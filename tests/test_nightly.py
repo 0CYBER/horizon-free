@@ -85,3 +85,38 @@ class ScheduledTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+
+
+class UntrustedBuildTests(unittest.TestCase):
+    """A nightly can hold unreviewed pull requests: nothing its build leaves may reach a release (game-build.yml)."""
+
+    def setUp(self):
+        self.game = (WORKFLOWS / "game-build.yml").read_text()
+
+    def test_only_the_release_is_trusted(self):
+        self.assertIn("trusted: true", (WORKFLOWS / "release.yml").read_text())
+        nightly_build = (WORKFLOWS / "nightly-build.yml").read_text()
+        self.assertIn("trusted: false", nightly_build)
+        self.assertNotIn("trusted: true", nightly_build)
+        self.assertIn("default: false", self.game.split("trusted:", 1)[1].split("developer_id:", 1)[0])
+
+    def test_an_untrusted_build_neither_shares_nor_saves_the_release_cache(self):
+        self.assertIn("shared-key: ${{ inputs.trusted && 'release' || 'nightly' }}-${{ matrix.name }}", self.game)
+        self.assertIn("save-if: ${{ inputs.trusted }}", self.game)
+        self.assertEqual(self.game.count("Swatinem/rust-cache"), 1)
+
+    def test_an_untrusted_build_never_runs_on_the_release_runner(self):
+        runs_on = [line for line in self.game.splitlines() if "runs-on:" in line]
+        self.assertEqual(len(runs_on), 2)
+        pr_runner = "fromJSON('[\"self-hosted\", \"macOS\", \"horizon-game\"]')"
+        for line in runs_on:
+            self.assertIn(f"inputs.trusted && vars.MAC_RUNNER || {pr_runner}", line)
+
+    def test_a_trusted_build_never_reads_the_shared_sccache(self):
+        calls = self.game.count("bash tools/ci/runner-env.sh")
+        self.assertEqual(self.game.count("HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}"), calls)
+        env = (Path(__file__).resolve().parents[1] / "tools/ci/runner-env.sh").read_text()
+        self.assertEqual(env.count('-z "${HORIZON_NO_SCCACHE:-}"'), 2)

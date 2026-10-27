@@ -19,6 +19,15 @@ on:
         description: A nightly's "<date> <short sha>" (HORIZON_NIGHTLY), shown by the game; empty for a release
         type: string
         default: ''
+      trusted:
+        # Only release.yml says true: it builds main. A nightly can hold pull requests nobody reviewed yet, whose
+        # build scripts and tests run here and could rewrite target/, the cargo home or a compiler cache. So an
+        # untrusted build never runs on the release runner, never saves the Rust cache (its key is its own anyway),
+        # and a trusted one never reads the machine's shared sccache, which pull requests' jobs write
+        # (tests/test_nightly.py pins all of it).
+        description: The source is main (a release); false for anything else (a nightly)
+        type: boolean
+        default: false
       developer_id:
         description: Sign the macOS programs with Developer ID and notarize the zip (the runner's keychain)
         type: boolean
@@ -27,8 +36,10 @@ permissions:
   contents: read
 jobs:
   exporters:
-    # This runner holds the maintainer's own pinned Minecraft jars. Only our classes leave it.
-    runs-on: ${{ vars.MAC_RUNNER || 'ludovics-mac-mini' }}
+    # This runner holds the maintainer's own pinned Minecraft jars. Only our classes leave it. An untrusted build
+    # goes to the Mac mini runner that already runs pull requests' parity jobs (macOS + horizon-game:
+    # ludovics-mac-mini), never the release runner (MAC_RUNNER: ludovics-mac-mini-release) nor parity-main's.
+    runs-on: ${{ inputs.trusted && vars.MAC_RUNNER || fromJSON('["self-hosted", "macOS", "horizon-game"]') }}
     # Three full preparations (two isolated, one batched) besides the compile.
     timeout-minutes: 60
     steps:
@@ -39,6 +50,8 @@ jobs:
           clean: true
       - uses: dtolnay/rust-toolchain@stable
       - run: bash tools/ci/runner-env.sh
+        env:
+          HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
       - run: bash tools/ci/vanilla-data.sh
       - name: Compile and validate original exporters against the pinned jars
         shell: bash
@@ -90,7 +103,7 @@ jobs:
             mac: true
             dir: horizon-macos-arm64
             asset: horizon-macos-arm64.zip
-    runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
+    runs-on: ${{ matrix.mac && (inputs.trusted && vars.MAC_RUNNER || fromJSON('["self-hosted", "macOS", "horizon-game"]')) || matrix.os }}
     # Notarizing the zip can take a few minutes.
     timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
@@ -117,7 +130,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
         with:
-          shared-key: release-${{ matrix.name }}
+          # A release restores only what a release saved: an untrusted build has its own key and saves nothing.
+          shared-key: ${{ inputs.trusted && 'release' || 'nightly' }}-${{ matrix.name }}
+          save-if: ${{ inputs.trusted }}
       - name: ALSA and udev headers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
@@ -173,6 +188,8 @@ jobs:
           done
       - name: Tools from the runner
         if: runner.environment == 'self-hosted'
+        env:
+          HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
         run: bash tools/ci/runner-env.sh
       - name: Resources prepared from the runner's own Minecraft
         if: runner.environment == 'self-hosted'
