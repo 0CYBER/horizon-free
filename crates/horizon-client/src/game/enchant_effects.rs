@@ -3,14 +3,18 @@
 //! unbreaking (`minecraft:item_damage`), sharpness/smite/bane and power
 //! (`minecraft:damage`), knockback, fire aspect, infinity (`minecraft:ammo_use`),
 //! thorns (`minecraft:post_attack`), mending (`minecraft:repair_with_xp`) and
-//! the armor attribute effects (respiration, depth strider, ...) and Soul
-//! Speed's `location_changed` and `tick` effects.
+//! the armor attribute effects (respiration, depth strider, ...), Soul
+//! Speed's `location_changed` and `tick` effects and the
+//! `minecraft:location_changed` disk effect (frost walker).
 use super::Game;
 use horizon_client::{
     enchant::{EffectContext, Enchantments, level_value},
     items::ItemStack,
+    mobs::Who,
 };
 use horizon_core::{position::BlockPos, random::RandomSource};
+use horizon_world::{fluid::FluidKind, level::LevelAccess, registry::BlockStateId};
+use serde_json::Value;
 
 /// Where Mending found a damaged item (`EnchantedItemInUse.inSlot`).
 #[derive(Clone, Copy)]
@@ -69,7 +73,7 @@ impl Game<'_> {
     }
     /// `getEnchantedDamage - base`: damage bonus of the held weapon against a mob type.
     pub(super) fn enchant_damage_bonus(&mut self, target: &str) -> f32 {
-        let Some(held) = self.inventory[self.selected].clone() else {
+        let Some(held) = self.held().cloned() else {
             return 0.0;
         };
         let ctx = EffectContext {
@@ -102,7 +106,7 @@ impl Game<'_> {
     /// whether the hit is that knockback attack.
     pub(super) fn extra_knockback(&mut self, target_kind: &str, scale: f32) -> (f32, bool) {
         let knockback_attack = scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting);
-        let enchanted = match self.inventory[self.selected].clone() {
+        let enchanted = match self.held().cloned() {
             Some(held) => {
                 let ctx = EffectContext {
                     this: Some(target_kind),
@@ -144,7 +148,7 @@ impl Game<'_> {
     }
     /// After a successful melee hit: fire aspect and wind burst.
     pub(super) fn post_attack(&mut self, mob: usize) {
-        let Some(held) = self.inventory[self.selected].clone() else {
+        let Some(held) = self.held().cloned() else {
             return;
         };
         let Some(m) = self.mobs.get(mob) else { return };
@@ -636,6 +640,173 @@ impl Game<'_> {
             self.apply_equipment();
         }
     }
+    /// `EnchantmentHelper.runLocationChangedEffects` for the worn armor of the
+    /// player, run on the server once the player has moved: `LivingEntity.baseTick`
+    /// runs it when the block position changed, `checkFallDamage` when it lands.
+    /// `from` and `was_on_ground` are where and how the tick began.
+    pub(super) fn location_changed_effects(&mut self, from: [f64; 3], was_on_ground: bool) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let on_ground = p.ground.on_ground;
+        let cell = |v: [f64; 3]| v.map(|c| c.floor() as i32);
+        if cell(from) == cell(at) && !(on_ground && !was_on_ground) {
+            return;
+        }
+        let riding = self.riding.is_some();
+        let mut disks = Vec::new();
+        for (stack, slot) in self.armor.iter().zip(["head", "chest", "legs", "feet"]) {
+            let Some(stack) = stack else { continue };
+            for (id, level) in stack.enchantments() {
+                let Some(def) = self.res.stations().enchantments.get(id) else {
+                    continue;
+                };
+                if !def
+                    .slots
+                    .iter()
+                    .any(|s| s == slot || s == "armor" || s == "any")
+                {
+                    continue;
+                }
+                for effect in def.effects["minecraft:location_changed"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    if effect["effect"]["type"] == "minecraft:replace_disk"
+                        && location_requirements(&effect["requirements"], on_ground, riding)
+                    {
+                        disks.push((effect["effect"].clone(), *level));
+                    }
+                }
+            }
+        }
+        for (effect, level) in disks {
+            self.replace_disk(&effect, level, at);
+        }
+    }
+    /// `ReplaceDisk.apply`: the blocks of the disk around `at` that pass the
+    /// predicate become the effect's state, and each placement is a game event.
+    fn replace_disk(&mut self, effect: &Value, level: u32, at: [f64; 3]) {
+        let registry = self.pack.assets.registry;
+        let spec = &effect["block_state"];
+        let Some(default) = spec["id"].as_str().and_then(|n| registry.default_state(n)) else {
+            return;
+        };
+        let Some(mut state) = registry.state(default).cloned() else {
+            return;
+        };
+        for (k, v) in spec["properties"].as_object().into_iter().flatten() {
+            state
+                .properties
+                .insert(k.clone(), v.as_str().unwrap_or("").to_owned());
+        }
+        let new = registry.resolve(&state).unwrap_or(default);
+        let radius = level_value(&effect["radius"], level) as i32;
+        let height = level_value(&effect["height"], level) as i32;
+        let offset = cell_offset(effect);
+        let center = [0, 1, 2].map(|i| at[i].floor() as i32 + offset[i]);
+        let event = effect["trigger_game_event"].as_str() == Some("minecraft:block_place");
+        for dy in (height - 1).min(0)..=0 {
+            for dz in -radius..=radius {
+                for dx in -radius..=radius {
+                    let pos = [center[0] + dx, center[1] + dy, center[2] + dz];
+                    let (x, z) = (
+                        f64::from(pos[0]) + 0.5 - at[0],
+                        f64::from(pos[2]) + 0.5 - at[2],
+                    );
+                    if x * x + z * z >= f64::from(radius * radius)
+                        || !self.disk_predicate(&effect["predicate"], pos, new)
+                        || self.level_set(pos, new).is_err()
+                    {
+                        continue;
+                    }
+                    if event {
+                        self.post_block_game_event(
+                            "minecraft:block_place",
+                            pos,
+                            Some(Who::Player),
+                            Some(new),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    /// The `BlockPredicate` subset the disk effect uses, tested at `pos`; no
+    /// predicate matches everything.
+    fn disk_predicate(&mut self, p: &Value, pos: [i32; 3], placed: BlockStateId) -> bool {
+        if p.is_null() {
+            return true;
+        }
+        let offset = cell_offset(p);
+        let at = [0, 1, 2].map(|i| pos[i] + offset[i]);
+        let state = self.world.block(at[0], at[1], at[2]);
+        let b = self.res.behaviours();
+        let names = |v: &Value| -> Vec<String> {
+            match v {
+                Value::String(s) => vec![s.clone()],
+                Value::Array(a) => a
+                    .iter()
+                    .filter_map(|n| n.as_str().map(String::from))
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        match p["type"].as_str().unwrap_or("") {
+            "minecraft:all_of" => p["predicates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|q| self.disk_predicate(q, pos, placed)),
+            // `MatchingBlockTagPredicate`
+            "minecraft:matching_block_tag" => b
+                .tag(p["tag"].as_str().unwrap_or("").trim_start_matches('#'))
+                .is_some_and(|t| t.contains(b.block(state))),
+            // `MatchingBlocksPredicate`
+            "minecraft:matching_blocks" => {
+                names(&p["blocks"]).iter().any(|n| n == b.table.name(state))
+            }
+            // `MatchingFluidsPredicate`: Fluids.WATER is the source.
+            "minecraft:matching_fluids" => {
+                let fluid = b.fluid(state);
+                names(&p["fluids"]).iter().any(|n| match n.as_str() {
+                    "minecraft:water" => fluid.kind() == FluidKind::Water && fluid.is_source(),
+                    "minecraft:flowing_water" => {
+                        fluid.kind() == FluidKind::Water && !fluid.is_source()
+                    }
+                    _ => false,
+                })
+            }
+            // `UnobstructedPredicate`: no building-blocking entity in the block.
+            "minecraft:unobstructed" => self.with_level(|_, level, _| {
+                level.is_unobstructed(BlockPos::new(pos[0], pos[1], pos[2]), placed)
+            }),
+            _ => false,
+        }
+    }
+    /// Whether a worn enchantment gives immunity to `#burn_from_stepping`
+    /// damage (frost walker's `minecraft:damage_immunity`).
+    pub(crate) fn wears_burn_from_stepping_immunity(&self) -> bool {
+        self.armor
+            .iter()
+            .zip(["head", "chest", "legs", "feet"])
+            .any(|(stack, slot)| {
+                stack
+                    .iter()
+                    .flat_map(ItemStack::enchantments)
+                    .any(|(id, _)| {
+                        self.res.stations().enchantments.get(id).is_some_and(|def| {
+                            def.effects.get("minecraft:damage_immunity").is_some()
+                                && def
+                                    .slots
+                                    .iter()
+                                    .any(|s| s == slot || s == "armor" || s == "any")
+                        })
+                    })
+            })
+    }
     /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
     /// Each piece's modifier id ends with its slot (`EnchantmentAttributeEffect.idForSlot`),
     /// so the same enchantment on two pieces stacks instead of replacing itself.
@@ -683,4 +854,36 @@ fn soul_speed_modifiers(
             )
         })
         .collect()
+}
+
+/// An effect's or predicate's `offset` vector (zero when absent).
+fn cell_offset(v: &Value) -> [i32; 3] {
+    let at = |i: usize| {
+        v["offset"]
+            .get(i)
+            .and_then(Value::as_i64)
+            .map_or(0, |n| n as i32)
+    };
+    [at(0), at(1), at(2)]
+}
+/// The loot-condition subset a `location_changed` effect requires of the
+/// wearer: standing on the ground and not riding (frost walker).
+fn location_requirements(req: &Value, on_ground: bool, riding: bool) -> bool {
+    match req["type"].as_str().unwrap_or("") {
+        "" if req.is_null() => true,
+        "minecraft:all_of" => req["terms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|t| location_requirements(t, on_ground, riding)),
+        "minecraft:inverted" => !location_requirements(&req["term"], on_ground, riding),
+        "minecraft:entity_properties" => {
+            let p = &req["predicate"];
+            p["minecraft:flags"]["is_on_ground"]
+                .as_bool()
+                .is_none_or(|v| v == on_ground)
+                && (p["minecraft:vehicle"].is_null() || riding)
+        }
+        _ => false,
+    }
 }

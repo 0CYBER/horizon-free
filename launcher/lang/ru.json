@@ -160,7 +160,7 @@
   "Prepared for Minecraft {version}": "Подготовлено для Minecraft {version}",
   "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "Подготовлено для Minecraft {version}, но без звуков: игра будет беззвучной. Подготовьте заново, чтобы скопировать их из вашей установки Minecraft.",
   "Nightly builds": "Ночные сборки",
-  "Reviewed fixes not released yet; may break.": "Проверенные исправления, ещё не вышедшие в релиз; что-то может сломаться.",
+  "Can include pull requests not reviewed yet, picked by trusted reviewers; may break.": "Может включать ещё не проверенные pull request'ы, выбранные доверенными ревьюерами; что-то может сломаться.",
   "Plays in its own Nightly instance: your worlds and the release stay as they are.": "Запускается в отдельной сборке Nightly: ваши миры и релиз остаются как есть.",
   "Installing the nightly, {percent}%": "Установка ночной сборки, {percent}%",
   "The nightly could not be installed: {error}": "Не удалось установить ночную сборку: {error}",

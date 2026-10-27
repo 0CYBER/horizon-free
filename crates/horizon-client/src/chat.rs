@@ -556,26 +556,34 @@ impl Chat {
     pub fn hover_at(&self, font: &crate::font::Font, height: i32, x: f64, y: f64) -> Option<Text> {
         self.style_at(font, height, x, y)?.hover.map(|h| *h)
     }
-    /// ChatComponent.getClickedComponentStyleAt.
-    fn style_at(
-        &self,
-        font: &crate::font::Font,
-        height: i32,
-        x: f64,
-        y: f64,
-    ) -> Option<crate::text::Style> {
+    /// The wrapped line under a GUI-space cursor while chat is focused, and
+    /// the cursor's x within it (the text starts at 0).
+    fn line_at(&self, height: i32, x: f64, y: f64) -> Option<(&Line, f64)> {
         let scale = self.options.scale as f32;
-        let mut x = x / f64::from(scale) - 4.0;
+        let x = x / f64::from(scale) - 4.0;
         let bottom = hud_layout::floor((height - 40) as f32 / scale);
         let from_bottom = f64::from(bottom) - y / f64::from(scale);
-        if x < 0.0 || x >= f64::from(self.max_width()) || from_bottom <= 0.0 {
+        if x >= f64::from(self.max_width()) || from_bottom <= 0.0 {
             return None;
         }
         let row = (from_bottom / f64::from(self.options.line_height())).ceil() as usize - 1;
         if row >= self.lines_per_page(true) {
             return None;
         }
-        let line = self.lines.get(self.scroll + row)?;
+        Some((self.lines.get(self.scroll + row)?, x))
+    }
+    /// ChatComponent.getClickedComponentStyleAt.
+    pub fn style_at(
+        &self,
+        font: &crate::font::Font,
+        height: i32,
+        x: f64,
+        y: f64,
+    ) -> Option<crate::text::Style> {
+        let (line, mut x) = self.line_at(height, x, y)?;
+        if x < 0.0 {
+            return None;
+        }
         let content = line.content.resolve_legacy();
         for (c, style) in content.chars() {
             x -= f64::from(font.advance(c, style));
@@ -584,6 +592,13 @@ impl Chat {
             }
         }
         None
+    }
+    /// Whether the cursor is on a line's indicator bar while chat is focused
+    /// (`DrawingFocusedGraphicsAccess.handleTag`), whose tooltip is the
+    /// message tag's text.
+    pub fn indicator_at(&self, height: i32, x: f64, y: f64) -> bool {
+        self.line_at(height, x, y)
+            .is_some_and(|(line, x)| line.indicator.is_some() && (-4.0..-2.0).contains(&x))
     }
     /// Plain text of the newest messages (for tests and the control socket).
     pub fn recent_lines(&self, n: usize) -> Vec<String> {

@@ -169,6 +169,24 @@ fn target_pos(w: &MobWorld, id: i32) -> Option<([f64; 3], f64, bool)> {
             .map(|s| ([s.position.x, s.position.y, s.position.z], s.eye_y, false)),
     }
 }
+/// `WitherBoss.aiStep` on a client of a server: the smoke about each head
+/// (`radius` 0.3 of the wither's scale, which is 1 here).
+pub fn client_smoke(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    for i in 0..3 {
+        let h = head_pos(m, i);
+        let r = &mut m.random;
+        let at = [
+            h[0] + r.next_gaussian() * 0.3,
+            h[1] + r.next_gaussian() * 0.3,
+            h[2] + r.next_gaussian() * 0.3,
+        ];
+        events.push(MobEvent::ParticleAt {
+            kind: "smoke",
+            at,
+            velocity: [0.0; 3],
+        });
+    }
+}
 /// The side heads turn toward their targets, else back to the body. `find`
 /// gives the position and eye height of the entity a head's target id names.
 fn turn_heads(m: &mut Mob, find: impl Fn(i32) -> Option<([f64; 3], f64)>) {
