@@ -11,6 +11,7 @@ description = "Horizon native development client"
 horizon-assets = { path = "../horizon-assets" }
 horizon-client-core = { path = "../horizon-client-core" }
 horizon-command = { path = "../horizon-command" }
+horizon-items = { path = "../horizon-items" }
 horizon-core = { path = "../horizon-core" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
 horizon-threads = { path = "../horizon-threads" }
@@ -105,5 +106,6 @@ path = "examples/probe/main.rs"
 workspace = true
 
 [dev-dependencies]
+horizon-items = { path = "../horizon-items", features = ["test-support"] }
 # Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "msl-out", "spv-out"] }

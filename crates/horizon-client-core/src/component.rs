@@ -1,6 +1,7 @@
 //! Text components from commands: `ComponentArgument` reads an SNBT (or JSON)
 //! value, `ComponentSerialization` turns it into styled text.
 use crate::text::{Style, Text, named_color};
+use horizon_world::nbt::Tag;
 use serde_json::{Map, Value};
 
 /// `SnbtGrammar`, enough for components: compounds, lists, quoted and
@@ -296,6 +297,15 @@ pub fn to_text_with(
             out
         }
         Value::Null => Text::empty(),
+    }
+}
+
+/// `CustomName` as text: a string keeps its legacy formatting codes, anything
+/// else is a component (`ComponentSerialization`).
+pub fn name_text(tag: &Tag) -> Text {
+    match tag {
+        Tag::String(s) => Text::legacy(&s.to_string_lossy()),
+        t => crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
     }
 }
 
