@@ -83,8 +83,8 @@ impl Launcher {
         };
         index_row(
             n,
-            "While playing",
-            Some(div().child(said).into_any_element()),
+            tr("While playing"),
+            Some(div().child(tr(said)).into_any_element()),
             Some(picker.into_any_element()),
             &t,
         )
