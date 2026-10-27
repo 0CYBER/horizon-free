@@ -2083,11 +2083,16 @@ impl Game<'_> {
                     from_dragon: false,
                     potion: None,
                 });
-                self.audio.play(
-                    "minecraft:entity.dragon_fireball.explode",
-                    Some([next.x, next.y, next.z]),
-                    1.0,
-                    1.0,
+                // DragonFireball.onHit: level event 2006 (the burst of dragon
+                // breath and the explosion sound) at its block position.
+                self.level_event_at(
+                    2006,
+                    [
+                        next.x.floor() as i32,
+                        next.y.floor() as i32,
+                        next.z.floor() as i32,
+                    ],
+                    1,
                 );
                 return false;
             }
