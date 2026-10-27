@@ -718,7 +718,8 @@ impl Game<'_> {
         {
             return;
         }
-        let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        // ChatScreen.mouseScrolled: `hasShiftDown`, either Shift key.
+        let shift = self.has_shift_down();
         let amount = amount.clamp(-1.0, 1.0) * if shift { 1.0 } else { 7.0 };
         self.ui.chat.scroll_by(amount as i32, true);
     }
