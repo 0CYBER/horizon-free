@@ -321,7 +321,9 @@ fn read_text(t: &Tag) -> Option<String> {
         // A component's root `text` may be empty with the visible words in
         // `extra` (every legacy display name ViaVersion produces looks like
         // this), so flatten the whole component instead of reading one key.
-        Tag::Compound(_) => Some(crate::entity_nbt::name_text(t).plain()),
+        // ComponentSerialization.CODEC also takes a list (its first element
+        // styling the rest), as servers behind ViaVersion send book pages.
+        Tag::Compound(_) | Tag::List(_) => Some(crate::entity_nbt::name_text(t).plain()),
         _ => None,
     }
 }
@@ -913,6 +915,37 @@ mod tests {
         assert_eq!(
             extra.and_then(|d| d.custom_name.clone()).as_deref(),
             Some("Games Right click")
+        );
+    }
+
+    #[test]
+    fn written_book_pages_may_be_component_lists() {
+        // A page as Hypixel sends it through ViaVersion: a list, not a compound.
+        let page = Tag::List(vec![
+            Tag::compound([("text", Tag::String("".into()))]),
+            Tag::compound([("text", Tag::String("Please read ".into()))]),
+            Tag::compound([("text", Tag::String("the rules".into()))]),
+        ]);
+        let book = Tag::compound([
+            (
+                "title",
+                Tag::compound([("raw", Tag::String("Rules".into()))]),
+            ),
+            ("author", Tag::String("Server".into())),
+            (
+                "pages",
+                Tag::List(vec![
+                    page,
+                    Tag::compound([("raw", Tag::String("Two".into()))]),
+                ]),
+            ),
+        ]);
+        let components = Tag::compound([("minecraft:written_book_content", book)]);
+        let (_, extra) = decode_components(Some(&components));
+        let pages = extra.and_then(|d| d.written.clone()).map(|w| w.pages);
+        assert_eq!(
+            pages,
+            Some(vec!["Please read the rules".to_owned(), "Two".to_owned()])
         );
     }
 

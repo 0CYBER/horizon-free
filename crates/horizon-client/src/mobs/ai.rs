@@ -529,14 +529,19 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     m.first_tick = false;
     if m.alive() {
-        // LivingEntity.baseTick: suffocation inside full blocks.
+        // LivingEntity.baseTick: suffocation inside full blocks. Entity.isInWall
+        // is false under noPhysics, which Vex.tick holds while it ticks.
         let (ex, ey, ez) = (
             m.position.x.floor() as i32,
             m.eye_y().floor() as i32,
             m.position.z.floor() as i32,
         );
         let at_eye = w.facts.get(w.world.block(ex, ey, ez));
-        if at_eye.full_collision && at_eye.solid_render && m.width() < 1.0 {
+        if at_eye.full_collision
+            && at_eye.solid_render
+            && m.width() < 1.0
+            && m.species() != Species::Vex
+        {
             m.damage(1.0, Damage::of(DamageKind::InWall));
         }
         // Air supply and drowning (WaterAnimal.handleAirSupply for aquatic mobs).
@@ -1831,5 +1836,43 @@ mod despawn_tests {
         for s in [Species::Zombie, Species::ZombieVillager, Species::Pillager] {
             assert!(!never_removed_when_far(s), "{s:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod frog_tests {
+    use super::*;
+    use crate::mobs::MobTypes;
+    use crate::mobs::control::MoveKind;
+    use std::sync::Arc;
+
+    /// `Frog()`: `new SmoothSwimmingMoveControl<>(this, 85, 10, 0.02F, 0.1F, true)`.
+    /// The frog's movement speed is 1.0, so the controller's 0.1 outside-water
+    /// speed is what keeps a walking frog at vanilla's pace. The plain ground
+    /// controller walks it ten times too fast, which is the jitter, the
+    /// teleporting and the flying of #2213.
+    #[test]
+    fn a_frog_walks_at_the_vanilla_speed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists() {
+            return;
+        }
+        let data = MobTypes::load(&root).unwrap();
+        let kind = Arc::new(data.types.get("minecraft:frog").unwrap().clone());
+        assert_eq!(kind.speed, 1.0, "the frog's movement speed attribute");
+        let mut m = Mob::new(1, kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        register(&mut m);
+        assert_eq!(
+            m.ai.mov.kind,
+            MoveKind::SmoothSwimming {
+                max_turn_x: 85.0,
+                max_turn_y: 10.0,
+                in_water: 0.02,
+                outside: 0.1,
+                gravity: true,
+            }
+        );
     }
 }

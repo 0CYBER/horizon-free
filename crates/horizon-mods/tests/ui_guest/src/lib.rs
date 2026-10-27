@@ -112,6 +112,7 @@ impl Mod for Guest {
             "input_wheel",
             "zoom",
             "minimap",
+            "far_terrain",
             "raycast",
             "quiet",
             "quiet_many",
@@ -241,6 +242,15 @@ impl Mod for Guest {
                     round: words.get(3) == Some(&"1"),
                 });
                 render::set_minimap(map);
+            }
+            // `far_terrain off`, or `far_terrain DISTANCE REDUCED`.
+            "far_terrain" => {
+                let words: Vec<&str> = args.split(' ').collect();
+                let far = (args != "off").then(|| render::FarTerrain {
+                    distance: words.first().and_then(|w| w.parse().ok()).unwrap_or(0),
+                    reduced: words.get(1) == Some(&"1"),
+                });
+                render::set_far_terrain(far);
             }
             "quiet" => command::run_quiet(&args.split(';').map(str::to_owned).collect::<Vec<_>>()),
             "quiet_many" => {
