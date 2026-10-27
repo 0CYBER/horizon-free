@@ -504,7 +504,8 @@ impl<'a> Game<'a> {
                         m.position.z.floor() as i32,
                     ],
                     is_mob: true,
-                    persistent: m.persistent,
+                    persistent: m.persistent
+                        || horizon_client::mobs::ai::requires_custom_persistence(m),
                 })
                 .collect();
             let players = players

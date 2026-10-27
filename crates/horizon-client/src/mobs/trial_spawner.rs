@@ -13,6 +13,7 @@ use super::{
     spawn_selection,
     spawner::{self, SpawnData, SpawnerLevel, SpawnerSpawn},
 };
+pub use crate::chunk::block_entity::{ConfigSlot, TrialConfig, TrialSpawner};
 use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::nbt::{Compound, JavaString, Tag};
 use std::{collections::HashMap, path::Path, sync::OnceLock};
@@ -32,19 +33,6 @@ const TICKS_BETWEEN_ITEM_SPAWNERS: i64 = 160;
 /// Bad Omen.
 pub const TRIAL_OMEN_TICKS_PER_LEVEL: i32 = 18000;
 
-/// `TrialSpawnerConfig`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrialConfig {
-    pub spawn_range: i32,
-    pub total_mobs: f32,
-    pub simultaneous_mobs: f32,
-    pub total_mobs_added_per_player: f32,
-    pub simultaneous_mobs_added_per_player: f32,
-    pub ticks_between_spawn: i32,
-    pub spawn_potentials: Vec<(SpawnData, i32)>,
-    pub loot_tables_to_eject: Vec<(String, i32)>,
-    pub items_to_drop_when_ominous: String,
-}
 impl Default for TrialConfig {
     /// `TrialSpawnerConfig.Builder`'s defaults.
     fn default() -> Self {
@@ -202,15 +190,6 @@ fn identifier(t: Option<&Tag>) -> Option<String> {
     }
 }
 
-/// A `Holder<TrialSpawnerConfig>` as saved: a registry id
-/// (`minecraft:trial_chamber/breeze/normal`) or an inline config.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ConfigSlot {
-    /// The value as loaded, written back as is; None for the default.
-    pub saved: Option<Tag>,
-    pub config: TrialConfig,
-}
-
 /// `TrialSpawnerState`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TrialState {
@@ -335,31 +314,6 @@ pub trait TrialSpawnerLevel: SpawnerLevel {
     fn seed(&self) -> i64;
 }
 
-/// `TrialSpawner` with its `TrialSpawnerStateData`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrialSpawner {
-    pub normal: ConfigSlot,
-    pub ominous: ConfigSlot,
-    pub target_cooldown_length: i32,
-    pub required_player_range: i32,
-    pub detected_players: Vec<Uuid>,
-    pub current_mobs: Vec<Uuid>,
-    pub cooldown_ends_at: i64,
-    pub next_mob_spawns_at: i64,
-    pub total_mobs_spawned: i32,
-    pub next_spawn_data: Option<SpawnData>,
-    pub ejecting_loot_table: Option<String>,
-    /// `isOminous`, set from the block on every server tick.
-    pub is_ominous: bool,
-    /// The server's display entity exists (`getOrCreateDisplayEntity`): it is
-    /// made once per loaded block entity and kept.
-    pub has_display: bool,
-    pub spin: f64,
-    pub o_spin: f64,
-    /// `getDispensingItems`, kept once rolled (not saved): the ominous items
-    /// and their weights (the rolled counts).
-    pub dispensing: Option<Vec<crate::items::ItemStack>>,
-}
 impl Default for TrialSpawner {
     fn default() -> Self {
         Self {

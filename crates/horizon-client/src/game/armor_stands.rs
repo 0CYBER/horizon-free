@@ -627,21 +627,8 @@ impl Game<'_> {
                 * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0))
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0));
             let mut poses = Poses::new(model);
-            // ArmorStand.DEFAULT_*_POSE and ArmorStandModel part visibility.
-            let deg = |v: f32| v.to_radians();
-            for (name, rot) in [
-                ("left_arm", [-10.0, 0.0, -10.0]),
-                ("right_arm", [-15.0, 0.0, 10.0]),
-                ("left_leg", [-1.0, 0.0, -1.0]),
-                ("right_leg", [1.0, 0.0, 1.0]),
-            ] {
-                if poses.has(name) {
-                    let pose = poses.get(name);
-                    pose[3] = deg(rot[0]);
-                    pose[4] = deg(rot[1]);
-                    pose[5] = deg(rot[2]);
-                }
-            }
+            // ArmorStandModel.setupAnim: the stand's pose and part visibility.
+            apply_pose(&mut poses, &a.pose);
             // Item layers pose from the hidden arms too (`visible` only skips drawing).
             let posed = poses.clone();
             let mut hide = |name: &str| {
@@ -725,7 +712,9 @@ impl Game<'_> {
                 } else {
                     0
                 };
-                let layer_poses = Poses::new(part);
+                // ArmorStandArmorModel.setupAnim: the same pose as the stand.
+                let mut layer_poses = Poses::new(part);
+                apply_pose(&mut layer_poses, &a.pose);
                 horizon_client::mobs::render::draw(
                     part,
                     base,
@@ -754,6 +743,33 @@ impl Game<'_> {
                 }
             }
             self.cull_entity_vertices(out, entity_start);
+        }
+    }
+}
+/// The `Pose` rotations on the parts of an armor stand model or its armor
+/// (`ArmorStandArmorModel.setupAnim`); the body also turns the sticks.
+fn apply_pose(poses: &mut Poses, pose: &[[f32; 3]; 6]) {
+    let parts: [&[&str]; 6] = [
+        &["head"],
+        &[
+            "body",
+            "right_body_stick",
+            "left_body_stick",
+            "shoulder_stick",
+        ],
+        &["left_arm"],
+        &["right_arm"],
+        &["left_leg"],
+        &["right_leg"],
+    ];
+    for (names, rotation) in parts.into_iter().zip(pose) {
+        for name in names {
+            if poses.has(name) {
+                let part = poses.get(name);
+                part[3] = rotation[0].to_radians();
+                part[4] = rotation[1].to_radians();
+                part[5] = rotation[2].to_radians();
+            }
         }
     }
 }

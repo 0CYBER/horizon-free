@@ -2,7 +2,7 @@
 //! add/update with hidden effects, per-tick application of the periodic
 //! effects (regeneration, poison, wither, hunger, saturation, instant
 //! effects), and the derived flags the movement and damage code read.
-use crate::brewing;
+use horizon_client_core::potions;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInstance {
@@ -129,15 +129,16 @@ fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
         _ => None,
     }
 }
-/// `InstantenousMobEffect.applyInstantenousEffect` (potions apply these directly).
+/// `HealOrHarmMobEffect.applyInstantaneousEffect` (potions apply these directly;
+/// the amount rounds to the nearest whole point).
 pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
     match id {
         "instant_health" => Some(EffectAction::Heal(
-            (scale * f64::from(4 << amp.min(30))) as i32 as f32,
+            (scale * f64::from(4 << amp.min(30)) + 0.5) as i32 as f32,
         )),
         "instant_damage" => Some(EffectAction::Hurt(
             "minecraft:magic",
-            (scale * f64::from(6 << amp.min(30))) as i32 as f32,
+            (scale * f64::from(6 << amp.min(30)) + 0.5) as i32 as f32,
         )),
         "saturation" => Some(EffectAction::Eat(amp + 1, 1.0)),
         _ => None,
@@ -183,7 +184,7 @@ impl PlayerEffects {
     pub fn from_saved(saved: &[(String, i32, i32, bool, bool)]) -> Self {
         let mut effects = Self::default();
         for (id, duration, amplifier, ambient, particles) in saved {
-            if let Some(def) = brewing::effect(id) {
+            if let Some(def) = potions::effect(id) {
                 let mut e = EffectInstance::new(def.id, *duration, *amplifier);
                 e.ambient = *ambient;
                 e.visible = *particles;
@@ -306,10 +307,10 @@ impl PlayerEffects {
     ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
         let mut lasting = Vec::new();
         let mut now = Vec::new();
-        if let Some(def) = potion.and_then(brewing::potion) {
+        if let Some(def) = potion.and_then(potions::potion) {
             for (id, duration, amp) in def.effects {
-                let id = brewing::effect(id).map_or("speed", |e| e.id);
-                if brewing::effect(id).is_some_and(|e| e.instant) {
+                let id = potions::effect(id).map_or("speed", |e| e.id);
+                if potions::effect(id).is_some_and(|e| e.instant) {
                     now.extend(instant(id, *amp, 1.0));
                 } else {
                     // withScaledDuration: max(floor(d * scale), 1).

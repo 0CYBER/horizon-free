@@ -30,6 +30,20 @@ pub fn digest(
     horizon_release_sign::signed_digest(tag, asset, sums.as_deref(), signature.as_deref(), keys)
 }
 
+/// The signed SHA-256 of `asset` in the current nightly build (the `nightly` pre-release): its
+/// checksums must be signed for the nightly channel (`horizon_release_sign::nightly_digest`).
+pub fn nightly_digest(
+    asset: &str,
+    keys: &[PublicKey],
+    fetch: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<String, String> {
+    let tag = horizon_release_sign::NIGHTLY;
+    let sums = fetch(&asset_url(tag, SUMS))?;
+    let signature = fetch(&asset_url(tag, SIGNATURE))?
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    horizon_release_sign::nightly_digest(asset, sums.as_deref(), signature.as_deref(), keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,7 +79,7 @@ mod tests {
         let signature = key.sign("v2099.01.01", sums.as_bytes());
         // GitHub as it answers for a signed release (any tag: the files are what a replay would serve).
         let signed = |url: &str| -> Result<Option<Vec<u8>>, String> {
-            assert!(url.starts_with("https://github.com/ludovic111/horizon/releases/download/"));
+            assert!(url.starts_with("https://github.com/horizon-rust/horizon/releases/download/"));
             Ok(Some(
                 if url.ends_with(".sig") {
                     signature.clone()
@@ -92,5 +106,42 @@ mod tests {
         // Checksums that can't be fetched are an error too, never a pass.
         let offline = |_: &str| -> Result<Option<Vec<u8>>, String> { Err("No connection".into()) };
         assert!(digest("v2099.01.01", "horizon.zip", &keys, offline).is_err());
+    }
+
+    /// The release channel never installs what was signed for the nightly channel, whatever tag it
+    /// is served under, and the nightly channel never installs a release's signed list.
+    #[test]
+    fn the_release_channel_refuses_nightly_signatures() {
+        let (key, _) = SigningKey::generate().unwrap();
+        let keys = [key.public()];
+        let sums = sums_file(&[("horizon.zip".into(), sha256_hex(b"game"))]);
+        let serving = |signed_for: &'static str| {
+            let signature = key.sign(signed_for, sums.as_bytes());
+            let sums = sums.clone();
+            move |url: &str| -> Result<Option<Vec<u8>>, String> {
+                Ok(Some(
+                    if url.ends_with(".sig") {
+                        signature.clone()
+                    } else {
+                        sums.clone()
+                    }
+                    .into_bytes(),
+                ))
+            }
+        };
+        let nightly = serving(horizon_release_sign::NIGHTLY);
+        assert_eq!(
+            nightly_digest("horizon.zip", &keys, &nightly),
+            Ok(sha256_hex(b"game"))
+        );
+        for tag in ["v0.2.81", "nightly", "nightly-2026-10-27"] {
+            assert!(
+                digest(tag, "horizon.zip", &keys, &nightly).is_err(),
+                "{tag}"
+            );
+        }
+        let release = serving("v0.2.81");
+        assert!(digest("v0.2.81", "horizon.zip", &keys, &release).is_ok());
+        assert!(nightly_digest("horizon.zip", &keys, &release).is_err());
     }
 }

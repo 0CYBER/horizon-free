@@ -43,6 +43,7 @@ pub mod game_event {
     pub const RAIN_LEVEL: u8 = 7;
     pub const THUNDER_LEVEL: u8 = 8;
     pub const GUARDIAN_ELDER_EFFECT: u8 = 10;
+    pub const IMMEDIATE_RESPAWN: u8 = 11;
     pub const LEVEL_CHUNKS_LOAD_START: u8 = 13;
 }
 
@@ -172,9 +173,14 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// The `immediate_respawn` game rule, as the players were last told.
+    immediate_respawn: bool,
     /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
     /// whose moves are never checked.
     pub singleplayer_owner: Option<u128>,
+    /// The world is superflat (`ServerLevel.isFlat`, a world-wide flag, sent as
+    /// `CommonPlayerSpawnInfo.isFlat` in every dimension).
+    pub flat_world: bool,
     /// Who rides what, set by the game before each tick.
     pub riding: super::entity::Riding,
     /// The scoreboard's teams, set by the game each tick, for players'
@@ -193,6 +199,9 @@ pub struct Hub {
     pub ops: std::collections::HashMap<u128, u8>,
     /// `entity-broadcast-range-percentage` (dedicated servers).
     pub entity_range_percent: i32,
+    /// `spawn-protection` (dedicated servers): the radius around the world
+    /// spawn that only operators may change.
+    pub spawn_protection: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -352,8 +361,10 @@ impl Hub {
             guests: Vec::new(),
             sync,
             ticks: 0,
+            immediate_respawn: false,
             movement_checks: (true, true),
             singleplayer_owner: None,
+            flat_world: false,
             riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
@@ -361,6 +372,7 @@ impl Hub {
             stepping: 0,
             ops: Default::default(),
             entity_range_percent: 100,
+            spawn_protection: 0,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
@@ -429,6 +441,17 @@ impl Hub {
             g.sender.send(body.clone());
         }
     }
+    /// MinecraftServer.onGameRuleChanged: every player is told when
+    /// `immediate_respawn` changes; a joining player's Login carries it.
+    pub fn set_immediate_respawn(&mut self, on: bool) {
+        if self.immediate_respawn != on {
+            self.immediate_respawn = on;
+            self.broadcast(&C::GameEvent(play::GameEvent {
+                event: game_event::IMMEDIATE_RESPAWN,
+                param: if on { 1.0 } else { 0.0 },
+            }));
+        }
+    }
     /// PlayerList.setViewDistance: every player is told the new radius,
     /// and each one's chunks follow it, up to what they asked for
     /// (ChunkMap.getPlayerViewDistance).
@@ -468,6 +491,13 @@ impl Hub {
         self.broadcast(&C::SystemChat(play::SystemChat {
             content,
             overlay: false,
+        }));
+    }
+    /// `ServerPlayer.sendOverlayMessage` to every guest (the action bar).
+    pub fn overlay_message(&self, content: Tag) {
+        self.broadcast(&C::SystemChat(play::SystemChat {
+            content,
+            overlay: true,
         }));
     }
     /// A chat message from the host (a disguised chat: the host has no
@@ -587,16 +617,24 @@ impl Hub {
 
     // ---- joining -------------------------------------------------------
 
-    fn spawn_info(&self, game_mode: i32) -> play::SpawnInfo {
+    fn spawn_info(&self, i: usize) -> play::SpawnInfo {
+        let g = &self.guests[i];
         play::SpawnInfo {
             dimension_type: self.dimension_type,
             dimension: self.config.dimension.clone(),
             seed: horizon_core::biome::obfuscate_seed(self.config.seed),
-            game_type: game_mode,
+            game_type: g.game_mode,
             previous_game_type: None,
             debug: false,
-            flat: false,
-            last_death: None,
+            flat: self.flat_world,
+            // Player.getLastDeathLocation.
+            last_death: g
+                .last_death
+                .as_ref()
+                .map(|(dimension, pos)| play::GlobalPos {
+                    dimension: dimension.clone(),
+                    pos: *pos,
+                }),
             portal_cooldown: 0,
             sea_level: 63,
         }
@@ -663,9 +701,9 @@ impl Hub {
             chunk_radius: self.config.view_distance,
             simulation_distance: self.config.simulation_distance,
             reduced_debug_info: false,
-            show_death_screen: true,
+            show_death_screen: !self.immediate_respawn,
             limited_crafting: false,
-            spawn: self.spawn_info(mode),
+            spawn: self.spawn_info(i),
             // MinecraftServer.usesAuthentication, enforceSecureProfile.
             online_mode: self.lan.shared.config.online.is_some(),
             enforces_secure_chat: self.enforces_secure_chat(),
@@ -2501,14 +2539,7 @@ impl Hub {
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
     pub fn respawn(&mut self, i: usize, at: [f64; 3], ctx: &TickCtx) {
-        let mode = self.guests[i].game_mode;
-        let mut info = self.spawn_info(mode);
-        // Player.getLastDeathLocation, set where the player died.
-        // The level they died in: theirs until now.
-        info.last_death = self.guests[i].last_death.map(|pos| play::GlobalPos {
-            dimension: self.guests[i].dimension.clone(),
-            pos,
-        });
+        let info = self.spawn_info(i);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         // PlayerList.respawn: into the level in place (the respawn level).
@@ -2621,8 +2652,7 @@ impl Hub {
         portal_sound: bool,
         ctx: &TickCtx,
     ) {
-        let mode = self.guests[i].game_mode;
-        let info = self.spawn_info(mode);
+        let info = self.spawn_info(i);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         g.dimension = self.config.dimension.clone();
@@ -2719,7 +2749,7 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
 }
 
 /// What the others see of a guest's body, from its server-side state.
-fn guest_body(g: &Guest) -> BodyFlags {
+pub fn guest_body(g: &Guest) -> BodyFlags {
     let m = g.motion.as_deref();
     BodyFlags {
         gliding: g.fall_flying,

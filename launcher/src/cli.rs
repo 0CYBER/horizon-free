@@ -79,7 +79,8 @@ enum ServersCmd {
 enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
-    /// Sign in with a Microsoft account in your browser (device code)
+    /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
+    /// Minecraft: Java Edition
     SignIn,
     /// Sign out: the account's tokens leave the keychain
     SignOut {
@@ -88,8 +89,9 @@ enum AccountCmd {
     },
     /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters,
-    /// digits or _), or as the name the game made up
+    /// Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game:
+    /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
+    /// made up
     Offline { name: Option<String> },
     /// Forget one of your offline names
     ForgetOffline { name: String },
@@ -546,17 +548,21 @@ enum Cmd {
     Install { tag: String },
     /// Remove an installed version
     Remove { tag: String },
-    /// Prepare a version's resources from your own Minecraft install
+    /// Prepare a version's resources from your own Minecraft install, or from Mojang
     Prepare {
         /// The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App,
         /// ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "download")]
         minecraft: Option<PathBuf>,
+        /// Download Minecraft from Mojang for the signed-in account that owns it, instead of
+        /// using an install
+        #[arg(long)]
+        download: bool,
         /// The installed version (default: the selected one)
         #[arg(long)]
         version: Option<String>,
     },
-    /// Start the client
+    /// Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition)
     Play {
         #[arg(long)]
         version: Option<String>,
@@ -972,11 +978,20 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             backend::remove_version(&tag)?;
             println!("Removed {tag}.");
         }
-        Cmd::Prepare { minecraft, version } => {
+        Cmd::Prepare {
+            minecraft,
+            download,
+            version,
+        } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
+            let from = if download {
+                backend::MinecraftFrom::Mojang
+            } else {
+                backend::MinecraftFrom::Install
+            };
             let (preparer, minecraft) =
-                backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
+                backend::preparer(&tag, &minecraft, from, &|line| eprintln!("{line}"))?;
             backend::sounds(&tag, &minecraft, &|line| println!("{line}"));
             match preparer {
                 backend::Preparer::Process(cmd) => attached(cmd)?,
@@ -1312,9 +1327,13 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "selected": accounts.player() == account::Player::Offline(n.clone()),
                     })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
+                    "owner": accounts.has_owner(account::store()),
                 }));
             } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
-                println!("No Microsoft account signed in: the game plays offline.");
+                println!(
+                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
+                     Edition: horizon-launcher account sign-in"
+                );
             } else {
                 for a in &accounts.accounts {
                     let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
@@ -1332,6 +1351,9 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     println!(
                         "Playing offline as the game's own name (`account select NAME` to switch)."
                     );
+                }
+                if !accounts.has_owner(account::store()) {
+                    println!("{}.", account::NEEDS_OWNER);
                 }
             }
         }
@@ -1372,7 +1394,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 ),
                 (None, None) => return Err(find(&accounts, &who).unwrap_err()),
             };
-            accounts.play_as(player)?;
+            accounts.play_as(account::store(), player)?;
             accounts.save()?;
             println!("The game plays as {name}.");
         }
@@ -1381,7 +1403,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 Some(n) => account::Player::Offline(n),
                 None => account::Player::GameName,
             };
-            accounts.play_as(player)?;
+            accounts.play_as(account::store(), player)?;
             accounts.save()?;
             match accounts.name_arg() {
                 Some(n) => println!("The game plays offline as {n}."),
