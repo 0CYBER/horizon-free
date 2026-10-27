@@ -40,11 +40,16 @@ fn translate(key: &str, fallback: &str, args: &[&dyn std::fmt::Display]) -> Stri
     format_translation(&lang::get_or(key, fallback), &args).plain()
 }
 
-enum BackupToast {
-    Created { folder: String, bytes: u64 },
+enum WorldToast {
+    Created {
+        folder: String,
+        bytes: u64,
+    },
     Failed(String),
+    /// `SystemToast.onWorldAccessFailure`: the folder of a world that couldn't be locked.
+    AccessFailure(String),
 }
-impl BackupToast {
+impl WorldToast {
     fn text(&self) -> (String, String) {
         match self {
             Self::Created { folder, bytes } => (
@@ -58,6 +63,10 @@ impl BackupToast {
             Self::Failed(error) => (
                 lang::get_or("selectWorld.edit.backupFailed", "Backup failed"),
                 error.clone(),
+            ),
+            Self::AccessFailure(folder) => (
+                lang::get_or("selectWorld.access_failure", "Failed to access world"),
+                folder.clone(),
             ),
         }
     }
@@ -139,8 +148,8 @@ pub struct Title {
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
-    /// EditWorldScreen's `SystemToast` (`WORLD_BACKUP`) and its slide.
-    toast: Option<(crate::toasts::Slide, BackupToast)>,
+    /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
+    toast: Option<(crate::toasts::Slide, WorldToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
     /// The saves listed for Home, re-read every couple of seconds.
@@ -432,8 +441,8 @@ impl Title {
             let folder = world.folder.clone();
             self.return_to_list(Some(&folder));
             let toast = match result {
-                Ok(bytes) => BackupToast::Created { folder, bytes },
-                Err(error) => BackupToast::Failed(error),
+                Ok(bytes) => WorldToast::Created { folder, bytes },
+                Err(error) => WorldToast::Failed(error),
             };
             self.toast = Some((crate::toasts::Slide::default(), toast));
         }
@@ -1253,6 +1262,18 @@ impl Title {
         let sound = hit.is_some() || matches!(action, Action::Play { .. });
         (action, sound)
     }
+    /// `WorldOpenFlows.createWorldAccess`: a world that can't be locked, as one
+    /// another instance has open, stays closed behind `onWorldAccessFailure`.
+    fn play(&mut self, folder: String) -> Action {
+        if crate::save::SessionLock::acquire(&self.saves.join(&folder)).is_err() {
+            self.toast = Some((
+                crate::toasts::Slide::default(),
+                WorldToast::AccessFailure(folder),
+            ));
+            return Action::None;
+        }
+        Action::Play { folder }
+    }
     fn click_action(&mut self, x: f32, y: f32, (w, h): (f32, f32), hit: Option<u8>) -> Action {
         match (&mut self.mode, hit) {
             (Mode::Main, Some(1)) => {
@@ -1281,9 +1302,10 @@ impl Title {
             (Mode::Main, Some(6)) => Action::Language,
             (Mode::Select { worlds, selected }, Some(10)) => {
                 match selected.and_then(|i| worlds.get(i)) {
-                    Some(world) => Action::Play {
-                        folder: world.folder.clone(),
-                    },
+                    Some(world) => {
+                        let folder = world.folder.clone();
+                        self.play(folder)
+                    }
                     None => Action::None,
                 }
             }
@@ -1356,7 +1378,7 @@ impl Title {
                     // WorldListEntry.mouseClicked: the icon joins at once.
                     let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
                     if on_icon || *selected == Some(index) {
-                        return Action::Play { folder };
+                        return self.play(folder);
                     }
                     if let Mode::Select { selected, .. } = &mut self.mode {
                         *selected = Some(index);
