@@ -10,7 +10,8 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   `tools/check_public_tree.py` rejects them; `git config core.hooksPath .githooks` runs it on commit.
 - **Keep your runs away from real player data.** Any game or launcher you start gets fresh `mktemp -d`
   folders in `HORIZON_HOME` (the game's data), `HORIZON_LAUNCHER_HOME`, `XDG_DATA_HOME` and
-  `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`. Never write to
+  `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`, and, for the
+  launcher, `HORIZON_LAUNCHER_TRASH` and `HORIZON_LAUNCHER_CLIPBOARD` pointing into the scratch home. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
 - **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
   Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
