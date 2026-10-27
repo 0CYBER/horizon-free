@@ -619,8 +619,9 @@ impl Behaviours {
     }
 
     /// `BlockBehaviour.attack` when mining begins: `RedStoneOreBlock.attack`
-    /// lights the ore, `NoteBlock.attack` plays the note. True for a note
-    /// block, whose player also earns the `play_noteblock` statistic.
+    /// lights the ore, `DragonEggBlock.attack` teleports the egg,
+    /// `NoteBlock.attack` plays the note. True for a note block, whose player
+    /// also earns the `play_noteblock` statistic.
     pub fn attack_block<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
@@ -630,6 +631,9 @@ impl Behaviours {
         let mut sim = self.sim(level, ticks);
         let state = sim.state(pos);
         let chain = &self.data(state).chain;
+        if chain.contains(&Class::DragonEgg) {
+            sim.dragon_egg_teleport(pos, state);
+        }
         if chain.contains(&Class::Note) {
             sim.note_play(pos, state);
             return true;
