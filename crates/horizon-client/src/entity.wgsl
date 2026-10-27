@@ -203,7 +203,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
     color *= in.light_color;
-    if in.overlay == 7u || in.overlay == 8u {
+    if in.overlay == 7u || in.overlay == 8u || in.overlay == 33u {
         // Enchantment glint (overlay 7, 8 with the hurt tint): the purple
         // enchanted_glint sheen drifting diagonally over the item's shape.
         let px = in.uv * vec2<f32>(textureDimensions(atlas));

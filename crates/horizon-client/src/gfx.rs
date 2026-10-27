@@ -37,7 +37,10 @@ mod crumbling_tests;
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
-pub use entity_batch::{SHADOW_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY};
+pub use entity_batch::{
+    SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
+    TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
+};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -391,6 +394,7 @@ pub struct Renderer {
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
     shadow_blob_pipeline: wgpu::RenderPipeline,
+    translucent_item_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -1839,6 +1843,19 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        // RenderPipelines.ITEM_TRANSLUCENT: blended, depth tested. Drawn before
+        // translucent terrain, it cannot write depth: the water behind a
+        // glass item would fail the test and vanish (vanilla sorts these in
+        // its order independent transparency pass instead).
+        let translucent_item_pipeline = entity_pipeline(
+            "Translucent items",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            alpha_blend,
+            false,
+        );
         let cloud_pipeline = entity_pipeline(
             "Clouds",
             Some(wgpu::Face::Back),
@@ -2374,6 +2391,7 @@ impl Renderer {
             weather,
             crumbling_pipeline,
             shadow_blob_pipeline,
+            translucent_item_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
             cloud_mesh: Default::default(),
@@ -3984,6 +4002,7 @@ impl Renderer {
             water_mask_quads,
             shadow_quads,
             translucent_particle_quads,
+            translucent_item_quads,
         ] = self
             .entity_batch
             .update(entities, frame.additive, frame.hand, frame.see_through);
@@ -3993,7 +4012,8 @@ impl Renderer {
             + translucent_crumbling_quads
             + water_mask_quads
             + shadow_quads
-            + translucent_particle_quads;
+            + translucent_particle_quads
+            + translucent_item_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -4516,6 +4536,17 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if translucent_item_quads > 0 {
+                pass.set_pipeline(&self.translucent_item_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..translucent_item_quads * 6,
+                    ((world_quads - translucent_item_quads) * 4) as i32,
+                    0..1,
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if !pack_draws_weather {
                 self.weather.draw(&mut pass, &self.entity_group);
             }
@@ -4533,7 +4564,11 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..shadow_quads * 6,
-                    ((world_quads - translucent_particle_quads - shadow_quads) * 4) as i32,
+                    ((world_quads
+                        - translucent_item_quads
+                        - translucent_particle_quads
+                        - shadow_quads)
+                        * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -4614,7 +4649,8 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..translucent_particle_quads * 6,
-                    ((world_quads - translucent_particle_quads) * 4) as i32,
+                    ((world_quads - translucent_item_quads - translucent_particle_quads) * 4)
+                        as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -5243,7 +5279,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 1, 1]);
+        assert_eq!(counts, [4, 1, 1, 0, 1, 1, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
