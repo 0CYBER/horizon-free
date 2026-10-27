@@ -180,8 +180,9 @@ fn use_duration(components: &Components) -> i32 {
         | "minecraft:crossbow"
         | "minecraft:trident"
         | "minecraft:spyglass"
-        | "minecraft:goat_horn"
-        | "minecraft:brush" => 72_000,
+        | "minecraft:goat_horn" => 72_000,
+        // BrushItem.USE_DURATION.
+        "minecraft:brush" => 200,
         _ => 0,
     }
 }

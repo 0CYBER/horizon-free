@@ -258,7 +258,8 @@ pub enum LevelEvent {
     /// event follow as their own events; the caller removes the block.
     PrimeTnt { pos: BlockPos, rot: f64 },
     /// Block-entity or entity side effects the caller implements: `"dispense"`
-    /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
+    /// (dispenser/dropper/crafter scheduled tick), `"brushable"` (a suspicious
+    /// block's scheduled tick: `checkReset`), `"hatch"` (frogspawn
     /// hatched into tadpoles; the block is already destroyed), `"portal_spawn"`
     /// (a nether portal won its zombified piglin roll; the caller checks
     /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal).
