@@ -1612,6 +1612,8 @@ impl Game<'_> {
         let _ = self.flush_wind_bursts();
         // A sweep attack's reach to the other players from a guest's attack.
         self.flush_sweeps();
+        // A reeled-in hook pulling a player.
+        self.flush_hook_pulls();
         // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
         self.flush_lan_particles();
     }
