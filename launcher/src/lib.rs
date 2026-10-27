@@ -9,6 +9,7 @@ pub mod desktop_seams;
 pub mod export;
 #[cfg(unix)]
 pub mod game_app;
+pub mod game_log;
 pub mod heads;
 pub mod import;
 pub mod instances;
