@@ -86,6 +86,10 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
                 target: Who::Player,
                 ..
             }
+            | MobEvent::Knockback {
+                target: Who::Player,
+                ..
+            }
             | MobEvent::Ignite {
                 target: Who::Player,
                 ..
@@ -381,6 +385,8 @@ mod tests {
             last_hurt: None,
             velocity: Vec3::ZERO,
             yaw: 0.0,
+            sprinting: false,
+            riding: false,
             hero: false,
             effects: Vec::new(),
             uuid: [0; 4],

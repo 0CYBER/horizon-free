@@ -11,6 +11,7 @@ pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
+pub mod armadillo;
 pub mod axolotl;
 pub mod bat;
 pub mod bee;
@@ -31,8 +32,11 @@ pub mod enderman;
 pub mod equine;
 pub mod farm;
 pub mod finalize;
+pub mod fox;
+pub mod frog;
 pub mod gear;
 pub mod goals;
+pub mod goat;
 pub mod golem;
 pub mod guardian;
 pub mod happy_ghast;
@@ -47,6 +51,7 @@ pub mod monster_brain;
 pub mod nautilus;
 pub mod nav;
 pub mod nether;
+pub mod panda;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
@@ -797,6 +802,8 @@ pub struct Extra {
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
     pub screaming: bool,
     pub lost_horns: [bool; 2],
+    /// A goat's lowered head and ram behaviours.
+    pub goat: goat::State,
     /// Attribute bases and permanent modifiers set by `finalizeSpawn`.
     pub attributes: Option<Box<finalize::Attributes>>,
     /// Brain memories `finalizeSpawn` sets: (memory, value, ticks to expiry).
@@ -812,6 +819,12 @@ pub struct Extra {
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
     pub bee: Option<Box<bee::Bee>>,
+    /// An armadillo's state and scare brain.
+    pub armadillo: armadillo::State,
+    /// A frog's brain memories and tongue target.
+    pub frog: frog::State,
+    /// A panda's flags, counters and amounts.
+    pub panda: Option<Box<panda::State>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -1047,6 +1060,13 @@ pub enum MobEvent {
         target: u32,
         amount: f32,
         source: Damage,
+    },
+    /// `LivingEntity.knockback(power, x, z)`: pushed away from the direction.
+    Knockback {
+        target: Who,
+        power: f64,
+        x: f64,
+        z: f64,
     },
     /// Set another mob's attack target (HurtByTargetGoal alerts).
     SetTarget {
@@ -1291,6 +1311,10 @@ pub enum MobEvent {
         center: [f64; 3],
         spread: [f64; 3],
     },
+    /// `Panda.afterSneeze`: the grown pandas within 10 blocks start.
+    PandaSneezed {
+        mob: u32,
+    },
 }
 /// How a spawned-by-kind mob should be set up.
 #[derive(Clone, Debug, Default)]
@@ -1328,6 +1352,8 @@ pub struct Seen {
     pub target: Option<Who>,
     pub health: f32,
     pub variant: u8,
+    /// A slime's or magma cube's size.
+    pub size: i32,
     /// Dye colour (sheep).
     pub color: u8,
     /// A villager's claimed job site and bed.
@@ -1431,6 +1457,7 @@ impl Mob {
             target: m.ai.target,
             health: m.health,
             variant: m.extra.variant,
+            size: m.extra.size,
             color: m.extra.color,
             job: villager.then_some(m.extra.home).flatten(),
             bed: villager.then_some(m.extra.bed).flatten(),
@@ -1613,6 +1640,9 @@ pub struct PlayerView {
     pub last_hurt: Option<(Who, i64)>,
     pub velocity: Vec3,
     pub yaw: f32,
+    /// `Player.isSprinting` and `isPassenger` (what scares an armadillo).
+    pub sprinting: bool,
+    pub riding: bool,
     /// The Hero of the Village effect.
     pub hero: bool,
     /// The active effects, without namespace (`slowness`, `poison`...).
@@ -1900,6 +1930,9 @@ impl Mob {
             return false;
         }
         let mut amount = if reflected { 1000.0 } else { amount };
+        if self.species() == Species::Armadillo {
+            amount = armadillo::reduce_damage(self, amount);
+        }
         if source.kind == DamageKind::FallingBlock
             && !species::body_slot(self.species())
             && self.extra.head.is_some()

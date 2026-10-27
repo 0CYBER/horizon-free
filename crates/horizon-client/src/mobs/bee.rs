@@ -103,6 +103,17 @@ pub fn has_stung(m: &Mob) -> bool {
 pub fn rolling(m: &Mob) -> bool {
     flag(m, FLAG_ROLL)
 }
+/// A client's bee from the server's `DATA_FLAGS_ID` and `DATA_ANGER_END_TIME`
+/// (the texture and the roll read them).
+pub fn set_synced(m: &mut Mob, flags: Option<u8>, anger_end: Option<i64>) {
+    let b = st(m);
+    if let Some(flags) = flags {
+        b.flags = flags;
+    }
+    if let Some(anger_end) = anger_end {
+        b.anger_end = anger_end;
+    }
+}
 /// `Bee.setHasNectar`: nectar resets the time without it.
 pub fn set_has_nectar(m: &mut Mob, value: bool) {
     if value {

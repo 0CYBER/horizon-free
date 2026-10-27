@@ -339,6 +339,18 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.insert("Sitting".into(), Tag::Byte(i8::from(m.extra.sitting)));
             map.insert("CollarColor".into(), Tag::Byte(m.extra.color as i8));
         }
+        "minecraft:panda" => {
+            use crate::mobs::panda::GENES;
+            for (key, gene) in [
+                ("MainGene", m.extra.variant),
+                ("HiddenGene", m.extra.variant2),
+            ] {
+                map.insert(
+                    key.into(),
+                    string(GENES[usize::from(gene).min(GENES.len() - 1)]),
+                );
+            }
+        }
         "minecraft:piglin" | "minecraft:piglin_brute" | "minecraft:hoglin" => {
             // Only Piglin.addAdditionalSaveData writes CannotHunt.
             if id == "minecraft:piglin_brute" {
@@ -1093,6 +1105,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.sitting = flag(tag, "Sitting");
         m.extra.color =
             number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
+    }
+    if m.species() == crate::mobs::Species::Panda {
+        let gene = |key| text(tag.get(key)).map_or(0, |n| crate::mobs::panda::gene_from_name(&n));
+        m.extra.variant = gene("MainGene");
+        m.extra.variant2 = gene("HiddenGene");
     }
     if m.species() == crate::mobs::Species::Wolf {
         let health = m.health;

@@ -244,7 +244,13 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         }
         _ => (None, None),
     };
-    let mut stack = loot_stack(item?, 1);
+    // A panda keeps the whole stack it picked up in its mouth.
+    let count = if slot == "mainhand" && m.species() == Species::Panda {
+        super::panda::held_count(m)
+    } else {
+        1
+    };
+    let mut stack = loot_stack(item?, count as i32);
     if let (Some(index), Some(g)) = (index, gear::gear(m)) {
         for (e, l) in &g.slots[index] {
             stack.enchantments.push((e.to_string(), *l as i32));

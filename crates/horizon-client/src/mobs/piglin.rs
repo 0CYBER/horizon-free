@@ -498,6 +498,12 @@ fn throw_target(m: &mut Mob, who: Who, cx: &mut Cx) {
 /// `HoglinBase.hurtAndThrowTarget`.
 pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     m.extra.anim_ticks = 10;
+    // Entity event 4: clients start the headbutt.
+    cx.events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 4,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
     let attack = m.attrs.attack_damage;
     let amount = if !m.is_baby() && attack as i32 > 0 {
         attack / 2.0 + m.random.next_int_bound(attack as i32).unwrap_or(0) as f32
@@ -626,6 +632,19 @@ pub fn piglin_pose(
             }
         }
         _ => {}
+    }
+}
+/// `Hoglin.handleEntityEvent` and `Zoglin`'s event 4 on a client: the
+/// headbutt, which `aiStep` then counts down.
+pub fn client_event(m: &mut Mob, event: u8) {
+    if event == 4 {
+        m.extra.anim_ticks = 10;
+    }
+}
+/// The headbutt's countdown (`Hoglin.aiStep`, `Zoglin.aiStep`) on a client.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.anim_ticks > 0 {
+        m.extra.anim_ticks -= 1;
     }
 }
 /// `HoglinModel.setupAnim`.
