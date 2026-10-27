@@ -982,7 +982,7 @@ impl Game<'_> {
             | "minecraft:lingering_potion" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.launch_thrown(one, at, shot.velocity);
+                self.launch_thrown(one, at, shot.velocity, None);
             }
             "minecraft:firework_rocket" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
