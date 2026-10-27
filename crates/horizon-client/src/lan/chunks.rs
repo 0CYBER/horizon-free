@@ -948,6 +948,13 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             }
             Some(Tag::compound(entries))
         }
+        BlockEntity::Shelf(s) => Some(Tag::compound([
+            ("Items", crate::save::encode_items(&s.items)),
+            (
+                "align_items_to_bottom",
+                Tag::Byte(i8::from(s.align_to_bottom)),
+            ),
+        ])),
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();

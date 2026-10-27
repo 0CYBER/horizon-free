@@ -435,15 +435,17 @@ pub(super) fn shelf_signal(
             _ => 0,
         });
     }
-    let tag = super::spill::saved_entity(world, [pos.x, pos.y, pos.z]);
     // Only read from the back: a bit for each of the three slots in use.
     let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
     if facing.map(Direction::opposite) != Some(direction) {
         return Some(0);
     }
-    let items = horizon_client::save::decode_items(tag.as_ref().and_then(|t| t.get("Items")), 3);
+    let Some(BlockEntity::Shelf(shelf)) = world.block_entities.get(&(pos.x, pos.y, pos.z)) else {
+        return Some(0);
+    };
     Some(
-        items
+        shelf
+            .items
             .iter()
             .enumerate()
             .map(|(slot, item)| i32::from(item.is_some()) << slot)
@@ -486,6 +488,12 @@ impl Game<'_> {
             return;
         }
         self.chiseled_bookshelf_synced(pos);
+        if matches!(
+            self.world.block_entities.get(&pos),
+            Some(BlockEntity::Shelf(_))
+        ) {
+            self.mark_block_entity_updated(pos);
+        }
         // A double chest's other half changes with it.
         let halves: Vec<Pos> = std::iter::once(pos)
             .chain(self.chest_other_half(pos))

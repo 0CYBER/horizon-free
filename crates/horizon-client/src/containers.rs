@@ -3,7 +3,7 @@
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
 pub use crate::chunk::block_entity::{
     Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
-    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, Skull, SkullSkin,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, Shelf, Skull, SkullSkin,
 };
 use crate::{
     crafting::Recipes,
@@ -265,6 +265,9 @@ impl BlockEntity {
         if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
             return Some(Self::Campfire(Box::default()));
         }
+        if name == "minecraft:shelf" || name.ends_with("_shelf") {
+            return Some(Self::Shelf(Box::default()));
+        }
         if name == "minecraft:chiseled_bookshelf" {
             return Some(Self::ChiseledBookshelf(Box::default()));
         }
@@ -310,6 +313,7 @@ impl BlockEntity {
             Self::Brushable(_) => "minecraft:brushable_block",
             Self::Campfire(_) => "minecraft:campfire",
             Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
+            Self::Shelf(_) => "minecraft:shelf",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -336,6 +340,7 @@ impl BlockEntity {
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
             Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
             Self::ChiseledBookshelf(b) => b.items.iter().flatten().cloned().collect(),
+            Self::Shelf(b) => b.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -355,6 +360,7 @@ impl BlockEntity {
             | Self::Brushable(_) => &[],
             Self::Crafter(c) => &c.items,
             Self::ChiseledBookshelf(b) => &b.items,
+            Self::Shelf(b) => &b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -382,6 +388,7 @@ impl BlockEntity {
             | Self::Brushable(_) => &mut [],
             Self::Crafter(c) => &mut c.items,
             Self::ChiseledBookshelf(b) => &mut b.items,
+            Self::Shelf(b) => &mut b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
