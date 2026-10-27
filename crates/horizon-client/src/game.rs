@@ -1527,6 +1527,8 @@ struct Game<'a> {
     /// `ClientAvatarState`: walked distance and view bob.
     avatar: horizon_client::camera::AvatarBob,
     flash: u32,
+    /// `ClientLevel.rainSoundTime`: ticks of rain since the last rain sound.
+    rain_sound_time: i32,
     /// Bolts that struck here and sky flashes they made, in total (`status`).
     lightning_seen: [u32; 2],
     /// The head of the bed while sleeping; the visual timer also survives waking.
@@ -10343,40 +10345,7 @@ impl Game<'_> {
         if self.flash > 0 {
             self.flash -= 1;
         }
-        let (rain, _) = self.world.weather.levels(1.0);
-        let Some(eye) = self.eye_position() else {
-            return;
-        };
-        // WeatherEffectRenderer.tickRainParticles: occasional rain sounds.
-        if rain > 0.0 && self.world.random.next_int_bound(3).unwrap_or(1) < (rain * 3.0) as i32 {
-            let r = &mut self.world.random;
-            let (dx, dz) = (
-                r.next_int_bound(21).unwrap_or(10) - 10,
-                r.next_int_bound(21).unwrap_or(10) - 10,
-            );
-            let (x, z) = (eye[0].floor() as i32 + dx, eye[2].floor() as i32 + dz);
-            let top = self.rain_height(x, z);
-            if self.precipitation(x, top, z) == Some(false)
-                && (top - eye[1] as i32).abs() < 10
-                && self.world.random.next_int_bound(5).unwrap_or(1) == 0
-            {
-                let above = f64::from(top) > eye[1] + 1.0;
-                let (name, volume, pitch) = if above {
-                    ("minecraft:weather.rain.above", 0.1, 0.5)
-                } else {
-                    ("minecraft:weather.rain", 0.2, 1.0)
-                };
-                // The Horizon Weather option off silences the rain too.
-                if self.settings.horizon.weather {
-                    self.audio.play(
-                        name,
-                        Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
-                        volume,
-                        pitch,
-                    );
-                }
-            }
-        }
+        // The rain sounds come with the rain splashes (`tick_particles`).
     }
     /// WeatherEffectRenderer: rain and snow columns within the weather radius.
     fn weather_geometry(
@@ -13299,6 +13268,7 @@ impl<'a> Game<'a> {
             dragging: false,
             avatar: Default::default(),
             flash: 0,
+            rain_sound_time: 0,
             lightning_seen: [0; 2],
             sleeping: None,
             sleep_timer: 0,
