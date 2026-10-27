@@ -558,7 +558,6 @@ impl Game<'_> {
         // applyGravity
         c.velocity.y -= if self.cart_in_water(c) { 0.005 } else { 0.04 };
         let pos = self.rail_block(c.position);
-        let fall_speed = c.velocity;
         if let Some(rail) = self.rail(pos[0], pos[1], pos[2]) {
             self.move_along_track(c, pos, &rail, intent);
             if &*rail.name == "minecraft:activator_rail" {
@@ -600,21 +599,25 @@ impl Game<'_> {
                 }
             }
             CartKind::Tnt => {
-                let speed = fall_speed.x * fall_speed.x + fall_speed.z * fall_speed.z;
+                // MinecartTNT.tick: the fuse and the collision check are separate.
                 if c.fuse > 0 {
                     c.fuse -= 1;
                     let at = [c.position.x, c.position.y + 0.5, c.position.z];
                     self.particles
                         .add(&ParticleOptions::simple(ParticleType::Smoke), at, [0.0; 3]);
-                } else if c.fuse == 0 || (c.horizontal_collision && speed >= 0.01) {
+                } else if c.fuse == 0 {
+                    // explode(horizontalDistanceSqr()): a rising cart's
+                    // vertical speed adds nothing.
                     let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-                    let speed = if c.fuse == 0 && c.velocity.y > 0.0 {
-                        c.velocity.y * c.velocity.y
-                    } else {
-                        speed
-                    };
                     self.explode_cart(c, speed);
                     return false;
+                }
+                if c.horizontal_collision {
+                    let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
+                    if speed >= f64::from(0.01_f32) {
+                        self.explode_cart(c, speed);
+                        return false;
+                    }
                 }
             }
             _ => {}
