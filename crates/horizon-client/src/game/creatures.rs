@@ -933,6 +933,9 @@ impl Game<'_> {
             match e {
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
+                MobEvent::EntityEvent { mob, event, at } => {
+                    self.lan_entity_event(mob as i32, event, at)
+                }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio

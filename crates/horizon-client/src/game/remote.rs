@@ -2130,6 +2130,10 @@ impl Game<'_> {
                     self.ui.registries.permission = (p.event - 24) as u8;
                     self.remote_world_options_permission(p.event >= 26);
                 }
+                // ClientPacketListener.handleEntityEvent 21: a guardian's hum.
+                if p.event == 21 {
+                    self.start_guardian_sound(p.id as u32);
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
