@@ -31,7 +31,7 @@ Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that re
 
 Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.dev](https://playhorizon.dev) (the Download button picks your system) or from [the launcher releases](https://github.com/horizon-rust/horizon/releases?q=launcher-v&expanded=true), for Linux x86-64, macOS on Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its files from your own copy of Minecraft, and updates itself.
 
-**You need** a Microsoft account that owns Minecraft: Java Edition (the launcher signs in with it, as other launchers do; see [Microsoft account](docs/microsoft-account.md)); Minecraft: Java Edition 26.3, played once (the official launcher, Prism, MultiMC and other launchers all work); a Java 25 runtime, for the one-time preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac. Step by step, with macOS's first-open prompt and the first launch: [Install and first launch](https://playhorizon.dev/docs/install).
+**You need** Minecraft: Java Edition 26.3, played once (the official launcher, Prism, MultiMC and other launchers all work); a Java 25 runtime, for the one-time preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac. Step by step, with macOS's first-open prompt and the first launch: [Install and first launch](https://playhorizon.dev/docs/install).
 
 <table>
   <tr>
@@ -47,7 +47,7 @@ The [documentation](https://playhorizon.dev/docs/) covers each of these.
 - **The game:** singleplayer with vanilla's world generation, mobs, villagers, raids, redstone, every command, the HUD and the recipe book, on saves in vanilla's format. Worlds from 1.8 to 26.2 are upgraded as vanilla does. [Status table](#project-status).
 - **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
 - **Resource packs and data packs:** resource packs work, and data packs load functions, predicates and item modifiers.
-- **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining servers, online-mode ones with the Microsoft account the launcher signs in with. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
+- **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining offline-mode servers. Horizon cannot sign in to a Microsoft account yet, so it cannot join servers that check accounts. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
 - **Mods:** Horizon has its own mod system (Rust compiled to WebAssembly). Java mod jars do not run. See [Mods and data packs](https://playhorizon.dev/docs/mods).
 
 Screenshots, captured in the Rust client itself with vanilla assets and no mods or shaders:
@@ -158,7 +158,7 @@ them too (Rust uses Java's own float maths on each platform).
 
 ### Known issues
 
-Skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
+Horizon can't sign in to a Microsoft account yet, so it can't join online-mode servers (it joins offline-mode ones); skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
 
 ## Licence
 

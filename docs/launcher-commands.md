@@ -47,7 +47,7 @@ MCP: `prepare`.
 
 ## `horizon-launcher play`
 
-Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition).
+Start the client.
 
     horizon-launcher play
 
@@ -99,7 +99,7 @@ MCP: `account_list`.
 
 ## `horizon-launcher account sign-in`
 
-Sign in with a Microsoft account in your browser (device code). Play needs one that owns Minecraft: Java Edition.
+Sign in with a Microsoft account in your browser (device code).
 
     horizon-launcher account sign-in
 
@@ -127,7 +127,7 @@ MCP: `account_select`.
 
 ## `horizon-launcher account offline`
 
-Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
+Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
 
     horizon-launcher account offline [NAME]
 

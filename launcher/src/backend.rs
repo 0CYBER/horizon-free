@@ -1195,7 +1195,7 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
     binary.is_file().then_some(binary)
 }
 
-/// Downloads the pinned version from Mojang into `dir` when an account in the launcher owns
+/// Downloads the pinned version from Mojang into `dir` when the signed-in account owns
 /// Minecraft (asked again now), else says what signing in would do, as the last line of the
 /// not-found error.
 fn download_for_owner(
@@ -1205,20 +1205,17 @@ fn download_for_owner(
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let v = &pins.version;
-    let mut accounts = account::Accounts::load();
-    let pass = account::launch(
-        &account::Endpoints::live(),
-        account::client_id().as_deref(),
-        account::store(),
-        &mut accounts,
-    );
-    let _ = accounts.save();
-    match pass {
-        Ok(account::Launch {
-            owner: Some((owner, _)),
-            ..
-        }) => {
-            let name = owner.name;
+    let owner = (|| -> Result<Option<(String, bool)>, String> {
+        let ep = account::Endpoints::live();
+        let mut accounts = account::Accounts::load();
+        let Some((a, secrets)) = account::session_for_launch(&ep, account::store(), &mut accounts)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((a.name, account::owns_minecraft(&ep, &secrets)?)))
+    })();
+    match owner {
+        Ok(Some((name, true))) => {
             log(format!(
                 "{name} owns Minecraft: downloading {v} from Mojang"
             ));
@@ -1231,19 +1228,17 @@ fn download_for_owner(
                 format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
             })
         }
-        // An owner by its last answer, who can't be asked now.
-        Ok(pass) => Err(format!(
-            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
-             checked: {}",
-            pass.offline.unwrap_or_default()
+        Ok(Some((name, false))) => Err(format!(
+            "\n  • {name}, the signed-in account, doesn't own Minecraft: Java Edition, so Horizon \
+             can't download it."
         )),
-        Err(_) if !accounts.accounts.is_empty() => Err(
-            "\n  • No signed-in account owns Minecraft: Java Edition, so Horizon can't download it."
-                .into(),
-        ),
-        Err(_) => Err(format!(
+        Ok(None) => Err(format!(
             "\n  • Or sign in with the Microsoft account that owns Minecraft: Horizon then \
              downloads {v} from Mojang itself."
+        )),
+        Err(e) => Err(format!(
+            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
+             checked: {e}"
         )),
     }
 }
@@ -1910,20 +1905,14 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
     }
 }
 
-/// The client's command, once the owner gate lets it start and its resources are prepared. Past
-/// the gate, a sign-in that can't be renewed (no network, expired) still lets the game start,
-/// offline.
+/// The client's command, once its resources are prepared.
 pub fn client(tag: &str) -> Result<Command, String> {
-    let (session, offline) = account::session_for_game(&game_home())
-        .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;
     need_prepared(tag)?;
     complete_assets(tag);
     crate::browser::horizon::before_play(&game_home());
     let mut cmd = client_command(tag);
-    if let Some(file) = session {
-        cmd.arg("--session-file").arg(file);
-    }
-    if let Some(e) = offline {
+    // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
+    if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
         eprintln!("Playing offline: {e}");
     }
     append_game_args(&mut cmd);
@@ -2471,11 +2460,9 @@ pub enum Msg {
     Reused(Vec<(String, String)>),
     /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
     Keychain(bool),
-    /// Whether an account in the launcher owned the game at its last check (the owner gate).
-    Owner(bool),
-    /// The owner gate's answer for the game about to start: the selected account's session
-    /// file (none = offline) and why it plays offline, if it does.
-    Session(Result<(Option<PathBuf>, Option<String>), crate::account::NoOwner>),
+    /// The selected account's session file for the game about to start (none = offline), or
+    /// why it could not be renewed.
+    Session(Result<Option<PathBuf>, String>),
     /// A modpack step's line (`modpacks`).
     PackLine(String),
     /// A modpack step ended: the pack as it now is.
@@ -2644,10 +2631,6 @@ pub struct Settings {
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
-    /// The player without an account that owns the game has read, once, why the launcher needs
-    /// one now (the owner gate's screen).
-    #[serde(default)]
-    pub owner_notice_seen: bool,
     /// Seconds the sidebar's partner banner has been on screen, over every start, up to
     /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
     #[serde(default)]
