@@ -90,7 +90,7 @@ fn agent(url: &str) -> ureq::Agent {
     .build()
 }
 
-fn get(url: &str) -> Result<ureq::Response, String> {
+pub(crate) fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
     if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
@@ -239,7 +239,7 @@ fn release_list() -> Result<serde_json::Value, String> {
 }
 
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
-fn parse_releases(
+pub(crate) fn parse_releases(
     list: &serde_json::Value,
     asset: Option<&str>,
     keep: fn(&str) -> bool,
@@ -475,7 +475,7 @@ fn installed_in(versions: &Path) -> Vec<String> {
 }
 
 /// A small release file (its checksums or their signature), whole; None when it has none.
-fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
     let response = match get(url) {
         Ok(response) => response,
         Err(e) if e.ends_with("answered 404") => return Ok(None),
@@ -550,17 +550,28 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
     if !is_game_tag(tag) {
         return Err(format!("{tag} is not a Horizon release."));
     }
+    let sha256 = signed_digest(tag, ASSET.unwrap_or_default())?;
+    install_as(release, tag, &sha256, progress)
+}
+
+/// Downloads `release`'s archive for this platform, checks it against `sha256` (its signed
+/// checksum), and unpacks it as the installed version `tag`.
+pub(crate) fn install_as(
+    release: &Release,
+    tag: &str,
+    sha256: &str,
+    progress: impl Fn(f32),
+) -> Result<(), String> {
     let (url, size) = release
         .asset
         .clone()
         .ok_or_else(|| format!("{tag} has no build for this platform."))?;
-    let sha256 = signed_digest(tag, ASSET.unwrap_or_default())?;
     let root = versions_dir();
     let partial = root.join(format!(".{tag}.partial"));
     let _ = fs::remove_dir_all(&partial);
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
     let archive = partial.join("download");
-    download(&url, size, &sha256, &archive, &progress)?;
+    download(&url, size, sha256, &archive, &progress)?;
     let unpacked = partial.join("unpacked");
     unpack(&archive, &url, &unpacked)?;
     progress(0.97);
@@ -651,14 +662,17 @@ fn sounds_in(resources: &Path) -> bool {
 
 /// What the Play page says of a version's resources.
 pub fn resources_summary(prepared: bool, sounds: bool, version: &str) -> String {
+    use crate::i18n::trf;
     match (prepared, sounds) {
-        (false, _) => {
-            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
-        }
-        (true, true) => format!("Prepared for Minecraft {version}"),
-        (true, false) => format!(
+        (false, _) => trf(
+            "Not prepared. Horizon needs the files of your own Minecraft {version}.",
+            &[("version", version)],
+        ),
+        (true, true) => trf("Prepared for Minecraft {version}", &[("version", version)]),
+        (true, false) => trf(
             "Prepared for Minecraft {version}, without its sounds: the game will be silent. \
-             Prepare again to copy them from your Minecraft install."
+             Prepare again to copy them from your Minecraft install.",
+            &[("version", version)],
         ),
     }
 }
@@ -2436,6 +2450,10 @@ pub enum Msg {
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
     /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
     Playing(Option<u64>),
+    /// The nightly being installed, done this far (`nightly`).
+    NightlyProgress(f32),
+    /// A nightly check ended: the version installed (None: already up to date), or why not.
+    Nightly(Result<Option<String>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2604,6 +2622,20 @@ pub struct Settings {
     /// What the window does while the game runs. Stays by default.
     #[serde(default)]
     pub while_playing: WhilePlaying,
+    /// The accent colour on top of the appearance (`themes::Accent`). Horizon's violet by default.
+    #[serde(default)]
+    pub accent: crate::themes::Accent,
+    /// Home's background: a picture the player picked, kept in the data folder under this name
+    /// (`themes::keep_background`). Unset shows Horizon's landscape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// The window's language. Unset follows the system's (`i18n::Language::system`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<crate::i18n::Language>,
+    /// The player turned Nightly on (`nightly`): the nightly build installs and updates in its own
+    /// instance. Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nightly: bool,
 }
 
 impl Settings {
@@ -2628,12 +2660,27 @@ impl Settings {
             {
                 fields.remove("while_playing");
             }
+            if fields.get("accent").is_some_and(|a| {
+                serde_json::from_value::<crate::themes::Accent>(a.clone()).is_err()
+            }) {
+                fields.remove("accent");
+            }
+            // A language this launcher doesn't have yet follows the system's.
+            if fields.get("language").is_some_and(|l| {
+                serde_json::from_value::<Option<crate::i18n::Language>>(l.clone()).is_err()
+            }) {
+                fields.remove("language");
+            }
         }
         serde_json::from_value(value).unwrap_or_default()
     }
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {
         self.desktop_entry.unwrap_or(true)
+    }
+    /// The window's language: the one picked, else the system's.
+    pub fn language(&self) -> crate::i18n::Language {
+        self.language.unwrap_or_else(crate::i18n::Language::system)
     }
     /// Whether new Horizon versions are installed automatically.
     pub fn auto_install(&self) -> bool {
@@ -2963,6 +3010,35 @@ mod tests {
         }
         let here = WhilePlaying::Hide.here();
         assert_eq!(here == WhilePlaying::Hide, cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn the_language_follows_the_system_unless_picked() {
+        use crate::i18n::Language;
+        assert_eq!(Settings::parse("{}").language, None);
+        let fr = Settings::parse(r#"{"language": "fr"}"#);
+        assert_eq!(fr.language(), Language::French);
+        let future = Settings::parse(r#"{"language": "eo", "game_args": "--x"}"#);
+        assert_eq!((future.language, future.game_args.as_str()), (None, "--x"));
+        let saved = serde_json::to_value(Settings::default()).unwrap();
+        assert!(saved.get("language").is_none(), "unset is left out");
+    }
+
+    #[test]
+    fn the_accent_is_violet_unless_picked_and_an_unknown_one_keeps_the_rest() {
+        use crate::themes::Accent;
+        assert_eq!(Settings::parse("{}").accent, Accent::Violet);
+        let teal =
+            Settings::parse(r#"{"accent": "teal", "background": "background-0123456789ab.png"}"#);
+        assert_eq!(
+            (teal.accent, teal.background.as_deref()),
+            (Accent::Teal, Some("background-0123456789ab.png"))
+        );
+        let future = Settings::parse(r#"{"accent": "plaid", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.accent, future.game_args.as_str()),
+            (Accent::Violet, "--x")
+        );
     }
 
     #[test]
