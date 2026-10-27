@@ -159,8 +159,5 @@
   "Nightly builds": "每夜构建",
   "Plays in its own Nightly instance: your worlds and the release stay as they are.": "在单独的 Nightly 实例中运行：你的世界和正式版保持不变。",
   "The nightly could not be installed: {error}": "无法安装每夜构建：{error}",
-  "No nightly build yet.": "还没有每夜构建。",
-  "Microsoft account (coming soon)": "Microsoft 账户（即将推出）",
-  "Microsoft sign-in is coming soon. Until then the game plays offline: single player, LAN and servers in offline mode work.": "Microsoft 登录即将推出。在此之前游戏以离线方式运行：单人游戏、局域网和离线模式的服务器都能玩。",
-  "Coming soon": "即将推出"
+  "No nightly build yet.": "还没有每夜构建。"
 }
