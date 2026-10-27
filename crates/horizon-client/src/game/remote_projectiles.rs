@@ -166,7 +166,7 @@ impl Game<'_> {
                 p.velocity = velocity;
                 p.yaw = yaw;
                 p.pitch = pitch;
-                self.creatures.projectiles.push(p);
+                self.add_projectile(p);
             }
         }
         true

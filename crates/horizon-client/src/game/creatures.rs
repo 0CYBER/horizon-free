@@ -892,6 +892,15 @@ impl Game<'_> {
             self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
         }
     }
+    /// Adds a projectile, giving it an id from the entity counter
+    /// (`Entity.id`, the same counter as the rest) when it has none.
+    pub(super) fn add_projectile(&mut self, mut p: horizon_client::projectiles::Projectile) {
+        if p.id == 0 {
+            self.next_entity += 1;
+            p.id = self.next_entity;
+        }
+        self.creatures.projectiles.push(p);
+    }
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
@@ -1078,7 +1087,7 @@ impl Game<'_> {
                     self.next_entity += 1;
                     p.id = self.next_entity;
                     let (owner, at) = (p.owner, [p.position.x, p.position.y, p.position.z]);
-                    self.creatures.projectiles.push(p);
+                    self.add_projectile(p);
                     self.projectile_event("minecraft:projectile_shoot", owner, at);
                 }
                 MobEvent::Spawn(mut m) => {
@@ -2160,7 +2169,7 @@ impl Game<'_> {
             }
         }
         if keep {
-            self.creatures.projectiles.push(arrow);
+            self.add_projectile(arrow);
         }
     }
     /// `TargetBlock.onProjectileHit`: a target block takes its power from
@@ -3162,7 +3171,7 @@ impl Game<'_> {
             velocity,
             on_ground,
         );
-        self.creatures.projectiles.push(proj);
+        self.add_projectile(proj);
         self.player_projectile_shot();
         // ItemStack.use's applyAfterUseComponentSideEffects: the pearl's
         // second is the `use_cooldown` component, as for any thrown item.

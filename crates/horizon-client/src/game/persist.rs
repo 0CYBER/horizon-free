@@ -193,12 +193,12 @@ impl Game<'_> {
                             if let Some(a) = p.arrow.as_mut() {
                                 a.last_state = in_block.and_then(|t| self.state_from_nbt(&t));
                             }
-                            self.creatures.projectiles.push(p);
+                            self.add_projectile(p);
                         }
                     }
                     "minecraft:fireball" | "minecraft:small_fireball" => {
                         if let Some(p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
-                            self.creatures.projectiles.push(p);
+                            self.add_projectile(p);
                         }
                     }
                     "minecraft:falling_block" => {
