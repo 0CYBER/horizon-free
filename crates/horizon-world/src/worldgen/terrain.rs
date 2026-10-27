@@ -37,6 +37,9 @@ pub trait TerrainAquifer {
     fn air_above_y(&self) -> Option<i32> {
         None
     }
+    /// The fill decided this block without the aquifer (positive density or air
+    /// above its skip height). Both old paths cleared the pending fluid update.
+    fn note_skipped(&mut self) {}
 }
 impl<P: FluidPicker> TerrainAquifer for DisabledAquifer<P> {
     fn compute_substance(
@@ -67,6 +70,9 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> TerrainAquifer
     }
     fn air_above_y(&self) -> Option<i32> {
         NoiseBasedAquifer::air_above_y(self)
+    }
+    fn note_skipped(&mut self) {
+        NoiseBasedAquifer::note_skipped(self);
     }
 }
 
@@ -556,6 +562,7 @@ pub fn fill_noise<B: TerrainBlockStates>(
                     {
                         run += 1;
                     }
+                    aquifer.note_skipped();
                     chunk.fill_solid_run(
                         x as i32,
                         world_y,
@@ -579,10 +586,16 @@ pub fn fill_noise<B: TerrainBlockStates>(
                 }
                 // The aquifer answers `None` for positive density, which the fill
                 // writes as the default block, and air above its skip/fluid level.
-                // Both are decided here so the per-block call is not made at all.
-                let state = if value > 0.0 {
+                // Both are decided here so the per-block call is not made at all,
+                // with the same pending-update side effect the call had.
+                let solid = value > 0.0;
+                if solid {
+                    aquifer.note_skipped();
+                }
+                let state = if solid {
                     default_block
                 } else if air_above.is_some_and(|limit| world_y > limit) {
+                    aquifer.note_skipped();
                     continue;
                 } else {
                     aquifer

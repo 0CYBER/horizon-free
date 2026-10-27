@@ -215,6 +215,12 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> NoiseBasedAquif
     pub fn skip_sampling_above_y(&self) -> i32 {
         self.skip_above_y
     }
+    /// The fill decided a block without this aquifer. Both old decisions
+    /// (positive density and air above the skip height) cleared the pending
+    /// fluid update, so the caller reproduces that side effect.
+    pub fn note_skipped(&mut self) {
+        self.schedule = false;
+    }
     /// The y above which a non-positive density is the global fluid's air. The
     /// vanilla fluid rules depend only on y; a picker that varies with x/z keeps
     /// the per-block call by answering `None`.
