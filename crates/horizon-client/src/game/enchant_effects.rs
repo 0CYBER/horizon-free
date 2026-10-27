@@ -197,6 +197,106 @@ impl Game<'_> {
         }
         self.post_attack_bursts(&held, &kind);
     }
+    /// `EnchantmentHelper.doPostPiercingAttackEffects`: the
+    /// `minecraft:post_piercing_attack` effects of the weapon in hand after a
+    /// jab (Lunge's dash).
+    pub(super) fn post_piercing_attack(&mut self) {
+        let Some(held) = self.held().cloned() else {
+            return;
+        };
+        let mut effects = Vec::new();
+        for (id, level) in held.enchantments() {
+            let Some(def) = self.res.stations().enchantments.get(id) else {
+                continue;
+            };
+            for entry in def.effects["minecraft:post_piercing_attack"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                effects.push((*level, entry["effect"].clone()));
+            }
+        }
+        // Lunge's requirements: not riding, gliding or in water, and a
+        // player outside creative with at least 7 food.
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        if effects.is_empty()
+            || self.riding.is_some()
+            || p.fall_flying
+            || p.fluids.was_touching_water
+            || !(self.creative || p.health.food.food >= 7)
+        {
+            return;
+        }
+        for (level, effect) in effects {
+            self.apply_piercing_effect(&effect, level);
+        }
+    }
+    /// One `post_piercing_attack` effect on the player: `AllOf`,
+    /// `ChangeItemDamage`, `ApplyExhaustion`, `ApplyEntityImpulse` and
+    /// `PlaySoundEffect`.
+    fn apply_piercing_effect(&mut self, effect: &serde_json::Value, level: u32) {
+        let amount = || level_value(&effect["amount"], level);
+        match effect["type"].as_str() {
+            Some("minecraft:all_of") => {
+                for e in effect["effects"].as_array().into_iter().flatten() {
+                    self.apply_piercing_effect(e, level);
+                }
+            }
+            Some("minecraft:change_item_damage") => self.damage_held(amount() as u32),
+            Some("minecraft:apply_exhaustion") => {
+                if let Some(p) = self.player.as_mut() {
+                    p.cause_food_exhaustion(amount());
+                }
+            }
+            // The direction turned by the look (`Entity.getLookQuaternion`:
+            // pitch about x, then yaw about y), scaled by coordinate_scale
+            // and the magnitude, added to the velocity (the guest's client
+            // is told of it by `guest_hit_by`).
+            Some("minecraft:apply_impulse") => {
+                let vec3 = |key: &str| [0, 1, 2].map(|i| effect[key][i].as_f64().unwrap_or(0.0));
+                let (d, scale) = (vec3("direction"), vec3("coordinate_scale"));
+                let magnitude = f64::from(level_value(&effect["magnitude"], level));
+                let (yaw, pitch) = (
+                    f64::from(self.yaw).to_radians(),
+                    f64::from(self.pitch).to_radians(),
+                );
+                let (y1, z1) = (
+                    d[1] * pitch.cos() - d[2] * pitch.sin(),
+                    d[1] * pitch.sin() + d[2] * pitch.cos(),
+                );
+                let impulse = horizon_core::geometry::Vec3::new(
+                    (d[0] * yaw.cos() - z1 * yaw.sin()) * scale[0] * magnitude,
+                    y1 * scale[1] * magnitude,
+                    (d[0] * yaw.sin() + z1 * yaw.cos()) * scale[2] * magnitude,
+                );
+                if let Some(p) = self.player.as_mut() {
+                    p.velocity = p.velocity.add_vector(impulse);
+                }
+            }
+            // The sound for the level (a list picks by level), heard by all.
+            Some("minecraft:play_sound") => {
+                let sounds: Vec<&str> = match &effect["sound"] {
+                    serde_json::Value::Array(list) => {
+                        list.iter().filter_map(|s| s.as_str()).collect()
+                    }
+                    one => one.as_str().into_iter().collect(),
+                };
+                let index = (level as usize).saturating_sub(1);
+                if let Some(sound) = sounds.get(index.min(sounds.len().saturating_sub(1))) {
+                    let float = |key: &str| effect[key].as_f64().unwrap_or(1.0) as f32;
+                    let at = self
+                        .player
+                        .as_ref()
+                        .map(|p| [p.position.x, p.position.y, p.position.z]);
+                    self.audio.play(sound, at, float("volume"), float("pitch"));
+                }
+            }
+            _ => {}
+        }
+    }
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):
     /// a burst at the player's feet that only knocks back and triggers
     /// blocks (`ExplodeEffect` with `block_interaction: trigger`).

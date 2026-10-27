@@ -1027,6 +1027,8 @@ impl Game<'_> {
                         g.player_on_equip("mainhand", offhand.as_ref(), main.as_ref());
                     });
                 }
+                // STAB: `PiercingWeapon.attack` of a left click with a spear.
+                8 if !spectator => self.guest_jab(host, conn),
                 _ => {}
             },
             S::SetCarriedItem(p) => {
@@ -1512,6 +1514,37 @@ impl Game<'_> {
         g.yaw = (-d[0].atan2(d[2])).to_degrees() as f32;
         g.pitch = (-d[1].atan2(horizontal)).to_degrees() as f32;
         Some((centre, eye))
+    }
+
+    /// `ServerGamePacketListenerImpl.handlePlayerAction` for STAB: the spear in
+    /// the guest's main hand jabs once its charge allows it (with five ticks
+    /// of tolerance). The guest's client is sent the dash Lunge gave them.
+    fn guest_jab(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest(conn) else {
+            return;
+        };
+        let at = g.position;
+        // ServerPlayer.getKnownMovement: the move their client just sent.
+        let movement = g
+            .moves
+            .last()
+            .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
+        let sound = self
+            .guest_hit_by(host, conn, |g| {
+                g.known_movement = movement;
+                if g.cannot_attack_with_item(g.attack_ticks as i32, 5) {
+                    None
+                } else {
+                    g.jab()
+                }
+            })
+            .flatten();
+        // PiercingWeapon.makeSound: `playSound(causer, ...)`, so the guest's
+        // own client plays it.
+        if let Some(name) = sound {
+            let source = horizon_client::settings::sound_source(name) as i32;
+            host.hub.sound(name, at, 1.0, 1.0, source, Some(conn));
+        }
     }
 
     fn guest_attack(&mut self, host: &mut LanHost, conn: u32, id: i32) {

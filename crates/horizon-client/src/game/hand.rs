@@ -331,6 +331,12 @@ struct GameHands<'g, 'a> {
     error: Option<Box<dyn std::error::Error>>,
 }
 impl GameHands<'_, '_> {
+    /// The main-hand item's `kinetic_weapon` and `piercing_weapon`, a spear's.
+    fn attack_kinetic(&self) -> Option<horizon_client::spear::Kinetic> {
+        self.game
+            .held()
+            .and_then(|s| horizon_client::spear::Kinetic::of(&s.item))
+    }
     fn keep(&mut self, r: Result<()>) {
         if let Err(e) = r
             && self.error.is_none()
@@ -398,18 +404,27 @@ impl HandWorld for GameHands<'_, '_> {
         self.game.creative
     }
     fn cannot_attack(&mut self) -> bool {
-        false
+        let ticker = self.game.hand_strength.ticker;
+        self.game.cannot_attack_with_item(ticker, 0)
     }
     fn piercing_weapon(&mut self) -> bool {
-        false
+        self.attack_kinetic().is_some()
     }
     fn attack_animation(&mut self) -> SwingAnimation {
-        SwingAnimation::DEFAULT
+        self.attack_kinetic()
+            .map_or(SwingAnimation::DEFAULT, |k| k.attack_animation())
     }
     fn interact_animation(&mut self, _: Hand) -> SwingAnimation {
         SwingAnimation::DEFAULT
     }
-    fn piercing_attack(&mut self, _: SwingAnimation) {}
+    fn piercing_attack(&mut self, _: SwingAnimation) {
+        // The server's part (`PiercingWeapon.attack`), then the client's:
+        // the sound `MultiPlayerGameMode.piercingAttack` plays.
+        if let Some(sound) = self.game.jab() {
+            self.game.play_at_feet(sound);
+        }
+        self.game.hand_strength.reset_attack();
+    }
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }
