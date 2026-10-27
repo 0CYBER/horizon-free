@@ -191,9 +191,17 @@ fn mob_variant_meta(
                     "minecraft:zombie_nautilus_variant",
                 ),
             };
+            // Each registry's default (`define(DATA_VARIANT_ID, ... TEMPERATE)`)
+            // stays out of the pairing data, as other default values do.
             let name = horizon_client::mobs::finalize::variant_name(m.species(), e.variant);
-            if let Some(v) = id(registry, name.trim_start_matches("minecraft:")) {
+            let name = name.trim_start_matches("minecraft:");
+            if let Some(v) = id(registry, name)
+                && name != "temperate"
+            {
                 meta.push((index, serializer, Value::Id(v)));
+            }
+            if let Some(v) = id(registry, "temperate") {
+                defaults.push((index, serializer, Value::Id(v)));
             }
         }
         // Rabbit.DATA_TYPE_ID (after AgeableMob's two) and
