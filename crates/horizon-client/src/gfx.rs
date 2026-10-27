@@ -35,9 +35,13 @@ fn entity_shader() -> String {
 #[cfg(test)]
 mod crumbling_tests;
 mod entity_batch;
+mod entity_outline;
 mod weather;
 use entity_batch::EntityBatch;
-pub use entity_batch::{SHADOW_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY};
+pub use entity_batch::{
+    SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
+    TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
+};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -247,6 +251,8 @@ pub struct Frame<'a> {
     pub outline: Vec<[f64; 6]>,
     /// `BlockOutlineRenderState.isTranslucent`: draw after translucent terrain.
     pub outline_after_terrain: bool,
+    /// `BlockOutlineRenderState.highContrast`: a thick black outline under a bright one.
+    pub outline_high_contrast: bool,
     /// `lines` with a colour and pixel width (`gizmos::camera_relative`):
     /// the fishing line and debug gizmos, depth tested, then gizmos drawn
     /// over everything.
@@ -260,6 +266,9 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// The glowing entities' silhouettes in their team colours (`OutlineBufferSource`),
+    /// outlined through walls after the hand.
+    pub glowing: &'a [Vertex],
     /// Runs of `entities` by entity, while a shader pack draws them (`pack_draw::EntitySpan`).
     pub entity_spans: &'a [pack_draw::EntitySpan],
     pub weather: &'a [crate::weather::Vertex],
@@ -377,6 +386,7 @@ pub struct Renderer {
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    lines_secondary: wgpu::RenderPipeline,
     /// Gizmo lines (`RenderTypes.linesTranslucentNoDepthWrite`) and the
     /// always-on-top ones.
     debug_lines: wgpu::RenderPipeline,
@@ -391,6 +401,7 @@ pub struct Renderer {
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
     shadow_blob_pipeline: wgpu::RenderPipeline,
+    translucent_item_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -407,6 +418,8 @@ pub struct Renderer {
     celestial_buffer: wgpu::Buffer,
     end_sky: end_sky::EndSky,
     stars: stars::Stars,
+    /// The glowing entities' outline (`LevelRenderer.entityOutlineTarget`).
+    entity_outline: entity_outline::EntityOutline,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
@@ -1213,12 +1226,6 @@ impl Renderer {
                 attributes: &instance_attributes,
             }),
         ];
-        let line_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3];
-        let line_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: 24,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &line_attributes,
-        })];
         let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
         let debug_line_attributes =
             wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Unorm8x4,3=>Float32];
@@ -1351,10 +1358,22 @@ impl Renderer {
             "Block outline",
             "vs_line",
             "fs_line",
-            &line_buffers,
+            &debug_line_buffers,
             wgpu::PrimitiveTopology::TriangleStrip,
             None,
             true,
+            true,
+            Some(alpha_blend),
+        );
+        // RenderTypes.secondaryBlockOutline: the black stroke under a high contrast outline.
+        let lines_secondary = pipeline(
+            "Block outline secondary",
+            "vs_line",
+            "fs_line",
+            &debug_line_buffers,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            None,
+            false,
             true,
             Some(alpha_blend),
         );
@@ -1531,7 +1550,7 @@ impl Renderer {
         });
         let outline = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Outline"),
-            size: 24 * MAX_OUTLINE_EDGES,
+            size: 32 * 2 * MAX_OUTLINE_EDGES,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1836,6 +1855,19 @@ impl Renderer {
                 slope_scale: 0.015,
                 clamp: 0.0,
             },
+            alpha_blend,
+            false,
+        );
+        // RenderPipelines.ITEM_TRANSLUCENT: blended, depth tested. Drawn before
+        // translucent terrain, it cannot write depth: the water behind a
+        // glass item would fail the test and vanish (vanilla sorts these in
+        // its order independent transparency pass instead).
+        let translucent_item_pipeline = entity_pipeline(
+            "Translucent items",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
             alpha_blend,
             false,
         );
@@ -2319,6 +2351,11 @@ impl Renderer {
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
+        let entity_outline = entity_outline::EntityOutline::new(
+            &device,
+            (&entity_shader, &entity_layout, &entity_vertex),
+            config.format.remove_srgb_suffix(),
+        );
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -2364,6 +2401,7 @@ impl Renderer {
             sky,
             dark_disc,
             lines,
+            lines_secondary,
             debug_lines,
             debug_lines_on_top,
             debug_line_buffer,
@@ -2374,6 +2412,7 @@ impl Renderer {
             weather,
             crumbling_pipeline,
             shadow_blob_pipeline,
+            translucent_item_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
             cloud_mesh: Default::default(),
@@ -2389,6 +2428,7 @@ impl Renderer {
             celestial_buffer,
             end_sky: end_sky::EndSky::default(),
             stars,
+            entity_outline,
             panorama,
             border_pipeline,
             border_group,
@@ -2484,6 +2524,18 @@ impl Renderer {
             animated_textures: true,
             present_modes,
         })
+    }
+    /// LevelRenderer.submitBlockOutline: the buffer holds `edges` per stroke, the black
+    /// secondary stroke first when high contrast is on.
+    fn draw_outline(&self, pass: &mut wgpu::RenderPass<'_>, edges: u32, high_contrast: bool) {
+        pass.set_vertex_buffer(0, self.outline.slice(..));
+        if high_contrast {
+            pass.set_pipeline(&self.lines_secondary);
+            pass.draw(0..4, 0..edges);
+        }
+        pass.set_pipeline(&self.lines);
+        let first = if high_contrast { edges } else { 0 };
+        pass.draw(0..4, first..first + edges);
     }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
         let indices: Vec<u32> = (0..quads)
@@ -3197,7 +3249,7 @@ impl Renderer {
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
-        let levels = sprite_mipmap_limit(
+        let levels = crate::sprites::sprite_mipmap_limit(
             levels,
             self.sprite_textures[0].width(),
             self.sprite_minimum_size,
@@ -3957,7 +4009,26 @@ impl Renderer {
         );
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
-            let lines = outline_vertices(&frame.outline[..outline_edges], camera);
+            // The same per-line colour and pixel width layout as the gizmo lines. A high
+            // contrast outline is two strokes: the black one first, the bright one after it.
+            let edges = outline_vertices(&frame.outline[..outline_edges], camera);
+            let width = outline_width(self.config.width);
+            let stroke = |color: u32, width: f32| {
+                edges.iter().map(move |e| {
+                    let mut line = [0.0; 8];
+                    line[..6].copy_from_slice(e);
+                    line[6] = f32::from_bits(color);
+                    line[7] = width;
+                    line
+                })
+            };
+            let lines: Vec<[f32; 8]> = if frame.outline_high_contrast {
+                stroke(0xff00_0000, 7.0)
+                    .chain(stroke(0xff57_ffe1, width))
+                    .collect()
+            } else {
+                stroke(0x6600_0000, width).collect()
+            };
             self.uploads
                 .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
@@ -3984,6 +4055,7 @@ impl Renderer {
             water_mask_quads,
             shadow_quads,
             translucent_particle_quads,
+            translucent_item_quads,
         ] = self
             .entity_batch
             .update(entities, frame.additive, frame.hand, frame.see_through);
@@ -3993,7 +4065,8 @@ impl Renderer {
             + translucent_crumbling_quads
             + water_mask_quads
             + shadow_quads
-            + translucent_particle_quads;
+            + translucent_particle_quads
+            + translucent_item_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -4054,6 +4127,13 @@ impl Renderer {
                 bytemuck::cast_slice(all_entities),
             );
         }
+        self.entity_outline.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            frame.glowing,
+            [self.config.width, self.config.height],
+        );
         if let Some((rotation, brightness)) = frame.stars {
             self.stars.prepare(
                 &mut self.uploads,
@@ -4081,7 +4161,8 @@ impl Renderer {
             } else {
                 lightning::QUADS
             })
-            .max(weather_quads);
+            .max(weather_quads)
+            .max(frame.glowing.len() as u32 / 4);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -4516,6 +4597,17 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if translucent_item_quads > 0 {
+                pass.set_pipeline(&self.translucent_item_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..translucent_item_quads * 6,
+                    ((world_quads - translucent_item_quads) * 4) as i32,
+                    0..1,
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if !pack_draws_weather {
                 self.weather.draw(&mut pass, &self.entity_group);
             }
@@ -4533,7 +4625,11 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..shadow_quads * 6,
-                    ((world_quads - translucent_particle_quads - shadow_quads) * 4) as i32,
+                    ((world_quads
+                        - translucent_item_quads
+                        - translucent_particle_quads
+                        - shadow_quads)
+                        * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -4565,9 +4661,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if outline_edges > 0 && !frame.outline_after_terrain {
-                pass.set_pipeline(&self.lines);
-                pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..4, 0..outline_edges as u32);
+                self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
             if debug_depth > 0 {
                 pass.set_pipeline(&self.debug_lines);
@@ -4614,7 +4708,8 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..translucent_particle_quads * 6,
-                    ((world_quads - translucent_particle_quads) * 4) as i32,
+                    ((world_quads - translucent_item_quads - translucent_particle_quads) * 4)
+                        as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -4622,9 +4717,7 @@ impl Renderer {
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
             if outline_edges > 0 && frame.outline_after_terrain {
-                pass.set_pipeline(&self.lines);
-                pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..4, 0..outline_edges as u32);
+                self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             // LevelRenderer: the world border after translucent terrain and weather.
@@ -4811,6 +4904,13 @@ impl Renderer {
                 0..1,
             );
         }
+        // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
+        self.entity_outline.draw(
+            &mut encoder,
+            &view_target,
+            &self.entity_group,
+            &self.indices,
+        );
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5243,7 +5343,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 1, 1]);
+        assert_eq!(counts, [4, 1, 1, 0, 1, 1, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -5479,11 +5579,6 @@ mod tests {
     }
 }
 
-pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, available: u32) -> u32 {
-    // Only the atlas native minimum determines how many resampling-only mips to skip.
-    let upscale = (size / minimum.max(1)).max(1).ilog2();
-    requested.saturating_add(upscale).min(available - 1)
-}
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
@@ -5541,13 +5636,6 @@ mod sprite_upload_tests {
                 1,
             );
             assert_eq!(&actual[32 * 32 * 4..], expected, "rail layer {layer}");
-        }
-    }
-    #[test]
-    fn mipmap_option_keeps_real_16px_reductions() {
-        for levels in 0..=4 {
-            assert_eq!(sprite_mipmap_limit(levels, 32, 16, 6), levels + 1);
-            assert_eq!(sprite_mipmap_limit(levels, 16, 16, 5), levels);
         }
     }
     #[test]

@@ -29,12 +29,22 @@ pub(crate) type State = HurtState<DamageTypeId>;
 pub struct HealthRules {
     pub difficulty: Difficulty,
     pub natural_regeneration: bool,
+    /// The `drowning_damage`, `fall_damage`, `fire_damage` and
+    /// `freeze_damage` rules `Player.isInvulnerableTo` reads.
+    pub drowning_damage: bool,
+    pub fall_damage: bool,
+    pub fire_damage: bool,
+    pub freeze_damage: bool,
 }
 impl Default for HealthRules {
     fn default() -> Self {
         Self {
             difficulty: Difficulty::Normal,
             natural_regeneration: true,
+            drowning_damage: true,
+            fall_damage: true,
+            fire_damage: true,
+            freeze_damage: true,
         }
     }
 }
@@ -633,8 +643,13 @@ impl ImmunityWorld for Environment<'_> {
     fn enchantment_immunity(&mut self) -> io::Result<bool> {
         Ok(false)
     }
-    fn damage_rule(&mut self, _: DamageRule) -> io::Result<bool> {
-        Ok(true)
+    fn damage_rule(&mut self, rule: DamageRule) -> io::Result<bool> {
+        Ok(match rule {
+            DamageRule::Drowning => self.rules.drowning_damage,
+            DamageRule::Fall => self.rules.fall_damage,
+            DamageRule::Fire => self.rules.fire_damage,
+            DamageRule::Freeze => self.rules.freeze_damage,
+        })
     }
     fn changing_dimension(&mut self) -> io::Result<bool> {
         Ok(false)

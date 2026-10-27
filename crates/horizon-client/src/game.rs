@@ -63,9 +63,9 @@ mod frames;
 mod friends;
 mod functions;
 mod game_mode;
-mod game_rules_screen;
 mod gamemode_switcher;
 mod ghasts;
+mod glowing;
 mod golems;
 mod growth;
 mod hand;
@@ -133,6 +133,7 @@ mod persist;
 mod perspective;
 mod pickups;
 mod piglins;
+mod piston_push;
 mod player_equip;
 mod postprocess;
 mod potions;
@@ -571,6 +572,8 @@ struct GameLevel<'w> {
     player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
+    /// Each minecart's kind and comparator signal, in `cart_boxes` order.
+    cart_signals: Vec<(minecarts::CartKind, i32)>,
     /// Arrow and thrown trident boxes (wooden buttons).
     arrow_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The other entities that keep blocks from being placed into them.
@@ -649,6 +652,37 @@ impl EntityObstructionWorld for BuildingObstruction {
     }
 }
 impl GameLevel<'_> {
+    /// `DetectorRailBlock.getAnalogOutputSignal`: a powered rail reads the
+    /// minecart on it, a command block cart first (its success count, which
+    /// is 0 here), else the first container cart's fullness.
+    fn detector_rail_signal(&self, pos: BlockPos, powered: bool) -> i32 {
+        if !powered {
+            return 0;
+        }
+        let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
+        let area = Aabb::new(
+            Vec3::new(x + 0.2, y, z + 0.2),
+            Vec3::new(x + 0.8, y + 0.8, z + 0.8),
+        );
+        let mut container = None;
+        for ((lo, hi), &(kind, signal)) in self.cart_boxes.iter().zip(&self.cart_signals) {
+            let cart = Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            );
+            if !area.intersects(cart) {
+                continue;
+            }
+            match kind {
+                minecarts::CartKind::CommandBlock => return 0,
+                minecarts::CartKind::Chest | minecarts::CartKind::Hopper => {
+                    container = container.or(Some(signal));
+                }
+                _ => {}
+            }
+        }
+        container.unwrap_or(0)
+    }
     /// Every entity box that blocks building: the players who aren't
     /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
     /// armor stand, whose box is empty, doesn't).
@@ -709,6 +743,14 @@ impl LevelAccess for GameLevel<'_> {
         state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(s) = self.registry.state(state)
+            && s.name == "minecraft:detector_rail"
+        {
+            return self.detector_rail_signal(
+                pos,
+                s.properties.get("powered").is_some_and(|v| v == "true"),
+            );
+        }
         if let Some(signal) = command_blocks::analog_signal(self.world, (pos.x, pos.y, pos.z)) {
             return signal;
         }
@@ -1348,6 +1390,8 @@ struct Game<'a> {
     /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
     /// while `pack_ids` is set (game/shader_packs.rs).
     entity_spans: std::cell::RefCell<Vec<horizon_client::gfx::pack_draw::EntitySpan>>,
+    /// The glowing entities' silhouettes this frame (game/glowing.rs).
+    glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// The shader pack's entity and block entity ids, while one draws entities.
     pack_ids: Option<shader_packs::PackIds>,
     started: Instant,
@@ -1569,6 +1613,9 @@ struct Game<'a> {
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
+    /// `ProfileResolver.Cached`: `Dynamic` profiles (name- or id-only heads
+    /// and mannequins) resolve through the services in the background.
+    skin_profiles: RefCell<horizon_client::skins::Resolver>,
     skin_slots: Vec<(String, usize)>,
     /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
     trim_slots: Vec<(String, usize)>,
@@ -2050,9 +2097,11 @@ impl Game<'_> {
     /// item in use (LocalPlayer.modifyInput), the helmet's Respiration
     /// (decreaseAirSupply), the wings, leather boots on powder snow
     /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
-    /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
+    /// (LivingEntity.canFreeze), the dimension's FAST_LAVA and the sleeping
+    /// pose.
     pub(crate) fn sync_player_body(&mut self) {
         let glider = self.glider_worn();
+        let sleeping = self.sleeping.is_some();
         let item_use_speed = self
             .using
             .and_then(|(slot, _)| {
@@ -2080,6 +2129,7 @@ impl Game<'_> {
         player.item_use_speed = item_use_speed;
         player.respiration = respiration;
         player.glider = glider;
+        let _ = player.set_sleeping(sleeping);
         player.leather_boots = leather_boots;
         player.freeze_immune = freeze_immune;
         player.fluids.fast_lava = self.dim == Dim::Nether;
@@ -2467,6 +2517,15 @@ impl Game<'_> {
                 no_physics,
                 &self.res.motion().fluids,
             );
+            // Entity.applyEffectsFromBlocks: bubble columns lift or drag the item.
+            horizon_client::motion::bubble_column_push(
+                &self.world,
+                self.pack.assets.registry,
+                self.res.facts(),
+                self.collision,
+                item.bounds(),
+                &mut item.velocity,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -2575,8 +2634,14 @@ impl Game<'_> {
                                 pickups::Taken::Item(Box::new(item.clone())),
                                 pickups::Collector::Player,
                             );
+                            // handleTakeItemEntity: the random pitch of a full pickup.
+                            let pitch = ((self.world.random.next_float()
+                                - self.world.random.next_float())
+                                * 0.7
+                                + 1.0)
+                                * 2.0;
                             self.audio
-                                .play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
+                                .play("minecraft:entity.item.pickup", Some(feet), 0.2, pitch);
                         }
                         item.stack = rest;
                     }
@@ -2633,6 +2698,7 @@ impl Game<'_> {
                 )
             })
             .collect();
+        let cart_signals = self.cart_signals();
         let arrow_boxes = self
             .creatures
             .projectiles
@@ -2675,6 +2741,7 @@ impl Game<'_> {
         };
         let mut level = GameLevel {
             cart_boxes,
+            cart_signals,
             arrow_boxes,
             blockers,
             world: &mut self.world,
@@ -2927,20 +2994,29 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
         });
+        // `PistonMovingBlockEntity.tick` pushes what its block just ran into,
+        // with the progress it is about to take.
+        let pushes = std::mem::take(&mut self.block_ticks.piston_pushes);
+        self.push_piston_entities(pushes);
+        self.process_level_events()?;
         self.sync_moving_pistons();
-        self.process_level_events()
+        Ok(())
     }
     /// Copies the moving-piston block entities into the world, where the
     /// collision queries and the renderer read them.
     fn sync_moving_pistons(&mut self) {
-        let pistons = &mut self.world.moving_pistons;
-        pistons.clear();
-        pistons.extend(
-            self.block_ticks
-                .moving_pistons
-                .iter()
-                .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state())),
-        );
+        let previous = std::mem::take(&mut self.world.moving_pistons);
+        let current: Vec<_> = self
+            .block_ticks
+            .moving_pistons
+            .iter()
+            .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state()))
+            .collect();
+        self.world.moving_piston_fallback = previous
+            .into_iter()
+            .filter(|(pos, _)| !current.iter().any(|(next, _)| next == pos))
+            .collect();
+        self.world.moving_pistons = current;
     }
     /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
     /// the side effects of each (a shrieker summoning a warden, drops, game
@@ -3071,6 +3147,34 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.composter_fill_event(pos, data == 1),
+                // LevelEventHandler 1504: the stalactite's drip particle.
+                LevelEvent::LevelEvent { id: 1504, pos, .. } => self.dripstone_drip_particle(pos),
+                // LevelEventHandler 2006: the dragon fireball's burst.
+                LevelEvent::LevelEvent {
+                    id: 2006,
+                    pos,
+                    data,
+                } => self.dragon_fireball_burst(pos, data),
+                // LevelEventHandler 2009: a wet sponge drying.
+                LevelEvent::LevelEvent { id: 2009, pos, .. } => {
+                    self.puffs_above_block(pos, horizon_client::particles::ParticleType::Cloud)
+                }
+                // LevelEventHandler 2012: a turtle egg laid.
+                LevelEvent::LevelEvent {
+                    id: 2012,
+                    pos,
+                    data,
+                } => self.turtle_egg_particles(pos, data),
+                // LevelEventHandler 2014: a straw bed destroyed, with no sound.
+                LevelEvent::LevelEvent {
+                    id: 2014,
+                    pos,
+                    data,
+                } => self.destroy_particles([pos.x, pos.y, pos.z], BlockStateId(data as u32)),
+                // LevelEventHandler 3009: a sniffer egg cracking.
+                LevelEvent::LevelEvent { id: 3009, pos, .. } => {
+                    self.sniffer_egg_crack_particles(pos)
+                }
                 LevelEvent::LevelEvent {
                     id: id @ 3011..=3021,
                     pos,
@@ -3086,6 +3190,16 @@ impl Game<'_> {
                         1501 => Some(("minecraft:block.lava.extinguish", 0.5)),
                         1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
+                        1033 => Some(("minecraft:block.chorus_flower.grow", 1.0)),
+                        1034 => Some(("minecraft:block.chorus_flower.death", 1.0)),
+                        1046 => Some((
+                            "minecraft:block.pointed_dripstone.drip_lava_into_cauldron",
+                            2.0,
+                        )),
+                        1047 => Some((
+                            "minecraft:block.pointed_dripstone.drip_water_into_cauldron",
+                            2.0,
+                        )),
                         // LevelEvent.SOUND_ZOMBIE_WOODEN_DOOR (attack, break).
                         1019 => Some(("minecraft:entity.zombie.attack_wooden_door", 2.0)),
                         1021 => Some(("minecraft:entity.zombie.break_wooden_door", 2.0)),
@@ -3107,6 +3221,13 @@ impl Game<'_> {
                                     - self.world.random.next_float())
                                     * 0.8
                             }
+                            // LevelEventHandler draws these from the client
+                            // level's random, before 1501's and 1502's smoke.
+                            1501 | 1502 => {
+                                let r = self.particles.level_random();
+                                2.6 + (r.next_float() - r.next_float()) * 0.8
+                            }
+                            1046 | 1047 => self.particles.level_random().next_float() * 0.1 + 0.9,
                             1029 | 1030 | 1042 | 1043 | 1044 | 1053 | 1054 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
@@ -3124,6 +3245,15 @@ impl Game<'_> {
                         } else {
                             self.audio.play(name, c, volume, pitch);
                         }
+                    }
+                    // LevelEventHandler 1501 and 1502 draw their smoke after the sound.
+                    match id {
+                        1501 => self.puffs_above_block(
+                            pos,
+                            horizon_client::particles::ParticleType::LargeSmoke,
+                        ),
+                        1502 => self.torch_burnout_smoke(pos),
+                        _ => {}
                     }
                 }
                 LevelEvent::Sound {
@@ -3191,6 +3321,8 @@ impl Game<'_> {
                     // Popped as the behaviour emits it (GameLevel::emit).
                     PlayerEffect::DropItem(_) => {}
                     PlayerEffect::EatCake => {
+                        // CakeBlock.eat
+                        self.stats.custom("eat_cake_slice", 1);
                         if let Some(p) = self.player.as_mut() {
                             let food = &mut p.health.food;
                             food.food = (food.food + 2).min(20);
@@ -3324,11 +3456,18 @@ impl Game<'_> {
             self.open_command_block(key);
             return;
         }
+        // SignBlock.useWithoutItem: the text editor, not a container.
+        if horizon_client::signs::sign_kind(&name).is_some() {
+            self.use_sign_empty_hand(pos);
+            return;
+        }
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
             self.craft_table = Some(pos);
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
+            // EnderChestBlock.useWithoutItem
+            self.stats.custom("open_enderchest", 1);
             self.container_opener_event(key, true);
             let at = [
                 f64::from(key.0) + 0.5,
@@ -3720,6 +3859,21 @@ impl Game<'_> {
                 {
                     self.hive_broken_by_player(pos, hive, honey, facing);
                 }
+                // InfestedBlock.spawnAfterBreak: its silverfish comes out unless the
+                // tool has silk touch (#prevents_infested_spawns) or blocks don't drop.
+                if facts.name.starts_with("minecraft:infested_")
+                    && !silk
+                    && self.ui.rules.bool("block_drops")
+                {
+                    let at = [
+                        f64::from(pos[0]) + 0.5,
+                        f64::from(pos[1]),
+                        f64::from(pos[2]) + 0.5,
+                    ];
+                    if let Some(id) = self.spawn_mob("minecraft:silverfish", at, false) {
+                        self.mob_poof(id);
+                    }
+                }
                 // SpawnerBlock.spawnAfterBreak pops its experience whatever the tool.
                 let xp = if silk && &*facts.name != "minecraft:spawner" {
                     0
@@ -3841,6 +3995,10 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if self.use_sign_applicator(hit.pos, held.as_ref()) {
+                self.swing_arm();
+                return Ok(true);
+            }
             if self.use_jukebox(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(true);
@@ -3900,6 +4058,20 @@ impl Game<'_> {
                     )
                 });
                 self.process_level_events()?;
+                // NoteBlock.useWithoutItem (tuned) and BellBlock.onHit (rung).
+                if result == horizon_world::level::InteractionResult::Success {
+                    let name = self
+                        .res
+                        .facts()
+                        .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
+                        .name
+                        .clone();
+                    match &*name {
+                        "minecraft:note_block" => self.stats.custom("tune_noteblock", 1),
+                        "minecraft:bell" => self.stats.custom("bell_ring", 1),
+                        _ => {}
+                    }
+                }
                 if result.consumes_action() {
                     self.swing_arm();
                     return Ok(true);
@@ -4688,7 +4860,6 @@ impl Game<'_> {
             player.dimensions.eye_height
         };
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
-        let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         // `LivingEntity.baseTick` (Soul Speed) comes before `aiStep` (the
         // glide's wear): both draw from the level random.
         if let Some((at, velocity)) = self.tick_soul_speed() {
@@ -4724,10 +4895,12 @@ impl Game<'_> {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
                 MotionEvent::Emission {
                     state, in_water, ..
-                } if !crouching => {
+                } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Entity.playStepSound: the block's step sound at 0.15 volume,
-                    // muffled under the swim sound in water.
+                    // muffled under the swim sound in water. Whether it plays is
+                    // Player.getMovementEmission's call (shift on the ground),
+                    // not the pose: a forced crouch still steps.
                     let (volume, pitch) = if in_water {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
                     } else {
@@ -4738,6 +4911,14 @@ impl Game<'_> {
                 MotionEvent::Swim { volume, pitch } => {
                     self.audio
                         .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
+                }
+                MotionEvent::Chime { volume, pitch } => {
+                    self.audio.play(
+                        "minecraft:block.amethyst_block.chime",
+                        Some(feet),
+                        volume,
+                        pitch,
+                    );
                 }
                 MotionEvent::Drown => {
                     // The guests see the entity event 67 too.
@@ -4780,6 +4961,10 @@ impl Game<'_> {
                         _ => continue,
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
+                }
+                // Player.causeFallDamage: a fall of 2 blocks or more counts.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Statistic(cm)) => {
+                    self.stats.custom("fall_one_cm", cm)
                 }
                 // LivingEntity.checkFallDamage: the block's crumbs where the fall landed.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
@@ -4848,6 +5033,7 @@ impl Game<'_> {
             }
         }
         self.powder_snow_fire()?;
+        self.rain_extinguish_in_frame();
         self.tick_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -7922,13 +8108,15 @@ impl Game<'_> {
     }
     /// The visual and sound part of `Player.doSweepAttack` after a successful hit.
     pub(super) fn sweep_attack(&mut self, at: [f64; 3], from: Option<[f64; 3]>) {
-        self.particles.add(
-            &horizon_client::particles::ParticleOptions::simple(
-                horizon_client::particles::ParticleType::SweepAttack,
-            ),
-            at,
-            [0.0; 3],
+        let sweep = horizon_client::particles::ParticleOptions::simple(
+            horizon_client::particles::ParticleType::SweepAttack,
         );
+        self.particles.add(&sweep, at, [0.0; 3]);
+        // Player.sweepAttack's `sendParticles(SWEEP_ATTACK, ..., 0, dx, 0, dz, 0)`:
+        // the offset is the one from the player to the particle.
+        let origin = from.unwrap_or(at);
+        let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
+        self.lan_send_particles(&sweep, at, spread, 0.0, 0);
         self.audio
             .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
@@ -8083,11 +8271,6 @@ impl Game<'_> {
         let sweep = self.sweep_attack_position(scale, crit);
         let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
-        if let Some(p) = self.player.as_mut()
-            && !self.creative
-        {
-            p.cause_food_exhaustion(0.1);
-        }
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         if knockback_attack {
@@ -8167,6 +8350,14 @@ impl Game<'_> {
                     0.2,
                     (actual * 0.5) as u32,
                 );
+                // The players a server serves are sent them too.
+                self.lan_send_particles(
+                    &indicator,
+                    [feet[0], feet[1] + height * 0.5, feet[2]],
+                    [0.1, 0.0, 0.1],
+                    0.2,
+                    (actual * 0.5) as u32,
+                );
             }
             self.last_hurt_by_player
                 .insert(self.mobs[index].id, self.lan_acting);
@@ -8197,6 +8388,13 @@ impl Game<'_> {
                 }
             }
             self.weapon_hit(index);
+            // Player.attack: causeFoodExhaustion(0.1F) only when the hit hurt
+            // (inside `if (wasHurt)`), after damageStatsAndHearts.
+            if let Some(p) = self.player.as_mut()
+                && !self.creative
+            {
+                p.cause_food_exhaustion(0.1);
+            }
         } else {
             self.audio
                 .play("minecraft:entity.player.attack.nodamage", from, 1.0, 1.0);
@@ -8760,6 +8958,10 @@ impl Game<'_> {
         }
         self.lan_close(false);
         self.save_game()?;
+        if let Some(mut remote) = self.remote.take() {
+            // Minecraft.disconnect closes the connection, so the host sees a clean leave.
+            remote.session.disconnect();
+        }
         self.saved_for_exit = true;
         Ok(())
     }
@@ -9041,6 +9243,9 @@ impl Game<'_> {
         if result.outcome == Outcome::Pass {
             return Ok(false);
         }
+        if let Some(stat) = result.stat {
+            self.stats.custom(stat, 1);
+        }
         if let Some(block) = result.block
             && let Ok(new) = registry.resolve(&block)
         {
@@ -9150,6 +9355,8 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
+        // BlockTransformer.transformBlock: ITEM_USED_ON_BLOCK before the swap.
+        self.trigger_block("minecraft:item_used_on_block", pos, stack);
         self.level_set(pos, new)?;
         // BlockTransformer.TransformParticle.send.
         self.transform_particle(&particle, pos);
@@ -9422,6 +9629,8 @@ impl Game<'_> {
             if let Some(waxed) = old.and_then(|old| self.res.transformers().waxed(registry, &old))
                 && let Ok(state) = registry.resolve(&waxed)
             {
+                // HoneycombItem.useOn: ITEM_USED_ON_BLOCK before the swap.
+                self.trigger_block("minecraft:item_used_on_block", hit.pos, stack);
                 self.level_set(hit.pos, state)?;
                 self.level_event_at(3003, hit.pos, 0);
                 self.audio.play(
@@ -9743,16 +9952,13 @@ impl Game<'_> {
     /// sound every fifth level (at most every 100 ticks).
     pub(super) fn give_orb_points(&mut self, gained: u32) {
         let at = self.eye_position();
-        if self.experience.give(gained as i32)
-            && self.experience.level % 5 == 0
+        // Player.giveExperienceLevels runs per level, so the first multiple of 5
+        // crossed plays the sound (and starts the cooldown for the rest).
+        if let Some(level) = self.experience.give(gained as i32)
             && self.ticks > self.last_level_up + 100
         {
             self.last_level_up = self.ticks;
-            let volume = if self.experience.level > 30 {
-                1.0
-            } else {
-                self.experience.level as f32 / 30.0
-            };
+            let volume = if level > 30 { 1.0 } else { level as f32 / 30.0 };
             self.audio
                 .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
         }
@@ -10122,6 +10328,14 @@ impl Game<'_> {
         };
         Some(t < 0.15)
     }
+    /// `Level.isRainingAt`: it rains, the sky light is 15, nothing that stops
+    /// motion is above, and the biome's precipitation there is rain.
+    fn raining_at(&self, p: BlockPos) -> bool {
+        self.world.weather.levels(1.0).0 > 0.2
+            && self.world.light(p.x, p.y, p.z) >> 4 == 15
+            && self.rain_height(p.x, p.z) <= p.y
+            && self.precipitation(p.x, p.y, p.z) == Some(false)
+    }
     /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
     /// highest block in `blocks_motion_in_heightmap` or holding a fluid.
     fn rain_height(&self, x: i32, z: i32) -> i32 {
@@ -10158,12 +10372,15 @@ impl Game<'_> {
                 } else {
                     ("minecraft:weather.rain", 0.2, 1.0)
                 };
-                self.audio.play(
-                    name,
-                    Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
-                    volume,
-                    pitch,
-                );
+                // The Horizon Weather option off silences the rain too.
+                if self.settings.horizon.weather {
+                    self.audio.play(
+                        name,
+                        Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
+                        volume,
+                        pitch,
+                    );
+                }
             }
         }
     }
@@ -10706,6 +10923,9 @@ impl Game<'_> {
         let level = &mut self.level;
         level.creative = self.creative;
         level.game_mode = mode;
+        // PrimaryLevelData.setDifficulty: /difficulty and the options button change it.
+        level.difficulty =
+            horizon_client::title::DIFFICULTIES[usize::from(self.ui.difficulty) & 3].into();
         level.time = self.world.game_time;
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
@@ -10861,6 +11081,21 @@ impl Game<'_> {
             }
             return Ok(false);
         }
+        // A server pack's reload covers the frame with its progress
+        // (`LoadingOverlay`) until `tick_server_packs` applies it.
+        if let Some(reload) = &self.server_packs.reload {
+            if let Some(renderer) = &mut self.renderer {
+                let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
+                horizon_client::level_loading::draw_progress(
+                    &mut hud,
+                    &self.gui.atlas,
+                    reload.progress.line(),
+                    reload.progress.fraction(),
+                );
+                return renderer.render(&loading_frame(&hud));
+            }
+            return Ok(false);
+        }
         let Some(size) = self
             .renderer
             .as_ref()
@@ -10981,7 +11216,11 @@ impl Game<'_> {
         let debug_crosshair = horizon_client::gizmos::camera_relative(&crosshair.on_top, at, view);
         // LevelExtractor.extractBlockOutline: model translucency controls draw order.
         let mut outline_after_terrain = false;
-        let outline = if self.screen == Screen::Playing && !self.spectator() {
+        // GameRenderer.shouldRenderBlockOutline: not with the HUD hidden (F1), and only for a
+        // player who may build. Adventure players only get one with a CAN_BREAK or
+        // CAN_PLACE_ON item and spectators with a menu block; Horizon reads neither the
+        // components nor opens menus for spectators, so those never show it.
+        let outline = if self.screen == Screen::Playing && !self.ui.hide_gui && self.may_build() {
             self.pick()
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
@@ -11066,6 +11305,7 @@ impl Game<'_> {
         let mut entities = std::mem::take(&mut self.entity_vertices);
         entities.clear();
         self.see_through_vertices.clear();
+        self.glowing_vertices.get_mut().clear();
         if !title {
             entities = horizon_client::spans::time("entity_geometry", || {
                 self.entity_geometry(camera, alpha, entities)
@@ -11133,6 +11373,7 @@ impl Game<'_> {
         // map_patches any earlier leaves them a frame behind.
         hud.patches.append(&mut self.map_patches);
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
+        let glowing = std::mem::take(self.glowing_vertices.get_mut());
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
@@ -11177,6 +11418,7 @@ impl Game<'_> {
             dark_disc: self.dark_disc(camera),
             outline,
             outline_after_terrain,
+            outline_high_contrast: self.settings.file.bool("highContrastBlockOutline"),
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
@@ -11198,6 +11440,7 @@ impl Game<'_> {
             }),
             entities: &entities,
             entity_spans: &entity_spans,
+            glowing: &glowing,
             dynamic_lights: &self.dynamic_lights,
             lightning: horizon_client::gfx::lightning::Input {
                 bolts: &bolts,
@@ -11236,7 +11479,7 @@ impl Game<'_> {
             }),
             ticks: self.ticks,
             darkness: self.darkness_lighting(alpha as f32),
-            night_vision: self.night_vision_intensity(),
+            night_vision: self.night_vision_intensity(alpha as f32),
             block_flicker: self.fog.block_light_flicker,
             boss_darken: self
                 .boss_overlay
@@ -11253,6 +11496,7 @@ impl Game<'_> {
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
         *self.entity_spans.get_mut() = entity_spans;
+        *self.glowing_vertices.get_mut() = glowing;
         self.see_through_vertices = see_through;
         result
     }
@@ -11943,6 +12187,19 @@ impl ApplicationHandler for Game<'_> {
         {
             return;
         }
+        // The pack reload's progress overlay takes no input
+        // (`LoadingOverlay`): `start_pack_reload` released what was held.
+        if self.server_packs.reload.is_some()
+            && !matches!(
+                &event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::Focused(_)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::RedrawRequested
+            )
+        {
+            return;
+        }
         if self.pending_save.is_some() {
             match event {
                 WindowEvent::CloseRequested => {
@@ -12166,7 +12423,8 @@ impl ApplicationHandler for Game<'_> {
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         let clicked = t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
                         t.press_field(atlas, self.cursor, (b.width, b.height), shift);
-                        clicked
+                        let rules = t.press_rules(atlas, self.cursor, (b.width, b.height));
+                        (clicked.0, clicked.1 || rules)
                     });
                     self.save_title_options();
                     if sound {
@@ -12744,6 +13002,16 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if horizon_threads::stop_requests() > 0
+            && self.pending_save.as_ref().is_none_or(|save| !save.quit)
+        {
+            // SIGTERM, SIGINT or SIGHUP: the shutdown hook's server halt, as a window close.
+            if let Err(error) = self.begin_closing_save(true) {
+                self.error = Some(error);
+                event_loop.exit();
+                return;
+            }
+        }
         if self.pending_save.is_some() {
             match self.poll_closing_save() {
                 Ok(true) => event_loop.exit(),
@@ -12944,6 +13212,7 @@ impl<'a> Game<'a> {
             luminance: None,
             see_through_vertices: Vec::new(),
             entity_spans: Default::default(),
+            glowing_vertices: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             started: now,
@@ -13094,6 +13363,7 @@ impl<'a> Game<'a> {
                     .unwrap_or_default()
                     .join("assets/skins"),
             )),
+            skin_profiles: RefCell::new(horizon_client::skins::Resolver::new()),
             skin_slots: Vec::new(),
             trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
@@ -13439,7 +13709,6 @@ const NUMERIC_KEYS: [KeyCode; 11] = [
     KeyCode::Numpad9,
 ];
 
-const STAGES: u32 = 10;
 const STAGE_LINES: [&str; 10] = [
     "Loading menu",
     "Loading assets",
@@ -13455,19 +13724,28 @@ const STAGE_LINES: [&str; 10] = [
 
 /// The background loader's checkpoint, read by the loading screen each frame.
 #[derive(Clone)]
-struct Progress(Arc<AtomicU32>);
+struct Progress {
+    value: Arc<AtomicU32>,
+    lines: &'static [&'static str],
+}
 impl Progress {
     fn new() -> Self {
-        Self(Arc::new(AtomicU32::new(0)))
+        Self::with(&STAGE_LINES)
+    }
+    fn with(lines: &'static [&'static str]) -> Self {
+        Self {
+            value: Arc::new(AtomicU32::new(0)),
+            lines,
+        }
     }
     fn set(&self, stage: u32) {
-        self.0.store(stage, Ordering::Relaxed);
+        self.value.store(stage, Ordering::Relaxed);
     }
     fn fraction(&self) -> f32 {
-        self.0.load(Ordering::Relaxed) as f32 / (STAGES - 1) as f32
+        self.value.load(Ordering::Relaxed) as f32 / (self.lines.len() - 1) as f32
     }
     fn line(&self) -> &'static str {
-        STAGE_LINES[(self.0.load(Ordering::Relaxed) as usize).min(STAGE_LINES.len() - 1)]
+        self.lines[(self.value.load(Ordering::Relaxed) as usize).min(self.lines.len() - 1)]
     }
 }
 
@@ -13921,6 +14199,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         dark_disc: false,
         outline: Vec::new(),
         outline_after_terrain: false,
+        outline_high_contrast: false,
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],
@@ -13928,6 +14207,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         nether_lighting: false,
         entities: &[],
         entity_spans: &[],
+        glowing: &[],
         dynamic_lights: &[],
         clouds: None,
         lightning: Default::default(),
@@ -14233,6 +14513,11 @@ impl Loading {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if horizon_threads::stop_requests() > 0 {
+            // No world is open yet: nothing to save.
+            event_loop.exit();
+            return;
+        }
         if let Err(error) = self.poll_menu_resources() {
             self.error = Some(error);
             event_loop.exit();
@@ -14509,6 +14794,9 @@ pub fn run() -> Result<()> {
         && options.world_frames.is_none()
     {
         horizon_client::heartbeat::start();
+    }
+    if options.execution_role.is_client() {
+        horizon_threads::catch_stop_signals();
     }
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());
