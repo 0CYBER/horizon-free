@@ -1914,7 +1914,8 @@ impl Game<'_> {
             }
             C::SetPassengers(p) => self.remote_set_passengers(p.vehicle, &p.passengers),
             // ClientPacketListener.handleEntityLinkPacket: who holds a mob's
-            // lead (this player, another player or a mob), for the rope.
+            // lead (this player, another player, a mob or a fence knot), for
+            // the rope.
             C::SetEntityLink(p) => {
                 let me = self.remote.as_ref().map(|r| r.entity_id);
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.source as u32) {
@@ -1922,7 +1923,12 @@ impl Game<'_> {
                     m.extra.leash = match p.dest {
                         0 => None,
                         d if Some(d) == me => Some(Holder::Player),
-                        d => Some(Holder::Mob(d as u32)),
+                        d => match self.remote_knots.get(&(d as u32)) {
+                            Some(&block) => Some(Holder::Knot(block)),
+                            // Not a known knot yet: kept by id until the knot
+                            // arrives (game/remote_objects.rs).
+                            None => Some(Holder::Mob(d as u32)),
+                        },
                     };
                 }
             }

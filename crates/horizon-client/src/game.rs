@@ -1609,6 +1609,12 @@ struct Game<'a> {
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
     text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    /// The fence knots a server tracks to this client, by entity id, at their
+    /// block (`LeashFenceKnotEntity`).
+    remote_knots: HashMap<u32, [i32; 3]>,
+    /// The entity ids a hosted server gives the knots its mobs hang on, by
+    /// block, while a lead is tied there.
+    knot_ids: HashMap<[i32; 3], u32>,
     text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
@@ -13359,6 +13365,8 @@ impl<'a> Game<'a> {
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
             text_displays: Default::default(),
+            remote_knots: Default::default(),
+            knot_ids: Default::default(),
             text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
