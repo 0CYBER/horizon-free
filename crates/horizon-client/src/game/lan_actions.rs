@@ -950,6 +950,9 @@ impl Game<'_> {
                     if spectator {
                         return;
                     }
+                    if !host.hub.guests[gi].may_reach_block(a.pos) {
+                        return;
+                    }
                     let face = direction(i32::from(a.direction));
                     let play = host.play.entry(conn).or_default();
                     play.digging = Some((a.pos, face));
@@ -962,6 +965,15 @@ impl Game<'_> {
                 1 => {}
                 3 => {
                     host.hub.ack(conn, a.sequence);
+                    if !host.hub.guests[gi].may_reach_block(a.pos) {
+                        // Too far (handleBlockBreakAction's "too far"): the
+                        // dig drops and the ack has the client undo its
+                        // prediction.
+                        let play = host.play.entry(conn).or_default();
+                        play.digging = None;
+                        play.mining = None;
+                        return;
+                    }
                     self.guest_stop_digging(host, conn, a.pos);
                 }
                 2 => {
@@ -1050,6 +1062,14 @@ impl Game<'_> {
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
                 if spectator {
+                    return;
+                }
+                // handleUseItemOn: within reach, and the hit point within the block.
+                let inside = p
+                    .cursor
+                    .iter()
+                    .all(|&c| (f64::from(c) - 0.5).abs() < 1.0000001);
+                if !(inside && host.hub.guests[gi].may_reach_block(p.pos)) {
                     return;
                 }
                 let face = direction(p.face);
