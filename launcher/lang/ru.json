@@ -171,5 +171,10 @@
   "Not now": "Не сейчас",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "Как и другим лаунчерам, Horizon нужен аккаунт Microsoft, у которого есть Minecraft: Java Edition.",
   "Your worlds, offline names and settings stay where they are.": "Ваши миры, офлайн-имена и настройки остаются на месте.",
-  "Open {link} in your browser and enter this code:": "Откройте {link} в браузере и введите этот код:"
+  "Open {link} in your browser and enter this code:": "Откройте {link} в браузере и введите этот код:",
+  "From my install": "Из моей установки",
+  "Download and prepare": "Скачать и подготовить",
+  "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.": "Не подготовлено. Horizon может скачать Minecraft {version} у Mojang для вашего аккаунта или взять вашу установку.",
+  "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.": "Не подготовлено. Сначала войдите в аккаунт Microsoft, у которого есть Minecraft {version}.",
+  "Cancel": "Отмена"
 }

@@ -1021,10 +1021,13 @@ impl Launcher {
         });
     }
 
-    fn prepare(&mut self) {
+    /// Prepares the selected version, its Minecraft files from the player's install or, for an
+    /// owner who asks, from Mojang.
+    fn prepare(&mut self, from: backend::MinecraftFrom) {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
+        horizon_launcher::mojang::CANCEL.store(false, Ordering::Relaxed);
         let minecraft = self
             .settings
             .minecraft_dir
@@ -1040,7 +1043,7 @@ impl Launcher {
             let log = |line| {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
-            let result = backend::preparer(&tag, &minecraft, &log)
+            let result = backend::preparer(&tag, &minecraft, from, &log)
                 .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
                 .and_then(|(p, _)| match p {
                     backend::Preparer::Process(cmd) => {
@@ -2232,10 +2235,22 @@ impl Launcher {
                     .child(play),
             );
 
-        let resources_value = if self.preparing {
-            tr("Preparing…").to_string()
-        } else {
-            backend::resources_summary(prepared, !silent, &version)
+        // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
+        // owner there is nothing to play, so signing in comes first.
+        let first = (!prepared && !self.preparing)
+            .then_some(self.owner)
+            .flatten();
+        let resources_value = match first {
+            _ if self.preparing => tr("Preparing…").to_string(),
+            Some(true) => trf(
+                "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.",
+                &[("version", &version)],
+            ),
+            Some(false) => trf(
+                "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.",
+                &[("version", &version)],
+            ),
+            None => backend::resources_summary(prepared, !silent, &version),
         };
         let mut prepare = button(
             "prepare",
@@ -2251,10 +2266,44 @@ impl Launcher {
             prepare = disabled(prepare);
         } else {
             prepare = prepare.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.prepare();
+                this.prepare(backend::MinecraftFrom::Install);
                 cx.notify();
             }));
         }
+        let prepare = match first {
+            Some(true) => div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    button("prepare-install", "From my install", Kind::Ghost, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.prepare(backend::MinecraftFrom::Install);
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    button(
+                        "prepare-download",
+                        "Download and prepare",
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.prepare(backend::MinecraftFrom::Mojang);
+                        cx.notify();
+                    })),
+                ),
+            Some(false) => div().child(
+                button("prepare-sign-in", "Sign in", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.sign_in_to_play();
+                        cx.notify();
+                    },
+                )),
+            ),
+            None => div().child(prepare),
+        };
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
@@ -2394,12 +2443,33 @@ impl Launcher {
         // looks after pressing Prepare, not below the fold (#666).
         if self.preparing {
             let last = self.prepare_log.back().cloned().unwrap_or_default();
+            // A download from Mojang shows how far it is, and can stop (it goes on from there
+            // next time).
+            let download = horizon_launcher::mojang::progress();
+            let cancel = download.map(|_| {
+                button("download-cancel", "Cancel", Kind::Ghost, &t).on_click(|_, _, _| {
+                    horizon_launcher::mojang::CANCEL.store(true, Ordering::Relaxed)
+                })
+            });
             page = page.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(10.))
-                    .child(progress_bar(None, &t))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(progress_bar(
+                                download.map(|(done, total)| {
+                                    let f = done as f32 / total as f32;
+                                    (f, f)
+                                }),
+                                &t,
+                            ))
+                            .children(cancel),
+                    )
                     .child(
                         text(theme::MICRO)
                             .text_color(t.muted)
