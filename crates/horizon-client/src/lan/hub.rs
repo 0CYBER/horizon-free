@@ -21,7 +21,7 @@ use crate::{
 use horizon_core::geometry::{Aabb, ShapeOp, Vec3, VoxelShape};
 use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
-    entity_data::{Value, serializer},
+    entity_data::{Particle, ParticleData, Value, serializer},
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::{literal, translatable},
 };
@@ -87,6 +87,29 @@ pub struct HostState {
     pub living_flags: i8,
     /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
     pub bed: Option<[i32; 3]>,
+    pub body: BodyFlags,
+}
+
+/// What the other players see of a player's body besides sneaking and
+/// sprinting: the pose and the rest of `Entity.DATA_SHARED_FLAGS_ID`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BodyFlags {
+    /// `Entity.isFallFlying`: gliding with elytra.
+    pub gliding: bool,
+    /// `Entity.isSwimming` (the swimming flag).
+    pub swimming: bool,
+    /// The swimming pose of a player crawling under a block.
+    pub crawling: bool,
+    /// The crouching pose, held without sneaking under a low ceiling.
+    pub crouching: bool,
+    /// `LivingEntity.isAutoSpinAttack`: Riptide's spin.
+    pub spin_attack: bool,
+    /// `Entity.isOnFire`.
+    pub on_fire: bool,
+    /// `Entity.isInvisible`: the invisibility effect.
+    pub invisible: bool,
+    /// The glowing effect.
+    pub glowing: bool,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -168,6 +191,8 @@ pub struct Hub {
     level_sync: std::collections::HashMap<String, LevelSync>,
     /// Operators and their permission levels (dedicated servers).
     pub ops: std::collections::HashMap<u128, u8>,
+    /// `entity-broadcast-range-percentage` (dedicated servers).
+    pub entity_range_percent: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -177,6 +202,9 @@ pub struct Hub {
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
     entity_out: Vec<Vec<Vec<u8>>>,
+    /// Server mods' commands, a root in the commands report's format, sent
+    /// after vanilla's; the key the game last set them for.
+    mod_commands: (serde_json::Value, Option<u64>),
 }
 
 fn string(s: &str) -> Tag {
@@ -332,6 +360,7 @@ impl Hub {
             ticking: (20.0, false),
             stepping: 0,
             ops: Default::default(),
+            entity_range_percent: 100,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
@@ -341,6 +370,7 @@ impl Hub {
             entity_types: Default::default(),
             entities: Default::default(),
             entity_out: Vec::new(),
+            mod_commands: (serde_json::Value::Null, None),
             teams: Vec::new(),
         }
     }
@@ -849,13 +879,36 @@ impl Hub {
         }
     }
 
+    /// The key [`Hub::set_mod_commands`] last had: the game compares it
+    /// with its server mods' each tick.
+    pub fn mod_commands_key(&self) -> Option<u64> {
+        self.mod_commands.1
+    }
+    /// Server mods' commands changed: every player gets their tree again.
+    pub fn set_mod_commands(&mut self, key: u64, commands: serde_json::Value) {
+        let resend = self.mod_commands.0 != commands;
+        self.mod_commands = (commands, Some(key));
+        if resend {
+            for i in 0..self.guests.len() {
+                if self.guests[i].placed {
+                    self.send_commands(i);
+                }
+            }
+        }
+    }
+
     /// Commands.sendCommands: the command tree for this player.
     fn send_commands(&self, i: usize) {
         let g = &self.guests[i];
         let packet = match &self.sync.commands {
             Some(tree) => {
                 let dedicated = self.config.dedicated && !self.config.integrated;
-                tree.packet(g.permission, dedicated, &self.sync.builtin)
+                tree.packet_with(
+                    g.permission,
+                    dedicated,
+                    &self.sync.builtin,
+                    &self.mod_commands.0,
+                )
             }
             None => play::Commands {
                 nodes: vec![play::CommandNode {
@@ -1500,6 +1553,49 @@ impl Hub {
 
     // ---- entities ------------------------------------------------------
 
+    /// `LivingEntity.updateSynchronizedMobEffectParticles`: DATA_EFFECT_PARTICLES
+    /// (10) and DATA_EFFECT_AMBIENCE_ID (11) for the visible `effects`, as
+    /// (effect, ambient). The entries are left out when there is nothing to
+    /// show, which is their default.
+    pub fn effect_meta<'a>(
+        &self,
+        effects: impl IntoIterator<Item = (&'a str, bool)>,
+    ) -> Vec<(u8, i32, Value)> {
+        let mut particles = Vec::new();
+        let mut all_ambient = true;
+        for (effect, ambient) in effects {
+            let effect = effect.trim_start_matches("minecraft:");
+            // MobEffect.particleFactory: the omens have their own particles,
+            // the others an entity effect in their colour (faint if ambient).
+            let (name, data) = match effect {
+                "trial_omen" | "raid_omen" => (effect, None),
+                _ => {
+                    let Some(def) = crate::brewing::effect(effect) else {
+                        continue;
+                    };
+                    let alpha = if ambient { 38 } else { 255 };
+                    let argb = (alpha << 24) | def.color as i32;
+                    ("entity_effect", Some(ParticleData::Color(argb)))
+                }
+            };
+            let Some(id) =
+                self.registry_id("minecraft:particle_type", &format!("minecraft:{name}"))
+            else {
+                continue;
+            };
+            particles.push(Particle { id, data });
+            all_ambient &= ambient;
+        }
+        if particles.is_empty() {
+            return Vec::new();
+        }
+        let mut meta = vec![(10, serializer::PARTICLES, Value::Particles(particles))];
+        if all_ambient {
+            meta.push((11, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        meta
+    }
+
     fn player_state(
         &self,
         id: i32,
@@ -1507,21 +1603,29 @@ impl Hub {
         position: [f64; 3],
         rot: (f32, f32, f32),
         on_ground: bool,
-        flags: (bool, bool, bool, bool),
+        flags: (bool, bool, bool),
+        body: BodyFlags,
         living_flags: i8,
         bed: Option<[i32; 3]>,
         skin: u8,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         attributes: Vec<play::AttributeSnapshot>,
+        effects: &[EffectInstance],
     ) -> EntityState {
-        let (sneaking, sprinting, gliding, sleeping) = flags;
-        let shared = shared_flags(sneaking, sprinting, gliding);
+        let (sneaking, sprinting, sleeping) = flags;
+        let shared = shared_flags(sneaking, sprinting, &body);
+        // Player.getDesiredPose (and updatePlayerPose's crawl): sleeping,
+        // swimming, gliding, Riptide's spin, crouching.
         let pose = if sleeping {
             2
-        } else if gliding {
+        } else if body.swimming || body.crawling {
+            3
+        } else if body.gliding {
             1
-        } else if sneaking {
+        } else if body.spin_attack {
+            4
+        } else if sneaking || body.crouching {
             5
         } else {
             0
@@ -1547,6 +1651,14 @@ impl Hub {
         if skin != 0 {
             meta.push((16, serializer::BYTE, Value::Byte(skin as i8)));
         }
+        meta.extend(
+            self.effect_meta(
+                effects
+                    .iter()
+                    .filter(|e| e.visible)
+                    .map(|e| (e.id, e.ambient)),
+            ),
+        );
         EntityState {
             id,
             uuid,
@@ -1559,7 +1671,11 @@ impl Hub {
             velocity: [0.0; 3],
             data: 0,
             meta,
-            defaults: Vec::new(),
+            // The effect swirls go back to none.
+            defaults: vec![
+                (10, serializer::PARTICLES, Value::Particles(Vec::new())),
+                (11, serializer::BOOLEAN, Value::Bool(false)),
+            ],
             equipment,
             attributes,
             precise: false,
@@ -1607,13 +1723,15 @@ impl Hub {
                 h.position,
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
-                (h.sneaking, h.sprinting, false, h.bed.is_some()),
+                (h.sneaking, h.sprinting, h.bed.is_some()),
+                h.body,
                 h.living_flags,
                 h.bed,
                 0x7F,
                 h.health,
                 equipment,
                 h.attributes.clone(),
+                &[],
             ));
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -1639,7 +1757,8 @@ impl Hub {
                     g.position,
                     (g.yaw, g.pitch, g.head_yaw),
                     g.on_ground,
-                    (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
+                    (g.sneaking, g.sprinting, g.sleeping),
+                    guest_body(g),
                     g.living_flags,
                     g.bed,
                     g.info.model_customisation,
@@ -1649,6 +1768,7 @@ impl Hub {
                         .as_ref()
                         .map(|m| super::attributes::syncable(&m.attributes))
                         .unwrap_or_default(),
+                    &g.effects.list,
                 )
             })
             .collect();
@@ -1678,6 +1798,7 @@ impl Hub {
                 out,
             })
             .collect();
+        level.range_percent = Some(self.entity_range_percent);
         let (types, sync) = (&mut self.entity_types, &self.sync);
         level.tick(&entities, &self.riding, &mut viewers, |kind| {
             entity_type(types, sync, kind)
@@ -1798,7 +1919,7 @@ impl Hub {
         // too, so the sprint a hit stops (Player.causeExtraKnockback) stops
         // on its client.
         let g = &mut self.guests[i];
-        let shared = shared_flags(g.sneaking, g.sprinting, g.fall_flying);
+        let shared = shared_flags(g.sneaking, g.sprinting, &guest_body(g));
         if shared != g.sent_shared {
             g.sent_shared = shared;
             g.send(&C::SetEntityData(play::SetEntityData {
@@ -2043,6 +2164,20 @@ impl Hub {
                 S::Chat(c) => self.handle_chat(i, c, events),
                 S::ChatAck(p) => self.chat_ack(i, p.offset, events),
                 S::ChatSessionUpdate(p) => self.chat_session_update(i, p, events),
+                // handlePlayerAction (a dig starting, stopping or finishing) is the
+                // game's, run after this pass. A move queued behind it is checked
+                // against the block the player just broke and falls through, so it
+                // would be sent back; it waits for the next tick, when the block is
+                // gone, as vanilla handles the two packets in order.
+                S::PlayerAction(p) if p.action <= 3 => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::PlayerAction(p))));
+                    if matches!(
+                        self.guests[i].inbox.front(),
+                        Some(S::MovePlayerPos(_) | S::MovePlayerPosRot(_))
+                    ) {
+                        break;
+                    }
+                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
@@ -2578,16 +2713,44 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
     raw(ids::TICKING_STATE, w.data)
 }
 
-/// Entity.DATA_SHARED_FLAGS_ID of a player: crouching, sprinting, gliding.
-fn shared_flags(sneaking: bool, sprinting: bool, gliding: bool) -> i8 {
+/// What the others see of a guest's body, from its server-side state.
+fn guest_body(g: &Guest) -> BodyFlags {
+    let m = g.motion.as_deref();
+    BodyFlags {
+        gliding: g.fall_flying,
+        swimming: m.is_some_and(|m| m.swimming),
+        crawling: m.is_some_and(|m| m.pose == crate::pose::Pose::Swimming && !m.swimming),
+        crouching: m.is_some_and(|m| m.pose == crate::pose::Pose::Crouching),
+        spin_attack: m.is_some_and(|m| m.auto_spin_attack_ticks > 0),
+        on_fire: m.is_some_and(|m| m.fire_ticks > 0),
+        invisible: g.effects.get("invisibility").is_some(),
+        glowing: g.effects.get("glowing").is_some(),
+    }
+}
+
+/// Entity.DATA_SHARED_FLAGS_ID of a player: on fire 0x01, crouching 0x02,
+/// sprinting 0x08, swimming 0x10, invisible 0x20, glowing 0x40, gliding 0x80.
+fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
     let mut shared = 0i8;
+    if body.on_fire {
+        shared |= 0x01;
+    }
     if sneaking {
         shared |= 0x02;
     }
     if sprinting {
         shared |= 0x08;
     }
-    if gliding {
+    if body.swimming {
+        shared |= 0x10;
+    }
+    if body.invisible {
+        shared |= 0x20;
+    }
+    if body.glowing {
+        shared |= 0x40;
+    }
+    if body.gliding {
         shared |= -128;
     }
     shared
