@@ -672,6 +672,7 @@ impl Game<'_> {
         }
         let source = match source.kind {
             horizon_client::mobs::DamageKind::MaceSmash => "minecraft:mace_smash",
+            horizon_client::mobs::DamageKind::Spear => "minecraft:spear",
             _ => "minecraft:player_attack",
         };
         out.push(format!(

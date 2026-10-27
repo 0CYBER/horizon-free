@@ -1,4 +1,4 @@
-//! The registry repository (`ludovic111/horizon-mods`, docs/api/mod-index.md):
+//! The registry repository (`horizon-rust/horizon-mods`, docs/api/mod-index.md):
 //! one `mods/<id>.toml` per project, written by the submission form or by
 //! hand and reviewed in a pull request, plus `revoked.toml`. Its CI turns
 //! them into `index.json` with [`build`], reading every listed file, and

@@ -4,6 +4,8 @@
     nightly.py pick [--force]      which commit tonight's nightly builds: GitHub outputs and nightly-notes.md
     nightly.py rotate              renames the current `nightly` pre-release to nightly-<its date>, frees the tag
     nightly.py prune [--days 7]    deletes the nightly-<date> pre-releases and tags older than that, nothing else
+    nightly.py prune-builds [--days 7]   deletes the nightly/build-<date>-<n> branches older than that, but the
+                                   newest and any a published nightly points to (Ludovic, 2026-10-27)
 
 A nightly builds main plus the pull requests the trusted reviewers picked (the set: tools/ci/nightly_set.py), merged
 in their order and pushed as nightly/build-<date>-<n>. With no set it builds the newest union branch on origin
@@ -264,17 +266,63 @@ def prune(days: int) -> None:
         print(f"deleted {tag}")
 
 
+BUILD = re.compile(r"^nightly/build-(\d{4}-\d{2}-\d{2})-(\d+)$")
+
+
+def stale_builds(branches: dict[str, str], published: set[str], today: dt.date, days: int) -> list[str]:
+    """The nightly/build-<date>-<n> branches (name -> commit) to delete: older than `days`, never the newest build,
+    never one whose commit a published nightly release points to, never a branch not named like a build."""
+    builds = {name: sha for name, sha in branches.items() if BUILD.match(name)}
+    if not builds:
+        return []
+    order = lambda name: (BUILD.match(name).group(1), int(BUILD.match(name).group(2)))  # noqa: E731
+    newest = max(builds, key=order)
+    cutoff = today - dt.timedelta(days=days)
+    return sorted(name for name, sha in builds.items() if name != newest and sha not in published
+                  and dt.date.fromisoformat(BUILD.match(name).group(1)) < cutoff)
+
+
+def remote_refs(pattern: str) -> dict[str, str]:
+    """origin's refs matching `pattern`: short name -> commit (annotated tags peeled)."""
+    refs: dict[str, str] = {}
+    for line in git("ls-remote", "origin", pattern).splitlines():
+        sha, ref = line.split("\t", 1)
+        name = ref.removeprefix("refs/heads/").removeprefix("refs/tags/")
+        if name.endswith("^{}"):
+            refs[name[:-3]] = sha  # the peeled commit wins over the tag object
+        else:
+            refs.setdefault(name, sha)
+    return refs
+
+
+def prune_builds(days: int) -> None:
+    """Deletes old nightly/build-* branches on origin through the API, one line per deletion (the run summary)."""
+    branches = remote_refs("refs/heads/nightly/build-*")
+    tags = {name: sha for name, sha in remote_refs("refs/tags/nightly*").items()
+            if name == "nightly" or DATED.match(name)}
+    today = dt.datetime.now(dt.timezone.utc).date()
+    doomed = stale_builds(branches, set(tags.values()), today, days)
+    for name in doomed:
+        gh("api", "-X", "DELETE", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/refs/heads/{name}")
+        print(f"- deleted `{name}` ({branches[name][:7]})")
+    print(f"{len(doomed)} of {len(branches)} nightly/build-* branches deleted (kept: the newest, the published "
+          f"nightlies' and the last {days} days')")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("pick").add_argument("--force", action="store_true")
     sub.add_parser("rotate")
     sub.add_parser("prune").add_argument("--days", type=int, default=7)
+    sub.add_parser("prune-builds").add_argument("--days", type=int, default=7)
     args = ap.parse_args()
     if args.cmd == "pick":
         pick(args.force)
     elif args.cmd == "rotate":
         rotate()
+    elif args.cmd == "prune-builds":
+        prune_builds(args.days)
     else:
         prune(args.days)
 
