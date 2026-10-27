@@ -323,7 +323,9 @@ fn read_text(t: &Tag) -> Option<String> {
         // this), so flatten the whole component instead of reading one key.
         // ComponentSerialization.CODEC also takes a list (its first element
         // styling the rest), as servers behind ViaVersion send book pages.
-        Tag::Compound(_) | Tag::List(_) => Some(horizon_client_core::component::name_text(t).plain()),
+        Tag::Compound(_) | Tag::List(_) => {
+            Some(horizon_client_core::component::name_text(t).plain())
+        }
         _ => None,
     }
 }
