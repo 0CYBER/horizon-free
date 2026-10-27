@@ -32,6 +32,7 @@ mod screenshots_page;
 mod scrollbar;
 mod servers_page;
 mod shortcut_page;
+mod skin_page;
 mod switch_page;
 mod theme;
 mod titlebar;
@@ -167,6 +168,8 @@ struct Launcher {
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
     account_menu: bool,
+    /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
+    skin: Option<skin_page::SkinPanel>,
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
@@ -366,6 +369,7 @@ impl Launcher {
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
+            skin: None,
             args_input: settings.game_args.clone(),
             args_focused: false,
             args_focus: cx.focus_handle(),
@@ -592,6 +596,7 @@ impl Launcher {
                         if let Some(name) = self.accounts.name_arg() {
                             cmd.arg("--name").arg(name);
                         }
+                        cmd.envs(self.accounts.look_env());
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {

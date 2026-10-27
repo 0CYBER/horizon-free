@@ -169,6 +169,15 @@ impl Launcher {
                     ),
                 );
             }
+            let dressed = name.clone();
+            actions = actions.child(
+                button(format!("offline-skin-{i}"), "Skin…", Kind::Ghost, &t).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.open_skin(dressed.clone());
+                        cx.notify();
+                    }),
+                ),
+            );
             let forget = name.clone();
             actions = actions.child(
                 button(format!("offline-forget-{i}"), "Forget", Kind::Ghost, &t).on_click(
@@ -198,6 +207,7 @@ impl Launcher {
                 &t,
             ));
         }
+        rows = rows.children(self.skin_panel(cx));
         n += 1;
         let add = div()
             .flex()
@@ -218,8 +228,8 @@ impl Launcher {
             Some(
                 div()
                     .child(
-                        "Play offline under another name, and switch from the top bar. Offline \
-                         names have no skin, and online servers don't take them.",
+                        "Play offline under another name, and switch from the top bar. Online \
+                         servers don't take offline names.",
                     )
                     .into_any_element(),
             ),
