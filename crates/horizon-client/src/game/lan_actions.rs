@@ -684,6 +684,13 @@ impl Game<'_> {
                 g.sprinting = false;
             }
             m.sprinting = false;
+            // ServerPlayer.indicateDamage: the hit's direction to the player.
+            if let Some(yaw) = m.health.indicated_dir.take() {
+                g.send(&C::HurtAnimation(play::HurtAnimation {
+                    id: g.entity_id,
+                    yaw,
+                }));
+            }
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
