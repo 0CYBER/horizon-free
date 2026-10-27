@@ -257,8 +257,24 @@ impl Game<'_> {
                 // Player.startAutoSpinAttack(20, 8, stack).
                 p.auto_spin_attack_ticks = 20;
                 p.auto_spin_attack_dmg = 8.0;
-                if p.ground.on_ground {
-                    p.position.y += 1.2;
+            }
+            // `player.move(SELF, (0, 1.1999999, 0))` when on the ground: the lift
+            // stops at a ceiling.
+            let lift = self
+                .player
+                .as_ref()
+                .filter(|p| p.ground.on_ground)
+                .map(|p| p.bounds());
+            if let Some(bounds) = lift {
+                let mut scene = SceneCollisions {
+                    world: &self.world,
+                    binding: self.collision,
+                    subject: None,
+                };
+                let up = Vec3::new(0.0, f64::from(1.1999999f32), 0.0);
+                let moved = scene.resolve(bounds, up, 0.0, true).unwrap_or(Vec3::ZERO);
+                if let Some(p) = self.player.as_mut() {
+                    p.position.y += moved.y;
                 }
             }
             let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));

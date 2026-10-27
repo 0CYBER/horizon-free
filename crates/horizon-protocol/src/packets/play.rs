@@ -2243,6 +2243,7 @@ packet!(
     PaddleBoat { left: bool => Bool, right: bool => Bool }
 );
 packet!(PickItemFromBlock { pos: [i32; 3] => Pos, include_data: bool => Bool });
+packet!(PickItemFromEntity { id: i32 => VarInt, include_data: bool => Bool });
 packet!(
     /// ServerboundPlayerActionPacket.Action: 0 start destroy, 1 change destroy
     /// direction, 2 abort, 3 stop destroy, 4 drop all, 5 drop item, 6 release
@@ -2321,6 +2322,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MoveVehicle(MoveVehicleRequest) = MOVE_VEHICLE,
     PaddleBoat(PaddleBoat) = PADDLE_BOAT,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
+    PickItemFromEntity(PickItemFromEntity) = PICK_ITEM_FROM_ENTITY,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
     PlayerAction(PlayerAction) = PLAYER_ACTION,

@@ -771,9 +771,24 @@ pub struct ArmorStand {
     pub name_visible: bool,
     /// Game time of the last hit (the wobble and the second-hit window).
     pub last_hit: i64,
+    /// `DATA_HEAD_POSE` to `DATA_RIGHT_LEG_POSE`: head, body, left arm, right
+    /// arm, left leg, right leg, in degrees (`POSE_KEYS` order).
+    pub pose: [[f32; 3]; 6],
 }
 impl ArmorStand {
     pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
+    /// The `Pose` compound's keys.
+    pub const POSE_KEYS: [&'static str; 6] =
+        ["Head", "Body", "LeftArm", "RightArm", "LeftLeg", "RightLeg"];
+    /// `ArmorStand.DEFAULT_*_POSE`.
+    pub const DEFAULT_POSE: [[f32; 3]; 6] = [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [-10.0, 0.0, -10.0],
+        [-15.0, 0.0, 10.0],
+        [-1.0, 0.0, -1.0],
+        [1.0, 0.0, 1.0],
+    ];
     pub fn new(id: u32, position: Vec3, yaw: f32) -> Self {
         Self {
             fire_ticks: 0,
@@ -792,6 +807,7 @@ impl ArmorStand {
             custom_name: None,
             name_visible: false,
             last_hit: i64::MIN / 2,
+            pose: Self::DEFAULT_POSE,
         }
     }
     pub fn environment_tick(

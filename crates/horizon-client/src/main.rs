@@ -23,6 +23,8 @@ fn main() {
     };
     if !help {
         logging::init(&home, thread);
+        // The log's first line names the build, so a bug report that carries the log says which one it was.
+        log::info!("Horizon {}", crash::version());
         crash::install(home.clone(), side);
     }
     if let Err(error) = game::run() {

@@ -59,11 +59,11 @@ pub struct Goat {
     pub ramming_x_head_rot: f32,
 }
 impl Goat {
-    pub fn from_mob(_m: &Mob) -> Self {
+    pub fn from_mob(m: &Mob) -> Self {
         Self {
-            left_horn: true,
-            right_horn: true,
-            ramming_x_head_rot: 0.0,
+            left_horn: !m.extra.lost_horns[0],
+            right_horn: !m.extra.lost_horns[1],
+            ramming_x_head_rot: super::goat::ramming_x_head_rot(m),
         }
     }
 }
@@ -960,7 +960,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
     match m.species() {
         Species::Goat => goat(p, s, &Goat::from_mob(m)),
         Species::PolarBear => polar_bear(p, s, super::polar_bear::standing_scale(m, s.partial)),
-        Species::Panda => panda(p, s, &Panda::default()),
+        Species::Panda => panda(p, s, &super::panda::pose(m, s.partial)),
         Species::Llama | Species::TraderLlama => {
             llama(p, s, m.extra.chested && !s.baby);
         }
@@ -1008,7 +1008,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             p,
             s,
             &Armadillo {
-                hiding_in_shell: false,
+                hiding_in_shell: super::armadillo::hiding_in_shell(m),
                 roll_out: st[0],
                 roll_up: st[1],
                 peek: st[2],
@@ -1029,7 +1029,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             a,
         ),
         Species::Rabbit => rabbit(p, s, &st[0], &st[1], a),
-        Species::Fox => fox(p, s, &Fox::default(), a),
+        Species::Fox => fox(p, s, &super::fox::pose(m, s.partial), a),
         _ => return false,
     }
     true
