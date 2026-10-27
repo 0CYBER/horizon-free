@@ -82,6 +82,40 @@ impl Game<'_> {
         }
     }
 
+    /// `ServerLevel.sendParticles` of a mob's particles: a packet to each
+    /// player within 32 blocks. The window draws its own copy.
+    pub(super) fn lan_level_particles(
+        &self,
+        options: &ParticleOptions,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    ) {
+        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, None)) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: spread.map(|d| d as f32),
+            max_speed: [speed as f32; 3],
+            count: count as i32,
+            randomization: 0,
+        });
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
     /// `LivingEntity.checkFallDamage`'s `ServerLevel.sendParticles` of the
     /// landing block's crumbs: drawn in this window, when it has one, and
     /// sent to each player within 32 blocks. `host` is the hub of a guest's

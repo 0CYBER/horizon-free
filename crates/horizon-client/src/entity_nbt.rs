@@ -515,6 +515,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 "Variant".into(),
                 Tag::Int(i32::from(m.extra.variant.min(4))),
             );
+            if let Some(owner) = m.extra.owner {
+                map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
+            } else {
+                map.remove(&"Owner".into());
+            }
+            map.insert("Sitting".into(), Tag::Byte(i8::from(m.extra.sitting)));
         }
         "minecraft:salmon" => {
             let size = SALMON_SIZES[usize::from(m.extra.variant).min(2)];
@@ -552,7 +558,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                         "memories",
                         Tag::compound([(
                             "minecraft:liked_player",
-                            Tag::compound([("value", Tag::IntArray(vec![0, 0, 0, 1]))]),
+                            Tag::compound([(
+                                "value",
+                                Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
+                            )]),
                         )]),
                     )]),
                 );
@@ -605,6 +614,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             if m.extra.egg_time > 0 {
                 map.insert("life_ticks".into(), Tag::Int(m.extra.egg_time));
             }
+        }
+        "minecraft:endermite" => {
+            map.insert("Lifetime".into(), Tag::Int(m.extra.counter));
         }
         "minecraft:shulker" => {
             map.insert("AttachFace".into(), Tag::Byte(m.extra.variant3 as i8));
@@ -709,6 +721,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             {
                 let mut stack = crate::items::ItemStack::new(id, 1);
                 stack.data_mut().enchantments = g.slots[index].clone();
+                equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
+                continue;
+            }
+            // A wolf's armor keeps the durability it lost.
+            if slot == "body"
+                && m.species() == crate::mobs::Species::Wolf
+                && let Some(id) = item
+            {
+                let mut stack = crate::items::ItemStack::new(id, 1);
+                stack.damage = m.extra.body_damage.max(0) as u32;
+                stack.extra = m.extra.body_extra.clone();
                 equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
                 continue;
             }
@@ -1111,6 +1134,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.variant = gene("MainGene");
         m.extra.variant2 = gene("HiddenGene");
     }
+    if m.species() == crate::mobs::Species::Parrot {
+        m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
+        m.extra.tame = m.extra.owner.is_some();
+        m.extra.sitting = flag(tag, "Sitting");
+    }
     if m.species() == crate::mobs::Species::Wolf {
         let health = m.health;
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
@@ -1118,6 +1146,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         crate::mobs::tame::set_tame(&mut m, tame);
         m.health = health;
         m.extra.sitting = flag(tag, "Sitting");
+        let armor = tag
+            .get("equipment")
+            .and_then(|e| e.get("body"))
+            .and_then(crate::save::item_from_nbt);
+        m.extra.body_damage = armor.as_ref().map_or(0, |s| s.damage as i32);
+        m.extra.body_extra = armor.and_then(|s| s.extra);
         m.extra.color =
             number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
     }
@@ -1148,11 +1182,14 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.ints[1] = number(first.get("count")).unwrap_or(1) as i32;
         }
         m.extra.egg_time = number(tag.get("DuplicationCooldown")).unwrap_or(0) as i32;
-        m.extra.tame = tag
+        let liked = tag
             .get("Brain")
             .and_then(|b| b.get("memories"))
-            .and_then(|b| b.get("minecraft:liked_player"))
-            .is_some();
+            .and_then(|b| b.get("minecraft:liked_player"));
+        m.extra.tame = liked.is_some();
+        m.extra.owner = liked
+            .and_then(|l| l.get("value"))
+            .and_then(|v| crate::save::uuid_from_tag(Some(v)));
     }
     if crate::mobs::camel::is_camel(m.species()) {
         let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
@@ -1229,6 +1266,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;
         m.extra.counter2 = number(tag.get("StunTick")).unwrap_or(0) as i32;
         m.extra.anim_ticks = number(tag.get("RoarTick")).unwrap_or(0) as i32;
+    }
+    if m.species() == crate::mobs::Species::Endermite {
+        m.extra.counter = number(tag.get("Lifetime")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Vex {
         if let Some(Tag::IntArray(v)) = tag.get("bound_pos")
@@ -1320,6 +1360,11 @@ pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> 
     } else if let Tag::Compound(map) = &mut tag {
         map.remove(&"Thrower".into());
     }
+    if let Some(target) = e.target {
+        put(&mut tag, "Owner", Tag::IntArray(target.to_vec()));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Owner".into());
+    }
     tag
 }
 pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemEntity> {
@@ -1331,6 +1376,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         id,
         stack,
         thrower: uuid_from_tag(tag.get("Thrower")),
+        target: uuid_from_tag(tag.get("Owner")),
         position,
         previous: position,
         velocity: motion(tag),
@@ -2240,6 +2286,7 @@ mod tests {
             health: 2,
             fire_ticks: 73,
             thrower: Some([5, 6, 7, 8]),
+            target: None,
             id: 7,
             stack: ItemStack {
                 item: Arc::from("minecraft:diamond_pickaxe"),

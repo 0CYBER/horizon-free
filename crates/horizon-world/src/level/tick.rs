@@ -127,6 +127,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
+                    // BrushableBlock.tick checks the brush reset first (the
+                    // caller keeps the brush counts).
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "brushable",
+                    });
                     if self.is_free(self.below_state(pos)) && pos.y >= self.level.min_y() {
                         self.falling_block_fall(pos, state);
                     }

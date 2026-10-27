@@ -506,11 +506,11 @@ impl Mob {
     /// and fall distance (Entity.checkFallDamage).
     pub fn do_move(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let mut wanted = self.velocity;
-        // Entity.move: standing in a cobweb (`WebBlock.entityInside` ends in
-        // `makeStuckInBlock`) scales the move, stops the mob and ends its fall.
-        if let Some(stuck) = self.web_multiplier(w) {
-            self.fall_distance = 0.0;
-            wanted = Vec3::new(wanted.x * stuck.x, wanted.y * stuck.y, wanted.z * stuck.z);
+        // Entity.move: a block the mob is stuck in (sweet berry bush) scales
+        // this move once and stops it.
+        if self.stuck_multiplier.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(self.stuck_multiplier);
+            self.stuck_multiplier = Vec3::ZERO;
             self.velocity = Vec3::ZERO;
         }
         let step = self.kind.step_height as f32;
@@ -607,35 +607,6 @@ impl Mob {
         ) {
             self.fall_distance = 0.0;
         }
-    }
-    /// `WebBlock.entityInside`: the speed multiplier of a mob whose box (shrunk
-    /// by `1.0E-5`, as in `checkInsideBlocks`) touches a cobweb, half as
-    /// strong with Weaving. Spiders' `makeStuckInBlock` ignores cobwebs and the
-    /// wither's ignores every block.
-    fn web_multiplier(&self, w: &MobWorld) -> Option<Vec3> {
-        use super::Species;
-        if matches!(
-            self.species(),
-            Species::Spider | Species::CaveSpider | Species::Wither
-        ) {
-            return None;
-        }
-        let b = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
-        let (min, max) = (b.min_position(), b.max_position());
-        for x in min.x.floor() as i32..=max.x.floor() as i32 {
-            for y in min.y.floor() as i32..=max.y.floor() as i32 {
-                for z in min.z.floor() as i32..=max.z.floor() as i32 {
-                    if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:cobweb" {
-                        return Some(if self.has_effect("minecraft:weaving") {
-                            Vec3::new(0.5, 0.25, 0.5)
-                        } else {
-                            Vec3::new(0.25, f64::from(0.05_f32), 0.25)
-                        });
-                    }
-                }
-            }
-        }
-        None
     }
     /// LivingEntity.checkFallDamage: the fluid state refreshed out of water
     /// (touching water resets the fall), then Entity.checkFallDamage.
@@ -1026,8 +997,14 @@ impl Mob {
             movement.y = 0.2;
         }
         let mut y = movement.y;
-        if self.extra.levitation > 0 {
-            y += (0.05 * 1.0 - movement.y) * 0.2;
+        // LivingEntity.travelInAir: levitation lifts by its amplifier.
+        if let Some(&(_, _, amp)) = self
+            .extra
+            .effects
+            .iter()
+            .find(|e| e.0 == "minecraft:levitation")
+        {
+            y += (0.05 * f64::from(amp + 1) - movement.y) * 0.2;
         } else {
             y -= self.gravity();
         }
