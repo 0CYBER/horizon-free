@@ -36,11 +36,12 @@ MCP: `remove`, needs `confirm: true`.
 
 ## `horizon-launcher prepare`
 
-Prepare a version's resources from your own Minecraft install.
+Prepare a version's resources from your own Minecraft install, or from Mojang.
 
     horizon-launcher prepare
 
 - `--minecraft`: The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
+- `--download`: Download Minecraft from Mojang for the signed-in account that owns it, instead of using an install
 
 MCP: `prepare`.
 

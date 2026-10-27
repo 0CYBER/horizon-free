@@ -93,6 +93,17 @@ possible; the launcher just doesn't offer it on its own.
   the launcher's tests use accounts in a memory store (`MemoryStore`, and `HORIZON_NO_KEYCHAIN`
   for the CLI and MCP tests, which then have no owner).
 
+## Downloading the game for an owner
+
+Decided 2026-10-27. This is the only exception to "Horizon never downloads the game", and it
+applies only on the player's machine, for an account the owner gate just asked about. The
+launcher's "Download and prepare" (`horizon-launcher prepare --download`) fetches the pinned
+version straight from Mojang (`launcher/src/mojang.rs`): the version file, the client jar,
+libraries, the asset index and the assets, each checked against the size and sha1 Mojang lists.
+They go to `minecraft/` in the launcher's data folder, and the preparation runs as usual. The
+download can be cancelled and goes on where it stopped. CI, agents, harnesses and the repo never
+download or keep Mojang's files.
+
 Refresh: the Minecraft token is renewed from the Microsoft refresh token (steps 2-5 with
 `grant_type=refresh_token`) when it has less than an hour left, before every launch; steps 6-7 run
 at every launch (the owner gate). A refused

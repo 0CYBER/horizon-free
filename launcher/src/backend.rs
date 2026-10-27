@@ -1227,7 +1227,7 @@ fn download_for_owner(
                 sources::Os::MacOs => "osx",
                 sources::Os::Windows => "windows",
             };
-            mojang::download(pins, dir, os, 8, fetch, log).map_err(|e| {
+            mojang::download(pins, dir, os, 8, fetch, &mojang::CANCEL, log).map_err(|e| {
                 format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
             })
         }
@@ -1299,7 +1299,8 @@ fn java(
         Ok(body)
     };
     let runtime = data_dir().join("minecraft").join("runtime");
-    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
+    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, &mojang::CANCEL, log)
+        .map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
     find(major, &[home]).map(|jdk| jdk.home())
@@ -1351,6 +1352,16 @@ fn assets_folder(
     }
 }
 
+/// Where the preparation takes Minecraft's files from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinecraftFrom {
+    /// The player's own install (any launcher's); Mojang only when none has the version and an
+    /// account that owns the game is signed in.
+    Install,
+    /// Mojang, for the signed-in account that owns the game ("Download and prepare").
+    Mojang,
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1359,6 +1370,7 @@ fn assets_folder(
 pub fn preparer(
     tag: &str,
     minecraft: &Path,
+    from: MinecraftFrom,
     log: &dyn Fn(String),
 ) -> Result<(Preparer, PathBuf), String> {
     let version = game_version(tag);
@@ -1386,16 +1398,23 @@ pub fn preparer(
             Ok(body)
         };
         let linked = data_dir().join("linked-minecraft");
-        let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
-        if reused {
-            assets_folder(resolved, &chosen, &version, log)
+        if from == MinecraftFrom::Mojang {
+            // Straight from Mojang (what is already there and whole is kept), for an owner only.
+            download_for_owner(&pins, &own, &fetch, log)
+                .map_err(|e| e.trim_start_matches("\n  • ").to_string())?;
+            own
         } else {
-            match resolved? {
-                sources::Resolved::Folder(dir) => dir,
-                sources::Resolved::NotFound(checked) => {
-                    let not_found = sources::not_found(&version, &checked, minecraft);
-                    download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
-                    own
+            let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
+            if reused {
+                assets_folder(resolved, &chosen, &version, log)
+            } else {
+                match resolved? {
+                    sources::Resolved::Folder(dir) => dir,
+                    sources::Resolved::NotFound(checked) => {
+                        let not_found = sources::not_found(&version, &checked, minecraft);
+                        download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                        own
+                    }
                 }
             }
         }
