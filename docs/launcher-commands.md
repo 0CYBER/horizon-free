@@ -330,6 +330,49 @@ Keep an instance on one installed Horizon version, or "latest" to follow updates
 
 MCP: `instance_version`.
 
+## `horizon-launcher worlds list`
+
+The worlds: name, mode, version, last played and size (the default).
+
+    horizon-launcher worlds list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `worlds_list`.
+
+## `horizon-launcher worlds backup`
+
+Zip a world into the instance's backups/ folder, as the game's Make Backup does.
+
+    horizon-launcher worlds backup <WORLD>
+
+- `WORLD`: Its folder or name
+- `--instance`
+
+MCP: `worlds_backup`.
+
+## `horizon-launcher worlds copy`
+
+Copy a world beside it, as "<name> (1)".
+
+    horizon-launcher worlds copy <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_copy`.
+
+## `horizon-launcher worlds delete`
+
+Move a world to the system's trash.
+
+    horizon-launcher worlds delete <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_delete`, needs `confirm: true`.
+
 ## `horizon-launcher modpack list`
 
 The imported packs and their coverage (the default).

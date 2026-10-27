@@ -185,6 +185,35 @@ enum InstanceCmd {
 }
 
 #[derive(Subcommand)]
+enum WorldsCmd {
+    /// The worlds: name, mode, version, last played and size (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Zip a world into the instance's backups/ folder, as the game's Make Backup does
+    Backup {
+        /// Its folder or name
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Copy a world beside it, as "<name> (1)"
+    Copy {
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Move a world to the system's trash
+    Delete {
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ModsCmd {
     /// What the browser installed (the default)
     List,
@@ -377,6 +406,11 @@ enum Cmd {
     Instance {
         #[command(subcommand)]
         action: Option<InstanceCmd>,
+    },
+    /// An instance's single-player worlds: list them, back one up, copy or delete it
+    Worlds {
+        #[command(subcommand)]
+        action: Option<WorldsCmd>,
     },
     /// Modpacks: import a Java pack, see its coverage report, port what this computer can and
     /// play it as its own profile (docs/modpacks.md)
@@ -827,6 +861,10 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("Horizon is in the applications menu.");
             }
         }
+        Cmd::Worlds { action } => worlds(
+            action.unwrap_or(WorldsCmd::List { instance: None }),
+            as_json,
+        )?,
         Cmd::Instance { action } => instance(action.unwrap_or(InstanceCmd::List), as_json)?,
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List), as_json)?,
@@ -1444,6 +1482,68 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+    }
+    Ok(())
+}
+
+fn worlds(action: WorldsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::worlds::{self, World};
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    let value = |w: &World| {
+        let millis = w
+            .last_played
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        serde_json::json!({
+            "folder": w.folder, "name": w.name, "mode": w.mode, "version": w.version,
+            "last_played_ms": millis, "size": w.size, "path": w.path, "icon": w.icon,
+        })
+    };
+    match action {
+        WorldsCmd::List { instance } => {
+            let home = home(instance)?;
+            let all = worlds::list(&home);
+            if as_json {
+                json(all.iter().map(value).collect());
+            } else if all.is_empty() {
+                println!("No worlds in {}", home.join("saves").display());
+            }
+            for w in all.iter().filter(|_| !as_json) {
+                let version = w.version.as_deref().unwrap_or("unknown version");
+                let mb = w.size as f64 / 1_000_000.0;
+                println!(
+                    "{} ({})\n    {}, {version}, {mb:.1} MB",
+                    w.name, w.folder, w.mode
+                );
+            }
+        }
+        WorldsCmd::Backup { world, instance } => {
+            let home = home(instance)?;
+            let zip = worlds::backup(&home, &worlds::find(&home, &world)?)?;
+            match as_json {
+                true => json(serde_json::json!({ "backup": zip })),
+                false => println!("{}", zip.display()),
+            }
+        }
+        WorldsCmd::Copy { world, instance } => {
+            let home = home(instance)?;
+            let copy = worlds::copy(&worlds::find(&home, &world)?)?;
+            match as_json {
+                true => json(value(&copy)),
+                false => println!("Copied to {} ({})", copy.name, copy.folder),
+            }
+        }
+        WorldsCmd::Delete { world, instance } => {
+            let home = home(instance)?;
+            let w = worlds::find(&home, &world)?;
+            worlds::delete(&w)?;
+            println!("{} is in the trash.", w.name);
         }
     }
     Ok(())
