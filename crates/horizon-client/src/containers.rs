@@ -1,6 +1,10 @@
 //! Container block entities: chests/barrels (27 slots) and the three furnace
 //! kinds, ticking as `AbstractFurnaceBlockEntity.serverTick` with fuel times
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
+pub use crate::chunk::block_entity::{
+    Banner, Beacon, BlockEntity, Campfire, ChiseledBookshelf, Crafter, CreakingHeart, EndGateway,
+    Furnace, FurnaceKind, Jukebox, Lectern, Skull, SkullSkin,
+};
 use crate::{
     crafting::Recipes,
     items::{ItemStack, Items},
@@ -8,12 +12,6 @@ use crate::{
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FurnaceKind {
-    Furnace,
-    BlastFurnace,
-    Smoker,
-}
 impl FurnaceKind {
     pub fn recipe_type(self) -> &'static str {
         match self {
@@ -34,21 +32,6 @@ impl FurnaceKind {
         }
     }
 }
-#[derive(Clone, Debug)]
-pub struct Furnace {
-    pub kind: FurnaceKind,
-    /// input, fuel, result
-    pub items: [Option<ItemStack>; 3],
-    pub lit_remaining: i32,
-    pub lit_total: i32,
-    pub cooking_timer: i32,
-    pub cooking_total: i32,
-    pub speed: f32,
-    /// `AbstractFurnaceBlockEntity.recipesUsed`: how many of each recipe this furnace has
-    /// made since a player last took from its output. The experience is owed per recipe
-    /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
-    pub recipes_used: HashMap<String, u32>,
-}
 /// The key `recipes_used` keeps a recipe under: its full id, as vanilla's `ResourceKey<Recipe>`
 /// writes it in `RecipesUsed`. Horizon's own recipe ids are file names without the namespace, so
 /// keeping both forms would write a key twice, and vanilla refuses such a furnace
@@ -63,50 +46,6 @@ pub fn recipe_used_key(id: &str) -> String {
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
 
-#[derive(Clone, Debug)]
-pub enum BlockEntity {
-    Chest(Vec<Option<ItemStack>>),
-    Furnace(Furnace),
-    Brewing(Box<crate::brewing::BrewingStand>),
-    /// Signs and hanging signs (`SignBlockEntity`).
-    Sign(crate::signs::SignData),
-    /// `JukeboxBlockEntity`: the record and its `JukeboxSongPlayer`.
-    Jukebox(Jukebox),
-    /// `BeaconBlockEntity`.
-    Beacon(Box<Beacon>),
-    /// `LecternBlockEntity`: the book and the open page.
-    Lectern(Lectern),
-    /// Sculk sensors, shriekers and catalysts (`crate::sculk`).
-    Sculk(Box<crate::sculk::SculkEntity>),
-    /// `CreakingHeartBlockEntity`: its protector and the hurt emitter.
-    CreakingHeart(Box<CreakingHeart>),
-    /// `BannerBlockEntity`: the pattern layers.
-    Banner(Banner),
-    /// `CrafterBlockEntity`.
-    Crafter(Crafter),
-    /// `SpawnerBlockEntity` (`crate::mobs::spawner`).
-    Spawner(Box<crate::mobs::spawner::Spawner>),
-    /// `TrialSpawnerBlockEntity` (`crate::mobs::trial_spawner`).
-    TrialSpawner(Box<crate::mobs::trial_spawner::TrialSpawner>),
-    /// `VaultBlockEntity` (`crate::vault`).
-    Vault(Box<crate::vault::Vault>),
-    /// `BeehiveBlockEntity` of beehives and bee nests (`crate::beehive`).
-    Beehive(Box<crate::beehive::Beehive>),
-    /// `CommandBlockEntity` of the three command blocks (`crate::command_block`).
-    CommandBlock(Box<crate::command_block::CommandBlock>),
-    /// `CampfireBlockEntity` of campfires and soul campfires.
-    Campfire(Box<Campfire>),
-    /// `SkullBlockEntity` of every skull and head block.
-    Skull(Skull),
-}
-/// `CampfireBlockEntity`: four cooking slots, each with its
-/// `cookingProgress` and `cookingTime` (the recipe's).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Campfire {
-    pub items: [Option<ItemStack>; 4],
-    pub progress: [i32; 4],
-    pub total: [i32; 4],
-}
 impl Campfire {
     /// `placeFood`'s slot: the first empty one, given the item's
     /// `campfire_cooking` time; it takes one item of `held`.
@@ -154,17 +93,6 @@ impl Campfire {
         changed
     }
 }
-/// `SkullBlockEntity`: the player profile the head shows (kept as loaded:
-/// a compound, or a string when it names a player only), the note block
-/// sound and `custom_name`.
-#[derive(Clone, Debug, Default)]
-pub struct Skull {
-    pub profile: Option<horizon_world::nbt::Tag>,
-    pub note_block_sound: Option<String>,
-    pub custom_name: Option<horizon_world::nbt::Tag>,
-    /// What `profile` draws, read from it once rather than every frame.
-    pub skin: Option<SkullSkin>,
-}
 impl Skull {
     pub fn new(
         profile: Option<horizon_world::nbt::Tag>,
@@ -180,43 +108,33 @@ impl Skull {
         }
     }
 }
-/// `SkullBlockRenderer.getPlayerSkin` of a head's profile: its skin's URL
-/// with the `skins/<sha1>` sprite it downloads to, and the
-/// `DefaultPlayerSkin` drawn until that sprite is there (steve for a
-/// profile with no id).
-#[derive(Clone, Debug)]
-pub struct SkullSkin {
-    pub download: Option<(String, String)>,
-    pub fallback: &'static str,
-}
 impl SkullSkin {
     pub fn of(profile: &horizon_world::nbt::Tag) -> Self {
         let download = crate::skins::profile_skin_url_nbt(profile).and_then(|url| {
             let location = crate::skins::skin_location(&crate::skins::texture_hash(&url)?);
             Some((url, location))
         });
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services when the skull is drawn.
+        let dynamic = crate::skins::dynamic_nbt(profile);
         // DefaultPlayerSkin.get(id), or getDefaultSkin (slim steve) without an id.
         let fallback = crate::skins::profile_uuid_nbt(profile)
+            .or_else(|| {
+                crate::skins::nbt_text(profile.get("name"))
+                    .map(|name| horizon_protocol::crypto::offline_uuid(&name))
+            })
             .map_or("entity/player/slim/steve", crate::tab_list::default_skin);
-        Self { download, fallback }
+        Self {
+            download,
+            dynamic,
+            fallback,
+        }
     }
 }
 /// The skull and head blocks (`SkullBlock`, `WallSkullBlock`): every
 /// `*_skull` and `*_head` but the piston's head.
 fn is_skull(name: &str) -> bool {
     name.ends_with("_skull") || (name.ends_with("_head") && name != "minecraft:piston_head")
-}
-/// `CrafterBlockEntity`: nine slots that can be disabled, the powered flag
-/// and the ticks left in the crafting animation.
-#[derive(Clone, Debug, Default)]
-pub struct Crafter {
-    pub items: [Option<ItemStack>; 9],
-    pub disabled: [bool; 9],
-    pub triggered: bool,
-    pub crafting_ticks: i32,
-    /// The block state's `triggered` when last ticked (not saved): the block
-    /// entity flag follows it only when it changes (`CrafterBlock.neighborChanged`).
-    pub state_triggered: Option<bool>,
 }
 impl Crafter {
     /// `slotCanBeDisabled`: only empty slots.
@@ -256,48 +174,6 @@ impl Crafter {
                 }
         })
     }
-}
-#[derive(Clone, Debug, Default)]
-pub struct Banner {
-    pub layers: Vec<crate::banner::BannerLayer>,
-    pub name: Option<String>,
-    /// Components not consumed by BannerBlockEntity's implicit fields.
-    pub components: horizon_world::nbt::Compound,
-}
-/// `CreakingHeartBlockEntity` (the logic is in `game/creaking.rs`).
-#[derive(Clone, Debug, Default)]
-pub struct CreakingHeart {
-    /// The protector: its entity id once resolved, and its UUID (the saved form).
-    pub creaking: Option<(Option<u32>, [i32; 4])>,
-    pub ticks_existed: i64,
-    pub ticker: i32,
-    /// Ticks left of the hurt effect (`emitter`) and where it heads.
-    pub emitter: i32,
-    pub emitter_target: Option<[f64; 3]>,
-    pub output_signal: i32,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Lectern {
-    pub book: Option<ItemStack>,
-    pub page: i32,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Beacon {
-    pub levels: i32,
-    /// Effect ids (`minecraft:speed`).
-    pub primary: Option<String>,
-    pub secondary: Option<String>,
-    /// Beam sections (RGB colour, height) and the ones being rebuilt.
-    pub sections: Vec<(u32, i32)>,
-    pub checking: Vec<(u32, i32)>,
-    pub last_check_y: i32,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Jukebox {
-    pub record: Option<ItemStack>,
-    /// `ticks_since_song_started`, while a song plays.
-    pub ticks: i64,
-    pub playing: bool,
 }
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
@@ -363,6 +239,12 @@ impl BlockEntity {
         if is_skull(name) {
             return Some(Self::Skull(Skull::default()));
         }
+        if name == "minecraft:end_gateway" {
+            return Some(Self::EndGateway(EndGateway::default()));
+        }
+        if name == "minecraft:daylight_detector" {
+            return Some(Self::DaylightDetector);
+        }
         if name == "minecraft:beacon" {
             return Some(Self::Beacon(Box::new(Beacon {
                 last_check_y: i32::MIN / 2,
@@ -374,6 +256,9 @@ impl BlockEntity {
         }
         if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
             return Some(Self::Campfire(Box::default()));
+        }
+        if name == "minecraft:chiseled_bookshelf" {
+            return Some(Self::ChiseledBookshelf(Box::default()));
         }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
@@ -412,7 +297,10 @@ impl BlockEntity {
             Self::Beehive(_) => "minecraft:beehive",
             Self::CommandBlock(_) => "minecraft:command_block",
             Self::Skull(_) => "minecraft:skull",
+            Self::EndGateway(_) => "minecraft:end_gateway",
+            Self::DaylightDetector => "minecraft:daylight_detector",
             Self::Campfire(_) => "minecraft:campfire",
+            Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -429,12 +317,15 @@ impl BlockEntity {
             | Self::Vault(_)
             | Self::Beehive(_)
             | Self::CommandBlock(_)
-            | Self::Skull(_) => Vec::new(),
+            | Self::EndGateway(_)
+            | Self::Skull(_)
+            | Self::DaylightDetector => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
             Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
+            Self::ChiseledBookshelf(b) => b.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -448,8 +339,11 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
-            | Self::Skull(_) => &[],
+            | Self::EndGateway(_)
+            | Self::Skull(_)
+            | Self::DaylightDetector => &[],
             Self::Crafter(c) => &c.items,
+            Self::ChiseledBookshelf(b) => &b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -471,8 +365,11 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
-            | Self::Skull(_) => &mut [],
+            | Self::EndGateway(_)
+            | Self::Skull(_)
+            | Self::DaylightDetector => &mut [],
             Self::Crafter(c) => &mut c.items,
+            Self::ChiseledBookshelf(b) => &mut b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -718,6 +615,18 @@ impl Furnace {
                                     .recipes_used
                                     .entry(recipe_used_key(&recipe.id))
                                     .or_insert(0) += 1;
+                                // AbstractFurnaceBlockEntity.burn: drying a wet sponge fills
+                                // the bucket in the fuel slot.
+                                if self.items[0]
+                                    .as_ref()
+                                    .is_some_and(|i| &*i.item == "minecraft:wet_sponge")
+                                    && self.items[1]
+                                        .as_ref()
+                                        .is_some_and(|f| &*f.item == "minecraft:bucket")
+                                {
+                                    self.items[1] =
+                                        Some(ItemStack::new("minecraft:water_bucket", 1));
+                                }
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {

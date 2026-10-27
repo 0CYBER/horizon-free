@@ -2,7 +2,7 @@
 //! add/update with hidden effects, per-tick application of the periodic
 //! effects (regeneration, poison, wither, hunger, saturation, instant
 //! effects), and the derived flags the movement and damage code read.
-use crate::brewing;
+use horizon_client_core::potions;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInstance {
@@ -129,15 +129,16 @@ fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
         _ => None,
     }
 }
-/// `InstantenousMobEffect.applyInstantenousEffect` (potions apply these directly).
+/// `HealOrHarmMobEffect.applyInstantaneousEffect` (potions apply these directly;
+/// the amount rounds to the nearest whole point).
 pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
     match id {
         "instant_health" => Some(EffectAction::Heal(
-            (scale * f64::from(4 << amp.min(30))) as i32 as f32,
+            (scale * f64::from(4 << amp.min(30)) + 0.5) as i32 as f32,
         )),
         "instant_damage" => Some(EffectAction::Hurt(
             "minecraft:magic",
-            (scale * f64::from(6 << amp.min(30))) as i32 as f32,
+            (scale * f64::from(6 << amp.min(30)) + 0.5) as i32 as f32,
         )),
         "saturation" => Some(EffectAction::Eat(amp + 1, 1.0)),
         _ => None,
@@ -179,13 +180,14 @@ impl PlayerEffects {
         self.list.clear();
     }
     /// The effects of a saved player (`Player.active_effects`: id,
-    /// duration, amplifier, ambient, visible).
+    /// duration, amplifier, ambient, particles visible).
     pub fn from_saved(saved: &[(String, i32, i32, bool, bool)]) -> Self {
         let mut effects = Self::default();
-        for (id, duration, amplifier, ambient, _) in saved {
-            if let Some(def) = brewing::effect(id) {
+        for (id, duration, amplifier, ambient, particles) in saved {
+            if let Some(def) = potions::effect(id) {
                 let mut e = EffectInstance::new(def.id, *duration, *amplifier);
                 e.ambient = *ambient;
+                e.visible = *particles;
                 effects.add(e);
             }
         }
@@ -213,8 +215,9 @@ impl PlayerEffects {
     }
     /// `LivingEntity.tickEffects` (server part) with the omens' effect ticks:
     /// `omen` answers `BadOmenMobEffect` (every tick) and `RaidOmenMobEffect`
-    /// (on its last tick). Returns the actions to apply, in order, and
-    /// whether Raid Omen was newly added.
+    /// (on its last tick); `absorption_empty` is `AbsorptionMobEffect`'s
+    /// answer: the effect ends once the absorption is used up. Returns the
+    /// actions to apply, in order, and whether Raid Omen was newly added.
     ///
     /// Bad Omen turning into a new Raid Omen adds an entry to the map being
     /// iterated: vanilla's iterator then throws a
@@ -224,6 +227,7 @@ impl PlayerEffects {
     pub fn tick_with(
         &mut self,
         omen: &mut dyn FnMut(&EffectInstance) -> OmenTick,
+        absorption_empty: bool,
     ) -> (Vec<EffectAction>, bool) {
         self.tick_count = self.tick_count.wrapping_add(1);
         let mut actions = Vec::new();
@@ -246,6 +250,7 @@ impl PlayerEffects {
             let answer = match e.id {
                 "bad_omen" => omen(e),
                 "raid_omen" if t == 1 => omen(e),
+                "absorption" if absorption_empty => OmenTick::Remove,
                 _ => OmenTick::Continue,
             };
             match answer {
@@ -302,10 +307,10 @@ impl PlayerEffects {
     ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
         let mut lasting = Vec::new();
         let mut now = Vec::new();
-        if let Some(def) = potion.and_then(brewing::potion) {
+        if let Some(def) = potion.and_then(potions::potion) {
             for (id, duration, amp) in def.effects {
-                let id = brewing::effect(id).map_or("speed", |e| e.id);
-                if brewing::effect(id).is_some_and(|e| e.instant) {
+                let id = potions::effect(id).map_or("speed", |e| e.id);
+                if potions::effect(id).is_some_and(|e| e.instant) {
                     now.extend(instant(id, *amp, 1.0));
                 } else {
                     // withScaledDuration: max(floor(d * scale), 1).
@@ -465,13 +470,13 @@ mod tests {
         };
         // The first tick adds Raid Omen and stops there (the iterator's
         // ConcurrentModificationException): Bad Omen and Speed stay as they were.
-        let (_, added) = fx.tick_with(&mut convert);
+        let (_, added) = fx.tick_with(&mut convert, false);
         assert!(added);
         assert_eq!(fx.get("bad_omen").unwrap().duration, 100);
         assert_eq!(fx.get("speed").unwrap().duration, 50);
         assert_eq!(fx.get("raid_omen").unwrap().duration, 600);
         // The second refreshes Raid Omen and drops Bad Omen.
-        let (_, added) = fx.tick_with(&mut convert);
+        let (_, added) = fx.tick_with(&mut convert, false);
         assert!(!added);
         assert!(fx.get("bad_omen").is_none());
         assert_eq!(fx.get("speed").unwrap().duration, 49);
@@ -486,9 +491,9 @@ mod tests {
             seen.push(e.duration);
             OmenTick::Remove
         };
-        fx.tick_with(&mut watch);
+        fx.tick_with(&mut watch, false);
         assert!(fx.get("raid_omen").is_some());
-        fx.tick_with(&mut watch);
+        fx.tick_with(&mut watch, false);
         assert!(fx.get("raid_omen").is_none());
         assert_eq!(seen, vec![1]);
     }

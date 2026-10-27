@@ -28,6 +28,8 @@ pub const MARKINGS: [&str; 5] = ["", "white", "whitefield", "whitedots", "blackd
 pub const EAT: usize = 0;
 pub const STAND: usize = 1;
 pub const MOUTH: usize = 2;
+/// `AbstractHorse.tailCounter`: client-side, it only drives the model.
+pub const TAIL: usize = 3;
 
 /// What a rider asks of its mount this tick.
 #[derive(Clone, Copy, Debug, Default)]
@@ -418,6 +420,20 @@ pub fn ridden_step(m: &mut Mob) {
         }
     }
 }
+/// `AbstractHorse.aiStep`'s `moveTail` (one in 200 ticks) and the counter's
+/// step in `tick` (it runs to 8, then stops). A client runs it on its own
+/// random, as vanilla's client-side `aiStep` does.
+pub fn tail_tick(m: &mut Mob) {
+    if m.random.next_int_bound(200).unwrap_or(1) == 0 {
+        m.anim.v[TAIL] = 1.0;
+    }
+    if m.anim.v[TAIL] > 0.0 {
+        m.anim.v[TAIL] += 1.0;
+        if m.anim.v[TAIL] > 8.0 {
+            m.anim.v[TAIL] = 0.0;
+        }
+    }
+}
 /// `AbstractHorse.aiStep` and `tick`: healing, grazing, the rear and the
 /// eating/standing/mouth animations.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -455,6 +471,11 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.counter > 0 {
         m.extra.counter -= 1;
     }
+    animate(m);
+}
+/// `AbstractHorse.tick`'s eat, stand and mouth animations, which follow the
+/// eating and standing flags (`flag` and `counter > 0`).
+pub fn animate(m: &mut Mob) {
     let (eating, standing) = (m.extra.flag, m.extra.counter > 0);
     let v = &mut m.anim.v;
     if standing {
@@ -471,6 +492,22 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         v[STAND] = (s + (0.8 * s * s * s - s) * 0.6 - 0.05).max(0.0);
     }
     v[MOUTH] = (v[MOUTH] - v[MOUTH] * 0.7 - 0.05).max(0.0);
+}
+/// `AbstractHorse.tick` on a client that is not the server: the animations
+/// follow the flags of the synched data (`set_flags`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    animate(m);
+}
+/// `AbstractHorse.DATA_ID_FLAGS` on a client: eating 16 and standing 32.
+pub fn set_flags(m: &mut Mob, flags: u8) {
+    m.extra.flag = flags & 16 != 0;
+    m.extra.counter = i32::from(flags & 32 != 0);
+}
+/// Whether `ai_step` above runs this species' grazing and rearing, so that
+/// the server's flags 16 and 32 mean eating and standing.
+pub fn grazes(s: Species) -> bool {
+    is_equine(s) && !super::camel::is_camel(s) && !super::llama::is_llama(s)
 }
 /// Body texture and the markings overlay.
 pub fn texture(m: &Mob) -> String {
@@ -603,7 +640,15 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         t[1] += speed * age;
         t[2] += speed * 2.0 * age;
     }
-    p.yrot("tail", 0.0);
+    // animateTail: the tail swings while the counter runs.
+    p.yrot(
+        "tail",
+        if m.anim.v[TAIL] > 0.0 {
+            (s.age * 0.7).mcos()
+        } else {
+            0.0
+        },
+    );
     if baby && donkey {
         // BabyDonkeyModel overrides the state's pitch with -30 degrees and
         // sets the head parts again.

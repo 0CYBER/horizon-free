@@ -132,8 +132,18 @@ impl Game<'_> {
         match t {
             Target::Player => Some(self.acting_player_name().to_owned()),
             Target::Guest(conn) => self.command_guest(conn).map(|g| g.name.clone()),
-            Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
-            _ => None,
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
+            | Target::Other(id) => Some(uuid_text(self.uuid_for(id))),
+            // Orbs and projectiles have no UUID here.
+            Target::Orb(_) | Target::Projectile(_) => None,
         }
     }
     fn holder_for(&mut self, t: Target) -> Option<Holder> {
@@ -180,7 +190,11 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Guest(_) | Target::Orb(_) | Target::Projectile(_) => None,
+            Target::Guest(_)
+            | Target::Orb(_)
+            | Target::Projectile(_)
+            | Target::Crystal(_)
+            | Target::Dragon(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l
@@ -669,7 +683,7 @@ impl Game<'_> {
         let objective = board.display_objective(sb::SLOT_LIST);
         let shown = tab_list::visible(
             key,
-            self.remote.is_none(),
+            self.has_singleplayer_server(),
             players.len(),
             objective.is_some(),
         );

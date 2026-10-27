@@ -1,7 +1,8 @@
 //! Zombies (zombie, husk, drowned, zombie villager) and skeletons (skeleton,
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
-    Mob, MobEvent, Species, Who,
+    Damage, Mob, MobEvent, Species, Who,
+    doors::BreakDoor,
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
@@ -10,11 +11,22 @@ use super::{
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
+/// `Zombie.hurtServer`, once the hit landed: a zombie with a target (its own,
+/// else a living attacker) asks the game to try calling a reinforcement; the
+/// difficulty, chance and spawn tests are the game's (`call_reinforcements`).
+pub fn after_hurt(m: &mut Mob, source: &Damage) {
+    if let Some(target) = m.ai.target.or(source.attacker) {
+        m.outbox
+            .push(MobEvent::Reinforcements { mob: m.id, target });
+    }
+}
+
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
         S::Zombie | S::Husk | S::ZombieVillager => {
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
@@ -42,6 +54,7 @@ pub fn register(m: &mut Mob) {
         S::ZombifiedPiglin => {
             // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
             g.add(2, MeleeAttack::new(1.0, false).zombie());
@@ -58,6 +71,7 @@ pub fn register(m: &mut Mob) {
         S::Drowned => {
             // Zombie.registerGoals, then Drowned.addBehaviourGoals.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
@@ -136,12 +150,13 @@ pub fn register(m: &mut Mob) {
             }
             // The AbstractSkeleton constructor's reassessWeaponGoal, after
             // registerGoals; the weapon itself comes with finalizeSpawn.
-            let interval = if matches!(species, S::Bogged | S::Parched) {
-                70
+            // getHardAttackInterval / getAttackInterval.
+            let (hard, normal) = if matches!(species, S::Bogged | S::Parched) {
+                (50, 70)
             } else {
-                40
+                (20, 40)
             };
-            m.ai.goals.add(4, SkeletonWeapon::new(interval));
+            m.ai.goals.add(4, SkeletonWeapon::new(hard, normal));
         }
         _ => {}
     }
@@ -165,6 +180,17 @@ fn drowned_ok_target(m: &Mob, w: &super::MobWorld) -> bool {
 /// Drowned.wantsToSwim
 pub fn drowned_wants_to_swim(m: &Mob, w: &super::MobWorld) -> bool {
     m.extra.flag2 || m.target_info(w).is_some_and(|t| in_water_at(w, t.position))
+}
+/// `Drowned.updateSwimming`: swimming under water while it wants to. `flag`
+/// holds `isSwimming`, which clients take from the entity's shared flags.
+pub fn drowned_update_swimming(m: &mut Mob, w: &super::MobWorld) {
+    m.extra.flag =
+        !m.no_ai && m.was_eye_in_water && m.fluids.in_water && drowned_wants_to_swim(m, w);
+}
+/// A drowned on a client: `LivingEntity.updateSwimAmount` follows the
+/// swimming flag (`Drowned.isVisuallySwimming`).
+pub fn drowned_client_tick(m: &mut Mob) {
+    m.extra.swim.tick(m.extra.flag, m.fluids.in_water);
 }
 /// Drowned.DrownedMoveControl
 pub fn drowned_move_control(m: &mut Mob, w: &super::MobWorld) {
@@ -217,8 +243,10 @@ pub fn drowned_travel(
     m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
     true
 }
-/// The trident throw of `Drowned.performRangedAttack`, until thrown tridents
-/// exist: an arrow-like shot with the trident's damage.
+/// The trident throw of `Drowned.performRangedAttack`: a `ThrownTrident` of
+/// the held trident (a plain one when it holds none), owned by the drowned,
+/// which cannot be picked up and does not return (`AbstractArrow` constructor:
+/// only a player's projectile is `Pickup.ALLOWED`).
 fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let Some(t) = cx.w.target_info(who) else {
         return;
@@ -228,15 +256,18 @@ fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let yd = t.position.y + (t.bounds.max_position().y - t.bounds.min_position().y) / 3.0 - start.y;
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
-    let mut p = Projectile::new(
-        ProjectileKind::Arrow {
-            base_damage: 8.0,
-            critical: false,
-            effect: None,
-        },
-        start,
-        Some(Who::Mob(m.id)),
-    );
+    let mut trident = crate::items::ItemStack::new("minecraft:trident", 1);
+    if m.extra.main_hand.as_deref() == Some("minecraft:trident")
+        && let Some(g) = super::gear::gear(m)
+    {
+        for (e, l) in &g.slots[super::gear::MAIN] {
+            trident.enchant(e, *l);
+        }
+    }
+    let mut p = Projectile::new(ProjectileKind::Trident, start, Some(Who::Mob(m.id)));
+    if let Some(a) = p.arrow.as_mut() {
+        a.set_item(&trident);
+    }
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + dist * f64::from(0.2_f32), zd],
@@ -478,15 +509,77 @@ fn zombified_piglin_step(m: &mut Mob, cx: &mut Cx) {
         }
     }
 }
+/// `Entity.isInPowderSnow`: the mob's box, shrunk by `1.0E-5` as in
+/// `checkInsideBlocks`, touches powder snow.
+fn in_powder_snow(m: &Mob, w: &super::MobWorld) -> bool {
+    let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    let (min, max) = (b.min_position(), b.max_position());
+    for x in min.x.floor() as i32..=max.x.floor() as i32 {
+        for y in min.y.floor() as i32..=max.y.floor() as i32 {
+            for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:powder_snow" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+/// `Skeleton.freezingTracker` (`ConversionTracker.tick`): 140 ticks in
+/// powder snow start a conversion into a stray that takes 300 more; leaving
+/// the snow stops it. `counter` is the affliction time (-1 outside the snow)
+/// and `counter2` the conversion time plus one while converting, so that
+/// reaching 0 is vanilla's `conversionTime < 0`.
+fn skeleton_freezing(m: &mut Mob, cx: &mut Cx) {
+    if !in_powder_snow(m, cx.w) {
+        m.extra.counter = -1;
+        m.extra.counter2 = 0;
+    } else if m.extra.counter2 > 0 {
+        m.extra.counter2 -= 1;
+        if m.extra.counter2 == 0 {
+            // levelEvent 1048: the conversion sound at the stray.
+            let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+            cx.events.push(MobEvent::Sound(
+                "entity.skeleton.converted_to_stray",
+                m.center(),
+                2.0,
+                pitch,
+            ));
+            cx.events.push(MobEvent::SpawnKind {
+                kind: "minecraft:stray".into(),
+                at: [m.position.x, m.position.y, m.position.z],
+                setup: super::SpawnSetup {
+                    yaw: m.yaw,
+                    persistent: m.persistent,
+                    ..Default::default()
+                },
+            });
+            m.removed = true;
+        }
+    } else {
+        m.extra.counter += 1;
+        if m.extra.counter >= 140 {
+            m.extra.counter2 = 301;
+        }
+    }
+}
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     if m.species() == Species::ZombieVillager {
         super::zombie_villager::step(m, cx);
+    }
+    if m.species() == Species::Skeleton && m.alive() && !m.no_ai {
+        skeleton_freezing(m, cx);
     }
     if m.species() == Species::ZombifiedPiglin {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {
@@ -524,13 +617,20 @@ pub struct SkeletonWeapon {
     bow: BowAttack,
     melee: MeleeAttack,
     use_bow: bool,
+    /// The weapon the goal was last reassessed for.
+    assessed: Option<bool>,
+    hard_interval: i32,
+    normal_interval: i32,
 }
 impl SkeletonWeapon {
-    pub fn new(bow_interval: i32) -> Self {
+    pub fn new(hard_interval: i32, normal_interval: i32) -> Self {
         Self {
-            bow: BowAttack::new(1.0, bow_interval, 15.0),
+            bow: BowAttack::new(1.0, normal_interval, 15.0),
             melee: MeleeAttack::new(1.2, false),
             use_bow: false,
+            assessed: None,
+            hard_interval,
+            normal_interval,
         }
     }
 }
@@ -556,6 +656,18 @@ impl Goal for SkeletonWeapon {
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         // The goal registered for the weapon in hand.
         self.use_bow = holding_bow(m);
+        // reassessWeaponGoal: a bow gets the hard interval only on Hard; it
+        // is picked again when the weapon changes (the first check after
+        // spawning or loading stands for finalizeSpawn and
+        // readAdditionalSaveData).
+        if self.assessed != Some(self.use_bow) {
+            self.assessed = Some(self.use_bow);
+            self.bow.interval_min = if cx.w.difficulty.hard {
+                self.hard_interval
+            } else {
+                self.normal_interval
+            };
+        }
         if self.use_bow {
             self.bow.can_use(m, cx)
         } else {
@@ -743,8 +855,9 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
     // AbstractArrow.setBaseDamageFromMob: power * 2 + triangle(difficulty * 0.11, 0.57425).
+    let id = i32::from(cx.w.difficulty.id);
     let mut arrow_random = crate::projectiles::own_random(m);
-    let base = f64::from(power) * 2.0 + arrow_random.triangle(2.0 * 0.11, 0.574_25);
+    let base = f64::from(power) * 2.0 + arrow_random.triangle(f64::from(id) * 0.11, 0.574_25);
     let effect = match m.species() {
         Species::Stray => Some(("minecraft:slowness", 600)),
         Species::Bogged => Some(("minecraft:poison", 100)),
@@ -765,7 +878,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
         &mut arrow_random,
         [xd, yd + dist * 0.2, zd],
         1.6,
-        (14 - 2 * 4) as f32,
+        (14 - id * 4) as f32,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 1.0 / (m.random.next_float() * 0.4 + 0.8);
@@ -939,16 +1052,21 @@ impl Goal for AttackTurtleEgg {
                 pos: eat,
                 drop: false,
             });
+            // `sendParticles(POOF, ..., 1, xa, ya, za, 0.15)`, twenty times.
             for _ in 0..20 {
-                m.random.next_gaussian();
-                m.random.next_gaussian();
-                m.random.next_gaussian();
+                let spread = [
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                ];
+                cx.events.push(MobEvent::LevelParticles {
+                    kind: "poof",
+                    at: [center[0], f64::from(eat[1]), center[2]],
+                    spread,
+                    speed: 0.15,
+                    count: 1,
+                });
             }
-            cx.events.push(MobEvent::Particles {
-                kind: "poof",
-                at: [center[0], f64::from(eat[1]), center[2]],
-                count: 20,
-            });
             // The break sound's pitch draws from the level random.
             cx.events.push(MobEvent::Sound(
                 "block.turtle_egg.break",

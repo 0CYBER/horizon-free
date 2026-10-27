@@ -10,6 +10,12 @@ impl MotionWorld<'_, '_, '_> {
         if self.player.invulnerable || self.player.spectator {
             return Ok(());
         }
+        // Frost walker's `damage_immunity`: #burn_from_stepping (magma, campfire).
+        if self.player.burn_from_stepping_immune
+            && matches!(source, "minecraft:hot_floor" | "minecraft:campfire")
+        {
+            return Ok(());
+        }
         let id = self
             .resources
             .health
@@ -160,6 +166,29 @@ pub(crate) fn fire_contact(
         }
     }
     damage
+}
+/// `CactusBlock.entityInside`: the box (deflated by `1.0E-5`, as in
+/// `Entity.checkInsideBlocks`) touches a cactus; its inside shape is the
+/// whole block.
+pub(crate) fn cactus_contact(
+    world: &World,
+    registry: &horizon_world::registry::BlockRegistry,
+    bounds: Aabb,
+) -> bool {
+    let b = bounds.deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    for x in b.min_position().x.floor() as i32..=b.max_position().x.floor() as i32 {
+        for y in b.min_position().y.floor() as i32..=b.max_position().y.floor() as i32 {
+            for z in b.min_position().z.floor() as i32..=b.max_position().z.floor() as i32 {
+                if registry
+                    .state(world.block(x, y, z))
+                    .is_some_and(|s| s.name == "minecraft:cactus")
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
     fn in_water(&mut self) -> Result<bool> {

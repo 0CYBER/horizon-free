@@ -217,6 +217,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "beacons"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -924,6 +931,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
+name = "far-view"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,7 +1370,6 @@ name = "horizon-client"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
- "arboard",
  "bytemuck",
  "chrono",
  "cpal",
@@ -1365,10 +1378,14 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-bench",
+ "horizon-client-core",
+ "horizon-client-input",
+ "horizon-command",
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
  "horizon-hdr",
+ "horizon-items",
  "horizon-mods",
  "horizon-protocol",
  "horizon-server-files",
@@ -1389,11 +1406,41 @@ dependencies = [
  "sha1",
  "sha2",
  "symphonia",
+ "unicode-bidi",
  "ureq",
  "wgpu",
  "winit",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "horizon-client-core"
+version = "0.1.0"
+dependencies = [
+ "horizon-world",
+ "serde_json",
+]
+
+[[package]]
+name = "horizon-client-input"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "horizon-client-core",
+ "horizon-dualsense",
+ "horizon-theme",
+ "png",
+ "winit",
+]
+
+[[package]]
+name = "horizon-command"
+version = "0.1.0"
+dependencies = [
+ "horizon-client-core",
+ "horizon-protocol",
+ "horizon-world",
 ]
 
 [[package]]
@@ -1433,6 +1480,17 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "wgpu",
+]
+
+[[package]]
+name = "horizon-items"
+version = "0.1.0"
+dependencies = [
+ "horizon-client-core",
+ "horizon-core",
+ "horizon-world",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2972,6 +3030,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "recipes"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3733,6 +3798,12 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-ident"

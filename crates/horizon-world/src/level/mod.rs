@@ -137,7 +137,7 @@ mod tests;
 pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
-pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
+pub use interact::{InteractionResult, PlayerContext, PlayerEffect, hit_slot};
 pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{PlaceContext, PlaceOutcome};
 pub use states::{BlockId, PropKey, StateTable};
@@ -181,6 +181,8 @@ pub struct GameRules {
     pub max_snow_accumulation_height: i32,
     pub spawn_mobs: bool,
     pub spawn_monsters: bool,
+    /// `fire_spread_radius_around_player`: -1 spreads everywhere.
+    pub fire_spread_radius_around_player: i32,
 }
 impl Default for GameRules {
     fn default() -> Self {
@@ -193,6 +195,7 @@ impl Default for GameRules {
             max_snow_accumulation_height: 1,
             spawn_mobs: true,
             spawn_monsters: true,
+            fire_spread_radius_around_player: 128,
         }
     }
 }
@@ -206,6 +209,9 @@ pub enum EntityQuery {
     Mobs,
     /// Minecarts only (detector rails).
     Minecart,
+    /// Arrows only (`AbstractArrow`, thrown tridents included): the entities
+    /// a wooden button senses.
+    Arrows,
 }
 
 /// Side effects reported to the caller, in vanilla call order.
@@ -252,7 +258,8 @@ pub enum LevelEvent {
     /// event follow as their own events; the caller removes the block.
     PrimeTnt { pos: BlockPos, rot: f64 },
     /// Block-entity or entity side effects the caller implements: `"dispense"`
-    /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
+    /// (dispenser/dropper/crafter scheduled tick), `"brushable"` (a suspicious
+    /// block's scheduled tick: `checkReset`), `"hatch"` (frogspawn
     /// hatched into tadpoles; the block is already destroyed), `"portal_spawn"`
     /// (a nether portal won its zombified piglin roll; the caller checks
     /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal).
@@ -325,6 +332,10 @@ pub trait LevelAccess {
     fn sky_darken(&self) -> i32 {
         0
     }
+    /// `EnvironmentAttributes.SUN_ANGLE` at `pos`, in degrees (0 at noon).
+    fn sun_angle(&self, _pos: BlockPos) -> f32 {
+        0.0
+    }
     fn is_raining(&self) -> bool {
         false
     }
@@ -348,6 +359,11 @@ pub trait LevelAccess {
     fn can_spread_fire_around(&self, _pos: BlockPos) -> bool {
         true
     }
+    /// The `INCREASED_FIRE_BURNOUT` environment attribute at `pos` (a biome
+    /// attribute).
+    fn increased_fire_burnout(&self, _pos: BlockPos) -> bool {
+        false
+    }
     /// `Level.isUnobstructed(state, pos, context)`: whether the state's
     /// collision shape at `pos` would intersect an entity.
     fn is_unobstructed(&self, _pos: BlockPos, _state: BlockStateId) -> bool {
@@ -363,6 +379,12 @@ pub trait LevelAccess {
         _direction: Direction,
     ) -> i32 {
         0
+    }
+    /// `ItemFrame.getAnalogOutput` of the one item frame in the block at
+    /// `pos` that faces `facing` (`ComparatorBlock.getItemFrame`), or None when
+    /// there is not exactly one.
+    fn item_frame_analog_output(&self, _pos: BlockPos, _facing: Direction) -> Option<i32> {
+        None
     }
     /// `ContainerOpenersCounter.recheckOpenCount` for the chest or ender chest
     /// block entity at `pos`: recounts its openers and returns the previous
@@ -638,6 +660,20 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).player_destroy(pos, creative)
     }
+    /// `IceBlock.playerDestroy` after the drops: mined ice melts into water
+    /// unless the tool prevents ice melting (silk touch). `destroyed` is the
+    /// state that was broken.
+    pub fn ice_destroyed_by_player<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+        prevents_melting: bool,
+    ) {
+        self.sim(level, ticks)
+            .ice_destroyed_by_player(pos, destroyed, prevents_melting);
+    }
     /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
     /// otherwise fire shaped by its neighbours.
     pub fn fire_state_for<L: LevelAccess + ?Sized>(
@@ -755,6 +791,24 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).entity_inside(pos);
     }
+    /// `DaylightDetectorBlock.tickEntity` of the daylight detector at `pos`:
+    /// its signal follows the sky every 20 game ticks. The detector's ticker
+    /// exists only where the dimension has sky light.
+    pub fn tick_daylight_detector<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        if level.dimension() == Dimension::Nether || level.game_time() % 20 != 0 {
+            return;
+        }
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        if sim.b.data(state).is(classes::Class::DaylightDetector) {
+            sim.daylight_detector_update_signal(pos, state);
+        }
+    }
     /// `BigDripleafBlock.entityInside` for an entity whose box is inside
     /// `pos`: whether it is on the ground and its feet's y (`canEntityTilt`).
     pub fn entity_on_big_dripleaf<L: LevelAccess + ?Sized>(
@@ -767,6 +821,22 @@ impl Behaviours {
     ) {
         self.sim(level, ticks)
             .big_dripleaf_entity_inside(pos, on_ground, feet_y);
+    }
+    /// `BellBlock.onProjectileHit` for a projectile that hit `face` of the
+    /// block at `pos` at height `hit_y`. False when the block is not a bell
+    /// or the hit missed the bell proper.
+    pub fn bell_projectile_hit<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        face: Direction,
+        hit_y: f64,
+    ) -> bool {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        self.data(state).is(classes::Class::Bell)
+            && sim.bell_hit(pos, state, face, hit_y - f64::from(pos.y))
     }
     /// Redstone signal queries (`SignalGetter`).
     pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(
@@ -784,6 +854,22 @@ impl Behaviours {
         pos: BlockPos,
     ) -> i32 {
         self.sim(level, ticks).best_neighbor_signal(pos)
+    }
+    /// `BlockState.onProjectileHit` of a target block (`TargetBlock`) hit by
+    /// a projectile at `location` on the face with normal `face`; `arrow`
+    /// for an `AbstractArrow`. Returns the output strength, or None when the
+    /// block at `pos` is not a target block.
+    pub fn target_projectile_hit<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        location: [f64; 3],
+        face: [i32; 3],
+        arrow: bool,
+    ) -> Option<i32> {
+        self.sim(level, ticks)
+            .target_projectile_hit(pos, location, face, arrow)
     }
 }
 

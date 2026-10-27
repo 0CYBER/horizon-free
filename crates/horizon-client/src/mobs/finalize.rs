@@ -516,9 +516,13 @@ fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
-    compute(m, a, true)
+    compute(m, a, true, &[])
 }
-fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
+/// `value` with more modifiers, such as the ones worn equipment grants.
+pub fn value_with(m: &Mob, a: Attr, extra: &[(f64, Op)]) -> f64 {
+    compute(m, a, true, extra)
+}
+fn compute(m: &Mob, a: Attr, with_transient: bool, extra: &[(f64, Op)]) -> f64 {
     let mut base = base_value(m, a);
     let empty = Vec::new();
     let mods = m.extra.attributes.as_ref().map_or(&empty, |s| &s.modifiers);
@@ -531,6 +535,7 @@ fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
         ops.extend(transient(m, a));
         ops.extend(effect_modifiers(m, a));
     }
+    ops.extend(extra.iter().copied());
     for (amount, op) in &ops {
         if *op == Op::AddValue {
             base += amount;
@@ -573,7 +578,7 @@ fn refresh(m: &mut Mob, a: Attr) {
 /// The value without the transient baby modifier (`speed_bonus` applies
 /// that one to movement speed).
 fn base_with_modifiers(m: &Mob, a: Attr) -> f64 {
-    compute(m, a, false)
+    compute(m, a, false, &[])
 }
 /// `AttributeInstance.setBaseValue`.
 pub fn set_base(m: &mut Mob, a: Attr, v: f64) {
@@ -590,6 +595,14 @@ pub fn has_modifier(m: &Mob, a: Attr, id: &str) -> bool {
         .as_ref()
         .is_some_and(|s| s.modifiers.iter().any(|x| x.attr == a && x.id == id))
 }
+/// The amount of a permanent modifier, if the mob has it.
+pub fn modifier_amount(m: &Mob, a: Attr, id: &str) -> Option<f64> {
+    m.extra
+        .attributes
+        .as_ref()
+        .and_then(|s| s.modifiers.iter().find(|x| x.attr == a && x.id == id))
+        .map(|x| x.amount)
+}
 /// `addOrReplacePermanentModifier`.
 pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op) {
     let s = m.extra.attributes.get_or_insert_with(Box::default);
@@ -604,6 +617,59 @@ pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op)
         None => s.modifiers.push(new),
     }
     refresh(m, a);
+}
+/// `Zombie.handleAttributes`, from the zombie's own random.
+pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
+    let r = &mut m.random;
+    let reinforcements = if m.kind.species == Species::ZombifiedPiglin {
+        0.0
+    } else {
+        r.next_double() * f64::from(0.1f32)
+    };
+    let knockback = r.next_double() * f64::from(0.05f32);
+    let follow = r.next_double() * 1.5 * f64::from(special);
+    let leader = r.next_float() < special * 0.05;
+    let leader_rolls = leader.then(|| (r.next_double() * 0.25 + 0.5, r.next_double() * 3.0 + 1.0));
+    set_base(m, Attr::SpawnReinforcements, reinforcements);
+    add_modifier(
+        m,
+        Attr::KnockbackResistance,
+        "minecraft:random_spawn_bonus",
+        knockback,
+        Op::AddValue,
+    );
+    if follow > 1.0 {
+        add_modifier(
+            m,
+            Attr::FollowRange,
+            "minecraft:zombie_random_spawn_bonus",
+            follow,
+            Op::AddMultipliedTotal,
+        );
+    }
+    if let Some((reinforce, health)) = leader_rolls {
+        add_modifier(
+            m,
+            Attr::SpawnReinforcements,
+            "minecraft:leader_zombie_bonus",
+            reinforce,
+            Op::AddValue,
+        );
+        add_modifier(
+            m,
+            Attr::MaxHealth,
+            "minecraft:leader_zombie_bonus",
+            health,
+            Op::AddMultipliedTotal,
+        );
+        if !matches!(
+            reason,
+            Reason::Conversion | Reason::Load | Reason::DimensionTravel
+        ) {
+            m.health = max_health(m);
+        }
+        super::doors::set_can_break_doors(m, true);
+    }
 }
 pub fn max_health(m: &Mob) -> f32 {
     value(m, Attr::MaxHealth) as f32
@@ -828,6 +894,36 @@ pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
         _ => return,
     }
     gear::set(m, gear_slot(slot), Vec::new());
+}
+/// The enchantments on what `m` has in `slot`.
+pub fn slot_enchantments(m: &Mob, slot: usize) -> gear::Levels {
+    gear::gear(m).map_or_else(Vec::new, |g| g.slots[gear_slot(slot)].clone())
+}
+/// Replace the enchantments of what `m` has in `slot` (after `set_item`).
+pub fn set_slot_enchantments(m: &mut Mob, slot: usize, levels: gear::Levels) {
+    gear::set(m, gear_slot(slot), levels);
+}
+/// `EquipmentUser.equip` for one rolled stack: `setItemSlot` puts the item in
+/// `slot` with its own enchantments, then the slot's drop chance is stored
+/// when the table names one.
+pub fn equip_stack(
+    m: &mut Mob,
+    slot: usize,
+    stack: &horizon_world::loot::LootStack,
+    drop_chance: Option<f32>,
+) {
+    set_item(m, slot, &stack.item);
+    if slot <= HEAD {
+        let levels = stack
+            .enchantments
+            .iter()
+            .map(|(id, level)| (Arc::from(id.as_str()), (*level).max(0) as u32))
+            .collect();
+        gear::set(m, gear_slot(slot), levels);
+    }
+    if let Some(chance) = drop_chance {
+        set_drop_chance(m, slot, chance);
+    }
 }
 /// `Mob.setDropChance`.
 pub fn set_drop_chance(m: &mut Mob, slot: usize, chance: f32) {
@@ -1144,69 +1240,16 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                     }
                 }
             }
-            m.extra.can_break_doors = self.float() < special * 0.1;
+            let can_break_doors = self.float() < special * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if reason != Reason::Conversion {
                 self.populate(m);
                 self.enchant(m);
             }
         }
         self.halloween(m);
-        self.zombie_attributes(m, special, reason);
+        zombie_attributes(m, special, reason);
         g
-    }
-    /// `Zombie.handleAttributes`, from the zombie's own random.
-    fn zombie_attributes(&mut self, m: &mut Mob, special: f32, reason: Reason) {
-        let r = &mut m.random;
-        let reinforcements = if m.kind.species == Species::ZombifiedPiglin {
-            0.0
-        } else {
-            r.next_double() * f64::from(0.1f32)
-        };
-        let knockback = r.next_double() * f64::from(0.05f32);
-        let follow = r.next_double() * 1.5 * f64::from(special);
-        let leader = r.next_float() < special * 0.05;
-        let leader_rolls =
-            leader.then(|| (r.next_double() * 0.25 + 0.5, r.next_double() * 3.0 + 1.0));
-        set_base(m, Attr::SpawnReinforcements, reinforcements);
-        add_modifier(
-            m,
-            Attr::KnockbackResistance,
-            "minecraft:random_spawn_bonus",
-            knockback,
-            Op::AddValue,
-        );
-        if follow > 1.0 {
-            add_modifier(
-                m,
-                Attr::FollowRange,
-                "minecraft:zombie_random_spawn_bonus",
-                follow,
-                Op::AddMultipliedTotal,
-            );
-        }
-        if let Some((reinforce, health)) = leader_rolls {
-            add_modifier(
-                m,
-                Attr::SpawnReinforcements,
-                "minecraft:leader_zombie_bonus",
-                reinforce,
-                Op::AddValue,
-            );
-            add_modifier(
-                m,
-                Attr::MaxHealth,
-                "minecraft:leader_zombie_bonus",
-                health,
-                Op::AddMultipliedTotal,
-            );
-            if !matches!(
-                reason,
-                Reason::Conversion | Reason::Load | Reason::DimensionTravel
-            ) {
-                m.health = max_health(m);
-            }
-            m.extra.can_break_doors = true;
-        }
     }
     fn husk(&mut self, m: &mut Mob, g: Option<Group>, reason: Reason) -> Option<Group> {
         let mut g = self.zombie(m, g, reason);
@@ -1492,7 +1535,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn sound(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
         let r = registry(self.data.registries);
-        m.extra.sound_variant = r.random(self.random) as u8;
+        m.extra.sound_variant = Some(r.random(self.random) as u8);
     }
 
     /// `finalizeSpawn` of the mob's class.
@@ -1675,13 +1718,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let hidden = panda_gene(self.int(16));
                 m.extra.variant = main;
                 m.extra.variant2 = hidden;
-                let shown = panda_variant(main, hidden);
-                if shown == 5 {
-                    set_base(m, Attr::MaxHealth, 10.0);
-                }
-                if shown == 1 {
-                    set_base(m, Attr::MovementSpeed, f64::from(0.07f32));
-                }
+                super::panda::set_attributes(m);
                 self.ageable(m, g.or(Some(Group::Ageable(Ageable::chance(0.2)))))
             }
             S::PolarBear | S::Ocelot => {
@@ -1934,7 +1971,7 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
-fn panda_gene(roll: i32) -> u8 {
+pub fn panda_gene(roll: i32) -> u8 {
     match roll {
         0 => 1,
         1 => 2,
@@ -1997,6 +2034,17 @@ pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static st
         _ => return None,
     };
     Some((component, format!("minecraft:{}", variant_name(s, variant))))
+}
+/// The `*_sound_variant` registry of a species, in registry order.
+pub fn sound_variants(s: Species) -> &'static [&'static str] {
+    match s {
+        Species::Pig => &["big", "classic", "mini"],
+        Species::Cow => &["classic", "moody"],
+        Species::Chicken => &["classic", "picky"],
+        Species::Cat => &["classic", "royal"],
+        Species::Wolf => &["angry", "big", "classic", "cute", "grumpy", "puglin", "sad"],
+        _ => &[],
+    }
 }
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {

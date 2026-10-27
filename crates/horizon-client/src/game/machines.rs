@@ -41,6 +41,8 @@ enum Kind {
     Crafter,
     /// `BrewingStandBlockEntity` (a `WorldlyContainer`).
     Brewing,
+    /// `ChiseledBookShelfBlockEntity`: books only, one to a slot.
+    Bookshelf,
     /// `ComposterBlock.getContainer` at this level (a `WorldlyContainerHolder`
     /// without a block entity): input below 7, empty at 7, bone meal at 8.
     Composter(i32),
@@ -82,7 +84,7 @@ impl View {
     }
 }
 
-fn dir_from_name(name: &str) -> Option<Direction> {
+pub(super) fn dir_from_name(name: &str) -> Option<Direction> {
     Some(match name {
         "down" => Direction::Down,
         "up" => Direction::Up,
@@ -159,14 +161,17 @@ impl Containers<'_> {
             });
         }
         let entity = self.world.block_entities.get(&pos)?;
-        // A beehive keeps bees, not items: it is no `Container`.
-        if matches!(entity, BlockEntity::Beehive(_)) {
+        // A beehive keeps bees, not items, and a campfire cooks its own: neither
+        // is a `Container` (HopperBlockEntity.getContainerAt), so a dropper drops
+        // in front of them and a hopper leaves them alone.
+        if matches!(entity, BlockEntity::Beehive(_) | BlockEntity::Campfire(_)) {
             return None;
         }
         let kind = match (entity, name) {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
             (BlockEntity::Crafter(_), _) => Kind::Crafter,
             (BlockEntity::Brewing(_), _) => Kind::Brewing,
+            (BlockEntity::ChiseledBookshelf(_), _) => Kind::Bookshelf,
             (_, "minecraft:hopper") => Kind::Hopper,
             _ => Kind::Generic,
         };
@@ -247,6 +252,16 @@ impl Containers<'_> {
                 }
                 _ => false,
             };
+        }
+        if view.kind == Kind::Bookshelf {
+            // ListBackedContainer.canPlaceItem: `acceptsItemType` (the books)
+            // and a free slot, as `getMaxStackSize` is 1.
+            return self
+                .items
+                .item_tags
+                .get("minecraft:bookshelf_books")
+                .is_some_and(|m| m.contains(&*stack.item))
+                && self.get(view, slot).is_none();
         }
         if view.kind == Kind::Brewing {
             // BrewingStandBlockEntity.canPlaceItem
@@ -397,6 +412,45 @@ pub(super) fn container_signal(
         .map_or(0, |v| c.signal(&v))
 }
 
+/// `ChiseledBookShelfBlock.getAnalogOutputSignal` and
+/// `ShelfBlock.getAnalogOutputSignal`, from the block entity Horizon keeps as
+/// it was loaded; `None` for any other block. `direction` points from the
+/// block to the comparator.
+pub(super) fn shelf_signal(
+    world: &World,
+    registry: &'static horizon_world::registry::BlockRegistry,
+    state: BlockStateId,
+    pos: BlockPos,
+    direction: Direction,
+) -> Option<i32> {
+    let info = registry.state(state)?;
+    let chiseled = info.name == "minecraft:chiseled_bookshelf";
+    if !chiseled && !info.name.ends_with("_shelf") {
+        return None;
+    }
+    if chiseled {
+        // The last slot touched, plus one (`lastInteractedSlot` starts at -1).
+        return Some(match world.block_entities.get(&(pos.x, pos.y, pos.z)) {
+            Some(BlockEntity::ChiseledBookshelf(b)) => b.last_slot + 1,
+            _ => 0,
+        });
+    }
+    let tag = super::spill::saved_entity(world, [pos.x, pos.y, pos.z]);
+    // Only read from the back: a bit for each of the three slots in use.
+    let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
+    if facing.map(Direction::opposite) != Some(direction) {
+        return Some(0);
+    }
+    let items = horizon_client::save::decode_items(tag.as_ref().and_then(|t| t.get("Items")), 3);
+    Some(
+        items
+            .iter()
+            .enumerate()
+            .map(|(slot, item)| i32::from(item.is_some()) << slot)
+            .sum(),
+    )
+}
+
 impl Game<'_> {
     fn containers(&self) -> Containers<'_> {
         Containers {
@@ -431,6 +485,7 @@ impl Game<'_> {
         if pos.1 == super::minecarts::CART_KEY_Y {
             return;
         }
+        self.chiseled_bookshelf_synced(pos);
         // A double chest's other half changes with it.
         let halves: Vec<Pos> = std::iter::once(pos)
             .chain(self.chest_other_half(pos))
@@ -593,27 +648,41 @@ impl Game<'_> {
             self.container_changed(pos);
         }
     }
-    /// `HopperBlockEntity.ejectItems`.
+    /// `HopperBlockEntity.ejectItems`: into the block container in front, else
+    /// a container entity there (`getContainerAt`).
     fn hopper_eject(&mut self, pos: Pos, hopper: &View) -> bool {
         let state = self.world.block(pos.0, pos.1, pos.2);
         let c = self.containers();
         let Some(facing) = c.prop(state, "facing").and_then(dir_from_name) else {
             return false;
         };
-        let Some(target) = c.view(offset(pos, facing), false) else {
+        let front = offset(pos, facing);
+        let face = facing.opposite();
+        if let Some(target) = c.view(front, false) {
+            return self.eject_into(pos, hopper, &target, face);
+        }
+        let Some(id) = self.entity_container_at([
+            f64::from(front.0) + 0.5,
+            f64::from(front.1) + 0.5,
+            f64::from(front.2) + 0.5,
+        ]) else {
             return false;
         };
-        let face = facing.opposite();
-        if c.is_full(&target, face) {
+        self.with_entity_container(id, |g, target| g.eject_into(pos, hopper, target, face))
+            .unwrap_or(false)
+    }
+    /// The rest of `HopperBlockEntity.ejectItems`: one item into `target`.
+    fn eject_into(&mut self, pos: Pos, hopper: &View, target: &View, face: Direction) -> bool {
+        if self.containers().is_full(target, face) {
             return false;
         }
         for slot in 0..hopper.len() {
             let Some(one) = self.take_one(hopper, slot) else {
                 continue;
             };
-            match self.add_item(Some(pos), &target, one, Some(face)) {
+            match self.add_item(Some(pos), target, one, Some(face)) {
                 None => {
-                    self.view_changed(&target);
+                    self.view_changed(target);
                     return true;
                 }
                 Some(rest) => self.put_back(hopper, slot, rest),
@@ -624,46 +693,13 @@ impl Game<'_> {
     /// `HopperBlockEntity.suckInItems`: from the container above, or item entities.
     fn hopper_suck(&mut self, pos: Pos, hopper: &View) -> bool {
         let above = (pos.0, pos.1 + 1, pos.2);
-        let c = self.containers();
-        if let Some(source) = c.view(above, false) {
-            if let Kind::Composter(level) = source.kind {
-                if level != 8 {
-                    return false;
-                }
-                // tryTakeInItemFromSlot on the OutputContainer: removeItem calls
-                // its setChanged, which empties the composter, and so does the
-                // second setChanged after the move or, when the hopper has no
-                // room, the setItem putting the bone meal back into the detached
-                // container (whose bone meal is lost with it).
-                let bone_meal = c.bone_meal.clone();
-                let at = BlockPos::new(above.0, above.1, above.2);
-                self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
-                let moved = self.add_item(None, hopper, bone_meal, None).is_none();
-                self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
-                self.world.modified.insert((above.0 >> 4, above.2 >> 4));
-                return moved;
-            }
-            let source_hopper = (source.kind == Kind::Hopper).then_some(above);
-            for slot in source.slots_for_face(Some(Direction::Down)) {
-                let c = self.containers();
-                let Some(stack) = c.get(&source, slot) else {
-                    continue;
-                };
-                if !c.can_take(&source, slot, stack, Direction::Down) {
-                    continue;
-                }
-                let Some(one) = self.take_one(&source, slot) else {
-                    continue;
-                };
-                match self.add_item(source_hopper, hopper, one, None) {
-                    None => {
-                        self.view_changed(&source);
-                        return true;
-                    }
-                    Some(rest) => self.put_back(&source, slot, rest),
-                }
-            }
-            return false;
+        let at = [
+            f64::from(pos.0) + 0.5,
+            f64::from(pos.1) + 1.5,
+            f64::from(pos.2) + 0.5,
+        ];
+        if let Some(took) = self.suck_from_container(above, at, hopper) {
+            return took;
         }
         let above_state = self.world.block(above.0, above.1, above.2);
         let blocked = self.res.facts().get(above_state).full_collision
@@ -693,6 +729,168 @@ impl Game<'_> {
         {
             return false;
         }
+        self.suck_item_entities(hopper, min, max)
+    }
+    /// The container half of `HopperBlockEntity.suckInItems`: one item from the
+    /// container at `above`, through its bottom face; with no block container
+    /// there, from a container entity whose box meets the one around `at`
+    /// (`getSourceContainerOrHandler`). `None` when there is no container.
+    fn suck_from_container(&mut self, above: Pos, at: [f64; 3], hopper: &View) -> Option<bool> {
+        let c = self.containers();
+        let Some(source) = c.view(above, false) else {
+            let id = self.entity_container_at(at)?;
+            return self
+                .with_entity_container(id, |g, source| g.suck_from_slots(None, source, hopper));
+        };
+        if let Kind::Composter(level) = source.kind {
+            if level != 8 {
+                return Some(false);
+            }
+            // tryTakeInItemFromSlot on the OutputContainer: removeItem calls
+            // its setChanged, which empties the composter, and so does the
+            // second setChanged after the move or, when the hopper has no
+            // room, the setItem putting the bone meal back into the detached
+            // container (whose bone meal is lost with it).
+            let bone_meal = c.bone_meal.clone();
+            let at = BlockPos::new(above.0, above.1, above.2);
+            self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+            let moved = self.add_item(None, hopper, bone_meal, None).is_none();
+            self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+            self.world.modified.insert((above.0 >> 4, above.2 >> 4));
+            return Some(moved);
+        }
+        let source_hopper = (source.kind == Kind::Hopper).then_some(above);
+        Some(self.suck_from_slots(source_hopper, &source, hopper))
+    }
+    /// `HopperBlockEntity.tryTakeInItemFromSlot` over the `DOWN` face of `source`.
+    fn suck_from_slots(
+        &mut self,
+        source_hopper: Option<Pos>,
+        source: &View,
+        hopper: &View,
+    ) -> bool {
+        for slot in source.slots_for_face(Some(Direction::Down)) {
+            let c = self.containers();
+            let Some(stack) = c.get(source, slot) else {
+                continue;
+            };
+            if !c.can_take(source, slot, stack, Direction::Down) {
+                continue;
+            }
+            let Some(one) = self.take_one(source, slot) else {
+                continue;
+            };
+            match self.add_item(source_hopper, hopper, one, None) {
+                None => {
+                    self.view_changed(source);
+                    return true;
+                }
+                Some(rest) => self.put_back(source, slot, rest),
+            }
+        }
+        false
+    }
+    /// `HopperBlockEntity.getEntityContainer`: one of the alive container
+    /// entities (`EntitySelector.CONTAINER_ENTITY_SELECTOR`: chest and hopper
+    /// minecarts, chest boats) whose box meets the 1x1x1 box around `at`,
+    /// picked at random.
+    fn entity_container_at(&mut self, at: [f64; 3]) -> Option<u32> {
+        let meets = |b: horizon_core::geometry::Aabb| {
+            let (lo, hi) = (b.min_position(), b.max_position());
+            lo.x < at[0] + 0.5
+                && hi.x > at[0] - 0.5
+                && lo.y < at[1] + 0.5
+                && hi.y > at[1] - 0.5
+                && lo.z < at[2] + 0.5
+                && hi.z > at[2] - 0.5
+        };
+        let mut found: Vec<u32> = self
+            .carts
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.kind,
+                    super::minecarts::CartKind::Chest | super::minecarts::CartKind::Hopper
+                ) && meets(c.bounds())
+            })
+            .map(|c| c.id)
+            .collect();
+        found.extend(
+            self.boats
+                .iter()
+                .filter(|b| b.chest && meets(b.bounds()))
+                .map(|b| b.id),
+        );
+        if found.is_empty() {
+            return None;
+        }
+        let pick = self
+            .world
+            .random
+            .next_int_bound(found.len() as i32)
+            .unwrap_or(0);
+        found.get(pick as usize).copied()
+    }
+    /// Runs `f` on a container entity's items as a container, under the
+    /// placeholder key its menu uses (the open menu's copy when it is open),
+    /// then hands the items back to the entity.
+    fn with_entity_container<R>(
+        &mut self,
+        id: u32,
+        f: impl FnOnce(&mut Self, &View) -> R,
+    ) -> Option<R> {
+        let mut items = if let Some(c) = self.carts.iter_mut().find(|c| c.id == id) {
+            std::mem::take(&mut c.items)
+        } else {
+            std::mem::take(&mut self.boats.iter_mut().find(|b| b.id == id)?.items)
+        };
+        let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, id as i32);
+        let (view, open) = self.lend_items(key, &mut items);
+        let result = f(self, &view);
+        self.reclaim_items(key, open, &mut items);
+        if let Some(c) = self.carts.iter_mut().find(|c| c.id == id) {
+            c.items = items;
+        } else if let Some(b) = self.boats.iter_mut().find(|b| b.id == id) {
+            b.items = items;
+        }
+        Some(result)
+    }
+    /// A vehicle's slots as a container under its placeholder `key`. When its
+    /// menu is open the placeholder is the live copy and stays as it is.
+    /// Returns the view and whether the menu was open.
+    fn lend_items(&mut self, key: Pos, items: &mut Vec<Option<ItemStack>>) -> (View, bool) {
+        let open = self.world.block_entities.contains_key(&key);
+        if !open {
+            let slots = BlockEntity::Chest(std::mem::take(items));
+            self.world.block_entities.insert(key, slots);
+        }
+        let size = self
+            .world
+            .block_entities
+            .get(&key)
+            .map_or(0, |e| e.slots().len());
+        let view = View {
+            parts: vec![(key, size)],
+            kind: Kind::Generic,
+        };
+        (view, open)
+    }
+    /// Gives `lend_items`' slots back to the vehicle, so its own items stay
+    /// the one source of truth: a menu copy that is still around (open, or
+    /// left by a guest's close) gets the changed items copied to `items`.
+    fn reclaim_items(&mut self, key: Pos, open: bool, items: &mut Vec<Option<ItemStack>>) {
+        let slots = if open {
+            self.world.block_entities.get(&key).cloned()
+        } else {
+            self.world.block_entities.remove(&key)
+        };
+        if let Some(BlockEntity::Chest(slots)) = slots {
+            *items = slots;
+        }
+    }
+    /// The item half of `HopperBlockEntity.suckInItems` (`getItemsAtAndAbove`):
+    /// adds the item entities that meet the box, until one is taken whole.
+    fn suck_item_entities(&mut self, hopper: &View, min: [f64; 3], max: [f64; 3]) -> bool {
         let mut i = 0;
         while i < self.dropped.len() {
             let b = self.dropped[i].bounds();
@@ -716,6 +914,44 @@ impl Game<'_> {
             i += 1;
         }
         false
+    }
+    /// `MinecartHopper.tick`'s `tryConsumeItems` (`suckInItems`) for an enabled
+    /// hopper minecart: one item from the container above, else the item
+    /// entities over it or touching it, each tick without a cooldown.
+    pub(super) fn hopper_cart_suck(&mut self, cart: &mut super::minecarts::Minecart) {
+        // The cart's slots are edited as a container under the placeholder key
+        // its menu uses; when that menu is open the placeholder is the live copy.
+        let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, cart.id as i32);
+        let (view, open) = self.lend_items(key, &mut cart.items);
+        let p = cart.position;
+        // getLevelY is the cart's y + 0.5, so the container is the block at
+        // y + 1.5, and Hopper.SUCK_AABB (moved by getLevel - 0.5) starts 11/16
+        // above the cart.
+        let above = (
+            p.x.floor() as i32,
+            (p.y + 1.5).floor() as i32,
+            p.z.floor() as i32,
+        );
+        let at = [p.x, p.y + 1.5, p.z];
+        let took = match self.suck_from_container(above, at, &view) {
+            Some(took) => took,
+            None => self.suck_item_entities(
+                &view,
+                [p.x - 0.5, p.y + 11.0 / 16.0, p.z - 0.5],
+                [p.x + 0.5, p.y + 2.0, p.z + 0.5],
+            ),
+        };
+        if !took {
+            // The cart's own box, inflated by 0.25 sideways.
+            let b = cart.bounds();
+            let (lo, hi) = (b.min_position(), b.max_position());
+            self.suck_item_entities(
+                &view,
+                [lo.x - 0.25, lo.y, lo.z - 0.25],
+                [hi.x + 0.25, hi.y, hi.z + 0.25],
+            );
+        }
+        self.reclaim_items(key, open, &mut cart.items);
     }
 
     // ---- dispensers and droppers ----
@@ -953,6 +1189,7 @@ mod item_column_tests {
             id,
             stack: ItemStack::new("minecraft:stone", 1),
             thrower: None,
+            target: None,
             position: at,
             previous: at,
             velocity: Vec3::ZERO,
