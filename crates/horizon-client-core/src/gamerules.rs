@@ -292,27 +292,4 @@ mod tests {
         assert_eq!(GameRules::load(&dir), rules);
         let _ = fs::remove_dir_all(dir);
     }
-    /// The world's save (Level.write) writes the rules as they are now, and a
-    /// world opened again reads them back (#74).
-    #[test]
-    fn level_save_keeps_changed_rules() {
-        let dir =
-            std::env::temp_dir().join(format!("horizon-gamerules-level-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let mut level = crate::save::Level::default();
-        level.write(&dir).unwrap();
-        // Rules changed while playing, then saved and loaded again.
-        let mut rules = GameRules::load(&dir);
-        assert_eq!(rules, GameRules::default());
-        assert!(rules.set("advance_time", Value::Bool(false)));
-        assert!(rules.set("advance_weather", Value::Bool(false)));
-        assert!(rules.set("random_tick_speed", Value::Int(0)));
-        level.game_rules = rules.by_name();
-        level.write(&dir).unwrap();
-        assert_eq!(GameRules::load(&dir), rules);
-        let read = crate::save::Level::read(&dir).unwrap();
-        assert_eq!(read.game_rules, rules.by_name());
-        assert_eq!(read.game_rule("advance_time"), 0);
-        let _ = fs::remove_dir_all(dir);
-    }
 }

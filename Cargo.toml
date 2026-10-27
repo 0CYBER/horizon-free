@@ -7,6 +7,8 @@ members = [
     "crates/horizon-hdr",
     "crates/horizon-world",
     "crates/horizon-client",
+    "crates/horizon-client-core",
+    "crates/horizon-command",
     "crates/horizon-server-files",
     "crates/horizon-server",
     "crates/horizon-bots",

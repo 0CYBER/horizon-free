@@ -67,7 +67,7 @@ pub struct Style {
 }
 /// A style's `font` field: an identifier (`alt` is `minecraft:alt`).
 pub fn font_id(v: &Value) -> Option<String> {
-    crate::command::args::parse_identifier(v.as_str()?)
+    crate::identifier::parse_identifier(v.as_str()?)
 }
 impl Style {
     pub fn color(c: u32) -> Self {

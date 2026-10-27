@@ -6,7 +6,7 @@ use super::{CmdResult, CommandError, Reader};
 use horizon_world::nbt::{Compound, JavaString, Tag};
 
 pub fn snbt(t: &Tag) -> String {
-    crate::snbt::to_snbt(t)
+    horizon_client_core::snbt::to_snbt(t)
 }
 pub fn not_map(t: &Tag) -> String {
     format!("Not a map: {}", snbt(t))

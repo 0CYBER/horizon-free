@@ -42,8 +42,12 @@ struct Bundled;
 impl ResourceSource for Bundled {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         let body = match path {
-            "assets/horizon/lang/en_us.json" => include_str!("../assets/horizon/lang/en_us.json"),
-            "assets/horizon/lang/ru_ru.json" => include_str!("../assets/horizon/lang/ru_ru.json"),
+            "assets/horizon/lang/en_us.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/en_us.json")
+            }
+            "assets/horizon/lang/ru_ru.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/ru_ru.json")
+            }
             _ => return None,
         };
         Some(body.as_bytes().to_vec())

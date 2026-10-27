@@ -252,7 +252,7 @@ pub fn to_text_with(
             } else if let Some(sel) = o.get("selector").and_then(Value::as_str) {
                 resolve(sel)
             } else if let Some(key) = o.get("keybind").and_then(Value::as_str) {
-                crate::keybinds::display_name(key)
+                crate::key_display::display_name(key)
             } else {
                 Text::empty()
             };

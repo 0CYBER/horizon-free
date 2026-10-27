@@ -72,9 +72,9 @@ pub fn decode_component(id: &str, t: &Tag) -> Result<(), String> {
                     } else {
                         format!("minecraft:{id}")
                     };
-                    let known = crate::block_entity_nbt::TYPES
+                    let known = horizon_client_core::block_entity_nbt::TYPES
                         .iter()
-                        .chain(&crate::block_entity_nbt::NEWEST)
+                        .chain(&horizon_client_core::block_entity_nbt::NEWEST)
                         .any(|k| *k == id);
                     if known {
                         Ok(())
