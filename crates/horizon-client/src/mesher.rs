@@ -38,6 +38,8 @@ pub struct Vertex {
     pub light: u32,
     /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour.
     pub normal: [i8; 4],
+    /// The `GLINT_TEXTURING` atlas UV for a foil item quad; zero elsewhere.
+    pub glint_uv: [f32; 2],
 }
 /// A section vertex: vanilla's `DefaultVertexFormat.BLOCK` (position, colour,
 /// UV0, UV2) with the sprite's array layer beside the light, in 24 bytes

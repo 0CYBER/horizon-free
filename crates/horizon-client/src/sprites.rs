@@ -342,9 +342,24 @@ pub(crate) fn test_frames(layer: u32, frames: Vec<Vec<u8>>, metadata: &str) -> S
     }
 }
 
+/// How many reduced copies a sprite atlas keeps: the Mipmap Levels option plus the
+/// resampling-only levels an upscaled pack needs, within what the atlas holds.
+pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, available: u32) -> u32 {
+    // Only the atlas native minimum determines how many resampling-only mips to skip.
+    let upscale = (size / minimum.max(1)).max(1).ilog2();
+    requested.saturating_add(upscale).min(available - 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mipmap_option_keeps_real_16px_reductions() {
+        for levels in 0..=4 {
+            assert_eq!(sprite_mipmap_limit(levels, 32, 16, 6), levels + 1);
+            assert_eq!(sprite_mipmap_limit(levels, 16, 16, 5), levels);
+        }
+    }
     #[test]
     fn identical_still_textures_share_a_layer() {
         let root =
@@ -398,7 +413,7 @@ mod tests {
         assert_eq!((sprites.size, sprites.minimum_size), (32, 32));
         for level in 0..=4 {
             assert_eq!(
-                crate::gfx::sprite_mipmap_limit(level, sprites.size, sprites.minimum_size, 6),
+                sprite_mipmap_limit(level, sprites.size, sprites.minimum_size, 6),
                 level
             );
         }
@@ -408,7 +423,7 @@ mod tests {
         sprites.finish();
         assert_eq!((sprites.size, sprites.minimum_size), (32, 16));
         assert_eq!(
-            crate::gfx::sprite_mipmap_limit(0, sprites.size, sprites.minimum_size, 6),
+            sprite_mipmap_limit(0, sprites.size, sprites.minimum_size, 6),
             1
         );
     }
