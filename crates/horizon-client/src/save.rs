@@ -2297,6 +2297,19 @@ fn restore_level_dat(dir: &Path) {
         let _ = fs::rename(old, path);
     }
 }
+/// `PlayerDataStorage.backup`: a player file that fails to load is copied to
+/// `<uuid>_corrupted_<time>.dat` before it is written over.
+fn back_up_unreadable_player(path: &Path) {
+    if path.is_file()
+        && read_dat(path).is_none()
+        && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+    {
+        let _ = fs::copy(
+            path,
+            path.with_file_name(format!("{stem}_corrupted_{}.dat", backup_stamp())),
+        );
+    }
+}
 /// Write a gzip NBT file the way vanilla does (`<name>_new`, keep `_old`).
 pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
     if let Some(dir) = path.parent() {
@@ -2820,7 +2833,12 @@ impl Level {
         // file of a server world, or the legacy Data.Player.
         let uuid = uuid_from_tag(data.get("singleplayer_uuid"));
         let player_dir = dir.join("players").join("data");
-        let owner = uuid.and_then(|u| read_dat(&player_dir.join(format!("{}.dat", uuid_text(u)))));
+        // PlayerDataStorage.load: the player's file, else its .dat_old.
+        let owner = uuid.and_then(|u| {
+            let name = uuid_text(u);
+            read_dat(&player_dir.join(format!("{name}.dat")))
+                .or_else(|| read_dat(&player_dir.join(format!("{name}.dat_old"))))
+        });
         let player = owner
             .or_else(|| {
                 fs::read_dir(&player_dir)
@@ -3359,12 +3377,12 @@ impl Level {
             }
             write_saved_data(dir, "game_rules", rules)?;
         }
-        write_dat(
-            &dir.join("players")
-                .join("data")
-                .join(format!("{}.dat", uuid_text(uuid))),
-            self.player_tag(),
-        )?;
+        let player_file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(uuid)));
+        back_up_unreadable_player(&player_file);
+        write_dat(&player_file, self.player_tag())?;
         write_dat(&dir.join("level.dat"), Tag::compound([("Data", data)]))?;
         Ok(())
     }
