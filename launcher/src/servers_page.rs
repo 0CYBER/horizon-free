@@ -2409,6 +2409,7 @@ impl Launcher {
                 disabled(confirm)
             };
             controls = controls
+                .child(field)
                 .child(text(theme::CAPTION).text_color(t.muted).child(
                     gpui::StyledText::new(format!("Type {name} to confirm.")).with_highlights([(
                         5..5 + name.len(),
@@ -2418,7 +2419,6 @@ impl Launcher {
                         },
                     )]),
                 ))
-                .child(field)
                 .child(
                     div()
                         .flex()
@@ -2463,6 +2463,7 @@ impl Launcher {
             "Remove this server from Horizon and move its worlds, settings and backups to the trash.".into(),
             controls.into_any_element(),
         )
+        .items_start()
     }
 
     fn background_row(&mut self, cx: &mut Context<Self>) -> Div {
