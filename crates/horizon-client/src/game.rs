@@ -4309,6 +4309,12 @@ impl Game<'_> {
             UseResult::Fail => return Ok(true),
             UseResult::Pass => {}
         }
+        // PotionItem.useOn comes before PotionItem.use's drink.
+        if let Some(hit) = block_hit
+            && self.use_water_bottle_on_block(hit.pos, hit.face, &stack)?
+        {
+            return Ok(true);
+        }
         if (!on_block && self.use_potion_item(&stack)?)
             || ((block_hit.is_some() || !spawn_egg)
                 && (!on_block || spawn_egg)

@@ -513,6 +513,47 @@ impl Game<'_> {
             _ => Ok(false),
         }
     }
+    /// `PotionItem.useOn`: a water bottle used on a block that turns to mud
+    /// (`#convertible_to_mud`), not on its underside, is poured out and the
+    /// block becomes mud.
+    pub(super) fn use_water_bottle_on_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        stack: &ItemStack,
+    ) -> horizon_client::Result<bool> {
+        if &*stack.item != "minecraft:potion"
+            || stack.potion() != Some("minecraft:water")
+            || face == [0, -1, 0]
+            || !self.block_in_tag("minecraft:convertible_to_mud", &self.block_name(pos))
+        {
+            return Ok(false);
+        }
+        let centre = pos.map(|v| f64::from(v) + 0.5);
+        self.audio
+            .play("minecraft:entity.generic.splash", Some(centre), 1.0, 1.0);
+        self.fill_held(ItemStack::new("minecraft:glass_bottle", 1));
+        // ServerLevel.sendParticles: five splashes above the block.
+        for _ in 0..5 {
+            let r = &mut self.world.random;
+            let at = [
+                f64::from(pos[0]) + r.next_double(),
+                f64::from(pos[1] + 1),
+                f64::from(pos[2]) + r.next_double(),
+            ];
+            self.particles
+                .add(&ParticleOptions::simple(ParticleType::Splash), at, [0.0; 3]);
+        }
+        self.audio
+            .play("minecraft:item.bottle.empty", Some(centre), 1.0, 1.0);
+        self.post_block_game_event("minecraft:fluid_place", pos, None, None);
+        if let Some(mud) = self.pack.assets.registry.default_state("minecraft:mud") {
+            self.level_set(pos, mud)?;
+        }
+        self.stats.add("used", &stack.item, 1);
+        self.swing_arm();
+        Ok(true)
+    }
     /// `ItemUtils.createFilledResult`: replace one of the held stack.
     fn fill_held(&mut self, filled: ItemStack) {
         if self.creative {
