@@ -107,10 +107,11 @@ pub struct EffectIcon {
 
 impl From<&crate::effects::EffectInstance> for EffectIcon {
     fn from(effect: &crate::effects::EffectInstance) -> Self {
-        let def = crate::brewing::effect(effect.id);
+        let def = horizon_client_core::potions::effect(effect.id);
         Self {
             id: effect.id.to_owned(),
-            beneficial: def.is_some_and(|d| d.category == crate::brewing::Category::Beneficial),
+            beneficial: def
+                .is_some_and(|d| d.category == horizon_client_core::potions::Category::Beneficial),
             color: def.map_or(0, |d| d.color as i32),
             ambient: effect.ambient,
             duration: effect.duration,

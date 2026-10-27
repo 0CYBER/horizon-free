@@ -14,6 +14,12 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
+/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
+/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
+/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
+/// the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 13;
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
@@ -177,8 +183,71 @@ pub fn body(m: &Mob) -> (String, String) {
             "frog#main".into(),
             format!("entity/frog/frog_{}", climate(m)),
         ),
-        S::Rabbit => (
-            baby_or(m, "rabbit#main", "rabbit_baby#main"),
+        // RabbitRenderer.getTextureLocation: the Toast name tag, else the
+        // variant (the killer bunny's id is 99).
+        S::Rabbit => {
+            let name = if m.custom_name.as_deref() == Some("Toast") {
+                "toast"
+            } else {
+                match m.extra.variant {
+                    1 => "white",
+                    2 => "black",
+                    3 => "white_splotched",
+                    4 => "gold",
+                    5 => "salt",
+                    99 => "caerbannog",
+                    _ => "brown",
+                }
+            };
+            (
+                baby_or(m, "rabbit#main", "rabbit_baby#main"),
+                b(&format!("entity/rabbit/rabbit_{name}")),
+            )
+        }
+        // ParrotRenderer.getVariantTexture.
+        S::Parrot => {
+            let name = ["red_blue", "blue", "green", "yellow_blue", "grey"]
+                [usize::from(m.extra.variant).min(4)];
+            (m.kind.model_key(), format!("entity/parrot/parrot_{name}"))
+        }
+        // AxolotlRenderer.getTextureLocation.
+        S::Axolotl => {
+            let name =
+                ["lucy", "wild", "gold", "cyan", "blue"][usize::from(m.extra.variant).min(4)];
+            (
+                baby_or(m, "axolotl#main", "axolotl_baby#main"),
+                b(&format!("entity/axolotl/axolotl_{name}")),
+            )
+        }
+        // SalmonRenderer.submit: the model of the salmon's size.
+        S::Salmon => {
+            let model = match m.extra.variant {
+                0 => "salmon_small#main",
+                2 => "salmon_large#main",
+                _ => "salmon#main",
+            };
+            (model.into(), "entity/fish/salmon".into())
+        }
+        // The baby models and textures of AgeableMobRenderer's other
+        // subclasses.
+        S::Goat => (
+            baby_or(m, "goat#main", "goat_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::PolarBear => (
+            baby_or(m, "polar_bear#main", "polar_bear_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::Ocelot => (
+            baby_or(m, "ocelot#main", "ocelot_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::Turtle => (
+            baby_or(m, "turtle#main", "turtle_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::Armadillo => (
+            baby_or(m, "armadillo#main", "armadillo_baby#main"),
             b(&m.kind.texture),
         ),
         S::Pig => {
@@ -241,7 +310,7 @@ pub fn body(m: &Mob) -> (String, String) {
         ),
         S::ZombieVillager => (
             baby_or(m, "zombie_villager#main", "zombie_villager_baby#main"),
-            "entity/zombie_villager/zombie_villager".into(),
+            b("entity/zombie_villager/zombie_villager"),
         ),
         S::Villager => (
             baby_or(m, "villager#main", "villager_baby#main"),
@@ -601,14 +670,6 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             false,
         ),
-        // EnergySwirlLayer (the scroll is not reproduced: atlas sprites do not wrap).
-        S::Creeper if m.extra.charged => push(
-            &mut v,
-            "creeper#armor",
-            "entity/creeper/creeper_armor",
-            0x80FF_FFFF,
-            true,
-        ),
         S::TropicalFish => {
             // TropicalFishPatternLayer: the pattern tinted with the pattern colour.
             let (model, letter, n) = if m.extra.variant < 6 {
@@ -765,7 +826,14 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     let rotation = match sleep {
         // setupRotations for Pose.SLEEPING, with the head moved toward the pillow.
         Some((angle, step)) => {
-            let head = (m.eye_y() - m.position.y) as f32 - 0.1;
+            // The eye height of the standing pose (LivingEntityRenderer
+            // extracts `getEyeHeight(Pose.STANDING)` for a bed).
+            let eye = if avatar(m) {
+                m.kind.eye_height as f32
+            } else {
+                (m.eye_y() - m.position.y) as f32
+            };
+            let head = eye - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
                 * glam::Mat4::from_rotation_y(angle.to_radians())
                 * glam::Mat4::from_rotation_z(90.0_f32.to_radians())
@@ -833,10 +901,15 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
 }
-/// `LivingEntityRenderer.isShaking`: converting zombies, piglins and
-/// hoglins, and a zombie villager being cured.
+/// `LivingEntityRenderer.isShaking`: a fully frozen mob (the skeleton's own
+/// `isShaking` is its stray conversion only), converting zombies, piglins
+/// and hoglins, a zombie villager being cured and a cold strider.
 fn shaking(m: &Mob) -> bool {
+    if m.is_fully_frozen() && m.species() != Species::Skeleton {
+        return true;
+    }
     match m.species() {
+        Species::Strider => super::strider::suffocating(m),
         Species::ZombieVillager => super::zombie_villager::is_converting(m),
         Species::Zombie | Species::Husk => m.extra.counter2 > 0,
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
@@ -958,6 +1031,13 @@ fn draw_normals(
             let normal = poly.vertex_normal(normals);
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                // The armour glint scrolls the layer's model UV in the shader;
+                // the item path already passed its transformed UV.
+                let glint_uv = if overlay == ARMOR_GLINT {
+                    [v[3], v[4]]
+                } else {
+                    [0.0, 0.0]
+                };
                 out.push(Vertex {
                     normal,
                     pos: pos.to_array(),
@@ -968,6 +1048,7 @@ fn draw_normals(
                     layer: overlay,
                     color,
                     light,
+                    glint_uv,
                 });
             }
         }
@@ -1128,9 +1209,9 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the glint (7) when enchanted.
+        // the hurt tint, the armour glint (13) when enchanted.
         let overlay = match armor_slot(&layer.model) {
-            Some(slot) if super::gear::enchanted(m, slot) => 7,
+            Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
             None => overlay,
         };
@@ -1151,8 +1232,48 @@ fn render_visible(
             }
         }
     }
+    // EnergySwirlLayer: the armour model, additive, scrolling over the sprite.
+    if let Some((model, texture, x_offset)) = energy_swirl(m, s.age)
+        && let Some(part) = m.kind.layer(model)
+        && let Some([u0, v0, u1, v1]) = atlas(texture)
+    {
+        layer_poses.reset(part);
+        anim::setup(m, &s, &mut layer_poses, &data.animations);
+        // `RenderTypes.energySwirl`'s texture offset, as the sprite-local UV.
+        let (du, dv) = (x_offset % 1.0, s.age * 0.01 % 1.0);
+        let start = out.len();
+        draw(
+            part,
+            base,
+            &layer_poses,
+            [du, dv, 1.0 + du, 1.0 + dv],
+            crate::breaking::stage_light([u1 - u0, v1 - v0]),
+            crate::breaking::stage_light([u0, v0]),
+            crate::gfx::ENERGY_SWIRL_OVERLAY,
+            out,
+        );
+        // No lighting: the colour bytes carry the sprite's size (fs_energy_swirl).
+        for vertex in &mut out[start..] {
+            vertex.normal = [0; 4];
+        }
+    }
     if shell_last {
         draw_body(out);
+    }
+}
+/// `EnergySwirlLayer`'s model, texture and `xOffset(t)` for a charged creeper
+/// (`CreeperPowerLayer`) or a powered wither (`WitherArmorLayer`); `t` is `ageInTicks`.
+fn energy_swirl(m: &Mob, t: f32) -> Option<(&'static str, &'static str, f32)> {
+    match m.species() {
+        Species::Creeper if m.extra.charged => {
+            Some(("creeper#armor", "entity/creeper/creeper_armor", t * 0.01))
+        }
+        Species::Wither if super::wither::powered(m) => Some((
+            "wither#armor",
+            "entity/wither/wither_armor",
+            (t * 0.02).mcos() * 3.0,
+        )),
+        _ => None,
     }
 }
 /// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).
@@ -1235,6 +1356,15 @@ fn hand_base(
         0.0
     };
     let mut t = part_matrix(model, base, poses, arm, offset)?;
+    if m.species() == Species::Vex {
+        // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
+        t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
+        t *= glam::Mat4::from_translation(glam::Vec3::new(
+            if left { -0.046_875 } else { 0.046_875 },
+            -0.156_25,
+            0.078_125,
+        ));
+    }
     let (ox, oy, oz) = if m.is_baby() {
         (0.0, 1.0, -4.5)
     } else {
@@ -1419,6 +1549,42 @@ mod tests {
                 "a swallowed block still hides the default core"
             );
             assert!(vertices.iter().all(|v| v.uv[0] >= 0.5));
+        }
+    }
+    /// `VexModel.translateToHand`: the held item is drawn at 0.55 scale and
+    /// moved by the vex's own offset, so the vex's sword is the tiny one
+    /// vanilla shows. It was drawn at the full size, like a zombie's.
+    #[test]
+    fn the_vex_holds_its_item_at_the_small_scale() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:vex"].clone());
+        let mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        for left in [false, true] {
+            let t = held_item_transform(&mob, 0.5, glam::DVec3::ZERO, &data, left).unwrap();
+            // The model's own part scale is 1, so the item's scale is the
+            // renderer's: `poseStack.scale(0.55F, 0.55F, 0.55F)`.
+            for axis in [t.x_axis, t.y_axis, t.z_axis] {
+                let scale = axis.truncate().length();
+                assert!(
+                    (scale - 0.55).abs() < 1.0e-5,
+                    "the vex's item is drawn at 0.55 scale, got {scale}"
+                );
+            }
         }
     }
 }

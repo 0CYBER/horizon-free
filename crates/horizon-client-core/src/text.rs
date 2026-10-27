@@ -42,6 +42,10 @@ pub fn named_color(name: &str) -> Option<u32> {
 /// Click actions carried by locally constructed text components.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClickEvent {
+    /// `ClickEvent.OpenUrl`: an http or https link.
+    OpenUrl(String),
+    /// `ClickEvent.ChangePage`: a book's page, counted from 1.
+    ChangePage(i32),
     SuggestCommand(String),
     /// `ClickEvent.RunCommand`: the command, with or without its `/`.
     RunCommand(String),
@@ -542,6 +546,8 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
     }
     if let Some(click) = &style.click {
         let event = match click {
+            ClickEvent::OpenUrl(url) => json!({ "action": "open_url", "url": url }),
+            ClickEvent::ChangePage(page) => json!({ "action": "change_page", "page": page }),
             ClickEvent::SuggestCommand(command) => {
                 json!({ "action": "suggest_command", "command": command })
             }

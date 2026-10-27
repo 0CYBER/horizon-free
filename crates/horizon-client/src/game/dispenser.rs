@@ -1034,7 +1034,7 @@ impl Game<'_> {
                     a.pickup = horizon_client::arrows::Pickup::Allowed;
                 }
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.creatures.projectiles.push(shot);
+                self.add_projectile(shot);
             }
         }
     }
