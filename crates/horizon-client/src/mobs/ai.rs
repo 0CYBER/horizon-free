@@ -635,7 +635,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let t = m.ambient_timer;
         m.ambient_timer += 1;
         if roll < t {
-            m.ambient_timer = -m.kind.ambient_interval;
+            m.ambient_timer = -m.ambient_interval();
             play_ambient(m, w, events);
         }
     }

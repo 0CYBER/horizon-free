@@ -1925,7 +1925,7 @@ impl Mob {
             let dead = !self.alive();
             let sound = ai::voice_sounds(self)[if dead { 2 } else { 1 }];
             if !dead {
-                self.ambient_timer = -self.kind.ambient_interval;
+                self.ambient_timer = -self.ambient_interval();
             }
             if !sound.is_empty() {
                 let pitch = self.voice_pitch();
@@ -2034,6 +2034,16 @@ impl Mob {
     pub fn sound(&self, event: &'static str, events: &mut Vec<MobEvent>) {
         let at = [self.position.x, self.eye_y(), self.position.z];
         events.push(MobEvent::Sound(event, at, 1.0, 1.0));
+    }
+    /// `Mob.getAmbientSoundInterval`; `HappyGhast` waits six times as long
+    /// while it carries a passenger.
+    pub fn ambient_interval(&self) -> i32 {
+        let ridden = self.rider.is_some() || self.extra.rider.is_some();
+        if self.species() == Species::HappyGhast && ridden {
+            self.kind.ambient_interval * 6
+        } else {
+            self.kind.ambient_interval
+        }
     }
     /// LivingEntity.getVoicePitch.
     pub fn voice_pitch(&mut self) -> f32 {
