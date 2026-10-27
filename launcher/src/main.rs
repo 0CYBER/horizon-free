@@ -32,6 +32,7 @@ mod screenshots_page;
 mod scrollbar;
 mod servers_page;
 mod shortcut_page;
+mod switch_page;
 mod theme;
 mod titlebar;
 mod while_playing;
@@ -164,6 +165,8 @@ struct Launcher {
     install_error: Option<(String, String)>,
     confirm_remove: Option<String>,
     picker_open: bool,
+    /// The top bar's quick switch of who plays (`switch_page.rs`).
+    account_menu: bool,
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
@@ -362,6 +365,7 @@ impl Launcher {
             install_error: None,
             confirm_remove: None,
             picker_open: false,
+            account_menu: false,
             args_input: settings.game_args.clone(),
             args_focused: false,
             args_focus: cx.focus_handle(),
@@ -467,6 +471,7 @@ impl Launcher {
             }
         }
         self.picker_open = false;
+        self.account_menu = false;
     }
 
     fn check_updates(&mut self) {
@@ -583,6 +588,10 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        // An offline name the player picked (the quick switch).
+                        if let Some(name) = self.accounts.name_arg() {
+                            cmd.arg("--name").arg(name);
+                        }
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
@@ -1557,14 +1566,9 @@ impl Launcher {
                 }));
             nav = nav.child(keyboard(track_hover(item, id), &t));
         }
-        // Only a signed-in account says "Microsoft account"; otherwise the name the game made up.
-        let (name, how) = match self.accounts.selected() {
-            Some(a) => (a.name.clone(), "Microsoft account"),
-            None => (
-                self.offline_name.clone().unwrap_or_else(|| "Player".into()),
-                "Offline",
-            ),
-        };
+        // Only a signed-in account says "Microsoft account"; otherwise an offline name, or the
+        // one the game made up.
+        let (name, how) = self.who_plays();
         let account = keyboard(div().id("account"), &t)
             .relative()
             .flex()
@@ -1603,9 +1607,13 @@ impl Launcher {
                     .child(text(theme::CAPTION).text_color(t.muted).child(how)),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.go(Page::Settings);
+                this.account_menu = !this.account_menu;
                 cx.notify();
             }));
+        let account = div()
+            .relative()
+            .child(account)
+            .children(self.account_menu(cx));
         let settings_open = self.page == Page::Settings;
         let settings = keyboard(div().id("nav-Settings"), &t)
             .relative()
@@ -2626,6 +2634,7 @@ impl Launcher {
         let mono = |s: String| div().font_family(theme::MONO).child(s).into_any_element();
         let plain = |s: &str| div().child(s.to_string()).into_any_element();
         let (accounts, n) = self.account_rows(cx);
+        let (offline, n) = self.offline_rows(n, cx);
         let appearance = segments(
             "appearance",
             &[
@@ -2666,6 +2675,7 @@ impl Launcher {
                     .flex_col()
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
+                    .child(offline)
                     .child(group("Updates", "reload"))
                     .child(index_row(
                         n + 1,
