@@ -119,6 +119,67 @@ impl PlayerMotion {
         !self.fluids.first_tick && self.fluids.interaction.is_in_fluid(&FluidTags, LAVA)
     }
 }
+/// `BubbleColumnBlock.entityInside` for an entity that is not the player (a mob,
+/// a dropped item, an ender pearl): the bubble columns its box touches push it
+/// up or drag it down, harder at the surface (`Entity.handleOnAboveBubbleColumn`
+/// and `handleOnInsideBubbleColumn`). Returns whether it was inside a column
+/// below the surface, which resets its fall distance.
+pub fn bubble_column_push(
+    world: &World,
+    registry: &horizon_world::registry::BlockRegistry,
+    facts: &crate::blocks::BlockFacts,
+    collision: &horizon_world::block_collision::BlockCollisionRegistry<'_>,
+    bounds: Aabb,
+    velocity: &mut Vec3,
+) -> bool {
+    let b = bounds.deflate(Vec3::new(
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+    ));
+    let (lo, hi) = (b.min_position(), b.max_position());
+    let mut reset_fall = false;
+    for x in lo.x.floor() as i32..=(hi.x.ceil() as i32 - 1) {
+        for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
+            for z in lo.z.floor() as i32..=(hi.z.ceil() as i32 - 1) {
+                let state = world.block(x, y, z);
+                if &*facts.get(state).name != "minecraft:bubble_column" {
+                    continue;
+                }
+                let drag = registry
+                    .state(state)
+                    .and_then(|s| s.properties.get("drag"))
+                    .is_some_and(|d| d == "true");
+                let above = world.block(x, y + 1, z);
+                // stateAbove.getCollisionShape(level, pos): the shape is asked
+                // at the column's own position.
+                let mut scene = SceneCollisions {
+                    world,
+                    binding: collision,
+                    subject: None,
+                };
+                let context = horizon_world::collision_context::CollisionContext::empty(false);
+                let nothing_above = collision
+                    .collision_shape_with_context(
+                        &mut scene,
+                        above,
+                        BlockPos::new(x, y, z),
+                        &context,
+                    )
+                    .is_ok_and(|shape| shape.is_empty())
+                    && facts.get(above).fluid == crate::blocks::Fluid::None;
+                velocity.y = match (nothing_above, drag) {
+                    (true, true) => (-0.9_f64).max(velocity.y - 0.03),
+                    (true, false) => 1.8_f64.min(velocity.y + 0.1),
+                    (false, true) => (-0.3_f64).max(velocity.y - 0.03),
+                    (false, false) => 0.7_f64.min(velocity.y + 0.06),
+                };
+                reset_fall |= !nothing_above;
+            }
+        }
+    }
+    reset_fall
+}
 /// Which fluids `FluidTags.WATER` and `FluidTags.LAVA` hold.
 pub struct FluidTags;
 impl FluidMembership for FluidTags {

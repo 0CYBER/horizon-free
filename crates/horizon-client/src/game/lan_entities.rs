@@ -225,6 +225,16 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        for (p, &id) in &self.knot_ids {
+            // LeashFenceKnotEntity.getAddEntityPacket: the fence's block.
+            out.push(state(
+                id,
+                "minecraft:leash_knot",
+                p.map(f64::from),
+                0.0,
+                false,
+            ));
+        }
         for p in &self.paintings {
             let mut e = state(p.id, "minecraft:painting", p.pos.map(f64::from), 0.0, false);
             // Direction.get2DDataValue (south 0, west 1, north 2, east 3) to its
@@ -270,6 +280,24 @@ impl Game<'_> {
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {
+        // LeashFenceKnotEntity: one per fence post with a lead on it
+        // (`notifyLeasheeRemoved` discards it once the last lead is gone).
+        let knots: Vec<[i32; 3]> = self
+            .mobs
+            .iter()
+            .filter(|m| !m.removed)
+            .filter_map(|m| match m.extra.leash {
+                Some(horizon_client::mobs::leash::Holder::Knot(p)) => Some(p),
+                _ => None,
+            })
+            .collect();
+        self.knot_ids.retain(|p, _| knots.contains(p));
+        for p in knots {
+            self.knot_ids.entry(p).or_insert_with(|| {
+                self.next_entity += 1;
+                self.next_entity
+            });
+        }
         let next = &mut self.next_entity;
         let mut give = |id: &mut u32| {
             if *id == 0 {
@@ -342,6 +370,7 @@ impl Game<'_> {
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
+            e.needs_sync = p.needs_sync;
             // Projectile.getAddEntityPacket: the owner's id.
             e.data = match p.guest.and_then(|conn| hub.guest(conn)) {
                 Some(g) => g.entity_id,
@@ -466,7 +495,7 @@ impl Game<'_> {
             }
             out.push(e);
         }
-        // The dragon's breath clouds (AreaEffectCloud's DATA_RADIUS,
+        // The dragon's breath and lingering potion clouds (AreaEffectCloud's DATA_RADIUS,
         // DATA_WAITING for its 20-tick wait, and DATA_PARTICLE): the
         // client draws them from these (`tick_remote_clouds`).
         let breath = self.network_particle(
@@ -484,10 +513,14 @@ impl Game<'_> {
         for b in self.breath_clouds.iter().filter(|b| b.id != 0) {
             let mut e = state(b.id, "minecraft:area_effect_cloud", b.at, 0.0, false);
             e.meta.push((8, serializer::FLOAT, Value::Float(b.radius)));
-            if b.age < 20 {
+            if b.waiting() {
                 e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
             }
-            if let Some(p) = &breath {
+            let particle = match &b.potion {
+                Some(p) => self.network_particle(&p.particle(), None),
+                None => breath.clone(),
+            };
+            if let Some(p) = &particle {
                 e.meta
                     .push((10, serializer::PARTICLE, Value::Particle(p.clone())));
             }
