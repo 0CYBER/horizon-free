@@ -245,6 +245,16 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        for c in &self.cushions {
+            let p = c.position;
+            let mut e = state(c.id, "minecraft:cushion", [p.x, p.y, p.z], c.yaw, false);
+            // Cushion.DATA_COLOR, set unless it is the default white.
+            if c.color != 0 {
+                e.meta
+                    .push((8, serializer::DYE_COLOR, Value::Id(i32::from(c.color))));
+            }
+            out.push(e);
+        }
         self.lan_projectile_states(host_entity, hub, out);
         for o in &self.others {
             let p = o.position;
@@ -279,6 +289,10 @@ impl Game<'_> {
         self.bolts.iter_mut().for_each(|b| give(&mut b.id));
         self.potions.thrown_ids().for_each(&mut give);
         self.end.eye_ids().for_each(&mut give);
+        self.breath_clouds.iter_mut().for_each(|b| give(&mut b.id));
+        self.dragon_fireballs
+            .iter_mut()
+            .for_each(|b| give(&mut b.id));
     }
 
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
@@ -290,6 +304,9 @@ impl Game<'_> {
             None => 0,
         };
         let at = |p: horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        for f in &self.fangs.list {
+            out.push(state(f.id, "minecraft:evoker_fangs", f.pos, f.yaw, false));
+        }
         // LightningBolt: each client draws and flashes its own.
         for b in self.bolts.iter().filter(|b| b.id != 0) {
             out.push(state(b.id, "minecraft:lightning_bolt", b.at, 0.0, false));
@@ -339,6 +356,20 @@ impl Game<'_> {
                         a.map_or(0, |a| a.pierce),
                         a.is_some_and(|a| a.in_ground) || p.stuck,
                     ));
+                }
+                // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
+                // AbstractArrow's flags.
+                K::Trident => {
+                    let a = p.arrow.as_deref();
+                    e.meta.extend(arrow_meta(
+                        false,
+                        a.is_some_and(|a| a.no_physics),
+                        0,
+                        a.is_some_and(|a| a.in_ground) || p.stuck,
+                    ));
+                    if a.is_some_and(|a| a.pickup_item.has_any_enchantments()) {
+                        e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
+                    }
                 }
                 // WitherSkull.DATA_DANGEROUS.
                 K::WitherSkull { dangerous: true } => {
@@ -433,6 +464,35 @@ impl Game<'_> {
             if !c.show_bottom {
                 e.meta.push((9, serializer::BOOLEAN, Value::Bool(false)));
             }
+            out.push(e);
+        }
+        // The dragon's breath clouds (AreaEffectCloud's DATA_RADIUS,
+        // DATA_WAITING for its 20-tick wait, and DATA_PARTICLE): the
+        // client draws them from these (`tick_remote_clouds`).
+        let breath = self.network_particle(
+            &horizon_client::particles::ParticleOptions::simple(
+                horizon_client::particles::ParticleType::DragonBreath,
+            ),
+            None,
+        );
+        for b in self.dragon_fireballs.iter().filter(|b| b.id != 0) {
+            let p = b.position;
+            let mut e = state(b.id, "minecraft:dragon_fireball", at(p), 0.0, false);
+            e.velocity = [b.velocity.x, b.velocity.y, b.velocity.z];
+            out.push(e);
+        }
+        for b in self.breath_clouds.iter().filter(|b| b.id != 0) {
+            let mut e = state(b.id, "minecraft:area_effect_cloud", b.at, 0.0, false);
+            e.meta.push((8, serializer::FLOAT, Value::Float(b.radius)));
+            if b.age < 20 {
+                e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            if let Some(p) = &breath {
+                e.meta
+                    .push((10, serializer::PARTICLE, Value::Particle(p.clone())));
+            }
+            e.defaults
+                .push((9, serializer::BOOLEAN, Value::Bool(false)));
             out.push(e);
         }
         out.extend(self.lan_dragon_state());

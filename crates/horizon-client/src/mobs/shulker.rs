@@ -3,7 +3,7 @@
 //! their face is lost or when badly hurt, and shrugging off arrows while
 //! closed.
 use super::{
-    Damage, DamageKind, Mob, MobEvent, MobWorld, Who,
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
     goals::{
         Cx, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, RandomLookAround,
@@ -14,7 +14,7 @@ use crate::projectiles::{Projectile, ProjectileWorld, STEPS};
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use std::f32::consts::PI;
 
@@ -164,12 +164,62 @@ pub fn after_hurt(m: &mut Mob) {
         m.extra.flag = true;
     }
 }
-/// The deferred teleport of `after_hurt`.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+/// `Shulker.hurtServer` after a shulker bullet's damage: unless the
+/// low-health teleport was drawn instead (`else if`), `hitByShulkerBullet`
+/// runs on the next tick. Whether the shell is open is read here, at hurt
+/// time, so a goal opening it before that tick cannot change the outcome.
+pub fn hit_by_bullet(m: &mut Mob) {
+    if m.species() == Species::Shulker && !m.extra.flag && m.extra.counter != 0 {
+        m.extra.flag2 = true;
+    }
+}
+/// The deferred teleport of `after_hurt` and `hitByShulkerBullet`.
+pub fn ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     if m.extra.flag {
         m.extra.flag = false;
         teleport(m, w, events);
     }
+    if m.extra.flag2 {
+        m.extra.flag2 = false;
+        hit_by_shulker_bullet(m, w, level_random, events);
+    }
+}
+/// `Shulker.hitByShulkerBullet` (only queued by an open shulker): it
+/// teleports, and leaves a new one of its colour behind unless shulkers
+/// crowd the place (one in five fewer chances for every other shulker
+/// within 8 blocks).
+fn hit_by_shulker_bullet(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    let old_position = m.position;
+    let old_box = m.bounds();
+    if !teleport(m, w, events) {
+        return;
+    }
+    let area = old_box.inflate(Vec3::new(8.0, 8.0, 8.0));
+    // The shulker itself stands within reach of its old box, so it counts.
+    let others = w
+        .others_near(area)
+        .filter(|s| {
+            s.alive && s.species == Species::Shulker && s.id != m.id && s.bounds.intersects(area)
+        })
+        .count();
+    let failure_chance = others as f32 / 5.0;
+    // The level's random, not the shulker's.
+    if level_random.next_float() < failure_chance {
+        return;
+    }
+    let mut baby = Mob::new(0, m.kind.clone(), old_position, 0.0);
+    baby.extra.color = m.extra.color;
+    events.push(MobEvent::Spawn(Box::new(baby)));
 }
 /// A ProjectileWorld over the mob world, for aiming a new bullet.
 struct Probe<'a, 'w> {
