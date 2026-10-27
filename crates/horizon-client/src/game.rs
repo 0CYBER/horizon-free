@@ -5277,6 +5277,10 @@ impl Game<'_> {
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
                 MotionEvent::CauldronExtinguish { pos } => self.cauldron_extinguish(pos),
                 MotionEvent::InsideWitherRose => self.wither_rose_contact(),
+                // Entity.restituteMovementAfterCollisions: GameEvent.BOUNCE.
+                MotionEvent::Bounce { .. } => {
+                    self.post_entity_event("minecraft:bounce", horizon_client::mobs::Who::Player)
+                }
                 MotionEvent::SmashLanding {
                     state,
                     position,
