@@ -327,29 +327,36 @@ impl Control {
     fn parse(t: &Tag) -> Option<Self> {
         let label = || t.get("label").map(text);
         Some(match path(&string(t.get("type"))?) {
-            "text" => Self::Text {
-                width: int(t, "width", 200),
-                label: label()?,
-                label_visible: boolean(t, "label_visible", true),
-                initial: string(t.get("initial")).unwrap_or_default(),
-                max_length: int(t, "max_length", 32),
-                multiline: t.get("multiline").map(|m| {
-                    let get = |key| number(m.get(key)).map(|v| v as i32);
-                    (get("max_lines"), get("height"))
-                }),
-            },
+            "text" => {
+                let initial = string(t.get("initial")).unwrap_or_default();
+                let max_length = int(t, "max_length", 32);
+                // TextInput: the default text may not be longer than the length.
+                if initial.encode_utf16().count() > max_length.max(0) as usize {
+                    return None;
+                }
+                Self::Text {
+                    width: int(t, "width", 200),
+                    label: label()?,
+                    label_visible: boolean(t, "label_visible", true),
+                    initial,
+                    max_length,
+                    multiline: t.get("multiline").map(|m| {
+                        let get = |key| number(m.get(key)).map(|v| v as i32);
+                        (get("max_lines"), get("height"))
+                    }),
+                }
+            }
             "boolean" => Self::Boolean {
                 label: label()?,
                 initial: boolean(t, "initial", false),
                 on_true: string(t.get("on_true")).unwrap_or_else(|| "true".into()),
                 on_false: string(t.get("on_false")).unwrap_or_else(|| "false".into()),
             },
-            "single_option" => Self::SingleOption {
-                width: int(t, "width", 200),
+            "single_option" => {
                 // SingleOptionInput.Entry.CODEC: a full entry or just its id.
-                options: list(t.get("options"))
+                let options: Vec<_> = list(t.get("options"))
                     .iter()
-                    .filter_map(|o| match o {
+                    .map(|o| match o {
                         Tag::String(id) => Some((id.to_string_lossy(), None, false)),
                         o => Some((
                             string(o.get("id"))?,
@@ -357,10 +364,18 @@ impl Control {
                             boolean(o, "initial", false),
                         )),
                     })
-                    .collect(),
-                label: label()?,
-                label_visible: boolean(t, "label_visible", true),
-            },
+                    .collect::<Option<_>>()?;
+                // A non-empty list with at most one initial entry.
+                if options.is_empty() || options.iter().filter(|o| o.2).count() > 1 {
+                    return None;
+                }
+                Self::SingleOption {
+                    width: int(t, "width", 200),
+                    options,
+                    label: label()?,
+                    label_visible: boolean(t, "label_visible", true),
+                }
+            }
             "number_range" => {
                 let float = |key| number(t.get(key)).map(|v| v as f32);
                 Self::NumberRange {
@@ -584,20 +599,21 @@ impl Dialog {
             _ => return None,
         };
         // DialogBody.COMPACT_LIST_CODEC: one body, or a list of them.
+        // A body or input it cannot read fails the whole dialog.
         let body = match t.get("body") {
-            Some(Tag::List(items)) => items.iter().filter_map(Body::parse).collect(),
-            Some(one) => Body::parse(one).into_iter().collect(),
+            Some(Tag::List(items)) => items.iter().map(Body::parse).collect::<Option<_>>()?,
+            Some(one) => vec![Body::parse(one)?],
             None => Vec::new(),
         };
         let inputs = list(t.get("inputs"))
             .iter()
-            .filter_map(|i| {
+            .map(|i| {
                 Some(Input {
                     key: string(i.get("key"))?,
                     control: Control::parse(i)?,
                 })
             })
-            .collect();
+            .collect::<Option<_>>()?;
         Some(Self {
             kind,
             title: text(t.get("title")?),
