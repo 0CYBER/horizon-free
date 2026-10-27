@@ -66,6 +66,8 @@ pub(super) struct Parked {
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     mobs: Vec<Mob>,
+    /// The entity ids of the level's fence knots (`knot_ids`).
+    knot_ids: HashMap<[i32; 3], u32>,
     projectiles: Vec<horizon_client::projectiles::Projectile>,
     dropped: Vec<ItemEntity>,
     orbs: Vec<ExperienceOrb>,
@@ -75,7 +77,7 @@ pub(super) struct Parked {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
-    lan_critical_hits: Vec<(Option<u32>, i32)>,
+    lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
     /// Only the per-level parts of these are used (`swap_level`).
     anims: BlockEntityAnims,
     raiding: Raiding,
@@ -119,6 +121,10 @@ impl Levels {
         self.parked
             .iter_mut()
             .map(|(d, p)| (*d, &mut p.world.chunks))
+    }
+    /// The levels that are not in place, by dimension.
+    pub(super) fn parked_dims(&self) -> Vec<Dim> {
+        self.parked.keys().copied().collect()
     }
 }
 
@@ -166,6 +172,7 @@ impl Game<'_> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             mobs: Vec::new(),
+            knot_ids: HashMap::new(),
             projectiles: Vec::new(),
             dropped: Vec::new(),
             orbs: Vec::new(),
@@ -192,6 +199,7 @@ impl Game<'_> {
         let mut locator = self.end.locator();
         swap(&mut locator, &mut p.locator);
         self.end.set_locator(locator);
+        self.share_spawn_conditions();
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
@@ -218,6 +226,7 @@ impl Game<'_> {
         swap(&mut self.tnts, &mut p.tnts);
         swap(&mut self.hoppers, &mut p.hoppers);
         swap(&mut self.mobs, &mut p.mobs);
+        swap(&mut self.knot_ids, &mut p.knot_ids);
         swap(&mut self.creatures.projectiles, &mut p.projectiles);
         swap(&mut self.dropped, &mut p.dropped);
         swap(&mut self.orbs, &mut p.orbs);
@@ -399,7 +408,8 @@ impl Game<'_> {
         }
         *next += self.clock.tick_duration();
         if *next > now {
-            // A `/pregen` task keeps the workers fed until the next tick.
+            // A `/pregen` task or force-loaded chunks keep the workers fed
+            // until the next tick.
             self.pump_pregen(*next);
             let now = Instant::now();
             if *next > now {

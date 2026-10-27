@@ -129,6 +129,7 @@ pub(super) struct Host<'a> {
     banners: &'a horizon_client::banner::Banners,
     sprites: &'a HashMap<String, Rect>,
     skins: &'a RefCell<horizon_client::skins::Downloader>,
+    profiles: &'a RefCell<horizon_client::skins::Resolver>,
 }
 impl SpecialHost for Host<'_> {
     fn banner_texture(&self, pattern: &str) -> Option<String> {
@@ -144,14 +145,14 @@ impl SpecialHost for Host<'_> {
     fn player_skin(&self, profile: &Value) -> Option<String> {
         // SkullBlockRenderer.getPlayerSkin: SkinManager.getInsecureSkinInformation
         // accepts a texture property without a signature, unlike the tab list.
-        let url = horizon_client::skins::profile_skin_url(profile)?;
-        let location =
-            horizon_client::skins::skin_location(&horizon_client::skins::texture_hash(&url)?);
-        let _ = self
-            .skins
-            .borrow_mut()
-            .state(horizon_client::skins::Kind::Skin, &url);
-        self.sprites.contains_key(&location).then_some(location)
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services (`PlayerSkinRenderCache.getOrDefault`).
+        Some(horizon_client::skins::head_skin(
+            profile,
+            &mut self.profiles.borrow_mut(),
+            &mut self.skins.borrow_mut(),
+            |location| self.sprites.contains_key(location),
+        ))
     }
 }
 
@@ -194,6 +195,7 @@ impl Game<'_> {
             banners: &self.res.stations().banners,
             sprites: &self.gui.atlas.sprites,
             skins: &self.skin_downloads,
+            profiles: &self.skin_profiles,
         }
     }
     /// The client level as item models read it: worked out once a frame (a
@@ -296,7 +298,31 @@ impl Game<'_> {
             x,
             y,
             self.started.elapsed().as_secs_f32(),
+            self.settings.file.double("glintSpeed") as f32,
+            self.settings.file.double("glintStrength") as f32,
         );
+    }
+    /// The `GLINT_TEXTURING` inputs the atlas and options provide.
+    pub(super) fn glint(&self) -> Option<item_render::Glint> {
+        self.gui
+            .atlas
+            .sprites
+            .get("misc/enchanted_glint_item")
+            .copied()
+            .map(|_| item_render::Glint {
+                speed: self.settings.file.double("glintSpeed") as f32,
+                alpha: self.settings.file.double("glintStrength") as f32,
+                millis: self.started.elapsed().as_secs_f32() * 1000.0,
+                scale: 0.5,
+            })
+    }
+    /// The glint scroll phase shared by world items and armour
+    /// (`item_render::Glint::scroll_ticks`).
+    pub(super) fn glint_ticks(&self) -> f32 {
+        item_render::Glint::scroll_ticks(
+            self.started.elapsed().as_secs_f32() * 1000.0,
+            self.settings.file.double("glintSpeed") as f32,
+        )
     }
     /// Submit a resolved item under `pose` (camera-relative) at `light`
     /// (packed lightmap coordinates).
@@ -311,6 +337,7 @@ impl Game<'_> {
             out,
             light,
             lights: Some(diffuse_lights(self.dim == Dim::Nether)),
+            glint: self.glint(),
         };
         state.submit(
             &self.pack.item_renderer,
@@ -332,6 +359,7 @@ impl Game<'_> {
             out,
             light,
             lights: None,
+            glint: self.glint(),
         };
         state.submit(
             &self.pack.item_renderer,
@@ -405,7 +433,12 @@ impl Game<'_> {
             ) {
                 self.submit_item_world(&state, copy, vertex_light(packed), out);
             }
-            self.cull_entity_vertices(out, entity_start);
+            if self.entity_glowing(item.id) {
+                let rgb = super::glowing::team_color(self.mob_team(item.id));
+                self.mark_outline(&out[entity_start..], rgb);
+            } else {
+                self.cull_entity_vertices(out, entity_start);
+            }
         }
     }
 }
