@@ -13,18 +13,6 @@ use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::f32::consts::PI;
 
-/// The species raiders do not fight (`Raider`'s allies).
-fn raider(s: Species) -> bool {
-    matches!(
-        s,
-        Species::Pillager
-            | Species::Vindicator
-            | Species::Witch
-            | Species::Evoker
-            | Species::Illusioner
-            | Species::Ravager
-    )
-}
 fn targets(m: &mut Mob, villagers_seen: bool) {
     let mut hurt = HurtByTarget::new().alert();
     hurt.ignore = vec![
@@ -80,10 +68,11 @@ pub fn register_vindicator(m: &mut Mob) {
     g.add(9, LookAtPlayer::new(3.0).probability(1.0));
     g.add(10, LookAtPlayer::mobs(8.0));
     targets(m, true);
-    // VindicatorJohnnyAttackGoal: a vindicator named Johnny attacks anything.
+    // VindicatorJohnnyAttackGoal: a vindicator named Johnny attacks any
+    // living entity, other raiders included.
     m.ai.targets.add(
         4,
-        NearestTarget::new(Prey::Filter(|s| !raider(s.species)), true)
+        NearestTarget::new(Prey::Filter(|_| true), true)
             .interval(0)
             .when(|m, _| m.custom_name.as_deref() == Some("Johnny")),
     );

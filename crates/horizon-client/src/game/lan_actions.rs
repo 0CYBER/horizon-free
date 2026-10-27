@@ -1434,16 +1434,65 @@ impl Game<'_> {
                     .unwrap_or_default();
                 host.hub.send_stats(conn, &stats);
             }
+            // handlePickItemFromBlock: a block within the block reach plus 1, its
+            // data only with infinite materials.
             S::PickItemFromBlock(p) => {
-                let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
-                let item = self.res.facts().get(state).item.clone();
-                let g = &mut host.hub.guests[gi];
-                if g.creative() && &*item != "minecraft:air" {
-                    let slot = g.selected;
-                    g.inventory[slot] = Some(ItemStack::new(&item, 1));
-                }
+                self.guest_pick_item(host, conn, |g| {
+                    let eye = g.eye_position()?;
+                    let d2: f64 = (0..3)
+                        .map(|a| {
+                            let lo = f64::from(p.pos[a]);
+                            (eye[a] - eye[a].clamp(lo, lo + 1.0)).powi(2)
+                        })
+                        .sum();
+                    let range = g.reach() + 1.0;
+                    if d2 >= range * range {
+                        return None;
+                    }
+                    g.picked_stack(p.pos, g.creative && p.include_data)
+                });
+            }
+            // handlePickItemFromEntity.
+            S::PickItemFromEntity(p) => {
+                self.guest_pick_item(host, conn, |g| {
+                    g.within_entity_range(p.id)
+                        .then(|| g.entity_pick_result(p.id))
+                        .flatten()
+                });
             }
             _ => {}
+        }
+    }
+
+    /// `ServerGamePacketListenerImpl.tryPickItem` for the guest: a matching stack
+    /// is selected, else a creative player gets the item; the held slot is sent
+    /// back and the changed slots follow with the tick's inventory changes.
+    fn guest_pick_item(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        stack: impl FnOnce(&mut Self) -> Option<ItemStack>,
+    ) {
+        let picked = self.as_guest(host, conn, |g| {
+            let stack = stack(g)?;
+            let infinite = g.creative;
+            horizon_client::pick_item::pick(
+                &mut g.inventory[..36],
+                &mut g.selected,
+                &stack,
+                infinite,
+            );
+            Some(())
+        });
+        if picked.flatten().is_some()
+            && let Some(g) = host.hub.guests.iter().find(|g| g.conn == conn)
+        {
+            host.hub.send_to(
+                conn,
+                &C::SetHeldSlot(play::SetHeldSlot {
+                    slot: g.selected as i32,
+                }),
+            );
         }
     }
 
@@ -2054,6 +2103,7 @@ impl Game<'_> {
             self.as_guest(host, conn, |g| {
                 g.tick_fishing();
                 g.tick_maps();
+                g.tick_lodestone_compasses();
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
                 g.update_player_attributes();

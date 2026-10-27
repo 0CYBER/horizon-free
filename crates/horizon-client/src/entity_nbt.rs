@@ -339,6 +339,18 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.insert("Sitting".into(), Tag::Byte(i8::from(m.extra.sitting)));
             map.insert("CollarColor".into(), Tag::Byte(m.extra.color as i8));
         }
+        "minecraft:panda" => {
+            use crate::mobs::panda::GENES;
+            for (key, gene) in [
+                ("MainGene", m.extra.variant),
+                ("HiddenGene", m.extra.variant2),
+            ] {
+                map.insert(
+                    key.into(),
+                    string(GENES[usize::from(gene).min(GENES.len() - 1)]),
+                );
+            }
+        }
         "minecraft:piglin" | "minecraft:piglin_brute" | "minecraft:hoglin" => {
             // Only Piglin.addAdditionalSaveData writes CannotHunt.
             if id == "minecraft:piglin_brute" {
@@ -1094,6 +1106,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.color =
             number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
     }
+    if m.species() == crate::mobs::Species::Panda {
+        let gene = |key| text(tag.get(key)).map_or(0, |n| crate::mobs::panda::gene_from_name(&n));
+        m.extra.variant = gene("MainGene");
+        m.extra.variant2 = gene("HiddenGene");
+    }
     if m.species() == crate::mobs::Species::Wolf {
         let health = m.health;
         m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
@@ -1832,6 +1849,15 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
     }
     put(&mut tag, "Health", Tag::Float(a.health.to_bits()));
     put(&mut tag, "Fire", Tag::Short(a.fire_ticks as i16));
+    // ArmorStand.addAdditionalSaveData: the `Pose` parts that are not default.
+    let pose: Vec<(&str, Tag)> = ArmorStand::POSE_KEYS
+        .into_iter()
+        .zip(a.pose)
+        .zip(ArmorStand::DEFAULT_POSE)
+        .filter(|((_, rotation), default)| rotation != default)
+        .map(|((key, rotation), _)| (key, floats(&rotation)))
+        .collect();
+    put(&mut tag, "Pose", Tag::compound(pose));
     // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
     if let Tag::Compound(map) = &mut tag {
         for (key, value) in [
@@ -1871,6 +1897,19 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.invisible = flag(tag, "Invisible");
     a.marker = flag(tag, "Marker");
     a.on_ground = flag(tag, "OnGround");
+    // ArmorStand.readAdditionalSaveData: each part of `Pose` that is a list of
+    // three numbers, the others staying at their defaults.
+    if let Some(pose) = tag.get("Pose") {
+        for (rotation, key) in a.pose.iter_mut().zip(ArmorStand::POSE_KEYS) {
+            if let Some(Tag::List(values)) = pose.get(key)
+                && values.len() == 3
+            {
+                for (r, v) in rotation.iter_mut().zip(values) {
+                    *r = float(Some(v)).unwrap_or(0.0) as f32;
+                }
+            }
+        }
+    }
     Some(a)
 }
 /// A boat entity (`minecraft:<wood>_boat`, `minecraft:bamboo_chest_raft`...):
