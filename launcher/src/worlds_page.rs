@@ -166,7 +166,10 @@ impl Launcher {
             );
         }
         for (i, w) in list.into_iter().enumerate() {
-            section = section.child(self.world_row(i, w, cx));
+            let row = self.world_row(i, w.clone(), cx);
+            section = section
+                .child(self.world_drop_target(i, &w, row, cx))
+                .children(self.world_packs_panel(&w, cx));
         }
         Some(section)
     }
@@ -275,6 +278,19 @@ impl Launcher {
                         },
                     )),
                 )
+                .child({
+                    let world = w.clone();
+                    let label = match self.world_packs_open(&w) {
+                        true => "Hide data packs",
+                        false => "Data packs",
+                    };
+                    act("world-packs", label, Kind::Ghost).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.toggle_world_packs(&world);
+                            cx.notify();
+                        },
+                    ))
+                })
                 .child(
                     act("world-folder", "Open folder", Kind::Ghost)
                         .on_click(move |_, _, cx| cx.open_with_system(&folder)),

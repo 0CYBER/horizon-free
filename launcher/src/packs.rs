@@ -124,7 +124,7 @@ fn read(path: &Path, kind: Kind, on: &[String]) -> Option<Pack> {
 }
 
 /// A file at the root of a pack folder or zip, at most 4 MB.
-fn entry(path: &Path, name: &str) -> Option<Vec<u8>> {
+pub(crate) fn entry(path: &Path, name: &str) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     if path.is_dir() {
         fs::File::open(path.join(name))
@@ -141,7 +141,7 @@ fn entry(path: &Path, name: &str) -> Option<Vec<u8>> {
 }
 
 /// A text component as plain text: its strings, without `§` formatting codes.
-fn plain(component: &serde_json::Value) -> String {
+pub(crate) fn plain(component: &serde_json::Value) -> String {
     fn walk(v: &serde_json::Value, out: &mut String) {
         match v {
             serde_json::Value::String(s) => out.push_str(s),

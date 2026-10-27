@@ -88,7 +88,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
   system's trash after a confirmation; **Open folder**. The same from the command line:
   `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
-  **Play** on a world starts the game straight into it.
+  **Play** on a world starts the game straight into it. **Data packs** opens the world's
+  `datapacks/` under its row: what is there (and which the game has turned off), **Add data pack…**,
+  and **Remove** (to the trash); a data pack `.zip` dropped on a world goes into it. The game turns
+  a new one on when the world opens. From the command line: `horizon-launcher worlds
+  datapack-list|datapack-add|datapack-remove <world> …`.
 - **Packs**: Home lists the selected instance's resource packs and shader packs, each with a switch.
   The choice is the game's own: `resourcePacks` in options.txt (a pack turned on goes on top, as
   the game's Resource Packs screen does) and `pickedShaderPack` in `horizon-graphics.txt` (one shader

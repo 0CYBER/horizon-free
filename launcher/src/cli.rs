@@ -212,6 +212,27 @@ enum WorldsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
+    /// A world's data packs, and which are on
+    DatapackList {
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Copy a data pack zip into a world (the game turns it on when the world opens)
+    DatapackAdd {
+        world: String,
+        file: PathBuf,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Move a world's data pack to the system's trash
+    DatapackRemove {
+        world: String,
+        /// Its file name, with or without .zip
+        pack: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1816,6 +1837,7 @@ fn multiplayer(action: MultiplayerCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn worlds(action: WorldsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::datapacks;
     use horizon_launcher::worlds::{self, World};
     let home = |instance: Option<String>| -> Result<PathBuf, String> {
         Ok(match instance {
@@ -1872,6 +1894,46 @@ fn worlds(action: WorldsCmd, as_json: bool) -> Result<(), String> {
             let w = worlds::find(&home, &world)?;
             worlds::delete(&w)?;
             println!("{} is in the trash.", w.name);
+        }
+        WorldsCmd::DatapackList { world, instance } => {
+            let w = worlds::find(&home(instance)?, &world)?;
+            let packs = datapacks::list(&w.path);
+            if as_json {
+                json(
+                    packs
+                        .iter()
+                        .map(|p| serde_json::json!({ "file": p.file, "description": p.description, "enabled": p.enabled, "path": p.path }))
+                        .collect(),
+                );
+            } else if packs.is_empty() {
+                println!("No data packs in {}", w.name);
+            }
+            for p in packs.iter().filter(|_| !as_json) {
+                let on = if p.enabled { "on " } else { "off" };
+                println!("  {on} {}  {}", p.file, p.description);
+            }
+        }
+        WorldsCmd::DatapackAdd {
+            world,
+            file,
+            instance,
+        } => {
+            let w = worlds::find(&home(instance)?, &world)?;
+            let p = datapacks::add(&w.path, &file)?;
+            println!(
+                "Added {} to {}: the game turns it on when the world opens.",
+                p.file, w.name
+            );
+        }
+        WorldsCmd::DatapackRemove {
+            world,
+            pack,
+            instance,
+        } => {
+            let w = worlds::find(&home(instance)?, &world)?;
+            let p = datapacks::find(&w.path, &pack)?;
+            datapacks::remove(&w.path, &p)?;
+            println!("{} is in the trash.", p.file);
         }
     }
     Ok(())

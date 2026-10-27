@@ -374,6 +374,41 @@ Move a world to the system's trash.
 
 MCP: `worlds_delete`, needs `confirm: true`.
 
+## `horizon-launcher worlds datapack-list`
+
+A world's data packs, and which are on.
+
+    horizon-launcher worlds datapack-list <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_datapack_list`.
+
+## `horizon-launcher worlds datapack-add`
+
+Copy a data pack zip into a world (the game turns it on when the world opens).
+
+    horizon-launcher worlds datapack-add <WORLD> <FILE>
+
+- `WORLD`
+- `FILE`
+- `--instance`
+
+MCP: `worlds_datapack_add`.
+
+## `horizon-launcher worlds datapack-remove`
+
+Move a world's data pack to the system's trash.
+
+    horizon-launcher worlds datapack-remove <WORLD> <PACK>
+
+- `WORLD`
+- `PACK`: Its file name, with or without .zip
+- `--instance`
+
+MCP: `worlds_datapack_remove`, needs `confirm: true`.
+
 ## `horizon-launcher packs list`
 
 The resource and shader packs, and which are on (the default).
