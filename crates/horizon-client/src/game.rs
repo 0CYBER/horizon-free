@@ -11002,7 +11002,11 @@ impl Game<'_> {
         let debug_crosshair = horizon_client::gizmos::camera_relative(&crosshair.on_top, at, view);
         // LevelExtractor.extractBlockOutline: model translucency controls draw order.
         let mut outline_after_terrain = false;
-        let outline = if self.screen == Screen::Playing && !self.spectator() {
+        // GameRenderer.shouldRenderBlockOutline: not with the HUD hidden (F1), and only for a
+        // player who may build. Adventure players only get one with a CAN_BREAK or
+        // CAN_PLACE_ON item and spectators with a menu block; Horizon reads neither the
+        // components nor opens menus for spectators, so those never show it.
+        let outline = if self.screen == Screen::Playing && !self.ui.hide_gui && self.may_build() {
             self.pick()
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
@@ -11198,6 +11202,7 @@ impl Game<'_> {
             dark_disc: self.dark_disc(camera),
             outline,
             outline_after_terrain,
+            outline_high_contrast: self.settings.file.bool("highContrastBlockOutline"),
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
@@ -13942,6 +13947,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         dark_disc: false,
         outline: Vec::new(),
         outline_after_terrain: false,
+        outline_high_contrast: false,
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],

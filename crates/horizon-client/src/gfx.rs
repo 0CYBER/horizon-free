@@ -250,6 +250,8 @@ pub struct Frame<'a> {
     pub outline: Vec<[f64; 6]>,
     /// `BlockOutlineRenderState.isTranslucent`: draw after translucent terrain.
     pub outline_after_terrain: bool,
+    /// `BlockOutlineRenderState.highContrast`: a thick black outline under a bright one.
+    pub outline_high_contrast: bool,
     /// `lines` with a colour and pixel width (`gizmos::camera_relative`):
     /// the fishing line and debug gizmos, depth tested, then gizmos drawn
     /// over everything.
@@ -380,6 +382,7 @@ pub struct Renderer {
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    lines_secondary: wgpu::RenderPipeline,
     /// Gizmo lines (`RenderTypes.linesTranslucentNoDepthWrite`) and the
     /// always-on-top ones.
     debug_lines: wgpu::RenderPipeline,
@@ -1217,12 +1220,6 @@ impl Renderer {
                 attributes: &instance_attributes,
             }),
         ];
-        let line_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3];
-        let line_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: 24,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &line_attributes,
-        })];
         let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
         let debug_line_attributes =
             wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Unorm8x4,3=>Float32];
@@ -1355,10 +1352,22 @@ impl Renderer {
             "Block outline",
             "vs_line",
             "fs_line",
-            &line_buffers,
+            &debug_line_buffers,
             wgpu::PrimitiveTopology::TriangleStrip,
             None,
             true,
+            true,
+            Some(alpha_blend),
+        );
+        // RenderTypes.secondaryBlockOutline: the black stroke under a high contrast outline.
+        let lines_secondary = pipeline(
+            "Block outline secondary",
+            "vs_line",
+            "fs_line",
+            &debug_line_buffers,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            None,
+            false,
             true,
             Some(alpha_blend),
         );
@@ -1535,7 +1544,7 @@ impl Renderer {
         });
         let outline = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Outline"),
-            size: 24 * MAX_OUTLINE_EDGES,
+            size: 32 * 2 * MAX_OUTLINE_EDGES,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2381,6 +2390,7 @@ impl Renderer {
             sky,
             dark_disc,
             lines,
+            lines_secondary,
             debug_lines,
             debug_lines_on_top,
             debug_line_buffer,
@@ -2502,6 +2512,18 @@ impl Renderer {
             animated_textures: true,
             present_modes,
         })
+    }
+    /// LevelRenderer.submitBlockOutline: the buffer holds `edges` per stroke, the black
+    /// secondary stroke first when high contrast is on.
+    fn draw_outline(&self, pass: &mut wgpu::RenderPass<'_>, edges: u32, high_contrast: bool) {
+        pass.set_vertex_buffer(0, self.outline.slice(..));
+        if high_contrast {
+            pass.set_pipeline(&self.lines_secondary);
+            pass.draw(0..4, 0..edges);
+        }
+        pass.set_pipeline(&self.lines);
+        let first = if high_contrast { edges } else { 0 };
+        pass.draw(0..4, first..first + edges);
     }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
         let indices: Vec<u32> = (0..quads)
@@ -3975,7 +3997,26 @@ impl Renderer {
         );
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
-            let lines = outline_vertices(&frame.outline[..outline_edges], camera);
+            // The same per-line colour and pixel width layout as the gizmo lines. A high
+            // contrast outline is two strokes: the black one first, the bright one after it.
+            let edges = outline_vertices(&frame.outline[..outline_edges], camera);
+            let width = outline_width(self.config.width);
+            let stroke = |color: u32, width: f32| {
+                edges.iter().map(move |e| {
+                    let mut line = [0.0; 8];
+                    line[..6].copy_from_slice(e);
+                    line[6] = f32::from_bits(color);
+                    line[7] = width;
+                    line
+                })
+            };
+            let lines: Vec<[f32; 8]> = if frame.outline_high_contrast {
+                stroke(0xff00_0000, 7.0)
+                    .chain(stroke(0xff57_ffe1, width))
+                    .collect()
+            } else {
+                stroke(0x6600_0000, width).collect()
+            };
             self.uploads
                 .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
@@ -4600,9 +4641,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if outline_edges > 0 && !frame.outline_after_terrain {
-                pass.set_pipeline(&self.lines);
-                pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..4, 0..outline_edges as u32);
+                self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
             if debug_depth > 0 {
                 pass.set_pipeline(&self.debug_lines);
@@ -4658,9 +4697,7 @@ impl Renderer {
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
             if outline_edges > 0 && frame.outline_after_terrain {
-                pass.set_pipeline(&self.lines);
-                pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..4, 0..outline_edges as u32);
+                self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             // LevelRenderer: the world border after translucent terrain and weather.
