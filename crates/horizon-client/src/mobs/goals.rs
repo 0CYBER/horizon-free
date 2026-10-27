@@ -1893,6 +1893,10 @@ impl Goal for Breed {
         if tamable && (!m.extra.tame || m.extra.sitting) {
             return false;
         }
+        // AbstractHorse.canMate is false and Mule keeps it: mules never breed.
+        if species == Species::Mule {
+            return false;
+        }
         // TurtleBreedGoal.canUse: not while carrying an egg.
         if species == Species::Turtle && super::turtle::has_egg(m) {
             return false;
