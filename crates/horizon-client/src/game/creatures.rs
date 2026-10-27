@@ -1876,6 +1876,10 @@ impl Game<'_> {
         if let Some(a) = attacker.or(owner) {
             self.note_attacker(damage_type, a);
         }
+        // The projectile is the direct entity: named when it has no owner.
+        if let Some(name) = self.combat.projectile_direct.take() {
+            self.note_direct_entity(damage_type, name);
+        }
         // DamageSource.scalesWithDifficulty: a mob (or its projectile's
         // owner) caused the hit, not a player.
         let living_cause = attacker.or(owner).is_some();
@@ -2453,6 +2457,26 @@ impl Game<'_> {
     pub(super) fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),
+            _ => None,
+        };
+        self.combat.projectile_direct = match hit {
+            Hit::Entity {
+                who: Who::Player, ..
+            } => {
+                let spectral = p
+                    .arrow
+                    .as_ref()
+                    .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow");
+                let id = if spectral {
+                    "minecraft:spectral_arrow"
+                } else {
+                    p.kind.id()
+                };
+                Some(Text::translate(
+                    &format!("entity.{}", id.replace(':', ".")),
+                    &[],
+                ))
+            }
             _ => None,
         };
         let at = match hit {
