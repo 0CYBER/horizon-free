@@ -1832,6 +1832,15 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
     }
     put(&mut tag, "Health", Tag::Float(a.health.to_bits()));
     put(&mut tag, "Fire", Tag::Short(a.fire_ticks as i16));
+    // ArmorStand.addAdditionalSaveData: the `Pose` parts that are not default.
+    let pose: Vec<(&str, Tag)> = ArmorStand::POSE_KEYS
+        .into_iter()
+        .zip(a.pose)
+        .zip(ArmorStand::DEFAULT_POSE)
+        .filter(|((_, rotation), default)| rotation != default)
+        .map(|((key, rotation), _)| (key, floats(&rotation)))
+        .collect();
+    put(&mut tag, "Pose", Tag::compound(pose));
     // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
     if let Tag::Compound(map) = &mut tag {
         for (key, value) in [
@@ -1871,6 +1880,19 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.invisible = flag(tag, "Invisible");
     a.marker = flag(tag, "Marker");
     a.on_ground = flag(tag, "OnGround");
+    // ArmorStand.readAdditionalSaveData: each part of `Pose` that is a list of
+    // three numbers, the others staying at their defaults.
+    if let Some(pose) = tag.get("Pose") {
+        for (rotation, key) in a.pose.iter_mut().zip(ArmorStand::POSE_KEYS) {
+            if let Some(Tag::List(values)) = pose.get(key)
+                && values.len() == 3
+            {
+                for (r, v) in rotation.iter_mut().zip(values) {
+                    *r = float(Some(v)).unwrap_or(0.0) as f32;
+                }
+            }
+        }
+    }
     Some(a)
 }
 /// A boat entity (`minecraft:<wood>_boat`, `minecraft:bamboo_chest_raft`...):
