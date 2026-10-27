@@ -74,6 +74,13 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
+/// Where the player's fall began (`ServerPlayer`'s field of the same name). A
+/// guest keeps their own, as `levitation` does.
+#[derive(Clone, Debug, Default)]
+pub(super) struct TravelMarks {
+    /// `startingToFallPosition`.
+    pub(super) fall: Option<[f64; 3]>,
+}
 #[derive(Default)]
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
@@ -89,6 +96,8 @@ pub(super) struct AdvState {
     pub(super) last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
+    /// The fall `tick_marks` follows.
+    pub(super) marks: TravelMarks,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
     /// unlocked and the announcements, for their client and everyone's.
@@ -685,6 +694,7 @@ impl Game<'_> {
         if let Some((start, since)) = self.adv.levitation {
             self.trigger_levitation(start, (self.ticks - since) as i64);
         }
+        self.tick_marks();
         if self.ticks.is_multiple_of(20) {
             let me = self.player_entity();
             self.trigger("minecraft:location", |c, w| {
@@ -746,6 +756,43 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
                 && adv::range_i(&c["duration"], duration)
+        });
+    }
+    /// `ServerPlayer.tick`: `trackStartFallingPosition` and the end of a fall
+    /// (`resetFallDistance`).
+    fn tick_marks(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let falling = p.fall_distance > 0.0;
+        let dead = p.health.dead_or_dying();
+        match (falling, self.adv.marks.fall) {
+            (true, None) => self.adv.marks.fall = Some(at),
+            // `resetFallDistance`: a fall ends by landing, climbing or water.
+            (false, Some(start)) => {
+                self.adv.marks.fall = None;
+                if !dead {
+                    self.trigger_distance("minecraft:fall_from_height", start);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// `DistanceTrigger`: the player's `player` condition, `start_position`
+    /// at `start`, and the `distance` from `start` to the player.
+    fn trigger_distance(&mut self, name: &str, start: [f64; 3]) {
+        let me = self.player_entity();
+        self.trigger(name, move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::location(&c["start_position"], start, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
         });
     }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
