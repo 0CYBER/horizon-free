@@ -3227,6 +3227,19 @@ impl Game<'_> {
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                 }
             }
+            // Tadpole.feed: frog food ages it by a tenth of the time left to
+            // grow into a frog (it grows on its next tick once past 24000).
+            Species::Tadpole if is_food && !m.extra.age_locked => {
+                consume = true;
+                let left = 24_000 - m.extra.age;
+                m.extra.age += ((left / 20) as f32 * 0.1) as i32 * 20;
+                // One happy villager particle at rest about the body.
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    "happy_villager",
+                    horizon_client::particles::Burst::HORSE_EATING,
+                );
+            }
             // HappyGhast.canFallInLove: never, so only a ghastling takes food.
             _ if is_food
                 && m.kind.flags.animal
