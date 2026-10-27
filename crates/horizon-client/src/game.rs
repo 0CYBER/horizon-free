@@ -11249,7 +11249,7 @@ impl Game<'_> {
             }),
             ticks: self.ticks,
             darkness: self.darkness_lighting(alpha as f32),
-            night_vision: self.night_vision_intensity(),
+            night_vision: self.night_vision_intensity(alpha as f32),
             block_flicker: self.fog.block_light_flicker,
             boss_darken: self
                 .boss_overlay
