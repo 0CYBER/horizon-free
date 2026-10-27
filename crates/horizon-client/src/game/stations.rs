@@ -277,6 +277,10 @@ fn argb(c: i32) -> u32 {
     )
 }
 
+/// A text style's `0xRRGGBB` colour from a HUD colour (`rgba`).
+fn rgb_of(rgba: u32) -> u32 {
+    (rgba & 0xFF) << 16 | (rgba >> 8 & 0xFF) << 8 | (rgba >> 16 & 0xFF)
+}
 impl Game<'_> {
     /// `Component.translatable`: the selected language (which `lang` layers
     /// over `en_us`), the caller's English text last.
@@ -1690,20 +1694,34 @@ impl Game<'_> {
         &self,
         stack: &ItemStack,
     ) -> Vec<(horizon_client::text::Text, u32)> {
-        let e: &Enchantments = &self.res.stations().enchantments;
-        let props = e.props(&stack.item);
+        self.stack_tooltip_lines(stack, false)
+    }
+    /// `ItemStack.getRarity`'s colour for the name line and a `[name]` link.
+    fn rarity_color(&self, stack: &ItemStack) -> u32 {
+        let props = self.res.stations().enchantments.props(&stack.item);
         let rarity = horizon_client::item_tooltip::rarity(
             stack,
             props.map_or("common", |p| p.rarity.as_str()),
         );
-        let color = match rarity {
+        match rarity {
             "uncommon" => rgba(255, 255, 85, 255),
             "rare" => rgba(85, 255, 255, 255),
             "epic" => rgba(255, 85, 255, 255),
             _ => u32::MAX,
-        };
-        let name = if let Some(n) = stack.custom_name() {
+        }
+    }
+    /// `ItemStack.getHoverName`: the custom name, a written book's title, the
+    /// item name component, else the item's or potion's name.
+    fn stack_hover_name(&self, stack: &ItemStack) -> String {
+        if let Some(n) = stack.custom_name() {
             n.to_owned()
+        } else if let Some(title) = stack
+            .data()
+            .and_then(|d| d.written.as_ref())
+            .map(|w| w.title.as_str())
+            .filter(|t| !t.trim().is_empty())
+        {
+            title.to_owned()
         } else if let Some(n) = stack.item_name() {
             n
         } else if stack.data().is_some_and(|d| d.ominous_banner) {
@@ -1719,16 +1737,47 @@ impl Game<'_> {
                 .unwrap_or_else(|| self.pack.names.display_item(&stack.item))
         } else {
             self.pack.names.display_item(&stack.item)
-        };
+        }
+    }
+    /// `ItemStack.getTooltipLines`. A `nested` stack is a crossbow's
+    /// projectile: `ChargedProjectiles.addProjectileTooltip` takes its details
+    /// without the name, the player and the advanced flag.
+    fn stack_tooltip_lines(
+        &self,
+        stack: &ItemStack,
+        nested: bool,
+    ) -> Vec<(horizon_client::text::Text, u32)> {
+        let e: &Enchantments = &self.res.stations().enchantments;
+        let color = self.rarity_color(stack);
+        let advanced = !nested && self.options_advanced_tooltips();
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
         let mut lines = Vec::new();
-        if display.name_visible(self.screen == Screen::Creative) {
-            lines.push((horizon_client::text::Text::legacy(&name), color));
+        if !nested && display.name_visible(self.screen == Screen::Creative) {
+            // `getStyledHoverName`: a custom name is italic.
+            let name = self.stack_hover_name(stack);
+            let name = if stack.custom_name().is_some() {
+                horizon_client::text::Text::literal(name).italic()
+            } else {
+                horizon_client::text::Text::legacy(&name)
+            };
+            lines.push((name, color));
         }
         let translate = |k: &str| self.pack.names.display_get(k);
         let push = |lines: &mut Vec<(horizon_client::text::Text, u32)>, s: String, c: u32| {
             lines.push((horizon_client::text::Text::legacy(&s), c));
         };
+        let gray = rgba(170, 170, 170, 255);
+        let item_info = self.res.items().get(&stack.item);
+        // InstrumentComponent.addToTooltip.
+        if let Some(text) =
+            horizon_client::item_tooltip::instrument_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, gray);
+        }
+        // Bees.addToTooltip.
+        if let Some(text) = horizon_client::item_tooltip::bees_line(stack, &display, &translate) {
+            push(&mut lines, text, gray);
+        }
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
@@ -1741,6 +1790,70 @@ impl Game<'_> {
                 horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate)
             {
                 push(&mut lines, text, u32::MAX);
+            }
+        }
+        // BannerPatternLayers.addToTooltip: up to six layer names.
+        if display.shows("minecraft:banner_patterns") {
+            for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
+                let key = self.res.stations().banners.layer_key(layer);
+                push(
+                    &mut lines,
+                    self.translate(&key, &key),
+                    rgba(170, 170, 170, 255),
+                );
+            }
+        }
+        // WrittenBookContent.addToTooltip.
+        for text in horizon_client::item_tooltip::written_book_lines(stack, &display, &translate) {
+            push(&mut lines, text, gray);
+        }
+        // ChargedProjectiles.addToTooltip: each run of equal projectiles, then
+        // the projectile's own details indented under it.
+        if display.shows("minecraft:charged_projectiles") {
+            let charged = stack.data().map_or(&[][..], |d| &d.charged[..]);
+            for run in charged.chunk_by(|a, b| a.same_item_same_components(b)) {
+                let projectile = &run[0];
+                let name = self.stack_hover_name(projectile);
+                let line = if run.len() == 1 {
+                    // `getDisplayName`: `[name]` in the rarity colour.
+                    let mut shown = horizon_client::text::Text::literal(format!("[{name}]"))
+                        .with_color(rgb_of(self.rarity_color(projectile)));
+                    if projectile.custom_name().is_some() {
+                        shown = shown.italic();
+                    }
+                    horizon_client::text::format_translation(
+                        &self.translate(
+                            "item.minecraft.crossbow.projectile.single",
+                            "Projectile: %s",
+                        ),
+                        &[shown],
+                    )
+                } else {
+                    horizon_client::text::format_translation(
+                        &self.translate(
+                            "item.minecraft.crossbow.projectile.multiple",
+                            "Projectile: %s x %s",
+                        ),
+                        &[
+                            horizon_client::text::Text::literal(run.len().to_string()),
+                            horizon_client::text::Text::literal(name),
+                        ],
+                    )
+                };
+                lines.push((line, u32::MAX));
+                for (text, c) in self.stack_tooltip_lines(projectile, true) {
+                    // `literal("  ").append(line).withStyle(GRAY)`: the line's
+                    // own colours win over the gray.
+                    let rgb = if c == u32::MAX {
+                        horizon_client::text::GRAY
+                    } else {
+                        rgb_of(c)
+                    };
+                    let indented = horizon_client::text::Text::literal("  ")
+                        .append(text)
+                        .with_color(rgb);
+                    lines.push((indented, u32::MAX));
+                }
             }
         }
         // Fireworks / FireworkExplosion.addToTooltip.
@@ -1765,6 +1878,17 @@ impl Game<'_> {
                 };
                 push(&mut lines, text, c);
             }
+            // The attribute modifiers of the effects (`When Applied:`).
+            for (text, c) in horizon_client::item_tooltip::potion_modifier_lines(stack, &translate)
+            {
+                push(&mut lines, text, c);
+            }
+        }
+        // JukeboxPlayable.addToTooltip.
+        if let Some(text) =
+            horizon_client::item_tooltip::jukebox_line(stack, item_info, &display, &translate)
+        {
+            push(&mut lines, text, gray);
         }
         if display.shows("minecraft:trim")
             && let Some((material, pattern)) = stack.data().and_then(|d| d.trim.clone())
@@ -1812,16 +1936,12 @@ impl Game<'_> {
                 );
             }
         }
-        // BannerPatternLayers.addToTooltip: up to six layer names.
-        if display.shows("minecraft:banner_patterns") {
-            for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
-                let key = self.res.stations().banners.layer_key(layer);
-                push(
-                    &mut lines,
-                    self.translate(&key, &key),
-                    rgba(170, 170, 170, 255),
-                );
-            }
+        // DyedItemColor.addToTooltip.
+        if let Some((text, italic)) =
+            horizon_client::item_tooltip::dyed_line(stack, &display, advanced, &translate)
+        {
+            let text = horizon_client::text::Text::legacy(&text);
+            lines.push((if italic { text.italic() } else { text }, gray));
         }
         // ItemLore.addToTooltip: after the enchantments, before the attributes
         // (ItemStack.addDetailsToTooltip).
@@ -1829,6 +1949,50 @@ impl Game<'_> {
             for text in horizon_client::item_tooltip::lore_texts(stack) {
                 lines.push((text, u32::MAX));
             }
+        }
+        if display.shows("minecraft:attribute_modifiers") {
+            // The item's own modifiers, then its enchantments' for each slot
+            // group (`ItemStack.forEachModifier`).
+            let mut modifiers = item_info.map(|i| i.modifiers.clone()).unwrap_or_default();
+            modifiers.extend(e.modifier_rows(stack));
+            let base = |name: &str, default| {
+                self.player
+                    .as_ref()
+                    .and_then(|player| {
+                        let key = player.attributes.key(name)?;
+                        let handle = player.attributes.lookup(Some(&key))?;
+                        player
+                            .attributes
+                            .instance(&handle)
+                            .ok()
+                            .map(|value| value.base_value())
+                    })
+                    .unwrap_or(default)
+            };
+            let player_base = (!nested).then(|| {
+                [
+                    base("minecraft:attack_damage", 1.0),
+                    base(
+                        "minecraft:attack_speed",
+                        horizon_client::attack_strength::BASE_ATTACK_SPEED,
+                    ),
+                ]
+            });
+            for (text, c) in
+                horizon_client::item_tooltip::attribute_lines(&modifiers, player_base, &translate)
+            {
+                push(&mut lines, text, c);
+            }
+        }
+        // ItemStack.UNBREAKABLE_TOOLTIP.
+        if let Some(text) =
+            horizon_client::item_tooltip::unbreakable_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, rgba(85, 85, 255, 255));
+        }
+        // BlockItemStateProperties.addToTooltip.
+        if let Some(text) = horizon_client::item_tooltip::honey_line(stack, &display, &translate) {
+            push(&mut lines, text, gray);
         }
         // Spawner.appendHoverText: what a spawner or trial spawner item spawns.
         if display.shows("minecraft:block_entity_data")
@@ -1853,43 +2017,11 @@ impl Game<'_> {
                 }
             }
         }
-        if display.shows("minecraft:attribute_modifiers")
-            && let Some(info) = self.res.items().get(&stack.item)
-        {
-            let base = |name: &str, default| {
-                self.player
-                    .as_ref()
-                    .and_then(|player| {
-                        let key = player.attributes.key(name)?;
-                        let handle = player.attributes.lookup(Some(&key))?;
-                        player
-                            .attributes
-                            .instance(&handle)
-                            .ok()
-                            .map(|value| value.base_value())
-                    })
-                    .unwrap_or(default)
-            };
-            let player_base = [
-                base("minecraft:attack_damage", 1.0),
-                base(
-                    "minecraft:attack_speed",
-                    horizon_client::attack_strength::BASE_ATTACK_SPEED,
-                ),
-            ];
-            for (text, c) in horizon_client::item_tooltip::attribute_lines(
-                &info.modifiers,
-                Some(player_base),
-                &translate,
-            ) {
-                push(&mut lines, text, c);
-            }
-        }
         if display.shows("minecraft:damage")
-            && let Some(info) = self.res.items().get(&stack.item)
+            && let Some(info) = item_info
             && info.max_damage > 0
             && stack.damage > 0
-            && self.options_advanced_tooltips()
+            && advanced
         {
             push(
                 &mut lines,
@@ -1901,8 +2033,23 @@ impl Game<'_> {
                 u32::MAX,
             );
         }
+        // ItemStack.addDetailsToTooltipTail: with advanced tooltips the item id
+        // and how many components the stack has.
+        if advanced {
+            let dark_gray = rgba(85, 85, 85, 255);
+            push(&mut lines, stack.item.to_string(), dark_gray);
+            let count = horizon_client::item_tooltip::component_count(stack, item_info);
+            if count > 0 {
+                let text = self.translate("item.components", "%s component(s)");
+                push(
+                    &mut lines,
+                    text.replacen("%s", &count.to_string(), 1),
+                    dark_gray,
+                );
+            }
+        }
         // ItemStack.OP_NBT_WARNING, for a player with game master permission.
-        if self.ui.registries.permission >= 2 && block_entity_item::op_warning(stack) {
+        if !nested && self.ui.registries.permission >= 2 && block_entity_item::op_warning(stack) {
             for (key, fallback) in [
                 ("item.op_warning.line1", "Warning:"),
                 (
