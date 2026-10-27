@@ -229,6 +229,17 @@ fn profile_tag(p: &Profile) -> Tag {
     if let Some(name) = &p.name {
         entries.push(("name", Tag::String(name.as_str().into())));
     }
+    if let Some(id) = p.id {
+        entries.push((
+            "id",
+            Tag::IntArray(vec![
+                (id >> 96) as i32,
+                (id >> 64) as i32,
+                (id >> 32) as i32,
+                id as i32,
+            ]),
+        ));
+    }
     entries.push(("properties", Tag::List(properties)));
     Tag::compound(entries)
 }
