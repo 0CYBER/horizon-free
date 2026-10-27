@@ -2358,6 +2358,20 @@ impl Game<'_> {
                     r.state_id = p.state;
                 }
                 let stack = self.to_stack(&p.item);
+                // ClientPacketListener.handleContainerSetSlot: a hotbar slot that
+                // gains items squeezes for 5 ticks.
+                if p.container == 0
+                    && (36..=45).contains(&p.slot)
+                    && let Some(new) = &stack
+                {
+                    let (pop, old) = match p.slot {
+                        45 => (9, self.offhand.as_ref()),
+                        s => (s as usize - 36, self.inventory[s as usize - 36].as_ref()),
+                    };
+                    if old.is_none_or(|old| old.count < new.count) {
+                        self.hotbar_pop[pop] = 5;
+                    }
+                }
                 self.set_menu_slot(p.container, i32::from(p.slot), stack);
                 self.remote_synced();
             }
@@ -3177,6 +3191,10 @@ impl Game<'_> {
         // server says the entry ended. `onCooldownEnded` is the plain
         // ItemCooldowns' no-op on a client.
         self.cooldowns.tick();
+        // Inventory.tick's ItemStack.inventoryTick: the pop time runs down.
+        for pop in &mut self.hotbar_pop {
+            *pop = pop.saturating_sub(1);
+        }
         // Leaving a slot clears its bundle's selection here and on the server.
         self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
