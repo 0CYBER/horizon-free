@@ -2210,7 +2210,8 @@ impl Game<'_> {
         let dmax = [dest[0] + size[0], dest[1] + size[1], dest[2] + size[2]];
         let overlap = (0..3).all(|i| dest[i] <= max[i] && dmax[i] >= min[i]);
         let moving = ctx.has("move");
-        if !ctx.has("force") && overlap {
+        // Mode.canOverlap: only the normal mode refuses overlapping regions.
+        if !ctx.has("force") && !moving && overlap {
             return Err(err("commands.clone.overlap", &[]));
         }
         let area = (0..3).map(|i| i64::from(size[i] + 1)).product::<i64>();
