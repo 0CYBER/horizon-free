@@ -654,12 +654,15 @@ impl Goal for Float {
 #[derive(Clone, Debug)]
 pub struct Panic {
     pub speed: f64,
+    /// Only the damage of `#panic_environmental_causes` (an armadillo).
+    pub environmental: bool,
     pos: [f64; 3],
 }
 impl Panic {
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
+            environmental: false,
             pos: [0.0; 3],
         }
     }
@@ -675,7 +678,14 @@ impl Goal for Panic {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !should_panic(m) {
+        let wanted = if self.environmental {
+            m.last_damage.is_some_and(|(d, t)| {
+                super::armadillo::environmental(d.kind) && i64::from(m.age) - t <= 40
+            }) || m.fire_ticks > 0 && !m.kind.flags.fire_immune
+        } else {
+            should_panic(m)
+        };
+        if !wanted {
             return false;
         }
         if m.fire_ticks > 0 {

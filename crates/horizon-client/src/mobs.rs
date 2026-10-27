@@ -11,6 +11,7 @@ pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
+pub mod armadillo;
 pub mod axolotl;
 pub mod bat;
 pub mod bee;
@@ -31,6 +32,7 @@ pub mod enderman;
 pub mod equine;
 pub mod farm;
 pub mod finalize;
+pub mod frog;
 pub mod gear;
 pub mod goals;
 pub mod goat;
@@ -529,6 +531,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `freeze`: a fully frozen mob in powder snow.
+    Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
 }
@@ -598,6 +602,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -622,6 +627,7 @@ impl Damage {
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -807,6 +813,10 @@ pub struct Extra {
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
     pub bee: Option<Box<bee::Bee>>,
+    /// An armadillo's state and scare brain.
+    pub armadillo: armadillo::State,
+    /// A frog's brain memories and tongue target.
+    pub frog: frog::State,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -906,6 +916,12 @@ pub enum MobEvent {
     },
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
+        mob: u32,
+        at: [f64; 3],
+    },
+    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
+    /// clients' `makeDrownParticles`.
+    Drown {
         mob: u32,
         at: [f64; 3],
     },
@@ -1300,6 +1316,8 @@ pub struct Seen {
     pub target: Option<Who>,
     pub health: f32,
     pub variant: u8,
+    /// A slime's or magma cube's size.
+    pub size: i32,
     /// Dye colour (sheep).
     pub color: u8,
     /// A villager's claimed job site and bed.
@@ -1367,6 +1385,10 @@ impl Mob {
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
     }
+    /// `Entity.isFullyFrozen`.
+    pub fn is_fully_frozen(&self) -> bool {
+        self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
+    }
 
     /// What other mobs see of this one this tick (`player`: the player's
     /// UUID, which villagers' reputation is keyed by).
@@ -1395,6 +1417,7 @@ impl Mob {
             target: m.ai.target,
             health: m.health,
             variant: m.extra.variant,
+            size: m.extra.size,
             color: m.extra.color,
             job: villager.then_some(m.extra.home).flatten(),
             bed: villager.then_some(m.extra.bed).flatten(),
@@ -1573,6 +1596,9 @@ pub struct PlayerView {
     pub last_hurt: Option<(Who, i64)>,
     pub velocity: Vec3,
     pub yaw: f32,
+    /// `Player.isSprinting` and `isPassenger` (what scares an armadillo).
+    pub sprinting: bool,
+    pub riding: bool,
     /// The Hero of the Village effect.
     pub hero: bool,
     /// The active effects, without namespace (`slowness`, `poison`...).
@@ -1839,11 +1865,23 @@ impl Mob {
             return false;
         }
         let mut amount = if reflected { 1000.0 } else { amount };
+        if self.species() == Species::Armadillo {
+            amount = armadillo::reduce_damage(self, amount);
+        }
         if source.kind == DamageKind::FallingBlock
             && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;
+        }
+        // LivingEntity.hurtServer: `#freeze_hurts_extra_types` take five times.
+        if source.kind == DamageKind::Freeze
+            && matches!(
+                self.species(),
+                Species::Strider | Species::Blaze | Species::MagmaCube
+            )
+        {
+            amount *= 5.0;
         }
         let (worn, worn_toughness) = self.worn_armor();
         if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
