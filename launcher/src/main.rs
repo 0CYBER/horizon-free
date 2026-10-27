@@ -2901,7 +2901,9 @@ impl Launcher {
                 this.set_nightly(!this.settings.nightly);
                 cx.notify();
             }));
-        let what = tr("Reviewed fixes not released yet; may break.");
+        let what = tr(
+            "Can include pull requests not reviewed yet, picked by trusted reviewers; may break.",
+        );
         let status = match (&self.nightly_progress, &self.nightly_error) {
             _ if !on => tr("Plays in its own Nightly instance: your worlds and the release stay as they are.")
                 .to_string(),

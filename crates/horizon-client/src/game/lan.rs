@@ -457,6 +457,13 @@ fn mob_meta(
             }
             defaults.push((19, serializer::BYTE, Value::Byte(0)));
         }
+        "minecraft:parrot" => {
+            // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
+            let flags = i8::from(e.sitting) | if e.tame { 4 } else { 0 };
+            if flags != 0 {
+                meta.push((18, serializer::BYTE, Value::Byte(flags)));
+            }
+        }
         "minecraft:cat" | "minecraft:wolf" => {
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
             let flags = i8::from(e.sitting) | if e.tame { 4 } else { 0 };
@@ -526,6 +533,14 @@ fn mob_meta(
             } else if (kind == "minecraft:donkey" || kind == "minecraft:mule") && e.chested {
                 meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
             }
+        }
+        // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER),
+        // set while `serverStillTimeout > 0` (`syncStayStillFlag`).
+        "minecraft:happy_ghast" => {
+            if horizon_client::mobs::happy_ghast::on_still_timeout(m) {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
         }
         // Villager.DATA_VILLAGER_DATA and ZombieVillager's (after Zombie's three).
         "minecraft:villager" | "minecraft:zombie_villager" => {
@@ -724,7 +739,7 @@ fn mob_meta(
                 defaults.push((index, serializer::BOOLEAN, Value::Bool(true)));
             }
         }
-        // Enderman.DATA_CARRY_STATE.
+        // Enderman.DATA_CARRY_STATE and DATA_CREEPY (angry: the open mouth).
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
                 meta.push((
@@ -733,6 +748,10 @@ fn mob_meta(
                     Value::Id(state.0 as i32),
                 ));
             }
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
         _ => {}
     }
@@ -794,8 +813,17 @@ fn mob_equipment(
             let stack = ItemStack {
                 item: item.clone(),
                 count: 1,
-                damage: 0,
-                extra: None,
+                // A wolf's armor shows its cracks.
+                damage: if slot == 6 && m.species() == horizon_client::mobs::Species::Wolf {
+                    e.body_damage.max(0) as u32
+                } else {
+                    0
+                },
+                extra: if slot == 6 && m.species() == horizon_client::mobs::Species::Wolf {
+                    e.body_extra.clone()
+                } else {
+                    None
+                },
             };
             out.push((slot, hub.stack(&Some(stack))));
         }
@@ -1078,6 +1106,7 @@ impl Game<'_> {
         self.world.light_log = None;
         self.audio.capture = None;
         self.lan_events.clear();
+        self.lan_songs.clear();
         self.lan_critical_hits.clear();
         self.lan_cushion_breaks.clear();
         self.streaming.extra.clear();
@@ -1300,6 +1329,9 @@ impl Game<'_> {
                 &mut e.meta,
                 &mut e.defaults,
             );
+            // HappyGhast.aiStep: requiresPrecisePosition while on a still timeout.
+            e.precise = m.species() == horizon_client::mobs::Species::HappyGhast
+                && horizon_client::mobs::happy_ghast::on_still_timeout(m);
             mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
@@ -1569,6 +1601,8 @@ impl Game<'_> {
         // A blast from a guest's attack, and a mace's wind burst.
         self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
+        // A sweep attack's reach to the other players from a guest's attack.
+        self.flush_sweeps();
         // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
         self.flush_lan_particles();
     }
@@ -1671,10 +1705,11 @@ impl Game<'_> {
             match e {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
-                    // particles, bone meal's growth, or anvil result sounds
-                    // (these levelEvent calls name no excluded player), nor
-                    // the digger's own crack and hit sound (2019, 2020).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020) {
+                    // particles, bone meal's growth, anvil result sounds, or a
+                    // finished brushing (these levelEvent calls name no
+                    // excluded player), nor the digger's own crack and hit
+                    // sound (2019, 2020).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020 | 3008) {
                         None
                     } else {
                         self.lan_acting
@@ -1736,6 +1771,7 @@ impl Game<'_> {
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         let critical_hits = std::mem::take(&mut self.lan_critical_hits);
+        let kinetic_hits = std::mem::take(&mut self.lan_kinetic_hits);
         for (state, at) in std::mem::take(&mut self.lan_cushion_breaks) {
             if let Some(id) = host
                 .hub
@@ -1769,6 +1805,16 @@ impl Game<'_> {
                     .push([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
             }
             host.hub.level_event(kind, pos, data, acting);
+        }
+        // Level events 1010 and 1011: the guests' parrots dance or stop.
+        for (pos, song) in std::mem::take(&mut self.lan_songs) {
+            match song {
+                Some(name) => {
+                    let id = host.hub.registry_id("minecraft:jukebox_song", &name);
+                    host.hub.level_event(1010, pos, id.unwrap_or(0), None);
+                }
+                None => host.hub.level_event(1011, pos, 0, None),
+            }
         }
         for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
             host.hub.block_event(pos, b0, b1, state);
@@ -1814,7 +1860,12 @@ impl Game<'_> {
                 // A projectile is the direct entity of its hit: not tracked here.
                 let melee = matches!(
                     source.kind,
-                    K::PlayerAttack | K::MaceSmash | K::MobAttack | K::Sting | K::SonicBoom
+                    K::PlayerAttack
+                        | K::MaceSmash
+                        | K::Spear
+                        | K::MobAttack
+                        | K::Sting
+                        | K::SonicBoom
                 );
                 let direct = cause.filter(|_| melee);
                 host.hub.damage_event(m.id as i32, kind, cause, direct, at);
@@ -1835,6 +1886,19 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
+        // Level.broadcastEntityEvent(player, 2) of a spear's stab.
+        for attacker in kinetic_hits {
+            let hit = match attacker {
+                None => self
+                    .player
+                    .as_ref()
+                    .map(|p| (host.host_entity, [p.position.x, p.position.y, p.position.z])),
+                Some(conn) => host.hub.guest(conn).map(|g| (g.entity_id, g.position)),
+            };
+            if let Some((id, at)) = hit {
+                host.hub.entity_event(id, 2, at);
+            }
+        }
         for (attacker, target, magic) in critical_hits {
             let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
                 host.hub.guest(conn).map(|g| g.entity_id)
@@ -1899,10 +1963,18 @@ impl Game<'_> {
             m.head_yaw = g.head_yaw;
             m.head_pitch = g.pitch;
             let mut target = m.body_yaw;
-            if dx * dx + dz * dz > 0.002_500_000_2 {
-                target = (dz.atan2(dx) as f32).to_degrees() - 90.0;
-            }
             let wrap = |a: f32| (a + 180.0).rem_euclid(360.0) - 180.0;
+            if dx * dx + dz * dz > 0.002_500_000_2 {
+                // LivingEntity.tick: walking backwards the body faces away
+                // from the walk direction, not along it.
+                let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+                let facing = (wrap(g.yaw) - walk).abs();
+                target = if 95.0 < facing && facing < 265.0 {
+                    walk - 180.0
+                } else {
+                    walk
+                };
+            }
             m.body_yaw += wrap(target - m.body_yaw) * 0.3;
             let diff = wrap(g.yaw - m.body_yaw);
             if diff.abs() > 50.0 {
@@ -1926,6 +1998,27 @@ impl Game<'_> {
             m.extra.crouching = g.sneaking;
             m.extra.avatar_pose = g.pose();
             m.extra.sprinting = g.sprinting;
+            // Entity.DATA_POSE and the shared and living flags the others
+            // get (hub::guest_body): gliding, swimming, Riptide's spin.
+            let body = lan::hub::guest_body(g);
+            m.extra.fall_flying = body.gliding;
+            m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
+            m.extra.auto_spin_attack = body.spin_attack;
+            m.velocity = g
+                .motion
+                .as_ref()
+                .map_or(Vec3::new(dx, dy, dz), |motion| motion.velocity);
+            m.tick_avatar_pose(
+                g.motion
+                    .as_ref()
+                    .is_some_and(|motion| motion.fluids.was_touching_water),
+            );
+            // CrossbowItem.isCharged: the held crossbow's projectiles.
+            m.extra.charged = g
+                .inventory
+                .get(g.selected)
+                .and_then(|s| s.as_ref())
+                .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
@@ -2000,6 +2093,15 @@ impl Game<'_> {
                 ),
                 out,
             );
+            self.player_elytra_geometry(
+                m,
+                m.extra.chest.as_deref(),
+                camera,
+                alpha as f32,
+                packed,
+                out,
+            );
+            self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.held_item_geometry(m, camera, alpha, packed, true, out);
             // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
             let guest = host.hub.guest(*conn);

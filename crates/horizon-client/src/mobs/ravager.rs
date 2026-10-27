@@ -236,7 +236,14 @@ fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             velocity: fling(s.position),
         });
     }
-    // Entity event 69: a puff of smoke.
+    // Entity event 69: a puff of smoke, and the client's own push. A client
+    // of this server (the window of the server thread) gets the event;
+    // this window draws the puff itself.
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 69,
+        at: from,
+    });
     events.push(MobEvent::Particles {
         kind: "poof",
         at: [

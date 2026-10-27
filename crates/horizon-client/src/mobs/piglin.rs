@@ -6,7 +6,8 @@ use super::{
     anim::{Poses, State},
     goals::{
         Avoid, AvoidEntity, Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
-        NearestTarget, Prey, RandomLookAround, Stroll, goal_clone,
+        NearestTarget, Prey, RandomLookAround, Stroll, TARGET, TargetState, goal_clone,
+        target_continue,
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
@@ -62,15 +63,94 @@ pub fn register_piglin(m: &mut Mob) {
     m.ai.targets.add(1, hurt);
     m.ai.targets
         .add(2, NearestTarget::player(true).when(hostile_to_player));
-    m.ai.targets.add(
-        3,
-        NearestTarget::new(
-            Prey::Filter(|s| s.species == Species::Hoglin && s.baby),
-            true,
-        )
-        .interval(10)
-        .when(|m, _| !m.is_baby()),
-    );
+    m.ai.targets.add(3, HuntHoglin::default());
+    // `PiglinAi.initMemories`: the first hunt waits too.
+    m.extra.ints[0] = time_between_hunts(m);
+}
+/// `PiglinAi.TIME_BETWEEN_HUNTS`: 30 to 120 seconds.
+fn time_between_hunts(m: &mut Mob) -> i32 {
+    m.random
+        .next_int_between_inclusive(600, 2400)
+        .unwrap_or(600)
+}
+/// `StartHuntingHoglin`: an adult piglin that is not angry, has not hunted
+/// recently and sees no adult piglin that has, goes for the nearest adult
+/// hoglin it sees; then it and the adult piglins near it wait before the next
+/// hunt, and the others join in (`broadcastAngerTarget`).
+#[derive(Clone, Debug)]
+struct HuntHoglin {
+    found: Option<u32>,
+    st: TargetState,
+}
+impl Default for HuntHoglin {
+    fn default() -> Self {
+        let mut st = TargetState::default();
+        st.unseen_memory = 60;
+        Self { found: None, st }
+    }
+}
+impl Goal for HuntHoglin {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        TARGET
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.is_baby() || m.extra.ints[0] > 0 || m.extra.anger > 0 || m.ai.target.is_some() {
+            return false;
+        }
+        let range = m.attrs.follow_range;
+        let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let id = m.id;
+        if cx
+            .w
+            .nearby(pos, range, |s| {
+                s.id != id && s.species == Species::Piglin && !s.baby && s.hunted_recently
+            })
+            .next()
+            .is_some()
+        {
+            return false;
+        }
+        let hoglins: Vec<(u32, Vec3)> =
+            cx.w.nearby(pos, range, |s| s.species == Species::Hoglin && !s.baby)
+                .map(|s| (s.id, s.position))
+                .collect();
+        self.found = hoglins
+            .into_iter()
+            .find(|&(hoglin, at)| {
+                m.distance_sqr(at) <= range * range && m.sees(cx.w, Who::Mob(hoglin))
+            })
+            .map(|(hoglin, _)| hoglin);
+        self.found.is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        target_continue(&mut self.st, true, m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(hoglin) = self.found else { return };
+        m.ai.target = Some(Who::Mob(hoglin));
+        m.extra.ints[0] = time_between_hunts(m);
+        let range = m.attrs.follow_range;
+        let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let id = m.id;
+        let others: Vec<u32> =
+            cx.w.nearby(pos, range, |s| {
+                s.id != id && s.species == Species::Piglin && !s.baby
+            })
+            .map(|s| s.id)
+            .collect();
+        for mob in others {
+            let ticks = time_between_hunts(m);
+            cx.events.push(MobEvent::HuntHoglin {
+                mob,
+                target: hoglin,
+                ticks,
+            });
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.target = None;
+    }
 }
 pub fn register_brute(m: &mut Mob) {
     let g = &mut m.ai.goals;
@@ -393,6 +473,19 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     if m.species() == Species::Hoglin && m.alive() {
         hoglin_repellent(m, w);
+    }
+    if m.species() == Species::Piglin {
+        if m.extra.ints[0] > 0 {
+            m.extra.ints[0] -= 1;
+        }
+        // `StopAttackingIfTargetInvalid`: a hoglin handed over by a hunt
+        // broadcast has no target goal of its own to drop it when it dies.
+        if let Some(who @ Who::Mob(_)) = m.ai.target
+            && w.target_info(who)
+                .is_none_or(|t| !t.alive || !t.can_be_seen_as_enemy)
+        {
+            m.ai.target = None;
+        }
     }
     if m.extra.anger > 0 {
         m.extra.anger -= 1;
