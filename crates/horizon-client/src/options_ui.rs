@@ -966,8 +966,10 @@ pub enum Event {
     ButtonClick,
     /// Close the options screens (back to the pause menu or title).
     Close,
-    /// Settings changed: apply them.
+    /// Settings changed: apply and save them.
     Changed,
+    /// A slider is being dragged: apply settings live but defer saving.
+    SliderDrag,
     /// The language changed (reload translations).
     Language(String),
     /// The pack selection changed (reload resources).
@@ -2426,6 +2428,7 @@ impl OptionsUi {
                 match action {
                     Action::ButtonClick => events.push(Event::ButtonClick),
                     Action::Changed => events.push(Event::Changed),
+                    Action::SliderDrag => events.push(Event::SliderDrag),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
@@ -2506,7 +2509,7 @@ impl OptionsUi {
                 let v = ui::slider_value(wd.x, wd.w, x);
                 self.slider_value = Some((opt, v, Instant::now()));
                 set_slider(opt, s, v);
-                events.push(Event::Changed);
+                events.push(Event::SliderDrag);
             }
             return events;
         }
@@ -2633,7 +2636,7 @@ impl OptionsUi {
                     let v = ui::slider_value(wd.x, wd.w, x);
                     self.slider_value = Some((opt, v, Instant::now()));
                     set_slider(opt, s, v);
-                    events.push(Event::Changed);
+                    events.push(Event::SliderDrag);
                 }
                 WKind::LanguageRow { code, .. } => {
                     if self.language_choice.as_deref() == Some(code.as_str()) {
@@ -2666,7 +2669,7 @@ impl OptionsUi {
         let slider = self.dragging.take().is_some();
         let graphics_slider = self.graphics.release();
         if slider || graphics_slider {
-            vec![Event::ButtonClick]
+            vec![Event::ButtonClick, Event::Changed]
         } else {
             Vec::new()
         }

@@ -339,6 +339,9 @@ impl Loading {
                     self.save_menu_settings();
                     self.apply_menu_settings();
                 }
+                Event::SliderDrag => {
+                    self.apply_menu_settings();
+                }
                 Event::Close if self.menu.options.resource_error.is_some() => {}
                 Event::Close => {
                     self.menu.options_open = false;
