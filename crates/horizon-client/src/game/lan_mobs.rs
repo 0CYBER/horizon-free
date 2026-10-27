@@ -42,6 +42,22 @@ pub(super) fn player_for(
     }
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    // A tame wolf or cat sees its owner (`TamableAnimal.getOwner`), while they
+    // are in play, whoever is nearer. Not while it targets or was just hurt by
+    // a player: then `Who::Player` is that attacker, whoever it is, and the
+    // owner goals ignore it until the wolf lets go.
+    if !targeting
+        && matches!(m.species(), Species::Wolf | Species::Cat)
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        if host.is_some_and(|v| v.alive && v.uuid == owner) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| v.alive && v.uuid == owner) {
+            return Some(*conn);
+        }
+    }
     choose(m.position, targeting, host, guests, bound)
 }
 
@@ -189,9 +205,9 @@ impl Game<'_> {
             .iter()
             .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .map(|g| {
-                let [x, y, z] = g.position;
-                let height = if g.sneaking { 1.5 } else { 1.8 };
-                ([x - 0.3, y, z - 0.3], [x + 0.3, y + height, z + 0.3])
+                let b = g.bounds();
+                let (lo, hi) = (b.min_position(), b.max_position());
+                ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
             })
             .collect()
     }
@@ -333,7 +349,7 @@ impl Game<'_> {
                     uuid: horizon_client::lan::playerdata::uuid_ints(g.uuid),
                     position: g.position,
                     eye: [x, y + g.eye_height(), z],
-                    height: if g.sneaking { 1.5 } else { 1.8 },
+                    height: g.dimensions().height,
                     creative: g.creative(),
                     spectator: g.spectator(),
                     alive: !g.dead,
@@ -350,14 +366,9 @@ impl Game<'_> {
     }
 }
 
-/// A guest's bounding box (0.6 wide, 1.8 tall, 1.5 crouching).
+/// A guest's bounding box, by its pose (`Avatar.POSES`).
 pub(super) fn guest_bounds(g: &horizon_client::lan::guest::Guest) -> Aabb {
-    let [x, y, z] = g.position;
-    let height = if g.sneaking { 1.5 } else { 1.8 };
-    Aabb::new(
-        Vec3::new(x - 0.3, y, z - 0.3),
-        Vec3::new(x + 0.3, y + height, z + 0.3),
-    )
+    g.bounds()
 }
 
 #[cfg(test)]
@@ -377,6 +388,7 @@ mod tests {
             off_hand: None,
             head: None,
             armor_cover: 0.0,
+            invisible: false,
             spectator: false,
             gold_armor: false,
             hurt_by: None,
@@ -384,11 +396,13 @@ mod tests {
             velocity: Vec3::ZERO,
             yaw: 0.0,
             hero: false,
+            effects: Vec::new(),
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
             sleeping: false,
             sleep_timer: 0,
+            passenger: false,
         }
     }
 
