@@ -128,9 +128,12 @@ pub fn register(m: &mut Mob) {
             let g = &mut m.ai.goals;
             g.add(0, BreathAir);
             g.add(0, TryFindWater::default());
+            g.add(1, super::dolphin::SwimToTreasure::default());
+            g.add(2, super::dolphin::SwimWithPlayer::new(4.0));
             g.add(4, Stroll::swimming(1.0, 10));
             g.add(4, RandomLookAround::default());
             g.add(5, LookAtPlayer::new(6.0));
+            g.add(5, super::dolphin::Jump::new(10));
             g.add(6, MeleeAttack::new(1.2, true));
             m.ai.targets.add(1, HurtByTarget::new().alert());
             m.ai.mov.kind = MoveKind::SmoothSwimming {

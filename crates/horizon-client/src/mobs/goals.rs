@@ -595,6 +595,11 @@ impl Mob {
     pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
         self.player_in_range(w, range, true)
     }
+    /// `TargetingConditions.forNonCombat().range(range).ignoreLineOfSight()`
+    /// for the player.
+    pub fn can_see_player_through_walls(&mut self, w: &MobWorld, range: f64) -> bool {
+        self.player_in_range(w, range, false)
+    }
     fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
         if !p.alive || p.spectator {

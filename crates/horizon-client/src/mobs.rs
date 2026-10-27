@@ -25,6 +25,7 @@ pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
 pub mod data;
+pub mod dolphin;
 pub mod doors;
 pub mod drops;
 pub mod enderman;
@@ -1087,6 +1088,12 @@ pub enum MobEvent {
     },
     /// Regeneration support after an axolotl-assisted kill.
     AxolotlSupportPlayer,
+    /// A dolphin that was given a fish asks the game for the nearest
+    /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
+    /// sets the dolphin's `extra.home` to it, or leaves it empty.
+    DolphinTreasure {
+        mob: u32,
+    },
     /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
     EffectPlayer {
         effect: &'static str,
@@ -1540,6 +1547,8 @@ pub struct PlayerView {
     pub alive: bool,
     pub creative: bool,
     pub sneaking: bool,
+    /// `Entity.isSwimming`.
+    pub swimming: bool,
     pub look: [f64; 3],
     pub main_hand: Option<Arc<str>>,
     pub off_hand: Option<Arc<str>>,
