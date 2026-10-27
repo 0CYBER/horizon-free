@@ -35,10 +35,15 @@ impl Game<'_> {
                     m.extra.leash = Some(Holder::Knot(block));
                 }
             }
-        } else if kind == "minecraft:text_display" {
+        } else if let Some(shows) = match kind {
+            "minecraft:text_display" => Some(super::text_displays::Shows::Text),
+            "minecraft:block_display" => Some(super::text_displays::Shows::Block),
+            "minecraft:item_display" => Some(super::text_displays::Shows::Item),
+            _ => None,
+        } {
             self.text_displays.insert(
                 id as i32,
-                super::text_displays::RemoteTextDisplay::new(position, yaw),
+                super::text_displays::RemoteTextDisplay::new(shows, position, yaw),
             );
         } else if kind == "minecraft:ominous_item_spawner" {
             self.add_remote_ominous_item_spawner(id, position);
@@ -121,8 +126,16 @@ impl Game<'_> {
 
     /// `handleSetEntityData` for an object: what changes how it looks.
     pub(super) fn remote_object_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
-        if let Some(display) = self.text_displays.get_mut(&id) {
-            display.metadata(values);
+        if self.text_displays.contains_key(&id) {
+            // ItemDisplay.DATA_ITEM_STACK, read with the server's registries.
+            let item = values.iter().find_map(|(index, _, value)| match (index, value) {
+                (23, Value::Item(stack)) => Some(self.to_stack(stack)),
+                _ => None,
+            });
+            if let Some(display) = self.text_displays.get_mut(&id) {
+                display.show(values, item);
+                display.metadata(values);
+            }
             return;
         }
         let id = id as u32;
