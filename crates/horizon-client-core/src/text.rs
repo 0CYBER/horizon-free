@@ -46,6 +46,8 @@ pub enum ClickEvent {
     OpenUrl(String),
     /// `ClickEvent.ChangePage`: a book's page, counted from 1.
     ChangePage(i32),
+    /// `ClickEvent.RunCommand`: the command the click sends (`/` allowed).
+    RunCommand(String),
     SuggestCommand(String),
     CopyToClipboard(String),
     /// A local file to open with the system handler.
@@ -535,6 +537,9 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
         let event = match click {
             ClickEvent::OpenUrl(url) => json!({ "action": "open_url", "url": url }),
             ClickEvent::ChangePage(page) => json!({ "action": "change_page", "page": page }),
+            ClickEvent::RunCommand(command) => {
+                json!({ "action": "run_command", "command": command })
+            }
             ClickEvent::SuggestCommand(command) => {
                 json!({ "action": "suggest_command", "command": command })
             }

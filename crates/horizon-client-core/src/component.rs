@@ -182,6 +182,7 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
                     })
                 })
                 .map(crate::text::ClickEvent::OpenUrl),
+            Some("run_command") => text("command").map(crate::text::ClickEvent::RunCommand),
             // ClickEvent.ChangePage.CODEC: ExtraCodecs.POSITIVE_INT.
             Some("change_page") => e
                 .get("page")
