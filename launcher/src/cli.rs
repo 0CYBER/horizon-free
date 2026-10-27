@@ -180,6 +180,8 @@ enum InstanceCmd {
     },
     /// Make Play start this instance
     Select { instance: String },
+    /// Keep an instance on one installed Horizon version, or "latest" to follow updates again
+    Version { instance: String, version: String },
 }
 
 #[derive(Subcommand)]
@@ -647,11 +649,11 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             join,
             arg,
         } => {
-            let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
             let instance = match instance {
                 Some(name) => instances::find(&name)?,
                 None => instances::selected(),
             };
+            let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
             instances::apply(&mut cmd, &instance)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
@@ -1385,6 +1387,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
         serde_json::json!({
             "id": i.id, "name": i.name, "kind": format!("{:?}", i.kind).to_lowercase(),
             "home": i.home, "icon": i.icon, "group": i.group, "selected": selected,
+            "version": i.version,
         })
     };
     let line = |i: &instances::Instance, selected: bool| {
@@ -1394,8 +1397,13 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .as_ref()
             .map(|g| format!("  [{g}]"))
             .unwrap_or_default();
+        let pinned = i
+            .version
+            .as_ref()
+            .map(|v| format!("  {v}"))
+            .unwrap_or_default();
         println!(
-            "{mark} {} ({}){group}\n    {}",
+            "{mark} {} ({}){pinned}{group}\n    {}",
             i.name,
             i.id,
             i.home.display()
@@ -1430,6 +1438,13 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             changed(instances::edit(&instance, |m| m.group = group)?)
         }
         InstanceCmd::Select { instance } => changed(instances::select(&instance)?),
+        InstanceCmd::Version { instance, version } => {
+            let pin = match version.as_str() {
+                "latest" => None,
+                tag => Some(backend::resolve_version(Some(tag))?),
+            };
+            changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
     }
     Ok(())
 }

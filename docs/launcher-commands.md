@@ -320,6 +320,16 @@ Make Play start this instance.
 
 MCP: `instance_select`.
 
+## `horizon-launcher instance version`
+
+Keep an instance on one installed Horizon version, or "latest" to follow updates again.
+
+    horizon-launcher instance version <INSTANCE> <VERSION>
+
+- `INSTANCE`
+
+MCP: `instance_version`.
+
 ## `horizon-launcher modpack list`
 
 The imported packs and their coverage (the default).
