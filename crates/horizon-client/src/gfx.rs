@@ -1818,19 +1818,21 @@ impl Renderer {
             false,
         );
         // RenderPipelines.ENTITY_SHADOW: translucent, depth test without
-        // writes. The quads lie on the block tops like vanilla's, but the
-        // terrain under them snaps to the subpixel grid at other vertices, so
-        // at a slant their depths differ by up to 1/256 of a pixel's depth
-        // slope and whole shadows failed the test. The bias covers that and
-        // the rounding, and stays below the 0.001 a model's feet sit higher
-        // (1/27 of a pixel's slope at the 16-block shadow range in 720p).
+        // writes. The quads lie exactly on the block tops like vanilla's, but
+        // terrain and shadows are separate draw paths, so their fp32 depth
+        // interpolations disagree by a few dozen ulps of the fragment depth
+        // and the shadow's rim z-fights with the block top (speckle that
+        // re-rolls as the camera drifts a subpixel). A constant bias of 128
+        // ulps covers that spread at any resolution while staying far below
+        // the 0.001 a model's feet sit higher, so shadows never bleed onto
+        // the feet.
         let shadow_blob_pipeline = entity_pipeline(
             "Entity shadows",
             None,
             false,
             wgpu::CompareFunction::GreaterEqual,
             wgpu::DepthBiasState {
-                constant: 16,
+                constant: 128,
                 slope_scale: 0.015,
                 clamp: 0.0,
             },
