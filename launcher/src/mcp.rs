@@ -6,6 +6,7 @@ use crate::cli_tools;
 use crate::game_tools::{self, GameTools};
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Logged};
+use horizon_launcher::instances;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -29,6 +30,7 @@ fn session_tools() -> Value {
     json!([
         { "name": "play", "description": "Start the Horizon client (a game window on the player's screen) under agent control: the game_* tools then play it. Returns once it has started; game_wait_ready waits for the world. CLI: horizon-launcher play",
           "inputSchema": { "type": "object", "properties": { "version": version,
+            "instance": { "type": "string", "description": "The instance to play, by name or id (instance_list). Default: the selected one." },
             "world": { "type": "string", "description": "Open or create this world (a folder under saves) at once." },
             "creative": { "type": "boolean", "description": "Creative mode for a new world." },
             "join": { "type": "string", "description": "Join a friend's world with its invite code. Only when the player asks." },
@@ -68,6 +70,11 @@ impl Session {
                 }
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
                 let mut cmd = backend::client(&tag)?;
+                let instance = match arg_str(args, "instance") {
+                    Some(name) => instances::find(name)?,
+                    None => instances::selected(),
+                };
+                instances::apply(&mut cmd, &instance)?;
                 cmd.args(game_tools::control_args());
                 if let Some(world) = arg_str(args, "world") {
                     cmd.arg("--world").arg(world);

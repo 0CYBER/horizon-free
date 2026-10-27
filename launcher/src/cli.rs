@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
+use horizon_launcher::instances;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -156,6 +157,32 @@ enum ModpackCmd {
 }
 
 #[derive(Subcommand)]
+enum InstanceCmd {
+    /// The instances, each with its game folder (* = the one Play starts)
+    List,
+    /// Make an instance: empty but for your options and name, or a copy of another one's
+    /// worlds, options and packs
+    Create {
+        name: String,
+        /// The instance to copy (its name or id)
+        #[arg(long)]
+        copy: Option<String>,
+    },
+    /// Rename an instance (its folder stays)
+    Rename { instance: String, name: String },
+    /// Set an instance's icon: a block or item name from your prepared files (grass_block),
+    /// a colour (#3fa7d6), or none
+    Icon { instance: String, icon: String },
+    /// Put an instance in a sidebar group, or take it out with no group
+    Group {
+        instance: String,
+        group: Option<String>,
+    },
+    /// Make Play start this instance
+    Select { instance: String },
+}
+
+#[derive(Subcommand)]
 enum ModsCmd {
     /// What the browser installed (the default)
     List,
@@ -261,6 +288,9 @@ enum Cmd {
     Play {
         #[arg(long)]
         version: Option<String>,
+        /// The instance to play (its name or id; default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
         /// Open or create this world (a folder under saves) at once
         #[arg(long)]
         world: Option<String>,
@@ -340,6 +370,11 @@ enum Cmd {
     Data {
         #[command(subcommand)]
         action: Option<DataCmd>,
+    },
+    /// Instances: separate game folders, each with its own worlds, options and packs
+    Instance {
+        #[command(subcommand)]
+        action: Option<InstanceCmd>,
     },
     /// Modpacks: import a Java pack, see its coverage report, port what this computer can and
     /// play it as its own profile (docs/modpacks.md)
@@ -606,12 +641,18 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         }
         Cmd::Play {
             version,
+            instance,
             world,
             creative,
             join,
             arg,
         } => {
             let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
+            let instance = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            instances::apply(&mut cmd, &instance)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
             }
@@ -784,6 +825,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("Horizon is in the applications menu.");
             }
         }
+        Cmd::Instance { action } => instance(action.unwrap_or(InstanceCmd::List), as_json)?,
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
@@ -1333,6 +1375,61 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             horizon_launcher::browser::java::set_enabled(&home, id, on)?;
             println!("{} is {}.", e.title, if on { "on" } else { "off" });
         }
+    }
+    Ok(())
+}
+
+fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
+    use instances::Icon;
+    let value = |i: &instances::Instance, selected: bool| {
+        serde_json::json!({
+            "id": i.id, "name": i.name, "kind": format!("{:?}", i.kind).to_lowercase(),
+            "home": i.home, "icon": i.icon, "group": i.group, "selected": selected,
+        })
+    };
+    let line = |i: &instances::Instance, selected: bool| {
+        let mark = if selected { "*" } else { " " };
+        let group = i
+            .group
+            .as_ref()
+            .map(|g| format!("  [{g}]"))
+            .unwrap_or_default();
+        println!(
+            "{mark} {} ({}){group}\n    {}",
+            i.name,
+            i.id,
+            i.home.display()
+        );
+    };
+    let changed = |i: instances::Instance| {
+        let selected = i.id == instances::selected().id;
+        match as_json {
+            true => json(value(&i, selected)),
+            false => line(&i, selected),
+        }
+    };
+    match action {
+        InstanceCmd::List => {
+            let selected = instances::selected().id;
+            let all = instances::list();
+            if as_json {
+                json(all.iter().map(|i| value(i, i.id == selected)).collect());
+            } else {
+                all.iter().for_each(|i| line(i, i.id == selected));
+            }
+        }
+        InstanceCmd::Create { name, copy } => changed(instances::create(&name, copy.as_deref())?),
+        InstanceCmd::Rename { instance, name } => {
+            changed(instances::edit(&instance, |m| m.name = Some(name))?)
+        }
+        InstanceCmd::Icon { instance, icon } => {
+            let icon = (icon != "none").then(|| Icon::parse(&icon)).transpose()?;
+            changed(instances::edit(&instance, |m| m.icon = icon)?)
+        }
+        InstanceCmd::Group { instance, group } => {
+            changed(instances::edit(&instance, |m| m.group = group)?)
+        }
+        InstanceCmd::Select { instance } => changed(instances::select(&instance)?),
     }
     Ok(())
 }

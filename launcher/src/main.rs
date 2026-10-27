@@ -33,6 +33,7 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::instances;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -535,13 +536,16 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
-                        if let Some(work) = self.starting_pack.take() {
-                            if let Err(e) =
+                        // A pack's Play button plays that pack; Play plays the selected instance.
+                        let profile = match self.starting_pack.take() {
+                            Some(work) => {
                                 horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
-                            {
-                                self.client_error = Some(e);
-                                continue;
                             }
+                            None => instances::apply(&mut cmd, &instances::selected()),
+                        };
+                        if let Err(e) = profile {
+                            self.client_error = Some(e);
+                            continue;
                         }
                         if let Some(code) = self.joining.take() {
                             if let Err(e) = backend::join_friend(&mut cmd, &code) {
@@ -668,10 +672,12 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            // The run's own game folder: an instance's or a pack's keeps its reports.
+                            let home = self.client_home.clone().unwrap_or_else(backend::game_home);
                             let report = self
                                 .client_started
                                 .take()
-                                .and_then(backend::crash_report_since);
+                                .and_then(|since| backend::crash_report_since(&home, since));
                             if error.is_some() && report.is_none() && self.switched_to_dx12() {
                                 self.client_error = Some(
                                     "Horizon's Vulkan renderer crashed while starting on this \
