@@ -839,7 +839,9 @@ impl Items {
     /// registry entry or inline instrument.
     pub fn instrument(&self, stack: &ItemStack) -> Option<Instrument> {
         if let Some(tag) = inline_instrument(stack) {
-            return Some(parse_instrument(&crate::scoreboard::tag_to_json(tag)));
+            return Some(parse_instrument(
+                &horizon_client_core::scoreboard::tag_to_json(tag),
+            ));
         }
         self.instruments.get(&instrument_id(stack)?).cloned()
     }
