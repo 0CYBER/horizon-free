@@ -3103,8 +3103,11 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = None;
-                            let _ = this.accounts.save();
+                            let mut accounts = Accounts::load();
+                            accounts.selected = None;
+                            if accounts.save().is_ok() {
+                                this.accounts = accounts;
+                            }
                             cx.notify();
                         }),
                     ),
@@ -3114,8 +3117,7 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = Some(uuid.clone());
-                            let _ = this.accounts.save();
+                            this.play_as(account::Player::Microsoft(uuid.clone()));
                             cx.notify();
                         }),
                     ),
@@ -3124,11 +3126,14 @@ impl Launcher {
             actions = actions.child(
                 button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
-                        let store = account::store();
-                        if let Err(e) = this.accounts.remove(store, &uuid) {
-                            this.sign_in_state = Some(SignInState::Done(Err(e)));
+                        let mut accounts = Accounts::load();
+                        match accounts
+                            .remove(account::store(), &uuid)
+                            .and_then(|()| accounts.save())
+                        {
+                            Ok(()) => this.accounts = accounts,
+                            Err(e) => this.sign_in_state = Some(SignInState::Done(Err(e))),
                         }
-                        let _ = this.accounts.save();
                         cx.notify();
                     },
                 )),

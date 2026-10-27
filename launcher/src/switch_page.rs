@@ -183,7 +183,11 @@ impl Launcher {
                 button(format!("offline-forget-{i}"), "Forget", Kind::Ghost, &t).on_click(
                     cx.listener(move |this, _: &ClickEvent, _, cx| {
                         let mut accounts = Accounts::load();
-                        if accounts.remove_offline(&forget).is_ok() && accounts.save().is_ok() {
+                        if accounts
+                            .remove_offline(&forget, &horizon_launcher::skins::dir())
+                            .is_ok()
+                            && accounts.save().is_ok()
+                        {
                             this.accounts = accounts;
                         }
                         cx.notify();
