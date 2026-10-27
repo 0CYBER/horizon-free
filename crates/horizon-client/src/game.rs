@@ -34,6 +34,7 @@ mod consume;
 mod control;
 mod copper_golems;
 mod creaking;
+mod creative_hotbar;
 mod creatures;
 mod crossbow;
 pub(crate) mod cushions;
@@ -11471,7 +11472,7 @@ impl Game<'_> {
             | KeyCode::Digit9
                 if self.screen == Screen::Playing =>
             {
-                self.selected = match key {
+                let slot = match key {
                     KeyCode::Digit1 => 0,
                     KeyCode::Digit2 => 1,
                     KeyCode::Digit3 => 2,
@@ -11482,6 +11483,15 @@ impl Game<'_> {
                     KeyCode::Digit8 => 7,
                     _ => 8,
                 };
+                // Minecraft.handleKeybinds: a creative player holding the load
+                // or save toolbar key loads or saves a toolbar instead (load
+                // first when both are held).
+                let load = self.mapped_key_down("key.loadToolbarActivator");
+                if self.creative && (load || self.mapped_key_down("key.saveToolbarActivator")) {
+                    self.hotbar_load_or_save(slot, load);
+                } else {
+                    self.selected = slot;
+                }
             }
             _ => {}
         }
