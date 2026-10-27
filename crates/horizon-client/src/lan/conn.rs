@@ -791,6 +791,16 @@ fn login_and_configure(
             },
         }),
     )?;
+    // ServerConfigurationPacketListenerImpl.startConfiguration: links, only
+    // when there are any (MinecraftServer.serverLinks is empty elsewhere).
+    if !shared.config.server_links.is_empty() {
+        send(
+            c,
+            cfg::Clientbound::ServerLinks(cfg::ServerLinks {
+                links: shared.config.server_links.clone(),
+            }),
+        )?;
+    }
     send(
         c,
         cfg::Clientbound::UpdateEnabledFeatures(cfg::UpdateEnabledFeatures {
