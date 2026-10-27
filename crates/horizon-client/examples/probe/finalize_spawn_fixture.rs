@@ -154,11 +154,11 @@ const MEMORIES: [&str; 7] = [
 fn variant(m: &Mob, regs: &SpawnRegistries, v: &mut Vec<String>) {
     use Species as S;
     let s = m.species();
-    let named = |reg: &finalize::VariantRegistry, i: u8| {
-        format!(
-            "minecraft:{}",
+    let named = |reg: &finalize::VariantRegistry, i: Option<u8>| {
+        let name = i.map_or("classic", |i| {
             reg.names.get(i as usize).map_or("?", |n| n.as_str())
-        )
+        });
+        format!("minecraft:{name}")
     };
     let var = format!("minecraft:{}", finalize::variant_name(s, m.extra.variant));
     match s {
