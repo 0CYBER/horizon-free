@@ -4250,6 +4250,9 @@ impl Game<'_> {
             f64::from(y + 1),
             f64::from(pos[2]) + 0.5,
         ];
-        let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
+        // setPortalCooldown: the new piglin does not travel at once.
+        if let Some(id) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
+            self.set_portal_cooldown(id);
+        }
     }
 }
