@@ -1107,13 +1107,20 @@ impl Game<'_> {
                     volume,
                     spread,
                 } => {
-                    // The client's own level random: nothing drawn from the server's.
-                    let mut r = horizon_core::random::LegacyRandom::new(
-                        self.world.game_time.wrapping_mul(341_873_128_712),
-                    );
-                    let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
-                    self.audio
-                        .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
+                    // WitherBoss.customServerAiStep: the spawn roar is global
+                    // level event 1023 at the block position.
+                    if sound == "entity.wither.spawn" {
+                        let pos = at.map(|v| v.floor() as i32);
+                        self.global_level_event(1023, pos, 0);
+                    } else {
+                        // The client's own level random: nothing drawn from the server's.
+                        let mut r = horizon_core::random::LegacyRandom::new(
+                            self.world.game_time.wrapping_mul(341_873_128_712),
+                        );
+                        let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
+                        self.audio
+                            .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
+                    }
                 }
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
