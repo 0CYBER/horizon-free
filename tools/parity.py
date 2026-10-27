@@ -48,6 +48,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1134,6 +1135,14 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles, r
     return results, time.monotonic() - started_all
 
 
+def exit_on_termination():
+    """SIGTERM and SIGHUP (a cancelled CI job, a dropped ssh) end this process through its finally blocks, which stop
+    the running harnesses. Each runs in its own session, so without that they, and the vanilla servers they started,
+    outlive it (orphans of days were found on the Mac mini's runners, 2026-10-26)."""
+    for number in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, lambda received, _frame: sys.exit(128 + received))
+
+
 def worker_main(shared_local):
     """`parity.py --worker SHARED_LOCAL`: run harnesses sent as JSON lines on stdin, answer on stdout."""
     import queue as queues
@@ -1169,13 +1178,20 @@ def worker_main(shared_local):
     built, errors = prebuild(first["prebuild"], default_build_jobs()) if first["prebuild"] else (True, "")
     executor = LocalExecutor(MACHINE_JOBS, int(memory_available() * 0.75), first["timeout"])
     send({"hello": {"jobs": MACHINE_JOBS, "memory": executor.memory_budget, "built": built, "errors": errors[-4000:]}})
+    try:
+        return serve(executor, inbox, queues.Empty, send, state, hasher)
+    finally:
+        executor.stop()
+
+
+def serve(executor, inbox, empty, send, state, hasher):
+    """The worker's loop: start what the coordinating runner sends, report what finished, until its stdin ends."""
     while True:
         try:
             message = inbox.get(timeout=0.2)
-        except queues.Empty:
+        except empty:
             message = False
         if message is None:
-            executor.stop()
             save_state(state)
             return 0
         if message:
@@ -1246,6 +1262,101 @@ def trace_main(output, script, arguments):
 
 # Files every harness's result depends on (part of environment_key): a change to one affects them all.
 SHARED_INPUTS = {"research-lock.json", "Cargo.lock"}
+# Manifest sections that say what a crate is and where its targets are, not what it builds with.
+MANIFEST_SECTION_KEPT = re.compile(r"\[\[?(?:package|lib|bin|example|test|bench|lints|badges)\b[^\]]*\]\]?$")
+WORKSPACE_CRATE = r"(horizon[\w-]*|cargo-horizon-mod|xtask)"
+# A workspace crate named as a dependency (by path, or from the workspace's own table) without choosing its features,
+# or listed as a member.
+WORKSPACE_LINE = re.compile(WORKSPACE_CRATE + r'\s*=\s*(?:\{(?![^}]*\bfeatures\b)[^}]*\b(?:path|workspace)\s*=[^}]*\}|true)'
+                            r'|' + WORKSPACE_CRATE + r'\.workspace\s*=\s*true|"crates/[^"]+",?')
+# A workspace crate named as a dependency with some of its features turned on.
+WORKSPACE_FEATURES = re.compile(WORKSPACE_CRATE + r'\s*=\s*\{(?=[^}]*\b(?:path|workspace)\s*=)(?![^}]*default-features)'
+                                r'[^}]*\bfeatures\s*=\s*\[([^\]]*)\][^}]*\}')
+
+
+def git_show(base, path):
+    """path's content at commit base, or None where it didn't exist."""
+    result = subprocess.run(["git", "show", f"{base}:{path}"], cwd=ROOT, capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+def manifest_lines(text):
+    """A Cargo.toml's lines that decide what is built: (section, line) pairs, without its package's identity and
+    targets, comments, or workspace crates (whose code counts through its own sources)."""
+    lines, section = set(), ""
+    name = re.search(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', text or "", re.M | re.S)
+    for raw in (text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw.split("#", 1)[0]).strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            # A crate's features are its own: the same line in two crates means two things.
+            section = f"[features] of {name.group(1) if name else '?'}" if line == "[features]" else line
+            continue
+        if MANIFEST_SECTION_KEPT.match(section) or WORKSPACE_LINE.fullmatch(line) or \
+                section == "[workspace]" and (line.startswith("members =") or line.startswith('"') or line == "]"):
+            continue
+        lines.add((section, line))
+    return lines
+
+
+def lock_packages(text):
+    """Cargo.lock's packages from a registry or git (with their versions and checksums); workspace crates' entries
+    only list what their manifests say."""
+    return {block.strip() for block in (text or "").split("[[package]]") if "\nsource = " in block}
+
+
+def workspace_only_manifests(changed, base):
+    """The changed Cargo.lock and Cargo.toml files whose changes only add, remove or move workspace crates (a crate
+    split): no external package, version, feature, or build setting changed across them. Their crates' code counts
+    through its own sources, so these files don't make every harness linking the crates rerun."""
+    manifests = sorted(path for path in changed if path == "Cargo.lock" or path.endswith("Cargo.toml"))
+    if not manifests or base is None:
+        return set()
+    if "Cargo.lock" in manifests and \
+            lock_packages(git_show(base, "Cargo.lock")) != lock_packages((ROOT / "Cargo.lock").read_text(encoding="utf-8")):
+        return set()
+    tomls = [path for path in manifests if path != "Cargo.lock"]
+    before = set().union(*(manifest_lines(git_show(base, path)) for path in tomls)) if tomls else set()
+    after = set().union(*(manifest_lines((ROOT / path).read_text(encoding="utf-8") if (ROOT / path).exists() else None)
+                          for path in tomls)) if tomls else set()
+    # Workspace crates' features that a changed line defines or turns on: they change what compiles of that crate's
+    # sources, which is fine only where every source naming them changed too (a split: the crate's files are new).
+    gated = set()
+    for section, line in before ^ after:
+        wanted = WORKSPACE_FEATURES.fullmatch(line)
+        if wanted:
+            gated |= {(wanted.group(1), feature) for feature in re.findall(r'"([^"]+)"', wanted.group(2))}
+        elif section.startswith("[features] of ") and re.fullmatch(r'[\w-]+ = \[(?: ?"[\w-]+",?)*\s*\]', line):
+            gated.add((section[len("[features] of "):], line.split(" ", 1)[0]))
+        else:
+            return set()  # an external package, a feature reaching one ("dep:", "crate/feature"), a build setting
+    return set(manifests) if all(feature_sources_changed(crate, feature, changed) for crate, feature in gated) else set()
+
+
+def feature_sources_changed(crate, feature, changed):
+    """Whether every Rust source of workspace crate `crate` that names `feature`, or a feature it turns on, is in
+    changed (False where the crate isn't found)."""
+    listed = subprocess.run(["git", "ls-files", "*Cargo.toml"], cwd=ROOT, capture_output=True, text=True)
+    manifests = [ROOT / path for path in listed.stdout.split()] if listed.returncode == 0 else list(ROOT.rglob("Cargo.toml"))
+    for manifest in manifests:
+        text = manifest.read_text(encoding="utf-8") if manifest.exists() else ""
+        if re.search(r'^\[package\][^\[]*?^name\s*=\s*"' + re.escape(crate) + '"', text, re.M | re.S):
+            break
+    else:
+        return False
+    table = re.search(r"^\[features\]\n(.*?)(?=^\[|\Z)", text, re.M | re.S)
+    implies = {name: re.findall(r'"([^"]+)"', value) for name, value in
+               re.findall(r'^([\w-]+)\s*=\s*\[([^\]]*)\]', table.group(1) if table else "", re.M)}
+    names, todo = set(), [feature]
+    while todo:
+        name = todo.pop()
+        if name not in names:
+            names.add(name)
+            todo += [implied for implied in implies.get(name, []) if "/" not in implied and ":" not in implied]
+    named = re.compile(r'feature\s*=\s*"(?:' + "|".join(map(re.escape, sorted(names))) + r')"')
+    return all(path.relative_to(ROOT).as_posix() in changed for path in manifest.parent.rglob("*.rs")
+               if named.search(path.read_text(encoding="utf-8", errors="replace")))
 
 
 def changed_files(ref):
@@ -1310,7 +1421,7 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
             affected.add(name)
             continue
         plain = {path.split(KEEP)[0] for path in dependencies}
-        hit = plain & changed
+        hit = (plain & changed) | parity_reach.unrecorded(ROOT, plain, changed)
         if not hit:
             continue
         if graph is None or any(not path.startswith("crates/") for path in hit):
@@ -1384,6 +1495,7 @@ def finished_run(failed):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--trace":
         return trace_main(sys.argv[2], sys.argv[3], sys.argv[4:])
+    exit_on_termination()
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         return worker_main(sys.argv[2])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1449,7 +1561,11 @@ def main():
         if args.changed:
             merge_base = subprocess.run(["git", "merge-base", "HEAD", args.changed], cwd=ROOT, capture_output=True, text=True)
             base = merge_base.stdout.strip() or None
-        affected = affected_harnesses(found, records, changed, reach=not args.by_crate, base=base)
+        moved = workspace_only_manifests(changed, base) if not args.by_crate else set()
+        if moved:
+            print(f"{', '.join(sorted(moved))}: only workspace crates added, removed or moved; their sources count "
+                  "instead", flush=True)
+        affected = affected_harnesses(found, records, changed - moved, reach=not args.by_crate, base=base)
         chosen = [name for name in found if name in affected and stale(name, state, hasher, environment)]
         print(f"{len(changed)} files changed{since}: {len(affected)} harnesses "
               f"depend on them, {len(chosen)} without a pass for their current inputs.", flush=True)
@@ -1509,6 +1625,7 @@ def main():
         jobs = 1  # harnesses that can only run here still need a slot
     remotes = [RemoteExecutor(host, config["hosts"][host], artifacts, config.get("local_only", {}), args.timeout)
                for host in hosts]
+    local = None
     try:
         if jobs:
             print("Building probes...", flush=True)
@@ -1521,12 +1638,12 @@ def main():
         where = "".join(f", plus {host}" for host in hosts)
         print(f"Running {len(selected)} harnesses, {jobs} at a time here{where}...", flush=True)
         reuse_oracles = not (args.fresh or args.all)
-        executors = [*remotes, LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
-                                             REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)]
-        results, elapsed = run(selected, state, hasher, environment_key(hasher), executors, reuse_oracles, rounds,
-                               known_flaky(config))
+        local = LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
+                              REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)
+        results, elapsed = run(selected, state, hasher, environment_key(hasher), [*remotes, local], reuse_oracles,
+                               rounds, known_flaky(config))
     finally:
-        for executor in remotes:
+        for executor in [*remotes, *([local] if local else [])]:
             executor.stop()
     save_state(state)
     failed = sorted(name for name, record in results.items() if record["status"] != "pass")

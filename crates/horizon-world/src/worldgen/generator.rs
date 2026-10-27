@@ -23,6 +23,7 @@ use super::{
     climate::{ClimateSampler, decode_parameter, quantize},
     decode_noise,
     density::DensityRegistry,
+    generator_structures::Starts,
     material_condition::{
         MaterialConditionRegistry, MaterialConditions, MaterialDensitySources, MaterialRule,
         MaterialRuleError, MaterialRuleLibrary, MaterialSurfaceQueries,
@@ -567,6 +568,9 @@ pub struct ProtoChunk {
     pub block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
     /// Structure starts referencing this chunk (STRUCTURE_REFERENCES).
     pub(super) structure_starts: Vec<Arc<super::structure::start::StructureStart>>,
+    /// The starts made in this chunk (STRUCTURE_STARTS), also those none of
+    /// whose pieces reach it (a giant ruined portal next door).
+    own_starts: Starts,
     /// Entities placed by structures (`ProtoChunk.addEntity`), as NBT with
     /// absolute `Pos`.
     pub entities: Vec<crate::nbt::Compound>,
@@ -620,12 +624,7 @@ impl ProtoChunk {
     }
     /// The structure starts this chunk holds itself (`structures.starts`).
     pub fn own_starts(&self) -> Vec<Arc<super::structure::start::StructureStart>> {
-        let pos = self.position();
-        self.structure_starts
-            .iter()
-            .filter(|s| s.chunk == pos)
-            .cloned()
-            .collect()
+        self.own_starts.to_vec()
     }
     /// Also restores a saved proto chunk that was decorated before it was saved.
     pub fn set_decorated(&mut self) {
@@ -1114,16 +1113,19 @@ where
         )
         .map_err(stage("noise"))?;
         chunk.set_generation_stage(PreLightChunkStage::Biomes);
-        let references = match &self.structures {
-            Some(structures) => structures.references(
-                &mut StructureQueries {
+        let (references, own_starts) = match &self.structures {
+            Some(structures) => {
+                let mut queries = StructureQueries {
                     pipeline: self,
                     worker,
                     valid: BTreeSet::new(),
-                },
-                pos,
-            ),
-            None => Vec::new(),
+                };
+                (
+                    structures.references(&mut queries, pos),
+                    structures.starts_at(&mut queries, pos),
+                )
+            }
+            None => (Vec::new(), Starts::default()),
         };
         if let Some(beard) = self
             .structures
@@ -1259,6 +1261,7 @@ where
             decorated: false,
             block_entities: Vec::new(),
             structure_starts: references,
+            own_starts,
             entities: Vec::new(),
         })
     }
@@ -1648,6 +1651,22 @@ pub(super) struct WorkerState {
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
     pub(super) structures_only: bool,
+    pub(super) structure_mobs: Option<Arc<dyn StructureMobs>>,
+}
+/// `Mob.finalizeSpawn(level, difficulty, STRUCTURE, null)` of the entities a
+/// structure places with finalizeEntities, run by the game, which owns mobs.
+pub trait StructureMobs: Send + Sync {
+    /// Finalizes the entity in `nbt` if it is a mob, drawing from the
+    /// region's random. `biome` is the biome at its block, `structures` the
+    /// structures with a piece there. False when it could not: the entity
+    /// keeps its `horizon:finalize` for the game to finish on load.
+    fn finalize(
+        &self,
+        nbt: &mut crate::nbt::Compound,
+        biome: &str,
+        structures: &[String],
+        random: &mut dyn super::structure::legacy::PieceRandom,
+    ) -> bool;
 }
 
 trait SeededPipeline: Send + Sync {
@@ -2464,6 +2483,7 @@ impl OverworldGenerator {
                 carver_biomes: HashMap::new(),
                 timings: StageTimings::default(),
                 structures_only: false,
+                structure_mobs: None,
                 heights: HashMap::new(),
             },
         }
@@ -2589,6 +2609,9 @@ impl GeneratorWorker {
     /// (for structure placement parity checks).
     pub fn set_structures_only(&mut self, only: bool) {
         self.state.structures_only = only;
+    }
+    pub fn set_structure_mobs(&mut self, mobs: Arc<dyn StructureMobs>) {
+        self.state.structure_mobs = Some(mobs);
     }
 }
 
@@ -2973,6 +2996,26 @@ mod tests {
         ] {
             assert_eq!(rings[i], ChunkPos::new(x, z), "stronghold {i}");
         }
+    }
+
+    /// Seed 8675309's giant ruined portal starts in chunk (-26, 23) and lies
+    /// wholly in (-26, 24): its own chunk still holds the start, as vanilla's
+    /// getAllStarts does, though no piece reaches it.
+    #[test]
+    fn a_chunk_holds_its_starts_whose_pieces_lie_elsewhere() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
+        let generator = OverworldGenerator::new(data, 8675309).expect("generator");
+        let mut worker = generator.worker();
+        let proto = worker
+            .generate_proto(ChunkPos::new(-26, 23))
+            .expect("proto");
+        let own: Vec<_> = proto.own_starts().iter().map(|s| s.name.clone()).collect();
+        assert!(
+            own.iter().any(|n| n == "minecraft:ruined_portal_mountain"),
+            "{own:?}"
+        );
     }
 
     /// Chunks no ring search can end near are decided without the rings,

@@ -52,6 +52,8 @@ pub struct StackData {
     pub pot_decorations: Option<Box<[Option<ItemStack>; 4]>>,
     /// `minecraft:bundle_contents`.
     pub bundle_contents: Vec<ItemStack>,
+    /// `BundleContents.selectedItem`: runtime only, never saved or sent.
+    pub bundle_selected: BundleSelected,
     /// `minecraft:suspicious_stew_effects`: (effect id, duration).
     pub stew_effects: Vec<(Arc<str>, i32)>,
     /// `minecraft:map_post_processing`: 0 lock, 1 scale.
@@ -59,6 +61,20 @@ pub struct StackData {
     /// Components Horizon does not model (lore, custom data, item name,
     /// max stack size...), kept as their saved values in key order.
     pub other: Vec<(String, Tag)>,
+}
+/// A bundle's selected item index (-1: none). Like vanilla's
+/// `BundleContents.equals` it is left out when stacks are compared.
+#[derive(Clone, Copy, Debug)]
+pub struct BundleSelected(pub i32);
+impl Default for BundleSelected {
+    fn default() -> Self {
+        Self(-1)
+    }
+}
+impl PartialEq for BundleSelected {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 /// The components `components_tag` writes from modelled fields.
 const MODELLED: &[&str] = &[
@@ -791,6 +807,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 Arc::from(t.get("pattern").and_then(string)?.as_str()),
             ))
         }),
+        bundle_selected: BundleSelected::default(),
         other: Vec::new(),
     };
     let mut data = data;

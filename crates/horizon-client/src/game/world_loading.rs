@@ -201,6 +201,82 @@ impl WorldLoader {
     }
 }
 
+/// How long the preloaded world data outlives the world screens: a player
+/// who goes back to the title or to Multiplayer and opens no world for this
+/// long gets the memory back.
+const PRELOAD_KEPT: std::time::Duration = std::time::Duration::from_secs(60);
+
+enum Preload {
+    Idle,
+    /// Read, or being read, on the "World data preload" thread. `left`: when
+    /// the player last left the world screens.
+    Started {
+        thread: std::thread::JoinHandle<()>,
+        left: Option<std::time::Instant>,
+    },
+    /// A world opened: the data is the world's now, and stays.
+    Used,
+}
+
+static PRELOAD: std::sync::Mutex<Preload> = std::sync::Mutex::new(Preload::Idle);
+
+/// Each frame of the title: read what every world opening loads and keeps
+/// for the rest of the process (the worldgen bundle, the loot tables and the
+/// registries the server sends) on a helper thread while the player is on the
+/// world screens (`on_world_screens`: Singleplayer, Create World and their
+/// dialogs), so it overlaps the time spent choosing a world. A world opened
+/// meanwhile waits for the part being read instead of reading it again. Not
+/// at the title screen itself: many players only go to Multiplayer, and
+/// small machines need the memory. Dropped after `PRELOAD_KEPT` away from
+/// the world screens without a world opening.
+pub(super) fn preload_world_data(
+    on_world_screens: bool,
+    resources: &std::path::Path,
+    registry: &'static horizon_world::registry::BlockRegistry,
+) {
+    let mut preload = PRELOAD.lock().unwrap_or_else(|e| e.into_inner());
+    match &mut *preload {
+        Preload::Used => {}
+        Preload::Idle if on_world_screens => {
+            let resources = resources.to_owned();
+            let spawned = std::thread::Builder::new()
+                .name("World data preload".into())
+                .spawn(move || {
+                    horizon_threads::behind_server();
+                    // Errors are left for the world opening to report.
+                    let _ = horizon_client::vanillagen::shared_data(
+                        &resources.join("worldgen"),
+                        registry,
+                    );
+                    let _ = horizon_client::structure_blocks::loot_data(&resources);
+                    let _ = super::lan::sync_data(&resources);
+                });
+            match spawned {
+                Ok(thread) => *preload = Preload::Started { thread, left: None },
+                Err(e) => log::warn!("Horizon: world data preload: {e}"),
+            }
+        }
+        Preload::Idle => {}
+        Preload::Started { left, .. } if on_world_screens => *left = None,
+        Preload::Started { thread, left } => {
+            let left = *left.get_or_insert_with(std::time::Instant::now);
+            if left.elapsed() >= PRELOAD_KEPT && thread.is_finished() {
+                horizon_client::vanillagen::forget_shared_data();
+                horizon_client::structure_blocks::forget_loot_data();
+                super::lan::forget_sync_data();
+                horizon_threads::release_free_memory();
+                *preload = Preload::Idle;
+                log::info!("Horizon: preloaded world data dropped, no world opened");
+            }
+        }
+    }
+}
+
+/// A world opens: what `preload_world_data` read is the world's from now on.
+pub(super) fn world_data_used() {
+    *PRELOAD.lock().unwrap_or_else(|e| e.into_inner()) = Preload::Used;
+}
+
 pub(super) fn make_streaming(
     res: &Resources,
     pack: &PackResources,
