@@ -953,6 +953,14 @@ impl Game<'_> {
                     if !host.hub.guests[gi].may_reach_block(a.pos) {
                         return;
                     }
+                    // mayInteract: a block outside the world border can't be
+                    // dug (the ack puts it back on the client).
+                    if !self
+                        .border
+                        .contains(f64::from(a.pos[0]), f64::from(a.pos[2]))
+                    {
+                        return;
+                    }
                     let face = direction(i32::from(a.direction));
                     let play = host.play.entry(conn).or_default();
                     play.digging = Some((a.pos, face));
@@ -1083,19 +1091,26 @@ impl Game<'_> {
                     ],
                 };
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
-                let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
-                let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
-                let swung = self.as_guest(host, conn, |g| {
-                    g.forced_hit = Some(hit);
-                    g.guest_use = Some(GuestUse::OnBlock(hand));
-                    let swings = g.swings_started;
-                    let _ = g.use_item();
-                    g.forced_hit = None;
-                    g.guest_use = None;
-                    g.swings_started != swings
-                });
-                self.lan_swing_back(host, conn, swung);
-                self.guest_use_sounds(host, conn, logged, heard);
+                // mayInteract: nothing is used on a block outside the world
+                // border; the blocks are still sent back below.
+                if self
+                    .border
+                    .contains(f64::from(p.pos[0]), f64::from(p.pos[2]))
+                {
+                    let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
+                    let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
+                    let swung = self.as_guest(host, conn, |g| {
+                        g.forced_hit = Some(hit);
+                        g.guest_use = Some(GuestUse::OnBlock(hand));
+                        let swings = g.swings_started;
+                        let _ = g.use_item();
+                        g.forced_hit = None;
+                        g.guest_use = None;
+                        g.swings_started != swings
+                    });
+                    self.lan_swing_back(host, conn, swung);
+                    self.guest_use_sounds(host, conn, logged, heard);
+                }
                 // The client predicted a result: correct it with what really is.
                 for pos in [
                     p.pos,
