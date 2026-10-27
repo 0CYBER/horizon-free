@@ -6,6 +6,7 @@ pub mod browser;
 pub mod datapacks;
 pub mod desktop;
 pub mod desktop_seams;
+pub mod export;
 #[cfg(unix)]
 pub mod game_app;
 pub mod heads;

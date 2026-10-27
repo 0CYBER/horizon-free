@@ -172,6 +172,14 @@ pub(super) fn parse_version(v: &Value) -> Option<Version> {
     })
 }
 
+/// The files of one version (`GET /version/{id}`), with their downloads and checksums.
+pub fn version_files(version: &str) -> Result<Vec<FileRef>, String> {
+    let v = get(&format!("{API}/version/{}", encode(version)))?;
+    parse_version(&v)
+        .map(|v| v.files)
+        .ok_or_else(|| format!("Modrinth: no version {version}."))
+}
+
 impl Source for Modrinth {
     fn id(&self) -> SourceId {
         SourceId::Modrinth

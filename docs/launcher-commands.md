@@ -331,6 +331,19 @@ Keep an instance on one installed Horizon version, or "latest" to follow updates
 
 MCP: `instance_version`.
 
+## `horizon-launcher instance export`
+
+Export an instance (or a port) to share: its settings, packs, Horizon mods and the worlds named, as a .mrpack (resource packs from Modrinth listed by download) or a zip. Never logs, screenshots or account data; worlds go without their per-player files.
+
+    horizon-launcher instance export [INSTANCE]
+
+- `INSTANCE`: The instance (default: the selected one)
+- `--format` (mrpack, zip)
+- `--world`: A world to put in it (its name or folder); repeat for more
+- `--out`: Where to write it (default: "<name>.mrpack" in the current folder)
+
+MCP: `instance_export`.
+
 ## `horizon-launcher worlds list`
 
 The worlds: name, mode, version, last played and size (the default).
