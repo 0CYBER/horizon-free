@@ -32,10 +32,13 @@ pub(super) enum Field {
     Port,
     Token,
     Email,
+    /// The instance dialog's (`instances_page.rs`).
+    InstanceName,
+    InstanceGroup,
 }
 
 impl Field {
-    const ALL: [Field; 9] = [
+    const ALL: [Field; 11] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -45,6 +48,8 @@ impl Field {
         Field::Port,
         Field::Token,
         Field::Email,
+        Field::InstanceName,
+        Field::InstanceGroup,
     ];
 }
 
@@ -163,7 +168,7 @@ pub(super) struct Servers {
     focus: HashMap<Field, FocusHandle>,
     focused: Option<Field>,
     /// The field to put the keyboard in on the next frame.
-    focus_soon: Option<Field>,
+    pub(super) focus_soon: Option<Field>,
     /// A suggested value shown selected: the first key typed replaces it.
     selected: Option<Field>,
     /// A field whose value was refused, and why: shown under it until it's edited.
@@ -961,11 +966,15 @@ impl Launcher {
                     command,
                 );
                 match typed {
+                    Key::Enter if matches!(f, Field::InstanceName | Field::InstanceGroup) => {
+                        this.save_instance(cx)
+                    }
                     Key::Enter => this.field_enter(f),
                     Key::Escape => {
                         if this.servers.create.is_some() && !this.servers.creating {
                             this.servers.create = None;
                         }
+                        this.instance_escape();
                         window.blur();
                     }
                     Key::Paste => {
@@ -1017,6 +1026,7 @@ impl Launcher {
             Field::Port => self.save_port(),
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
+            Field::InstanceName | Field::InstanceGroup => {}
         }
     }
 
