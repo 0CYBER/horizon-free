@@ -938,6 +938,19 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
     match entity {
         BlockEntity::Sign(sign) => Some(Tag::compound(sign.encode())),
         BlockEntity::Spawner(s) => Some(s.update_tag()),
+        // BannerBlockEntity.getUpdateTag: saveWithoutMetadata, so the patterns,
+        // the custom name and the components.
+        BlockEntity::Banner(b) => {
+            let mut entries = Vec::new();
+            if !b.layers.is_empty() {
+                entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
+            }
+            if let Some(name) = &b.name {
+                entries.push(("CustomName", Tag::String(name.as_str().into())));
+            }
+            entries.push(("components", Tag::Compound(b.components.clone())));
+            Some(Tag::compound(entries))
+        }
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();
