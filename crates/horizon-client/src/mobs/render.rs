@@ -14,6 +14,12 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
+/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
+/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
+/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
+/// the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 13;
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
@@ -664,14 +670,6 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             false,
         ),
-        // EnergySwirlLayer (the scroll is not reproduced: atlas sprites do not wrap).
-        S::Creeper if m.extra.charged => push(
-            &mut v,
-            "creeper#armor",
-            "entity/creeper/creeper_armor",
-            0x80FF_FFFF,
-            true,
-        ),
         S::TropicalFish => {
             // TropicalFishPatternLayer: the pattern tinted with the pattern colour.
             let (model, letter, n) = if m.extra.variant < 6 {
@@ -1033,6 +1031,13 @@ fn draw_normals(
             let normal = poly.vertex_normal(normals);
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                // The armour glint scrolls the layer's model UV in the shader;
+                // the item path already passed its transformed UV.
+                let glint_uv = if overlay == ARMOR_GLINT {
+                    [v[3], v[4]]
+                } else {
+                    [0.0, 0.0]
+                };
                 out.push(Vertex {
                     normal,
                     pos: pos.to_array(),
@@ -1043,6 +1048,7 @@ fn draw_normals(
                     layer: overlay,
                     color,
                     light,
+                    glint_uv,
                 });
             }
         }
@@ -1203,9 +1209,9 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the glint (7) when enchanted.
+        // the hurt tint, the armour glint (13) when enchanted.
         let overlay = match armor_slot(&layer.model) {
-            Some(slot) if super::gear::enchanted(m, slot) => 7,
+            Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
             None => overlay,
         };
@@ -1226,8 +1232,48 @@ fn render_visible(
             }
         }
     }
+    // EnergySwirlLayer: the armour model, additive, scrolling over the sprite.
+    if let Some((model, texture, x_offset)) = energy_swirl(m, s.age)
+        && let Some(part) = m.kind.layer(model)
+        && let Some([u0, v0, u1, v1]) = atlas(texture)
+    {
+        layer_poses.reset(part);
+        anim::setup(m, &s, &mut layer_poses, &data.animations);
+        // `RenderTypes.energySwirl`'s texture offset, as the sprite-local UV.
+        let (du, dv) = (x_offset % 1.0, s.age * 0.01 % 1.0);
+        let start = out.len();
+        draw(
+            part,
+            base,
+            &layer_poses,
+            [du, dv, 1.0 + du, 1.0 + dv],
+            crate::breaking::stage_light([u1 - u0, v1 - v0]),
+            crate::breaking::stage_light([u0, v0]),
+            crate::gfx::ENERGY_SWIRL_OVERLAY,
+            out,
+        );
+        // No lighting: the colour bytes carry the sprite's size (fs_energy_swirl).
+        for vertex in &mut out[start..] {
+            vertex.normal = [0; 4];
+        }
+    }
     if shell_last {
         draw_body(out);
+    }
+}
+/// `EnergySwirlLayer`'s model, texture and `xOffset(t)` for a charged creeper
+/// (`CreeperPowerLayer`) or a powered wither (`WitherArmorLayer`); `t` is `ageInTicks`.
+fn energy_swirl(m: &Mob, t: f32) -> Option<(&'static str, &'static str, f32)> {
+    match m.species() {
+        Species::Creeper if m.extra.charged => {
+            Some(("creeper#armor", "entity/creeper/creeper_armor", t * 0.01))
+        }
+        Species::Wither if super::wither::powered(m) => Some((
+            "wither#armor",
+            "entity/wither/wither_armor",
+            (t * 0.02).mcos() * 3.0,
+        )),
+        _ => None,
     }
 }
 /// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).

@@ -21,6 +21,9 @@ pub(super) struct SignEditor {
     pub line: usize,
     /// The line being edited (`AbstractSignEditScreen`'s text field).
     edit: EditBox,
+    /// `AbstractSignEditScreen.messages`: the side's lines as edited, sent
+    /// when the editor closes, even if the sign is gone by then.
+    lines: [String; 4],
 }
 
 fn sign_box() -> EditBox {
@@ -185,11 +188,19 @@ impl Game<'_> {
     }
     /// `SignBlock.openTextEdit` for the front side after placement.
     pub(super) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
+        // Minecraft.setScreen: the editor already open is removed first.
+        self.close_sign_editor();
+        let lines = match self.world.block_entities.get(&pos) {
+            Some(BlockEntity::Sign(sign)) if front => sign.front.lines.clone(),
+            Some(BlockEntity::Sign(sign)) => sign.back.lines.clone(),
+            _ => Default::default(),
+        };
         self.sign_edit = Some(SignEditor {
             pos,
             front,
             line: 0,
             edit: sign_box(),
+            lines,
         });
         self.sign_load();
         self.keys.clear();
@@ -202,14 +213,11 @@ impl Game<'_> {
     pub(super) fn close_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
             if self.remote.is_some() {
-                if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&edit.pos) {
-                    let side = if edit.front { &sign.front } else { &sign.back };
-                    self.send(S::SignUpdate(play::SignUpdate {
-                        pos: [edit.pos.0, edit.pos.1, edit.pos.2],
-                        lines: side.lines.clone(),
-                        front: edit.front,
-                    }));
-                }
+                self.send(S::SignUpdate(play::SignUpdate {
+                    pos: [edit.pos.0, edit.pos.1, edit.pos.2],
+                    lines: edit.lines,
+                    front: edit.front,
+                }));
             } else {
                 self.mark_block_entity_updated(edit.pos);
             }
@@ -358,7 +366,8 @@ impl Game<'_> {
             edit.edit.set_value(&text);
         }
     }
-    /// The box's text onto the sign, when it still fits the line.
+    /// The box's text onto the editor's lines and the sign
+    /// (`AbstractSignEditScreen.setMessage`), when it still fits the line.
     fn sign_write(&mut self) {
         let Some(edit) = self.sign_edit.as_ref() else {
             return;
@@ -366,6 +375,9 @@ impl Game<'_> {
         let (pos, front, line, value) = (edit.pos, edit.front, edit.line, edit.edit.value.clone());
         if !self.sign_fits(&value) {
             return;
+        }
+        if let Some(edit) = self.sign_edit.as_mut() {
+            edit.lines[line].clone_from(&value);
         }
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&pos) else {
             return;

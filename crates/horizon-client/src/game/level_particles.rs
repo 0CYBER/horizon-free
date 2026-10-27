@@ -12,19 +12,17 @@ use horizon_world::registry::BlockStateId;
 
 impl Game<'_> {
     pub(super) fn dragon_egg_particles(&mut self, pos: [i32; 3], data: i32) {
-        self.particles
-            .block_teleportation(pos, data, [16, 8, 16], self.settings.particles);
+        self.particles.block_teleportation(pos, data, [16, 8, 16]);
     }
     /// Event 2016: `Shulker.teleportSomewhere`'s particles between the
     /// shell's old and new cells.
     pub(super) fn shulker_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
-        self.particles
-            .block_teleportation(pos, data, [8, 8, 8], self.settings.particles);
+        self.particles.block_teleportation(pos, data, [8, 8, 8]);
     }
     /// Event 2017: `TeleportRandomlyConsumeEffect`'s directional particles.
     pub(super) fn consume_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
         self.particles
-            .block_teleportation(pos, data, [127, 127, 127], self.settings.particles);
+            .block_teleportation(pos, data, [127, 127, 127]);
     }
     /// `LevelEventHandler.levelEvent` 3002 to 3005, drawing from the client
     /// level's random.
