@@ -26,6 +26,7 @@ pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
 pub mod data;
+pub mod dolphin;
 pub mod doors;
 pub mod drops;
 pub mod enderman;
@@ -1027,6 +1028,16 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
+    /// A melee hit whose effect comes only if the hit lands (husk hunger,
+    /// cave spider poison, wither skeleton wither, bee and pufferfish
+    /// poison): a shield-blocked hit gives nothing.
+    AttackPlayerWithEffect {
+        amount: f32,
+        from: [f64; 3],
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+    },
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {
         amount: f32,
@@ -1164,6 +1175,12 @@ pub enum MobEvent {
     },
     /// Regeneration support after an axolotl-assisted kill.
     AxolotlSupportPlayer,
+    /// A dolphin that was given a fish asks the game for the nearest
+    /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
+    /// sets the dolphin's `extra.home` to it, or leaves it empty.
+    DolphinTreasure {
+        mob: u32,
+    },
     /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
     EffectPlayer {
         effect: &'static str,
@@ -1640,6 +1657,8 @@ pub struct PlayerView {
     pub alive: bool,
     pub creative: bool,
     pub sneaking: bool,
+    /// `Entity.isSwimming`.
+    pub swimming: bool,
     pub look: [f64; 3],
     pub main_hand: Option<Arc<str>>,
     pub off_hand: Option<Arc<str>>,
@@ -1971,9 +1990,15 @@ impl Mob {
             amount *= 5.0;
         }
         let (worn, worn_toughness) = self.worn_armor();
-        if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
+        // Shulker.setRawPeekAmount: a closed shell adds the covered armor modifier.
+        let covered = if self.species() == Species::Shulker && self.extra.counter == 0 {
+            20.0
+        } else {
+            0.0
+        };
+        if !source.bypasses_armor() && self.kind.armor + worn + covered > 0.0 {
             // CombatRules.getDamageAfterAbsorb
-            let armor = self.kind.armor + worn;
+            let armor = self.kind.armor + worn + covered;
             let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
             let mut fraction = effective / 25.0;

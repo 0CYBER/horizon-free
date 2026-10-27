@@ -36,6 +36,7 @@ mod consume;
 mod control;
 mod copper_golems;
 mod creaking;
+mod creative_hotbar;
 mod creatures;
 mod crossbow;
 pub(crate) mod cushions;
@@ -1493,6 +1494,9 @@ struct Game<'a> {
     armor: [Option<ItemStack>; 4],
     /// The off hand (Inventory slot 40, saved as slot 150; menu slot 504 here).
     offhand: Option<ItemStack>,
+    /// `ItemStack.popTime` of the nine hotbar stacks, then the off hand: set to 5
+    /// when a slot gains items, counted down each tick.
+    hotbar_pop: [u8; 10],
     /// The hand an item use acts with (`InteractionHand`): the off hand only
     /// for its turn in `use_item` and while its item is being used.
     hand: Hand,
@@ -4927,15 +4931,13 @@ impl Game<'_> {
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
-                MotionEvent::Emission {
-                    state, in_water, ..
-                } => {
+                MotionEvent::Emission { state, muffled, .. } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Entity.playStepSound: the block's step sound at 0.15 volume,
                     // muffled under the swim sound in water. Whether it plays is
                     // Player.getMovementEmission's call (shift on the ground),
                     // not the pose: a forced crouch still steps.
-                    let (volume, pitch) = if in_water {
+                    let (volume, pitch) = if muffled {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
                     } else {
                         (sounds.volume * 0.15, sounds.pitch)
@@ -5562,7 +5564,10 @@ impl Game<'_> {
         let decorations = hud_overlays::ItemDecorations {
             count: stack.count,
             count_text,
-            bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
+            // BundleItem overrides the bar with its fullness.
+            bar: horizon_client::bundle::Contents::of(self.res.items(), stack)
+                .map(|c| c.bar())
+                .unwrap_or_else(|| hud_overlays::damage_bar(stack.damage as i32, max_damage)),
             cooldown: self.cooldowns.percent(&cooldown, partial),
         };
         let mut draws = vec![hud_layout::GuiDraw::Push(vec![
@@ -5667,12 +5672,17 @@ impl Game<'_> {
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
             if !spectator {
+                let partial = self.clock.fraction() as f32;
                 let inputs = hud_layout::HotbarInputs {
                     selected: self.selected as i32,
                     right_handed: !self.settings.main_hand_left,
                     offhand: self.offhand.is_some(),
-                    slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
-                    offhand_pop: 0.0,
+                    slots: std::array::from_fn(|i| {
+                        self.inventory[i]
+                            .as_ref()
+                            .map(|_| (f32::from(self.hotbar_pop[i]) - partial).max(0.0))
+                    }),
+                    offhand_pop: (f32::from(self.hotbar_pop[9]) - partial).max(0.0),
                     attack: (indicator == 2).then_some(strength),
                 };
                 let draws = hud_layout::hotbar(wi, hi, &inputs);
@@ -5759,17 +5769,9 @@ impl Game<'_> {
                 } else {
                     hud_layout::HeartKind::Normal
                 };
-                let eye = p.position.y + f64::from(p.dimensions.eye_height);
-                let under_water = self
-                    .res
-                    .facts()
-                    .get(self.world.block(
-                        p.position.x.floor() as i32,
-                        eye.floor() as i32,
-                        p.position.z.floor() as i32,
-                    ))
-                    .fluid
-                    == horizon_client::blocks::Fluid::Water;
+                // Hud.extractAirBubbles: `isEyeInFluidMatching`, so the eyes are below
+                // the surface, not merely in the water block.
+                let under_water = p.is_eye_in_fluid(horizon_client::motion::WATER);
                 let inputs = hud_layout::HealthInputs {
                     tick: self.ticks as i32,
                     millis: self.started.elapsed().as_millis() as i64,
@@ -10655,7 +10657,9 @@ impl Game<'_> {
     fn tick_sleep(&mut self) {
         self.sleep_timer = tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         if let Some(head) = self.sleeping {
-            if self.keys.contains(&KeyCode::ShiftLeft)
+            // Vanilla has no Shift wake-up: the chat screen's capitals must
+            // not get the sleeper up.
+            if (self.screen != Screen::Chat && self.keys.contains(&KeyCode::ShiftLeft))
                 || self
                     .player
                     .as_ref()
@@ -11831,7 +11835,7 @@ impl Game<'_> {
             | KeyCode::Digit9
                 if self.screen == Screen::Playing =>
             {
-                self.selected = match key {
+                let slot = match key {
                     KeyCode::Digit1 => 0,
                     KeyCode::Digit2 => 1,
                     KeyCode::Digit3 => 2,
@@ -11842,6 +11846,15 @@ impl Game<'_> {
                     KeyCode::Digit8 => 7,
                     _ => 8,
                 };
+                // Minecraft.handleKeybinds: a creative player holding the load
+                // or save toolbar key loads or saves a toolbar instead (load
+                // first when both are held).
+                let load = self.mapped_key_down("key.loadToolbarActivator");
+                if self.creative && (load || self.mapped_key_down("key.saveToolbarActivator")) {
+                    self.hotbar_load_or_save(slot, load);
+                } else {
+                    self.selected = slot;
+                }
             }
             _ => {}
         }
@@ -13378,6 +13391,7 @@ impl<'a> Game<'a> {
             title: None,
             armor: [None, None, None, None],
             offhand: None,
+            hotbar_pop: [0; 10],
             hand: Hand::Main,
             shield_cooldown: 0,
             cooldowns: Default::default(),

@@ -201,6 +201,7 @@ impl Game<'_> {
             // EntitySelector.NO_CREATIVE_OR_SPECTATOR.
             creative: self.creative || self.spectator(),
             sneaking: self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+            swimming: p.swimming,
             look: view_vector(self.yaw, self.pitch),
             main_hand: self.held().map(|s| s.item.clone()),
             off_hand: None,
@@ -1044,6 +1045,18 @@ impl Game<'_> {
                 MobEvent::AttackPlayer(amount, from) => {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
+                // doHurtTarget: the effect only when hurtServer took damage.
+                MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
+                    effect,
+                    ticks,
+                    amplifier,
+                } => {
+                    if self.mob_hits_player(amount, from, "minecraft:mob_attack") {
+                        self.give_player_effect(effect, ticks, amplifier);
+                    }
+                }
                 MobEvent::DamagePlayer { amount, from, kind } => {
                     self.mob_hits_player(amount, from, kind);
                 }
@@ -1420,6 +1433,27 @@ impl Game<'_> {
                         .effects
                         .list
                         .retain(|e| e.id != "mining_fatigue");
+                }
+                MobEvent::DolphinTreasure { mob } => {
+                    // ServerLevel.findNearestMapStructure(#dolphin_located, 50).
+                    let Some(at) = self.mobs.iter().find(|m| m.id == mob).map(|m| {
+                        [
+                            m.position.x.floor() as i32,
+                            m.position.y.floor() as i32,
+                            m.position.z.floor() as i32,
+                        ]
+                    }) else {
+                        continue;
+                    };
+                    let names = self.structure_tag("minecraft:dolphin_located");
+                    let found = self
+                        .end
+                        .locator()
+                        .filter(|_| !names.is_empty())
+                        .and_then(|t| t.locate(&names, at, 50));
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        m.extra.home = found.map(|(_, p)| p);
+                    }
                 }
                 MobEvent::EffectPlayer {
                     effect,
@@ -2661,6 +2695,17 @@ impl Game<'_> {
                                 };
                                 self.player_hit(&victim, "minecraft:arrow", Some(direct), amount);
                             }
+                            // AbstractArrow.onHitEntity: KILLED_BY_ARROW for a kill
+                            // (piercing arrows are not modelled).
+                            if hurt
+                                && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                                && !m.alive()
+                            {
+                                let victim = self.mob_entity(m);
+                                let weapon =
+                                    p.arrow.as_ref().and_then(|a| a.fired_from_weapon.as_ref());
+                                self.trigger_killed_by_arrow(&[victim], weapon);
+                            }
                         }
                         hurt
                     }
@@ -3152,6 +3197,12 @@ impl Game<'_> {
             .item_tags
             .get("minecraft:creeper_igniters")
             .is_some_and(|t| t.contains(&*item));
+        let fish = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:fishes")
+            .is_some_and(|t| t.contains(&*item));
         let damageable = self
             .res
             .items()
@@ -3256,8 +3307,9 @@ impl Game<'_> {
                     .items()
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
-                    .map_or(2.0, |f| f.0 as f32);
-                // TamableAnimal.feed: playEatingSound, which wolves leave empty.
+                    .map_or(2.0, |f| f.0 as f32 * 2.0);
+                // TamableAnimal.feed(.., 2.0F, 2.0F): heals twice the nutrition,
+                // then playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
             }
@@ -3445,6 +3497,18 @@ impl Game<'_> {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                 }
+            }
+            // Dolphin.mobInteract: a fish makes a baby grow by a tenth and an
+            // adult remember it (`gotFish`), to swim to a treasure.
+            Species::Dolphin if fish => {
+                eat = Some(("entity.dolphin.eat", 1.0, 1.0));
+                if m.extra.age < 0 {
+                    let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
+                    horizon_client::mobs::ai::age_up(m, secs, true);
+                } else {
+                    m.extra.flag = true;
+                }
+                consume = true;
             }
             // Tadpole.feed: frog food ages it by a tenth of the time left to
             // grow into a frog (it grows on its next tick once past 24000).

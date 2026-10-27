@@ -2556,6 +2556,20 @@ impl Game<'_> {
                     r.state_id = p.state;
                 }
                 let stack = self.to_stack(&p.item);
+                // ClientPacketListener.handleContainerSetSlot: a hotbar slot that
+                // gains items squeezes for 5 ticks.
+                if p.container == 0
+                    && (36..=45).contains(&p.slot)
+                    && let Some(new) = &stack
+                {
+                    let (pop, old) = match p.slot {
+                        45 => (9, self.offhand.as_ref()),
+                        s => (s as usize - 36, self.inventory[s as usize - 36].as_ref()),
+                    };
+                    if old.is_none_or(|old| old.count < new.count) {
+                        self.hotbar_pop[pop] = 5;
+                    }
+                }
                 self.set_menu_slot(p.container, i32::from(p.slot), stack);
                 self.remote_synced();
             }
@@ -3448,6 +3462,10 @@ impl Game<'_> {
         // a client. Ticking it after the keybinds keeps a held use from
         // trying again a tick before the server's entry ends.
         self.cooldowns.tick();
+        // Inventory.tick's ItemStack.inventoryTick: the pop time runs down.
+        for pop in &mut self.hotbar_pop {
+            *pop = pop.saturating_sub(1);
+        }
         // ClientLevel.tick: the border's size change.
         self.border.tick();
         self.player_border();
@@ -3590,12 +3608,10 @@ impl Game<'_> {
         let feet = [player.position.x, player.position.y, player.position.z];
         for event in events {
             match event {
-                horizon_client::motion::MotionEvent::Emission {
-                    state, in_water, ..
-                } => {
+                horizon_client::motion::MotionEvent::Emission { state, muffled, .. } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Player.playStepSound: muffled under the swim sound in water.
-                    let (volume, pitch) = if in_water {
+                    let (volume, pitch) = if muffled {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
                     } else {
                         (sounds.volume * 0.15, sounds.pitch)

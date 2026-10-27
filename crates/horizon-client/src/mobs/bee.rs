@@ -333,19 +333,23 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
     let amount = (m.attrs.attack_damage as i32) as f32;
     match who {
         Who::Player => {
-            cx.events.push(MobEvent::AttackPlayer(amount, from));
-            // Poison only on normal (10 s) and hard (18 s).
+            // Bee.doHurtTarget: the poison only when the sting hurt, and
+            // only on normal (10 s) and hard (18 s).
             let seconds = match cx.w.difficulty.id {
                 2 => 10,
                 3 => 18,
                 _ => 0,
             };
             if seconds > 0 {
-                cx.events.push(MobEvent::EffectPlayer {
+                cx.events.push(MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
                     effect: "minecraft:poison",
                     ticks: seconds * 20,
                     amplifier: 0,
                 });
+            } else {
+                cx.events.push(MobEvent::AttackPlayer(amount, from));
             }
         }
         Who::Mob(id) => cx.events.push(MobEvent::AttackMob {

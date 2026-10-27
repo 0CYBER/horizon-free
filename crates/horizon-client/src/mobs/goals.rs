@@ -604,6 +604,11 @@ impl Mob {
     pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
         self.player_in_range(w, range, true, true)
     }
+    /// `TargetingConditions.forNonCombat().range(range).ignoreLineOfSight()`
+    /// for the player (still scaled by visibility).
+    pub fn can_see_player_through_walls(&mut self, w: &MobWorld, range: f64) -> bool {
+        self.player_in_range(w, range, false, true)
+    }
     /// `scale` is `TargetingConditions.testInvisible`: scale the range by
     /// the player's visibility.
     fn player_in_range(

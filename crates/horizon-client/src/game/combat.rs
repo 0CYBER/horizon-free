@@ -42,6 +42,10 @@ pub(super) struct CombatTracker {
     /// The projectile hitting the player now is another player's that
     /// `ServerPlayer.canHarmPlayer` refuses (the `pvp` rule, an ally).
     pub(super) refuse_player_hit: bool,
+    /// The player whose melee hit is landing on the player now: where they
+    /// stand and the seconds their weapon disables a shield for
+    /// (`getSecondsToDisableBlocking`).
+    pub(super) player_attacker: Option<([f64; 3], f32)>,
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,

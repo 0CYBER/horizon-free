@@ -1768,6 +1768,11 @@ impl Game<'_> {
         };
         let gray = rgba(170, 170, 170, 255);
         let item_info = self.res.items().get(&stack.item);
+        // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
+        // before the components.
+        for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
+            push(&mut lines, text, c);
+        }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
             horizon_client::item_tooltip::instrument_line(stack, &display, &translate)
@@ -2023,15 +2028,19 @@ impl Game<'_> {
             && stack.damage > 0
             && advanced
         {
-            push(
-                &mut lines,
-                format!(
-                    "Durability: {} / {}",
-                    info.max_damage - stack.damage,
-                    info.max_damage
+            // `item.durability`, in the selected language.
+            lines.push((
+                horizon_client::text::Text::translate(
+                    "item.durability",
+                    &[
+                        horizon_client::text::Text::literal(
+                            (info.max_damage - stack.damage).to_string(),
+                        ),
+                        horizon_client::text::Text::literal(info.max_damage.to_string()),
+                    ],
                 ),
                 u32::MAX,
-            );
+            ));
         }
         // ItemStack.addDetailsToTooltipTail: with advanced tooltips the item id
         // and how many components the stack has.

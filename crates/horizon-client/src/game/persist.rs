@@ -376,9 +376,9 @@ impl Game<'_> {
         let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
         // `NeutralMob.readPersistentAngerSaveData`: the anger runs until its
         // end time, and the mob is angry at the target again.
-        m.extra.anger = crate::mobs::anger_left(m.extra.anger_end, self.world.game_time);
+        m.extra.anger = horizon_client::mobs::anger_left(m.extra.anger_end, self.world.game_time);
         if m.extra.anger > 0 && m.extra.angry_at.is_some() {
-            m.ai.target = Some(crate::mobs::Who::Player);
+            m.ai.target = Some(horizon_client::mobs::Who::Player);
         }
         m.extra.mount = mount;
         m.extra.passenger = mount.is_some();
