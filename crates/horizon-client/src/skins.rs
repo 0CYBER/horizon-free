@@ -17,6 +17,8 @@ pub enum Signature {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Textures {
     pub skin: Option<String>,
+    /// The skin's `metadata.model` is `slim` (`PlayerModelType.SLIM`).
+    pub slim: bool,
     pub cape: Option<String>,
     pub elytra: Option<String>,
     pub signed: bool,
@@ -100,6 +102,13 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Texture
             .any(|u| url.starts_with(&u.replace("{textureId}", "")));
         if !allowed {
             return empty;
+        }
+        if kind == "SKIN" {
+            out.slim = texture
+                .get("metadata")
+                .and_then(|m| m.get("model"))
+                .and_then(|m| m.as_str())
+                == Some("slim");
         }
         let slot = match kind.as_str() {
             "SKIN" => &mut out.skin,
@@ -809,6 +818,21 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    /// `MinecraftProfileTexture.getMetadata("model")`: `slim` marks a slim
+    /// skin; no metadata is the wide (classic) model.
+    #[test]
+    fn a_skins_model_comes_from_its_metadata() {
+        use super::{Signature, TEXTURE_URIS, unpack};
+        let slim = "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHBzOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL2FiYyIsIm1ldGFkYXRhIjp7Im1vZGVsIjoic2xpbSJ9fX19";
+        let wide = "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHBzOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL2FiYyJ9fX0=";
+        let t = unpack(slim, Signature::Signed, &TEXTURE_URIS);
+        assert_eq!(
+            t.skin.as_deref(),
+            Some("https://textures.minecraft.net/texture/abc")
+        );
+        assert!(t.slim);
+        assert!(!unpack(wide, Signature::Signed, &TEXTURE_URIS).slim);
+    }
     #[test]
     fn profiles_parse_like_resolvable_profiles() {
         use super::{NameOrId, Signature, parse_profile};
