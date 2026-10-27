@@ -3139,6 +3139,11 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.consume_teleport_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent {
+                    id: 2018,
+                    pos,
+                    data,
+                } => self.enderman_teleport_particles([pos.x, pos.y, pos.z], data),
                 LevelEvent::LevelEvent { id: 2003, pos, .. } => {
                     self.eye_break_particles([pos.x, pos.y, pos.z]);
                 }
