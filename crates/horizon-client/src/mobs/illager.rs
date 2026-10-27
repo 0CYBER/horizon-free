@@ -681,7 +681,12 @@ pub fn anim_pose(m: &Mob, s: &State, p: &mut Poses, pose: ArmPose) {
                 p.xrot("right_arm", x + a * 1.2 - b * 0.4);
                 p.xrot("left_arm", x + a * 1.2 - b * 0.4);
             } else {
-                // swingWeaponDown (right-handed).
+                // swingWeaponDown: the main arm swings down.
+                let (main, off) = if m.main_arm_left() {
+                    ("left_arm", "right_arm")
+                } else {
+                    ("right_arm", "left_arm")
+                };
                 let swing = s.swing;
                 let a2 = (swing * PI).msin();
                 let a = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
@@ -690,11 +695,11 @@ pub fn anim_pose(m: &Mob, s: &State, p: &mut Poses, pose: ArmPose) {
                 p.yrot("right_arm", PI / 20.0);
                 p.yrot("left_arm", -PI / 20.0);
                 p.xrot(
-                    "right_arm",
+                    main,
                     -1.884_955_8 + (s.age * 0.09).mcos() * 0.15 + (a2 * 2.2 - a * 0.4),
                 );
                 p.xrot(
-                    "left_arm",
+                    off,
                     -0.0 + (s.age * 0.19).mcos() * 0.5 + (a2 * 1.2 - a * 0.4),
                 );
             }

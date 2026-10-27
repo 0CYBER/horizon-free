@@ -1174,7 +1174,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.game_event(pos, "minecraft:note_block_play");
         }
     }
-    /// `NoteBlock.triggerEvent`: the note's sound.
+    /// `NoteBlock.triggerEvent`: the note's particle (tunable instruments)
+    /// and sound.
     pub(crate) fn note_trigger_event(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let instrument = b.table.text(state, b.props.instrument).to_owned();
@@ -1186,6 +1187,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let pitch = if mob_head {
             1.0
         } else {
+            // `isTunable`: the client adds the NOTE particle above the block.
+            self.emit(LevelEvent::BlockEvent {
+                pos,
+                state,
+                kind: "note_particle",
+            });
             horizon_core::jmath::pow(2.0, f64::from(note - 12) / 12.0) as f32
         };
         let sound = match instrument.as_str() {
