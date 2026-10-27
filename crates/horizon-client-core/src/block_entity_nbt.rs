@@ -61,6 +61,16 @@ fn f32_tag(v: f32) -> Tag {
     Tag::Float(v.to_bits())
 }
 
+/// `TheEndGatewayBlockEntity.loadAdditional`: BlockPos.CODEC and Level.isInSpawnableBounds.
+pub fn gateway_exit(tag: &Tag) -> Option<[i32; 3]> {
+    let Tag::IntArray(v) = tag else { return None };
+    let p: [i32; 3] = v.as_slice().try_into().ok()?;
+    ((-30_000_000..30_000_000).contains(&p[0])
+        && (-20_000_000..20_000_000).contains(&p[1])
+        && (-30_000_000..30_000_000).contains(&p[2]))
+    .then_some(p)
+}
+
 /// What a block entity reads and writes, in `saveAdditional` order.
 struct Fields<'a> {
     input: &'a Tag,
@@ -424,10 +434,7 @@ pub fn canonical(tag: &Tag) -> Option<Tag> {
         }
         "minecraft:end_gateway" => {
             f.long("Age", 0);
-            f.keep("exit_portal", |t| {
-                is_pos(t)
-                    && matches!(t, Tag::IntArray(v) if v[1].abs() <= 30_000_000 && v[0].abs() <= 30_000_000 && v[2].abs() <= 30_000_000)
-            });
+            f.keep("exit_portal", |t| gateway_exit(t).is_some());
             if flag(tag.get("ExactTeleport")) == Some(true) {
                 f.put("ExactTeleport", boolean(true));
             }

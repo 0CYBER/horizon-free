@@ -20,6 +20,7 @@ mod instances_page;
 mod internet;
 mod language_page;
 mod launch_page;
+mod line_edit;
 mod markdown;
 mod mcp;
 mod modpacks_page;
@@ -51,6 +52,7 @@ use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
+use horizon_launcher::nightly;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -167,6 +169,12 @@ struct Launcher {
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
     removing: Option<String>,
     install_error: Option<(String, String)>,
+    /// Nightly (`horizon_launcher::nightly`): how far the nightly being installed is, and why the
+    /// last check or install failed.
+    nightly_progress: Option<f32>,
+    nightly_error: Option<String>,
+    /// Play the Nightly instance once its first install ends: the player just turned Nightly on.
+    nightly_select: bool,
     confirm_remove: Option<String>,
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
@@ -212,7 +220,7 @@ struct Launcher {
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
-    args_input: String,
+    args_input: line_edit::LineEdit,
     args_focused: bool,
     args_focus: FocusHandle,
     /// Settings' Proxy field, the same way (`proxy`).
@@ -372,12 +380,15 @@ impl Launcher {
             installing: None,
             removing: None,
             install_error: None,
+            nightly_progress: None,
+            nightly_error: None,
+            nightly_select: false,
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
             skin: None,
             background_error: None,
-            args_input: settings.game_args.clone(),
+            args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
             proxy_input: settings.proxy.clone().unwrap_or_default(),
@@ -530,6 +541,41 @@ impl Launcher {
             backend::select_after_update(self.settings.selected.as_deref(), &self.installed);
         self.update_install = Some((release.tag.clone(), select));
         self.install(&release);
+    }
+
+    /// With Nightly on, installs the current nightly in the Nightly instance if it is new.
+    fn update_nightly(&mut self) {
+        if !self.settings.nightly || self.nightly_progress.is_some() {
+            return;
+        }
+        self.nightly_progress = Some(0.);
+        self.nightly_error = None;
+        let (tx, installed) = (self.tx.clone(), self.installed.clone());
+        std::thread::spawn(move || {
+            let result = nightly::latest().and_then(|latest| {
+                let Some(release) = nightly::update(latest, &installed) else {
+                    return Ok(None);
+                };
+                let progress = |p| {
+                    let _ = tx.send(Msg::NightlyProgress(p));
+                };
+                nightly::install(&release, progress).map(|_| Some(nightly::version_of(&release)))
+            });
+            let _ = tx.send(Msg::Nightly(result));
+        });
+    }
+
+    /// Turns Nightly on (install it, then play its instance) or off (play the release again; the
+    /// Nightly instance and its worlds stay).
+    fn set_nightly(&mut self, on: bool) {
+        self.settings.nightly = on;
+        if on {
+            self.nightly_select = true;
+        } else if self.settings.instance.as_deref() == Some(nightly::INSTANCE) {
+            self.settings.instance = None;
+        }
+        self.settings.save();
+        self.update_nightly();
     }
 
     fn fetch_releases(&mut self) {
@@ -702,8 +748,32 @@ impl Launcher {
                     if let Some(release) = self.updates.launcher.clone() {
                         self.update_launcher(release);
                     }
+                    self.update_nightly();
                 }
                 Msg::Updates(Err(e)) => self.update_error = Some(e),
+                Msg::NightlyProgress(p) => self.nightly_progress = Some(p),
+                Msg::Nightly(result) => {
+                    self.nightly_progress = None;
+                    self.installed = backend::installed();
+                    self.reload_instances();
+                    match result {
+                        Ok(_)
+                            if self.nightly_select
+                                && self.settings.nightly
+                                && self
+                                    .instances
+                                    .list
+                                    .iter()
+                                    .any(|i| i.id == nightly::INSTANCE) =>
+                        {
+                            self.nightly_select = false;
+                            self.settings.instance = Some(nightly::INSTANCE.into());
+                            self.settings.save();
+                        }
+                        Ok(_) => {}
+                        Err(e) => self.nightly_error = Some(e),
+                    }
+                }
                 Msg::LauncherProgress(p) => {
                     if let SelfUpdate::Downloading(_, f) = &mut self.self_update {
                         *f = p;
@@ -1702,7 +1772,7 @@ impl Launcher {
 
     /// The sidebar: Horizon and the imported modpacks, the player's servers, then the
     /// launcher's own update, the community links and its version.
-    fn sidebar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         self.load_packs();
         let heading = |label: String| {
@@ -1751,12 +1821,14 @@ impl Launcher {
                 this.open_instance_dialog(None);
                 cx.notify();
             }));
+        let items = self.instance_items(heading, cx);
+        let mut rows = items.len();
         let list = div()
             .flex()
             .flex_col()
             .gap(px(4.))
             .child(heading(tr("INSTANCES").into()).child(add))
-            .children(self.instance_items(heading, cx));
+            .children(items);
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
@@ -1766,6 +1838,8 @@ impl Launcher {
         if !servers.is_empty() {
             list = list.child(heading(tr("SERVERS").into()));
         }
+        rows += servers.len();
+        let headings = 1 + usize::from(!servers.is_empty());
         for e in servers {
             let up = self.servers.is_up(&e.dir);
             let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
@@ -1855,12 +1929,20 @@ impl Launcher {
             }
             _ => {}
         }
-        // Sculk's banner, small, above the links: seen without scrolling, on every page but Servers, which
-        // shows it large. After a while on screen a "Hide" beside its label puts it away for good.
+        // Sculk's card above the links: seen without scrolling, on every page but Servers, which shows
+        // its wide banner. Tall where the sidebar has the height for it besides its rows (about 60
+        // high each, under headings of about 40) and the links, compact otherwise. After a while on
+        // screen a "Hide" beside its label puts it away for good.
         if self.page != Page::Servers && !self.settings.partner_hidden {
-            let mut side = div().relative().mb(px(8.)).child(partner::banner(
+            let free = f32::from(window.viewport_size().height)
+                - theme::TOPBAR
+                - 40. * headings as f32
+                - 60. * rows as f32
+                - 110.;
+            let mut side = div().relative().mb(px(8.)).child(partner::card(
                 "partner-side",
                 theme::SIDEBAR - 20.,
+                free < partner::TALL_HEIGHT,
                 &t,
             ));
             if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
@@ -2730,6 +2812,7 @@ impl Launcher {
                         Some(toggle.into_any_element()),
                         &t,
                     ))
+                    .child(self.nightly_row(n + 2, cx))
                     .child(group("Launcher", "monitor"))
                     .child(index_row(
                         n + 3,
@@ -2808,6 +2891,57 @@ impl Launcher {
             .children(self.agents_section(cx))
     }
 
+    /// Settings' Nightly row: off by default; on, the nightly build installs and updates in its
+    /// own instance, and the release stays one click away (the Horizon instance).
+    fn nightly_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let on = self.settings.nightly;
+        let toggle =
+            switch("nightly", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.set_nightly(!this.settings.nightly);
+                cx.notify();
+            }));
+        let what = tr(
+            "Can include pull requests not reviewed yet, picked by trusted reviewers; may break.",
+        );
+        let status = match (&self.nightly_progress, &self.nightly_error) {
+            _ if !on => tr("Plays in its own Nightly instance: your worlds and the release stay as they are.")
+                .to_string(),
+            (Some(p), _) => trf(
+                "Installing the nightly, {percent}%",
+                &[("percent", &format!("{:.0}", p * 100.))],
+            ),
+            (None, Some(e)) => trf("The nightly could not be installed: {error}", &[("error", e)]),
+            (None, None) => match self
+                .instances
+                .list
+                .iter()
+                .find(|i| i.id == nightly::INSTANCE)
+                .and_then(|i| i.version.clone())
+            {
+                Some(version) => trf(
+                    "{version} in the Nightly instance. Choose Horizon in the sidebar to play the release.",
+                    &[("version", &version)],
+                ),
+                None => tr("No nightly build yet.").to_string(),
+            },
+        };
+        index_row(
+            n,
+            tr("Nightly builds"),
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(what.to_string())
+                    .child(status)
+                    .into_any_element(),
+            ),
+            Some(toggle.into_any_element()),
+            &t,
+        )
+    }
+
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in
     /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
     fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
@@ -2828,46 +2962,32 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.args_input.is_empty() && !focused {
-                div()
-                    .text_color(t.muted)
-                    .child("For example --server-thread")
-            } else {
-                // The end of a long line stays in view while typing.
-                let chars: Vec<char> = self.args_input.chars().collect();
-                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.args_input,
+                &t,
+                focused,
+                false,
+                false,
+                "For example --server-thread",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.args_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "backspace" => {
-                        this.args_input.pop();
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.args_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited => {
+                        this.settings.game_args = this.args_input.text().to_string();
+                        this.settings.save();
                     }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.args_input.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.args_input.push_str(ch);
-                        }
-                    }
-                    _ => return,
+                    _ => {}
                 }
-                this.args_input.truncate(1024);
-                this.settings.game_args = this.args_input.clone();
-                this.settings.save();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.args_input);
         index_row(
             n,
             "Game arguments",
@@ -3659,7 +3779,7 @@ impl Render for Launcher {
         }
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(window, cx);
-        let sidebar = self.sidebar(cx);
+        let sidebar = self.sidebar(window, cx);
         let mut root = div()
             .id("root")
             .track_focus(&self.root_focus)

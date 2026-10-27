@@ -41,6 +41,9 @@ use std::{
 pub struct ItemQuad {
     pub pos: [Vec3; 4],
     pub uv: [[f32; 2]; 4],
+    /// The model UVs `GLINT_TEXTURING` scrolls for the glint (vanilla's UV0,
+    /// or UV3 for a special model).
+    pub foil_uv: [[f32; 2]; 4],
     pub normal: Vec3,
     pub color: u32,
     pub foil: Foil,
@@ -49,6 +52,47 @@ pub struct ItemQuad {
     /// The quad's sprite has translucent pixels (`MaterialInfo.itemRenderType`
     /// is a translucent sheet): drawn with the translucent entities.
     pub translucent: bool,
+}
+/// `TextureTransform.setupGlintTexturing`'s inputs.
+#[derive(Clone, Copy, Debug)]
+pub struct Glint {
+    /// `options.glintSpeed` (vanilla default 0.5).
+    pub speed: f32,
+    /// `options.glintStrength` / shader `GlintAlpha` (vanilla default 0.75).
+    pub alpha: f32,
+    /// `Util.getMillis()`.
+    pub millis: f32,
+    /// The transform's scale: `GLINT_TEXTURING`'s 8.0 for GUI items,
+    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for items in the world and
+    /// `ARMOR_ENTITY_GLINT_TEXTURING`'s 0.16 for armour (entity.wgsl).
+    pub scale: f32,
+}
+impl Glint {
+    /// `Util.getMillis() * glintSpeed * 8.0` as vanilla's long.
+    fn ticks(millis: f32, speed: f32) -> i64 {
+        (f64::from(millis) * f64::from(speed) * 8.0) as i64
+    }
+    /// The scroll clock modulo the common period of both offsets (110000 and
+    /// 30000 divide 330000), for `globals.time.w`: the entity shader derives
+    /// `ARMOR_ENTITY_GLINT_TEXTURING` from it.
+    pub fn scroll_ticks(millis: f32, speed: f32) -> f32 {
+        (Self::ticks(millis, speed) % 330_000) as f32
+    }
+    /// `TextureTransform.setupGlintTexturing(scale)` applied to the model UV:
+    /// translation(-o0, o1) * rotateZ(PI/18) * scale. The result repeats:
+    /// the shader samples the dedicated glint texture with vanilla's
+    /// repeating `GlintSampler`, so the UVs stay unwrapped.
+    pub fn uv(&self, model: [f32; 2]) -> [f32; 2] {
+        let ticks = Self::ticks(self.millis, self.speed);
+        let offset0 = (ticks % 110_000) as f32 / 110_000.0;
+        let offset1 = (ticks % 30_000) as f32 / 30_000.0;
+        let angle = std::f32::consts::PI / 18.0;
+        let (sin, cos) = angle.sin_cos();
+        [
+            model[0] * self.scale * cos - model[1] * self.scale * sin - offset0,
+            model[0] * self.scale * sin + model[1] * self.scale * cos + offset1,
+        ]
+    }
 }
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,6 +302,7 @@ fn submit_quads(
         sink.quad(ItemQuad {
             pos,
             uv,
+            foil_uv: q.uv,
             normal: transform_normal(m, direction_vector(q.facing)),
             color: argb(color),
             foil,
@@ -712,6 +757,8 @@ pub struct WorldSink<'a> {
     pub light: u32,
     /// The level's diffuse lights; `None` leaves the colour unshaded.
     pub lights: Option<(Vec3, Vec3)>,
+    /// The `GLINT_TEXTURING` sample for foil quads (`None` leaves them unglinted).
+    pub glint: Option<Glint>,
 }
 impl ItemSink for WorldSink<'_> {
     fn quad(&mut self, q: ItemQuad) {
@@ -726,13 +773,19 @@ impl ItemSink for WorldSink<'_> {
         } else {
             self.light
         };
-        let overlay = match (q.foil, q.translucent) {
-            (Foil::None, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
-            (Foil::None, false) => 0,
-            (_, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
-            (_, false) => 7,
+        let glint = if q.foil == Foil::None {
+            None
+        } else {
+            self.glint
         };
-        for (p, uv) in q.pos.iter().zip(q.uv) {
+        let overlay = match (glint.is_some(), q.translucent) {
+            (false, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
+            (false, false) => 0,
+            (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
+            (true, false) => 7,
+        };
+        for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
+            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
                 normal: [0; 4],
                 pos: p.to_array(),
@@ -740,6 +793,7 @@ impl ItemSink for WorldSink<'_> {
                 layer: overlay,
                 color,
                 light,
+                glint_uv,
             });
         }
     }
@@ -795,6 +849,33 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bad item model surfaces only once items.json has loaded, so a broken
+    /// items.json still reports itself first.
+    #[test]
+    fn item_model_errors_wait_for_the_item_definitions() -> crate::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("horizon-item-model-errors-{}", std::process::id()));
+        let model = root.join("assets/horizon/models/INVALID.json");
+        fs::create_dir_all(model.parent().unwrap())?;
+        fs::write(model, "{}")?;
+        let library = crate::model_library::ParsedModels::load(&root).into_item_library();
+        assert!(library.is_err());
+        fs::write(root.join("items.json"), "{")?;
+        let load = || {
+            ItemRenderer::load_with_library(&root, library.clone())
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        let broken_items = load();
+        fs::write(root.join("items.json"), "{}")?;
+        let bad_model = load();
+        let _ = fs::remove_dir_all(&root);
+        assert!(!broken_items.starts_with("item models:"));
+        assert!(bad_model.starts_with("item models:"));
+        Ok(())
+    }
 
     #[test]
     fn rendered_amounts_follow_the_count_bands() {

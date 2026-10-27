@@ -5,7 +5,7 @@
 //! (hits, pushes, fire, its projectiles) runs with that guest swapped in.
 use super::{Game, lan::LanHost};
 use horizon_client::{
-    mobs::{Mob, MobEvent, PlayerView, Who},
+    mobs::{Mob, MobEvent, PlayerView, Species, Who},
     projectiles::{Hit, Projectile},
 };
 use horizon_core::geometry::{Aabb, Vec3};
@@ -28,6 +28,22 @@ pub(super) fn player_for(
 ) -> Option<u32> {
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
+    // A tame wolf or cat sees its owner (`TamableAnimal.getOwner`), while they
+    // are in play, whoever is nearer. Not while it targets or was just hurt by
+    // a player: then `Who::Player` is that attacker, whoever it is, and the
+    // owner goals ignore it until the wolf lets go.
+    if !targeting
+        && matches!(m.species(), Species::Wolf | Species::Cat)
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        if host.is_some_and(|v| v.alive && v.uuid == owner) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| v.alive && v.uuid == owner) {
+            return Some(*conn);
+        }
+    }
     choose(m.position, targeting, host, guests, bound)
 }
 
@@ -65,8 +81,13 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
     matches!(
         e,
         MobEvent::AttackPlayer(..)
+            | MobEvent::AttackPlayerWithEffect { .. }
             | MobEvent::DamagePlayer { .. }
             | MobEvent::Push {
+                target: Who::Player,
+                ..
+            }
+            | MobEvent::Knockback {
                 target: Who::Player,
                 ..
             }
@@ -353,22 +374,27 @@ mod tests {
             alive: true,
             creative,
             sneaking: false,
+            swimming: false,
             look: [0.0; 3],
             main_hand: None,
             off_hand: None,
             head: None,
             armor_cover: 0.0,
+            invisible: false,
             spectator: false,
             gold_armor: false,
             hurt_by: None,
             last_hurt: None,
             velocity: Vec3::ZERO,
             yaw: 0.0,
+            sprinting: false,
+            riding: false,
             hero: false,
             effects: Vec::new(),
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            passenger: false,
         }
     }
 
