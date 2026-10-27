@@ -244,17 +244,17 @@ fn mob_meta(
             }
             defaults.push((18, serializer::BYTE, Value::Byte(0)));
         }
-        // Fox.DATA_TYPE_ID and DATA_FLAGS_ID (sleeping 32, ...).
+        // Fox.DATA_TYPE_ID and DATA_FLAGS_ID (after AgeableMob's two; sleeping 32, ...).
         "minecraft:fox" => {
             if e.variant != 0 {
-                meta.push((17, serializer::INT, Value::Int(i32::from(e.variant))));
+                meta.push((18, serializer::INT, Value::Int(i32::from(e.variant))));
             }
-            defaults.push((17, serializer::INT, Value::Int(0)));
+            defaults.push((18, serializer::INT, Value::Int(0)));
             let flags = (e.ints[0] & 0xff) as u8 as i8;
             if flags != 0 {
-                meta.push((18, serializer::BYTE, Value::Byte(flags)));
+                meta.push((19, serializer::BYTE, Value::Byte(flags)));
             }
-            defaults.push((18, serializer::BYTE, Value::Byte(0)));
+            defaults.push((19, serializer::BYTE, Value::Byte(0)));
         }
         "minecraft:cat" | "minecraft:wolf" => {
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
