@@ -410,7 +410,7 @@ pub(super) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
 fn plain(run: &[Vertex]) -> bool {
     run.iter()
         .step_by(4)
-        .all(|v| !matches!(v.layer, 2 | 4 | 6 | 9 | 10 | 11 | 12 | 32))
+        .all(|v| !matches!(v.layer, 2 | 4 | 6 | 9 | 10 | 11 | 12 | 34))
 }
 
 /// The programs of entity runs, in the order they draw.
