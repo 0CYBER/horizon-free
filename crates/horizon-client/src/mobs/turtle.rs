@@ -1,12 +1,17 @@
 //! Turtles (`Turtle`): the egg a bred mother carries (`TurtleBreedGoal`), her
 //! walk home (`TurtleGoHomeGoal`) and the egg she digs into the sand
 //! (`TurtleLayEggGoal`). `extra.flag` is `hasEgg`, `extra.flag2` `isLayingEgg`,
-//! `extra.counter` `layEggCounter` and `extra.home` `homePos`.
+//! `extra.counter` `layEggCounter` and `extra.home` `homePos`. Its own
+//! `TurtleMoveControl` sets the speed it walks and swims at. Not ported yet:
+//! `Turtle.travelInWater` (swimming still uses the generic fluid travel),
+//! `TurtlePathNavigation` and the rest of the turtle goal set, so movement in
+//! water still differs from vanilla.
 use super::{
     Mob, MobEvent, MobWorld,
+    control::{EPSILON, Operation, rotlerp},
     goals::{Breed, Cx, Goal, JUMP, MOVE, MoveToBlock, goal_clone, reduced},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{geometry::trig, random::RandomSource};
 
 pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
@@ -48,6 +53,45 @@ fn block_of(m: &Mob) -> [i32; 3] {
 /// `TurtleEggBlock.isSand`.
 fn is_sand(w: &MobWorld, p: [i32; 3]) -> bool {
     w.has_tag("minecraft:sand", w.block_name(p[0], p[1], p[2]))
+}
+/// `Turtle.TurtleMoveControl.updateSpeed`: slow in water away from home
+/// (slower still as a baby), and halved every tick on land, never under 0.06.
+fn update_speed(m: &mut Mob) {
+    if m.fluids.in_water {
+        m.velocity.y += 0.005;
+        if !close_to_home(m, 16.0) {
+            m.set_speed((m.ai.speed / 2.0).max(0.08));
+        }
+        if m.is_baby() {
+            m.set_speed((m.ai.speed / 3.0).max(0.06));
+        }
+    } else if m.on_ground {
+        m.set_speed((m.ai.speed / 2.0).max(0.06));
+    }
+}
+/// `Turtle.TurtleMoveControl.tick`: ease the speed an eighth of the way to
+/// the wanted one each tick (after `updateSpeed` cut it), face the wanted
+/// point and lift towards it; no jumping, and the operation is never reset.
+pub fn move_control(m: &mut Mob) {
+    update_speed(m);
+    if m.ai.mov.operation != Operation::MoveTo || m.ai.nav.is_done() {
+        m.set_speed(0.0);
+        return;
+    }
+    let [wx, wy, wz] = m.ai.mov.wanted;
+    let (xd, yd, zd) = (wx - m.position.x, wy - m.position.y, wz - m.position.z);
+    let dist = (xd * xd + yd * yd + zd * zd).sqrt();
+    if dist < EPSILON {
+        m.set_speed(0.0);
+        return;
+    }
+    let y_rot = trig::atan2_degrees(zd, xd) - 90.0;
+    m.yaw = rotlerp(m.yaw, y_rot, 90.0);
+    m.body_yaw = m.yaw;
+    let wanted = (m.ai.mov.speed_modifier * m.movement_speed()) as f32;
+    // Mth.lerp(0.125F, getSpeed(), wanted).
+    m.set_speed(m.ai.speed + 0.125 * (wanted - m.ai.speed));
+    m.velocity.y += f64::from(m.ai.speed) * (yd / dist) * 0.1;
 }
 /// `Turtle.aiStep`: while digging, sand crumbs fly every fifth tick.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -205,5 +249,151 @@ impl Goal for GoHome {
             }
             None => self.stuck = true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::{
+        Species,
+        path::{Path, PathNode, PathType},
+    };
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    /// A turtle (movement speed 0.25) strolling (`speedModifier` 1.0) to a
+    /// point ten blocks ahead along a path it has not finished.
+    fn strolling_turtle() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:turtle".into();
+        k.species = Species::Turtle;
+        k.speed = 0.25;
+        k.step_height = 1.0;
+        let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
+        m.on_ground = true;
+        let node = PathNode {
+            x: 0,
+            y: 0,
+            z: 10,
+            kind: PathType::Walkable,
+        };
+        m.ai.nav.path = Some(Path {
+            nodes: vec![node],
+            next: 0,
+            target: [0, 0, 10],
+            dist_to_target: 0.0,
+            reached: true,
+        });
+        m.ai.mov.set_wanted(0.0, 0.0, 10.0, 1.0);
+        m
+    }
+    fn speeds(m: &mut Mob, ticks: usize) -> Vec<f32> {
+        (0..ticks)
+            .map(|_| {
+                move_control(m);
+                assert_eq!(m.ai.zza, m.ai.speed, "setSpeed sets the forward input");
+                m.ai.speed
+            })
+            .collect()
+    }
+
+    #[test]
+    fn walks_on_land_at_a_third_of_its_movement_speed() {
+        // TurtleMoveControl.tick on the ground: updateSpeed makes it
+        // max(speed / 2, 0.06) = 0.06, then Mth.lerp(0.125F, 0.06, 0.25),
+        // every tick. The default MoveControl walked it at the full 0.25, so
+        // the walk animation (and TurtleModel's 8 * walkSpeed leg swing) ran
+        // about nine times too fast (#1776).
+        let mut m = strolling_turtle();
+        let land = 0.06_f32 + 0.125 * (0.25 - 0.06_f32);
+        assert_eq!(speeds(&mut m, 40), vec![land; 40]);
+        // Facing the wanted point, the body with it; it never jumps.
+        assert_eq!(m.body_yaw, m.yaw);
+        assert!(crate::mobs::living::wrap(m.yaw).abs() < 1.0e-3);
+        assert!(!m.ai.jump);
+        assert_eq!(m.ai.mov.operation, Operation::MoveTo);
+        assert_eq!(m.velocity.y, 0.0);
+    }
+
+    #[test]
+    fn water_speed_is_cut_away_from_home_and_for_babies() {
+        // updateSpeed in water near home: no cut, the lerp climbs towards
+        // 0.25, and it lifts the turtle 0.005 a tick. (Only the control's
+        // speed: Turtle.travelInWater is not ported.)
+        let mut m = strolling_turtle();
+        m.on_ground = false;
+        m.fluids.in_water = true;
+        let s = speeds(&mut m, 60);
+        assert_eq!(s[0], 0.125 * 0.25);
+        assert!(s.windows(2).all(|w| w[1] > w[0]) && s[59] > 0.24 && s[59] < 0.25);
+        assert!((m.velocity.y - 60.0 * 0.005).abs() < 1.0e-9);
+        // More than 16 blocks from home: max(speed / 2, 0.08) first.
+        let mut m = strolling_turtle();
+        m.on_ground = false;
+        m.fluids.in_water = true;
+        m.extra.home = Some([0, 0, 40]);
+        let far = 0.08_f32 + 0.125 * (0.25 - 0.08_f32);
+        assert_eq!(speeds(&mut m, 20), vec![far; 20]);
+        // A baby: max(speed / 3, 0.06).
+        let mut m = strolling_turtle();
+        m.on_ground = false;
+        m.fluids.in_water = true;
+        m.extra.age = -24000;
+        let young = 0.06_f32 + 0.125 * (0.25 - 0.06_f32);
+        assert_eq!(speeds(&mut m, 20), vec![young; 20]);
+    }
+
+    #[test]
+    fn stops_when_the_path_is_done_or_the_point_reached() {
+        let mut m = strolling_turtle();
+        m.ai.nav.stop();
+        assert_eq!(speeds(&mut m, 1), vec![0.0]);
+        let mut m = strolling_turtle();
+        m.ai.mov.set_wanted(0.0, 0.0, 0.0, 1.0);
+        assert_eq!(speeds(&mut m, 1), vec![0.0]);
+        // updateSpeed runs before the early return: a stopped turtle in
+        // water is still lifted 0.005, path done or not moving at all.
+        let mut m = strolling_turtle();
+        m.fluids.in_water = true;
+        m.ai.nav.stop();
+        assert_eq!(speeds(&mut m, 1), vec![0.0]);
+        assert_eq!(m.velocity.y, 0.005);
+        let mut m = strolling_turtle();
+        m.fluids.in_water = true;
+        m.ai.mov.operation = Operation::Wait;
+        assert_eq!(speeds(&mut m, 1), vec![0.0]);
+        assert_eq!(m.velocity.y, 0.005);
+    }
+
+    #[test]
+    fn lifts_towards_a_point_above_by_the_slope_of_the_way_there() {
+        // setDeltaMovement(... + getSpeed() * (dy / dist) * 0.1): two up,
+        // three across and ten ahead.
+        let mut m = strolling_turtle();
+        m.ai.mov.set_wanted(3.0, 2.0, 10.0, 1.0);
+        let speed = speeds(&mut m, 1)[0];
+        let dist = (3.0_f64 * 3.0 + 2.0 * 2.0 + 10.0 * 10.0).sqrt();
+        assert_eq!(m.velocity.y, f64::from(speed) * (2.0 / dist) * 0.1);
+        assert!(m.velocity.y > 0.0);
+    }
+
+    #[test]
+    fn turns_at_most_ninety_degrees_a_tick_and_wraps_into_a_turn() {
+        // rotlerp(yRot, target, 90): from 150 towards about -16.7 it turns
+        // the full 90 to 60, then reaches the target, kept in [0, 360] as
+        // about 343.3; the body follows the yaw each tick.
+        let mut m = strolling_turtle();
+        m.ai.mov.set_wanted(3.0, 0.0, 10.0, 1.0);
+        m.yaw = 150.0;
+        m.body_yaw = 150.0;
+        let target = trig::atan2_degrees(10.0, 3.0) - 90.0;
+        assert!((-17.0..-16.0).contains(&target));
+        move_control(&mut m);
+        assert_eq!((m.yaw, m.body_yaw), (60.0, 60.0));
+        move_control(&mut m);
+        assert_eq!(m.yaw, 60.0 + (target - 60.0) + 360.0);
+        assert_eq!(m.body_yaw, m.yaw);
     }
 }

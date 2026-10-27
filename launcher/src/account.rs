@@ -638,6 +638,33 @@ pub struct Accounts {
     pub accounts: Vec<Account>,
     /// The UUID of the account the game starts with; none plays offline.
     pub selected: Option<String>,
+    /// Offline names the player keeps, to switch between (`--name`): no account, no skin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offline: Vec<String>,
+    /// The offline name that plays when no account is selected; none: the name the game made up
+    /// (`horizon-player.txt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_selected: Option<String>,
+    /// Each offline name's skin and cape (`skins`), by the name in lowercase.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub looks: std::collections::BTreeMap<String, crate::skins::Look>,
+}
+
+/// Who plays, as the quick switch lists them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Player {
+    /// A Microsoft account, by UUID.
+    Microsoft(String),
+    /// An offline name.
+    Offline(String),
+    /// Offline as the name the game made up.
+    GameName,
+}
+
+/// Whether `name` can be an offline name: 3 to 16 letters, digits or `_`, as account names are.
+pub fn valid_offline_name(name: &str) -> bool {
+    (3..=16).contains(&name.chars().count())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 impl Accounts {
@@ -687,6 +714,94 @@ impl Accounts {
         }
         Ok(())
     }
+    /// Who plays now.
+    pub fn player(&self) -> Player {
+        match (self.selected(), &self.offline_selected) {
+            (Some(a), _) => Player::Microsoft(a.uuid.clone()),
+            (None, Some(name)) => Player::Offline(name.clone()),
+            (None, None) => Player::GameName,
+        }
+    }
+
+    /// Plays as `who`: an account, an offline name (kept), or the game's own name.
+    pub fn play_as(&mut self, who: Player) -> Result<(), String> {
+        match who {
+            Player::Microsoft(uuid) => {
+                if !self.accounts.iter().any(|a| a.uuid == uuid) {
+                    return Err("That account isn't signed in.".into());
+                }
+                self.selected = Some(uuid);
+            }
+            Player::Offline(name) => {
+                let name = self.add_offline(&name)?;
+                self.selected = None;
+                self.offline_selected = Some(name);
+            }
+            Player::GameName => {
+                self.selected = None;
+                self.offline_selected = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Keeps an offline name (once, in any case); returns it as kept.
+    pub fn add_offline(&mut self, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if !valid_offline_name(name) {
+            return Err(format!(
+                "{name}: an offline name is 3 to 16 letters, digits or _"
+            ));
+        }
+        if let Some(kept) = self.offline.iter().find(|n| n.eq_ignore_ascii_case(name)) {
+            return Ok(kept.clone());
+        }
+        self.offline.push(name.to_string());
+        Ok(name.to_string())
+    }
+
+    /// Forgets an offline name; if it was playing, the game's own name plays.
+    pub fn remove_offline(&mut self, name: &str) -> Result<(), String> {
+        let before = self.offline.len();
+        self.offline.retain(|n| !n.eq_ignore_ascii_case(name));
+        self.looks.remove(&name.to_ascii_lowercase());
+        if self.offline.len() == before {
+            return Err(format!("No offline name {name}."));
+        }
+        if self
+            .offline_selected
+            .as_ref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            self.offline_selected = None;
+        }
+        Ok(())
+    }
+
+    /// An offline name's look (the default: no skin of its own).
+    pub fn look(&self, name: &str) -> crate::skins::Look {
+        self.looks
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The game's variables for the offline name that plays: its skin and cape.
+    pub fn look_env(&self) -> Vec<(&'static str, String)> {
+        match self.name_arg() {
+            Some(name) => crate::skins::env(&crate::skins::dir(), name, &self.look(name)),
+            None => Vec::new(),
+        }
+    }
+
+    /// The game's `--name` for this run: the offline name, when one plays.
+    pub fn name_arg(&self) -> Option<&str> {
+        match self.selected() {
+            Some(_) => None,
+            None => self.offline_selected.as_deref(),
+        }
+    }
+
     /// Sign out: the secrets leave the keychain, the account the list.
     pub fn remove(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         store.delete(uuid)?;

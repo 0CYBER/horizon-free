@@ -828,8 +828,10 @@ impl Game<'_> {
                 continue;
             }
             let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+            // EndCrystal's constructor takes an id from the entity counter.
+            self.next_entity += 1;
             self.crystals.push(Crystal {
-                id: 0,
+                id: self.next_entity,
                 position: at,
                 show_bottom: true,
                 time,
@@ -2835,8 +2837,11 @@ impl Game<'_> {
             return false;
         }
         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+        // EndCrystal's constructor takes an id from the entity counter, so
+        // the crystal is an entity a command can name (`@e[type=end_crystal]`).
+        self.next_entity += 1;
         self.crystals.push(Crystal {
-            id: 0,
+            id: self.next_entity,
             position: Vec3::new(x + 0.5, y, z + 0.5),
             show_bottom: false,
             time,
@@ -2852,6 +2857,21 @@ impl Game<'_> {
         }
         self.swing_arm();
         true
+    }
+    /// `EndCrystal.kill` (`/kill`): the crystal is removed, without a blast
+    /// (`Entity.kill` does not hurt it).
+    pub(super) fn kill_crystal(&mut self, id: u32) {
+        if let Some(i) = self.crystals.iter().position(|c| c.id == id) {
+            self.destroy_crystal(i, None, CrystalDamage::Explosion);
+        }
+    }
+    /// `EnderDragon.kill` (`/kill`): `Entity.kill` removes the entity, it
+    /// does not hurt it (the dragon flies its death flight when its health
+    /// runs out).
+    pub(super) fn kill_dragon(&mut self, id: u32) {
+        if self.dragon.as_ref().is_some_and(|d| d.id == id) {
+            self.dragon = None;
+        }
     }
     /// Any entity touching `room` (`Level.getEntities(null, box)`).
     fn entity_in(&self, room: Aabb) -> bool {

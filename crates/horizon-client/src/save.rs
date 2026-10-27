@@ -3820,6 +3820,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn is_decorated(&self, proto: &crate::streaming::Proto) -> bool {
         self.inner.is_decorated(proto)
     }
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        self.inner.light_view(proto)
+    }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save
             .tables
