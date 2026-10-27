@@ -102,7 +102,12 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mod_browser;
+#[cfg(feature = "mods")]
+mod mod_browser_recipes;
 mod mod_input;
+#[cfg(feature = "mods")]
+mod mod_recipes;
 mod mod_render;
 mod mods;
 mod mount_menu;
@@ -370,7 +375,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -425,6 +430,16 @@ impl Options {
                         "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
                         "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
                         "--world" => o.world = Some(value),
+                        // Vanilla's quick play (Main, QuickPlay.joinSingleplayerWorld): only a
+                        // world that exists opens; else the title screen. --world also creates one.
+                        "--quickPlaySingleplayer" => {
+                            let folder = std::env::current_dir()?.join("saves").join(&value);
+                            if folder.join("level.dat").is_file() {
+                                o.world = Some(value);
+                            } else {
+                                eprintln!("Quick play: there is no world {value} in saves/");
+                            }
+                        }
                         "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
                         "--benchmark" => {
                             if horizon_client::benchmark::scenes(&value).is_none() {
@@ -435,7 +450,7 @@ impl Options {
                             }
                             o.benchmark = Some(value);
                         }
-                        "--server" => o.server = Some(value),
+                        "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
                         "--name" => o.player_name = Some(value),
                         "--session-file" => session_file = Some(value),
                         "--control-socket" => o.control = Some(value.into()),
@@ -3117,6 +3132,11 @@ impl Game<'_> {
                 } => self.hatch_sniffer([pos.x, pos.y, pos.z]),
                 LevelEvent::BlockEvent {
                     pos,
+                    state,
+                    kind: "hatch_turtles",
+                } => self.hatch_turtles([pos.x, pos.y, pos.z], state),
+                LevelEvent::BlockEvent {
+                    pos,
                     kind: "portal_spawn",
                     ..
                 } => self.portal_spawn([pos.x, pos.y, pos.z]),
@@ -4512,6 +4532,22 @@ impl Game<'_> {
         };
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        // `LivingEntity.baseTick` (Soul Speed) comes before `aiStep` (the
+        // glide's wear): both draw from the level random.
+        if let Some((at, velocity)) = self.tick_soul_speed() {
+            self.particles.send_particles(
+                &horizon_client::particles::ParticleOptions::simple(
+                    horizon_client::particles::ParticleType::Soul,
+                ),
+                at,
+                velocity,
+                1.0,
+                0,
+            );
+            if let Some(host) = self.lan.as_ref() {
+                lan_particles::send_soul_particle(host, at, velocity);
+            }
+        }
         // `ItemStack.hurtAndBreak` for the glide: Unbreaking can save the wear.
         if glider_wear > 0
             && !self.creative
@@ -5402,6 +5438,7 @@ impl Game<'_> {
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
+                self.draw_mod_browser(&mut batch);
             }
             Screen::Creative => {
                 self.draw_creative(&mut batch);
@@ -5794,6 +5831,7 @@ impl Game<'_> {
         self.last_inv_click = None;
     }
     pub(super) fn close_container(&mut self) {
+        self.mod_browser_closed();
         self.reset_inventory_clicks();
         self.close_station();
         self.mount_closed();
@@ -6521,6 +6559,9 @@ impl Game<'_> {
     fn inventory_press(&mut self, right: bool) {
         use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
+        if self.mod_browser_press(right) {
+            return;
+        }
         if !right && self.sort_press() {
             return;
         }
@@ -6704,24 +6745,8 @@ impl Game<'_> {
     }
     /// `hasClickedOutside` of the open screen at the cursor.
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
-        use horizon_client::container_screen::{Book, Image, clicked_outside};
-        let (ox, oy) = self.inventory_origin(batch);
-        let (shift, width, height) = if self.screen == Screen::Creative {
-            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
-        } else {
-            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-                Some(stations::Kind::Merchant) => (-50.0, 276),
-                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
-                _ => (0.0, 176),
-            };
-            (shift, width, self.screen_height() as i32)
-        };
-        let image = Image {
-            left: (ox + shift) as i32,
-            top: oy as i32,
-            width,
-            height,
-        };
+        use horizon_client::container_screen::{Book, clicked_outside};
+        let image = self.container_image(batch);
         let book = self
             .recipe_book_area(batch)
             .map(|(visible, tab_hovered)| Book {
@@ -6734,6 +6759,26 @@ impl Game<'_> {
             image,
             book,
         )
+    }
+    /// The open container screen's window: its place and size.
+    fn container_image(&self, batch: &HudBatch) -> horizon_client::container_screen::Image {
+        let (ox, oy) = self.inventory_origin(batch);
+        let (shift, width, height) = if self.screen == Screen::Creative {
+            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
+        } else {
+            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
+                Some(stations::Kind::Merchant) => (-50.0, 276),
+                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
+                _ => (0.0, 176),
+            };
+            (shift, width, self.screen_height() as i32)
+        };
+        horizon_client::container_screen::Image {
+            left: (ox + shift) as i32,
+            top: oy as i32,
+            width,
+            height,
+        }
     }
     /// A click outside the window (slot id -999): `THROW` does nothing; a
     /// `PICKUP` drops the carried stack (left) or one of it (right), thrown
@@ -6895,7 +6940,7 @@ impl Game<'_> {
         }
     }
     fn click_inventory(&mut self, right: bool) {
-        if self.mount_click(right) {
+        if self.mod_browser_press(right) || self.mount_click(right) {
             return;
         }
         if self.recipe_book_click(right) {
@@ -8067,6 +8112,7 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        world_loading::world_data_used();
         if self.defer_world_entry(PendingWorldEntry::Local {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
@@ -12128,6 +12174,14 @@ impl ApplicationHandler for Game<'_> {
                     self.recipe_key(&event);
                 }
                 WindowEvent::KeyboardInput { event, .. }
+                    if self.mod_browser_typing()
+                        && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // A mod's item panel's search box, as the recipe book's.
+                    self.mod_browser_key(&event);
+                }
+                WindowEvent::KeyboardInput { event, .. }
                     if self.station_typing()
                         && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
@@ -13036,6 +13090,17 @@ impl Game<'_> {
         if self.rest_loader.is_some() {
             return Ok(());
         }
+        let on_world_screens = self.title.as_ref().is_some_and(|title| {
+            !matches!(
+                title.mode,
+                horizon_client::title::Mode::Main | horizon_client::title::Mode::Multiplayer(_)
+            )
+        });
+        world_loading::preload_world_data(
+            on_world_screens,
+            &self.options.resources,
+            self.pack.assets.registry,
+        );
         if std::mem::take(&mut self.pending_pack_reload) {
             self.reload_packs();
         }

@@ -38,7 +38,7 @@ don't import it); faster, or fixing behaviour to what the reference already says
 
 A new WIT function doesn't break older mods, but a mod that calls it can't run on a Horizon from before it. So every
 function the game offers mods has an **API level**, the one it arrived at (`crates/horizon-mods/src/api_level.rs`):
-level 0 is the contract of Horizon 0.2.67 to 0.2.69, level 1 adds `render.set-minimap` and server mods' `players`, level 2 `game.raycast`, level 3 `command.run-quiet`. A mod needs the level of
+level 0 is the contract of Horizon 0.2.67 to 0.2.69, level 1 adds `render.set-minimap` and server mods' `players`, level 2 `game.raycast`, level 3 `command.run-quiet`, level 4 server mods' `world`, level 5 `recipes` (`items`, `all`, `known`), level 6 `browser` (`set-items`, `poll`, `set-recipes`) and `recipes.place` and `recipes.give`. A mod needs the level of
 the newest function it imports (a component imports only the functions it calls). The level is read from the file,
 never declared:
 

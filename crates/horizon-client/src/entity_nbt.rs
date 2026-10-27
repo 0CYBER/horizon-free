@@ -370,6 +370,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:bat" => {
             map.insert("BatFlags".into(), Tag::Byte(i8::from(m.extra.flag)));
         }
+        "minecraft:turtle" => {
+            map.insert("has_egg".into(), Tag::Byte(i8::from(m.extra.flag)));
+            if let Some(home) = m.extra.home {
+                map.insert("home_pos".into(), Tag::IntArray(home.to_vec()));
+            }
+        }
         "minecraft:creaking" => {
             // home_pos: the heart it is bound to.
             if let Some(home) = m.extra.home {
@@ -875,6 +881,18 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         && home.len() == 3
     {
         crate::mobs::creaking::set_transient(&mut m, [home[0], home[1], home[2]]);
+    }
+    if m.species() == crate::mobs::Species::Turtle {
+        // Turtle.readAdditionalSaveData: `home_pos` (else where it stands) and `has_egg`.
+        m.extra.flag = flag(tag, "has_egg");
+        m.extra.home = Some(match tag.get("home_pos") {
+            Some(Tag::IntArray(home)) if home.len() == 3 => [home[0], home[1], home[2]],
+            _ => [
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            ],
+        });
     }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;

@@ -1289,6 +1289,10 @@ impl Game<'_> {
                     self.mob_vibration_particle(from, to, ticks)
                 }
                 MobEvent::DigParticles { at } => self.warden_dig_particles(at),
+                MobEvent::BlockBreakEffect { pos, block } => {
+                    let state = self.world.block(block[0], block[1], block[2]);
+                    self.destroy_particles(pos, state);
+                }
                 MobEvent::Darkness { at, radius } => self.apply_darkness(at, radius),
                 MobEvent::CreakingHurt {
                     home,
@@ -1327,10 +1331,50 @@ impl Game<'_> {
                         m.ai.aggressive |= aggressive;
                     }
                 }
-                MobEvent::GiftLoot { mob, table, at } => self.drop_gift_loot(mob, table, at),
+                MobEvent::GiftLoot { mob, table, at } => {
+                    // Turtle.ageBoundaryReached: only with mob loot on.
+                    if table == "minecraft:gameplay/turtle_grow" && !self.ui.rules.bool("mob_drops")
+                    {
+                        continue;
+                    }
+                    self.drop_gift_loot(mob, table, at);
+                }
             }
         }
         Ok(())
+    }
+    /// `TurtleEggBlock.randomTick` at the last hatch stage: one baby turtle
+    /// per egg, a day from grown, with the egg as its home (the sound, the
+    /// crumbs and the block's removal came from the level).
+    pub(super) fn hatch_turtles(
+        &mut self,
+        pos: [i32; 3],
+        state: horizon_world::registry::BlockStateId,
+    ) {
+        let eggs = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("eggs"))
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(1);
+        for i in 0..eggs {
+            let at = [
+                f64::from(pos[0]) + 0.3 + f64::from(i) * 0.2,
+                f64::from(pos[1]),
+                f64::from(pos[2]) + 0.3,
+            ];
+            if let Some(id) = self.spawn_mob("minecraft:turtle", at, true)
+                && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+            {
+                m.extra.age = -24000;
+                m.extra.home = Some(pos);
+                m.yaw = 0.0;
+                m.body_yaw = 0.0;
+                m.head_yaw = 0.0;
+            }
+        }
     }
     fn apply_setup(&mut self, id: u32, setup: &SpawnSetup) {
         let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
@@ -1394,6 +1438,8 @@ impl Game<'_> {
                 .unwrap_or_else(|| parent.clone());
             let mut child = parent.clone();
             child.baby = true;
+            // TurtleBreedGoal.breed triggers it without a child.
+            let turtle = p.species() == Species::Turtle;
             if matches!(
                 (
                     p.species(),
@@ -1406,7 +1452,7 @@ impl Game<'_> {
             ) {
                 child.kind = "minecraft:mule".into();
             }
-            self.trigger_bred(&parent, &partner_view, Some(&child));
+            self.trigger_bred(&parent, &partner_view, (!turtle).then_some(&child));
         }
         if let Some(q) = self.mobs.iter_mut().find(|m| m.id == partner) {
             q.extra.age = 6000;
@@ -1416,6 +1462,19 @@ impl Game<'_> {
         // Sniffer.spawnChildFromBreeding: an egg instead of a baby.
         if p.species() == Species::Sniffer {
             self.lay_sniffer_egg(&p);
+            return;
+        }
+        // TurtleBreedGoal.breed: the goal gave the mother her egg; only the
+        // experience is left, and only with mob loot on.
+        if p.species() == Species::Turtle {
+            // One `new ExperienceOrb` of 1 to 7 from the mother's random (not
+            // split up as `ExperienceOrb.award` does).
+            if self.ui.rules.bool("mob_drops")
+                && let Some(m) = self.mobs.iter_mut().find(|m| m.id == parent)
+            {
+                let xp = 1 + m.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.add_orb([p.position.x, p.position.y, p.position.z], xp);
+            }
             return;
         }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
@@ -2695,6 +2754,7 @@ impl Game<'_> {
         let mut handled = true;
         let mut drops: Vec<(String, u32)> = Vec::new();
         let is_food = m.kind.food.contains(&item);
+        let baby_turtle = species == Species::Turtle && m.is_baby();
         match species {
             Species::Cow | Species::Mooshroom if item == "minecraft:bucket" && !m.is_baby() => {
                 give = Some("minecraft:milk_bucket");
@@ -2983,6 +3043,14 @@ impl Game<'_> {
         }
         if !handled {
             return Ok(false);
+        }
+        // Turtle.ageBoundaryReached: food that finishes a baby's growth.
+        if baby_turtle && !self.mobs[index].is_baby() {
+            self.handle_mob_events(vec![MobEvent::GiftLoot {
+                mob: self.mobs[index].id,
+                table: "minecraft:gameplay/turtle_grow",
+                at: feet,
+            }])?;
         }
         self.swing_arm();
         if let Some(s) = sound {
@@ -3456,6 +3524,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::InFire => "minecraft:in_fire",
         K::Lava => "minecraft:lava",
         K::Drown => "minecraft:drown",
+        K::DryOut => "minecraft:dry_out",
         K::Magic => "minecraft:magic",
         K::Sting => "minecraft:sting",
         K::Cactus => "minecraft:cactus",

@@ -266,8 +266,17 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 format!("{} quiet command(s)", lines.len())
             }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
+            Output::SetBlocks {
+                dimension, blocks, ..
+            } => {
+                format!("set {} block(s) in {dimension}", blocks.len())
+            }
             Output::OpenScreen { .. } => "opened a screen".to_string(),
             Output::CloseScreen { .. } => "closed its screen".to_string(),
+            Output::PlaceRecipe { book_id, all } => {
+                format!("placed recipe {book_id}{}", if all { " (all)" } else { "" })
+            }
+            Output::Give { item, count, .. } => format!("gave {count} {item}"),
             Output::Shake { strength, seconds } => {
                 format!("shook the camera: {strength:.2} for {seconds:.1} s")
             }
