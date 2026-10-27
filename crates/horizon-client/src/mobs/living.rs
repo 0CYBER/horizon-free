@@ -370,7 +370,14 @@ impl Mob {
     /// Entity.move with block collisions and step-up; updates collision flags
     /// and fall distance (Entity.checkFallDamage).
     pub fn do_move(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
-        let wanted = self.velocity;
+        let mut wanted = self.velocity;
+        // Entity.move: standing in a cobweb (`WebBlock.entityInside` ends in
+        // `makeStuckInBlock`) scales the move, stops the mob and ends its fall.
+        if let Some(stuck) = self.web_multiplier(w) {
+            self.fall_distance = 0.0;
+            wanted = Vec3::new(wanted.x * stuck.x, wanted.y * stuck.y, wanted.z * stuck.z);
+            self.velocity = Vec3::ZERO;
+        }
         let step = self.kind.step_height as f32;
         let mut scene = SceneCollisions {
             world: w.world,
@@ -428,6 +435,35 @@ impl Mob {
         // Entity.checkSupportingBlock
         self.supporting = self.supporting_block(w, moved);
         self.movement_emission(w, moved, events);
+    }
+    /// `WebBlock.entityInside`: the speed multiplier of a mob whose box (shrunk
+    /// by `1.0E-5`, as in `checkInsideBlocks`) touches a cobweb, half as
+    /// strong with Weaving. Spiders' `makeStuckInBlock` ignores cobwebs and the
+    /// wither's ignores every block.
+    fn web_multiplier(&self, w: &MobWorld) -> Option<Vec3> {
+        use super::Species;
+        if matches!(
+            self.species(),
+            Species::Spider | Species::CaveSpider | Species::Wither
+        ) {
+            return None;
+        }
+        let b = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+        let (min, max) = (b.min_position(), b.max_position());
+        for x in min.x.floor() as i32..=max.x.floor() as i32 {
+            for y in min.y.floor() as i32..=max.y.floor() as i32 {
+                for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                    if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:cobweb" {
+                        return Some(if self.has_effect("minecraft:weaving") {
+                            Vec3::new(0.5, 0.25, 0.5)
+                        } else {
+                            Vec3::new(0.25, f64::from(0.05_f32), 0.25)
+                        });
+                    }
+                }
+            }
+        }
+        None
     }
     /// LivingEntity.checkFallDamage: the fluid state refreshed out of water
     /// (touching water resets the fall), then Entity.checkFallDamage.
@@ -846,17 +882,24 @@ impl Mob {
                         self.ai.no_jump_delay = 10;
                     }
                 } else {
-                    self.jump_in_liquid();
+                    self.jump_in_liquid(true);
                 }
             } else {
-                self.jump_in_liquid();
+                self.jump_in_liquid(false);
             }
         } else {
             self.ai.no_jump_delay = 0;
         }
     }
     /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3; bees 0.01.
-    fn jump_in_liquid(&mut self) {
+    /// A magma cube in lava rises to `0.22 + size * 0.05` instead
+    /// (`MagmaCube.jumpInLiquid`).
+    fn jump_in_liquid(&mut self, lava: bool) {
+        if lava && self.species() == super::Species::MagmaCube {
+            self.velocity.y = f64::from(0.22_f32 + self.extra.size as f32 * 0.05);
+            self.needs_sync = true;
+            return;
+        }
         self.velocity.y += if self.species() == super::Species::Bee {
             0.01
         } else if self.ai.nav.can_float {
