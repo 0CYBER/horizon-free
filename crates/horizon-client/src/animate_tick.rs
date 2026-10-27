@@ -8,7 +8,7 @@ use crate::{
     blocks::{BlockFacts, Fluid},
     command::args::GameMode,
     items::ItemStack,
-    particles::{ParticleEngine, ParticleOptions, ParticleType as T},
+    particles::{ParticleEngine, ParticleOptions, ParticleType as T, along_axis},
     world::World,
 };
 use horizon_core::{
@@ -75,8 +75,32 @@ enum Animate {
         waterlogged: bool,
     },
     EndPortal,
+    /// A powered lever: its facing and the direction it is attached toward.
+    Lever {
+        facing: [i32; 3],
+        connected: [i32; 3],
+    },
+    /// A powered repeater.
+    Repeater {
+        facing: [i32; 3],
+        delay: i32,
+    },
+    /// A free-hanging stalactite tip that is not waterlogged.
+    PointedDripstone,
+    WitherRose,
+    EndGateway,
+    /// A lightning rod, by the axis it points along (0, 1, 2 for X, Y, Z).
+    LightningRod(usize),
     /// `WetSpongeBlock.animateTick`.
     WetSponge,
+    FireflyBush,
+    /// An open eyeblossom (`Type.OPEN.emitSounds()`).
+    OpenEyeblossom,
+    PaleHangingMoss,
+    /// `DryVegetationBlock`: a dead bush.
+    DeadBush,
+    /// `ShortDryGrassBlock` and `TallDryGrassBlock`.
+    DryGrass,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -91,6 +115,7 @@ fn step(facing: &str) -> [i32; 3] {
 fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
     let name = name.strip_prefix("minecraft:").unwrap_or(name);
     let lit = prop("lit").as_deref() == Some("true");
+    let powered = prop("powered").as_deref() == Some("true");
     let facing = || step(&prop("facing").unwrap_or_default());
     match name {
         "torch" => Animate::Torch(T::Flame),
@@ -172,10 +197,47 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
         "end_portal" => Animate::EndPortal,
+        "lever" if powered => Animate::Lever {
+            facing: facing(),
+            // FaceAttachedHorizontalDirectionalBlock.getConnectedDirection.
+            connected: match prop("face").as_deref() {
+                Some("ceiling") => [0, -1, 0],
+                Some("floor") => [0, 1, 0],
+                _ => facing(),
+            },
+        },
+        "repeater" if powered => Animate::Repeater {
+            facing: facing(),
+            delay: prop("delay").and_then(|d| d.parse().ok()).unwrap_or(1),
+        },
+        "pointed_dripstone"
+            if prop("vertical_direction").as_deref() == Some("down")
+                && prop("thickness").as_deref() == Some("tip")
+                && prop("waterlogged").as_deref() != Some("true") =>
+        {
+            Animate::PointedDripstone
+        }
+        "wither_rose" => Animate::WitherRose,
+        "end_gateway" => Animate::EndGateway,
+        _ if name == "lightning_rod" || name.ends_with("_lightning_rod") => {
+            let [dx, dy, _] = facing();
+            Animate::LightningRod(if dx != 0 {
+                0
+            } else if dy != 0 {
+                1
+            } else {
+                2
+            })
+        }
         "wet_sponge" => Animate::WetSponge,
         // BrushableBlock has no dust colour of its own, so the dust is the map colour.
         "suspicious_sand" => Animate::Falling(0xF7E9A3, false),
         "suspicious_gravel" => Animate::Falling(0x707070, false),
+        "firefly_bush" => Animate::FireflyBush,
+        "open_eyeblossom" => Animate::OpenEyeblossom,
+        "pale_hanging_moss" => Animate::PaleHangingMoss,
+        "dead_bush" => Animate::DeadBush,
+        "short_dry_grass" | "tall_dry_grass" => Animate::DryGrass,
         "sculk_sensor" | "calibrated_sculk_sensor"
             if prop("sculk_sensor_phase").as_deref() == Some("active") =>
         {
@@ -246,10 +308,16 @@ pub struct AnimateTables {
     desert_sand_sounds: Vec<bool>,
     /// `#required_for_poplar_leaf_ambience` (overworld natural logs).
     poplar_leaf_logs: Vec<bool>,
+    /// `#triggers_ambient_desert_dry_vegetation_block_sounds`.
+    desert_dry_vegetation_sounds: Vec<bool>,
+    terracotta: Vec<bool>,
+    pale_oak_logs: Vec<bool>,
     /// `FireBlock.canBurn`: states with ignite odds above zero (none waterlogged).
     burnable: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
     ambient: Vec<Vec<(T, f32)>>,
+    /// Per state: 1 for a pointed dripstone, 2 for one whose tip points down.
+    dripstone: Vec<u8>,
 }
 impl AnimateTables {
     pub fn load(root: &Path, registry: &BlockRegistry, biomes: &Biomes) -> crate::Result<Self> {
@@ -315,14 +383,36 @@ impl AnimateTables {
                 }
             }
         }
+        let dripstone = (0..registry.len() as u32)
+            .map(|id| {
+                registry.state(BlockStateId(id)).map_or(0, |s| {
+                    let name = s.name.strip_prefix("minecraft:").unwrap_or(&s.name);
+                    if name != "pointed_dripstone" {
+                        0
+                    } else if s.properties.get("vertical_direction").map(String::as_str)
+                        == Some("down")
+                    {
+                        2
+                    } else {
+                        1
+                    }
+                })
+            })
+            .collect();
         Ok(Self {
             kinds,
+            dripstone,
             impermeable: by_state("minecraft:impermeable"),
             power_provider: by_state("minecraft:enchantment_power_provider"),
             power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
             dried_ghast_sounds: by_state("minecraft:triggers_ambient_dried_ghast_block_sounds"),
             desert_sand_sounds: by_state("minecraft:triggers_ambient_desert_sand_block_sounds"),
             poplar_leaf_logs: by_state("minecraft:required_for_poplar_leaf_ambience"),
+            desert_dry_vegetation_sounds: by_state(
+                "minecraft:triggers_ambient_desert_dry_vegetation_block_sounds",
+            ),
+            terracotta: by_state("minecraft:terracotta"),
+            pale_oak_logs: by_state("minecraft:pale_oak_logs"),
             burnable,
             ambient,
         })
@@ -348,8 +438,22 @@ pub struct AnimateContext<'a> {
     pub registry: &'a BlockRegistry,
     /// `Level.isRainingAt`.
     pub raining_at: &'a dyn Fn([i32; 3]) -> bool,
+    /// `getHeight(MOTION_BLOCKING_NO_LEAVES, x, z)` at a position's column.
+    pub height_no_leaves: &'a dyn Fn([i32; 3]) -> i32,
+    /// `EnvironmentAttributes.FIREFLY_BUSH_SOUNDS` (overworld day timeline).
+    pub firefly_bush_sounds: bool,
+    /// `Level.getSkyDarken`, for `getMaxLocalRawBrightness`.
+    pub sky_darken: i32,
     /// Creative main-hand marker block and a resolver for each placed state's sprite.
     pub marker: Option<(&'a str, &'a dyn Fn(BlockStateId) -> Option<ParticleOptions>)>,
+    /// `BlockState.getOffset` of a state at (x, z), for blocks with a random model offset.
+    pub model_offset: &'a dyn Fn(BlockStateId, i32, i32) -> Option<[f64; 3]>,
+    /// `TheEndGatewayBlockEntity.getParticleAmount` of the gateway state at a position.
+    pub gateway_particles: &'a dyn Fn(BlockStateId, [i32; 3]) -> usize,
+    /// `Level.isThundering`.
+    pub thundering: bool,
+    /// The dimension has `water_evaporates` and drips lava from dripstone (the Nether).
+    pub ultrawarm: bool,
 }
 
 /// `ClientLevel.getMarkerParticleTarget`: only the selected main-hand item counts.
@@ -397,6 +501,15 @@ impl AnimateContext<'_> {
                 shape.max(Axis::Z),
             ],
         ))
+    }
+    /// `Level.getMaxLocalRawBrightness`: the brighter of block light and
+    /// sky light less the sky darkening.
+    fn max_local_raw_brightness(&self, p: [i32; 3]) -> i32 {
+        let light = self.world.light(p[0], p[1], p[2]);
+        i32::from(light & 15).max(i32::from(light >> 4) - self.sky_darken)
+    }
+    fn offset_of(&self, state: BlockStateId, p: [i32; 3]) -> [f64; 3] {
+        (self.model_offset)(state, p[0], p[2]).unwrap_or([0.0; 3])
     }
     fn foliage(&self, p: [i32; 3]) -> u32 {
         let biome = self
@@ -453,7 +566,7 @@ fn do_animate_tick(
         return;
     }
     let state = ctx.state(pos);
-    block_animate_tick(tables, engine, ctx, state, pos);
+    block_animate_tick(tables, engine, ctx, state, pos, center);
     let facts = ctx.facts.get(state);
     if facts.fluid != Fluid::None {
         fluid_animate_tick(
@@ -609,6 +722,22 @@ fn beehive_drip(
     ];
     add(engine, T::DrippingHoney, p, [0.0; 3]);
 }
+/// `AmbientDesertBlockSoundsPlayer.shouldPlayDesertDryVegetationBlockSounds`:
+/// sand or terracotta two blocks deep.
+fn desert_dry_vegetation_sounds(
+    tables: &AnimateTables,
+    ctx: &AnimateContext,
+    below: [i32; 3],
+) -> bool {
+    let triggers = |p: [i32; 3]| {
+        tables
+            .desert_dry_vegetation_sounds
+            .get(ctx.state(p).0 as usize)
+            .copied()
+            .unwrap_or(false)
+    };
+    triggers(below) && triggers([below[0], below[1] - 1, below[2]])
+}
 /// `WaterFluid.animateTick` / `LavaFluid.animateTick`.
 fn fluid_animate_tick(
     engine: &mut ParticleEngine,
@@ -684,6 +813,7 @@ fn block_animate_tick(
     ctx: &AnimateContext,
     state: BlockStateId,
     pos: [i32; 3],
+    player: [i32; 3],
 ) {
     let (fx, fy, fz) = (f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
     match tables.kind(state) {
@@ -1073,11 +1203,197 @@ fn block_animate_tick(
                 }
             }
         }
+        Animate::FireflyBush => {
+            // FireflyBushBlock.animateTick: the idle sound on a quiet night
+            // under open sky, and fireflies in the dark within 5 blocks.
+            if next_int(engine.random(), 30) == 0
+                && ctx.firefly_bush_sounds
+                && (ctx.height_no_leaves)(pos) <= pos[1]
+            {
+                let name = "minecraft:block.firefly_bush.idle";
+                sound(engine, name, [fx, fy, fz], 1.0, 1.0);
+            }
+            if ctx.max_local_raw_brightness(pos) <= 13 {
+                let r = engine.random();
+                if r.next_double() <= 0.7 {
+                    let p = [
+                        fx + r.next_double() * 10.0 - 5.0,
+                        fy + r.next_double() * 5.0,
+                        fz + r.next_double() * 10.0 - 5.0,
+                    ];
+                    add(engine, T::Firefly, p, [0.0; 3]);
+                }
+            }
+        }
+        Animate::OpenEyeblossom => {
+            // EyeblossomBlock.animateTick: pale moss below.
+            if next_int(engine.random(), 700) == 0 {
+                let below = ctx.state([pos[0], pos[1] - 1, pos[2]]);
+                if ctx
+                    .registry
+                    .state(below)
+                    .is_some_and(|s| s.name == "minecraft:pale_moss_block")
+                {
+                    let name = "minecraft:block.eyeblossom.idle";
+                    sound(engine, name, [fx, fy, fz], 1.0, 1.0);
+                }
+            }
+        }
+        Animate::PaleHangingMoss => {
+            // HangingMossBlock.animateTick: under pale oak logs or leaves.
+            if next_int(engine.random(), 500) == 0 {
+                let above = ctx.state([pos[0], pos[1] + 1, pos[2]]);
+                let pale_leaves = ctx
+                    .registry
+                    .state(above)
+                    .is_some_and(|s| s.name == "minecraft:pale_oak_leaves");
+                if pale_leaves
+                    || tables
+                        .pale_oak_logs
+                        .get(above.0 as usize)
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    let name = "minecraft:block.pale_hanging_moss.idle";
+                    sound(engine, name, [fx, fy, fz], 1.0, 1.0);
+                }
+            }
+        }
+        Animate::DeadBush => {
+            // AmbientDesertBlockSoundsPlayer.playAmbientDeadBushSounds.
+            if next_int(engine.random(), 130) == 0 {
+                let below = [pos[0], pos[1] - 1, pos[2]];
+                let state = ctx.state(below);
+                let red_sand = ctx
+                    .registry
+                    .state(state)
+                    .is_some_and(|s| s.name == "minecraft:red_sand");
+                let terracotta = tables
+                    .terracotta
+                    .get(state.0 as usize)
+                    .copied()
+                    .unwrap_or(false);
+                if (red_sand || terracotta) && next_int(engine.random(), 3) != 0 {
+                    return;
+                }
+                if desert_dry_vegetation_sounds(tables, ctx, below) {
+                    let name = "minecraft:block.deadbush.idle";
+                    sound(engine, name, [fx, fy, fz], 1.0, 1.0);
+                }
+            }
+        }
+        Animate::DryGrass => {
+            // AmbientDesertBlockSoundsPlayer.playAmbientDryGrassSounds:
+            // played at the player.
+            if next_int(engine.random(), 200) == 0
+                && desert_dry_vegetation_sounds(tables, ctx, [pos[0], pos[1] - 1, pos[2]])
+            {
+                let at = [
+                    f64::from(player[0]) + 0.5,
+                    f64::from(player[1]),
+                    f64::from(player[2]) + 0.5,
+                ];
+                sound(engine, "minecraft:block.dry_grass.ambient", at, 1.0, 1.0);
+            }
+        }
         Animate::EndPortal => {
             // EndPortalBlock.animateTick: one smoke particle above the surface.
             let r = engine.random();
             let p = [fx + r.next_double(), fy + 0.8, fz + r.next_double()];
             add(engine, T::Smoke, p, [0.0; 3]);
+        }
+        Animate::Lever { facing, connected } => {
+            // LeverBlock.animateTick: a powered lever puffs red dust a quarter of the time.
+            if engine.random().next_float() < 0.25 {
+                // LeverBlock.makeParticle with scale 0.5.
+                let at = |base: f64, i: usize| {
+                    base + 0.5 + 0.1 * f64::from(-facing[i]) + 0.2 * f64::from(-connected[i])
+                };
+                let p = [at(fx, 0), at(fy, 1), at(fz, 2)];
+                engine.add(&ParticleOptions::dust([1.0, 0.0, 0.0], 0.5), p, [0.0; 3]);
+            }
+        }
+        Animate::Repeater { facing, delay } => {
+            // RepeaterBlock.animateTick: dust at one of the torches.
+            let r = engine.random();
+            let x = fx + 0.5 + (r.next_double() - 0.5) * 0.2;
+            let y = fy + 0.4 + (r.next_double() - 0.5) * 0.2;
+            let z = fz + 0.5 + (r.next_double() - 0.5) * 0.2;
+            let mut offset = -5.0f32;
+            if r.next_boolean() {
+                offset = (delay * 2 - 1) as f32;
+            }
+            offset /= 16.0;
+            let xo = f64::from(offset * facing[0] as f32);
+            let zo = f64::from(offset * facing[2] as f32);
+            redstone(engine, [x + xo, y, z + zo]);
+        }
+        Animate::PointedDripstone => dripstone_drip(tables, engine, ctx, state, pos),
+        Animate::WitherRose => {
+            // WitherRoseBlock.animateTick: smoke puffs at the centre of the shape.
+            let center = ctx.shape_y(pos).map_or([0.5; 2], |s| {
+                [(s.2[0] + s.2[1]) / 2.0, (s.2[2] + s.2[3]) / 2.0]
+            });
+            let offset = ctx.offset_of(state, pos);
+            let x = fx + center[0] + offset[0];
+            let z = fz + center[1] + offset[2];
+            for _ in 0..3 {
+                let r = engine.random();
+                if r.next_boolean() {
+                    let p = [
+                        x + r.next_double() / 5.0,
+                        fy + (0.5 - r.next_double()),
+                        z + r.next_double() / 5.0,
+                    ];
+                    add(engine, T::Smoke, p, [0.0; 3]);
+                }
+            }
+        }
+        Animate::EndGateway => {
+            // EndGatewayBlock.animateTick: portal particles, one for each visible face.
+            for _ in 0..(ctx.gateway_particles)(state, pos) {
+                let r = engine.random();
+                let mut p = [
+                    fx + r.next_double(),
+                    fy + r.next_double(),
+                    fz + r.next_double(),
+                ];
+                let mut v = [
+                    (r.next_double() - 0.5) * 0.5,
+                    (r.next_double() - 0.5) * 0.5,
+                    (r.next_double() - 0.5) * 0.5,
+                ];
+                let flip = next_int(r, 2) * 2 - 1;
+                if r.next_boolean() {
+                    p[2] = fz + 0.5 + 0.25 * f64::from(flip);
+                    v[2] = f64::from(r.next_float() * 2.0 * flip as f32);
+                } else {
+                    p[0] = fx + 0.5 + 0.25 * f64::from(flip);
+                    v[0] = f64::from(r.next_float() * 2.0 * flip as f32);
+                }
+                add(engine, T::Portal, p, v);
+            }
+        }
+        Animate::LightningRod(axis) => {
+            // LightningRodBlock.animateTick: in a thunderstorm, sparks along the
+            // topmost rod, more often as the game time within 200 ticks grows.
+            if ctx.thundering
+                && i64::from(next_int(engine.level_random(), 200)) <= ctx.world.game_time % 200
+                && pos[1]
+                    == ctx
+                        .world
+                        .world_surface(pos[0], pos[2], |id| ctx.facts.is_air(id))
+                        - 1
+            {
+                let mut sparks = Vec::new();
+                along_axis(engine.level_random(), axis, pos, (1, 2), |p, v| {
+                    sparks.push((p, v));
+                });
+                let options = ParticleOptions::simple(T::ElectricSpark);
+                for (p, v) in sparks {
+                    engine.add(&options, p, v);
+                }
+            }
         }
         Animate::EnderChest => {
             for _ in 0..3 {
@@ -1381,6 +1697,68 @@ fn leaves_ambient_sound(
             return;
         }
     }
+}
+/// `PointedDripstoneBlock.animateTick`: a free-hanging stalactite tip drips the
+/// fluid above the root of its stalactite.
+fn dripstone_drip(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    state: BlockStateId,
+    pos: [i32; 3],
+) {
+    let roll = engine.random().next_float();
+    if roll > 0.12 {
+        return;
+    }
+    // getFluidAboveStalactite: findRootBlock climbs at most ten blocks of
+    // stalactite and stops at the first block that is not pointed dripstone.
+    let mut root = None;
+    for step in 1..11 {
+        let p = [pos[0], pos[1] + step, pos[2]];
+        match tables
+            .dripstone
+            .get(ctx.state(p).0 as usize)
+            .copied()
+            .unwrap_or(0)
+        {
+            0 => {
+                root = Some(p);
+                break;
+            }
+            2 => {}
+            _ => return,
+        }
+    }
+    let Some(root) = root else {
+        return;
+    };
+    let above = ctx.facts.get(ctx.state([root[0], root[1] + 1, root[2]]));
+    // Mud above the root counts as a water source unless water evaporates here.
+    let (fluid, source) = if &*above.name == "minecraft:mud" && !ctx.ultrawarm {
+        (Fluid::Water, true)
+    } else {
+        (above.fluid, above.fluid_level >= 8 && !above.fluid_falling)
+    };
+    // canFillCauldron: only a water or lava source passes below a 2% roll.
+    if roll >= 0.02 && !(fluid != Fluid::None && source) {
+        return;
+    }
+    // getDripParticle: no fluid drips what the dimension's default says.
+    let lava = fluid == Fluid::Lava || (fluid == Fluid::None && ctx.ultrawarm);
+    let ty = if lava {
+        T::DrippingDripstoneLava
+    } else {
+        T::DrippingDripstoneWater
+    };
+    let offset = ctx.offset_of(state, pos);
+    // STALACTITE_DRIP_START_PIXEL is the tip's lowest point, 5/16.
+    let p = [
+        f64::from(pos[0]) + 0.5 + offset[0],
+        f64::from(pos[1]) + 0.3125 - 0.0625,
+        f64::from(pos[2]) + 0.5 + offset[2],
+    ];
+    add(engine, ty, p, [0.0; 3]);
 }
 /// `AmbientDesertBlockSoundsPlayer.shouldPlayAmbientSandSound`: sand in the
 /// surface column eight blocks away on all four sides.

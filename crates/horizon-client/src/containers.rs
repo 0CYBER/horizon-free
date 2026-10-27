@@ -103,6 +103,22 @@ pub enum BlockEntity {
     /// `DaylightDetectorBlockEntity`: no data, only the ticker
     /// (`DaylightDetectorBlock.tickEntity`).
     DaylightDetector,
+    /// `ChiseledBookShelfBlockEntity`: a `Container` of six one-book slots.
+    ChiseledBookshelf(Box<ChiseledBookshelf>),
+}
+/// `ChiseledBookShelfBlockEntity`: six slots and `lastInteractedSlot`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChiseledBookshelf {
+    pub items: [Option<ItemStack>; 6],
+    pub last_slot: i32,
+}
+impl Default for ChiseledBookshelf {
+    fn default() -> Self {
+        Self {
+            items: Default::default(),
+            last_slot: -1,
+        }
+    }
 }
 /// `TheEndGatewayBlockEntity`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -407,6 +423,9 @@ impl BlockEntity {
         if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
             return Some(Self::Campfire(Box::default()));
         }
+        if name == "minecraft:chiseled_bookshelf" {
+            return Some(Self::ChiseledBookshelf(Box::default()));
+        }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             n if n.ends_with("copper_chest") => 27,
@@ -447,6 +466,7 @@ impl BlockEntity {
             Self::EndGateway(_) => "minecraft:end_gateway",
             Self::DaylightDetector => "minecraft:daylight_detector",
             Self::Campfire(_) => "minecraft:campfire",
+            Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -471,6 +491,7 @@ impl BlockEntity {
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
             Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
+            Self::ChiseledBookshelf(b) => b.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -488,6 +509,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::DaylightDetector => &[],
             Self::Crafter(c) => &c.items,
+            Self::ChiseledBookshelf(b) => &b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -513,6 +535,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::DaylightDetector => &mut [],
             Self::Crafter(c) => &mut c.items,
+            Self::ChiseledBookshelf(b) => &mut b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)

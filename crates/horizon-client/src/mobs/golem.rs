@@ -157,12 +157,16 @@ impl Goal for OfferFlower {
     fn can_continue(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
         self.ticks > 0
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.ticks = 400;
         m.extra.counter = 400;
+        // IronGolem.offerFlower(true): entity event 11.
+        entity_event(m, 11, cx);
     }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.counter = 0;
+        // IronGolem.offerFlower(false): entity event 34.
+        entity_event(m, 34, cx);
         // A copper golem the offer ran out beside takes the poppy on its
         // antenna (#accepts_iron_golem_gift) when it has none.
         if self.ticks == 0
@@ -198,6 +202,7 @@ impl Goal for OfferFlower {
 /// the target is thrown upward.
 pub fn iron_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     m.extra.anim_ticks = 10;
+    entity_event(m, 4, cx);
     let attack = m.attrs.attack_damage;
     let amount = if attack as i32 > 0 {
         attack / 2.0 + m.random.next_int_bound(attack as i32).unwrap_or(0) as f32
@@ -223,6 +228,33 @@ pub fn iron_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
         1.0,
         1.0,
     ));
+}
+/// `Level.broadcastEntityEvent` for an iron golem (guests run `client_event`).
+fn entity_event(m: &Mob, event: i8, cx: &mut Cx) {
+    cx.events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
+}
+/// `IronGolem.handleEntityEvent` on a client: 4 the swing, 11 and 34 the
+/// poppy offer starting and stopping.
+pub fn client_event(m: &mut Mob, event: u8) {
+    match event {
+        4 => m.extra.anim_ticks = 10,
+        11 => m.extra.counter = 400,
+        34 => m.extra.counter = 0,
+        _ => {}
+    }
+}
+/// The swing and offer clocks of `IronGolem.aiStep` on a client.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.anim_ticks > 0 {
+        m.extra.anim_ticks -= 1;
+    }
+    if m.extra.counter > 0 {
+        m.extra.counter -= 1;
+    }
 }
 /// `IronGolem.aiStep` timers and anger.
 pub fn iron_ai_step(m: &mut Mob) {
@@ -309,12 +341,12 @@ fn snowball_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let zd = t.position.z - m.position.z;
     let yo = (xd * xd + zd * zd).sqrt() * 0.2;
     let mut p = Projectile::new(ProjectileKind::Snowball, start, Some(Who::Mob(m.id)));
-    // rangedAttackUncertainty: 14 - 4 * difficulty (normal: 6).
+    // SnowGolem.rangedAttackUncertainty: 12 on every difficulty.
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + yo - start.y, zd],
         1.6,
-        6.0,
+        12.0,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 0.4 / (m.random.next_float() * 0.4 + 0.8);

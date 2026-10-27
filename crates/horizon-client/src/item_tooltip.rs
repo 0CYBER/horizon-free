@@ -484,6 +484,37 @@ pub fn component_count(stack: &ItemStack, info: Option<&ItemInfo>) -> usize {
     keys.len()
 }
 
+/// `SmithingTemplateItem.appendHoverText`: the template's kind, what it applies to
+/// and its ingredients (gray titles over blue descriptions); none for other items.
+pub fn smithing_template_lines(
+    stack: &ItemStack,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, u32)> {
+    let path = stack.item.trim_start_matches("minecraft:");
+    if !path.ends_with("_smithing_template") {
+        return Vec::new();
+    }
+    let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
+    let kind = if path == "netherite_upgrade_smithing_template" {
+        "netherite_upgrade"
+    } else {
+        "armor_trim"
+    };
+    let (title, description) = (rgba(170, 170, 170, 255), rgba(85, 85, 255, 255));
+    let described = |what: &str| {
+        let key = format!("item.minecraft.smithing_template.{kind}.{what}");
+        (format!(" {}", text(&key)), description)
+    };
+    vec![
+        (text("item.minecraft.smithing_template"), title),
+        (String::new(), u32::MAX),
+        (text("item.minecraft.smithing_template.applies_to"), title),
+        described("applies_to"),
+        (text("item.minecraft.smithing_template.ingredients"), title),
+        described("ingredients"),
+    ]
+}
+
 /// The lines of `stack` below its name that its components give, in
 /// `ItemStack.addDetailsToTooltip` order.
 pub fn detail_lines(
@@ -494,30 +525,11 @@ pub fn detail_lines(
     let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
     let path = stack.item.trim_start_matches("minecraft:");
     let mut lines = Vec::new();
-    // SmithingTemplateItem.appendHoverText.
-    if path.ends_with("_smithing_template") {
-        let kind = if path == "netherite_upgrade_smithing_template" {
-            "netherite_upgrade"
-        } else {
-            "armor_trim"
-        };
-        lines.push(text("item.minecraft.smithing_template"));
-        lines.push(String::new());
-        lines.push(text("item.minecraft.smithing_template.applies_to"));
-        lines.push(format!(
-            " {}",
-            text(&format!(
-                "item.minecraft.smithing_template.{kind}.applies_to"
-            ))
-        ));
-        lines.push(text("item.minecraft.smithing_template.ingredients"));
-        lines.push(format!(
-            " {}",
-            text(&format!(
-                "item.minecraft.smithing_template.{kind}.ingredients"
-            ))
-        ));
-    }
+    lines.extend(
+        smithing_template_lines(stack, translate)
+            .into_iter()
+            .map(|l| l.0),
+    );
     let display = TooltipDisplay::for_stack(stack);
     lines.extend(bees_line(stack, &display, translate));
     lines.extend(honey_line(stack, &display, translate));

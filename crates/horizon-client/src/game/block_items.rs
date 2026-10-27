@@ -4,9 +4,13 @@
 //! placed item gives its block entity.
 use super::Game;
 use horizon_client::{
-    block_entity_item, block_entity_nbt, containers::BlockEntity, item_data, items::ItemStack, save,
+    Result, block_entity_item, block_entity_nbt, containers::BlockEntity, item_data,
+    items::ItemStack, save,
 };
-use horizon_world::nbt::{Compound, Tag};
+use horizon_world::{
+    nbt::{Compound, Tag},
+    registry::BlockStateId,
+};
 
 /// The component patch of `stack`.
 fn components(stack: &ItemStack) -> Compound {
@@ -75,6 +79,42 @@ impl Game<'_> {
             (stack.damage, stack.extra) = item_data::decode_components(Some(&Tag::Compound(all)));
         }
         Some(stack)
+    }
+
+    /// `BlockItem.updateBlockStateFromTag`: the properties of the item's
+    /// `block_state` component (a hive's honey level, a statue's pose) set on
+    /// the block just placed at `pos`. Returns the state it has now.
+    pub(super) fn apply_item_block_state(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        stack: &ItemStack,
+    ) -> Result<BlockStateId> {
+        let Some(Tag::Compound(saved)) =
+            stack.data().and_then(|d| d.other("minecraft:block_state"))
+        else {
+            return Ok(state);
+        };
+        let Some(current) = self.pack.assets.registry.state(state) else {
+            return Ok(state);
+        };
+        // Only the properties the block has.
+        let props: Vec<(String, String)> = saved
+            .iter()
+            .filter_map(|(k, v)| match v {
+                Tag::String(v) => Some((k.to_string_lossy(), v.to_string_lossy())),
+                _ => None,
+            })
+            .filter(|(k, v)| current.properties.get(k).is_some_and(|old| old != v))
+            .collect();
+        let props: Vec<(&str, &str)> = props.iter().map(|(k, v)| (&**k, &**v)).collect();
+        match self.with_props(state, &props) {
+            Some(new) if !props.is_empty() && new != state => {
+                self.level_set(pos, new)?;
+                Ok(new)
+            }
+            _ => Ok(state),
+        }
     }
 
     /// `BlockItem.updateCustomBlockEntityTag` and `updateBlockEntityComponents`

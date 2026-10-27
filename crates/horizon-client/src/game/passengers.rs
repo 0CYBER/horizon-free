@@ -279,11 +279,13 @@ impl Game<'_> {
     /// horse is a trap for fifteen minutes; a player within ten blocks springs
     /// it.
     pub(super) fn tick_skeleton_traps(&mut self) {
-        let player = self
-            .player
-            .as_ref()
-            .filter(|p| !p.health.dead_or_dying())
-            .map(|p| p.position);
+        // `Level.hasNearbyAlivePlayer`: alive, not a spectator, in the level.
+        let players: Vec<_> = self
+            .level_players()
+            .into_iter()
+            .filter(|p| p.alive && !p.spectator)
+            .map(|p| p.position)
+            .collect();
         let mut sprung = Vec::new();
         for m in &mut self.mobs {
             if m.species() != Species::SkeletonHorse || !m.extra.trap || !m.alive() {
@@ -296,7 +298,10 @@ impl Game<'_> {
                     continue;
                 }
             }
-            if player.is_some_and(|p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE) {
+            if players
+                .iter()
+                .any(|&p| m.distance_sqr(p) < TRAP_RANGE * TRAP_RANGE)
+            {
                 sprung.push(m.id);
             }
         }
