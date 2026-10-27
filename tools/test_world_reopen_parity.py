@@ -84,6 +84,7 @@ def main():
     failures = 0
     try:
         ctl('wait-ready', '300')
+        ctl('wait-for', 'loaded', '--timeout', '300')  # as after each reopen below
         ctl('command', 'summon minecraft:minecart ~2 ~ ~2')
         ctl('wait', '20')
         expected = carts()
