@@ -1175,6 +1175,43 @@ impl ParticleEngine {
             }
         }
     }
+    /// `LevelEventHandler.levelEvent` 2018: an enderman's portal trail from
+    /// where it was (`from`) to where it went, which `data` packs within
+    /// (127, 127, 127). 128 portal particles along the way, spread about the
+    /// width and height of an enderman.
+    pub fn enderman_teleportation(&mut self, from: [i32; 3], data: i32, particle_level: u8) {
+        // EntityTypes.ENDERMAN's dimensions.
+        const WIDTH: f64 = 0.6_f32 as f64;
+        const HEIGHT: f64 = 2.9_f32 as f64;
+        let to = [
+            from[0].wrapping_add(((data >> 16) & 255) - 127),
+            from[1].wrapping_add(((data >> 8) & 255) - 127),
+            from[2].wrapping_add((data & 255) - 127),
+        ]
+        .map(f64::from);
+        let from = from.map(f64::from);
+        let options = ParticleOptions::simple(ParticleType::Portal);
+        for _ in 0..128 {
+            let r = &mut self.level_random;
+            let t = r.next_double();
+            let velocity = std::array::from_fn(|_| f64::from((r.next_float() - 0.5) * 0.2));
+            // Mth.lerp(t, to, from).
+            let position = [
+                to[0] + t * (from[0] - to[0]) + (r.next_double() - 0.5) * WIDTH * 2.0,
+                to[1] + t * (from[1] - to[1]) + r.next_double() * HEIGHT,
+                to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) * WIDTH * 2.0,
+            ];
+            // The option roll shares the level random and precedes the distance check.
+            let limited = match particle_level {
+                1 => r.next_int_bound(3).unwrap_or(0) == 0,
+                2 => true,
+                _ => false,
+            };
+            if !limited {
+                self.add(&options, position, velocity);
+            }
+        }
+    }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
     /// explosion particle (the emitter unless `ServerExplosion.isSmall`) and up
     /// to 512 poof/smoke particles thrown from air inside the radius.

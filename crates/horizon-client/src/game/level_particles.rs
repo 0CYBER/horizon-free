@@ -1,7 +1,7 @@
 //! Level events whose client handler (`LevelEventHandler`) spawns particles
 //! on a block: bone meal's growth (1505), dragon egg teleportation (2015), a
-//! consumable's teleport (2017), electric sparks (3002), waxing (3003), wax
-//! off (3004) and scraping (3005).
+//! consumable's teleport (2017), an enderman's (2018), electric sparks (3002),
+//! waxing (3003), wax off (3004) and scraping (3005).
 use super::Game;
 use horizon_client::items::ItemStack;
 use horizon_client::particles::{self, ParticleOptions, ParticleType};
@@ -17,6 +17,11 @@ impl Game<'_> {
     pub(super) fn consume_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
         self.particles
             .block_teleportation(pos, data, [127, 127, 127], self.settings.particles);
+    }
+    /// Event 2018: an enderman's portal trail.
+    pub(super) fn enderman_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
+        self.particles
+            .enderman_teleportation(pos, data, self.settings.particles);
     }
     /// `LevelEventHandler.levelEvent` 3002 to 3005, drawing from the client
     /// level's random.
