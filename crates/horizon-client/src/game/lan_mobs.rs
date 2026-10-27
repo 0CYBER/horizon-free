@@ -371,6 +371,7 @@ mod tests {
             velocity: Vec3::ZERO,
             yaw: 0.0,
             hero: false,
+            effects: Vec::new(),
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,

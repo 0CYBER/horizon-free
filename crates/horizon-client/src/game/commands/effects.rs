@@ -91,7 +91,12 @@ impl Game<'_> {
                 }
                 Target::Mob(id) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
-                        m.add_effect(namespaced(effect.id), duration, amplifier);
+                        let name = namespaced(effect.id);
+                        m.add_effect(name, duration, amplifier);
+                        m.extra.hidden_effects.retain(|h| *h != name);
+                        if !particles {
+                            m.extra.hidden_effects.push(name);
+                        }
                         true
                     }
                     None => false,
@@ -154,6 +159,10 @@ impl Game<'_> {
                         m.extra
                             .effects
                             .retain(|x| e.is_some_and(|e| x.0 != namespaced(e.id)));
+                        let left = &m.extra.effects;
+                        m.extra
+                            .hidden_effects
+                            .retain(|h| left.iter().any(|x| x.0 == *h));
                         m.extra.effects.len() != before
                     }
                     None => false,

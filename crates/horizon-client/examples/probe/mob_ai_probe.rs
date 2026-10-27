@@ -1058,6 +1058,7 @@ pub fn main() -> horizon_client::Result<()> {
                 velocity: Vec3::ZERO,
                 yaw: 0.0,
                 hero: false,
+                effects: Vec::new(),
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
