@@ -262,8 +262,10 @@ silent (no ping and Discord's @silent flag). Launcher releases post without a pi
 
 ### One channel
 
-Since 2026-10-23 there is one channel. Every game release is published as the release, never a pre-release, and
-marked GitHub's *latest*: the launcher, `horizon-server update` and `install.sh` take it at once. Because nothing
+Since 2026-10-23 there is one release channel, and it is every launcher's default. Since 2026-10-27 (Ludovic's
+decision, revising 2026-10-23's) players may also turn on [Nightly](#nightly-channel), an opt-in pre-release built
+from reviewed pull requests; nothing about releases changes for anyone who doesn't. Every game release is published
+as the release, never a pre-release, and marked GitHub's *latest*: the launcher, `horizon-server update` and `install.sh` take it at once. Because nothing
 promotes it later, the checks that used to gate a promotion run in the release itself, and the publish job
 (`tools/release_train.py gate`) publishes nothing unless both pass:
 
@@ -406,6 +408,37 @@ see the previous one as the newest; launchers that already updated keep running.
 With several game releases a day, the newest launcher release soon falls out of the newest 100 releases the
 launcher and the website read: both then look the newest launcher tags up one by one
 (`git/matching-refs/tags/launcher@`, then `launcher-v` if there is none, then `releases/tags/<tag>`).
+
+## Nightly channel
+
+`.github/workflows/nightly-build.yml` publishes an opt-in build once a night (20:17 UTC), for players who want
+reviewed fixes before they are released (#2681). It builds the newest `union/<agent>-<name>` branch on origin (main
+plus the pull requests the contribution gate proved together in one wave) when that union is newer than main's head
+and holds something main lacks, otherwise main (`tools/ci/nightly.py pick`). A night with nothing new publishes
+nothing. Only proven unions are pushed to origin, so nothing unreviewed ships.
+
+- **Jobs.** `pick` chooses the commit and writes the notes (the open pull requests it holds beyond main). `build` is
+  `game-build.yml`, the same builds and smoke test as a release, with the version `nightly-<date>` and
+  `HORIZON_NIGHTLY="<date> <short sha>"` built in, macOS signed ad hoc. `sign` signs SHA256SUMS for the channel
+  (the message says `horizon release nightly`, so a nightly's signature never passes for a release's). `publish`
+  checks the signature and the smoke test (not `release-blocker`: a nightly is how blockers get tested), renames the
+  previous `nightly` pre-release to `nightly-<its date>`, publishes the new one as the `nightly` pre-release (never
+  GitHub's latest), and deletes the `nightly-<date>` pre-releases and tags older than 7 days, nothing else.
+- **The signing key never meets the union's code.** Every workflow file and script runs from main's copy (a schedule
+  runs the default branch; `uses: ./…` takes the caller's commit), never the union's `.github/`. `build` compiles the
+  union with a read-only token that isn't kept in the checkout and no secrets; the runner's Developer ID keychain
+  stays locked. `sign` is the only job with the key, and checks out only main's `tools/ci/sign_release.sh`, which
+  hashes the archives with the runner's `sha256sum` and signs with its OpenSSL: it never runs what `build` made.
+  `publish` runs main's `horizon-release-sign`, never the archives.
+- **Players.** Releases stay the default and the only channel any launcher follows unless its player turns Nightly
+  on. `release_train.py`, `horizon-server update`, `install.sh` and the launcher's release list skip the tags: none
+  of them is `vX.Y.Z`.
+
+```sh
+gh workflow run "nightly build"                  # now; skips when the pick is the commit already published
+gh workflow run "nightly build" -f force=true    # build and publish anyway
+gh workflow run "nightly build" -f dry_run=true  # build and sign with a throwaway key, publish nothing
+```
 
 ## Nightly audit
 
