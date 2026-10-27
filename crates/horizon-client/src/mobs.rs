@@ -1011,6 +1011,16 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
+    /// A melee hit whose effect comes only if the hit lands (husk hunger,
+    /// cave spider poison, wither skeleton wither, bee and pufferfish
+    /// poison): a shield-blocked hit gives nothing.
+    AttackPlayerWithEffect {
+        amount: f32,
+        from: [f64; 3],
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+    },
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {
         amount: f32,
@@ -1955,9 +1965,15 @@ impl Mob {
             amount *= 5.0;
         }
         let (worn, worn_toughness) = self.worn_armor();
-        if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
+        // Shulker.setRawPeekAmount: a closed shell adds the covered armor modifier.
+        let covered = if self.species() == Species::Shulker && self.extra.counter == 0 {
+            20.0
+        } else {
+            0.0
+        };
+        if !source.bypasses_armor() && self.kind.armor + worn + covered > 0.0 {
             // CombatRules.getDamageAfterAbsorb
-            let armor = self.kind.armor + worn;
+            let armor = self.kind.armor + worn + covered;
             let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
             let mut fraction = effective / 25.0;

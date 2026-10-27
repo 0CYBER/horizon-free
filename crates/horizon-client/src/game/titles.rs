@@ -62,6 +62,7 @@ impl Game<'_> {
     /// The title, action bar and selected-item parts of `Hud.tick`.
     pub(super) fn tick_hud(&mut self) {
         self.titles.tick();
+        self.tick_in_bed_chat();
         // `MinecraftServer.isCurrentlySaving` of single player's server.
         let saving = self
             .integrated

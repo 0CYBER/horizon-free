@@ -1057,6 +1057,18 @@ impl Game<'_> {
                 MobEvent::AttackPlayer(amount, from) => {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
+                // doHurtTarget: the effect only when hurtServer took damage.
+                MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
+                    effect,
+                    ticks,
+                    amplifier,
+                } => {
+                    if self.mob_hits_player(amount, from, "minecraft:mob_attack") {
+                        self.give_player_effect(effect, ticks, amplifier);
+                    }
+                }
                 MobEvent::DamagePlayer { amount, from, kind } => {
                     self.mob_hits_player(amount, from, kind);
                 }
@@ -2674,6 +2686,17 @@ impl Game<'_> {
                                 };
                                 self.player_hit(&victim, "minecraft:arrow", Some(direct), amount);
                             }
+                            // AbstractArrow.onHitEntity: KILLED_BY_ARROW for a kill
+                            // (piercing arrows are not modelled).
+                            if hurt
+                                && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                                && !m.alive()
+                            {
+                                let victim = self.mob_entity(m);
+                                let weapon =
+                                    p.arrow.as_ref().and_then(|a| a.fired_from_weapon.as_ref());
+                                self.trigger_killed_by_arrow(&[victim], weapon);
+                            }
                         }
                         hurt
                     }
@@ -3269,8 +3292,9 @@ impl Game<'_> {
                     .items()
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
-                    .map_or(2.0, |f| f.0 as f32);
-                // TamableAnimal.feed: playEatingSound, which wolves leave empty.
+                    .map_or(2.0, |f| f.0 as f32 * 2.0);
+                // TamableAnimal.feed(.., 2.0F, 2.0F): heals twice the nutrition,
+                // then playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
             }
