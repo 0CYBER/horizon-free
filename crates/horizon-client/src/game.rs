@@ -23,6 +23,7 @@ mod campfire;
 mod campfire_douse;
 mod cartography;
 mod chat;
+mod chiseled_bookshelf;
 mod client_ambient;
 mod clipboard;
 mod combat;
@@ -3822,6 +3823,12 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if let Some(swings) = self.use_chiseled_bookshelf(hit, held.as_ref()) {
+                if swings {
+                    self.swing_arm();
+                }
+                return Ok(true);
+            }
             if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(true);
@@ -5657,7 +5664,8 @@ impl Game<'_> {
                 | BlockEntity::CommandBlock(_)
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
-                | BlockEntity::Campfire(_),
+                | BlockEntity::Campfire(_)
+                | BlockEntity::ChiseledBookshelf(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5929,7 +5937,8 @@ impl Game<'_> {
                     | BlockEntity::CommandBlock(_)
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
-                    | BlockEntity::Campfire(_),
+                    | BlockEntity::Campfire(_)
+                    | BlockEntity::ChiseledBookshelf(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
