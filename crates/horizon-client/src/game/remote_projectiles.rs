@@ -74,7 +74,8 @@ pub(super) fn cloud_client_tick(
             ];
             (particle.clone(), v)
         };
-        particles.add(&options, at, velocity);
+        // `addAlwaysVisibleParticle`.
+        particles.add_with(&options, at, velocity, false, true);
     }
 }
 

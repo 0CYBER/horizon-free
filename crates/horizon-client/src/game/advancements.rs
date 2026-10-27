@@ -180,6 +180,14 @@ impl adv::World for View<'_, '_> {
             "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
             "entity_type" => self.0.res.mob_data().entity_has(tag, id),
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
+            "damage_type" => self
+                .0
+                .res
+                .stations()
+                .enchantments
+                .damage_tags
+                .get(tag)
+                .is_some_and(|t| t.contains(id)),
             _ => false,
         }
     }
@@ -681,6 +689,69 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
     }
+    /// `PlayerHurtEntityTrigger`: the player, the damage and the victim.
+    pub(super) fn trigger_player_hurt_entity(
+        &mut self,
+        victim: &EntityView,
+        damage: &adv::DamageView,
+    ) {
+        let me = self.player_entity();
+        let (victim, damage) = (victim.clone(), damage.clone());
+        self.trigger("minecraft:player_hurt_entity", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let vctx = adv::Entities {
+                this: Some(&victim),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::damage(&c["damage"], &damage, w, me.position)
+                && adv::conditions(&c["entity"], &vctx, w)
+        });
+    }
+    /// The player's hit on `victim` as `LivingEntity.hurtServer` reports it:
+    /// `kind` damage of `amount` from `direct` (the player's own hand when
+    /// `None`), nothing blocked.
+    pub(super) fn player_hit(
+        &mut self,
+        victim: &EntityView,
+        kind: &str,
+        direct: Option<EntityView>,
+        amount: f32,
+    ) {
+        let me = self.player_entity();
+        self.trigger_player_hurt_entity(
+            victim,
+            &adv::DamageView {
+                kind: kind.to_owned(),
+                is_direct: direct.is_none(),
+                direct: direct.or_else(|| Some(me.clone())),
+                source: Some(me),
+                original: amount,
+                actual: amount,
+                blocked: false,
+            },
+        );
+    }
+    /// `EntityHurtPlayerTrigger`: the player and the damage it took.
+    pub(super) fn trigger_entity_hurt_player(&mut self, damage: &adv::DamageView) {
+        let me = self.player_entity();
+        let damage = damage.clone();
+        self.trigger("minecraft:entity_hurt_player", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::damage(&c["damage"], &damage, w, me.position)
+        });
+    }
     /// A player condition plus one item (`item` key).
     pub(super) fn trigger_item(&mut self, name: &str, stack: &ItemStack) {
         let me = self.player_entity();
@@ -721,6 +792,22 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::range_i(&c["level"], i64::from(levels))
         });
     }
+    /// `BrewedPotionTrigger`: the potion contents of a stack taken from a
+    /// brewing stand.
+    pub(super) fn trigger_brewed_potion(&mut self, stack: &ItemStack) {
+        let me = self.player_entity();
+        let potion = stack.potion().map(str::to_owned);
+        self.trigger("minecraft:brewed_potion", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::potions(&c["potion"], potion.as_deref(), w)
+        });
+    }
     /// `TradeTrigger`: the villager and the item the trade gave.
     pub(super) fn trigger_trade(&mut self, villager: &EntityView, stack: &ItemStack) {
         let me = self.player_entity();
@@ -740,6 +827,35 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
                 && adv::conditions(&c["villager"], &vctx, w)
                 && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// `FishingRodHookedTrigger`: the rod, what the hook is in (or the hook)
+    /// and the items it caught.
+    pub(super) fn trigger_fishing_rod_hooked(
+        &mut self,
+        rod: &ItemStack,
+        hooked: &EntityView,
+        items: &[ItemStack],
+    ) {
+        let me = self.player_entity();
+        let rod = item_view(rod);
+        let hooked = hooked.clone();
+        let items: Vec<ItemView> = items.iter().map(item_view).collect();
+        self.trigger("minecraft:fishing_rod_hooked", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let ectx = adv::Entities {
+                this: Some(&hooked),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::item(&c["rod"], &rod, w)
+                && adv::conditions(&c["entity"], &ectx, w)
+                && (c["item"].is_null() || items.iter().any(|i| adv::item(&c["item"], i, w)))
         });
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.

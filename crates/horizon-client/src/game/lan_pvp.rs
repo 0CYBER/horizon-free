@@ -267,6 +267,30 @@ impl Game<'_> {
         } else {
             Default::default()
         };
+        // ServerPlayer.awardKillScore: the blow that kills a player.
+        if hurt {
+            let died = match victim {
+                // A totem that fired is applied on the next tick_totem, so the
+                // victim is still at zero health but is not dying.
+                Victim::Host => self
+                    .player
+                    .as_ref()
+                    .is_some_and(|p| p.health.dead_or_dying() && !p.health.totem_used),
+                Victim::Guest(conn) => host
+                    .hub
+                    .guest(conn)
+                    .and_then(|g| g.motion.as_deref())
+                    .is_some_and(|p| p.health.dead_or_dying() && !p.health.totem_used),
+            };
+            if died {
+                match s.attacker {
+                    Some(conn) => {
+                        self.as_guest(host, conn, |g| g.stats.custom("player_kills", 1));
+                    }
+                    None => self.stats.custom("player_kills", 1),
+                }
+            }
+        }
         if hurt && (s.crit || s.magic) {
             let target = match victim {
                 Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
