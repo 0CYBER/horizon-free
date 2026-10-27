@@ -789,14 +789,7 @@ pub fn golem_detected(m: &mut Mob, now: i64) {
 
 // ---- Behaviours ---------------------------------------------------------
 
-/// The POI types villagers use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Poi {
-    /// A job site, by profession index.
-    Job(u8),
-    Home,
-    Meeting,
-}
+pub use crate::poi_sections::Poi;
 impl Poi {
     fn max_tickets(self) -> usize {
         match self {
