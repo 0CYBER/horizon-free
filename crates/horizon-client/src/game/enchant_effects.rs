@@ -456,6 +456,7 @@ impl Game<'_> {
             }
             hits.push(1.0 + self.world.random.next_float() * 4.0);
             // ChangeItemDamage -> ItemStack.hurtAndBreak: unbreaking applies.
+            self.trigger_item_durability(&stack);
             let loss = self.durability_loss(&stack, 2);
             if let Some(s) = self.armor[slot].as_mut() {
                 s.damage += loss;
@@ -714,6 +715,7 @@ impl Game<'_> {
         let Some(stack) = self.armor[3].clone() else {
             return;
         };
+        self.trigger_item_durability(&stack);
         let loss = self.durability_loss(&stack, amount);
         let max = self
             .res

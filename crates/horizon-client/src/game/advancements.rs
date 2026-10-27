@@ -903,6 +903,26 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && effects && source
         });
     }
+    /// `ItemDurabilityTrigger`: a player's item takes damage (`ItemStack.applyDamage`),
+    /// `stack` as it is before the damage. The durability and delta ranges are not
+    /// read: no advancement in the data uses them.
+    pub(super) fn trigger_item_durability(&mut self, stack: &ItemStack) {
+        if self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        let me = self.player_entity();
+        let item = item_view(stack);
+        self.trigger("minecraft:item_durability_changed", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && (c["item"].is_null() || adv::item(&c["item"], &item, w))
+        });
+    }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
     /// what the player looks at (`PlayerPredicate.lookingAt`).
     pub(super) fn trigger_using_item(&mut self, stack: &ItemStack) {

@@ -87,16 +87,20 @@ impl Game<'_> {
             return false;
         }
         if !self.creative
-            && let Some(stack) = self.inventory[self.selected].as_mut()
+            && let Some(stack) = self.inventory[self.selected].clone()
         {
-            stack.damage += wear;
-            let max = self
-                .res
-                .items()
-                .get(&stack.item)
-                .map_or(25, |i| i.max_damage);
-            if stack.damage >= max {
-                self.inventory[self.selected] = Some(ItemStack::new("minecraft:fishing_rod", 1));
+            self.trigger_item_durability(&stack);
+            if let Some(stack) = self.inventory[self.selected].as_mut() {
+                stack.damage += wear;
+                let max = self
+                    .res
+                    .items()
+                    .get(&stack.item)
+                    .map_or(25, |i| i.max_damage);
+                if stack.damage >= max {
+                    self.inventory[self.selected] =
+                        Some(ItemStack::new("minecraft:fishing_rod", 1));
+                }
             }
         }
         self.swing_arm();
