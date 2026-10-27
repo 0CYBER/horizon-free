@@ -215,6 +215,23 @@ enum WorldsCmd {
 }
 
 #[derive(Subcommand)]
+enum ScreenshotsCmd {
+    /// The screenshots, the newest first, with their files (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Move a screenshot to the system's trash
+    Delete {
+        /// Its file name, with or without .png
+        screenshot: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum MultiplayerCmd {
     /// The servers of the game's Multiplayer screen (the default)
     List {
@@ -441,6 +458,11 @@ enum Cmd {
     Worlds {
         #[command(subcommand)]
         action: Option<WorldsCmd>,
+    },
+    /// The screenshots F2 took in an instance: list, delete
+    Screenshots {
+        #[command(subcommand)]
+        action: Option<ScreenshotsCmd>,
     },
     /// The servers in an instance's Multiplayer list (servers.dat): list, add, remove
     Multiplayer {
@@ -909,6 +931,10 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         }
         Cmd::Worlds { action } => worlds(
             action.unwrap_or(WorldsCmd::List { instance: None }),
+            as_json,
+        )?,
+        Cmd::Screenshots { action } => screenshots(
+            action.unwrap_or(ScreenshotsCmd::List { instance: None }),
             as_json,
         )?,
         Cmd::Multiplayer { action } => multiplayer(
@@ -1537,6 +1563,50 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+    }
+    Ok(())
+}
+
+fn screenshots(action: ScreenshotsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::screenshots;
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    match action {
+        ScreenshotsCmd::List { instance } => {
+            let home = home(instance)?;
+            let shots = screenshots::list(&home);
+            if as_json {
+                json(
+                    shots
+                        .iter()
+                        .map(|s| {
+                            let millis = s
+                                .taken
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_millis() as u64);
+                            serde_json::json!({ "name": s.name, "path": s.path, "taken_ms": millis, "size": s.size })
+                        })
+                        .collect(),
+                );
+            } else if shots.is_empty() {
+                println!("No screenshots in {}", screenshots::folder(&home).display());
+            }
+            for s in shots.iter().filter(|_| !as_json) {
+                println!("{}", s.path.display());
+            }
+        }
+        ScreenshotsCmd::Delete {
+            screenshot,
+            instance,
+        } => {
+            let shot = screenshots::find(&home(instance)?, &screenshot)?;
+            screenshots::delete(&shot)?;
+            println!("{} is in the trash.", shot.name);
         }
     }
     Ok(())

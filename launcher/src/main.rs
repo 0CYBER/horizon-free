@@ -22,6 +22,7 @@ mod mods_project;
 mod multiplayer_page;
 mod partner;
 mod perf;
+mod screenshots_page;
 mod scrollbar;
 mod servers_page;
 mod theme;
@@ -235,6 +236,7 @@ struct Launcher {
     /// Home's Worlds section, of the selected instance (`worlds_page.rs`).
     worlds: worlds_page::Worlds,
     multiplayer: multiplayer_page::Multiplayer,
+    screenshots: screenshots_page::Screenshots,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -396,6 +398,7 @@ impl Launcher {
             instances: instances_page::Instances::default(),
             worlds: worlds_page::Worlds::default(),
             multiplayer: multiplayer_page::Multiplayer::default(),
+            screenshots: screenshots_page::Screenshots::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -708,6 +711,7 @@ impl Launcher {
                             // The game saved: last played, sizes and pictures changed.
                             self.worlds.stale();
                             self.multiplayer.stale();
+                            self.screenshots.stale();
                             if let Some((id, started)) = self.client_run.take() {
                                 if let Err(e) = instances::record_play(&id, started.elapsed()) {
                                     eprintln!("Play time not saved: {e}");
@@ -2200,6 +2204,9 @@ impl Launcher {
         if let Some(servers) = self.multiplayer_section(cx) {
             page = page.child(servers);
         }
+        if let Some(shots) = self.screenshots_section(cx) {
+            page = page.child(shots);
+        }
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
@@ -3547,6 +3554,9 @@ impl Render for Launcher {
                     }
                     "escape" if this.servers_escape() => {}
                     "escape" if this.instance_escape() => {}
+                    "escape" if this.screenshot_escape() => {}
+                    "left" if this.screenshot_step(false) => {}
+                    "right" if this.screenshot_step(true) => {}
                     _ => return,
                 }
                 cx.stop_propagation();
@@ -3609,6 +3619,11 @@ impl Render for Launcher {
         }
         if let Some(dialog) = self.instance_dialog(cx) {
             root = root.child(dialog);
+        }
+        if self.page == Page::Play {
+            if let Some(viewer) = self.screenshot_viewer(cx) {
+                root = root.child(viewer);
+            }
         }
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));
