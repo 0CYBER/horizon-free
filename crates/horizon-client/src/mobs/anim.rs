@@ -244,6 +244,8 @@ pub enum ArmPose {
     CrossbowCharge,
     /// Raising a trident to throw it (or to launch with Riptide).
     ThrowTrident,
+    /// A spear held out (`HumanoidModel.ArmPose.SPEAR`), at rest or charging.
+    Spear,
 }
 /// HumanoidModel.setupAnim with empty hands (endermen).
 pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
@@ -295,6 +297,10 @@ pub struct Hum {
     pub swing_right_arm: Option<bool>,
     /// `mainArm` is the left one (`Mob.isLeftHanded`): a mob's swing uses it.
     pub left_main: bool,
+    /// The spear each arm (right, left) holds, and how long that arm has
+    /// been using it (`ticksUsingItem(arm)`, 0 when it is not).
+    pub spear: [Option<crate::spear::Kinetic>; 2],
+    pub spear_ticks: [f32; 2],
 }
 impl Hum {
     pub fn new(right: ArmPose, left: ArmPose) -> Self {
@@ -313,6 +319,8 @@ impl Hum {
             using_item: false,
             swing_right_arm: None,
             left_main: false,
+            spear: [None; 2],
+            spear_ticks: [0.0; 2],
         }
     }
 }
@@ -388,6 +396,23 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
         }
         ArmPose::CrossbowHold => crossbow_hold(p, hx, hy, right),
         ArmPose::CrossbowCharge => crossbow_charge(p, h.charge.0, h.charge.1, right),
+        // SpearAnimations.thirdPersonHandUse.
+        ArmPose::Spear => {
+            let side = usize::from(!right);
+            let Some(kinetic) = h.spear[side] else {
+                return;
+            };
+            let (x, y, z) = crate::spear::third_person_arm(
+                &kinetic,
+                h.spear_ticks[side],
+                right,
+                (hx, hy),
+                h.fall_flying || h.swim > 0.0,
+            );
+            p.xrot(arm, x);
+            p.yrot(arm, y);
+            p.get(arm)[5] += z;
+        }
     }
 }
 /// `HumanoidModel.setupAnim` (and `ZombieModel.setupAttackAnimation`).
@@ -687,6 +712,14 @@ pub fn setup(
                 ArmPose::Empty
             };
             let using_main = m.extra.using_item > 0 && !m.extra.using_off_hand;
+            // AvatarRenderer.getArmPose: an arm holding a spear (at rest too).
+            let spear_in = |hand: &Option<std::sync::Arc<str>>| {
+                hand.as_deref()
+                    .filter(|_| player)
+                    .and_then(crate::spear::Kinetic::of)
+            };
+            let (main_spear, off_spear) =
+                (spear_in(&m.extra.main_hand), spear_in(&m.extra.off_hand));
             let pose = if player {
                 match m.extra.main_hand.as_deref() {
                     Some(_) if using_main && m.extra.blocking => ArmPose::Block,
@@ -698,6 +731,7 @@ pub fn setup(
                     Some("minecraft:crossbow") if m.extra.charged && s.swing == 0.0 => {
                         ArmPose::CrossbowHold
                     }
+                    Some(_) if main_spear.is_some() => ArmPose::Spear,
                     Some(_) => ArmPose::Item,
                     None => ArmPose::Empty,
                 }
@@ -705,7 +739,9 @@ pub fn setup(
                 right
             };
             let off = if player && m.extra.off_hand.is_some() && !pose.affects_offhand() {
-                if m.extra.using_item > 0 && m.extra.using_off_hand && m.extra.blocking {
+                if off_spear.is_some() {
+                    ArmPose::Spear
+                } else if m.extra.using_item > 0 && m.extra.using_off_hand && m.extra.blocking {
                     ArmPose::Block
                 } else {
                     ArmPose::Item
@@ -731,6 +767,17 @@ pub fn setup(
             h.using_item = m.extra.using_item > 0;
             h.swing_right_arm = m.extra.swing_right_arm;
             h.left_main = m.main_arm_left();
+            let main_side = usize::from(m.main_arm_left());
+            h.spear[main_side] = main_spear;
+            h.spear[1 - main_side] = off_spear;
+            if m.extra.using_item > 0 {
+                let using_side = if m.extra.using_off_hand {
+                    1 - main_side
+                } else {
+                    main_side
+                };
+                h.spear_ticks[using_side] = m.extra.using_item as f32 + s.partial;
+            }
             humanoid(p, s, &h);
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.

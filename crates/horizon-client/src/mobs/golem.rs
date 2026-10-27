@@ -341,12 +341,12 @@ fn snowball_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let zd = t.position.z - m.position.z;
     let yo = (xd * xd + zd * zd).sqrt() * 0.2;
     let mut p = Projectile::new(ProjectileKind::Snowball, start, Some(Who::Mob(m.id)));
-    // rangedAttackUncertainty: 14 - 4 * difficulty (normal: 6).
+    // SnowGolem.rangedAttackUncertainty: 12 on every difficulty.
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + yo - start.y, zd],
         1.6,
-        6.0,
+        12.0,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 0.4 / (m.random.next_float() * 0.4 + 0.8);
