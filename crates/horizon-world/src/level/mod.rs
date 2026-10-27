@@ -838,6 +838,23 @@ impl Behaviours {
         self.data(state).is(classes::Class::Bell)
             && sim.bell_hit(pos, state, face, hit_y - f64::from(pos.y))
     }
+    /// `BellBlock.attemptToRing(entity, level, pos, null)`: a mob rings the
+    /// bell from its facing. False when the block at `pos` is not a bell.
+    pub fn bell_attempt_to_ring<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        if !self.data(state).is(classes::Class::Bell) {
+            return false;
+        }
+        let facing = sim.b.facing(state);
+        sim.bell_ring(pos, state, facing);
+        true
+    }
     /// Redstone signal queries (`SignalGetter`).
     pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(
         &self,

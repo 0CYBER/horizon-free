@@ -978,6 +978,12 @@ pub enum MobEvent {
         count: u32,
     },
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `RingBell`: the villager rings the meeting-point bell
+    /// (`BellBlock.attemptToRing`: the bell shakes, the sound and the game
+    /// event follow).
+    RingBell {
+        bell: [i32; 3],
+    },
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
     ChestOpen {

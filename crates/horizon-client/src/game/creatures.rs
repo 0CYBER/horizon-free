@@ -1296,6 +1296,14 @@ impl Game<'_> {
                         }
                     }
                 },
+                MobEvent::RingBell { bell } => {
+                    let pos = BlockPos::new(bell[0], bell[1], bell[2]);
+                    let rang =
+                        self.with_level(|b, level, ticks| b.bell_attempt_to_ring(level, ticks, pos));
+                    if rang {
+                        let _ = self.process_level_events();
+                    }
+                }
                 MobEvent::ChestOpen { chest, open } => self.golem_chest_open(chest, open),
                 MobEvent::ChestSlot { chest, slot, stack } => {
                     self.golem_chest_slot(chest, slot, stack)

@@ -2508,16 +2508,7 @@ impl B {
                     if dist_sqr(bell, block_of(m.position)) < 9
                         && cx.w.block_name(bell[0], bell[1], bell[2]) == "minecraft:bell"
                     {
-                        cx.events.push(MobEvent::SoundId(
-                            "minecraft:block.bell.use".into(),
-                            [
-                                f64::from(bell[0]) + 0.5,
-                                f64::from(bell[1]) + 0.5,
-                                f64::from(bell[2]) + 0.5,
-                            ],
-                            2.0,
-                            1.0,
-                        ));
+                        cx.events.push(MobEvent::RingBell { bell });
                     }
                     true
                 },
