@@ -8,7 +8,7 @@ use crate::{
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
-    item::{Component, Hashed, HashedSlot, Slot, Stack},
+    item::{Component, DelimitedSlot, Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
@@ -2266,7 +2266,7 @@ packet!(
     SelectBundleItem { slot: i32 => VarInt, index: i32 => VarInt }
 );
 packet!(SetCarriedItem { slot: i16 => Short });
-packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => Slot });
+packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => DelimitedSlot });
 packet!(UseItem { hand: i32 => VarInt, sequence: i32 => VarInt, yaw: f32 => Float, pitch: f32 => Float });
 packet!(UseItemOn {
     hand: i32 => VarInt,

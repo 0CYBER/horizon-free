@@ -556,6 +556,55 @@ impl Codec<Option<Stack>> for Slot {
     }
 }
 
+/// ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC (`SetCreativeModeSlot`): as [`Slot`],
+/// but every component value goes behind its byte length
+/// (DataComponentPatch.DELIMITED_STREAM_CODEC), so a server skips what it can't read.
+pub struct DelimitedSlot;
+impl Codec<Option<Stack>> for DelimitedSlot {
+    fn read(r: &mut Reader) -> Result<Option<Stack>> {
+        let count = r.varint()?;
+        if count <= 0 {
+            return Ok(None);
+        }
+        let item = r.varint()?;
+        let positive = r.count(65536)?;
+        let negative = r.count(65536)?;
+        let mut added = Vec::with_capacity(positive.min(64));
+        for _ in 0..positive {
+            let kind = r.varint()?;
+            let len = r.count(r.remaining())?;
+            let mut value = Reader::new(r.bytes(len)?);
+            added.push((kind, Component::read(kind, &mut value)?));
+        }
+        let removed = (0..negative).map(|_| r.varint()).collect::<Result<_>>()?;
+        Ok(Some(Stack {
+            item,
+            count,
+            added,
+            removed,
+        }))
+    }
+    fn write(v: &Option<Stack>, w: &mut Writer) {
+        let Some(s) = v else {
+            w.varint(0);
+            return;
+        };
+        w.varint(s.count);
+        w.varint(s.item);
+        w.varint(s.added.len() as i32);
+        w.varint(s.removed.len() as i32);
+        for (kind, c) in &s.added {
+            w.varint(*kind);
+            let mut value = Writer::new();
+            c.write(*kind, &mut value);
+            w.byte_array(&value.data);
+        }
+        for kind in &s.removed {
+            w.varint(*kind);
+        }
+    }
+}
+
 /// ItemStackTemplate.STREAM_CODEC: the item, the count, then the patch.
 pub struct Template;
 impl Codec<Stack> for Template {
