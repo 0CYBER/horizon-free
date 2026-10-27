@@ -77,6 +77,14 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     }
     p.velocity.y -= 0.05;
 }
+/// A server's client ticks a projectile itself: it flies on between the
+/// tracker's updates (10 to 20 ticks apart) with its own gravity and drag,
+/// and a block stops it there; only the server decides what it hits.
+pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
+    if !matches!(p.tick(w).1, Hit::None) {
+        p.velocity = Vec3::ZERO;
+    }
+}
 
 impl Game<'_> {
     /// `handleAddEntity` for these types; false when `kind` isn't one.
@@ -95,6 +103,7 @@ impl Game<'_> {
         let (yaw, pitch) = rotation;
         self.remove_remote_projectile(id);
         match kind {
+            "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
                 id,
                 position: at,
@@ -161,12 +170,16 @@ impl Game<'_> {
                 let Some(k) = projectile_kind(kind) else {
                     return false;
                 };
+                if k == ProjectileKind::LlamaSpit {
+                    self.particles
+                        .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
+                }
                 let mut p = Projectile::new(k, at, None);
                 p.id = id;
                 p.velocity = velocity;
                 p.yaw = yaw;
                 p.pitch = pitch;
-                self.creatures.projectiles.push(p);
+                self.add_projectile(p);
             }
         }
         true
@@ -296,6 +309,7 @@ impl Game<'_> {
 
     /// One tick of interpolation, as `tick_remote_objects`.
     pub(super) fn tick_remote_projectiles(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
+        self.tick_remote_fangs();
         // PrimedTnt.tick runs on a client too: it falls, bounces and burns its
         // fuse down (the swell and flash follow it) between the server's
         // updates (every 10 ticks), and a client discards it when the fuse
@@ -341,11 +355,7 @@ impl Game<'_> {
                         p.age += 1;
                         p.position = p.position.add_vector(p.velocity);
                     }
-                    _ => {
-                        if !matches!(p.tick(&world).1, Hit::None) {
-                            p.velocity = Vec3::ZERO;
-                        }
-                    }
+                    _ => remote_projectile_tick(p, &world),
                 }
             }
         }
@@ -458,6 +468,7 @@ impl Game<'_> {
     }
 
     pub(super) fn remove_remote_projectile(&mut self, id: u32) {
+        self.fangs.list.retain(|f| f.id != id);
         self.tnts.retain(|t| t.id != id);
         self.falling.retain(|f| f.id != id);
         self.creatures.projectiles.retain(|p| p.id != id);
@@ -473,6 +484,7 @@ impl Game<'_> {
 
     /// Every one a server sent (a new connection, level or dimension).
     pub(super) fn clear_remote_projectiles(&mut self) {
+        self.fangs.list.clear();
         self.tnts.clear();
         self.falling.clear();
         self.creatures.projectiles.clear();
@@ -493,6 +505,12 @@ impl Game<'_> {
         use serde_json::json;
         let at = |p: Vec3| [p.x, p.y, p.z];
         let mut out = Vec::new();
+        for f in &self.fangs.list {
+            out.push(
+                json!({"id": f.id, "kind": "minecraft:evoker_fangs", "position": f.pos,
+                "yaw": f.yaw, "started": f.started, "life": f.life}),
+            );
+        }
         for t in &self.tnts {
             out.push(json!({"id": t.id, "kind": "minecraft:tnt", "position": at(t.position), "fuse": t.fuse}));
         }
@@ -517,5 +535,70 @@ impl Game<'_> {
         }
         out.extend(self.hooks_status());
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::mobs::Who;
+    use horizon_core::geometry::Aabb;
+
+    /// A world with nothing in it: the client tick of a projectile only
+    /// needs the blocks around it.
+    struct Empty;
+    impl ProjectileWorld for Empty {
+        fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            None
+        }
+        fn in_water(&self, _: Vec3) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &[]
+        }
+    }
+
+    /// A thrown item, as a server's client tracks it: the spawn position and
+    /// the motion the server gave it.
+    fn thrown(kind: ProjectileKind) -> Projectile {
+        let mut p = Projectile::new(kind, Vec3::new(0.0, 100.0, 0.0), None);
+        p.velocity = Vec3::new(1.5, 0.0, 0.0);
+        p
+    }
+
+    #[test]
+    fn a_thrown_item_flies_on_between_the_server_updates() {
+        // A thrown egg, an ender pearl and a wind charge (#1762): the server
+        // sends their position every 10 ticks, and the client ticks them
+        // itself in between, as vanilla's no-op interpolation handler does.
+        for kind in [
+            ProjectileKind::Egg,
+            ProjectileKind::EnderPearl,
+            ProjectileKind::WindCharge,
+        ] {
+            let mut p = thrown(kind);
+            remote_projectile_tick(&mut p, &Empty);
+            assert!(p.position.x > 1.0, "the projectile did not fly on: {p:?}");
+            // A second tick moves it further: it keeps flying, not a hop.
+            let first = p.position.x;
+            remote_projectile_tick(&mut p, &Empty);
+            assert!(p.position.x > first, "the projectile stopped: {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_thrown_item_falls_and_drags_like_a_throwable_projectile() {
+        // ThrowableProjectile.tick: gravity 0.03, then the air drag 0.99.
+        let mut p = thrown(ProjectileKind::Egg);
+        remote_projectile_tick(&mut p, &Empty);
+        assert!((p.velocity.x - 1.5 * 0.99).abs() < 1e-9, "{p:?}");
+        assert!((p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9, "{p:?}");
+        // A wind charge keeps its speed: no gravity and no drag
+        // (AbstractWindCharge: acceleration 0, inertia 1).
+        let mut p = thrown(ProjectileKind::WindCharge);
+        remote_projectile_tick(&mut p, &Empty);
+        assert!((p.velocity.x - 1.5).abs() < 1e-9, "{p:?}");
+        assert!((p.velocity.y - 0.0).abs() < 1e-9, "{p:?}");
     }
 }

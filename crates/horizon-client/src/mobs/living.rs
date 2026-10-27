@@ -320,17 +320,25 @@ impl MobWorld<'_> {
         };
         scene.unobstructed(b).unwrap_or(false)
     }
-    /// `Entity.isFree`: no collision and `LevelReader.containsAnyLiquid` false
-    /// over the blocks from the box's minimum corner to its maximum corner.
-    pub fn is_free(&self, b: Aabb) -> bool {
+    /// `LevelReader.containsAnyLiquid`: the blocks from the box's minimum
+    /// corner to the block holding its maximum corner.
+    pub fn contains_any_liquid(&self, b: Aabb) -> bool {
         let (lo, hi) = (b.min_position(), b.max_position());
-        let liquid = (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
-            (lo.y.floor() as i32..=hi.y.floor() as i32).any(|y| {
-                (lo.z.floor() as i32..=hi.z.floor() as i32)
-                    .any(|z| self.facts.get(self.world.block(x, y, z)).fluid != Fluid::None)
+        let (x0, y0, z0) = (
+            lo.x.floor() as i32,
+            lo.y.floor() as i32,
+            lo.z.floor() as i32,
+        );
+        let (x1, y1, z1) = (
+            hi.x.floor() as i32,
+            hi.y.floor() as i32,
+            hi.z.floor() as i32,
+        );
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                (z0..=z1).any(|z| self.facts.get(self.world.block(x, y, z)).fluid != Fluid::None)
             })
-        });
-        !liquid && self.no_collision(b)
+        })
     }
 }
 impl Mob {
@@ -947,14 +955,24 @@ impl Mob {
                 self.velocity.y -= gravity / 4.0;
             }
         }
-        // jumpOutOfFluid
+        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
+        // entities a mob collides with (canBeCollidedWith: living shulkers).
         let m = self.velocity;
+        let ahead = self.bounds().move_by(Vec3::new(
+            m.x,
+            m.y + f64::from(0.6_f32) - self.position.y + old_y,
+            m.z,
+        ));
+        let wide = ahead.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
         if self.horizontal_collision
-            && w.is_free(self.bounds().move_by(Vec3::new(
-                m.x,
-                m.y + f64::from(0.6_f32) - self.position.y + old_y,
-                m.z,
-            )))
+            && w.no_collision(ahead)
+            && !w.contains_any_liquid(ahead)
+            && !w.others_near(wide).any(|s| {
+                s.id != self.id
+                    && s.alive
+                    && s.species == super::Species::Shulker
+                    && s.bounds.intersects(wide)
+            })
         {
             self.velocity.y = f64::from(0.3_f32);
         }
@@ -1042,7 +1060,7 @@ impl Mob {
                 (distance * 4.0).min(1.0)
             };
             self.limb_speed += (target - self.limb_speed) * 0.4;
-            self.limb_position += self.limb_speed * if self.is_baby() { 3.0 } else { 1.0 };
+            self.limb_position += self.limb_speed;
         } else {
             self.limb_speed = 0.0;
         }

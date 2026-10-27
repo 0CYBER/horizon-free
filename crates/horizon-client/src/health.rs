@@ -860,6 +860,31 @@ mod tests {
         assert!(!third.hurt && !third.knockback);
     }
 
+    /// #2141: an arrow that takes the last of the player's health must kill
+    /// them: `LivingEntity.hurt` leaves the health at zero and `Player.die`
+    /// follows.
+    #[test]
+    fn an_arrow_kills_a_player_at_one_health() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .unwrap();
+        player.set_health(1.0, false).unwrap();
+        let (health, rules) = (&resources.health, super::HealthRules::default());
+        let id = health.damage.id("minecraft:arrow").unwrap();
+        let hurt = player.hurt(health, rules, id, 5.0).unwrap();
+        assert!(hurt, "the arrow must hurt");
+        assert_eq!(player.health.health(), 0.0, "the health must be spent");
+        assert!(player.health.dead_or_dying(), "the player must be dead");
+    }
+
     #[test]
     fn hurt_sounds_follow_damage_effects() {
         // DamageEffects: HURT, THORNS, DROWNING, BURNING, POKING, FREEZING.

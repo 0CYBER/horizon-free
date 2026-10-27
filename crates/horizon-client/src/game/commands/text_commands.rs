@@ -14,10 +14,11 @@ impl Game<'_> {
             serde_json::from_str(json).map_err(|e| err("argument.component.invalid", &[&e]))?;
         // NbtContents.resolve: the path's values in the entity, block or
         // storage data, rich-styled (or plain, or interpreted), ", "-joined.
+        // ScoreContents.resolve: the holder's score in the objective.
         let nbt_values = std::cell::RefCell::new(Vec::new());
         {
             let mut collect = |o: &serde_json::Map<String, serde_json::Value>| {
-                if o.contains_key("nbt") {
+                if o.contains_key("nbt") || o.contains_key("score") {
                     nbt_values.borrow_mut().push(o.clone());
                 }
             };
@@ -40,7 +41,11 @@ impl Game<'_> {
         }
         let mut resolved: Vec<(serde_json::Map<String, serde_json::Value>, Text)> = Vec::new();
         for o in nbt_values.into_inner() {
-            let t = self.resolve_nbt_component(&o);
+            let t = if o.contains_key("score") {
+                self.resolve_score_component(&o)?
+            } else {
+                self.resolve_nbt_component(&o)
+            };
             resolved.push((o, t));
         }
         let mut resolve = |raw: &str| -> Text {
@@ -72,6 +77,54 @@ impl Game<'_> {
                     .map(|(_, t)| t.clone())
             },
         ))
+    }
+    /// The text of a `score` component (ScoreContents.resolve): the named
+    /// holder's score, `*` being the player the command runs for.
+    fn resolve_score_component(
+        &mut self,
+        o: &serde_json::Map<String, serde_json::Value>,
+    ) -> R<Text> {
+        let score = o.get("score");
+        let field = |k: &str| score.and_then(|s| s.get(k)).and_then(|v| v.as_str());
+        let (name, objective) = (
+            field("name").unwrap_or(""),
+            field("objective").unwrap_or(""),
+        );
+        // findTargetName: a selector that matches one entity is that entity,
+        // one that matches none is just the name.
+        let mut reader = horizon_client::command::Reader::new(name);
+        let ty = horizon_client::command::args::ArgType::Entity {
+            single: false,
+            players: false,
+        };
+        let mut holder = name.to_owned();
+        if let Ok(Arg::Entity(sel)) = ty.parse(&mut reader, &self.ui.registries)
+            && !reader.can_read()
+        {
+            let found = self.select(&sel);
+            if found.len() > 1 {
+                return Err(err("argument.entity.toomany", &[]));
+            }
+            if let Some(t) = found.first().and_then(|t| self.holder_name(*t)) {
+                holder = t;
+            }
+        }
+        if holder == "*" {
+            holder = self.acting_player_name().to_owned();
+        }
+        let board = &self.score.board;
+        let (Some(objective), Some(score)) =
+            (board.objective(objective), board.score(&holder, objective))
+        else {
+            return Ok(Text::empty());
+        };
+        // numberFormatOrDefault(StyledFormat.NO_STYLE).
+        let format = (score.number_format.clone())
+            .or_else(|| objective.number_format.clone())
+            .unwrap_or(horizon_client::scoreboard::NumberFormat::Styled(
+                serde_json::json!({}),
+            ));
+        Ok(format.format(score.value))
     }
     /// The text of an `nbt` component.
     fn resolve_nbt_component(&mut self, o: &serde_json::Map<String, serde_json::Value>) -> Text {
@@ -136,28 +189,40 @@ impl Game<'_> {
         }
         out
     }
-    fn player_targets(&mut self, ctx: &Context) -> R<usize> {
-        // Only the local player can receive messages and titles.
+    /// The players the command reaches: the window's own and the LAN guests.
+    fn player_targets(&mut self, ctx: &Context) -> R<Vec<Target>> {
         let targets = self.entities(ctx, "targets", true)?;
-        Ok(targets.iter().filter(|t| **t == Target::Player).count())
+        Ok(targets
+            .into_iter()
+            .filter(|t| matches!(t, Target::Player | Target::Guest(_)))
+            .collect())
     }
     pub(super) fn cmd_tellraw(&mut self, ctx: &Context) -> R<i32> {
-        let n = self.player_targets(ctx)?;
+        let players = self.player_targets(ctx)?;
         let message = self.component_arg(ctx, "message")?;
-        if n > 0 {
-            self.system_message(message);
+        // Each player's chat (a guest's through the connection).
+        for &t in &players {
+            self.for_player(t, |g| g.system_message(message.clone()));
         }
-        Ok(n as i32)
+        Ok(players.len() as i32)
     }
     pub(super) fn cmd_title(&mut self, ctx: &Context) -> R<i32> {
-        let n = self.player_targets(ctx)?;
-        let name = self.target_name(Target::Player);
+        let players = self.player_targets(ctx)?;
+        let n = players.len();
+        let name = players
+            .first()
+            .map_or_else(Text::empty, |t| self.target_name(*t));
         let single = n == 1;
         let key = if ctx.has("clear") {
-            self.titles_or_packet(Titles::clear, C::ClearTitles(play::Bool1 { value: false }));
+            self.titles_or_packet(
+                &players,
+                Titles::clear,
+                C::ClearTitles(play::Bool1 { value: false }),
+            );
             "cleared"
         } else if ctx.has("reset") {
             self.titles_or_packet(
+                &players,
                 |t| {
                     t.clear();
                     t.reset_times();
@@ -172,6 +237,7 @@ impl Game<'_> {
             };
             let (fade_in, stay, fade_out) = (get("fadeIn"), get("stay"), get("fadeOut"));
             self.titles_or_packet(
+                &players,
                 |t| t.set_times(fade_in, stay, fade_out),
                 C::SetTitlesAnimation(play::TitlesAnimation {
                     fade_in,
@@ -186,13 +252,17 @@ impl Game<'_> {
                 text: component_nbt(&text.component()),
             };
             if ctx.has("subtitle") {
-                self.titles_or_packet(|t| t.set_subtitle(text), C::SetSubtitleText(sent));
+                self.titles_or_packet(&players, |t| t.set_subtitle(text), C::SetSubtitleText(sent));
                 "show.subtitle"
             } else if ctx.has("actionbar") {
-                self.titles_or_packet(|t| t.set_overlay(text, false), C::SetActionBarText(sent));
+                self.titles_or_packet(
+                    &players,
+                    |t| t.set_overlay(text, false),
+                    C::SetActionBarText(sent),
+                );
                 "show.actionbar"
             } else {
-                self.titles_or_packet(|t| t.set_title(text), C::SetTitleText(sent));
+                self.titles_or_packet(&players, |t| t.set_title(text), C::SetTitleText(sent));
                 "show.title"
             }
         };
@@ -207,13 +277,27 @@ impl Game<'_> {
         self.feedback(message);
         Ok(n as i32)
     }
-    /// The player the title is for: the guest acting now is sent the packet
-    /// (TitleCommand's `connection.send`), the window's own player shows it.
-    fn titles_or_packet(&mut self, local: impl FnOnce(&mut Titles), packet: C) {
-        if self.lan_acting.is_some() {
-            self.guest_packets.push(packet);
-        } else {
-            local(&mut self.titles);
+    /// TitleCommand's `connection.send` for each player: a guest is sent the
+    /// packet, the window's own player shows it.
+    fn titles_or_packet(&mut self, players: &[Target], local: impl FnOnce(&mut Titles), packet: C) {
+        let mut local = Some(local);
+        for &t in players {
+            match t {
+                Target::Player if self.lan_acting.is_some() => {
+                    self.guest_packets.push(packet.clone());
+                }
+                Target::Player => {
+                    if let Some(local) = local.take() {
+                        local(&mut self.titles);
+                    }
+                }
+                Target::Guest(conn) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }

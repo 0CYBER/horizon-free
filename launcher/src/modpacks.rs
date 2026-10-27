@@ -135,7 +135,11 @@ pub fn load(work: &Path) -> Result<Imported, String> {
 
 /// Every imported pack, by name.
 pub fn list() -> Vec<Imported> {
-    let mut packs: Vec<Imported> = fs::read_dir(ports_dir())
+    list_in(&ports_dir())
+}
+
+pub(crate) fn list_in(ports: &Path) -> Vec<Imported> {
+    let mut packs: Vec<Imported> = fs::read_dir(ports)
         .into_iter()
         .flatten()
         .flatten()
