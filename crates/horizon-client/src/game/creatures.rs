@@ -1243,9 +1243,9 @@ impl Game<'_> {
                     [0.0, 0.2, 0.0],
                     10,
                 ),
-                MobEvent::SetBlock { pos, state } => {
-                    self.world.set(pos[0], pos[1], pos[2], state)?
-                }
+                // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
+                // above trampled farmland breaks and drops.
+                MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,
                 MobEvent::SetDoorOpen { pos, open } => {
                     let pos = BlockPos::new(pos[0], pos[1], pos[2]);
                     self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
