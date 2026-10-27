@@ -1881,6 +1881,68 @@ pub fn remove_version(tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// How many of the newest release versions stay installed when the player has not said.
+const KEEP_NEWEST: usize = 2;
+
+/// The release versions to delete: all but the `keep` newest of `installed` (newest first), and
+/// never one of `protected`. Nightly builds are left out: `nightly::install` keeps only the
+/// newest of them.
+fn stale_versions(installed: &[String], keep: usize, protected: &[String]) -> Vec<String> {
+    installed
+        .iter()
+        .filter(|t| is_game_tag(t))
+        .skip(keep)
+        .filter(|t| !protected.contains(t))
+        .cloned()
+        .collect()
+}
+
+/// Whether a running program was started from the version's folder: the game and a server take
+/// their program and `--resources` from it. Windows refuses to delete a running program's files,
+/// so there the delete itself fails. With no answer from `ps` the version counts as running.
+#[cfg(unix)]
+fn in_use(tag: &str) -> bool {
+    let dir = format!("{}/", version_dir(tag).display());
+    Command::new("ps")
+        .args(["-A", "-ww", "-o", "args="])
+        .output()
+        .ok()
+        .is_none_or(|out| String::from_utf8_lossy(&out.stdout).contains(&dir))
+}
+
+#[cfg(not(unix))]
+fn in_use(_tag: &str) -> bool {
+    false
+}
+
+/// Deletes the release versions nothing needs after an install or update, unless the player
+/// turned that off: all but the newest few (`Settings::keep_newest`), the selected version, the
+/// ones instances pin and the ones a program is running from. A version that does not delete
+/// is logged and the rest still go. Returns the versions deleted. They install again from GitHub.
+pub fn prune_old_versions() -> Vec<String> {
+    let settings = Settings::load();
+    if !settings.auto_prune() {
+        return Vec::new();
+    }
+    let mut protected: Vec<String> = settings.selected.iter().cloned().collect();
+    protected.extend(crate::instances::list().into_iter().filter_map(|i| i.version));
+    let mut gone = Vec::new();
+    for tag in stale_versions(&installed(), settings.keep_newest(), &protected) {
+        if in_use(&tag) {
+            eprintln!("Keeping old version {tag}: the game is running from it.");
+            continue;
+        }
+        match remove(&tag) {
+            Ok(()) => {
+                eprintln!("Removed old version {tag}.");
+                gone.push(tag);
+            }
+            Err(e) => eprintln!("Could not remove old version {tag}: {e}"),
+        }
+    }
+    gone
+}
+
 /// The Minecraft folder to prepare from: the one given, the one chosen in the launcher, or the
 /// official launcher's default. It may be absent when imported files can be reused.
 pub fn minecraft_dir(requested: Option<PathBuf>) -> Result<PathBuf, String> {
@@ -2137,6 +2199,7 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
         settings.selected = Some(release.tag.clone());
         settings.save();
     }
+    prune_old_versions();
     Ok(release.tag.clone())
 }
 
@@ -2622,6 +2685,13 @@ pub struct Settings {
     /// `auto_install` (off by default) for everyone, so this is a new key and that one is ignored.
     #[serde(default)]
     pub install_new_versions: Option<bool>,
+    /// Unset means on: after an install the launcher deletes the release versions nothing needs
+    /// (`prune_old_versions`). Only a player who turned it off has `false` here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prune_old_versions: Option<bool>,
+    /// How many of the newest release versions pruning keeps. Unset means [`KEEP_NEWEST`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_versions: Option<usize>,
     /// Off by default, so the opening animation shows unless the player turns it off.
     #[serde(default)]
     pub skip_opening: bool,
@@ -2721,6 +2791,14 @@ impl Settings {
     /// Whether new Horizon versions are installed automatically.
     pub fn auto_install(&self) -> bool {
         self.install_new_versions.unwrap_or(true)
+    }
+    /// Whether old versions are deleted after an install.
+    pub fn auto_prune(&self) -> bool {
+        self.prune_old_versions.unwrap_or(true)
+    }
+    /// How many of the newest release versions pruning keeps: at least the newest.
+    pub fn keep_newest(&self) -> usize {
+        self.keep_versions.unwrap_or(KEEP_NEWEST).max(1)
     }
     pub fn save(&self) {
         let _ = fs::create_dir_all(data_dir());
