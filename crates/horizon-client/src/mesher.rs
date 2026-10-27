@@ -55,7 +55,7 @@ pub struct TerrainVertex {
     /// UV within the sprite, `UV_STEPS` per unit (`TerrainVertex::new`,
     /// `terrain.wgsl`'s `terrain_uv`).
     pub(crate) uv: [u16; 2],
-    /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves.
+    /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves and quads over opaque texels.
     pub layer: u16,
     /// Smooth light, 16x fixed point: sky in the low byte, block in the high one.
     pub light: u16,
@@ -890,8 +890,9 @@ impl Mesher<'_> {
             target.push(TerrainVertex::new(
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 q.uv[i],
-                // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
-                if !self.cutout_leaves && state.leaves {
+                // Opaque leaves (forceOpaque) and quads over opaque texels draw in the
+                // solid layer: no alpha cutout (a dirt path's side skips its clear top row).
+                if face.opaque && !face.translucent || !self.cutout_leaves && state.leaves {
                     face.layer as u16 | OPAQUE_LAYER
                 } else {
                     face.layer as u16
