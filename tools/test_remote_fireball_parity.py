@@ -18,15 +18,19 @@ def check_motion(host, guest, out):
     for game in (host, guest):
         game('command', command='gamemode creative')
     tag = 'remote_fireball_parity'
-    host('command', command=f'fill {x + 2} {y + 18} {z - 1} {x + 48} {y + 23} {z + 1} minecraft:air')
+    # A slow fireball (acceleration_power 0.02: under 0.4 blocks a tick, against ~2 by default) stays in the cleared
+    # corridor and in the guest's tracking range for every sample, however many ticks a loaded host takes to answer.
+    host('command', command=f'fill {x + 2} {y + 18} {z - 1} {x + 96} {y + 23} {z + 1} minecraft:air')
     host('command', command=f'summon minecraft:fireball {x + 3.5} {y + 20} {z + 0.5} '
-                            f'{{Tags:["{tag}"],Motion:[0.1d,0.0d,0.0d]}}')
+                            f'{{Tags:["{tag}"],Motion:[0.1d,0.0d,0.0d],acceleration_power:0.02d}}')
     samples = []
     try:
-        for _ in range(8):
-            balls = [p for p in guest('status')['projectiles'] if p['kind'] == 'LargeFireball']
+        # One ctl process for all samples: a ctl process per sample took 10-16 ticks on a loaded runner, by
+        # which time the fireball had left the cleared corridor and exploded.
+        replies = guest.script(['status', 'wait 1'] * 16, every=True)
+        for status in (reply for reply in replies if 'projectiles' in reply):
+            balls = [p for p in status['projectiles'] if p['kind'] == 'LargeFireball']
             samples.append(balls[0]['position'][0] if balls else None)
-            guest.wait(2)
     finally:
         host('command', command=f'kill @e[tag={tag}]')
     seen = [p for p in samples if p is not None]
