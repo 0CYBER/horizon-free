@@ -424,9 +424,10 @@ impl Game<'_> {
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             teams: std::sync::Arc::new(self.mob_teams()),
             items: Some(self.res.items()),
+            // The first player in the level: a server has no player of its own.
             difficulty: self.local_difficulty(
-                self.player
-                    .as_ref()
+                self.level_players()
+                    .first()
                     .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]),
             ),
         }
@@ -3754,13 +3755,10 @@ impl Game<'_> {
             f64::from((pos[0] >> 4) * 16 + 8),
             f64::from((pos[2] >> 4) * 16 + 8),
         ];
-        let spectator = self.spectator();
-        let Some(close) = self.player.as_ref().filter(|_| !spectator).map(|p| {
+        let close = self.level_players().iter().any(|p| {
             let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
-            dx * dx + dz * dz < 16384.0
-        }) else {
-            return;
-        };
+            !p.spectator && dx * dx + dz * dz < 16384.0
+        });
         if !close {
             return;
         }

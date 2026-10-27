@@ -450,7 +450,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                         "memories",
                         Tag::compound([(
                             "minecraft:liked_player",
-                            Tag::compound([("value", Tag::IntArray(vec![0, 0, 0, 1]))]),
+                            Tag::compound([(
+                                "value",
+                                Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
+                            )]),
                         )]),
                     )]),
                 );
@@ -994,11 +997,14 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.ints[1] = number(first.get("count")).unwrap_or(1) as i32;
         }
         m.extra.egg_time = number(tag.get("DuplicationCooldown")).unwrap_or(0) as i32;
-        m.extra.tame = tag
+        let liked = tag
             .get("Brain")
             .and_then(|b| b.get("memories"))
-            .and_then(|b| b.get("minecraft:liked_player"))
-            .is_some();
+            .and_then(|b| b.get("minecraft:liked_player"));
+        m.extra.tame = liked.is_some();
+        m.extra.owner = liked
+            .and_then(|l| l.get("value"))
+            .and_then(|v| crate::save::uuid_from_tag(Some(v)));
     }
     if crate::mobs::camel::is_camel(m.species()) {
         let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);

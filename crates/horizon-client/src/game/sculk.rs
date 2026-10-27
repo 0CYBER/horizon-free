@@ -876,17 +876,26 @@ impl Game<'_> {
     /// `SculkSensorBlock.stepOn` and `SculkShriekerBlock.stepOn`: standing on
     /// them is heard (or seen) every tick.
     fn sculk_step_on(&mut self) {
+        self.sculk_step_on_player();
         let mut standing: Vec<(Who, [f64; 3])> = Vec::new();
-        if let Some(p) = self.player.as_ref()
-            && p.ground.on_ground
-        {
-            standing.push((Who::Player, [p.position.x, p.position.y, p.position.z]));
-        }
         for m in &self.mobs {
             if m.alive() && m.on_ground {
                 standing.push((Who::Mob(m.id), [m.position.x, m.position.y, m.position.z]));
             }
         }
+        self.sculk_stand_on(standing);
+    }
+    /// `stepOn` for the player in place: the host, or a guest swapped in
+    /// (`guest_server_tick`), as a server has no player of its own.
+    pub(super) fn sculk_step_on_player(&mut self) {
+        if let Some(p) = self.player.as_ref()
+            && p.ground.on_ground
+        {
+            let at = [p.position.x, p.position.y, p.position.z];
+            self.sculk_stand_on(vec![(Who::Player, at)]);
+        }
+    }
+    fn sculk_stand_on(&mut self, standing: Vec<(Who, [f64; 3])>) {
         for (who, at) in standing {
             // getOnPosLegacy: 0.2 below the feet.
             let key = (
@@ -1108,23 +1117,10 @@ impl Game<'_> {
     /// in the way (`isUnobstructed`), and no block collision.
     fn warden_fits(&self, mob: &Mob) -> bool {
         let bounds = mob.bounds();
-        let player_blocks = !self.spectator()
-            && self.player.as_ref().is_some_and(|p| {
-                let w = f64::from(p.dimensions.width) / 2.0;
-                let b = horizon_core::geometry::Aabb::new(
-                    horizon_core::geometry::Vec3::new(
-                        p.position.x - w,
-                        p.position.y,
-                        p.position.z - w,
-                    ),
-                    horizon_core::geometry::Vec3::new(
-                        p.position.x + w,
-                        p.position.y + f64::from(p.dimensions.height),
-                        p.position.z + w,
-                    ),
-                );
-                !p.health.dead_or_dying() && b.intersects(bounds)
-            });
+        let player_blocks = self
+            .level_players()
+            .iter()
+            .any(|p| p.alive && !p.spectator && p.bounds.intersects(bounds));
         if player_blocks
             || self
                 .mobs

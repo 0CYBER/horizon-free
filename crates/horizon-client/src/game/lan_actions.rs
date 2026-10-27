@@ -2321,7 +2321,10 @@ impl Game<'_> {
         if let Some((at, velocity)) = soul {
             super::lan_particles::send_soul_particle(host, at, velocity);
         }
-        self.as_guest(host, conn, |game| game.tick_player_sculk_events());
+        self.as_guest(host, conn, |game| {
+            game.sculk_step_on_player();
+            game.tick_player_sculk_events();
+        });
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
