@@ -126,12 +126,36 @@ impl Game<'_> {
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
+        // SkeletonHorse.mobInteract: nothing for an untamed one.
+        if species == Species::SkeletonHorse && !m.extra.tame {
+            return false;
+        }
+        let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+            || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
+        // Horse / ZombieHorse.mobInteract: food is fed, and anything else in
+        // hand makes an untamed one mad instead of seating the player.
+        let dandelion = [self.held(), self.offhand.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|s| &*s.item == "minecraft:golden_dandelion");
+        let mut events = Vec::new();
+        match equine::held_item(
+            &mut self.mobs[index],
+            item,
+            sneaking,
+            dandelion,
+            &mut events,
+        ) {
+            Some(equine::HeldItem::Feed) => return self.feed_mount(index, item),
+            Some(equine::HeldItem::Refused) => {
+                let _ = self.handle_mob_events(events);
+                return true;
+            }
+            None => {}
+        }
+        let m = &self.mobs[index];
         // AbstractHorse.mobInteract: shift + use opens a tamed adult's inventory.
-        if !m.is_baby()
-            && m.extra.tame
-            && (self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
-                || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight))
-        {
+        if !m.is_baby() && m.extra.tame && sneaking {
             self.open_mount_menu(index);
             return true;
         }
@@ -460,6 +484,23 @@ impl Game<'_> {
                 }
             }
             MobEvent::Buck { mob } if self.riding == Some(mob) => self.dismount_mount(),
+            // ejectPassengers: a server's player gets off too (leave_guest
+            // tells their client).
+            MobEvent::Buck { mob } => {
+                let rider = self.lan.as_ref().and_then(|h| {
+                    h.hub
+                        .guests
+                        .iter()
+                        .find(|g| g.vehicle == Some(mob))
+                        .map(|g| g.conn)
+                });
+                if let Some(conn) = rider
+                    && let Some(mut host) = self.lan.take()
+                {
+                    self.as_guest(&mut host, conn, |g| g.dismount_mount());
+                    self.lan = Some(host);
+                }
+            }
             _ => {}
         }
     }

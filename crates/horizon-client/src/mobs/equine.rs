@@ -70,12 +70,21 @@ pub fn max_temper(s: Species) -> i32 {
         100
     }
 }
-/// `canPerformRearing`: not donkeys or mules.
+/// `canPerformRearing`: every `AbstractHorse` but llamas (and camels).
 fn can_rear(s: Species) -> bool {
     matches!(
         s,
-        Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
+        Species::Horse
+            | Species::Donkey
+            | Species::Mule
+            | Species::SkeletonHorse
+            | Species::ZombieHorse
     )
+}
+/// `AbstractHorse.isImmobile`: no goals while it eats or rears. A mount its
+/// rider steers still takes their input (`travelRidden`).
+pub fn immobile(m: &Mob) -> bool {
+    can_rear(m.species()) && (m.extra.flag || m.extra.counter > 0) && !controlled(m)
 }
 pub fn register(m: &mut Mob) {
     if super::camel::is_camel(m.species()) {
@@ -271,7 +280,7 @@ impl Goal for RunAroundLikeCrazy {
         make_mad(m, cx.events);
     }
 }
-/// `AbstractHorse.makeMad`: rear with the angry sound.
+/// `AbstractHorse.makeMad`: rear with the angry sound (`makeSound`).
 pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.extra.counter > 0 {
         return;
@@ -280,13 +289,69 @@ pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.extra.counter = 20;
         m.extra.flag = false;
     }
+    let baby = m.is_baby();
     let sound = match m.species() {
         Species::Donkey => "entity.donkey.angry",
         Species::Mule => "entity.mule.angry",
         Species::Llama | Species::TraderLlama => "entity.llama.angry",
-        _ => "entity.horse.angry",
+        Species::ZombieHorse => "entity.zombie_horse.angry",
+        Species::Horse if baby => "entity.baby_horse.angry",
+        Species::Horse => "entity.horse.angry",
+        // Skeleton horses and camels have no angry sound.
+        _ => return,
     };
-    events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+    m.voice(sound, events);
+}
+/// What `Horse`, `AbstractChestedHorse` (donkeys, mules, llamas) and
+/// `ZombieHorse.mobInteract` do with a held item before
+/// `AbstractHorse.mobInteract`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldItem {
+    /// `isFood`: `fedFood`, whether it eats or not.
+    Feed,
+    /// Untamed: `makeMad` instead of taking the rider.
+    Refused,
+}
+/// That branch for a click with `item` (empty for none): no rider, not
+/// opening a tamed adult's inventory (`sneaking`), not a baby while the
+/// player holds a golden dandelion (`dandelion`; zombie horses skip that
+/// check). An untamed mount is made mad here.
+pub fn held_item(
+    m: &mut Mob,
+    item: &str,
+    sneaking: bool,
+    dandelion: bool,
+    events: &mut Vec<MobEvent>,
+) -> Option<HeldItem> {
+    let species = m.species();
+    let checks_dandelion = match species {
+        Species::Horse | Species::Donkey | Species::Mule => true,
+        Species::Llama | Species::TraderLlama => true,
+        Species::ZombieHorse => false,
+        _ => return None,
+    };
+    let open_inventory = !m.is_baby() && m.extra.tame && sneaking;
+    if m.rider.is_some()
+        || open_inventory
+        || (checks_dandelion && m.is_baby() && dandelion)
+        || item.is_empty()
+    {
+        return None;
+    }
+    // ZombieHorse.isFood: the zombie_horse_food tag.
+    let food = if species == Species::ZombieHorse {
+        item == "minecraft:red_mushroom"
+    } else {
+        m.kind.food.iter().any(|f| f == item)
+    };
+    if food {
+        return Some(HeldItem::Feed);
+    }
+    if m.extra.tame {
+        return None;
+    }
+    make_mad(m, events);
+    Some(HeldItem::Refused)
 }
 /// `RandomStandGoal`.
 #[derive(Clone, Debug)]
@@ -302,7 +367,7 @@ impl Goal for RandomStand {
         self.next += 1;
         if self.next > 0 && m.random.next_int_bound(1000).unwrap_or(1000) < self.next {
             self.next = -m.kind.ambient_interval;
-            return m.random.next_int_bound(10).unwrap_or(1) == 0;
+            return !immobile(m) && m.random.next_int_bound(10).unwrap_or(1) == 0;
         }
         false
     }
@@ -312,9 +377,11 @@ impl Goal for RandomStand {
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.counter = 20;
         m.extra.flag = false;
-        if m.species() == Species::Horse {
-            cx.events
-                .push(MobEvent::Sound("entity.horse.angry", m.center(), 1.0, 1.0));
+        // playStandSound: getAmbientStandSound (the ambient sound) at 1, 1.
+        let sound = super::ai::voice_sounds(m)[0];
+        if !sound.is_empty() {
+            let at = [m.position.x, m.position.y, m.position.z];
+            cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
         }
     }
 }
