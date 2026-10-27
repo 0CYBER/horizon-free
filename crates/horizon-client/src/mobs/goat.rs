@@ -38,11 +38,10 @@ struct Candidate {
     target: Who,
 }
 
-/// `RAM_COOLDOWN_TICKS`, the lowered head and the ram behaviours' state.
+/// The lowered head and the ram behaviours' state. `RAM_COOLDOWN_TICKS` is a
+/// brain memory (`ram_cooldown`), saved with the others.
 #[derive(Clone, Debug, Default)]
 pub struct State {
-    /// `RAM_COOLDOWN_TICKS`: 0 when absent.
-    pub ram_cooldown: i32,
     lower_head_tick: i32,
     lowering_head: bool,
     phase: Phase,
@@ -71,10 +70,33 @@ pub fn tick(m: &mut Mob) {
     let g = &mut m.extra.goat;
     g.lower_head_tick += if g.lowering_head { 1 } else { -2 };
     g.lower_head_tick = g.lower_head_tick.clamp(0, 20);
-    if g.ram_cooldown > 0 {
-        g.ram_cooldown -= 1;
+    // `CountDownCooldownTicks(RAM_COOLDOWN_TICKS)`: one less each tick, erased
+    // once it runs out.
+    let cooldown = ram_cooldown(m);
+    if cooldown > 0 {
+        set_ram_cooldown(m, cooldown - 1);
     }
 }
+/// `RAM_COOLDOWN_TICKS`: 0 when absent.
+pub fn ram_cooldown(m: &Mob) -> i32 {
+    m.extra
+        .memories
+        .iter()
+        .find(|x| x.0 == RAM_COOLDOWN)
+        .map_or(0, |x| x.1 as i32)
+}
+fn set_ram_cooldown(m: &mut Mob, ticks: i32) {
+    let memories = &mut m.extra.memories;
+    match memories.iter().position(|x| x.0 == RAM_COOLDOWN) {
+        Some(i) if ticks > 0 => memories[i].1 = i64::from(ticks),
+        Some(i) => {
+            memories.remove(i);
+        }
+        None if ticks > 0 => memories.push((RAM_COOLDOWN, i64::from(ticks), i64::MAX)),
+        None => {}
+    }
+}
+const RAM_COOLDOWN: &str = "ram_cooldown";
 /// `Goat.getRammingXHeadRot`.
 pub fn ramming_x_head_rot(m: &Mob) -> f32 {
     let max = if m.is_baby() { 52.5_f32 } else { 30.0 };
@@ -206,7 +228,7 @@ impl Goal for Ram {
     fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
         // The ram activity needs the cooldown to be over (it also waits for
         // no tempting player and no breed target, which goats lack here).
-        m.extra.goat.ram_cooldown <= 0
+        ram_cooldown(m) <= 0
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let g = &m.extra.goat;
@@ -235,7 +257,8 @@ impl Goal for Ram {
             // up and the cooldown starts.
             Phase::Prepare => {
                 lower_head(m, cx.events, false);
-                m.extra.goat.ram_cooldown = rams(m).0;
+                let wait = rams(m).0;
+                set_ram_cooldown(m, wait);
             }
             // RamTarget.finishRam (also what its timeout leaves undone).
             Phase::RamStart | Phase::Ram => finish_ram(m, cx.events),
@@ -437,7 +460,8 @@ fn drop_horn(m: &mut Mob, events: &mut Vec<MobEvent>) -> bool {
 fn finish_ram(m: &mut Mob, events: &mut Vec<MobEvent>) {
     lower_head(m, events, false);
     let wait = rams(m);
-    m.extra.goat.ram_cooldown = between(m, wait);
+    let cooldown = between(m, wait);
+    set_ram_cooldown(m, cooldown);
     m.extra.goat.ram_target = None;
     m.extra.goat.phase = Phase::Done;
 }
