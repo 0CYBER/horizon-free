@@ -183,6 +183,29 @@ enum InstanceCmd {
     Select { instance: String },
     /// Keep an instance on one installed Horizon version, or "latest" to follow updates again
     Version { instance: String, version: String },
+    /// Export an instance (or a port) to share: its settings, packs, Horizon mods and the worlds
+    /// named, as a .mrpack (resource packs from Modrinth listed by download) or a zip. Never
+    /// logs, screenshots or account data; worlds go without their per-player files
+    Export {
+        /// The instance (default: the selected one)
+        instance: Option<String>,
+        #[arg(long, value_enum, default_value_t = ExportFormat::Mrpack)]
+        format: ExportFormat,
+        /// A world to put in it (its name or folder); repeat for more
+        #[arg(long)]
+        world: Vec<String>,
+        /// Where to write it (default: "<name>.mrpack" in the current folder)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ExportFormat {
+    /// Modrinth's modpack format
+    Mrpack,
+    /// The game folder's layout, zipped
+    Zip,
 }
 
 #[derive(Subcommand)]
@@ -1741,6 +1764,57 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+        InstanceCmd::Export {
+            instance,
+            format,
+            world,
+            out,
+        } => {
+            use horizon_launcher::export::{self, Format};
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let format = match format {
+                ExportFormat::Mrpack => Format::Mrpack,
+                ExportFormat::Zip => Format::Zip,
+            };
+            let worlds = world
+                .iter()
+                .map(|w| horizon_launcher::worlds::find(&i.home, w).map(|w| w.folder))
+                .collect::<Result<Vec<_>, _>>()?;
+            let linked = match format {
+                Format::Mrpack => export::linkable(&i.home, &export::from_modrinth),
+                Format::Zip => Vec::new(),
+            };
+            let out = match out {
+                Some(out) => out,
+                None => export::free_path(
+                    &std::env::current_dir().map_err(|e| e.to_string())?,
+                    &i.name,
+                    format,
+                ),
+            };
+            let done = export::export(&i.home, &i.name, format, &worlds, &linked, &out)?;
+            if as_json {
+                json(serde_json::json!({
+                    "path": done.path, "copied": done.copied, "linked": done.linked,
+                    "worlds": done.worlds,
+                }));
+            } else {
+                println!(
+                    "Exported {} to {}: {} files, {} listed by their Modrinth download{}.",
+                    i.name,
+                    done.path.display(),
+                    done.copied,
+                    done.linked,
+                    match done.worlds.is_empty() {
+                        true => String::new(),
+                        false => format!(", worlds: {}", done.worlds.join(", ")),
+                    }
+                );
+            }
         }
     }
     Ok(())
