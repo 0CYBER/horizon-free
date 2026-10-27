@@ -587,12 +587,9 @@ impl Game<'_> {
                     self.particles
                         .add(&ParticleOptions::simple(ParticleType::Smoke), at, [0.0; 3]);
                 } else if c.fuse == 0 {
+                    // explode(horizontalDistanceSqr()): a rising cart's
+                    // vertical speed adds nothing.
                     let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-                    let speed = if c.velocity.y > 0.0 {
-                        c.velocity.y * c.velocity.y
-                    } else {
-                        speed
-                    };
                     self.explode_cart(c, speed);
                     return false;
                 }
