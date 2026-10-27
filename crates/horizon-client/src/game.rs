@@ -22,6 +22,7 @@ mod bundles;
 mod campfire;
 mod campfire_douse;
 mod cartography;
+mod cat_spawner;
 mod chat;
 mod client_ambient;
 mod clipboard;
@@ -8693,6 +8694,7 @@ impl Game<'_> {
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
         self.creatures.reset_trader();
+        self.creatures.cat_tick = 0;
         self.portals = Default::default();
         self.experience = Experience {
             level: self.level.xp_level,
