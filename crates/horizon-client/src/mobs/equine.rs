@@ -114,28 +114,39 @@ pub fn register(m: &mut Mob) {
         g.add(3, Tempt::new(1.25, tempt, false));
     }
 }
-/// `generateMaxHealth`, `generateSpeed`, `generateJumpStrength` and the coat.
+/// `randomizeAttributes` of each class: horses roll health, speed and jump,
+/// donkeys and mules only health (their jump stays 0.5), skeleton horses only
+/// the jump, zombie horses a smaller jump and their own speed.
 pub fn finalize(m: &mut Mob) {
+    let species = m.species();
     let r = &mut m.random;
-    let health =
-        15.0 + r.next_int_bound(8).unwrap_or(0) as f32 + r.next_int_bound(9).unwrap_or(0) as f32;
-    let speed =
-        (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3) * 0.25;
-    let jump = 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
-    match m.species() {
+    if matches!(species, Species::Horse | Species::Donkey | Species::Mule) {
+        m.attrs.max_health = 15.0
+            + r.next_int_bound(8).unwrap_or(0) as f32
+            + r.next_int_bound(9).unwrap_or(0) as f32;
+    }
+    match species {
         Species::Horse => {
-            m.attrs.max_health = health;
-            m.attrs.speed = speed;
-            m.extra.vector[0] = jump;
-            m.extra.variant = m.random.next_int_bound(7).unwrap_or(0) as u8;
-            m.extra.variant2 = m.random.next_int_bound(5).unwrap_or(0) as u8;
+            m.attrs.speed = (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3
+                + r.next_double() * 0.3)
+                * 0.25;
+            m.extra.vector[0] =
+                0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
+            m.extra.variant = r.next_int_bound(7).unwrap_or(0) as u8;
+            m.extra.variant2 = r.next_int_bound(5).unwrap_or(0) as u8;
         }
-        Species::Donkey | Species::Mule => {
-            // AbstractChestedHorse.randomizeAttributes: fixed speed, generated health.
-            m.attrs.max_health = health;
-            m.extra.vector[0] = jump;
+        Species::Donkey | Species::Mule => m.extra.vector[0] = 0.5,
+        Species::ZombieHorse => {
+            // ZombieHorse.generateZombieHorseJumpStrength and ...Speed.
+            let d = 0.066_666_666_666_666_67;
+            m.extra.vector[0] = 0.5 + r.next_double() * d + r.next_double() * d + r.next_double() * d;
+            m.attrs.speed = (9.0 + r.next_double() + r.next_double() + r.next_double())
+                / f64::from(42.16f32);
         }
-        _ => m.extra.vector[0] = jump,
+        _ => {
+            m.extra.vector[0] =
+                0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2
+        }
     }
     m.health = m.attrs.max_health;
 }
