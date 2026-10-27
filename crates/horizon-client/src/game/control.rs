@@ -878,6 +878,9 @@ impl Game<'_> {
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
             Screen::Friends => "friends",
+            Screen::ServerLinks => "server-links",
+            Screen::ConfirmLink => "confirm-link",
+            Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
             Screen::Mod => "mod",
@@ -1083,6 +1086,9 @@ impl Game<'_> {
             "flashes": self.lightning_seen[1], "flash": self.flash});
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.
         status["projectiles"] = json!(self.projectiles_status());
+        let mut fangs_vertices = Vec::new();
+        self.fangs_geometry(glam::DVec3::ZERO, 0.5, &mut fangs_vertices);
+        status["fangs_vertices"] = json!(fangs_vertices.len());
         status["maps"] = json!(self.maps_status());
         // The particles made so far, by type.
         status["particles"] = json!(self.particles.made());

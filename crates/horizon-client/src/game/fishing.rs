@@ -30,8 +30,8 @@ enum State {
 pub(super) struct Hook {
     /// Its entity id, which a server's players track it under.
     id: u32,
-    position: Vec3,
-    previous: Vec3,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
     velocity: Vec3,
     state: State,
     life: i32,
@@ -770,8 +770,8 @@ impl Game<'_> {
 pub(super) struct RemoteHook {
     id: u32,
     owner: u32,
-    position: Vec3,
-    previous: Vec3,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
 }
 
 impl Hook {
