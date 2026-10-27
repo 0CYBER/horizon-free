@@ -5989,6 +5989,19 @@ impl Game<'_> {
                     .health_hud
                     .left_height
                     .max(self.health_hud.right_height);
+                // Hud.playAirBubblePoppedSound: Player.playSound (PLAYERS), heard
+                // by this client only.
+                if let Some((volume, pitch)) = self.health_hud.bubble_pop_sound.take() {
+                    let at = [p.position.x, p.position.y, p.position.z];
+                    let players = horizon_client::settings::SOUND_SOURCES
+                        .iter()
+                        .position(|s| *s == "player")
+                        .unwrap_or(0);
+                    let capture = self.audio.capture.take();
+                    self.audio
+                        .play_on(players, "ui.hud.bubble_pop", Some(at), volume, pitch);
+                    self.audio.capture = capture;
+                }
             }
             if contextual == ContextualBar::Locator {
                 let draws = self.locator_bar_draws(wi, hi);
