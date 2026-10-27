@@ -2604,6 +2604,13 @@ pub struct Settings {
     /// What the window does while the game runs. Stays by default.
     #[serde(default)]
     pub while_playing: WhilePlaying,
+    /// The accent colour on top of the appearance (`themes::Accent`). Horizon's violet by default.
+    #[serde(default)]
+    pub accent: crate::themes::Accent,
+    /// Home's background: a picture the player picked, kept in the data folder under this name
+    /// (`themes::keep_background`). Unset shows Horizon's landscape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
     /// The window's language. Unset follows the system's (`i18n::Language::system`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<crate::i18n::Language>,
@@ -2630,6 +2637,11 @@ impl Settings {
                 .is_some_and(|w| serde_json::from_value::<WhilePlaying>(w.clone()).is_err())
             {
                 fields.remove("while_playing");
+            }
+            if fields.get("accent").is_some_and(|a| {
+                serde_json::from_value::<crate::themes::Accent>(a.clone()).is_err()
+            }) {
+                fields.remove("accent");
             }
             // A language this launcher doesn't have yet follows the system's.
             if fields.get("language").is_some_and(|l| {
@@ -2988,6 +3000,23 @@ mod tests {
         assert_eq!((future.language, future.game_args.as_str()), (None, "--x"));
         let saved = serde_json::to_value(Settings::default()).unwrap();
         assert!(saved.get("language").is_none(), "unset is left out");
+    }
+
+    #[test]
+    fn the_accent_is_violet_unless_picked_and_an_unknown_one_keeps_the_rest() {
+        use crate::themes::Accent;
+        assert_eq!(Settings::parse("{}").accent, Accent::Violet);
+        let teal =
+            Settings::parse(r#"{"accent": "teal", "background": "background-0123456789ab.png"}"#);
+        assert_eq!(
+            (teal.accent, teal.background.as_deref()),
+            (Accent::Teal, Some("background-0123456789ab.png"))
+        );
+        let future = Settings::parse(r#"{"accent": "plaid", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.accent, future.game_args.as_str()),
+            (Accent::Violet, "--x")
+        );
     }
 
     #[test]
