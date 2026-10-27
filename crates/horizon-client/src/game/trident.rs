@@ -672,9 +672,12 @@ impl Game<'_> {
                 }
             }
             // playerTouch: stuck or returning tridents go back to a player.
+            // ThrownTrident.playerTouch: only its owner takes it, or anyone
+            // once the owner is not in this level (`getOwner() == null`).
             if t.in_ground || t.no_physics {
                 let near = |c: &&Catcher| {
                     c.touches
+                        && (owner_eye.is_none() || c.guest == t.guest)
                         && (t.position.x - c.feet.x).abs() < 1.0
                         && (t.position.z - c.feet.z).abs() < 1.0
                         && t.position.y > c.feet.y - 1.0
