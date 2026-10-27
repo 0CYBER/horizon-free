@@ -549,13 +549,15 @@ impl Mob {
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
-    /// every 0.55, a strider's every 0.6.
+    /// every 0.55, a strider's every 0.6, a turtle's every 0.15.
     fn next_step(&self) -> f32 {
         let walked = self.ai.steps.move_dist;
         if self.kind.species == super::Species::Warden {
             walked + 0.55
         } else if self.kind.species == super::Species::Strider {
             walked + 0.6
+        } else if self.kind.species == super::Species::Turtle {
+            walked + 0.15
         } else {
             (walked as i32).wrapping_add(1) as f32
         }
