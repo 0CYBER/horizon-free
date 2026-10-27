@@ -2857,6 +2857,10 @@ impl Game<'_> {
             self.swing_arm();
             return Ok(true);
         }
+        if self.interact_shear_mob(index, &item) {
+            self.swing_arm();
+            return Ok(true);
+        }
         // AbstractHorse.mobInteract: feed, equip or ride.
         if self.interact_mount(index, &item) {
             self.swing_arm();
@@ -3254,6 +3258,39 @@ impl Game<'_> {
             }
         }
         Ok(true)
+    }
+    /// `SnowGolem.mobInteract` and `Bogged.mobInteract` with shears: the
+    /// pumpkin or the mushrooms come off (the shearing loot table), the shear
+    /// game event is posted and the tool takes one damage.
+    fn interact_shear_mob(&mut self, index: usize, item: &str) -> bool {
+        let m = &self.mobs[index];
+        if item != "minecraft:shears" || !m.alive() || m.extra.sheared {
+            return false;
+        }
+        let (sound, table, height) = match m.species() {
+            Species::SnowGolem => (
+                "minecraft:entity.snow_golem.shear",
+                "minecraft:shearing/snow_golem",
+                m.eye_height(),
+            ),
+            Species::Bogged => (
+                "minecraft:entity.bogged.shear",
+                "minecraft:shearing/bogged",
+                f64::from(m.height()),
+            ),
+            _ => return false,
+        };
+        let at = m.position;
+        let tool = self.held().cloned();
+        self.audio.play(sound, Some([at.x, at.y, at.z]), 1.0, 1.0);
+        self.mobs[index].extra.sheared = true;
+        for stack in self.sequence_loot(table, table, tool.as_ref()) {
+            self.spawn_at_location(at, height, stack);
+        }
+        let ctx = self.who_context(Some(horizon_client::mobs::Who::Player), None);
+        self.post_game_event("minecraft:shear", [at.x, at.y, at.z], ctx);
+        self.damage_held_tool();
+        true
     }
     pub(super) fn damage_held_tool(&mut self) {
         if self.creative {

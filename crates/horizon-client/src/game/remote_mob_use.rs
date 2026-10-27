@@ -61,6 +61,8 @@ impl Game<'_> {
                 ) && !baby
             }
             Species::Sheep => item == "minecraft:shears" || item.ends_with("_dye"),
+            // SnowGolem.mobInteract: shears take the pumpkin off.
+            Species::SnowGolem => item == "minecraft:shears" && !m.extra.sheared,
             // Bucketable.bucketMobPickup.
             Species::Cod
             | Species::Salmon
