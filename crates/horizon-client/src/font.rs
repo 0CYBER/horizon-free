@@ -889,12 +889,17 @@ impl Font {
         if s.contains('§') {
             return self.width_text(&Text::legacy(s));
         }
-        s.chars().map(|c| self.glyph(c).advance).sum::<f32>().ceil()
+        crate::bidi::visual_str(s)
+            .chars()
+            .map(|c| self.glyph(c).advance)
+            .sum::<f32>()
+            .ceil()
     }
     /// Font.width of a component: `§` codes in the spans are formatting,
-    /// not glyphs.
+    /// not glyphs. Right-to-left text is measured as it is drawn, shaped.
     pub fn width_text(&self, t: &Text) -> f32 {
-        t.resolved()
+        let t = t.resolved();
+        crate::bidi::visual(&t)
             .chars()
             .map(|(c, s)| self.advance(c, s))
             .sum::<f32>()
