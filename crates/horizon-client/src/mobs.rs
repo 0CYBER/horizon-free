@@ -1225,8 +1225,10 @@ pub enum MobEvent {
         at: [f64; 3],
         amount: u32,
     },
-    /// Regeneration support after an axolotl-assisted kill.
-    AxolotlSupportPlayer,
+    /// Regeneration support after an axolotl-assisted kill, from the axolotl `mob`.
+    AxolotlSupportPlayer {
+        mob: u32,
+    },
     /// A dolphin that was given a fish asks the game for the nearest
     /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
     /// sets the dolphin's `extra.home` to it, or leaves it empty.

@@ -74,9 +74,9 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
-/// Where the player's fall, lava ride and Nether trip began and the blast that
-/// last hit the player (`ServerPlayer`'s fields of the same names). A guest
-/// keeps their own, as `levitation` does.
+/// Where the player's fall, lava ride and Nether trip began, the blast that
+/// last hit the player, and the effects the last tick saw (`ServerPlayer`'s
+/// fields of the same names). A guest keeps their own, as `levitation` does.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
@@ -87,6 +87,8 @@ pub(super) struct TravelMarks {
     pub(super) lava_ride: Option<[f64; 3]>,
     /// `enteredNetherPosition`.
     pub(super) nether: Option<[f64; 3]>,
+    /// The (effect, amplifier) pairs `EffectsChangedTrigger` last saw.
+    pub(super) effects: Vec<(&'static str, i32)>,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -103,7 +105,7 @@ pub(super) struct AdvState {
     pub(super) last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
-    /// The fall, lava ride, Nether trip and blast `tick_marks` follows.
+    /// The fall, lava ride, Nether trip, blast and effects `tick_marks` follows.
     pub(super) marks: TravelMarks,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
@@ -767,7 +769,8 @@ impl Game<'_> {
     }
     /// `ServerPlayer.tick`: `trackStartFallingPosition` and the end of a fall
     /// (`resetFallDistance`), `trackEnteredOrExitedLavaOnVehicle`, the way back
-    /// from the Nether and the wind charge blast a fall follows.
+    /// from the Nether, and `onEffectAdded`, `onEffectUpdated` and
+    /// `onEffectsRemoved`, which are seen as each tick ends.
     fn tick_marks(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
@@ -813,6 +816,17 @@ impl Game<'_> {
             self.adv.marks.nether = None;
             self.trigger_distance("minecraft:nether_travel", start);
         }
+        let effects: Vec<(&'static str, i32)> = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .map(|e| (e.id, e.amplifier))
+            .collect();
+        if effects != self.adv.marks.effects {
+            self.adv.marks.effects = effects;
+            self.trigger_effects_changed(None);
+        }
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
     /// at `start`, and the `distance` from `start` to the player.
@@ -856,6 +870,37 @@ impl Game<'_> {
                 && adv::location(&c["start_position"], impact, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], impact, me.position))
                 && adv::conditions(&c["cause"], &cctx, w)
+        });
+    }
+    /// `EffectsChangedTrigger`: the player's `effects`, and for an effect that
+    /// `source` gave, that entity (`source`).
+    pub(super) fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
+        let me = self.player_entity();
+        self.trigger("minecraft:effects_changed", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let effects = c["effects"].is_null()
+                || adv::entity(
+                    &serde_json::json!({ "minecraft:effects": c["effects"] }),
+                    &me,
+                    w,
+                    me.position,
+                );
+            let source = c["source"].is_null()
+                || source.as_ref().is_some_and(|s| {
+                    let sctx = adv::Entities {
+                        this: Some(s),
+                        origin: me.position,
+                        tool: None,
+                        block_pos: None,
+                    };
+                    adv::conditions(&c["source"], &sctx, w)
+                });
+            adv::conditions(&c["player"], &pctx, w) && effects && source
         });
     }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
