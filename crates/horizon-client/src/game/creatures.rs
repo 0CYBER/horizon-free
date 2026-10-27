@@ -2565,6 +2565,7 @@ impl Game<'_> {
                 let name = match sound {
                     ArrowSound::Splash => "minecraft:entity.generic.splash",
                     ArrowSound::HitGround => "minecraft:entity.arrow.hit",
+                    ArrowSound::CrossbowHit => "minecraft:item.crossbow.hit",
                     ArrowSound::Extinguish => "minecraft:entity.generic.extinguish_fire",
                     ArrowSound::TridentHitGround => "minecraft:item.trident.hit_ground",
                     ArrowSound::TridentHit => "minecraft:item.trident.hit",
