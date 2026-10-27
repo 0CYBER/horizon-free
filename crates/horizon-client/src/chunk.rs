@@ -24,6 +24,20 @@ pub fn block_strategy() -> Strategy {
     Strategy::blocks(BLOCK_BITS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// Frees `columns` (`count` of them) on a short-lived thread of its own
+/// when there are many: a teleport or a dimension change drops a few
+/// thousand columns at once, and freeing their sections took the frame
+/// 15-20 ms. A few are freed here.
+pub fn free_columns<T: Send + 'static>(columns: T, count: usize) {
+    if count < 64 {
+        return;
+    }
+    // Should the thread not start, the closure drops `columns` here.
+    let _ = std::thread::Builder::new()
+        .name("Chunk freeing".into())
+        .spawn(move || drop(columns));
+}
+
 /// Sizes the block states' global palette for a registry of `states`.
 pub fn set_block_states(states: usize) {
     let bits = horizon_core::paletted::ceil_log2(states).max(16);
@@ -147,6 +161,9 @@ pub struct Chunk {
     /// Structure starts reaching into this chunk (`structures.References`):
     /// structure id and the start's chunk.
     pub structure_refs: Vec<(Arc<str>, (i32, i32))>,
+    /// The starts generation made in this chunk (`structures.starts`), saved
+    /// with the state their placement has reached by then.
+    pub structure_starts: Vec<Arc<horizon_world::worldgen::structure::start::StructureStart>>,
 }
 impl Chunk {
     pub fn empty(x: i32, z: i32) -> Self {
@@ -164,6 +181,7 @@ impl Chunk {
             block_entities: Vec::new(),
             block_names: Vec::new(),
             structure_refs: Vec::new(),
+            structure_starts: Vec::new(),
             postprocess: Vec::new(),
             saved: None,
             entities: Vec::new(),
