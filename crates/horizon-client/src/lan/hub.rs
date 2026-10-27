@@ -2134,11 +2134,16 @@ impl Hub {
                 packets = 1;
             }
             // shouldCheckPlayerMovement (never the single-player owner).
-            // The server holds no velocity for a guest (getDeltaMovement),
-            // so nothing is expected.
             if !owner && check && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
-                if moved > limit * f64::from(packets) {
+                // `movedDist - expectedDist` (getDeltaMovement): the velocity
+                // the server last simulated for the guest is expected
+                // movement, not a violation — a landing glide keeps its speed.
+                let expected = g.motion.as_ref().map_or(0.0, |m| {
+                    let v = m.velocity;
+                    v.x * v.x + v.y * v.y + v.z * v.z
+                });
+                if moved - expected > limit * f64::from(packets) {
                     events.push(HostEvent::Warn(format!(
                         "{} moved too quickly! {},{},{}",
                         g.name,
