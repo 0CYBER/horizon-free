@@ -505,6 +505,12 @@ impl ChunkGenerator for VanillaTerrain {
     fn is_decorated(&self, proto: &Proto) -> bool {
         matches!(proto.downcast_ref::<VanillaProto>(), Some(VanillaProto::Ready(c)) if c.is_decorated())
     }
+    fn light_view(&self, proto: &Proto) -> Option<Chunk> {
+        match proto.downcast_ref::<VanillaProto>() {
+            Some(VanillaProto::Ready(chunk)) => Some(self.column(chunk)),
+            _ => None,
+        }
+    }
     fn saved_proto(&self, proto: &Proto) -> Option<SavedProto> {
         let Some(VanillaProto::Ready(chunk)) = proto.downcast_ref::<VanillaProto>() else {
             return None;
