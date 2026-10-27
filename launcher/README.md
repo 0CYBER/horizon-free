@@ -12,7 +12,7 @@ The opening, then Play ([clip](docs/opening.webm)):
 
 ## What it does
 
-- **Versions**: lists the published releases of ludovic111/horizon, installs the build for
+- **Versions**: lists the published releases of horizon-rust/horizon, installs the build for
   this platform into its own folder, and removes it again.
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the
   26.3 server jar from that version's own json, and Java 25) and copies its sounds from your
