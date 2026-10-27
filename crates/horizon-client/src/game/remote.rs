@@ -203,6 +203,8 @@ pub(super) struct Remote {
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
     death_message: Option<String>,
+    /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
+    show_death_screen: bool,
     player_type: Option<Arc<MobType>>,
     /// Inventory as last synchronised, for creative-mode slot updates.
     synced: Vec<Option<ItemStack>>,
@@ -496,6 +498,7 @@ impl Game<'_> {
             stop_mining: false,
             placing: None,
             death_message: None,
+            show_death_screen: true,
             player_type,
             synced: vec![None; 36],
             decode_errors: 0,
@@ -1664,6 +1667,7 @@ impl Game<'_> {
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
                     r.view_distance = p.chunk_radius;
+                    r.show_death_screen = p.show_death_screen;
                 }
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
@@ -2358,7 +2362,11 @@ impl Game<'_> {
                     pl.health.flash_health_change(p.health);
                 }
                 self.apply_remote_health();
-                if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
+                // The death screen opens (or the respawn is asked for) with the
+                // death packet when the rule hides it.
+                let shown = self.remote.as_ref().is_none_or(|r| r.show_death_screen);
+                if p.health <= 0.0 && shown && self.screen != Screen::Dead && self.player.is_some()
+                {
                     self.screen = Screen::Dead;
                     self.ui.death_time = 0;
                     self.capture(false);
@@ -2374,11 +2382,16 @@ impl Game<'_> {
                     r.death_message = Some(message);
                 }
                 // ClientPacketListener.handlePlayerCombatKill: the death
-                // screen, whatever health was last sent.
+                // screen, whatever health was last sent, or `respawn()` at
+                // once when it is hidden.
                 if me && self.screen != Screen::Dead && self.player.is_some() {
-                    self.screen = Screen::Dead;
-                    self.ui.death_time = 0;
-                    self.capture(false);
+                    if self.remote.as_ref().is_none_or(|r| r.show_death_screen) {
+                        self.screen = Screen::Dead;
+                        self.ui.death_time = 0;
+                        self.capture(false);
+                    } else {
+                        self.respawn_player()?;
+                    }
                 }
             }
             C::TrackedWaypoint(p) => self.handle_waypoint(&p),
@@ -2452,6 +2465,12 @@ impl Game<'_> {
                     self.set_mode_id(mode);
                     if let Some(r) = self.remote.as_mut() {
                         r.game_mode = mode;
+                    }
+                }
+                // IMMEDIATE_RESPAWN: LocalPlayer.setShowDeathScreen.
+                11 => {
+                    if let Some(r) = self.remote.as_mut() {
+                        r.show_death_screen = p.param == 0.0;
                     }
                 }
                 7 => {

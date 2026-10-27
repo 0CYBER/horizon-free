@@ -1214,6 +1214,19 @@ pub fn despawn_check(m: &mut Mob, w: &MobWorld) -> bool {
     }
     true
 }
+/// `Mob.requiresCustomPersistence` and its overrides: a passenger or a leashed
+/// mob, a raider in a raid, an enderman carrying a block, a tame nautilus, a
+/// sulfur cube holding a block or let out of a bucket. The spawn caps do not
+/// count these mobs either (`NaturalSpawner.createState`).
+pub fn requires_custom_persistence(m: &Mob) -> bool {
+    super::riders::keeps_alive(m)
+        || m.extra.leash.is_some()
+        || super::raider::state(m).is_some_and(|s| s.raid_id.is_some())
+        || m.species() == Species::Enderman && m.extra.carried.is_some()
+        || super::nautilus::is_nautilus(m.species()) && m.extra.tame
+        || m.species() == Species::SulfurCube
+            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0)
+}
 /// Mob.checkDespawn, before the tick (players are the only despawn
 /// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
@@ -1229,12 +1242,7 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         return true;
     };
     let d = m.distance_sqr(p);
-    // requiresCustomPersistence: raiders in a raid, a tame nautilus, a sulfur
-    // cube holding a block or let out of a bucket.
-    let persistent = m.persistent
-        || super::nautilus::is_nautilus(m.species()) && m.extra.tame
-        || m.species() == Species::SulfurCube
-            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
+    let persistent = m.persistent || requires_custom_persistence(m);
     // removeWhenFarAway: animals, villagers, golems, patrols and raiders,
     // zombie villagers being cured and ridden mobs stay.
     let creature = m.kind.category == "creature";
