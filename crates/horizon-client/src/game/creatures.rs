@@ -532,6 +532,8 @@ impl Game<'_> {
             _ => Vec::new(),
         };
         let mut guest_events = Vec::new();
+        // The mobs whose bodies go this tick: (id, feet, width, height).
+        let mut gone = Vec::new();
         let level_random;
         {
             // The level random, lent to the mobs (brain behaviours draw from
@@ -604,6 +606,11 @@ impl Game<'_> {
                 let from = events.len();
                 let kept = m.tick(&w, &mut scratch, &mut events);
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
+                // LivingEntity.tickDeath: after twenty ticks the body is removed.
+                if !kept && !m.removed && !m.alive() && m.death_time >= 20 {
+                    let (width, height) = (f64::from(m.width()), f64::from(m.height()));
+                    gone.push((m.id, m.position, width, height));
+                }
                 if let Some(conn) = seen_guest {
                     // ShulkerBullet.finalTarget is the guest's entity: the
                     // bullet homes on it while the projectiles tick, where
@@ -662,6 +669,12 @@ impl Game<'_> {
         }
         self.mobs.append(&mut mobs);
         self.died = died;
+        // ... and entity event 60 goes out as it is: the poof.
+        for (id, at, width, height) in gone {
+            let at = [at.x, at.y, at.z];
+            self.lan_entity_event(id as i32, 60, at);
+            self.death_poof(at, width, height);
+        }
         self.sync_riders();
         self.tick_skeleton_traps();
         self.tick_apparition();
@@ -687,6 +700,22 @@ impl Game<'_> {
         }
         self.handle_mob_events(queued)?;
         Ok(())
+    }
+    /// `LivingEntity.makePoofParticles` (entity event 60) about a mob's box.
+    pub(super) fn death_poof(&mut self, at: [f64; 3], width: f64, height: f64) {
+        let options = horizon_client::particles::ParticleOptions::simple(
+            horizon_client::particles::ParticleType::Poof,
+        );
+        for _ in 0..20 {
+            let r = self.particles.level_random();
+            let xa = r.next_gaussian() * 0.02;
+            let ya = r.next_gaussian() * 0.02;
+            let za = r.next_gaussian() * 0.02;
+            let x = at[0] + width * (2.0 * r.next_double() - 1.0) - xa * 10.0;
+            let y = at[1] + height * r.next_double() - ya * 10.0;
+            let z = at[2] + width * (2.0 * r.next_double() - 1.0) - za * 10.0;
+            self.particles.add(&options, [x, y, z], [xa, ya, za]);
+        }
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
