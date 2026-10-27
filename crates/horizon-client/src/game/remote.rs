@@ -191,7 +191,7 @@ pub(super) struct Remote {
     input: horizon_client::interaction_input::InteractionInput,
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
-    death_message: Option<String>,
+    death_message: Option<horizon_client::text::Text>,
     player_type: Option<Arc<MobType>>,
     /// Inventory as last synchronised, for creative-mode slot updates.
     synced: Vec<Option<ItemStack>>,
@@ -2233,7 +2233,7 @@ impl Game<'_> {
                 // The component resolves in the client's current language, as
                 // the chat line does, not in the language the session joined
                 // with (`Remote.lang` is the vanilla server-language table).
-                let message = remote_text(&p.message).plain();
+                let message = remote_text(&p.message);
                 let me = self.remote.as_ref().is_some_and(|r| r.entity_id == p.id);
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = Some(message);
@@ -5225,8 +5225,16 @@ impl Game<'_> {
         if self.screen == Screen::Dead
             && let Some(message) = &r.death_message
         {
-            let tw = HudBatch::text_width(atlas, message);
-            batch.text(atlas, message, (w - tw) / 2.0, 85.0, u32::MAX, true);
+            // DeathScreen draws the styled cause component.
+            let tw = atlas.font.width_text(message);
+            batch.text_styled(
+                atlas,
+                message,
+                ((w - tw) / 2.0).floor(),
+                85.0,
+                u32::MAX,
+                true,
+            );
         }
     }
     /// Status for `horizon-ctl status`.
