@@ -572,16 +572,16 @@ impl Game<'_> {
         let pitch = (1.0 + (client_float() - client_float()) * 0.2) * 0.7;
         self.audio
             .play("minecraft:entity.generic.explode", Some(center), 4.0, pitch);
-        let block_count = if interaction == BlockInteraction::Keep {
-            0
-        } else {
-            targets.len()
-        };
+        // ServerLevel.explode sends toBlow.size() whatever the interaction, and
+        // `ServerExplosion.isSmall` also covers an explosion that keeps blocks.
+        let block_count = targets.len();
+        let small = radius < 2.0 || interaction == BlockInteraction::Keep;
         let (world, facts) = (&self.world, self.res.facts());
-        self.particles.explosion(center, radius, block_count, &|b| {
-            facts.is_air(world.block(b[0], b[1], b[2]))
-        });
-        self.lan_explode(center, radius, block_count);
+        self.particles
+            .explosion(center, small, block_count, radius, &|b| {
+                facts.is_air(world.block(b[0], b[1], b[2]))
+            });
+        self.lan_explode(center, small, radius, block_count);
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).
