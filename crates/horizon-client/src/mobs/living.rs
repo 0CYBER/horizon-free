@@ -998,10 +998,7 @@ impl MobFluidWorld<'_> {
         self.world.block(p.x, p.y, p.z)
     }
     /// `BlockState.getFluidState`: the fluid, its amount and whether it falls.
-    fn fluid_at(
-        &self,
-        p: horizon_core::position::BlockPos,
-    ) -> horizon_world::fluid::FluidState {
+    fn fluid_at(&self, p: horizon_core::position::BlockPos) -> horizon_world::fluid::FluidState {
         let f = self.facts.get(self.state(p));
         let kind = match f.fluid {
             crate::blocks::Fluid::None => horizon_world::fluid::FluidKind::Empty,
@@ -1117,10 +1114,7 @@ impl horizon_world::entity_fluid::FluidInteractionWorld for MobFluidWorld<'_> {
 
 impl horizon_world::fluid::FluidHeightWorld for MobFluidWorld<'_> {
     type Error = std::convert::Infallible;
-    fn fluid(
-        &mut self,
-        p: [i32; 3],
-    ) -> Result<horizon_world::fluid::FluidState, Self::Error> {
+    fn fluid(&mut self, p: [i32; 3]) -> Result<horizon_world::fluid::FluidState, Self::Error> {
         Ok(self.fluid_at(horizon_core::position::BlockPos::new(p[0], p[1], p[2])))
     }
     fn sturdy_down(&mut self, p: [i32; 3]) -> Result<bool, Self::Error> {
@@ -1138,10 +1132,7 @@ impl horizon_world::fluid_flow::FluidFlowWorld for MobFluidWorld<'_> {
     ) -> Result<horizon_world::fluid::FluidState, Self::Error> {
         Ok(self.fluid_at(p))
     }
-    fn block(
-        &mut self,
-        p: horizon_core::position::BlockPos,
-    ) -> Result<Self::Block, Self::Error> {
+    fn block(&mut self, p: horizon_core::position::BlockPos) -> Result<Self::Block, Self::Error> {
         Ok(self.state(p))
     }
     fn blocks_fluid_flow(&self, s: Self::Block) -> bool {
