@@ -102,11 +102,12 @@ impl RaidLevel for Lvl<'_, '_> {
                 && g.res.facts().is_air(g.world.block(x, y, z))
     }
     fn player(&self) -> Option<RaidPlayer> {
-        let p = self.game.player.as_ref()?;
+        // The first player in the level: a server has no player of its own.
+        let p = self.game.level_players().into_iter().next()?;
         Some(RaidPlayer {
             position: [p.position.x, p.position.y, p.position.z],
             block: block_of(p.position),
-            alive: !p.health.dead_or_dying(),
+            alive: p.alive,
         })
     }
 }
@@ -174,12 +175,13 @@ impl PatrolLevel for PatrolCx<'_, '_, '_> {
     fn bright_outside(&self) -> bool {
         self.level.game.dim == Dim::Overworld && self.level.game.sky_darken() < 4
     }
+    /// `PatrolSpawner.tick` picks from `level.players()`: the local player
+    /// and every guest in the level.
     fn patrol_players(&self) -> Vec<([i32; 3], bool)> {
-        let g = self.level.game;
-        g.player
-            .as_ref()
-            .map(|p| (block_of(p.position), g.spectator()))
-            .into_iter()
+        self.level
+            .players
+            .iter()
+            .map(|p| (block_of(p.position), p.spectator))
             .collect()
     }
     fn sections_to_village(&self, pos: [i32; 3]) -> i32 {
@@ -633,7 +635,7 @@ impl Game<'_> {
     /// `Raid.playSound`: the horn, 13 blocks away from the player toward the
     /// wave, for players within 64 blocks or in the raid.
     fn raid_horn(&mut self, id: i32, pos: [i32; 3]) {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
+        let Some(p) = self.level_players().first().map(|p| p.position) else {
             return;
         };
         let in_raid = self.raiding.raids.get(id).is_some_and(|r| r.bar.player);
