@@ -2385,7 +2385,7 @@ impl Launcher {
             .gap(px(12.));
         if self.servers.confirm_delete {
             let matches = self.servers.value(Field::DeleteServer) == name && !name.is_empty();
-            let field = self.field(Field::DeleteServer, "Server name", 260., cx);
+            let field = self.field(Field::DeleteServer, "Server name", 230., cx);
             let confirm = button(
                 "server-delete-confirm",
                 "Move to trash",
