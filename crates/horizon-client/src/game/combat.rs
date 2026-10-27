@@ -82,8 +82,8 @@ impl Game<'_> {
     /// `LivingEntity.handleDamageEvent` for the player: the hurt sound of the
     /// source's `DamageEffects` (`Player.getHurtSound`).
     pub(super) fn player_hurt_sound(&mut self, sound: &str, at: [f64; 3]) {
-        let pitch = self.audio.hurt_pitch();
-        self.audio.play(sound, Some(at), 1.0, pitch);
+        // Player.getVoicePitch: always 1.0.
+        self.audio.play(sound, Some(at), 1.0, 1.0);
     }
     /// `CombatTracker.recordDamage` for the motion events of this tick.
     pub(super) fn record_combat(&mut self, events: &[MotionEvent]) {
