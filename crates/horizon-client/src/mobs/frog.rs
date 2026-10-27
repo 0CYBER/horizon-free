@@ -59,6 +59,17 @@ pub struct State {
 }
 
 pub fn register(m: &mut Mob) {
+    // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true). The
+    // frog's movement speed is 1.0, so the controller's 0.1 outside-water
+    // speed is what keeps a walking frog at vanilla's pace; the plain ground
+    // controller walks ten times too fast (#2213).
+    m.ai.mov.kind = super::control::MoveKind::SmoothSwimming {
+        max_turn_x: 85.0,
+        max_turn_y: 10.0,
+        in_water: 0.02,
+        outside: 0.1,
+        gravity: true,
+    };
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, Panic::new(1.25));

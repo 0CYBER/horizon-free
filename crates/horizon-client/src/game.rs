@@ -158,6 +158,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_links;
 mod server_mods;
 mod server_packs;
 mod server_travel;
@@ -509,6 +510,12 @@ enum Screen {
     Friends,
     /// CommandBlockEditScreen (game/command_blocks.rs).
     CommandBlock,
+    /// ServerLinksDialogScreen: a server's links (game/server_links.rs).
+    ServerLinks,
+    /// ConfirmLinkScreen for a server link (game/server_links.rs).
+    ConfirmLink,
+    /// DialogScreen.WarningScreen: the note about custom screens.
+    DialogWarning,
     /// WinScreen: the end poem and the credits (game/win.rs).
     Win,
     /// A `ui` mod's own screen, or its settings page from Options > Mods
@@ -1676,6 +1683,7 @@ struct Game<'a> {
     guest_use: Option<GuestUse>,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
+    lan_cushion_breaks: Vec<(horizon_world::registry::BlockStateId, [f64; 3])>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
@@ -1699,6 +1707,9 @@ struct Game<'a> {
     /// The acting guest's cooldowns, as (item, ticks): their packet needs the
     /// hub's item registry, which the guest's turn does not hold.
     guest_cooldowns: Vec<(Arc<str>, i32)>,
+    /// The acting guest's own entity events (`ServerPlayer.connection.send`),
+    /// sent with their entity id, which the guest's turn does not hold.
+    guest_entity_events: Vec<i8>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -1733,6 +1744,8 @@ struct Game<'a> {
     restore_player_state: bool,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
+    /// The Server Links screens' state (game/server_links.rs).
+    links_ui: server_links::LinksUi,
     camera_type: perspective::CameraType,
     fangs: fangs::FangState,
     /// The local player as a model (third person, the inventory).
@@ -2991,6 +3004,16 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                // LevelEventHandler 2019 and 2020: the crack on a face of the
+                // block being mined, with its hit sound for 2020.
+                LevelEvent::LevelEvent {
+                    id: id @ (2019 | 2020),
+                    pos,
+                    data,
+                } => {
+                    let face = horizon_core::geometry::Direction::ALL[data.clamp(0, 5) as usize];
+                    self.breaking_block_effects([pos.x, pos.y, pos.z], face.normal(), id == 2020);
+                }
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
@@ -3010,6 +3033,11 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.dragon_egg_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent {
+                    id: 2016,
+                    pos,
+                    data,
+                } => self.shulker_teleport_particles([pos.x, pos.y, pos.z], data),
                 LevelEvent::LevelEvent {
                     id: 2017,
                     pos,
@@ -4203,6 +4231,7 @@ impl Game<'_> {
         if &*stack.item == "minecraft:spyglass" {
             // SpyglassItem.USE_DURATION, then finishUsingItem.
             if ticks + 1 >= 1200 {
+                self.send_use_item_complete();
                 self.stop_spyglass();
                 self.using = None;
             } else {
@@ -4224,6 +4253,7 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            self.send_use_item_complete();
             // ItemStack.finishUsingItem's applyAfterUseComponentSideEffects.
             self.apply_use_cooldown(&stack);
             self.finish_consuming(&info, consumable, &stack);
@@ -4241,6 +4271,17 @@ impl Game<'_> {
             "minecraft:spyglass" => self.stop_spyglass(),
             _ => {}
         }
+    }
+    /// `ServerPlayerGameMode.tick` while a player digs: level event 2020 every
+    /// fourth tick since the START (the hit sound), else 2019 (the crack only),
+    /// for everyone around, the digger included (`levelEvent(null, ...)`).
+    fn destroy_progress_event(&mut self, pos: [i32; 3], face: [i32; 3], ticks: u32) {
+        let id = if ticks.is_multiple_of(4) { 2020 } else { 2019 };
+        let direction = horizon_core::geometry::Direction::ALL
+            .iter()
+            .position(|d| d.normal() == face)
+            .unwrap_or(1);
+        self.level_event_at(id, pos, direction as i32);
     }
     fn tick_mining(&mut self) -> Result<()> {
         if self.destroy_delay > 0 {
@@ -4285,6 +4326,11 @@ impl Game<'_> {
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         let facts = self.res.facts().get(state);
         if facts.hardness < 0.0 {
+            // The server still counts its destroy ticks on an unbreakable block.
+            let m = self.mining.as_mut().ok_or("mining")?;
+            m.ticks += 1;
+            let (pos, ticks) = (m.pos, m.ticks);
+            self.destroy_progress_event(pos, hit.face, ticks);
             return Ok(());
         }
         // Player.getDestroySpeed / BlockBehaviour.getDestroyProgress.
@@ -4315,26 +4361,15 @@ impl Game<'_> {
         } else {
             speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
         };
-        let hit_sound = facts.sounds.clone();
         self.swing_arm();
         let m = self.mining.as_mut().ok_or("mining")?;
         m.progress += progress;
         m.ticks += 1;
-        let crack = (m.pos, hit.face);
-        if m.ticks % 4 == 1 {
-            let c = [
-                f64::from(m.pos[0]) + 0.5,
-                f64::from(m.pos[1]) + 0.5,
-                f64::from(m.pos[2]) + 0.5,
-            ];
-            self.audio.play(
-                &hit_sound.hit,
-                Some(c),
-                (hit_sound.volume + 1.0) / 8.0,
-                hit_sound.pitch * 0.5,
-            );
+        // An instant break at START sends no destroy events.
+        if m.progress < 1.0 || m.ticks > 1 {
+            let (pos, ticks) = (m.pos, m.ticks);
+            self.destroy_progress_event(pos, hit.face, ticks);
         }
-        self.crack_particle(crack.0, crack.1, state);
         let m = self.mining.as_mut().ok_or("mining")?;
         // ServerPlayerGameMode breaks a player's block at once only when it is instant (START's
         // insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK
@@ -5086,6 +5121,9 @@ impl Game<'_> {
                     | Screen::Advancements
                     | Screen::WorldOptions
                     | Screen::Friends
+                    | Screen::ServerLinks
+                    | Screen::ConfirmLink
+                    | Screen::DialogWarning
                     | Screen::CommandBlock
             ) || self.book.is_some()
                 || self.win_screen_pauses())
@@ -5107,10 +5145,13 @@ impl Game<'_> {
         if capture && !self.focused {
             return;
         }
-        if capture {
-            // The inventory's screens are behind us: no drag survives them.
-            self.reset_inventory_clicks();
-        } else {
+        // The container screen's press state belongs to the screen: a screen
+        // that takes the pointer over starts with its own state, as
+        // `AbstractContainerScreen` does, so a press whose release never
+        // arrived (the pointer left the window) cannot wedge the next
+        // screen's quick move and clicks.
+        self.reset_inventory_clicks();
+        if !capture {
             self.stop_mining();
         }
         // The real pointer takes over from an agent's.
@@ -5569,6 +5610,9 @@ impl Game<'_> {
             Screen::Advancements => self.draw_advancements(&mut batch),
             Screen::WorldOptions => self.draw_world_options(&mut batch),
             Screen::Friends => self.draw_friends_screen(&mut batch),
+            Screen::ServerLinks => self.draw_server_links(&mut batch),
+            Screen::ConfirmLink => self.draw_confirm_link(&mut batch),
+            Screen::DialogWarning => self.draw_dialog_warning(&mut batch),
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
@@ -5956,12 +6000,14 @@ impl Game<'_> {
         }
     }
     /// `AbstractContainerScreen` keeps `isQuickCrafting` and the drag it
-    /// belongs to on the screen; Horizon keeps them on the game, so they are
-    /// dropped when a screen closes. A press whose release never reaches the
-    /// screen (the pointer left the window, or the screen closed first) would
+    /// belongs to on the screen. Horizon keeps both on `Game` (`inv_clicks`,
+    /// `inv_drag`, `last_inv_click`), so they are dropped when the pointer
+    /// changes hands: a screen that opens or closes starts with its own
+    /// state, and a press whose release never reached the screen -- the
+    /// pointer left the window, or the screen closed first -- would
     /// otherwise leave every later press on every later screen swallowed.
     pub(super) fn reset_inventory_clicks(&mut self) {
-        self.inv_clicks = Default::default();
+        self.inv_clicks.cancel_drag();
         self.inv_drag = None;
         self.last_inv_click = None;
     }
@@ -9772,7 +9818,7 @@ impl Game<'_> {
             velocity,
             on_ground,
         );
-        self.creatures.projectiles.push(arrow);
+        self.add_projectile(arrow);
         self.player_projectile_shot();
         let pitch = 1.0 / (self.world.random.next_float() * 0.4 + 1.2) + power * 0.5;
         self.audio
@@ -11363,6 +11409,10 @@ impl Game<'_> {
                 Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {}
                 Screen::Stats | Screen::Friends => self.screen = Screen::Paused,
+                Screen::ServerLinks => self.screen = Screen::Paused,
+                // ConfirmScreen.keyPressed: Escape answers no; both return to
+                // the Server Links screen they came from.
+                Screen::ConfirmLink | Screen::DialogWarning => self.screen = Screen::ServerLinks,
                 Screen::Advancements => self.close_advancements(),
                 Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
@@ -11431,8 +11481,10 @@ impl Game<'_> {
             // key.swapOffhand: on a server, ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND
             // (the server swaps the hands and sends both slots back; spectators can't).
             KeyCode::KeyF if self.screen == Screen::Playing && self.remote.is_some() => {
-                if !self.spectator() {
-                    self.remote_swap_hands();
+                if !self.spectator()
+                    && let Some(r) = self.remote.as_mut()
+                {
+                    r.pending_keys.push(key);
                 }
             }
             KeyCode::KeyF if self.screen == Screen::Playing => {
@@ -11529,11 +11581,28 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// LOD Distance as far terrain uses it (`Graphics::lod_distance_on`).
+    /// LOD Distance and Far Detail Reduced as chosen: the player's LOD
+    /// Distance when it is on, else a mod's far terrain
+    /// (`render.set-far-terrain`).
+    fn far_terrain_choice(&self) -> (u32, bool) {
+        let g = &self.settings.horizon;
+        let reduced = g.far_detail == horizon_client::graphics::FarDetail::Reduced;
+        if g.lod_distance > 0 {
+            return (g.lod_distance, reduced);
+        }
+        match self.mod_far_terrain() {
+            Some(f) => (f.distance, reduced || f.reduced),
+            None => (0, reduced),
+        }
+    }
+    /// LOD Distance as far terrain uses it (`graphics::lod_distance_capped`).
     fn lod_distance(&self) -> u32 {
+        let (distance, _) = self.far_terrain_choice();
         match &self.renderer {
-            Some(renderer) => self.settings.horizon.lod_distance_on(&renderer.info),
-            None => self.settings.horizon.lod_distance.min(1024),
+            Some(renderer) => {
+                horizon_client::graphics::lod_distance_capped(distance, &renderer.info)
+            }
+            None => distance.min(1024),
         }
     }
     /// Only enabled LOD worlds extend the renderer's range, never simulation.
@@ -11554,7 +11623,7 @@ impl Game<'_> {
         }
     }
     fn prepare_lod(&mut self) {
-        let enabled = self.settings.horizon.lod_distance > 0
+        let enabled = self.far_terrain_choice().0 > 0
             && self.renderer.is_some()
             && self.player.is_some()
             && self.title.is_none()
@@ -11651,6 +11720,7 @@ impl Game<'_> {
         {
             log::warn!("Horizon: failed to save unloaded chunks: {e}");
         }
+        let (far_distance, far_reduced) = self.far_terrain_choice();
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.horizon;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
@@ -11704,12 +11774,10 @@ impl Game<'_> {
             }
             renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
-                let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
+                let lod_distance =
+                    horizon_client::graphics::lod_distance_capped(far_distance, &renderer.info);
                 lod.set_near_loading(self.streaming.busy());
-                lod.set_reduced_detail(
-                    self.settings.horizon.far_detail
-                        == horizon_client::graphics::FarDetail::Reduced,
-                );
+                lod.set_reduced_detail(far_reduced);
                 // The covered columns change only with the complete ones and
                 // the render area: rebuilt then, not every frame.
                 let at = (
@@ -12043,6 +12111,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::WorldOptions && d != 0.0 {
                         self.world_options_scroll(d);
                     }
+                    if self.screen == Screen::ServerLinks && d != 0.0 {
+                        self.server_links_scroll(d);
+                    }
                     if self.screen == Screen::Advancements {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
@@ -12233,6 +12304,15 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
+                        }
+                        Screen::ServerLinks if pressed && button == MouseButton::Left => {
+                            self.server_links_click()?
+                        }
+                        Screen::ConfirmLink if pressed && button == MouseButton::Left => {
+                            self.confirm_link_click()
+                        }
+                        Screen::DialogWarning if pressed && button == MouseButton::Left => {
+                            self.dialog_warning_click()?
                         }
                         Screen::WorldOptions if button == MouseButton::Left => {
                             self.world_options_release()
@@ -13081,6 +13161,7 @@ impl<'a> Game<'a> {
             forced_hit: None,
             guest_use: None,
             lan_events: Vec::new(),
+            lan_cushion_breaks: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
@@ -13089,6 +13170,7 @@ impl<'a> Game<'a> {
             lan_acting: None,
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
+            guest_entity_events: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,
@@ -13115,6 +13197,7 @@ impl<'a> Game<'a> {
             restore_player_state: true,
             stats_ui: Default::default(),
             adv_ui: Default::default(),
+            links_ui: Default::default(),
             camera_type: Default::default(),
             fangs: Default::default(),
             player_model: None,
