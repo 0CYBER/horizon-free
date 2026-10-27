@@ -308,6 +308,25 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
     }
 }
 
+/// The report for a hung server tick, written by the watchdog thread
+/// (`ServerWatchdog`): the stuck thread's stack is not available to Rust, so
+/// the report carries none.
+pub fn report_watchdog(home: &Path, side: &'static str, message: String) -> Option<PathBuf> {
+    deliver(
+        home,
+        Report {
+            time: Local::now(),
+            description: "Watching Server".into(),
+            error: format!("{message} (Watching Server)"),
+            stack: String::new(),
+            thread: thread_name(),
+            side,
+            details: system_details(),
+            log: crate::logging::recent_lines(),
+        },
+    )
+}
+
 fn panic_message(info: &std::panic::PanicHookInfo) -> String {
     let payload = info.payload();
     let text = payload
