@@ -228,10 +228,12 @@ impl Game<'_> {
             return false;
         }
         let mut used = false;
+        let mut loved = false;
         if love && m.extra.tame && m.extra.age == 0 && m.extra.in_love <= 0 {
             m.extra.in_love = 600;
             m.extra.love_player = true;
             used = true;
+            loved = true;
         }
         if m.health < m.attrs.max_health && heal > 0.0 {
             m.health = (m.health + heal).min(m.attrs.max_health);
@@ -251,6 +253,7 @@ impl Game<'_> {
         // eating(): the mouth opens and the horse eats.
         m.anim.v[2] = 1.0;
         let at = m.center();
+        let id = m.id;
         let sound = match m.species() {
             Species::Camel => "minecraft:entity.camel.eat",
             Species::CamelHusk => "minecraft:entity.camel_husk.eat",
@@ -260,6 +263,10 @@ impl Game<'_> {
         };
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
         self.audio.play(sound, Some(at), 1.0, pitch);
+        // Animal.setInLove: entity event 18.
+        if loved {
+            self.mob_event_particles(id, 18);
+        }
         self.consume_held();
         true
     }
@@ -465,14 +472,16 @@ impl Game<'_> {
                     m.extra.owner = owner;
                     m.persistent = true;
                     // AbstractHorse.tameWithName: entity event 7, spawnTamingParticles(true).
-                    self.particles_around_mob(
-                        mob,
-                        "heart",
-                        horizon_client::particles::Burst::TAMING,
-                    );
+                    self.mob_event_particles(mob, 7);
                 }
             }
-            MobEvent::Buck { mob } if self.riding == Some(mob) => self.dismount_mount(),
+            MobEvent::Buck { mob } => {
+                if self.riding == Some(mob) {
+                    self.dismount_mount();
+                }
+                // RunAroundLikeCrazyGoal.tick: entity event 6, smoke.
+                self.mob_event_particles(mob, 6);
+            }
             _ => {}
         }
     }

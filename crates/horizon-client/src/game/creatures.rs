@@ -1313,12 +1313,17 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::AroundSelf {
+                    mob,
+                    event,
                     kind,
                     feet,
                     width,
                     height,
                     burst,
-                } => self.particles_around(kind, feet, [width, height], burst),
+                } => {
+                    self.lan_entity_event(mob as i32, event, feet);
+                    self.particles_around(kind, feet, [width, height], burst)
+                }
                 MobEvent::ParticleAt { kind, at, velocity } => {
                     if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
@@ -1573,6 +1578,8 @@ impl Game<'_> {
             q.extra.in_love = 0;
         }
         let q = self.mobs.iter().find(|m| m.id == partner).cloned();
+        // Animal.finalizeSpawnChildFromBreeding: entity event 18 for the parent.
+        self.mob_event_particles(parent, 18);
         // Sniffer.spawnChildFromBreeding: an egg instead of a baby.
         if p.species() == Species::Sniffer {
             self.lay_sniffer_egg(&p);
@@ -2611,6 +2618,7 @@ impl Game<'_> {
                     };
                     m.damage(amount, source);
                 }
+                self.thrown_break_event(p.id, atp);
                 self.item_burst(atp, "minecraft:snowball");
             }
             (ProjectileKind::Egg, hit) => {
@@ -2636,6 +2644,7 @@ impl Game<'_> {
                         }
                     }
                 }
+                self.thrown_break_event(p.id, atp);
                 self.item_burst(atp, "minecraft:egg");
             }
             (ProjectileKind::EnderPearl, hit) => {
@@ -2885,10 +2894,17 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// `Snowball`/`ThrownEgg.onHit`: entity event 3 for the guests, before the
+    /// projectile is discarded (the clients lose it when the tracker next runs).
+    fn thrown_break_event(&mut self, id: u32, at: [f64; 3]) {
+        if id != 0 {
+            self.lan_entity_event(id as i32, 3, at);
+        }
+    }
     /// `Snowball`/`ThrownEgg.handleEntityEvent(3)`: eight crumbs of the
     /// thrown item where it broke, at rest for a snowball, scattered by the
     /// client entity's random (the particle engine's here) for an egg.
-    fn item_burst(&mut self, at: [f64; 3], item: &str) {
+    pub(super) fn item_burst(&mut self, at: [f64; 3], item: &str) {
         let options = self.item_particle(&horizon_client::items::ItemStack::new(item, 1));
         let egg = item != "minecraft:snowball";
         for _ in 0..8 {
@@ -3182,14 +3198,8 @@ impl Game<'_> {
                     m.ai.target = None;
                     m.extra.sitting = true;
                 }
-                // TamableAnimal.spawnTamingParticles.
-                let kind = if tamed { "heart" } else { "smoke" };
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
-                self.particles_around_mob(
-                    self.mobs[index].id,
-                    kind,
-                    horizon_client::particles::Burst::TAMING,
-                );
+                self.mob_event_particles(self.mobs[index].id, if tamed { 7 } else { 6 });
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
@@ -3256,13 +3266,8 @@ impl Game<'_> {
                     m.extra.sitting = true;
                 }
                 eat = eating_sound(m, &mut self.world.random);
-                let kind = if tamed { "heart" } else { "smoke" };
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
-                self.particles_around_mob(
-                    self.mobs[index].id,
-                    kind,
-                    horizon_client::particles::Burst::TAMING,
-                );
+                self.mob_event_particles(self.mobs[index].id, if tamed { 7 } else { 6 });
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
@@ -3310,13 +3315,8 @@ impl Game<'_> {
                     m.extra.tame = true;
                     m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
                 }
-                let kind = if tamed { "heart" } else { "smoke" };
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
-                self.particles_around_mob(
-                    self.mobs[index].id,
-                    kind,
-                    horizon_client::particles::Burst::TAMING,
-                );
+                self.mob_event_particles(self.mobs[index].id, if tamed { 7 } else { 6 });
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
@@ -3347,6 +3347,11 @@ impl Game<'_> {
                     Some(sound) => {
                         consume = true;
                         eat = sound;
+                        // Animal.setInLove: entity event 18 (a baby that
+                        // only grew is not in love).
+                        if self.mobs[index].extra.in_love > 0 {
+                            self.mob_event_particles(self.mobs[index].id, 18);
+                        }
                     }
                     // Animal.mobInteract still consumes the client click when
                     // an adult cannot breed, without swinging or taking food.
