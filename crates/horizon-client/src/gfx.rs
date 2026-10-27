@@ -3587,7 +3587,7 @@ impl Renderer {
         if self.animated_textures {
             self.animate(&mut encoder, frame.ticks);
             self.hud
-                .animate_fire(&mut self.uploads, &mut encoder, frame.ticks);
+                .animate_sprites(&mut self.uploads, &mut encoder, frame.ticks);
         }
         self.update_lightmap(
             &mut encoder,

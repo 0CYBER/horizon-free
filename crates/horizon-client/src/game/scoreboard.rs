@@ -683,7 +683,7 @@ impl Game<'_> {
         let objective = board.display_objective(sb::SLOT_LIST);
         let shown = tab_list::visible(
             key,
-            self.remote.is_none(),
+            self.has_singleplayer_server(),
             players.len(),
             objective.is_some(),
         );
