@@ -16,15 +16,17 @@ use horizon_core::{
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-/// `EquipmentLayerRenderer.getColorForLayer` for a dyeable layer: the
-/// stack's `minecraft:dyed_color` wins, else the asset's undyed colour, else
-/// white. The result is in the renderer's byte order (R and B swapped).
+/// `EquipmentLayerRenderer.getColorForLayer`: a dyeable layer (one with a
+/// colour when undyed) takes the stack's `minecraft:dyed_color`, else that
+/// colour; any other layer stays white, dyed or not. The result is in the
+/// renderer's byte order (R and B swapped).
 fn layer_color(undyed: Option<u32>, stack: Option<&ItemStack>) -> u32 {
     let dyed = stack
         .and_then(|s| s.data())
         .and_then(|d| d.dyed_color)
         .map(|c| c as u32 & 0xFF_FFFF);
-    dyed.or(undyed).map_or(0xFFFF_FFFF, |c| {
+    undyed.map_or(0xFFFF_FFFF, |undyed| {
+        let c = dyed.unwrap_or(undyed);
         0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
     })
 }
@@ -1016,5 +1018,7 @@ mod layer_color_tests {
         assert_eq!(layer_color(Some(0xA06540), Some(&plain)), 0xFF40_65A0);
         // No dye and no undyed colour: white.
         assert_eq!(layer_color(None, Some(&plain)), 0xFFFF_FFFF);
+        // A layer that isn't dyeable stays white even on a dyed stack.
+        assert_eq!(layer_color(None, Some(&dyed)), 0xFFFF_FFFF);
     }
 }
