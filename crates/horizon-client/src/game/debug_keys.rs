@@ -889,7 +889,7 @@ impl Game<'_> {
         for p in &self.creatures.projectiles {
             use horizon_client::projectiles::ProjectileKind as K;
             let (size, eye) = match p.kind {
-                K::Arrow { .. } => (0.5, 0.13),
+                K::Arrow { .. } | K::Trident => (0.5, 0.13),
                 K::Snowball | K::Egg | K::EnderPearl | K::LlamaSpit | K::Potion { .. } => {
                     (0.25, 0.2125)
                 }
