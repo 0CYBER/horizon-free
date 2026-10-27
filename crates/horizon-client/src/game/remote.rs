@@ -2191,7 +2191,11 @@ impl Game<'_> {
                             3 => e.legs = item,
                             4 => e.chest = item,
                             5 if !body => e.head = item,
-                            6 if body => e.head = item,
+                            6 if body => {
+                                // A wolf's armor shows its cracks.
+                                e.body_damage = stack.as_ref().map_or(0, |s| s.damage as i32);
+                                e.head = item;
+                            }
                             7 => m.set_saddle(stack),
                             _ => {}
                         }

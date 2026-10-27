@@ -715,6 +715,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
                 continue;
             }
+            // A wolf's armor keeps the durability it lost.
+            if slot == "body"
+                && m.species() == crate::mobs::Species::Wolf
+                && let Some(id) = item
+            {
+                let mut stack = crate::items::ItemStack::new(id, 1);
+                stack.damage = m.extra.body_damage.max(0) as u32;
+                stack.extra = m.extra.body_extra.clone();
+                equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
+                continue;
+            }
             match item {
                 Some(id) => {
                     let keep = matches!(
@@ -1121,6 +1132,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         crate::mobs::tame::set_tame(&mut m, tame);
         m.health = health;
         m.extra.sitting = flag(tag, "Sitting");
+        let armor = tag
+            .get("equipment")
+            .and_then(|e| e.get("body"))
+            .and_then(crate::save::item_from_nbt);
+        m.extra.body_damage = armor.as_ref().map_or(0, |s| s.damage as i32);
+        m.extra.body_extra = armor.and_then(|s| s.extra);
         m.extra.color =
             number(tag.get("CollarColor")).map_or(crate::mobs::tame::RED, |c| (c as u8) & 15);
     }

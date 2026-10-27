@@ -794,8 +794,17 @@ fn mob_equipment(
             let stack = ItemStack {
                 item: item.clone(),
                 count: 1,
-                damage: 0,
-                extra: None,
+                // A wolf's armor shows its cracks.
+                damage: if slot == 6 && m.species() == horizon_client::mobs::Species::Wolf {
+                    e.body_damage.max(0) as u32
+                } else {
+                    0
+                },
+                extra: if slot == 6 && m.species() == horizon_client::mobs::Species::Wolf {
+                    e.body_extra.clone()
+                } else {
+                    None
+                },
             };
             out.push((slot, hub.stack(&Some(stack))));
         }

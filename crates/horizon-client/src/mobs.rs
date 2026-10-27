@@ -666,6 +666,8 @@ pub struct Attrs {
     pub spawn_reinforcements: f64,
     pub jump_strength: f64,
 }
+/// `minecraft:wolf_armor`'s maximum damage.
+pub const WOLF_ARMOR_DURABILITY: i32 = 64;
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
@@ -699,6 +701,10 @@ pub struct Extra {
     /// `Mob.canPickUpLoot` (also lets dispensers equip it).
     pub pick_up_loot: bool,
     pub saddled: bool,
+    /// The durability a wolf's body armor (`extra.head`) has lost.
+    pub body_damage: i32,
+    /// The components (dye, name...) of that armor stack.
+    pub body_extra: Option<Box<crate::item_data::StackData>>,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,
@@ -2046,18 +2052,29 @@ impl Mob {
         if epf > 0.0 {
             amount *= 1.0 - epf / 25.0;
         }
+        // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
+        let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
         if self.invulnerable as f32 > 10.0 {
             if amount <= self.last_hurt {
                 return false;
             }
-            self.health -= amount - self.last_hurt;
+            let dealt = amount - self.last_hurt;
+            if absorbed {
+                self.hurt_wolf_armor(dealt);
+            } else {
+                self.health -= dealt;
+            }
             self.last_hurt = amount;
             knock = false;
         } else {
             self.last_hurt = amount;
             self.invulnerable = 20;
-            self.health -= amount;
+            if absorbed {
+                self.hurt_wolf_armor(amount);
+            } else {
+                self.health -= amount;
+            }
             self.hurt_time = 10;
         }
         // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
@@ -2088,7 +2105,12 @@ impl Mob {
             // playHurtSound (Mob: also resets the ambient sound clock) or the
             // death sound: makeSound draws the voice pitch whenever there is a sound.
             let dead = !self.alive();
-            let sound = ai::voice_sounds(self)[if dead { 2 } else { 1 }];
+            // Wolf.getHurtSound: the armor's own sound when it takes the hit.
+            let sound = if absorbed {
+                "item.wolf_armor.damage"
+            } else {
+                ai::voice_sounds(self)[if dead { 2 } else { 1 }]
+            };
             if !dead {
                 self.ambient_timer = -self.ambient_interval();
             }
@@ -2111,6 +2133,46 @@ impl Mob {
             aquatic::spawn_ink(self);
         }
         true
+    }
+    /// `Wolf.canArmorAbsorb`: it wears wolf armor and the damage type is not
+    /// in `#bypasses_wolf_armor` (drowning, magic, thorns, in a wall, out of
+    /// the world and the untyped kills).
+    fn wolf_armor_absorbs(&self, source: &Damage) -> bool {
+        self.species() == Species::Wolf
+            && self.extra.head.as_deref() == Some("minecraft:wolf_armor")
+            && !matches!(
+                source.kind,
+                DamageKind::Drown
+                    | DamageKind::Magic
+                    | DamageKind::InWall
+                    | DamageKind::Thorns
+                    | DamageKind::OutOfWorld
+                    | DamageKind::Generic
+            )
+    }
+    /// `Wolf.actuallyHurt`: the armor loses `ceil(damage)` durability, cracks
+    /// at `Crackiness.WOLF_ARMOR` steps and breaks at its maximum.
+    fn hurt_wolf_armor(&mut self, damage: f32) {
+        let crack = |lost: i32| {
+            let left = (WOLF_ARMOR_DURABILITY - lost) as f32 / WOLF_ARMOR_DURABILITY as f32;
+            [0.95_f32, 0.69, 0.32].iter().filter(|t| left < **t).count()
+        };
+        let before = self.extra.body_damage;
+        let after = before + damage.ceil() as i32;
+        let at = [self.position.x, self.position.y, self.position.z];
+        if after >= WOLF_ARMOR_DURABILITY {
+            self.extra.head = None;
+            self.extra.body_damage = 0;
+            self.extra.body_extra = None;
+            self.outbox
+                .push(MobEvent::Sound("item.wolf_armor.break", at, 1.0, 1.0));
+        } else {
+            self.extra.body_damage = after;
+            if crack(before) != crack(after) {
+                self.outbox
+                    .push(MobEvent::Sound("item.wolf_armor.crack", at, 1.0, 1.0));
+            }
+        }
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
