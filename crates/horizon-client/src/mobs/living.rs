@@ -833,8 +833,8 @@ impl Mob {
                 self.velocity.y -= gravity / 4.0;
             }
         }
-        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of
-        // collidable entities too.
+        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
+        // entities a mob collides with (canBeCollidedWith: living shulkers).
         let m = self.velocity;
         let ahead = self.bounds().move_by(Vec3::new(
             m.x,
@@ -847,7 +847,12 @@ impl Mob {
             && !w.contains_any_liquid(ahead)
             && !w
                 .others_near(wide)
-                .any(|s| s.id != self.id && s.alive && s.bounds.intersects(wide))
+                .any(|s| {
+                    s.id != self.id
+                        && s.alive
+                        && s.species == super::Species::Shulker
+                        && s.bounds.intersects(wide)
+                })
         {
             self.velocity.y = f64::from(0.3_f32);
         }
