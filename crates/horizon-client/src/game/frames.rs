@@ -378,6 +378,8 @@ impl Game<'_> {
                             layer: 0,
                             color: 0xFFFF_FFFF,
                             light,
+
+                            glint_uv: [0.0, 0.0],
                         });
                     }
                 };
@@ -457,7 +459,7 @@ impl Game<'_> {
         }
         for (id, m, light) in maps {
             let entity_start = out.len();
-            self.map_vertices(id, m, light, out);
+            self.map_vertices(id, true, m, light, out);
             self.cull_entity_vertices(out, entity_start);
         }
     }

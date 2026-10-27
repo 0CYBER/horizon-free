@@ -2344,18 +2344,8 @@ impl Hub {
         }
         // getBoundingBox: the box of the body's pose (swimming and crawling
         // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
-        let (half, height) = if g.fall_flying {
-            (0.3, 0.6)
-        } else if let Some(m) = &g.motion {
-            (
-                f64::from(m.dimensions.width) / 2.0,
-                f64::from(m.dimensions.height),
-            )
-        } else if g.sneaking {
-            (0.3, 1.5)
-        } else {
-            (0.3, 1.8)
-        };
+        let d = g.dimensions();
+        let (half, height) = (f64::from(d.width) / 2.0, f64::from(d.height));
         let at = |p: [f64; 3]| {
             Aabb::new(
                 Vec3::new(p[0] - half, p[1], p[2] - half),
