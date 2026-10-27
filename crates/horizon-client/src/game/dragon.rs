@@ -1670,8 +1670,8 @@ impl Game<'_> {
         if roll < waited {
             d.ambient_time = -AMBIENT_INTERVAL;
             let at = [d.position.x, d.position.y, d.position.z];
-            // LivingEntity.getVoicePitch.
-            let r = &mut self.world.random;
+            // LivingEntity.getVoicePitch, from the dragon's own random.
+            let r = &mut d.random;
             let pitch = (r.next_float() - r.next_float()) * 0.2 + 1.0;
             self.audio.play(
                 "minecraft:entity.ender_dragon.ambient",
