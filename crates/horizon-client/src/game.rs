@@ -3112,12 +3112,19 @@ impl Game<'_> {
                     };
                     if let Some((name, volume)) = sound {
                         let pitch = match id {
-                            1009 | 1501 | 1502 => {
+                            1009 => {
                                 2.6 + (self.world.random.next_float()
                                     - self.world.random.next_float())
                                     * 0.8
                             }
-                            1029 | 1030 | 1042 | 1043 | 1044 | 1046 | 1047 | 1053 | 1054 => {
+                            // LevelEventHandler draws these from the client
+                            // level's random, before 1501's and 1502's smoke.
+                            1501 | 1502 => {
+                                let r = self.particles.level_random();
+                                2.6 + (r.next_float() - r.next_float()) * 0.8
+                            }
+                            1046 | 1047 => self.particles.level_random().next_float() * 0.1 + 0.9,
+                            1029 | 1030 | 1042 | 1043 | 1044 | 1053 | 1054 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
                             1019 | 1021 => {
