@@ -2113,6 +2113,8 @@ pub fn swim_sound(m: &Mob) -> &'static str {
         Species::Nautilus => "entity.nautilus.swim",
         Species::ZombieNautilus => "entity.zombie_nautilus.swim",
         Species::Turtle => "entity.turtle.swim",
+        // Monster.getSwimSound, and Hoglin's own override of it.
+        s if s == Species::Hoglin || is_monster(s) => "entity.hostile.swim",
         _ => "entity.generic.swim",
     }
 }
