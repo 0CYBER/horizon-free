@@ -318,7 +318,11 @@ pub fn work_sound(profession: u8) -> Option<&'static str> {
 pub fn crop(w: &MobWorld, p: [i32; 3]) -> bool {
     matches!(
         w.block_name(p[0], p[1], p[2]),
-        "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" | "minecraft:beetroots"
+        "minecraft:wheat"
+            | "minecraft:carrots"
+            | "minecraft:potatoes"
+            | "minecraft:beetroots"
+            | "minecraft:torchflower_crop"
     )
 }
 /// `CropBlock.isMaxAge` for the block at `p`.
@@ -326,6 +330,7 @@ pub fn ripe_crop(w: &MobWorld, p: [i32; 3]) -> bool {
     let max = match w.block_name(p[0], p[1], p[2]) {
         "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" => "7",
         "minecraft:beetroots" => "3",
+        "minecraft:torchflower_crop" => "1",
         _ => return false,
     };
     w.prop(p[0], p[1], p[2], "age") == Some(max)
