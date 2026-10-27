@@ -118,8 +118,9 @@ impl Style {
         (x, y, w): (f32, f32, f32),
         label: &Text,
         hover: bool,
+        active: bool,
     ) {
-        ui::button(batch, atlas, x, y, w, 20.0, label, true, hover);
+        ui::button(batch, atlas, x, y, w, 20.0, label, active, hover);
     }
     pub fn slider(
         &self,

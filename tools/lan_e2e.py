@@ -14,6 +14,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              closes on both when the guest closes it; the host keeps playing with its mouse look (#687);
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
              leaves the host's screen and mouse look alone;
+- spawned:   the host and a guest new to the world join on different spots (PlayerSpawnFinder), and the
+             guest opens a crafting table, a chest, a furnace and a stonecutter where it joined;
 - sign:      a sign the guest places doesn't open a sign editor on the host;
 - damage:    a guest in survival takes fall damage;
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
@@ -292,7 +294,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
@@ -339,8 +341,9 @@ class Game:
     def wait(self, ticks):
         self.d('wait', ticks=ticks)
 
-    def script(self, lines):
-        """Keep tick-sensitive input in one ctl process, through the normal control commands."""
+    def script(self, lines, every=False):
+        """Keep tick-sensitive input in one ctl process, through the normal control commands. Returns the last
+        reply, or with every=True all of them in order."""
         result = subprocess.run(self.d.base + ['script'], input='\n'.join(lines) + '\n',
                                 cwd=self.work, env=self.d.env, capture_output=True, text=True,
                                 timeout=600)
@@ -348,7 +351,7 @@ class Game:
         ticks = [r['ticks'] for r in replies if 'ticks' in r]
         print(f'[{self.name}] script {lines} -> {replies[-1] if replies else result.stderr[:400]}; ticks={ticks}')
         assert result.returncode == 0 and replies and not any('error' in r for r in replies), result.stdout
-        return replies[-1]
+        return replies if every else replies[-1]
 
     def until(self, observe, predicate, ticks=100):
         """Wait for an observable answer, within the existing tick budget."""
@@ -552,6 +555,39 @@ def check_crafting(host, guest, out):
     counts = guest('inventory')['counts']
     assert counts.get('minecraft:stick') == 4 and counts.get('minecraft:oak_planks') == 2, f'after the table: {counts}'
     return {'planks': planks, 'table': counts}
+
+
+def check_spawned(host, guest, out):
+    """Players new to a world don't share one spot: ServerPlayer.adjustSpawnLocation spreads them over the
+    respawn radius (PlayerSpawnFinder). Two players standing in each other target each other, so a guest
+    left in the host could open nothing it clicked. At its own spot, the guest opens a crafting table, a
+    chest, a furnace and a stonecutter."""
+    joined = {'host': [round(v, 2) for v in host.joined_at], 'guest': [round(v, 2) for v in guest.joined_at]}
+    apart = abs(joined['host'][0] - joined['guest'][0]) + abs(joined['host'][2] - joined['guest'][2]) >= 0.6
+    guest('command', command='gamemode survival')
+    for game in (host, guest):
+        x, y, z = game.joined_at
+        game('command', command=f'tp @s {x} {y} {z}')
+    guest.wait(20)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    grab(host)
+    opened = {}
+    for block in ('crafting_table', 'chest', 'furnace', 'stonecutter'):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:{block}')
+        guest.wait(10)
+        guest.raw('interact', *at)
+        guest.wait(10)
+        opened[block] = guest('state').get('screen')
+        guest.shot(out, f'spawned-{block}')
+        back_to_game(guest)
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    host_unaffected(host, "the guest's stations")
+    face_each_other(host, guest)
+    assert apart, f'the host and the guest joined on one spot: {joined}'
+    want = {'crafting_table': 'inventory', 'chest': 'container', 'furnace': 'container', 'stonecutter': 'station'}
+    assert opened == want, f'where it joined, the guest opened {opened}'
+    return {'joined': joined, 'opened': opened}
 
 
 def check_sign(host, guest, out):
@@ -2935,13 +2971,15 @@ def check_fireworks(host, guest, out):
         game('command', command=f'tp @s {x + dx + 0.5} {y} {z + 0.5}')
         game.raw('look-at', x + 0.5, y + 1.5, z + 3.5)
 
-    def red(path):
+    def reds(path):
+        """The red pixels' positions, above the hotbar."""
         rows, bpp = png_rows(path)
-        # Exclude the hotbar and chat at the bottom of the view.
-        return sum(row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]
-                   for row in rows[:len(rows) * 3 // 4] for i in range(0, len(row), bpp))
+        return {(y, i) for y, row in enumerate(rows[:len(rows) * 3 // 4]) for i in range(0, len(row), bpp)
+                if row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]}
 
-    baseline = {g.name: red(g.shot(out, 'fireworks-before')) for g in (host, guest)}
+    # Red where the view had none: the setup's own red chat lines (a fill that changed nothing) are in the
+    # baseline, and fade out before the later shots, which a plain count difference would take as missing sparks.
+    baseline = {g.name: reds(g.shot(out, 'fireworks-before')) for g in (host, guest)}
     before = {g.name: made(g, 'flash') for g in (host, guest)}
     host('command', command='item replace entity @s weapon.mainhand with minecraft:firework_rocket'
          '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
@@ -2954,12 +2992,14 @@ def check_fireworks(host, guest, out):
             break
     flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
     assert all(n == 1 for n in flashes.values()), f'configured burst missing or duplicated: {flashes}'
-    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime.
+    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime (48-59 ticks). A
+    # screenshot takes ~0.6 s where the frame is drawn on the CPU (lavapipe), so the later shots come 4 ticks after
+    # the burst's, not more: by then the tracked rocket is gone.
     burst_shots = {g.name: g.shot(out, 'fireworks-burst') for g in (host, guest)}
-    host.wait(16)
+    host.wait(4)
     trail_shots = {g.name: g.shot(out, 'fireworks-trail-fade') for g in (host, guest)}
-    burst = {name: red(path) - baseline[name] for name, path in burst_shots.items()}
-    trails = {name: red(path) - baseline[name] for name, path in trail_shots.items()}
+    burst = {name: len(reds(path) - baseline[name]) for name, path in burst_shots.items()}
+    trails = {name: len(reds(path) - baseline[name]) for name, path in trail_shots.items()}
     rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
     assert not any(rockets.values()), f'exploded rocket remains: {rockets}'
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
@@ -4669,6 +4709,7 @@ def check_worn(host, guest, out):
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
+             'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
@@ -4727,6 +4768,8 @@ def run(ctl, out, resources, checks):
         guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
         guest.raw('wait-for', 'loaded', '--timeout', 300)
         guest.wait(40)
+        # Where each joined, before anything moves them (check_spawned).
+        host.joined_at, guest.joined_at = pos_of(host), pos_of(guest)
         face_each_other(host, guest)
         host.shot(out, 'joined')
         guest.shot(out, 'joined')
@@ -7110,6 +7153,90 @@ CHECKS += ['guardian-beams']
 CHECK_FNS['guardian-beams'] = check_guardian_beams
 
 
+def check_fangs(host, guest, out):
+    """EvokerFangs: authoritative spawn, event 4, client animation and server removal (#1482)."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'lan_evoker_fangs'
+    selector = f'@e[type=minecraft:evoker,tag={tag},limit=1]'
+    paths = {g.name: {} for g in (host, guest)}
+    warmup = dict.fromkeys(paths, False)
+    drawn = dict.fromkeys(paths, False)
+    stopped = False
+    photographed = False
+
+    def fangs(status):
+        return [p for p in status['projectiles'] if p['kind'] == 'minecraft:evoker_fangs']
+
+    try:
+        host('command', command='difficulty normal')
+        host('command', command='gamemode creative')
+        guest('command', command='gamemode survival')
+        guest('command', command='effect give @s minecraft:resistance 120 4 true')
+        host('command', command=f'fill {x - 10} {y - 1} {z - 10} {x + 10} {y - 1} {z + 18} minecraft:stone')
+        host('command', command=f'fill {x - 10} {y} {z - 10} {x + 10} {y + 8} {z + 18} minecraft:air')
+        host('command', command=f'tp @s {x + 4.5} {y} {z - 2.5}')
+        guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        guest.wait(10)
+        host('command', command=f'summon minecraft:evoker {x + 0.5} {y} {z + 9.5} '
+                                f'{{PersistenceRequired:1b,Tags:["{tag}"]}}')
+        for game in (host, guest):
+            game.raw('look-at', x + 0.5, y + 0.5, z + 5.5)
+        for _ in range(200):
+            guest.wait(2)
+            statuses = {g.name: g('status') for g in (host, guest)}
+            for name, status in statuses.items():
+                live = fangs(status)
+                ids = [f['id'] for f in live]
+                assert all(ids) and len(ids) == len(set(ids)), f'{name}: invalid fang ids {ids}'
+                warmup[name] |= any(not f['started'] for f in live)
+                drawn[name] |= status['fangs_vertices'] > 0
+                for f in live:
+                    paths[name].setdefault(f['id'], []).append(f)
+            if paths['host'] and not stopped:
+                host('command', command=f'data merge entity {selector} {{NoAI:1b}}')
+                stopped = True
+            if (all(drawn.values()) and not photographed
+                    and any(f['started'] and 8 <= f['life'] <= 16
+                            for f in fangs(statuses['guest']))):
+                host('command', command='tick freeze')
+                try:
+                    for game in (host, guest):
+                        game.raw('key', 'f1', 'tap')
+                        try:
+                            game.shot(out, 'evoker-fangs')
+                        finally:
+                            game.raw('key', 'f1', 'tap')
+                finally:
+                    host('command', command='tick unfreeze')
+                photographed = True
+            if stopped and not any(fangs(s) for s in statuses.values()):
+                break
+        lab.write_json(out / 'evoker-fangs.json', {'paths': paths, 'warmup': warmup, 'drawn': drawn})
+        assert all(warmup.values()), f'fang warmup not received: {warmup}'
+        assert all(drawn.values()), f'fang renderer produced no geometry: {drawn}'
+        assert paths['host'].keys() == paths['guest'].keys(), 'clients received different fang ids'
+        for id, samples in paths['host'].items():
+            other = paths['guest'][id]
+            assert all(f['position'] == samples[0]['position'] for f in samples + other), \
+                f'fang {id} is not at its authoritative position'
+            for name, frames in (('host', samples), ('guest', other)):
+                life = {f['life'] for f in frames if f['started']}
+                assert len(life) > 1, f'{name}: fang {id} did not animate: {frames}'
+        assert not any(fangs(g('status')) for g in (host, guest)), 'fangs survived server removal'
+    finally:
+        host('command', command='tick unfreeze')
+        host('command', command=f'kill @e[tag={tag}]')
+        # The evoker can summon vexes before fangs; killing it leaves those summons alive.
+        host('command', command=f'kill @e[type=minecraft:vex,x={x},y={y},z={z},distance=..32]')
+        guest('command', command='effect clear @s')
+        face_each_other(host, guest)
+    return {'fangs': len(paths['host']), 'warmup': warmup, 'drawn': drawn, 'removed': True}
+
+
+CHECKS += ['fangs']
+CHECK_FNS.update(fangs=check_fangs)
+
+
 def check_sonic(host, guest, out):
     """A real warden's ray reaches connected clients once, with normal damage.
 
@@ -7243,6 +7370,59 @@ def check_cushions(host, guest, out):
 
 CHECKS += ['cushions']
 CHECK_FNS['cushions'] = check_cushions
+
+
+def check_forced_levels(host, guest, out):
+    """#1525: forced block/entity ticks outlive the last player and the 300-tick idle timeout.
+
+    Also keep a resident, unforced furnace outside the forced ticket's neighbour ring: scheduling
+    a playerless integrated-server level must not enable the fixtures' tick-everywhere fallback.
+    """
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    start = pos_of(guest)
+    results = {}
+    guest('command', command='gamemode creative')
+    try:
+        for dimension in (NETHER, END):
+            into_level(guest, dimension, 8, 100, 8)
+            host('command', command='tick freeze')
+            furnace = ('minecraft:furnace{Items:[{Slot:0b,id:"minecraft:raw_iron",count:1},'
+                       '{Slot:1b,id:"minecraft:coal",count:1}],cooking_total_time:200,'
+                       'cooking_time_spent:0}')
+            for x in (8, 56):
+                guest('command', command=f'setblock {x} 100 8 {furnace}')
+                server_reply(guest, f'execute if data block {x} 100 8 '
+                             'Items[{Slot:0b,id:"minecraft:raw_iron"}] '
+                             'run say forced-input-ready', 'forced-input-ready')
+            guest('command', command='forceload add 8 8')
+            guest('command', command='summon minecraft:armor_stand 8.5 104 8.5 {Tags:["forced_tick"]}')
+            guest('command', command=f'execute in {OVERWORLD} run tp @s {start[0]} {start[1]} {start[2]}')
+            wait_dimension(guest, OVERWORLD, 400)
+            host('command', command='tick step 450')
+            host.wait(500)
+            prefix = f'execute in {dimension} '
+            results[dimension] = server_reply(
+                host, prefix + 'if data block 8 100 8 Items[{Slot:2b,id:"minecraft:iron_ingot"}] '
+                'if data block 56 100 8 {cooking_time_spent:0} '
+                'if data block 56 100 8 Items[{Slot:0b,id:"minecraft:raw_iron"}] '
+                'if data entity @e[tag=forced_tick,limit=1] {Pos:[8.5d,101.0d,8.5d]} run say forced-level-pass',
+                'forced-level-pass')
+            assert dims(host, guest) == (OVERWORLD, OVERWORLD), dims(host, guest)
+            host('command', command=prefix + 'run forceload remove 8 8')
+            host('command', command=prefix + 'run kill @e[tag=forced_tick]')
+            host('command', command='tick unfreeze')
+    finally:
+        host('command', command='tick unfreeze')
+        for dimension in (NETHER, END):
+            host('command', command=f'execute in {dimension} run forceload remove 8 8')
+        guest('command', command=f'execute in {OVERWORLD} run tp @s {start[0]} {start[1]} {start[2]}')
+        guest('command', command='gamemode survival')
+    return results
+
+
+CHECKS += ['forced-levels']
+CHECK_FNS['forced-levels'] = check_forced_levels
 
 
 if __name__ == '__main__':
