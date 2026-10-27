@@ -1192,6 +1192,22 @@ fn button(
     keyboard(track_hover(base, id), &t).active(|s| s.opacity(theme::PRESSED).top(px(1.)))
 }
 
+/// Copies to the clipboard, or into `HORIZON_LAUNCHER_CLIPBOARD` when a test run sets it
+/// (`horizon_launcher::desktop_seams`).
+fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
+    let Some(file) = horizon_launcher::desktop_seams::clipboard_file() else {
+        cx.write_to_clipboard(item);
+        return;
+    };
+    let bytes = match item.entries().first() {
+        Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
+        _ => item.text().unwrap_or_default().into_bytes(),
+    };
+    if let Err(e) = std::fs::write(&file, bytes) {
+        eprintln!("{}: {e}", file.display());
+    }
+}
+
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
 fn switch(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
     let t = *t;
@@ -2251,7 +2267,7 @@ impl Launcher {
                     .on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
                             if let Ok(text) = std::fs::read_to_string(&report) {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                copy_to_clipboard(cx, gpui::ClipboardItem::new_string(text));
                                 if let Some(c) = &mut this.crash {
                                     c.copied = true;
                                 }
@@ -2968,9 +2984,10 @@ impl Launcher {
                     .child(
                         button("sign-in-copy", "Copy code", Kind::Secondary, &t).on_click(
                             move |_, _, cx| {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    user_code.clone(),
-                                ))
+                                copy_to_clipboard(
+                                    cx,
+                                    gpui::ClipboardItem::new_string(user_code.clone()),
+                                )
                             },
                         ),
                     )

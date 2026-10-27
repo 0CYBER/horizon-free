@@ -242,7 +242,10 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
 `next`, `links`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
-scripts and tests).
+scripts and tests). Test runs also set `HORIZON_LAUNCHER_TRASH=<folder>` and
+`HORIZON_LAUNCHER_CLIPBOARD=<file>` inside their scratch folders: what Delete would move to the
+system's trash goes into that folder, and what Copy would put on the clipboard is written to that
+file, so a test never touches the real trash or clipboard.
 
 ## AI agents (MCP)
 

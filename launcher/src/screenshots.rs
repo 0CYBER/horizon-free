@@ -55,7 +55,7 @@ pub fn find(home: &Path, query: &str) -> Result<Shot, String> {
 
 /// Moves the screenshot to the system's trash.
 pub fn delete(shot: &Shot) -> Result<(), String> {
-    crate::worlds::to_trash(&shot.path)
+    crate::desktop_seams::to_trash(&shot.path)
         .map_err(|e| format!("Could not move {} to the trash: {e}", shot.name))
 }
 
