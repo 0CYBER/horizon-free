@@ -538,6 +538,8 @@ pub enum DamageKind {
     Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
+    /// `cramming`: too many entities in one block (`maxEntityCramming`).
+    Cramming,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -601,6 +603,7 @@ impl Damage {
                 | DamageKind::Generic
                 | DamageKind::InWall
                 | DamageKind::SweetBerryBush
+                | DamageKind::Cramming
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -616,6 +619,7 @@ impl Damage {
                 | DamageKind::SonicBoom
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::Cramming
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -642,6 +646,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::Cramming
         )
     }
     pub fn is_projectile(&self) -> bool {
@@ -1805,6 +1810,8 @@ pub struct MobWorld<'a> {
     pub nether: bool,
     pub block_tags: &'a HashMap<String, std::collections::HashSet<String>>,
     pub biomes: &'a crate::biome::Biomes,
+    /// The `max_entity_cramming` game rule.
+    pub max_cramming: i32,
     /// The `mob_griefing` game rule.
     pub mob_griefing: bool,
     /// The `mob_drops` game rule (`shouldDropLoot`).
@@ -2181,6 +2188,7 @@ impl Mob {
                     | DamageKind::Thorns
                     | DamageKind::OutOfWorld
                     | DamageKind::Generic
+                    | DamageKind::Cramming
             )
     }
     /// `Wolf.actuallyHurt`: the armor loses `ceil(damage)` durability, cracks

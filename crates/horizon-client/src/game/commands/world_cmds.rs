@@ -124,6 +124,7 @@ impl Game<'_> {
             "freeze" => DamageKind::Freeze,
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
+            "cramming" => DamageKind::Cramming,
             _ => DamageKind::Generic,
         }
     }

@@ -454,6 +454,7 @@ impl Game<'_> {
             nether: self.dim == Dim::Nether,
             block_tags: &self.res.items().block_tags,
             biomes: self.res.biomes(),
+            max_cramming: self.ui.rules.int("max_entity_cramming"),
             mob_griefing: self.ui.rules.bool("mob_griefing"),
             mob_drops: self.ui.rules.bool("mob_drops"),
             end: self.dim == Dim::End,
@@ -4546,6 +4547,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::SonicBoom => "minecraft:sonic_boom",
         K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
+        K::Cramming => "minecraft:cramming",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).

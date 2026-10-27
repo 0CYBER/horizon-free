@@ -1058,7 +1058,8 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && m.species() != Species::Shulker
         && !on_climbable(m, w)
         && (m.species() != Species::Creaking || super::creaking::can_move(m));
-    let mut targets: Vec<(Who, Vec3)> = Vec::new();
+    // Each pusher with whether it is a passenger (`isPassenger`).
+    let mut targets: Vec<(Who, Vec3, bool)> = Vec::new();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
         && m.rider.is_none()
@@ -1066,21 +1067,26 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && !p.spectator
         && p.bounds.intersects(bounds)
     {
-        targets.push((Who::Player, p.position));
+        targets.push((Who::Player, p.position, p.passenger));
     }
     for o in w.others_near(bounds) {
         if o.id != m.id && o.alive && o.pushable && o.bounds.intersects(bounds) {
-            targets.push((Who::Mob(o.id), o.position));
+            targets.push((Who::Mob(o.id), o.position, o.passenger));
         }
     }
     // EntitySelector.pushableBy(this): the teams' collision rules.
     let own = w.teams.of(Who::Mob(m.id));
-    targets.retain(|(who, _)| crate::scoreboard::pushable_by(own, w.teams.of(*who), true));
-    // Cramming (maxEntityCramming 24).
-    if targets.len() > 23 {
-        let _ = m.random.next_int_bound(4);
+    targets.retain(|(who, ..)| crate::scoreboard::pushable_by(own, w.teams.of(*who), true));
+    // Cramming: in one in four ticks, with `maxEntityCramming` or more
+    // pushers around and that many not riding, 6 damage.
+    if w.max_cramming > 0
+        && targets.len() as i32 > w.max_cramming - 1
+        && m.random.next_int_bound(4).ok() == Some(0)
+        && targets.iter().filter(|t| !t.2).count() as i32 > w.max_cramming - 1
+    {
+        m.damage(6.0, Damage::of(DamageKind::Cramming));
     }
-    for (who, at) in targets {
+    for (who, at, _) in targets {
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
             super::warden::do_push(m, w, who, events);
