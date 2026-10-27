@@ -411,6 +411,10 @@ impl AnimateContext<'_> {
 fn add(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
     engine.add(&ParticleOptions::simple(ty), p, v);
 }
+/// `Level.addAlwaysVisibleParticle`: still shown under the Minimal option now and then.
+fn add_visible(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
+    engine.add_with(&ParticleOptions::simple(ty), p, v, false, true);
+}
 fn sound(engine: &mut ParticleEngine, name: &'static str, p: [f64; 3], volume: f32, pitch: f32) {
     engine.sounds.push((name, p, volume, pitch));
 }
@@ -973,7 +977,7 @@ fn block_animate_tick(
                         fy + 1.0 + f64::from(r.next_float()),
                         fz + f64::from(r.next_float()),
                     ];
-                    add(engine, T::SulfurBubbles, p, [0.0; 3]);
+                    add_visible(engine, T::SulfurBubbles, p, [0.0; 3]);
                 }
                 if next_int(engine.random(), 10) == 0 {
                     let name = "minecraft:block.potent_sulfur.noxious_gas";
@@ -1235,7 +1239,7 @@ fn block_animate_tick(
         }
         Animate::BubbleColumn { drag } => {
             if drag {
-                add(engine, T::CurrentDown, [fx + 0.5, fy + 0.8, fz], [0.0; 3]);
+                add_visible(engine, T::CurrentDown, [fx + 0.5, fy + 0.8, fz], [0.0; 3]);
                 let r = engine.random();
                 if next_int(r, 200) == 0 {
                     let (volume, pitch) = (0.2 + r.next_float() * 0.2, 0.9 + r.next_float() * 0.15);
@@ -1248,7 +1252,7 @@ fn block_animate_tick(
                     );
                 }
             } else {
-                add(
+                add_visible(
                     engine,
                     T::BubbleColumnUp,
                     [fx + 0.5, fy, fz + 0.5],
@@ -1260,7 +1264,7 @@ fn block_animate_tick(
                     fy + f64::from(r.next_float()),
                     fz + f64::from(r.next_float()),
                 ];
-                add(engine, T::BubbleColumnUp, p, [0.0, 0.04, 0.0]);
+                add_visible(engine, T::BubbleColumnUp, p, [0.0, 0.04, 0.0]);
                 let r = engine.random();
                 if next_int(r, 200) == 0 {
                     let (volume, pitch) = (0.2 + r.next_float() * 0.2, 0.9 + r.next_float() * 0.15);
