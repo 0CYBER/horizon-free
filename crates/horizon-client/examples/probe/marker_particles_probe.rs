@@ -75,6 +75,10 @@ pub fn main() -> Result<()> {
             registry: assets.registry,
             raining_at: &|_| false,
             marker: target.map(|name| (name, &options as &dyn Fn(_) -> _)),
+            model_offset: &|_, _, _| None,
+            gateway_particles: &|_, _| 0,
+            thundering: false,
+            ultrawarm: false,
         };
         engine.seed_randoms(1057, 0, 0);
         engine.requested = Some(Vec::new());

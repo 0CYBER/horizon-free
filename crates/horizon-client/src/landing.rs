@@ -324,10 +324,13 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
     type DamageSource = LandingDamage;
     type Sound = SceneSound;
     fn is_server_level(&self) -> bool {
-        true
+        // A remote client's world is a client level: it never tramples,
+        // the server's block change and teleport do it (FarmlandBlock.fallOn
+        // and TurtleEggBlock.fallOn check `level instanceof ServerLevel`).
+        !self.player.client_side
     }
     fn is_client_side(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.client_side)
     }
     fn random_float(&mut self) -> Result<f32> {
         Ok(self.scene.random.next_float())

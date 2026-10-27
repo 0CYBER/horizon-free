@@ -97,10 +97,26 @@ pub fn teleport_to(
         return false;
     }
     let old = m.center();
+    let old_block = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
     m.position = Vec3::new(x, ny, z);
     m.previous = m.position;
     m.velocity = Vec3::ZERO;
     m.ai.nav.stop();
+    if !m.silent {
+        // Level event 2018: the portal trail, from the old block to the new
+        // one, packed as `BlockUtil.clampedPackDifferenceInPosition` does.
+        let new_block = [x.floor() as i32, ny.floor() as i32, z.floor() as i32];
+        let packed = |k: usize| ((new_block[k] - old_block[k]).clamp(-127, 127) + 127) & 255;
+        events.push(MobEvent::LevelEvent {
+            id: 2018,
+            pos: old_block,
+            data: packed(0) << 16 | packed(1) << 8 | packed(2),
+        });
+    }
     events.push(MobEvent::Sound("entity.enderman.teleport", old, 1.0, 1.0));
     events.push(MobEvent::Sound(
         "entity.enderman.teleport",
@@ -184,15 +200,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             }
         }
     }
-    if (m.fluids.in_water
-        || w.raining
-            && w.can_see_sky(
-                m.position.x.floor() as i32,
-                m.eye_y().floor() as i32,
-                m.position.z.floor() as i32,
-            ))
-        && m.alive()
-    {
+    if (m.fluids.in_water || super::ai::in_rain(m, w)) && m.alive() {
         // Hurt by water: teleport away.
         m.extra.counter2 = m.extra.counter2.max(1);
     }
@@ -331,8 +339,11 @@ impl Goal for TakeBlock {
     fn flags(&self) -> u8 {
         0
     }
-    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.extra.carried.is_none() && m.random.next_int_bound(reduced(20)).unwrap_or(1) == 0
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // EndermanTakeBlockGoal.canUse: needs mobGriefing, checked before the draw.
+        m.extra.carried.is_none()
+            && cx.w.mob_griefing
+            && m.random.next_int_bound(reduced(20)).unwrap_or(1) == 0
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let x = (m.position.x - 2.0 + m.random.next_double() * 4.0).floor() as i32;
@@ -379,8 +390,11 @@ impl Goal for LeaveBlock {
     fn flags(&self) -> u8 {
         0
     }
-    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.extra.carried.is_some() && m.random.next_int_bound(reduced(2000)).unwrap_or(1) == 0
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // EndermanLeaveBlockGoal.canUse: needs mobGriefing, checked before the draw.
+        m.extra.carried.is_some()
+            && cx.w.mob_griefing
+            && m.random.next_int_bound(reduced(2000)).unwrap_or(1) == 0
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(carried) = m.extra.carried else {

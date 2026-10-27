@@ -9,7 +9,7 @@ use crate::{
     collisions::SceneCollisions,
     mobs::Who,
     motion::{FluidResources, LAVA, WATER},
-    projectiles::{Hit, Projectile},
+    projectiles::{Hit, Projectile, ProjectileKind},
     world::World,
 };
 use horizon_core::{
@@ -132,6 +132,10 @@ pub enum ArrowSound {
     HitGround,
     /// `entity.generic.extinguish_fire`.
     Extinguish,
+    /// A thrown trident's `getDefaultHitGroundSoundEvent` (`item.trident.hit_ground`).
+    TridentHitGround,
+    /// `ThrownTrident.onHitEntity`'s `item.trident.hit`.
+    TridentHit,
 }
 /// What a burning arrow does to the block it hits (`onProjectileHit`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,8 +159,14 @@ pub struct ArrowState {
     pub pickup: Pickup,
     /// `pickupItemStack`: what picking the arrow up gives.
     pub pickup_item: crate::items::ItemStack,
+    /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
+    pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
+    /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
+    /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
+    /// through (cleared when it sticks in a block).
+    pub pierced: Vec<Who>,
     /// `Entity.remainingFireTicks`.
     pub fire_ticks: i32,
     pub fall_distance: f64,
@@ -165,6 +175,9 @@ pub struct ArrowState {
     pub was_eye_in_water: bool,
     pub first_tick: bool,
     pub has_been_shot: bool,
+    /// `ThrownTrident.dealtDamage`: it has hit an entity (or sat in a block
+    /// for over 4 ticks) and hits no more.
+    pub dealt_damage: bool,
     pub removed: bool,
     /// The arrow's own random (`Entity.random`).
     pub random: LegacyRandom,
@@ -197,8 +210,10 @@ impl ArrowState {
             last_state: None,
             pickup: Pickup::Disallowed,
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
+            fired_from_weapon: None,
             no_physics: false,
             pierce: 0,
+            pierced: Vec::new(),
             fire_ticks: 0,
             fall_distance: 0.0,
             fluids: EntityFluidInteraction::new([WATER, LAVA]),
@@ -206,6 +221,7 @@ impl ArrowState {
             was_eye_in_water: false,
             first_tick: true,
             has_been_shot: false,
+            dealt_damage: false,
             removed: false,
             random,
             events: Vec::new(),
@@ -362,6 +378,29 @@ fn bounds(at: Vec3) -> Aabb {
         Vec3::new(at.x + w, at.y + f64::from(HEIGHT), at.z + w),
     )
 }
+/// The bounding box of an arrow, or a thrown trident, at `at`.
+pub fn arrow_bounds(at: Vec3) -> Aabb {
+    bounds(at)
+}
+/// The blocks an arrow that moved from `from` to `to` was inside
+/// (`Entity.checkInsideBlocks`: the sweep of its box, 16 steps at most), for
+/// the blocks that react to it (`entityInside`).
+pub fn blocks_inside(from: Vec3, to: Vec3) -> Vec<BlockPos> {
+    let deflated = bounds(to).deflate(Vec3::new(
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+    ));
+    let mut inside = Vec::new();
+    let _ = sweep_intersected_blocks(from, to, deflated, 1_000_000, |p, iteration| {
+        if iteration >= 16 {
+            return false;
+        }
+        inside.push(p);
+        true
+    });
+    inside
+}
 /// `Projectile.lerpRotation`.
 fn lerp_rotation(mut old: f32, new: f32) -> f32 {
     while new - old < -180.0 {
@@ -423,18 +462,29 @@ pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: Entity
     let Some(mut st) = p.arrow.take() else {
         return false;
     };
+    let trident = matches!(p.kind, ProjectileKind::Trident);
     let mut ticker = Ticker {
         p,
         st: &mut st,
         scene,
     };
     match outcome {
+        EntityHit::Hurt | EntityHit::Refused if trident => ticker.trident_bounce(),
         EntityHit::Hurt => {
             ticker.hit_sound();
-            ticker.st.removed = true;
+            // A piercing arrow flies on (`getPierceLevel() <= 0` discards).
+            if ticker.st.pierce == 0 {
+                ticker.st.removed = true;
+            }
         }
         EntityHit::Refused => ticker.turn_back(),
-        EntityHit::Deflected => {}
+        EntityHit::Deflected => {
+            // The deflection comes before `onHitEntity` adds the entity to
+            // `piercingIgnoreEntityIds`.
+            if ticker.st.pierce > 0 {
+                ticker.st.pierced.pop();
+            }
+        }
     }
     ticker.finish();
     p.stuck = st.in_ground;
@@ -464,7 +514,16 @@ impl Ticker<'_, '_, '_, '_> {
                 p.z,
             ))
     }
+    /// Whether this is a `ThrownTrident` (`AbstractArrow` with its own water
+    /// inertia, sounds and hit).
+    fn trident(&self) -> bool {
+        matches!(self.p.kind, ProjectileKind::Trident)
+    }
     fn tick(&mut self, targets: &[(Who, Aabb)]) -> Hit {
+        // ThrownTrident.tick.
+        if self.trident() && self.st.in_ground_time > 4 {
+            self.st.dealt_damage = true;
+        }
         let physics = !self.st.no_physics;
         let movement = self.p.velocity;
         let block_pos = self.block_position();
@@ -512,8 +571,9 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.in_ground_time = 0;
         let original = self.position();
         if self.st.was_touching_water {
-            // getWaterInertia, then the bubbles behind it.
-            self.p.velocity = self.p.velocity.scale(f64::from(0.6f32));
+            // getWaterInertia (0.99 for a trident), then the bubbles behind it.
+            let inertia = if self.trident() { 0.99f32 } else { 0.6f32 };
+            self.p.velocity = self.p.velocity.scale(f64::from(inertia));
             let v = self.p.velocity;
             for _ in 0..4 {
                 self.st.events.push(ArrowEvent::Particle {
@@ -639,7 +699,8 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.life = 0;
     }
     /// `AbstractArrow.stepMoveAndHit`: the nearest entity on the way, else the
-    /// block (piercing is not modelled).
+    /// block. A piercing arrow that hits an entity here goes on from it next
+    /// tick (`finish_entity_hit`); vanilla's loop goes on within the same tick.
     fn step_move_and_hit(&mut self, from: Vec3, to: Vec3, targets: &[(Who, Aabb)]) -> Hit {
         let block = self.scene.clip(from, to);
         let end = block.map_or(to, |b| b.0);
@@ -649,8 +710,14 @@ impl Ticker<'_, '_, '_, '_> {
             .expand_towards(self.p.velocity)
             .inflate(Vec3::new(1.0, 1.0, 1.0));
         let mut best: Option<(Who, Vec3, f64)> = None;
+        // ThrownTrident.findHitEntity: none once it has dealt damage.
+        let targets = if self.st.dealt_damage { &[] } else { targets };
         for (who, b) in targets {
             if Some(*who) == self.p.owner && !self.p.left_owner || !b.intersects(area) {
+                continue;
+            }
+            // canHitEntity: not an entity a piercing arrow has gone through.
+            if self.st.pierced.contains(who) {
                 continue;
             }
             if let Some(at) = self.entity_hit(b, from, end, margin) {
@@ -667,6 +734,15 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.position = next;
         self.apply_effects_from_blocks(from, next);
         if let Some((who, at, _)) = best {
+            // AbstractArrow.onHitEntity: past pierce level + 1 entities the
+            // arrow is discarded before it hurts the next one.
+            if self.st.pierce > 0 {
+                if self.st.pierced.len() > usize::from(self.st.pierce) {
+                    self.st.removed = true;
+                    return Hit::None;
+                }
+                self.st.pierced.push(who);
+            }
             return Hit::Entity { who, at };
         }
         let Some((at, pos, face)) = block else {
@@ -706,11 +782,32 @@ impl Ticker<'_, '_, '_, '_> {
     /// `playSound(soundEvent, 1, 1.2 / (random * 0.2 + 0.9))`.
     fn hit_sound(&mut self) {
         let pitch = 1.2 / (self.st.random.next_float() * 0.2 + 0.9);
+        let sound = if self.trident() {
+            ArrowSound::TridentHitGround
+        } else {
+            ArrowSound::HitGround
+        };
         self.st.events.push(ArrowEvent::Sound {
-            sound: ArrowSound::HitGround,
+            sound,
             volume: 1.0,
             pitch,
         });
+    }
+    /// `ThrownTrident.onHitEntity` after the hurt, whether it landed or not:
+    /// the hit sound, then `deflect(REVERSE, ..., (0.02, 0.2, 0.02))`. The
+    /// trident keeps flying (it has dealt its damage) and falls.
+    fn trident_bounce(&mut self) {
+        self.st.dealt_damage = true;
+        self.st.events.push(ArrowEvent::Sound {
+            sound: ArrowSound::TridentHit,
+            volume: 1.0,
+            pitch: 1.0,
+        });
+        // ProjectileDeflection.REVERSE.
+        let rotation = 170.0 + self.st.random.next_float() * 20.0;
+        let v = self.p.velocity;
+        self.p.velocity = Vec3::new(v.x * (-0.02 * 0.5), v.y * (-0.2 * 0.5), v.z * (-0.02 * 0.5));
+        self.p.yaw += rotation;
     }
     /// `onHitEntity` when the entity took no damage: `deflect(REVERSE, 0.2)`,
     /// a half turn give or take ten degrees at a tenth of the speed; one
@@ -752,6 +849,7 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.shake = 7;
         self.p.set_critical(false);
         self.st.pierce = 0;
+        self.st.pierced.clear();
     }
     /// `Projectile.mayInteract`: a mob's arrows need `mob_griefing`.
     fn may_interact(&self) -> bool {
