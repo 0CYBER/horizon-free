@@ -164,6 +164,10 @@ impl Game<'_> {
                     }
                     (3, Value::Bool(visible)) => a.name_visible = *visible,
                     (9, Value::Float(health)) => a.health = *health,
+                    // ArmorStand.DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE.
+                    (16..=21, Value::Floats(r)) if r.len() == 3 => {
+                        a.pose[usize::from(index - 16)] = [r[0], r[1], r[2]];
+                    }
                     // ArmorStand.DATA_CLIENT_FLAGS.
                     (15, Value::Byte(flags)) => {
                         a.small = flags & 1 != 0;

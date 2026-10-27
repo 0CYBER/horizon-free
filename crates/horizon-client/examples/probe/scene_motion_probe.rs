@@ -208,7 +208,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
             )),
             MotionEvent::Emission {
                 state,
-                in_water: true,
+                muffled: true,
                 ..
             } => Some(format!("muffled-step {}", state.0)),
             MotionEvent::BubbleColumnParticle { bubble, position } => Some(format!(
