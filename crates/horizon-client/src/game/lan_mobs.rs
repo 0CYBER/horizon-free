@@ -96,6 +96,10 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
         MobEvent::AttackPlayer(..)
             | MobEvent::AttackPlayerWithEffect { .. }
             | MobEvent::DamagePlayer { .. }
+            | MobEvent::SonicBoom {
+                target: Who::Player,
+                ..
+            }
             | MobEvent::Push {
                 target: Who::Player,
                 ..
@@ -114,6 +118,7 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
             }
             | MobEvent::EffectPlayer { .. }
             | MobEvent::AxolotlSupportPlayer
+            | MobEvent::ParrotToShoulder { .. }
     )
 }
 

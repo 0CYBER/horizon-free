@@ -675,6 +675,9 @@ pub struct Panic {
     pub speed: f64,
     /// Only the damage of `#panic_environmental_causes` (an armadillo).
     pub environmental: bool,
+    /// `TurtlePanicGoal`: always look for water this far away, not only
+    /// when on fire.
+    pub water_range: Option<i32>,
     pos: [f64; 3],
 }
 impl Panic {
@@ -682,8 +685,14 @@ impl Panic {
         Self {
             speed,
             environmental: false,
+            water_range: None,
             pos: [0.0; 3],
         }
+    }
+    /// `TurtlePanicGoal`.
+    pub fn looking_for_water(mut self, range: i32) -> Self {
+        self.water_range = Some(range);
+        self
     }
 }
 pub fn should_panic(m: &Mob) -> bool {
@@ -707,18 +716,19 @@ impl Goal for Panic {
         if !wanted {
             return false;
         }
-        if m.fire_ticks > 0 {
+        let range = self.water_range.or((m.fire_ticks > 0).then_some(5));
+        if let Some(range) = range {
             let (bx, by, bz) = (
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             );
             if cx.w.data.state(cx.w.world.block(bx, by, bz)).top == 0.0 {
-                // findBlocksInBoxByManhattanDistance(pos, 5, 1) for water.
+                // findBlocksInBoxByManhattanDistance(pos, range, 1) for water.
                 let mut best: Option<([i32; 3], i32)> = None;
                 for dy in -1i32..=1 {
-                    for dx in -5i32..=5 {
-                        for dz in -5i32..=5 {
+                    for dx in -range..=range {
+                        for dz in -range..=range {
                             let d = dx.abs() + dy.abs() + dz.abs();
                             if cx.w.fluid(bx + dx, by + dy, bz + dz) == crate::blocks::Fluid::Water
                                 && best.is_none_or(|b| d < b.1)

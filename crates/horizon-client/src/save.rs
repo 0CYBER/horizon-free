@@ -2711,6 +2711,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
+    /// Player.lastDeathLocation: the dimension and block of the last death.
+    pub last_death: Option<(String, [i32; 3])>,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
@@ -2911,6 +2913,15 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.last_death = p.get("LastDeathLocation").and_then(|d| {
+            let Some(Tag::IntArray(pos)) = d.get("pos") else {
+                return None;
+            };
+            Some((
+                text(d.get("dimension"))?,
+                [*pos.first()?, *pos.get(1)?, *pos.get(2)?],
+            ))
+        });
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
@@ -3011,6 +3022,7 @@ impl Level {
                 "Pos",
                 "respawn",
                 "recipeBook",
+                "LastDeathLocation",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -3137,6 +3149,15 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        if let Some((dimension, pos)) = &self.last_death {
+            entries.push((
+                "LastDeathLocation",
+                Tag::compound([
+                    ("dimension", string(dimension)),
+                    ("pos", Tag::IntArray(pos.to_vec())),
+                ]),
+            ));
+        }
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![

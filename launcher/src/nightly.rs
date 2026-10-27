@@ -1,5 +1,6 @@
-//! Nightly (docs/release-flow.md "Nightly channel"): an opt-in build of reviewed fixes not released
-//! yet, published each night as the `nightly` pre-release. Off by default (`Settings::nightly`).
+//! Nightly (docs/release-flow.md "Nightly channel"): an opt-in build of main plus pull requests
+//! picked by trusted reviewers, some not reviewed yet, published as the `nightly` pre-release each
+//! night and when a reviewer asks. Off by default (`Settings::nightly`).
 //!
 //! It never touches the release: it installs as its own version, `nightly-<date>-<commit>`, and plays
 //! in its own instance, "Nightly" (`instances/nightly/` in the game's home), so the player's worlds

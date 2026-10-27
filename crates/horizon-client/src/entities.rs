@@ -19,6 +19,8 @@ pub struct ItemEntity {
     pub id: u32,
     pub stack: ItemStack,
     pub thrower: Option<[i32; 4]>,
+    /// `ItemEntity.target`: the only player who may pick the item up.
+    pub target: Option<[i32; 4]>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -355,7 +357,10 @@ pub fn merge_with_neighbours(
         }
         // ItemEntity.areMergable: both fit one stack of the same item and components.
         let (this, other) = (&items[i].stack, &items[j].stack);
-        if this.count + other.count > max_stack(other) || !this.same_item_same_components(other) {
+        if items[i].target != items[j].target
+            || this.count + other.count > max_stack(other)
+            || !this.same_item_same_components(other)
+        {
             continue;
         }
         let (to, from) = if other.count < this.count {
@@ -951,6 +956,7 @@ mod fire_environment_tests {
         let make = |id: &str| ItemEntity {
             id: 1,
             thrower: None,
+            target: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count: 1,
@@ -1047,6 +1053,7 @@ mod merge_tests {
         ItemEntity {
             id: 0,
             thrower: None,
+            target: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count,

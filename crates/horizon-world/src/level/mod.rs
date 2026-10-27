@@ -258,7 +258,8 @@ pub enum LevelEvent {
     /// event follow as their own events; the caller removes the block.
     PrimeTnt { pos: BlockPos, rot: f64 },
     /// Block-entity or entity side effects the caller implements: `"dispense"`
-    /// (dispenser/dropper/crafter scheduled tick), `"hatch"` (frogspawn
+    /// (dispenser/dropper/crafter scheduled tick), `"brushable"` (a suspicious
+    /// block's scheduled tick: `checkReset`), `"hatch"` (frogspawn
     /// hatched into tadpoles; the block is already destroyed), `"portal_spawn"`
     /// (a nether portal won its zombified piglin roll; the caller checks
     /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal).
@@ -378,6 +379,12 @@ pub trait LevelAccess {
         _direction: Direction,
     ) -> i32 {
         0
+    }
+    /// `ItemFrame.getAnalogOutput` of the one item frame in the block at
+    /// `pos` that faces `facing` (`ComparatorBlock.getItemFrame`), or None when
+    /// there is not exactly one.
+    fn item_frame_analog_output(&self, _pos: BlockPos, _facing: Direction) -> Option<i32> {
+        None
     }
     /// `ContainerOpenersCounter.recheckOpenCount` for the chest or ender chest
     /// block entity at `pos`: recounts its openers and returns the previous
@@ -814,6 +821,22 @@ impl Behaviours {
     ) {
         self.sim(level, ticks)
             .big_dripleaf_entity_inside(pos, on_ground, feet_y);
+    }
+    /// `BellBlock.onProjectileHit` for a projectile that hit `face` of the
+    /// block at `pos` at height `hit_y`. False when the block is not a bell
+    /// or the hit missed the bell proper.
+    pub fn bell_projectile_hit<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        face: Direction,
+        hit_y: f64,
+    ) -> bool {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        self.data(state).is(classes::Class::Bell)
+            && sim.bell_hit(pos, state, face, hit_y - f64::from(pos.y))
     }
     /// Redstone signal queries (`SignalGetter`).
     pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(

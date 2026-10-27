@@ -673,6 +673,9 @@ impl Game<'_> {
             return Ok(());
         }
         self.sync_ops(&lists);
+        if let Some(host) = self.lan.as_mut() {
+            host.hub.spawn_protection = props.spawn_protection;
+        }
         log(
             "INFO",
             &format!(

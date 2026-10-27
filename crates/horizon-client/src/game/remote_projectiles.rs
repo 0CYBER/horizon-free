@@ -207,6 +207,8 @@ impl Game<'_> {
             "minecraft:trident" => {
                 let mut t = super::trident::ThrownTrident::remote(id, at, yaw, pitch);
                 t.velocity = velocity;
+                // Projectile.getAddEntityPacket: the owner's id is the data.
+                t.owner = data as u32;
                 self.tridents.push(t);
             }
             "minecraft:firework_rocket" => {
@@ -350,6 +352,15 @@ impl Game<'_> {
                     (9, Value::Bool(show)) => c.show_bottom = *show,
                     _ => {}
                 }
+            } else if let Some(t) = self.tridents.iter_mut().find(|t| t.id == id) {
+                // AbstractArrow.ID_FLAGS (no physics) and IN_GROUND, and
+                // ThrownTrident.ID_LOYALTY.
+                match (index, value) {
+                    (8, Value::Byte(flags)) => t.no_physics = flags & 2 != 0,
+                    (10, Value::Bool(in_ground)) => t.in_ground = *in_ground,
+                    (11, Value::Byte(loyalty)) => t.loyalty = u32::from(*loyalty as u8),
+                    _ => {}
+                }
             } else if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) {
                 match (&mut p.kind, index, value) {
                     // AbstractArrow.ID_FLAGS (critical) and IN_GROUND.
@@ -381,6 +392,25 @@ impl Game<'_> {
             t.yaw = yaw;
             t.pitch = pitch;
         }
+    }
+
+    /// `Entity.getEyePosition` of a projectile's owner: this game's player or
+    /// another player the server sent.
+    fn remote_eye(&self, id: u32) -> Option<Vec3> {
+        let me = self
+            .remote
+            .as_ref()
+            .and_then(|r| u32::try_from(r.entity_id).ok());
+        if me == Some(id) {
+            let eye = self.eye_position()?;
+            return Some(Vec3::new(eye[0], eye[1], eye[2]));
+        }
+        let m = self.mobs.iter().find(|m| m.id == id)?;
+        Some(Vec3::new(
+            m.position.x,
+            m.position.y + m.eye_height(),
+            m.position.z,
+        ))
     }
 
     /// One tick of interpolation, as `tick_remote_objects`.
@@ -416,6 +446,7 @@ impl Game<'_> {
         // updates (10 to 20 ticks apart); a block stops them there, and only
         // the server decides what they hit.
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        let mut tridents = std::mem::take(&mut self.tridents);
         {
             let w = self.mob_world_base(&[]);
             let world = super::creatures::ProjWorld {
@@ -434,8 +465,12 @@ impl Game<'_> {
                     _ => remote_projectile_tick(p, &world),
                 }
             }
+            for t in &mut tridents {
+                t.remote_tick(&world, self.remote_eye(t.owner));
+            }
         }
         self.creatures.projectiles = projectiles;
+        self.tridents = tridents;
         let trails: Vec<Vec3> = self
             .creatures
             .projectiles
@@ -444,10 +479,6 @@ impl Game<'_> {
             .map(|p| p.position)
             .collect();
         self.smoke_trails(trails);
-        for t in &mut self.tridents {
-            let id = t.id;
-            t.remote_step(|at| step(id, at));
-        }
         // FireworkRocketEntity.tick: a rocket attached to an entity follows it
         // and boosts it client-side too (attachedToEntity.isFallFlying), and
         // every rocket leaves its spark trail on a client.
