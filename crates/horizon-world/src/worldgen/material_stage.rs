@@ -134,6 +134,41 @@ fn tick(remaining: &mut usize) -> Result<(), SurfaceError> {
 /// uses one stone block above/below. The caller applies the returned state.
 /// Required heightmaps may be primed; block values are not changed here.
 /// The caller's density context is retained on successful and failed evaluation.
+/// Apply a compiled top-material rule at one position with a worker the caller
+/// built once. Carvers restore many cells per pass, so the rule is compiled and
+/// the density bindings created once instead of per restored block.
+pub(crate) fn top_material_cell<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockStates>(
+    worker: &mut MaterialConditions<R, S>,
+    chunk: &mut TerrainChunk<'_, B>,
+    rule: usize,
+    position: BlockPos,
+    submerged: bool,
+) -> Result<Option<BlockStateId>, SurfaceError> {
+    let (lx, lz) = (position.x & 15, position.z & 15);
+    let gx = first_available(chunk, (lx + 1).min(15), lz)?.wrapping_sub(first_available(
+        chunk,
+        (lx - 1).max(0),
+        lz,
+    )?);
+    let gz = first_available(chunk, lx, (lz + 1).min(15))?.wrapping_sub(first_available(
+        chunk,
+        lx,
+        (lz - 1).max(0),
+    )?);
+    worker.update_xz(position.x, position.z, gx, gz);
+    worker.update_y(
+        1,
+        1,
+        if submerged {
+            position.y.wrapping_add(1)
+        } else {
+            i32::MIN
+        },
+        position.y,
+    );
+    worker.try_apply(rule, position).map_err(SurfaceError::from)
+}
+
 pub fn top_material<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockStates>(
     chunk: &mut TerrainChunk<'_, B>,
     rule: MaterialRule,
@@ -158,29 +193,7 @@ pub fn top_material<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockS
     );
     let result = (|| {
         let rule = worker.add_rule(rule)?;
-        let (lx, lz) = (position.x & 15, position.z & 15);
-        let gx = first_available(chunk, (lx + 1).min(15), lz)?.wrapping_sub(first_available(
-            chunk,
-            (lx - 1).max(0),
-            lz,
-        )?);
-        let gz = first_available(chunk, lx, (lz + 1).min(15))?.wrapping_sub(first_available(
-            chunk,
-            lx,
-            (lz - 1).max(0),
-        )?);
-        worker.update_xz(position.x, position.z, gx, gz);
-        worker.update_y(
-            1,
-            1,
-            if submerged {
-                position.y.wrapping_add(1)
-            } else {
-                i32::MIN
-            },
-            position.y,
-        );
-        worker.try_apply(rule, position).map_err(SurfaceError::from)
+        top_material_cell(&mut worker, chunk, rule, position, submerged)
     })();
     let (_, mut context) = worker.into_surface().into_parts();
     std::mem::swap(&mut context, inputs.density_context);
