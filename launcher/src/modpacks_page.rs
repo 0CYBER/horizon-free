@@ -132,6 +132,7 @@ impl Launcher {
             self.mods.report_list.reset();
             self.packs = modpacks::list();
             self.registry_packs = horizon_pack::list();
+            self.reload_instances();
             if self.pack_open.is_none() {
                 self.pack_open = self.packs.first().map(|p| p.slug.clone());
             }

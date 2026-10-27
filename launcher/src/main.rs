@@ -12,6 +12,7 @@ mod collection;
 mod console;
 mod cull;
 mod game_tools;
+mod instances_page;
 mod internet;
 mod markdown;
 mod mcp;
@@ -33,6 +34,7 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::instances;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -222,6 +224,8 @@ struct Launcher {
     starting_pack: Option<std::path::PathBuf>,
     /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
     mods: mods_page::Mods,
+    /// The instances, for the sidebar and Play, and their dialog (`instances_page.rs`).
+    instances: instances_page::Instances,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -378,11 +382,13 @@ impl Launcher {
             pack_error: None,
             starting_pack: None,
             mods: mods_page::Mods::new(cx),
+            instances: instances_page::Instances::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
             scale: window.scale_factor(),
         };
+        this.reload_instances();
         if this.bench.is_some() {
             this.perf.keep_local_log(false);
         }
@@ -535,13 +541,16 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
-                        if let Some(work) = self.starting_pack.take() {
-                            if let Err(e) =
+                        // A pack's Play button plays that pack; Play plays the selected instance.
+                        let profile = match self.starting_pack.take() {
+                            Some(work) => {
                                 horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
-                            {
-                                self.client_error = Some(e);
-                                continue;
                             }
+                            None => instances::apply(&mut cmd, &instances::selected()),
+                        };
+                        if let Err(e) = profile {
+                            self.client_error = Some(e);
+                            continue;
                         }
                         if let Some(code) = self.joining.take() {
                             if let Err(e) = backend::join_friend(&mut cmd, &code) {
@@ -668,10 +677,12 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            // The run's own game folder: an instance's or a pack's keeps its reports.
+                            let home = self.client_home.clone().unwrap_or_else(backend::game_home);
                             let report = self
                                 .client_started
                                 .take()
-                                .and_then(backend::crash_report_since);
+                                .and_then(|since| backend::crash_report_since(&home, since));
                             if error.is_some() && report.is_none() && self.switched_to_dx12() {
                                 self.client_error = Some(
                                     "Horizon's Vulkan renderer crashed while starting on this \
@@ -1569,7 +1580,7 @@ impl Launcher {
     fn sidebar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         self.load_packs();
-        let heading = |label: &'static str| {
+        let heading = |label: String| {
             div()
                 .flex()
                 .items_center()
@@ -1600,7 +1611,7 @@ impl Launcher {
                 .border_2()
                 .border_color(t.side)
         };
-        let add = keyboard(div().id("add-pack"), &t)
+        let add = keyboard(div().id("add-instance"), &t)
             .flex()
             .items_center()
             .justify_center()
@@ -1612,79 +1623,23 @@ impl Launcher {
             .hover(move |s| s.bg(t.raised))
             .child(blocks::icon("plus", 14., t.ink_soft))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.show_modpack(None);
+                this.open_instance_dialog(None);
                 cx.notify();
             }));
-        let mut list = div()
+        let list = div()
             .flex()
             .flex_col()
             .gap(px(4.))
-            .child(heading("INSTANCES").child(add));
-        // Horizon itself, with a grass block from the player's own prepared files.
-        let tag = self.selected().cloned();
-        let prepared = tag.as_deref().is_some_and(backend::is_prepared);
-        let grass = self.vanilla_icon();
-        let on_play = self.page == Page::Play;
-        list = list.child(
-            blocks::side_item("side-horizon".into(), on_play, &t)
-                .child(match grass {
-                    Some(g) => div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(44.))
-                        .child(gpui::img(g).size(px(40.))),
-                    None => blocks::slot(None, "Horizon", 44., &t),
-                })
-                .child(dot(if prepared { t.success } else { t.warn }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .child(title("Horizon".into()))
-                        .child(sub(if tag.is_none() {
-                            "No version installed"
-                        } else if prepared {
-                            "Vanilla · ready"
-                        } else {
-                            "Needs preparing"
-                        }
-                        .into())),
-                )
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.go(Page::Play);
-                    cx.notify();
-                })),
-        );
-        let on_packs = self.page == Page::Mods && self.mods.on_modpacks();
-        for p in &self.packs {
-            let slug = p.slug.clone();
-            let open = on_packs && self.pack_open.as_ref() == Some(&p.slug);
-            list = list.child(
-                blocks::side_item(format!("side-pack-{slug}").into(), open, &t)
-                    .child(blocks::slot(None, p.title(), 44., &t))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .child(title(p.title().to_string()))
-                            .child(sub(p.summary())),
-                    )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.show_modpack(Some(slug.clone()));
-                        cx.notify();
-                    })),
-            );
-        }
+            .child(heading("INSTANCES".into()).child(add))
+            .children(self.instance_items(heading, cx));
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
             .map(<[_]>::to_vec)
             .unwrap_or_else(|| self.side_servers.clone());
+        let mut list = list;
         if !servers.is_empty() {
-            list = list.child(heading("SERVERS"));
+            list = list.child(heading("SERVERS".into()));
         }
         for e in servers {
             let up = self.servers.is_up(&e.dir);
@@ -2068,15 +2023,16 @@ impl Launcher {
             .flex()
             .flex_col()
             .child(section_title("Ready to play", "check", &t).mb(px(12.)))
+            .children(self.instance_row(1, cx))
             .child(index_row(
-                1,
+                2,
                 "Resources",
                 Some(div().child(resources_value).into_any_element()),
                 Some(prepare.into_any_element()),
                 &t,
             ))
             .child(index_row(
-                2,
+                3,
                 "Minecraft folder",
                 Some(minecraft),
                 Some(
@@ -2092,7 +2048,7 @@ impl Launcher {
             // offline, in a build that can sign in.
             if self.accounts.selected().is_none() && account::client_id().is_some() {
                 rows = rows.child(index_row(
-                    4,
+                    5,
                     "Playing offline",
                     Some(
                         div()
@@ -3058,7 +3014,7 @@ impl Launcher {
             join = disabled(join);
         }
         index_row(
-            3,
+            4,
             "Join a friend",
             Some(
                 div()
@@ -3517,6 +3473,7 @@ impl Render for Launcher {
                         }
                     }
                     "escape" if this.servers_escape() => {}
+                    "escape" if this.instance_escape() => {}
                     _ => return,
                 }
                 cx.stop_propagation();
@@ -3576,6 +3533,9 @@ impl Render for Launcher {
             if let Some(dialog) = self.create_dialog(cx) {
                 root = root.child(dialog);
             }
+        }
+        if let Some(dialog) = self.instance_dialog(cx) {
+            root = root.child(dialog);
         }
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));

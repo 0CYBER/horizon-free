@@ -50,6 +50,7 @@ Start the client.
 
     horizon-launcher play
 
+- `--instance`: The instance to play (its name or id; default: the selected one)
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
@@ -256,6 +257,68 @@ Upload a benchmark report (docs/benchmark-report.md); it is printed first.
 - `--yes`
 
 MCP: `data_benchmark`, only when the player asks.
+
+## `horizon-launcher instance list`
+
+The instances, each with its game folder (* = the one Play starts).
+
+    horizon-launcher instance list
+
+MCP: `instance_list`.
+
+## `horizon-launcher instance create`
+
+Make an instance: empty but for your options and name, or a copy of another one's worlds, options and packs.
+
+    horizon-launcher instance create <NAME>
+
+- `NAME`
+- `--copy`: The instance to copy (its name or id)
+
+MCP: `instance_create`.
+
+## `horizon-launcher instance rename`
+
+Rename an instance (its folder stays).
+
+    horizon-launcher instance rename <INSTANCE> <NAME>
+
+- `INSTANCE`
+- `NAME`
+
+MCP: `instance_rename`.
+
+## `horizon-launcher instance icon`
+
+Set an instance's icon: a block or item name from your prepared files (grass_block), a colour (#3fa7d6), or none.
+
+    horizon-launcher instance icon <INSTANCE> <ICON>
+
+- `INSTANCE`
+- `ICON`
+
+MCP: `instance_icon`.
+
+## `horizon-launcher instance group`
+
+Put an instance in a sidebar group, or take it out with no group.
+
+    horizon-launcher instance group <INSTANCE> [GROUP]
+
+- `INSTANCE`
+- `GROUP`
+
+MCP: `instance_group`.
+
+## `horizon-launcher instance select`
+
+Make Play start this instance.
+
+    horizon-launcher instance select <INSTANCE>
+
+- `INSTANCE`
+
+MCP: `instance_select`.
 
 ## `horizon-launcher modpack list`
 
