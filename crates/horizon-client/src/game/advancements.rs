@@ -9,6 +9,7 @@ use horizon_client::{
     text::{self, Style, Text},
     toasts::Slide,
 };
+use horizon_core::geometry::Vec3;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -82,6 +83,8 @@ pub(super) struct AdvState {
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
     pub(super) last_inventory: u64,
+    /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
+    pub(super) levitation: Option<([f64; 3], u64)>,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
     /// unlocked and the announcements, for their client and everyone's.
@@ -655,6 +658,28 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &ctx, w)
         });
+        // ServerPlayer.onEffectAdded and onEffectsRemoved keep the start of a
+        // levitation; tick fires LEVITATION while there is one.
+        let levitating = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .any(|e| e.id == "levitation");
+        match (levitating, self.adv.levitation) {
+            (true, None) => {
+                let at = self
+                    .player
+                    .as_ref()
+                    .map(|p| [p.position.x, p.position.y, p.position.z]);
+                self.adv.levitation = at.map(|at| (at, self.ticks));
+            }
+            (false, Some(_)) => self.adv.levitation = None,
+            _ => {}
+        }
+        if let Some((start, since)) = self.adv.levitation {
+            self.trigger_levitation(start, (self.ticks - since) as i64);
+        }
         if self.ticks.is_multiple_of(20) {
             let me = self.player_entity();
             self.trigger("minecraft:location", |c, w| {
@@ -688,6 +713,60 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
+    }
+    /// `LevitationTrigger`: how far the player rose from where it started
+    /// levitating, and for how long.
+    fn trigger_levitation(&mut self, start: [f64; 3], duration: i64) {
+        let me = self.player_entity();
+        self.trigger("minecraft:levitation", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
+                && adv::range_i(&c["duration"], duration)
+        });
+    }
+    /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
+    /// what the player looks at (`PlayerPredicate.lookingAt`).
+    pub(super) fn trigger_using_item(&mut self, stack: &ItemStack) {
+        if self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        let mut me = self.player_entity();
+        me.looking_at = self.looking_at_entity().map(Box::new);
+        let it = item_view(stack);
+        self.trigger("minecraft:using_item", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// The mob a 100 block ray from the eyes meets first, if no block is in
+    /// the way (`ProjectileUtil.getEntityHitResult` and `hasLineOfSight`).
+    fn looking_at_entity(&self) -> Option<EntityView> {
+        let eye = self.eye_position()?;
+        let dir = super::view_vector(self.yaw, self.pitch);
+        let (m, _) = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive())
+            .filter_map(|m| Some((m, super::ray_box(eye, dir, 100.0, m.bounds())?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        // `LivingEntity.hasLineOfSight`: eye to the target's eye height,
+        // `ClipContext.Block.COLLIDER`, no fluids, within 128 blocks.
+        let from = Vec3::new(eye[0], eye[1], eye[2]);
+        let to = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let world = self.mob_world_base(&[]);
+        let clear = to.distance(from) <= 128.0 && world.clear_between(from, to, false);
+        clear.then(|| self.mob_entity(m))
     }
     /// `PlayerHurtEntityTrigger`: the player, the damage and the victim.
     pub(super) fn trigger_player_hurt_entity(
