@@ -2652,6 +2652,9 @@ pub struct Level {
     /// The game mode id (0 survival, 1 creative, 2 adventure, 3 spectator);
     /// `creative` wins when the two disagree.
     pub game_mode: i32,
+    /// `previousPlayerGameType`: the mode the player left last (the F3+F4 switcher's
+    /// return mode), when it has one.
+    pub previous_game_mode: Option<i32>,
     pub time: i64,
     pub day_time: i64,
     /// Where the player respawns when it has no bed or anchor: its forced
@@ -2896,6 +2899,7 @@ impl Level {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
         }
+        self.previous_game_mode = n("previousPlayerGameType").map(|m| m as i32);
         self.flying = p
             .get("abilities")
             .and_then(|a| number(a.get("flying")))
@@ -2993,6 +2997,7 @@ impl Level {
                 "respawn",
                 "recipeBook",
                 "LastDeathLocation",
+                "previousPlayerGameType",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -3160,6 +3165,10 @@ impl Level {
                     ]),
                 ));
             }
+        }
+        // ServerPlayer.storeGameTypes: storeNullable, so absent without one.
+        if let Some(mode) = self.previous_game_mode {
+            entries.push(("previousPlayerGameType", Tag::Int(mode)));
         }
         for (key, value) in entries {
             put(&mut p, key, value);
