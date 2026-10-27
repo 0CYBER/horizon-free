@@ -908,7 +908,7 @@ impl Mob {
                 (distance * 4.0).min(1.0)
             };
             self.limb_speed += (target - self.limb_speed) * 0.4;
-            self.limb_position += self.limb_speed * if self.is_baby() { 3.0 } else { 1.0 };
+            self.limb_position += self.limb_speed;
         } else {
             self.limb_speed = 0.0;
         }

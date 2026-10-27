@@ -90,7 +90,7 @@ pub const MAP_COLORS: [u32; 62] = [
     14200723, 8365974,
 ];
 /// The 12 edges of the unit cube (outline data predating the export).
-fn cube_edges() -> Vec<[f64; 6]> {
+pub fn cube_edges() -> Vec<[f64; 6]> {
     let mut edges = Vec::new();
     for a in 0..3 {
         for (u, v) in [(0., 0.), (1., 0.), (0., 1.), (1., 1.)] {
