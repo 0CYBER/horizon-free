@@ -116,6 +116,11 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
+                // Saved, but the creative tabs, the quit keys and the mouse
+                // don't read them yet.
+                | Opt::OperatorItemsTab
+                | Opt::QuitShortcuts
+                | Opt::CtrlClickEmulatesRightClick
         )
     }
     fn file_key(self) -> Option<&'static str> {
