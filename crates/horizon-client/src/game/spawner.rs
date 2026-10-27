@@ -21,10 +21,11 @@ type Pos = (i32, i32, i32);
 
 /// What a spawner tick decided to add, created once the level is free.
 pub(super) enum Planned {
-    /// `finalizeSpawn` ran on a fresh mob.
-    Finalized(Mob),
-    /// A mob loaded from the spawn data (with its passengers).
-    Loaded(Tag),
+    /// `finalizeSpawn` ran on a fresh mob; the spawn data's `equipment`.
+    Finalized(Mob, Option<Tag>),
+    /// A mob loaded from the spawn data (with its passengers) and its
+    /// `equipment`.
+    Loaded(Tag, Option<Tag>),
 }
 
 /// What the spawner code keeps between ticks.
@@ -120,18 +121,24 @@ impl Game<'_> {
         for (i, plan) in planned.into_iter().enumerate() {
             let provisional = u32::MAX - i as u32;
             let id = match plan {
-                Planned::Finalized(mut mob) => {
+                Planned::Finalized(mut mob, equipment) => {
                     self.next_entity += 1;
                     mob.id = self.next_entity;
                     let id = mob.id;
                     self.mobs.push(mob);
                     self.enchant_spawn_equipment(id);
                     self.spawn_jockeys(id, true);
-                    Some(id)
+                    Some((id, equipment))
                 }
-                Planned::Loaded(tag) => self.load_mob(tag, None),
+                Planned::Loaded(tag, equipment) => {
+                    self.load_mob(tag, None).map(|id| (id, equipment))
+                }
             };
-            if let Some(id) = id {
+            if let Some((id, equipment)) = id {
+                // `nextSpawnData.getEquipment().ifPresent(mob::equip)`.
+                if let Some(table) = equipment {
+                    self.equip_from_table(id, &table);
+                }
                 ids.insert(provisional, id);
             }
         }
@@ -169,7 +176,7 @@ impl Game<'_> {
                 mob.previous_head_yaw = 0.0;
             }
             let bounds = mob.bounds();
-            planned.push(Planned::Finalized(mob));
+            planned.push(Planned::Finalized(mob, r.equipment.cloned()));
             bounds
         } else {
             // A UUID already in the level is refused.
@@ -197,7 +204,7 @@ impl Game<'_> {
             let tag = Tag::Compound(tag);
             let mob = horizon_client::entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), 0)?;
             let bounds = mob.bounds();
-            planned.push(Planned::Loaded(tag));
+            planned.push(Planned::Loaded(tag, r.equipment.cloned()));
             bounds
         };
         l.pending.borrow_mut().push(bounds);
@@ -253,12 +260,21 @@ impl Game<'_> {
         self.world.modified.insert((key.0 >> 4, key.2 >> 4));
     }
     /// `LivingEntity.makePoofParticles` (entity event 20) for a mob.
-    fn mob_poof(&mut self, id: u32) {
+    pub(super) fn mob_poof(&mut self, id: u32) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let at = m.position;
+        self.lan_entity_event(id as i32, 20, [at.x, at.y, at.z]);
+        self.poof_particles(id);
+    }
+    /// `Mob.handleEntityEvent` 20 (`spawnAnim` on a client): the poof about
+    /// mob `id`.
+    pub(super) fn poof_particles(&mut self, id: u32) {
         let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let (at, w, h) = (m.position, f64::from(m.width()), f64::from(m.height()));
-        self.lan_entity_event(id as i32, 20, [at.x, at.y, at.z]);
         let options = ParticleOptions::simple(ParticleType::Poof);
         for _ in 0..20 {
             let r = self.particles.level_random();

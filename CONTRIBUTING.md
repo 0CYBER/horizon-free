@@ -98,5 +98,5 @@ new pushes, we add it again.
 
 ## Talk to us
 
-[Discord](https://discord.gg/HcTeMZxe5E) for questions and ideas, [issues](https://github.com/ludovic111/horizon/issues)
+[Discord](https://discord.gg/HcTeMZxe5E) for questions and ideas, [issues](https://github.com/horizon-rust/horizon/issues)
 for bugs. If you want to take something on, say so in its issue so nobody else starts the same work.

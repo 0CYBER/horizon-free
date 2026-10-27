@@ -1,7 +1,7 @@
 # Installs horizon-server (docs/server.md) on Windows: the latest Horizon release, downloaded from GitHub
 # Releases and checked against the SHA-256 GitHub publishes for it.
 #
-#   irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex
 #   & ([scriptblock]::Create((irm .../install.ps1))) -Version v0.5.0 -Dir D:\Horizon
 #
 # Releases go to <Dir>\releases\<version>, <Dir>\current points at the one in use, and <Dir>\bin (added to
@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Repo = "ludovic111/horizon"
+$Repo = "horizon-rust/horizon"
 $Asset = "horizon-windows-x64.zip"
 if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
     throw "No Horizon release for Windows on $env:PROCESSOR_ARCHITECTURE yet: build it from source (docs/server.md)"

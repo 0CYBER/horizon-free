@@ -672,6 +672,7 @@ impl Game<'_> {
         }
         let source = match source.kind {
             horizon_client::mobs::DamageKind::MaceSmash => "minecraft:mace_smash",
+            horizon_client::mobs::DamageKind::Spear => "minecraft:spear",
             _ => "minecraft:player_attack",
         };
         out.push(format!(
@@ -1131,14 +1132,18 @@ impl Game<'_> {
             let (p, v) = (b.position, b.velocity);
             out.push(line(&kind, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
+        // A merged orb prints once per count, as the oracle does: whether orbs
+        // merge depends on entity ids, which differ from vanilla's.
         for o in &self.orbs {
             let (p, v) = (o.position, o.velocity);
-            out.push(line(
-                "minecraft:experience_orb",
-                [p.x, p.y, p.z],
-                [v.x, v.y, v.z],
-                "",
-            ));
+            for _ in 0..o.count.max(1) {
+                out.push(line(
+                    "minecraft:experience_orb",
+                    [p.x, p.y, p.z],
+                    [v.x, v.y, v.z],
+                    "",
+                ));
+            }
         }
         for c in &self.carts {
             let (p, v) = (c.position, c.velocity);

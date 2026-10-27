@@ -34,6 +34,8 @@ pub struct LootStack {
     /// Added by set_stew_effect (the `suspicious_stew_effects` component):
     /// (effect id, duration in ticks).
     pub stew_effects: Vec<(String, i32)>,
+    /// Set by set_name: (`custom_name` or `item_name`, the text component).
+    pub names: Vec<(String, Value)>,
 }
 /// `ExplorationMapFunction`'s settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +80,7 @@ impl LootStack {
             exploration: None,
             ominous_amplifier: None,
             stew_effects: Vec::new(),
+            names: Vec::new(),
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -154,6 +157,8 @@ pub struct LootEntity {
     pub captain: Option<bool>,
     /// A frog's variant id (`minecraft:warm`).
     pub frog_variant: Option<String>,
+    /// A chicken's variant id (`minecraft:warm`).
+    pub chicken_variant: Option<String>,
     /// A charged creeper (`Creeper.isPowered`).
     pub powered: bool,
     /// Worn and held items by `EquipmentSlot` name (mainhand, offhand,
@@ -862,6 +867,9 @@ impl<R: RandomSource> Context<'_, R> {
                 "minecraft:frog/variant" => {
                     e.frog_variant.is_some() && want.as_str() == e.frog_variant.as_deref()
                 }
+                "minecraft:chicken/variant" => {
+                    e.chicken_variant.is_some() && want.as_str() == e.chicken_variant.as_deref()
+                }
                 _ => false,
             }),
             "minecraft:type_specific/sheep" => e
@@ -1219,7 +1227,16 @@ impl<R: RandomSource> Context<'_, R> {
                     stack = smelted;
                 }
             }
-            // Names, lore, components and other data without random draws.
+            // SetNameFunction: the component the target names (custom_name by
+            // default). The entity-resolved selectors and scores are not
+            // modelled; no table uses `entity`.
+            "minecraft:set_name" if !f["name"].is_null() => {
+                let target = f["target"].as_str().unwrap_or("custom_name");
+                let id = format!("minecraft:{target}");
+                stack.names.retain(|(k, _)| *k != id);
+                stack.names.push((id, f["name"].clone()));
+            }
+            // Lore, components and other data without random draws.
             _ => {}
         }
         stack
