@@ -789,14 +789,30 @@ impl Game<'_> {
         // takes the experience (before the loot is dropped). It takes what
         // would drop, whoever killed the mob.
         self.sculk_mob_died(m);
+        let mut catalyst_xp = 0;
         let consumed =
             self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
-                if horizon_client::mobs::drops::drops_experience(&dying) {
+                catalyst_xp = if horizon_client::mobs::drops::drops_experience(&dying) {
                     horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
-                }
+                };
+                catalyst_xp
             });
+        // CatalystListener: with experience to take, the player who last hurt
+        // the mob gets KILL_MOB_NEAR_SCULK_CATALYST.
+        if consumed && catalyst_xp > 0 {
+            let who = match killer {
+                Some(Some(conn)) => Some(super::commands::Target::Guest(conn)),
+                Some(None) if self.lan_acting.is_none() => Some(super::commands::Target::Player),
+                _ => None,
+            };
+            if let Some(who) = who {
+                self.for_player(who, |g| {
+                    g.trigger_player("minecraft:kill_mob_near_sculk_catalyst")
+                });
+            }
+        }
         if by_player {
             // A guest's kill is theirs: their statistics, scores and
             // advancements (LivingEntity.die credits lastHurtByPlayer).
