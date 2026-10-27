@@ -74,8 +74,19 @@ pub enum BlockEntity {
     /// `DaylightDetectorBlockEntity`: no data, only the ticker
     /// (`DaylightDetectorBlock.tickEntity`).
     DaylightDetector,
+    /// Suspicious sand and gravel: saved loot and the transient brushed face.
+    Brushable(Box<Brushable>),
     /// `ChiseledBookShelfBlockEntity`: a `Container` of six one-book slots.
     ChiseledBookshelf(Box<ChiseledBookshelf>),
+}
+/// `BrushableBlockEntity`: the loot table is resolved on the first brush.
+#[derive(Clone, Debug, Default)]
+pub struct Brushable {
+    pub loot_table: Option<horizon_world::nbt::Tag>,
+    pub loot_seed: Option<horizon_world::nbt::Tag>,
+    pub item: Option<ItemStack>,
+    /// Direction's legacy network id; not saved to disk by vanilla.
+    pub hit_direction: Option<i32>,
 }
 /// `ChiseledBookShelfBlockEntity`: six slots and `lastInteractedSlot`.
 #[derive(Clone, Debug, PartialEq)]
