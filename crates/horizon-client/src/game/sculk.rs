@@ -67,6 +67,7 @@ struct Steps {
 pub(super) struct PlayerEvents {
     steps: Option<Steps>,
     last_health: Option<f32>,
+    mount: Option<(u32, [f64; 3])>,
 }
 
 #[derive(Default)]
@@ -81,6 +82,8 @@ pub(super) struct SculkState {
     pub known_revision: Option<u64>,
     // Keyed by mob ids the server gives out: the fast hasher is safe.
     steps: FxHashMap<Who, Steps>,
+    /// The vehicle each rider had last tick and where it stood.
+    mounts: FxHashMap<Who, (u32, [f64; 3])>,
     damaged: FxHashMap<u32, i64>,
     last_health: Option<f32>,
     /// The darkness effect's blend factor, previous and current tick.
@@ -98,6 +101,11 @@ impl SculkState {
             self.steps.insert(Who::Player, guest);
         }
         other.steps = steps;
+        let mount = self.mounts.remove(&Who::Player);
+        if let Some(guest) = other.mount.take() {
+            self.mounts.insert(Who::Player, guest);
+        }
+        other.mount = mount;
         std::mem::swap(&mut self.last_health, &mut other.last_health);
     }
 
@@ -1539,6 +1547,7 @@ impl Game<'_> {
             if on_ground && !self.spectator() {
                 self.step_on_redstone_ore(at, crouch);
             }
+            self.mount_events(Who::Player, self.riding, true);
             let in_water = self.in_water_at(at);
             self.entity_motion_events(
                 Who::Player,
@@ -1597,6 +1606,14 @@ impl Game<'_> {
             if on_ground {
                 self.step_on_redstone_ore(at, false);
             }
+            // A mob first seen already riding raised its event when it spawned.
+            let seen = self.sculk.steps.contains_key(&Who::Mob(id));
+            let vehicle = self
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .and_then(|m| m.extra.mount);
+            self.mount_events(Who::Mob(id), vehicle, seen);
             let emits = !matches!(species, Species::Shulker);
             if emits {
                 self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);
@@ -1614,6 +1631,51 @@ impl Game<'_> {
             Who::Player => true,
             Who::Mob(id) => alive.contains(id),
         });
+        self.sculk.mounts.retain(|who, _| match who {
+            Who::Player => true,
+            Who::Mob(id) => alive.contains(id),
+        });
+    }
+    /// Where the vehicle `id` stands: a mob, boat, minecart or cushion.
+    fn vehicle_position(&self, id: u32) -> Option<[f64; 3]> {
+        let p = if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+            m.position
+        } else if let Some(b) = self.boats.iter().find(|b| b.id == id) {
+            b.position
+        } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {
+            c.position
+        } else {
+            self.cushions.iter().find(|c| c.id == id)?.position
+        };
+        Some([p.x, p.y, p.z])
+    }
+    /// `Entity.startRiding` and `removeVehicle`: `entity_mount` at the new
+    /// vehicle and `entity_dismount` at the old one, derived from the vehicle
+    /// the rider has now and the one it had last tick. `announce` is false
+    /// for a rider first seen riding.
+    fn mount_events(&mut self, who: Who, vehicle: Option<u32>, announce: bool) {
+        let last = self.sculk.mounts.get(&who).copied();
+        let now = vehicle.and_then(|id| self.vehicle_position(id));
+        if last.map(|l| l.0) != vehicle {
+            if let Some((_, at)) = last {
+                let ctx = self.who_context(Some(who), None);
+                self.post_game_event("minecraft:entity_dismount", at, ctx);
+            }
+            if let (true, Some(at)) = (announce, now) {
+                let ctx = self.who_context(Some(who), None);
+                self.post_game_event("minecraft:entity_mount", at, ctx);
+            }
+        }
+        // A vehicle that is gone keeps the spot it was last seen at.
+        let kept = last.filter(|l| Some(l.0) == vehicle).map(|l| l.1);
+        match (vehicle, now.or(kept)) {
+            (Some(id), Some(at)) => {
+                self.sculk.mounts.insert(who, (id, at));
+            }
+            _ => {
+                self.sculk.mounts.remove(&who);
+            }
+        }
     }
     fn in_water_at(&self, at: [f64; 3]) -> bool {
         let (x, y, z) = (
