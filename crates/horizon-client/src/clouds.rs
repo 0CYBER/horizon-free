@@ -179,6 +179,8 @@ impl Mesh {
                         layer: 4,
                         color: u32::MAX,
                         light: shade,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             };

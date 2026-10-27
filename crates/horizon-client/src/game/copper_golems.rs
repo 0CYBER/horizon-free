@@ -44,13 +44,13 @@ impl Game<'_> {
         slot: usize,
         stack: Option<ItemStack>,
     ) {
-        if let Some(e) = self
-            .world
-            .block_entities
-            .get_mut(&(chest[0], chest[1], chest[2]))
+        let key = (chest[0], chest[1], chest[2]);
+        if let Some(e) = self.world.block_entities.get_mut(&key)
             && let Some(s) = e.slots_mut().get_mut(slot)
         {
             *s = stack;
+            // TransportItemsBetweenContainers calls Container.setChanged.
+            self.container_changed(key);
         }
     }
     /// `ContainerOpenersCounter.recheckOpeners` every five ticks: the golems
@@ -204,6 +204,64 @@ impl Game<'_> {
         }
     }
     // ---- interactions -----------------------------------------------------
+    /// `WeatheringCopperGolemStatueBlock.useItemOn`: an axe on an unoxidized
+    /// statue turns it back into a golem (`CopperGolemStatueBlockEntity.removeStatue`),
+    /// wearing the axe. Weathered statues are scraped by the axe's own
+    /// transform instead.
+    pub(super) fn use_golem_statue(&mut self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
+        if !held.is_some_and(|s| s.item.ends_with("_axe")) {
+            return false;
+        }
+        let registry = self.pack.assets.registry;
+        let Some(state) = registry.state(self.world.block(pos[0], pos[1], pos[2])) else {
+            return false;
+        };
+        if state.name != "minecraft:copper_golem_statue" {
+            return false;
+        }
+        // `Direction.toYRot` of the statue's facing.
+        let yaw = match state.properties.get("facing").map(String::as_str) {
+            Some("west") => 90.0,
+            Some("north") => 180.0,
+            Some("east") => 270.0,
+            _ => 0.0,
+        };
+        let waterlogged = state
+            .properties
+            .get("waterlogged")
+            .is_some_and(|w| w == "true");
+        // initCopperGolem: at the block's feet, facing as the statue does.
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]),
+            f64::from(pos[2]) + 0.5,
+        ];
+        let Some(id) = self.spawn_mob("minecraft:copper_golem", at, true) else {
+            return false;
+        };
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            m.yaw = yaw;
+            m.previous_yaw = yaw;
+            m.body_yaw = yaw;
+            m.previous_body_yaw = yaw;
+            m.head_yaw = yaw;
+            m.previous_head_yaw = yaw;
+        }
+        self.damage_held(1);
+        self.audio
+            .play("minecraft:entity.copper_golem.spawn", Some(at), 1.0, 1.0);
+        // Level.removeBlock(pos, false): air, or the water the statue stood in.
+        let replacement = registry.default_state(if waterlogged {
+            "minecraft:water"
+        } else {
+            "minecraft:air"
+        });
+        if let Some(replacement) = replacement {
+            let _ = self.level_set(pos, replacement);
+        }
+        self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
+        true
+    }
     /// `CopperGolem.mobInteract`; true when handled.
     pub(super) fn interact_copper_golem(&mut self, index: usize, item: &str) -> bool {
         if self.mobs[index].species() != Species::CopperGolem || !self.mobs[index].alive() {

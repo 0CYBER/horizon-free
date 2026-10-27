@@ -3,6 +3,7 @@
 //! the rain, nor through a blocked front, unless the hive is emptied in an
 //! emergency), honey for every bee coming home with nectar. The host (the game
 //! or the mob AI probe) loads and adds the bees through [`HiveHost`].
+pub use crate::chunk::block_entity::{Beehive, Occupant};
 use crate::mobs::{Mob, Species, bee};
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_world::nbt::{Compound, Tag};
@@ -38,20 +39,6 @@ const IGNORED_BEE_TAGS: [&str; 25] = [
     "UUID",
 ];
 
-/// `BeehiveBlockEntity`: the bees inside and the flower one of them knew.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Beehive {
-    pub bees: Vec<Occupant>,
-    pub flower: Option<[i32; 3]>,
-}
-/// `BeehiveBlockEntity.Occupant`: a bee's tag (with its `id`), its time in
-/// the hive and the time it stays at least.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Occupant {
-    pub entity_data: Tag,
-    pub ticks_in_hive: i32,
-    pub min_ticks_in_hive: i32,
-}
 /// `BeehiveBlockEntity.BeeReleaseStatus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Release {
