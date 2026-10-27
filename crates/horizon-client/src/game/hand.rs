@@ -144,6 +144,11 @@ impl Game<'_> {
         let harvest = !facts.requires_tool || self.res.items().correct_for_drops(held, &facts.name);
         speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
     }
+    /// A key for the main-hand stack (`destroyingItem`): its item and components.
+    pub(super) fn main_hand_key(&self) -> String {
+        self.held()
+            .map_or(String::new(), |s| format!("{} {:?}", s.item, s.extra))
+    }
     /// Whether an attack would hit an entity rather than the block behind
     /// it: the crosshair's `EntityHitResult`.
     pub(super) fn entity_targeted(&self) -> bool {
@@ -503,9 +508,7 @@ impl HandWorld for GameHands<'_, '_> {
         true
     }
     fn main_hand_key(&mut self) -> String {
-        self.game
-            .held()
-            .map_or(String::new(), |s| format!("{} {:?}", s.item, s.extra))
+        self.game.main_hand_key()
     }
     fn destroy_stage(&mut self, _: [i32; 3], _: Option<i32>) {}
     fn swing(&mut self, hand: Hand, animation: SwingAnimation) {

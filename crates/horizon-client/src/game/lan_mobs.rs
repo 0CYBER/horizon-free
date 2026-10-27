@@ -81,12 +81,17 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
     matches!(
         e,
         MobEvent::AttackPlayer(..)
+            | MobEvent::AttackPlayerWithEffect { .. }
             | MobEvent::DamagePlayer { .. }
             | MobEvent::SonicBoom {
                 target: Who::Player,
                 ..
             }
             | MobEvent::Push {
+                target: Who::Player,
+                ..
+            }
+            | MobEvent::Knockback {
                 target: Who::Player,
                 ..
             }
@@ -373,6 +378,7 @@ mod tests {
             alive: true,
             creative,
             sneaking: false,
+            swimming: false,
             look: [0.0; 3],
             main_hand: None,
             off_hand: None,
@@ -385,6 +391,8 @@ mod tests {
             last_hurt: None,
             velocity: Vec3::ZERO,
             yaw: 0.0,
+            sprinting: false,
+            riding: false,
             hero: false,
             effects: Vec::new(),
             uuid: [0; 4],

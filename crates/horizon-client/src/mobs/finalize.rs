@@ -1696,13 +1696,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let hidden = panda_gene(self.int(16));
                 m.extra.variant = main;
                 m.extra.variant2 = hidden;
-                let shown = panda_variant(main, hidden);
-                if shown == 5 {
-                    set_base(m, Attr::MaxHealth, 10.0);
-                }
-                if shown == 1 {
-                    set_base(m, Attr::MovementSpeed, f64::from(0.07f32));
-                }
+                super::panda::set_attributes(m);
                 self.ageable(m, g.or(Some(Group::Ageable(Ageable::chance(0.2)))))
             }
             S::PolarBear | S::Ocelot => {
@@ -1955,7 +1949,7 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
-fn panda_gene(roll: i32) -> u8 {
+pub fn panda_gene(roll: i32) -> u8 {
     match roll {
         0 => 1,
         1 => 2,
