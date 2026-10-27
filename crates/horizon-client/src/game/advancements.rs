@@ -1079,6 +1079,38 @@ impl Game<'_> {
                 && c["count"].as_u64().is_none_or(|n| stabbed as u64 >= n)
         });
     }
+    /// `BeeNestDestroyedTrigger`: the nest's block state, the tool that broke
+    /// it and the bees left inside.
+    pub(super) fn trigger_bee_nest_destroyed(
+        &mut self,
+        state: horizon_world::registry::BlockStateId,
+        tool: Option<&ItemStack>,
+        bees: i64,
+    ) {
+        let Some(definition) = self.pack.assets.registry.state(state).cloned() else {
+            return;
+        };
+        let me = self.player_entity();
+        let tool = tool.map(item_view).unwrap_or_default();
+        self.trigger("minecraft:bee_nest_destroyed", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let state_ok = c["state"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .all(|(k, v)| definition.properties.get(k).map(String::as_str) == v.as_str());
+            adv::id_matches(&c["blocks"], "block", &definition.name, w)
+                && state_ok
+                && adv::item(&c["item"], &tool, w)
+                && adv::range_i(&c["num_bees_inside"], bees)
+                && adv::conditions(&c["player"], &pctx, w)
+        });
+    }
     /// A trigger with only the player condition (slept_in_bed, started_riding).
     pub(super) fn trigger_player(&mut self, name: &str) {
         let me = self.player_entity();
