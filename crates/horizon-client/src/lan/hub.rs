@@ -87,6 +87,29 @@ pub struct HostState {
     pub living_flags: i8,
     /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
     pub bed: Option<[i32; 3]>,
+    pub body: BodyFlags,
+}
+
+/// What the other players see of a player's body besides sneaking and
+/// sprinting: the pose and the rest of `Entity.DATA_SHARED_FLAGS_ID`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BodyFlags {
+    /// `Entity.isFallFlying`: gliding with elytra.
+    pub gliding: bool,
+    /// `Entity.isSwimming` (the swimming flag).
+    pub swimming: bool,
+    /// The swimming pose of a player crawling under a block.
+    pub crawling: bool,
+    /// The crouching pose, held without sneaking under a low ceiling.
+    pub crouching: bool,
+    /// `LivingEntity.isAutoSpinAttack`: Riptide's spin.
+    pub spin_attack: bool,
+    /// `Entity.isOnFire`.
+    pub on_fire: bool,
+    /// `Entity.isInvisible`: the invisibility effect.
+    pub invisible: bool,
+    /// The glowing effect.
+    pub glowing: bool,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -1537,7 +1560,8 @@ impl Hub {
         position: [f64; 3],
         rot: (f32, f32, f32),
         on_ground: bool,
-        flags: (bool, bool, bool, bool),
+        flags: (bool, bool, bool),
+        body: BodyFlags,
         living_flags: i8,
         bed: Option<[i32; 3]>,
         skin: u8,
@@ -1545,13 +1569,19 @@ impl Hub {
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         attributes: Vec<play::AttributeSnapshot>,
     ) -> EntityState {
-        let (sneaking, sprinting, gliding, sleeping) = flags;
-        let shared = shared_flags(sneaking, sprinting, gliding);
+        let (sneaking, sprinting, sleeping) = flags;
+        let shared = shared_flags(sneaking, sprinting, &body);
+        // Player.getDesiredPose (and updatePlayerPose's crawl): sleeping,
+        // swimming, gliding, Riptide's spin, crouching.
         let pose = if sleeping {
             2
-        } else if gliding {
+        } else if body.swimming || body.crawling {
+            3
+        } else if body.gliding {
             1
-        } else if sneaking {
+        } else if body.spin_attack {
+            4
+        } else if sneaking || body.crouching {
             5
         } else {
             0
@@ -1637,7 +1667,8 @@ impl Hub {
                 h.position,
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
-                (h.sneaking, h.sprinting, false, h.bed.is_some()),
+                (h.sneaking, h.sprinting, h.bed.is_some()),
+                h.body,
                 h.living_flags,
                 h.bed,
                 0x7F,
@@ -1669,7 +1700,8 @@ impl Hub {
                     g.position,
                     (g.yaw, g.pitch, g.head_yaw),
                     g.on_ground,
-                    (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
+                    (g.sneaking, g.sprinting, g.sleeping),
+                    guest_body(g),
                     g.living_flags,
                     g.bed,
                     g.info.model_customisation,
@@ -1829,7 +1861,7 @@ impl Hub {
         // too, so the sprint a hit stops (Player.causeExtraKnockback) stops
         // on its client.
         let g = &mut self.guests[i];
-        let shared = shared_flags(g.sneaking, g.sprinting, g.fall_flying);
+        let shared = shared_flags(g.sneaking, g.sprinting, &guest_body(g));
         if shared != g.sent_shared {
             g.sent_shared = shared;
             g.send(&C::SetEntityData(play::SetEntityData {
@@ -2609,16 +2641,44 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
     raw(ids::TICKING_STATE, w.data)
 }
 
-/// Entity.DATA_SHARED_FLAGS_ID of a player: crouching, sprinting, gliding.
-fn shared_flags(sneaking: bool, sprinting: bool, gliding: bool) -> i8 {
+/// What the others see of a guest's body, from its server-side state.
+fn guest_body(g: &Guest) -> BodyFlags {
+    let m = g.motion.as_deref();
+    BodyFlags {
+        gliding: g.fall_flying,
+        swimming: m.is_some_and(|m| m.swimming),
+        crawling: m.is_some_and(|m| m.pose == crate::pose::Pose::Swimming && !m.swimming),
+        crouching: m.is_some_and(|m| m.pose == crate::pose::Pose::Crouching),
+        spin_attack: m.is_some_and(|m| m.auto_spin_attack_ticks > 0),
+        on_fire: m.is_some_and(|m| m.fire_ticks > 0),
+        invisible: g.effects.get("invisibility").is_some(),
+        glowing: g.effects.get("glowing").is_some(),
+    }
+}
+
+/// Entity.DATA_SHARED_FLAGS_ID of a player: on fire 0x01, crouching 0x02,
+/// sprinting 0x08, swimming 0x10, invisible 0x20, glowing 0x40, gliding 0x80.
+fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
     let mut shared = 0i8;
+    if body.on_fire {
+        shared |= 0x01;
+    }
     if sneaking {
         shared |= 0x02;
     }
     if sprinting {
         shared |= 0x08;
     }
-    if gliding {
+    if body.swimming {
+        shared |= 0x10;
+    }
+    if body.invisible {
+        shared |= 0x20;
+    }
+    if body.glowing {
+        shared |= 0x40;
+    }
+    if body.gliding {
         shared |= -128;
     }
     shared
