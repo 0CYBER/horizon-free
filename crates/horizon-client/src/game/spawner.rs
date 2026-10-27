@@ -253,12 +253,21 @@ impl Game<'_> {
         self.world.modified.insert((key.0 >> 4, key.2 >> 4));
     }
     /// `LivingEntity.makePoofParticles` (entity event 20) for a mob.
-    fn mob_poof(&mut self, id: u32) {
+    pub(super) fn mob_poof(&mut self, id: u32) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let at = m.position;
+        self.lan_entity_event(id as i32, 20, [at.x, at.y, at.z]);
+        self.poof_particles(id);
+    }
+    /// `Mob.handleEntityEvent` 20 (`spawnAnim` on a client): the poof about
+    /// mob `id`.
+    pub(super) fn poof_particles(&mut self, id: u32) {
         let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let (at, w, h) = (m.position, f64::from(m.width()), f64::from(m.height()));
-        self.lan_entity_event(id as i32, 20, [at.x, at.y, at.z]);
         let options = ParticleOptions::simple(ParticleType::Poof);
         for _ in 0..20 {
             let r = self.particles.level_random();
