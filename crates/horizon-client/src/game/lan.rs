@@ -221,6 +221,11 @@ fn mob_meta(
     }
     let e = &m.extra;
     let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
+    // Axolotl.DATA_VARIANT (after AgeableMob's two), outside the match so the
+    // axolotl's own arm keeps its other entries.
+    if kind == "minecraft:axolotl" && e.variant != 0 {
+        meta.push((18, serializer::INT, Value::Int(i32::from(e.variant))));
+    }
     match kind {
         "minecraft:guardian" | "minecraft:elder_guardian" => {
             // Guardian.DATA_ID_MOVING and DATA_ID_ATTACK_TARGET.
@@ -390,10 +395,10 @@ fn mob_meta(
                 meta.push((index, serializer, Value::Id(v)));
             }
         }
-        // Axolotl.DATA_VARIANT and Rabbit.DATA_TYPE_ID (after AgeableMob's
-        // two), Parrot.DATA_VARIANT_ID (after TamableAnimal's two and its
-        // flags and owner). The fox's type goes with its flags (#2538).
-        "minecraft:axolotl" | "minecraft:rabbit" | "minecraft:parrot" => {
+        // Rabbit.DATA_TYPE_ID (after AgeableMob's two) and
+        // Parrot.DATA_VARIANT_ID (after TamableAnimal's two and its flags and
+        // owner). The fox's type goes with its flags (#2538).
+        "minecraft:rabbit" | "minecraft:parrot" => {
             let index = if kind == "minecraft:parrot" { 20 } else { 18 };
             if e.variant != 0 {
                 meta.push((index, serializer::INT, Value::Int(i32::from(e.variant))));
