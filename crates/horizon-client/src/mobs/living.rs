@@ -697,6 +697,7 @@ impl Mob {
     }
     /// LivingEntity.travel.
     pub fn travel(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
+        self.fluid_current(w);
         if super::ai::custom_travel(self, w, input, events) {
             return;
         }
@@ -716,6 +717,29 @@ impl Mob {
             self.travel_in_air(w, input, events);
         }
     }
+
+    /// `Entity.updateFluidInteraction`: the current of the fluid the mob
+    /// stands in carries it along.
+    fn fluid_current(&mut self, w: &MobWorld) {
+        let mut interaction = horizon_world::entity_fluid::EntityFluidInteraction::new([
+            crate::motion::WATER,
+            crate::motion::LAVA,
+        ]);
+        let mut scene = MobFluidWorld {
+            mob: self,
+            world: w.world,
+            facts: w.facts,
+            block_tags: w.block_tags,
+        };
+        let _ = horizon_world::entity_fluid_tick::update(
+            &mut interaction,
+            &mut scene,
+            crate::motion::WATER,
+            crate::motion::LAVA,
+            4096,
+        );
+    }
+
     /// LivingEntity.travelFlying: no gravity, `0.91F` drag in the air,
     /// `0.8F` in water and 0.5 in lava. A happy ghast swims as fast as it
     /// flies (`HappyGhast.travel`); the others at 0.02.
@@ -955,6 +979,214 @@ impl Mob {
         }
     }
 }
+/// `Entity.updateFluidInteraction` for a mob: the current of the fluid the
+/// mob stands in carries it along, the way vanilla's `FlowingFluid.getFlow`
+/// and `EntityFluidInteraction` do.
+struct MobFluidWorld<'a> {
+    mob: &'a mut Mob,
+    world: &'a crate::world::World,
+    facts: &'a crate::blocks::BlockFacts,
+    block_tags: &'a std::collections::HashMap<String, std::collections::HashSet<String>>,
+}
+
+impl MobFluidWorld<'_> {
+    fn state(&self, p: horizon_core::position::BlockPos) -> horizon_world::registry::BlockStateId {
+        self.world.block(p.x, p.y, p.z)
+    }
+    /// `BlockState.getFluidState`: the fluid, its amount and whether it falls.
+    fn fluid_at(
+        &self,
+        p: horizon_core::position::BlockPos,
+    ) -> horizon_world::fluid::FluidState {
+        let f = self.facts.get(self.state(p));
+        let kind = match f.fluid {
+            crate::blocks::Fluid::None => horizon_world::fluid::FluidKind::Empty,
+            // A water or lava block below the source level is a flowing fluid.
+            crate::blocks::Fluid::Water => {
+                if f.fluid_level < 8 || f.fluid_falling {
+                    horizon_world::fluid::FluidKind::FlowingWater
+                } else {
+                    horizon_world::fluid::FluidKind::Water
+                }
+            }
+            crate::blocks::Fluid::Lava => {
+                if f.fluid_level < 8 || f.fluid_falling {
+                    horizon_world::fluid::FluidKind::FlowingLava
+                } else {
+                    horizon_world::fluid::FluidKind::Lava
+                }
+            }
+        };
+        horizon_world::fluid::FluidState::new(kind, f.fluid_level, f.fluid_falling)
+    }
+}
+
+impl horizon_world::entity_fluid::FluidMembership for MobFluidWorld<'_> {
+    fn fluid_in_tag(
+        &self,
+        kind: horizon_world::fluid::FluidKind,
+        tag: horizon_world::entity_fluid::FluidTagId,
+    ) -> bool {
+        crate::motion::FluidTags.fluid_in_tag(kind, tag)
+    }
+}
+
+impl horizon_world::entity_fluid::CurrentTarget for MobFluidWorld<'_> {
+    type Error = std::convert::Infallible;
+    fn is_player_class(&self) -> bool {
+        false
+    }
+    fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+        Ok(self.mob.velocity)
+    }
+    fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+        let v = self.mob.velocity;
+        let sum = Vec3::new(v.x + delta.x, v.y + delta.y, v.z + delta.z);
+        if delta.is_finite() && sum.is_finite() {
+            self.mob.velocity = sum;
+        }
+        Ok(())
+    }
+}
+
+impl horizon_world::entity_fluid::FluidInteractionWorld for MobFluidWorld<'_> {
+    type Error = std::convert::Infallible;
+    type Chunk = ();
+    fn interaction_box(&mut self) -> Result<Option<Aabb>, Self::Error> {
+        Ok(Some(
+            self.mob.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+        ))
+    }
+    fn loaded_chunk(&mut self, x: i32, z: i32) -> Result<Option<()>, Self::Error> {
+        Ok(self.world.chunks.contains_key(&(x, z)).then_some(()))
+    }
+    fn chunk_sections(
+        &mut self,
+        _: (),
+    ) -> Result<horizon_world::entity_fluid::FluidSections<'_>, Self::Error> {
+        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        Ok(horizon_world::entity_fluid::FluidSections {
+            minimum_section_y: crate::chunk::MIN_Y >> 4,
+            has_fluid: &SECTIONS,
+        })
+    }
+    fn bounding_box_min_y(&self) -> f64 {
+        self.mob.position.y
+    }
+    fn block_x(&self) -> i32 {
+        self.mob.position.x.floor() as i32
+    }
+    fn block_z(&self) -> i32 {
+        self.mob.position.z.floor() as i32
+    }
+    fn eye_y(&mut self) -> Result<f64, Self::Error> {
+        Ok(self.mob.eye_y())
+    }
+    fn fluid_state(
+        &mut self,
+        p: horizon_core::position::BlockPos,
+    ) -> Result<horizon_world::fluid::FluidState, Self::Error> {
+        Ok(self.fluid_at(p))
+    }
+    fn fluid_height(
+        &mut self,
+        s: horizon_world::fluid::FluidState,
+        p: horizon_core::position::BlockPos,
+    ) -> Result<f32, Self::Error> {
+        s.height_at(self, [p.x, p.y, p.z])
+    }
+    fn camera_height(
+        &mut self,
+        s: horizon_world::fluid::FluidState,
+        p: horizon_core::position::BlockPos,
+    ) -> Result<f32, Self::Error> {
+        s.camera_height_at(self, [p.x, p.y, p.z])
+    }
+    fn flow(
+        &mut self,
+        s: horizon_world::fluid::FluidState,
+        p: horizon_core::position::BlockPos,
+    ) -> Result<Vec3, Self::Error> {
+        horizon_world::fluid_flow::flow_at(self, s, p)
+    }
+}
+
+impl horizon_world::fluid::FluidHeightWorld for MobFluidWorld<'_> {
+    type Error = std::convert::Infallible;
+    fn fluid(
+        &mut self,
+        p: [i32; 3],
+    ) -> Result<horizon_world::fluid::FluidState, Self::Error> {
+        Ok(self.fluid_at(horizon_core::position::BlockPos::new(p[0], p[1], p[2])))
+    }
+    fn sturdy_down(&mut self, p: [i32; 3]) -> Result<bool, Self::Error> {
+        let state = self.state(horizon_core::position::BlockPos::new(p[0], p[1], p[2]));
+        Ok(self.facts.get(state).sturdy_full & 1 != 0)
+    }
+}
+
+impl horizon_world::fluid_flow::FluidFlowWorld for MobFluidWorld<'_> {
+    type Error = std::convert::Infallible;
+    type Block = horizon_world::registry::BlockStateId;
+    fn fluid(
+        &mut self,
+        p: horizon_core::position::BlockPos,
+    ) -> Result<horizon_world::fluid::FluidState, Self::Error> {
+        Ok(self.fluid_at(p))
+    }
+    fn block(
+        &mut self,
+        p: horizon_core::position::BlockPos,
+    ) -> Result<Self::Block, Self::Error> {
+        Ok(self.state(p))
+    }
+    fn blocks_fluid_flow(&self, s: Self::Block) -> bool {
+        // #minecraft:blocks_fluid_flow membership.
+        self.block_tags
+            .get("minecraft:blocks_fluid_flow")
+            .is_some_and(|set| set.contains(&*self.facts.get(s).name))
+    }
+    fn is_ice_class(&self, s: Self::Block) -> bool {
+        self.facts
+            .get(s)
+            .classes
+            .iter()
+            .any(|c| c.as_ref() == "IceBlock")
+    }
+    fn is_face_sturdy(
+        &mut self,
+        s: Self::Block,
+        _: horizon_core::position::BlockPos,
+        d: horizon_core::geometry::Direction,
+    ) -> Result<bool, Self::Error> {
+        Ok(self.facts.get(s).sturdy_full & (1 << d as u8) != 0)
+    }
+}
+
+impl horizon_world::entity_fluid_tick::EntityFluidTickWorld for MobFluidWorld<'_> {
+    fn is_pushed_by_fluid(&mut self) -> Result<bool, std::convert::Infallible> {
+        Ok(true)
+    }
+    fn reset_fall_distance(&mut self) -> Result<(), std::convert::Infallible> {
+        self.mob.fall_distance = 0.0;
+        Ok(())
+    }
+    fn was_touching_water(&self) -> bool {
+        self.mob.fluids.in_water
+    }
+    fn first_tick(&self) -> bool {
+        self.mob.first_tick
+    }
+    fn water_splash(&mut self) -> Result<(), std::convert::Infallible> {
+        // The mob's own splash, in `Mob::update_fluids`.
+        Ok(())
+    }
+    fn set_was_touching_water(&mut self, _value: bool) {}
+    fn fast_lava(&mut self) -> Result<bool, std::convert::Infallible> {
+        Ok(self.world.fast_lava)
+    }
+}
+
 /// LivingEntity.getFluidFallingAdjustedMovement.
 fn fluid_falling(gravity: f64, falling: bool, m: Vec3) -> Vec3 {
     if gravity != 0.0 {

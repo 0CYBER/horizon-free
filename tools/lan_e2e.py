@@ -301,6 +301,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+          'flow-push',
           'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
@@ -3142,6 +3143,38 @@ def check_sidebar(host, guest, out):
     return result
 
 
+def check_flow_push(host, guest, out):
+    """A mob in a current is carried along with it (`Entity.updateFluidInteraction`)."""
+    hx, hy, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, int(hy), int(hz // 16) * 16 + 8)
+    host('command', command='gamemode survival')
+    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+6} {z+4} minecraft:air')
+    # A water source with a flowing block next to it: the current runs +x.
+    host('command', command=f'setblock {x} {y} {z} minecraft:water')
+    host('command', command=f'setblock {x+1} {y} {z} minecraft:water[level=1]')
+    # A pool of sources: the middle one has no current at all.
+    for dx in range(3):
+        for dz in range(3):
+            host('command', command=f'setblock {x+3+dx} {y} {z+3+dz} minecraft:water')
+    host.wait(20)
+    host('command', command=f'summon minecraft:pig {x+1.5} {y+0.5} {z+0.5}')
+    host('command', command=f'summon minecraft:pig {x+4.5} {y+0.5} {z+4.5}')
+    host.wait(20)
+
+    def drift(at_x, at_z):
+        host.wait(30)
+        pigs = [p for p in host('entities', radius=16, type='pig')['entities']
+                if abs(p['pos'][2] - at_z) < 1.5]
+        near = [p['pos'][0] for p in pigs if abs(p['pos'][0] - at_x) < 3.0]
+        return (max(near) - at_x) if near else 0.0
+
+    flowing = drift(x + 1.5, z + 0.5)
+    still = drift(x + 4.5, z + 4.5)
+    assert flowing - still > 0.2, f'the current did not carry the mob: {flowing} vs {still}'
+    return {'flowing': round(flowing, 3), 'still': round(still, 3)}
+
+
 def check_border(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -4760,6 +4793,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
+             'flow-push': check_flow_push,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
              'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,
