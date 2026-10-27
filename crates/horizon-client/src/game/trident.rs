@@ -6,6 +6,7 @@
 use super::{Game, view_vector};
 use horizon_client::{
     collisions::SceneCollisions,
+    enchant::EffectContext,
     items::ItemStack,
     mesher::Vertex,
     mobs::{Damage, DamageKind, Who, anim::Poses},
@@ -392,11 +393,29 @@ impl Game<'_> {
                     }
                 }
                 if let Some((id, _)) = hit_mob {
-                    let impaling = t.stack.enchantment_level("minecraft:impaling") as f32;
-                    let aquatic = self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
-                        m.kind.flags.aquatic_swimmer || m.kind.flags.breathes_water
-                    });
-                    let damage = 8.0 + if aquatic { 2.5 * impaling } else { 0.0 };
+                    // ThrownTrident.getDamage: `EnchantmentHelper.modifyDamage` on 8
+                    // (impaling hits `#sensitive_to_impaling`, the aquatic tag).
+                    let victim = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| m.kind.id.clone());
+                    let ctx = EffectContext {
+                        this: victim.as_deref(),
+                        attacker: Some("minecraft:player"),
+                        direct_attacker: Some("minecraft:trident"),
+                        is_direct: true,
+                        damage_type: Some("minecraft:trident"),
+                        items: Some(self.res.items()),
+                        ..Default::default()
+                    };
+                    let damage = self.res.stations().enchantments.modify_value(
+                        Some(&t.stack),
+                        "minecraft:damage",
+                        &ctx,
+                        &mut self.world.random,
+                        8.0,
+                    );
                     t.dealt_damage = true;
                     let mut hurt_at = None;
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
