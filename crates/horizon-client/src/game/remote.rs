@@ -5073,7 +5073,9 @@ impl Game<'_> {
             match key {
                 KeyCode::KeyF if !self.spectator() => self.remote_swap_hands(),
                 KeyCode::KeyQ if !self.spectator() => {
-                    let all = self.keys.contains(&KeyCode::ControlLeft);
+                    // Minecraft.hasControlDown: the physical keys, so a toggled
+                    // sprint on Left Control does not make Q drop the stack.
+                    let all = self.has_control_down();
                     self.remote_drop(all);
                 }
                 KeyCode::KeyE if self.riding_mount_with_menu() => {
