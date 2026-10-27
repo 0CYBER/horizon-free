@@ -688,4 +688,51 @@ mod tests {
             );
         }
     }
+    /// `DecoratedPotRenderer` draws every part with `RenderTypes.entitySolid`,
+    /// whose pipeline culls back faces: the pot's flat `top` and `bottom`
+    /// planes would otherwise show both sides and z-fight in the hand too.
+    #[test]
+    fn the_decorated_pot_item_culls_its_back_faces() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let renderer = ItemRenderer::load(&root).unwrap();
+        let sprite = Rect {
+            u0: 0.25,
+            v0: 0.125,
+            u1: 0.375,
+            v1: 0.25,
+            w: 16,
+            h: 16,
+        };
+        let sprites: HashMap<String, Rect> = [
+            "entity/decorated_pot/decorated_pot_base",
+            "entity/decorated_pot/decorated_pot_side",
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), sprite))
+        .collect();
+        let model = SpecialModel {
+            kind: SpecialKind::DecoratedPot,
+        };
+        let mut quads: Vec<ItemQuad> = Vec::new();
+        submit(
+            &renderer,
+            &model,
+            &Value::Null,
+            false,
+            Mat4::IDENTITY,
+            &sprites,
+            &super::super::NoHost,
+            &mut quads,
+        );
+        assert!(!quads.is_empty(), "the pot item draws its parts");
+        assert!(
+            quads.iter().all(|q| q.cull_back),
+            "entitySolid culls the pot's back faces"
+        );
+    }
 }
