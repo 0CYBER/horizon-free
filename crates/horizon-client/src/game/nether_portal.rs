@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// `Player.getDimensionChangingDelay`.
 pub(super) const PLAYER_DELAY: i32 = 10;
 /// `Entity.getDimensionChangingDelay`.
-const ENTITY_DELAY: i32 = 300;
+pub(super) const ENTITY_DELAY: i32 = 300;
 
 /// Where in its portal a traveller stood, and where its exit is to be found.
 #[derive(Clone, Copy, Debug)]
@@ -496,14 +496,19 @@ impl Game<'_> {
         if let Some(Tag::Int(cooldown)) = tag.get("PortalCooldown")
             && *cooldown > 0
         {
-            self.portals.entities.insert(
-                id,
-                PortalState {
-                    cooldown: *cooldown,
-                    process: None,
-                },
-            );
+            self.set_portal_cooldown(id, *cooldown);
         }
+    }
+    /// `Entity.setPortalCooldown`: the entity that came through a portal
+    /// does not go back through it for a while.
+    pub(super) fn set_portal_cooldown(&mut self, id: u32, cooldown: i32) {
+        self.portals.entities.insert(
+            id,
+            PortalState {
+                cooldown,
+                process: None,
+            },
+        );
     }
     /// `canUsePortal(false)` of a mob: alive, riding nothing, not asleep,
     /// not carrying the player, and not a boss that never travels.
@@ -512,6 +517,9 @@ impl Game<'_> {
         m.alive()
             && m.extra.mount.is_none()
             && self.riding != Some(m.id)
+            // The animal a player rides travels with the player, which is
+            // carried by the vehicle (`Entity.teleportCrossDimension`).
+            && !self.guest_rides(m.id)
             && m.species() != Species::Wither
     }
     /// Whether the player, a server player or a mob rides vehicle `id`.

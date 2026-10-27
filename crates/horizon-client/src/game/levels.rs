@@ -52,8 +52,8 @@ pub(super) struct Parked {
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
     cushions: Vec<horizon_client::entities::Cushion>,
     others: Vec<commands::OtherEntity>,
-    boats: Vec<boats::Boat>,
-    carts: Vec<minecarts::Minecart>,
+    pub(super) boats: Vec<boats::Boat>,
+    pub(super) carts: Vec<minecarts::Minecart>,
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
     bolts: Vec<lightning::Bolt>,
     crystals: Vec<dragon::Crystal>,
@@ -65,7 +65,7 @@ pub(super) struct Parked {
     ominous_spawners: Vec<ominous_item_spawner::OminousItemSpawner>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
-    mobs: Vec<Mob>,
+    pub(super) mobs: Vec<Mob>,
     projectiles: Vec<horizon_client::projectiles::Projectile>,
     dropped: Vec<ItemEntity>,
     orbs: Vec<ExperienceOrb>,
@@ -119,6 +119,11 @@ impl Levels {
         self.parked
             .iter_mut()
             .map(|(d, p)| (*d, &mut p.world.chunks))
+    }
+
+    /// The level not in place, in `dim`.
+    pub(super) fn parked_mut(&mut self, dim: Dim) -> Option<&mut Parked> {
+        self.parked.get_mut(&dim)
     }
 }
 
@@ -286,6 +291,23 @@ impl Game<'_> {
             h.hub.set_dimension(target.id());
         }
         Ok(())
+    }
+
+    /// The entity's memory (its UUID and the compound it was loaded with)
+    /// moves with it from the level not in place to the level in place, so
+    /// it is saved in the other level as it was.
+    pub(super) fn move_entity_memory(&mut self, from: Dim, id: u32) {
+        let Some(p) = self.levels.parked.get_mut(&from) else {
+            return;
+        };
+        let uuid = p.persist.uuids.remove(&id);
+        let raw = p.persist.raw.remove(&id);
+        if let Some(u) = uuid {
+            self.persist.uuids.insert(id, u);
+        }
+        if let Some(r) = raw {
+            self.persist.raw.insert(id, r);
+        }
     }
 
     /// Put `dim`'s level in place for a command whose source is there
