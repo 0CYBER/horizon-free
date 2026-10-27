@@ -964,7 +964,7 @@ fn shaking(m: &Mob) -> bool {
     match m.species() {
         Species::Strider => super::strider::suffocating(m),
         Species::ZombieVillager => super::zombie_villager::is_converting(m),
-        Species::Zombie | Species::Husk => m.extra.counter2 > 0,
+        Species::Zombie | Species::Husk | Species::Skeleton => m.extra.counter2 > 0,
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
             !m.extra.flag2 && m.extra.counter2 > 0
         }
