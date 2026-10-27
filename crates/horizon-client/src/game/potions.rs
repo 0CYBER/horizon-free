@@ -12,6 +12,7 @@ use horizon_client::{
     hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
     mesher::Vertex,
+    text::Text,
 };
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3},
@@ -29,6 +30,9 @@ pub(super) struct ThrownPotion {
     position: Vec3,
     velocity: Vec3,
     age: u32,
+    /// `Projectile.getOwner`'s display name: the player who threw it (none
+    /// for a dispenser's).
+    owner: Option<Text>,
 }
 /// A mob's effect ids carry the `minecraft:` namespace.
 fn mob_effect_id(id: &str) -> Option<&'static str> {
@@ -180,7 +184,13 @@ impl Game<'_> {
     }
     /// A splash potion, lingering potion or experience bottle in flight (the
     /// player's throws and dispensers both end up here).
-    pub(super) fn launch_thrown(&mut self, stack: ItemStack, position: Vec3, velocity: Vec3) {
+    pub(super) fn launch_thrown(
+        &mut self,
+        stack: ItemStack,
+        position: Vec3,
+        velocity: Vec3,
+        owner: Option<Text>,
+    ) {
         self.potions.thrown.push(ThrownPotion {
             id: 0,
             stack,
@@ -188,6 +198,7 @@ impl Game<'_> {
             position,
             velocity,
             age: 0,
+            owner,
         });
     }
 }
@@ -204,6 +215,8 @@ pub(super) struct BodyPotions {
 pub(super) struct PotionState {
     pub(super) effects: PlayerEffects,
     thrown: Vec<ThrownPotion>,
+    /// The area effect clouds a server tracks (game/remote_projectiles.rs).
+    pub(super) clouds: Vec<super::remote_projectiles::RemoteCloud>,
     applied: Vec<(&'static str, &'static str, f64, &'static str)>,
     /// Armor the protection table was computed for.
     protection_for: Option<Vec<Option<ItemStack>>>,
@@ -266,6 +279,7 @@ impl PotionState {
             position: at,
             velocity,
             age: 0,
+            owner: None,
         });
     }
     /// ThrowableItemProjectile.DATA_ITEM_STACK: the potion it shows.
@@ -274,14 +288,22 @@ impl PotionState {
             t.stack = stack;
         }
     }
-    /// One tick of a server's client: `step` moves each toward where the
-    /// server put it.
-    pub(super) fn step_remote_thrown(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
-        for t in &mut self.thrown {
-            t.previous = t.position;
-            t.age += 1;
-            t.position = step(t.id, t.position);
-        }
+    /// A server's move: thrown potions have no interpolation handler, so
+    /// `moveOrInterpolateTo` puts them there at once. False when `id` isn't one.
+    pub(super) fn move_remote_thrown(&mut self, id: u32, at: Vec3) -> bool {
+        let Some(t) = self.thrown.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        t.position = at;
+        true
+    }
+    /// `handleSetEntityMotion` for a thrown potion. False when `id` isn't one.
+    pub(super) fn remote_thrown_motion(&mut self, id: u32, velocity: Vec3) -> bool {
+        let Some(t) = self.thrown.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        t.velocity = velocity;
+        true
     }
     pub(super) fn remove_remote_thrown(&mut self, id: u32) {
         self.thrown.retain(|t| t.id != id);
@@ -360,6 +382,7 @@ impl Game<'_> {
                     },
                     Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
                     v,
+                    Some(self.player_display_text()),
                 );
                 self.swing_arm();
                 self.consume_held();
@@ -399,7 +422,8 @@ impl Game<'_> {
         } else if let Some(rest) = self.give(filled)
             && let Some(eye) = self.eye_position()
         {
-            self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+            // `player.drop(stack, false)`.
+            self.throw_from_eyes(rest, eye, false);
         }
     }
     /// Drinking a potion while right-click is held; true when handled.
@@ -542,7 +566,27 @@ impl Game<'_> {
         for action in actions {
             self.apply_effect_action(action);
         }
+        self.turtle_helmet_tick();
         self.apply_effect_status();
+    }
+    /// `Player.tick` -> `turtleHelmetTick`: with a turtle helmet on the head
+    /// and the eyes out of the water, Water Breathing for 200 ticks (no
+    /// particles, an icon).
+    fn turtle_helmet_tick(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let eye_y = p.position.y + f64::from(p.dimensions.eye_height);
+        if !p.health.dead_or_dying()
+            && self.armor[0]
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:turtle_helmet")
+            && !self.eye_in_water(p.position.x, eye_y, p.position.z)
+        {
+            let mut effect = EffectInstance::new("water_breathing", 200, 0);
+            effect.visible = false;
+            self.potions.effects.add(effect);
+        }
     }
     /// A client's own effects (`LivingEntity.tickEffects` on the client,
     /// `MobEffectInstance.tickClient`): they count down, and the server
@@ -636,6 +680,7 @@ impl Game<'_> {
         thrown.retain_mut(|t| {
             t.age += 1;
             t.previous = t.position;
+            self.thrown_potion_motion(t);
             let next = Vec3::new(
                 t.position.x + t.velocity.x,
                 t.position.y + t.velocity.y,
@@ -668,28 +713,70 @@ impl Game<'_> {
                 }
             }
             if let Some(p) = hit {
-                landed.push((t.stack.clone(), p));
+                landed.push((t.stack.clone(), p, t.owner.clone()));
                 return false;
             }
             t.position = next;
-            // ThrowableItemProjectile: drag 0.99 then gravity 0.05.
-            // ThrownExperienceBottle.getDefaultGravity is 0.07.
-            let gravity = if &*t.stack.item == "minecraft:experience_bottle" {
-                0.07
-            } else {
-                0.05
-            };
-            t.velocity = Vec3::new(
-                t.velocity.x * 0.99,
-                t.velocity.y * 0.99 - gravity,
-                t.velocity.z * 0.99,
-            );
             t.age < 1200 && t.position.y > -128.0
         });
         self.potions.thrown = thrown;
-        for (stack, at) in landed {
-            self.splash(&stack, at);
+        for (stack, at, owner) in landed {
+            self.splash(&stack, at, owner);
         }
+    }
+    /// `ThrowableProjectile.tick`'s `applyGravity` and `applyInertia`, which
+    /// come before the move: gravity 0.05 (0.07 for an experience bottle),
+    /// then drag 0.99 (0.8 in water).
+    fn thrown_potion_motion(&self, t: &mut ThrownPotion) {
+        let gravity = if &*t.stack.item == "minecraft:experience_bottle" {
+            0.07
+        } else {
+            0.05
+        };
+        let at = t.position;
+        let water = self
+            .res
+            .facts()
+            .get(self.world.block(
+                at.x.floor() as i32,
+                at.y.floor() as i32,
+                at.z.floor() as i32,
+            ))
+            .fluid
+            == horizon_client::blocks::Fluid::Water;
+        let inertia = if water { 0.8 } else { 0.99 };
+        t.velocity = Vec3::new(
+            t.velocity.x * inertia,
+            (t.velocity.y - gravity) * inertia,
+            t.velocity.z * inertia,
+        );
+    }
+    /// `ThrowableProjectile.tick` on a server's client: it falls and moves
+    /// by itself between the server's updates and stops at a block; only
+    /// the server breaks it.
+    pub(super) fn step_remote_thrown(&mut self) {
+        let mut thrown = std::mem::take(&mut self.potions.thrown);
+        for t in &mut thrown {
+            t.previous = t.position;
+            t.age += 1;
+            self.thrown_potion_motion(t);
+            let next = Vec3::new(
+                t.position.x + t.velocity.x,
+                t.position.y + t.velocity.y,
+                t.position.z + t.velocity.z,
+            );
+            let state = self.world.block(
+                next.x.floor() as i32,
+                next.y.floor() as i32,
+                next.z.floor() as i32,
+            );
+            if self.res.facts().get(state).full_collision {
+                t.velocity = Vec3::ZERO;
+            } else {
+                t.position = next;
+            }
+        }
+        self.potions.thrown = thrown;
     }
     /// `ThrownItemRenderer` for thrown splash and lingering potions and
     /// experience bottles: the item (GROUND) facing the camera at scale 1,
@@ -742,6 +829,7 @@ impl Game<'_> {
         effects: &'static [(&'static str, i32, i32)],
         at: Vec3,
         scale: f64,
+        source: &Text,
     ) {
         if let Some(p) = self.player.as_ref() {
             let center = Vec3::new(
@@ -757,6 +845,18 @@ impl Game<'_> {
                     let instant = brewing::effect(id).is_some_and(|e| e.instant);
                     if instant {
                         if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
+                            // HealOrHarmMobEffect.applyInstantaneousEffect with
+                            // a source: indirectMagic, not plain magic.
+                            let a = match a {
+                                EffectAction::Hurt("minecraft:magic", amount) => {
+                                    self.note_direct_entity(
+                                        "minecraft:indirect_magic",
+                                        source.clone(),
+                                    );
+                                    EffectAction::Hurt("minecraft:indirect_magic", amount)
+                                }
+                                a => a,
+                            };
                             self.apply_effect_action(a);
                         }
                     } else {
@@ -772,68 +872,47 @@ impl Game<'_> {
         }
     }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
-    fn splash(&mut self, stack: &ItemStack, at: Vec3) {
+    fn splash(&mut self, stack: &ItemStack, at: Vec3, owner: Option<Text>) {
+        let block = [at.x, at.y, at.z].map(|v| v.floor() as i32);
         if &*stack.item == "minecraft:experience_bottle" {
             // ThrownExperienceBottle.onHit: the water-coloured splash (level
-            // event 2002) and 3 to 11 experience.
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio.play(
-                "minecraft:entity.splash_potion.break",
-                Some([at.x, at.y, at.z]),
-                1.0,
-                pitch,
-            );
-            for _ in 0..8 {
-                let v = [
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                    0.2,
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                ];
-                let p = horizon_client::particles::Particle::terrain(
-                    &mut self.world.random,
-                    [at.x, at.y, at.z],
-                    v,
-                    "item/splash_potion".into(),
-                    0x38_5DC6,
-                );
-                self.particles.push(p);
-            }
+            // event 2002, its sound 1053) and 3 to 11 experience.
+            self.level_event_at(2002, block, 0xFF38_5DC6u32 as i32);
+            self.level_event_at(1053, block, 0);
             let r = &mut self.world.random;
             let value = 3 + r.next_int_bound(5).unwrap_or(0) + r.next_int_bound(5).unwrap_or(0);
             self.spawn_orbs([at.x, at.y, at.z], value as u32);
             return;
         }
         let lingering = &*stack.item == "minecraft:lingering_potion";
-        let event = if lingering {
-            "minecraft:entity.lingering_potion.break"
-        } else {
-            "minecraft:entity.splash_potion.break"
-        };
-        let pitch = self.world.random.next_float() * 0.1 + 0.9;
-        self.audio.play(event, Some([at.x, at.y, at.z]), 1.0, pitch);
+        // AbstractThrownPotion.onHit: level event 2007 and sound 1054 for a
+        // potion with instant effects, 2002 and 1053 otherwise.
+        let potion = stack.potion().and_then(brewing::potion);
+        let instant = potion.is_some_and(|d| {
+            d.effects
+                .iter()
+                .any(|(id, ..)| brewing::effect(id).is_some_and(|e| e.instant))
+        });
         let color = brewing::potion_color(stack.potion());
-        for _ in 0..8 {
-            let v = [
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                0.2,
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-            ];
-            let p = horizon_client::particles::Particle::terrain(
-                &mut self.world.random,
-                [at.x, at.y, at.z],
-                v,
-                "item/splash_potion".into(),
-                color,
-            );
-            self.particles.push(p);
-        }
+        self.level_event_at(if instant { 2007 } else { 2002 }, block, color as i32);
+        self.level_event_at(if instant { 1054 } else { 1053 }, block, 0);
         let scale = if lingering { 0.25 } else { 1.0 };
-        let Some(def) = stack.potion().and_then(brewing::potion) else {
+        let Some(def) = potion else {
             return;
         };
         // Every player in range (`ThrownSplashPotion.applySplash` over
         // `LivingEntity`s, the players among them).
-        self.for_each_player(|g| g.splash_on_player(def.effects, at, scale));
+        // Instant damage is indirectMagic(potion or cloud, owner), which the
+        // death message names by the owner, else by the potion or cloud.
+        let source = owner.unwrap_or_else(|| {
+            let entity = if lingering {
+                "entity.minecraft.area_effect_cloud"
+            } else {
+                "entity.minecraft.splash_potion"
+            };
+            Text::translate(entity, &[])
+        });
+        self.for_each_player(|g| g.splash_on_player(def.effects, at, scale, &source));
         // Mobs take the instant effects (undead invert healing and harming).
         let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();
