@@ -11031,6 +11031,21 @@ impl Game<'_> {
             }
             return Ok(false);
         }
+        // A server pack's reload covers the frame with its progress
+        // (`LoadingOverlay`) until `tick_server_packs` applies it.
+        if let Some(reload) = &self.server_packs.reload {
+            if let Some(renderer) = &mut self.renderer {
+                let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
+                horizon_client::level_loading::draw_progress(
+                    &mut hud,
+                    &self.gui.atlas,
+                    reload.progress.line(),
+                    reload.progress.fraction(),
+                );
+                return renderer.render(&loading_frame(&hud));
+            }
+            return Ok(false);
+        }
         let Some(size) = self
             .renderer
             .as_ref()
@@ -12112,6 +12127,19 @@ impl ApplicationHandler for Game<'_> {
             && !matches!(
                 &event,
                 WindowEvent::CloseRequested
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::RedrawRequested
+            )
+        {
+            return;
+        }
+        // The pack reload's progress overlay takes no input
+        // (`LoadingOverlay`): `start_pack_reload` released what was held.
+        if self.server_packs.reload.is_some()
+            && !matches!(
+                &event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::Focused(_)
                     | WindowEvent::Resized(_)
                     | WindowEvent::RedrawRequested
             )
@@ -13625,7 +13653,6 @@ const NUMERIC_KEYS: [KeyCode; 11] = [
     KeyCode::Numpad9,
 ];
 
-const STAGES: u32 = 10;
 const STAGE_LINES: [&str; 10] = [
     "Loading menu",
     "Loading assets",
@@ -13641,19 +13668,28 @@ const STAGE_LINES: [&str; 10] = [
 
 /// The background loader's checkpoint, read by the loading screen each frame.
 #[derive(Clone)]
-struct Progress(Arc<AtomicU32>);
+struct Progress {
+    value: Arc<AtomicU32>,
+    lines: &'static [&'static str],
+}
 impl Progress {
     fn new() -> Self {
-        Self(Arc::new(AtomicU32::new(0)))
+        Self::with(&STAGE_LINES)
+    }
+    fn with(lines: &'static [&'static str]) -> Self {
+        Self {
+            value: Arc::new(AtomicU32::new(0)),
+            lines,
+        }
     }
     fn set(&self, stage: u32) {
-        self.0.store(stage, Ordering::Relaxed);
+        self.value.store(stage, Ordering::Relaxed);
     }
     fn fraction(&self) -> f32 {
-        self.0.load(Ordering::Relaxed) as f32 / (STAGES - 1) as f32
+        self.value.load(Ordering::Relaxed) as f32 / (self.lines.len() - 1) as f32
     }
     fn line(&self) -> &'static str {
-        STAGE_LINES[(self.0.load(Ordering::Relaxed) as usize).min(STAGE_LINES.len() - 1)]
+        self.lines[(self.value.load(Ordering::Relaxed) as usize).min(self.lines.len() - 1)]
     }
 }
 
