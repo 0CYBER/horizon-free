@@ -572,16 +572,16 @@ impl Game<'_> {
         let pitch = (1.0 + (client_float() - client_float()) * 0.2) * 0.7;
         self.audio
             .play("minecraft:entity.generic.explode", Some(center), 4.0, pitch);
-        let block_count = if interaction == BlockInteraction::Keep {
-            0
-        } else {
-            targets.len()
-        };
+        // ServerLevel.explode sends toBlow.size() whatever the interaction, and
+        // `ServerExplosion.isSmall` also covers an explosion that keeps blocks.
+        let block_count = targets.len();
+        let small = radius < 2.0 || interaction == BlockInteraction::Keep;
         let (world, facts) = (&self.world, self.res.facts());
-        self.particles.explosion(center, radius, block_count, &|b| {
-            facts.is_air(world.block(b[0], b[1], b[2]))
-        });
-        self.lan_explode(center, radius, block_count);
+        self.particles
+            .explosion(center, small, block_count, radius, &|b| {
+                facts.is_air(world.block(b[0], b[1], b[2]))
+            });
+        self.lan_explode(center, small, radius, block_count);
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).
@@ -598,6 +598,11 @@ impl Game<'_> {
         }
         let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
+        // CreakingHeartBlock.onExplosionHit: its creaking dies (no
+        // experience, as Horizon does not track a TNT's owner).
+        if &*name == "minecraft:creaking_heart" {
+            self.creaking_heart_broken(pos, false);
+        }
         // Block.onExplosionHit: the drops copy from the block entity, which
         // then spills its contents as the block turns to air.
         let key = (pos[0], pos[1], pos[2]);

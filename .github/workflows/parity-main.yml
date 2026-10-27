@@ -25,8 +25,8 @@ jobs:
   parity-main:
     # A Mac mini runner of its own (ludovics-mac-mini-2 holds only this label since 2026-10-26): behind PR parity jobs
     # this run waited 2 h while every merge replaced the pending one, and on the release runner a release then waited
-    # behind the next run. PR parity jobs have ludovics-mac-mini and the desktop. Not the desktop: a job slowed down
-    # because the maintainer came back could time out, and a failure here bisects and comments on merges.
+    # behind the next run. PR parity jobs have ludovics-mac-mini and playhorizon. Not playhorizon: its 4 CPUs
+    # make a core-crate run several times longer, and a failure here bisects and comments on merges.
     runs-on: [self-hosted, macOS, horizon-parity-main]
     timeout-minutes: 240  # a core-crate batch reruns ~300 harnesses (~60-90 min), a bisect a few rounds of the failures
     steps:

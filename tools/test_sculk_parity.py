@@ -336,9 +336,9 @@ def main():
                                    'dev.horizonlab.parity.VanillaSculkOracle', inputs, build / 'vanilla.txt'],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
-        oracle_harness.run_logged(['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'],
+        oracle_harness.run_logged(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'],
                                   build, 'compile-rust')
-        oracle_harness.run_logged([lab.cargo_target() / 'release/horizon-client', '--resources', resources], build, 'horizon',
+        oracle_harness.run_logged([lab.cargo_target() / 'fast/horizon-client', '--resources', resources], build, 'horizon',
                                   env=lab.game_env(HORIZON_SCULK_FIXTURE=f'{inputs},{build / "horizon.txt"}'))
     if args.java_only:
         return

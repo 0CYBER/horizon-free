@@ -235,7 +235,7 @@ impl Game<'_> {
         }
         out
     }
-    fn difficulty_id(&self) -> i32 {
+    pub(super) fn difficulty_id(&self) -> i32 {
         use horizon_world::food::Difficulty;
         match self.world.health_rules.difficulty {
             Difficulty::Peaceful => 0,

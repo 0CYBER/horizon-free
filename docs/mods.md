@@ -15,7 +15,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, command, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
-| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom, Minimap |
+| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom, Minimap; and Recipes, a recipe viewer |
 | Runtime | `crates/horizon-mods` | wasmtime 48 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / test / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
@@ -488,7 +488,7 @@ its component targets the WIT world `horizon-server-mod` instead of
 | `tick(tick)` | each server tick |
 | `player-joined(player)`, `player-left(player)` | `registration.joins` |
 | `chat(player, text)` | `registration.chat`: each chat message a player sends |
-| `command(player, name, args)` | `/name args` typed by a player, for a command it registered; `ok(some)` is that player's feedback, `err` their red error |
+| `command(player, name, args, values)` | `/name args` typed by a player, for a command it registered, with its arguments' values (below); `ok(some)` is that player's feedback, `err` their red error |
 | `block-broken(player, pos, state)`, `block-placed(player, pos, state)` | `registration.blocks`, with the state as `minecraft:oak_log[axis=y]` |
 
 Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
@@ -496,6 +496,31 @@ client mods; `players` is for server mods. In Rust: `impl
 horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
 [`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs), and with
 `world`, [`beacons`](../crates/horizon-mod-sdk/examples/beacons/src/lib.rs).
+
+**Typed commands.** Each command in `registration.commands` lists its
+arguments, in order: a name and a kind, required or optional (optional ones
+last). The server adds them to the command tree every player receives, after
+vanilla's commands, so a player's chat box completes and colours them as it
+does vanilla's (player names, coordinates, bounds); when a player sends one,
+the server parses the line the way vanilla's parsers do and gives the mod the
+values, by argument name, or answers with vanilla's error (`Integer must not
+be more than 64, found 65`, `No player was found`) without calling the mod.
+
+| Kind | Takes | Value | Chat box parser |
+|---|---|---|---|
+| `word` | one word: letters, digits, `_ - . +` | `word(string)` | `brigadier:string` (word) |
+| `text` | the rest of the line, only last | `text(string)` | `brigadier:string` (greedy) |
+| `integer(min, max)` | a whole number within the bounds given | `integer(s32)` | `brigadier:integer` |
+| `number` | a number | `number(f64)` | `brigadier:double` |
+| `boolean` | `true` or `false` | `boolean(bool)` | `brigadier:bool` |
+| `player` | an online player's name, `@s` or `@p` (whoever typed it) | `player(player)` | `minecraft:entity` (one player) |
+| `block-pos` | `x y z`, each a whole number, `~` or `~n` (from whoever typed it) | `block-pos(block-pos)` | `minecraft:block_pos` |
+
+A command with no arguments takes nothing after its name. In Rust,
+`Registration::command_with("beacon", [Argument::integer("height", Some(1),
+Some(64)).optional()])`, read with `args.integer("height")`; `command(name)`
+alone takes free text, an optional `text` argument named `args`
+(`args.text()` is the line as typed either way).
 
 **Capability `world`.** Reads are of the server's loaded chunks as they are
 during the call: the game lends a server mod's call the levels' chunk maps
@@ -537,10 +562,11 @@ chat for the in-frame player and a system message for a connection;
 on, each of these points costs one branch (measured in the PR that added
 them).
 
-**Not yet.** Clients aren't sent server mods' commands with vanilla's
-command tree, so a player's chat box doesn't complete or colour them; typing
-them works. Block events are a player's own breaking and placing, not
-explosions, pistons or other mods.
+**Not yet.** Block events are a player's own breaking and placing, not
+explosions, pistons or other mods. Command arguments don't take entities,
+items or block states yet, and `^` coordinates; in-frame single player's chat
+box lists server mods' commands by name only (the server still parses their
+arguments).
 
 ## Publish your mod
 
@@ -571,7 +597,7 @@ says how). The formats: [api/mod-index.md](api/mod-index.md).
 
 ### Horizon's official mods
 
-The Horizon extras that are mods now live in `mods/official/<name>/`, one crate each in the game's workspace, so
+The Horizon extras that are mods now, and Horizon's own recipe viewer, live in `mods/official/<name>/`, one crate each in the game's workspace, so
 `cargo clippy --workspace` and pr_ready cover them. They use only the public API, like any other mod, with the same
 options on their settings page as the extra had and the same look. Each is published by a maintainer: build it on
 `main` with the toolchain CI uses (`cd mods/official/<name> && cargo horizon-mod build`), then open a pull request in
@@ -585,6 +611,7 @@ so the same rustc and `Cargo.lock` give the same file.
 | Keystrokes | `keystrokes` | Extras > Keystrokes | `corner`: as above, default `top_left`; `cps`: `true` (default), `false` |
 | Zoom | `zoom` | Extras > Zoom | `level`: `2`, `3`, `4` (default), `6`, `8`, `10`; `smooth`: `true` (default), `false`; `sensitivity` (slower turning): `true` (default), `false`. The key is the game's: `key.zoom.zoom` in `horizon-mods.txt`, default `key.keyboard.z` |
 | Minimap | `minimap` | Extras > Minimap | `corner`: as above, default `top_right`; `size`: `64`, `96` (default), `128`; `shape`: `square` (default), `round`; `zoom` (blocks per pixel): `0.5`, `1` (default), `2`, `4`; `rotate`: `false` (default), `true`. The game draws the map (`render.set-minimap`) |
+| Recipes | `recipes` | nothing (new) | `give` (a click on the item panel gives the item in creative mode: one, a stack with a right click): `false` (default), `true`. The keys are the game's: `key.recipes.recipe` (default `key.keyboard.r`) and `key.recipes.uses` (default `key.keyboard.u`) in `horizon-mods.txt`. Every item sits in the item panel (`browser`) with a search box (words in the name or id, `@namespace`, `#tag`); R or a click shows an item's recipes, U or a right click its uses, a tab per station, and + fills the grid with a recipe the player knows (`recipes.place`). On servers that are not Horizon it shows the game's own 26.3 recipes; known recipes and + follow the server's recipe book |
 
 ## Versions and compatibility
 
