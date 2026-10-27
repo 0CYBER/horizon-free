@@ -86,7 +86,27 @@ pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorl
     }
 }
 
+/// `AbstractHurtingProjectile.getTrailParticle`: smoke for every one of them
+/// but the wind charges (no trail) and the dragon's fireball (its own).
+pub(super) fn has_smoke_trail(kind: &ProjectileKind) -> bool {
+    matches!(
+        kind,
+        ProjectileKind::SmallFireball
+            | ProjectileKind::LargeFireball { .. }
+            | ProjectileKind::WitherSkull { .. }
+    )
+}
+
 impl Game<'_> {
+    /// `AbstractHurtingProjectile.createParticleTrail`: one smoke puff half a
+    /// block above each position.
+    pub(super) fn smoke_trails(&mut self, at: impl IntoIterator<Item = Vec3>) {
+        let smoke = ParticleOptions::simple(ParticleType::Smoke);
+        for p in at {
+            self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
+        }
+    }
+
     /// `handleAddEntity` for these types; false when `kind` isn't one.
     pub(super) fn spawn_remote_projectile(
         &mut self,
@@ -360,6 +380,14 @@ impl Game<'_> {
             }
         }
         self.creatures.projectiles = projectiles;
+        let trails: Vec<Vec3> = self
+            .creatures
+            .projectiles
+            .iter()
+            .filter(|p| has_smoke_trail(&p.kind))
+            .map(|p| p.position)
+            .collect();
+        self.smoke_trails(trails);
         for t in &mut self.tridents {
             let id = t.id;
             t.remote_step(|at| step(id, at));
