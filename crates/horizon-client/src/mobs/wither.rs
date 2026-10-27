@@ -96,7 +96,7 @@ pub fn make_invulnerable(m: &mut Mob) {
 pub fn powered(m: &Mob) -> bool {
     m.health <= m.attrs.max_health / 2.0
 }
-fn head_pos(m: &Mob, i: usize) -> [f64; 3] {
+pub fn head_pos(m: &Mob, i: usize) -> [f64; 3] {
     if i == 0 {
         return [m.position.x, m.position.y + 3.0, m.position.z];
     }
@@ -221,6 +221,7 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
             events.push(MobEvent::Explode(
                 [m.position.x, m.eye_y(), m.position.z],
                 7.0,
+                m.species(),
             ));
             // Global level event 1023.
             if !m.silent {

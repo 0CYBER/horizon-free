@@ -1508,7 +1508,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn sound(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
         let r = registry(self.data.registries);
-        m.extra.sound_variant = r.random(self.random) as u8;
+        m.extra.sound_variant = Some(r.random(self.random) as u8);
     }
 
     /// `finalizeSpawn` of the mob's class.
@@ -2013,6 +2013,17 @@ pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static st
         _ => return None,
     };
     Some((component, format!("minecraft:{}", variant_name(s, variant))))
+}
+/// The `*_sound_variant` registry of a species, in registry order.
+pub fn sound_variants(s: Species) -> &'static [&'static str] {
+    match s {
+        Species::Pig => &["big", "classic", "mini"],
+        Species::Cow => &["classic", "moody"],
+        Species::Chicken => &["classic", "picky"],
+        Species::Cat => &["classic", "royal"],
+        Species::Wolf => &["angry", "big", "classic", "cute", "grumpy", "puglin", "sad"],
+        _ => &[],
+    }
 }
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {
