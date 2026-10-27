@@ -2739,7 +2739,7 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
-        let acting = self.acting_uuid();
+        let acting = self.acting_player_uuid();
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
