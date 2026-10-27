@@ -69,10 +69,10 @@ def seeds(count):
     return SEEDS + [rng.randrange(-2**63, 2**63) for _ in range(count)]
 
 
-def target_dir():
+def target_dir(profile='release'):
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    return Path(metadata['target_directory']) / 'release'
+    return Path(metadata['target_directory']) / profile
 
 
 def origins(build, classes, dependencies, all_seeds):
@@ -134,9 +134,9 @@ def main():
     if args.origins_only:
         sys.exit(1 if origin_diffs else 0)
 
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
                   'compile-rust', timeout=3600)
-    binary = target_dir() / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = target_dir('fast') / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     # One worker thread: the chunks decorated in a fixed order (see above).
     vanilla_server = ['java', '-Xmx2g', '-Dmax.bg.threads=1', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', RESOURCES, '--dedicated', '--nogui']
