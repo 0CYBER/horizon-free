@@ -764,7 +764,15 @@ impl Launcher {
         switched
     }
 
+    /// The version Play starts: the selected instance's own, else the launcher's.
     fn selected(&self) -> Option<&String> {
+        self.selected_instance()
+            .and_then(|i| self.version_of(i))
+            .or_else(|| self.launcher_version())
+    }
+
+    /// The launcher's version: what instances without one of their own play.
+    fn launcher_version(&self) -> Option<&String> {
         self.settings
             .selected
             .as_ref()
@@ -1850,16 +1858,20 @@ impl Launcher {
                 .absolute()
                 .top(px(66.))
                 .right_0()
-                .w(px(240.))
+                .w(px(300.))
                 .p(px(6.))
                 .border_2()
                 .border_color(t.outline)
                 .bg(t.surface)
                 .flex()
                 .flex_col();
+            // Picking a version keeps the selected instance on it; the launcher's own version
+            // (newest unless chosen otherwise on Versions) follows updates.
+            let follows = self.launcher_version().cloned();
             for tag in &self.installed {
                 let selected = self.selected() == Some(tag);
                 let tag = tag.clone();
+                let latest = follows.as_ref() == Some(&tag);
                 menu = menu.child(
                     div()
                         .id(SharedString::from(format!("pick-{tag}")))
@@ -1875,12 +1887,20 @@ impl Launcher {
                         .cursor_pointer()
                         .hover(move |s| s.bg(t.plate_soft))
                         .child(tag.clone())
-                        .when(selected, |d| {
-                            d.child(div().size(px(6.)).rounded_full().bg(t.accent))
-                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .when(latest, |d| {
+                                    d.child(caps("follows updates").text_color(t.muted))
+                                })
+                                .when(selected, |d| {
+                                    d.child(div().size(px(6.)).rounded_full().bg(t.accent))
+                                }),
+                        )
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.settings.selected = Some(tag.clone());
-                            this.settings.save();
+                            this.pin_version((!latest).then(|| tag.clone()));
                             this.picker_open = false;
                             cx.notify();
                         })),

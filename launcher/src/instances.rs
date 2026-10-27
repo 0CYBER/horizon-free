@@ -86,6 +86,10 @@ pub struct Meta {
     pub icon: Option<Icon>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The Horizon version this instance plays, kept when newer ones are installed. None: the
+    /// launcher's own version, which follows updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// `instances.json`: each instance's choices, by id.
@@ -121,6 +125,25 @@ pub struct Instance {
     pub home: PathBuf,
     pub icon: Option<Icon>,
     pub group: Option<String>,
+    /// Its pinned Horizon version, if any (`Meta::version`).
+    pub version: Option<String>,
+}
+
+impl Instance {
+    /// The installed version this instance plays: its pinned one, else `requested` (the
+    /// command line's `--version`) or the launcher's (`backend::resolve_version`).
+    pub fn resolve_version(&self, requested: Option<&str>) -> Result<String, String> {
+        match (requested, &self.version) {
+            (None, Some(pinned)) => backend::resolve_version(Some(pinned)).map_err(|_| {
+                format!(
+                    "{} plays {pinned}, which is not installed: install it, or horizon-launcher \
+                     instance version \"{}\" latest",
+                    self.name, self.name
+                )
+            }),
+            _ => backend::resolve_version(requested),
+        }
+    }
 }
 
 /// The instances, by the default game home and the launcher's data folder: Horizon first, then
@@ -172,6 +195,7 @@ fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
                 name: meta.name.unwrap_or(name),
                 icon: meta.icon,
                 group: meta.group,
+                version: meta.version,
                 id,
                 kind,
                 work,

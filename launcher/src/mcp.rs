@@ -25,7 +25,7 @@ struct Session {
 /// The tools the session runs itself, under their CLI names: they keep a process (the game, a
 /// server) or a sign-in going between calls. Every other CLI command is generated (cli_tools.rs).
 fn session_tools() -> Value {
-    let version = json!({ "type": "string", "description": "An installed version tag such as v2026.10.13. Default: the selected version." });
+    let version = json!({ "type": "string", "description": "An installed version tag such as v2026.10.13. Default: the selected version (play: the instance's own first)." });
     let none = json!({ "type": "object", "properties": {} });
     json!([
         { "name": "play", "description": "Start the Horizon client (a game window on the player's screen) under agent control: the game_* tools then play it. Returns once it has started; game_wait_ready waits for the world. CLI: horizon-launcher play",
@@ -68,12 +68,12 @@ impl Session {
                 if self.client.as_ref().is_some_and(|c| c.finished().is_none()) {
                     return Err("The client is already running.".into());
                 }
-                let tag = backend::resolve_version(arg_str(args, "version"))?;
-                let mut cmd = backend::client(&tag)?;
                 let instance = match arg_str(args, "instance") {
                     Some(name) => instances::find(name)?,
                     None => instances::selected(),
                 };
+                let tag = instance.resolve_version(arg_str(args, "version"))?;
+                let mut cmd = backend::client(&tag)?;
                 instances::apply(&mut cmd, &instance)?;
                 cmd.args(game_tools::control_args());
                 if let Some(world) = arg_str(args, "world") {
