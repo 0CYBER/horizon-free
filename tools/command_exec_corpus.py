@@ -241,6 +241,12 @@ def world_blocks():
         cmd('/clone 0 205 0 4 207 4 6 205 6 masked'),
         cmd('/execute if blocks 0 205 0 4 207 4 6 205 6 all'),
         cmd('/setblock 3 206 3 minecraft:air'),
+        # A container keeps its loot table and seed until its items change
+        # (RandomizableContainer.tryLoadLootTable / trySaveLootTable).
+        cmd('/setblock 7 206 7 minecraft:chest{LootTable:"minecraft:chests/simple_dungeon",LootTableSeed:42L}'),
+        cmd('/data get block 7 206 7'),
+        cmd('/data get block 7 206 7 LootTableSeed'),
+        cmd('/setblock 7 206 7 minecraft:air'),
         # A hopper placed into power turns `enabled=false` and keeps its block entity.
         cmd('/setblock 5 205 5 minecraft:redstone_block'),
         cmd('/setblock 5 206 5 minecraft:hopper'),

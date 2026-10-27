@@ -4,8 +4,8 @@ Thanks for helping. Horizon is Minecraft: Java Edition 26.3 rewritten in Rust, a
 everything is that **it plays exactly like vanilla**. This page is the short version of how we work; questions are
 welcome on [Discord](https://discord.gg/HcTeMZxe5E).
 
-This repository holds the game, the launcher and the website, plus the tools, tests and docs that build, check and
-release them. Anything else (videos, Discord and other community material) lives elsewhere.
+This repository holds the game and the launcher, plus the tools, tests and docs that build, check and release them.
+The website (playhorizon.dev) is built in a separate repository from this one's README, `docs/api/` and roadmap. Anything else (videos, Discord and other community material) lives elsewhere.
 
 **Where to start: [playhorizon.dev/hub](https://playhorizon.dev/hub).** It shows what is being done now and next
 ([ROADMAP.md](ROADMAP.md) in the repository), the work board, good first tasks, and the forms to report a bug or
