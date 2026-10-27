@@ -682,12 +682,25 @@ impl Game<'_> {
         } else {
             return;
         }
-        match self.ui.chat.click_at(
+        let Some(style) = self.ui.chat.style_at(
             &self.gui.atlas.font,
             height as i32,
             cursor.0 as f64,
             cursor.1 as f64,
-        ) {
+        ) else {
+            return;
+        };
+        // ChatScreen.handleComponentClicked: with Shift held only an
+        // insertion acts, else only the click event.
+        if self.has_shift_down() {
+            if let Some(insertion) = style.insertion
+                && let Some(screen) = self.ui.chat_screen.as_mut()
+            {
+                screen.type_text(&m, &c, &insertion);
+            }
+            return;
+        }
+        match style.click {
             Some(ClickEvent::CopyToClipboard(value)) => {
                 use horizon_client::clipboard::Clipboard;
                 self.clipboard.set(&value);
@@ -700,7 +713,24 @@ impl Game<'_> {
                     screen.suggest_command(&m, &c, &command);
                 }
             }
+            Some(ClickEvent::RunCommand(command)) => self.click_command(&command),
             None => {}
+        }
+    }
+    /// `Screen.clickCommandAction`: run a clicked command as the player
+    /// without adding it to the chat history. A client mod's command goes
+    /// first, as `ClientPacketListener.sendUnattendedCommand` lets client
+    /// commands take it. (Vanilla asks first when the command fails to
+    /// parse; here the server answers it.)
+    fn click_command(&mut self, command: &str) {
+        let command = command.strip_prefix('/').unwrap_or(command);
+        if self.mod_command(command) {
+            return;
+        }
+        if self.remote.is_some() {
+            self.send_chat(&format!("/{command}"));
+        } else if !self.local_server_mod_command(command) {
+            self.run_command(command);
         }
     }
     /// Chat lines over the HUD (focused while the chat screen is open).
@@ -737,16 +767,38 @@ impl Game<'_> {
         let draws = screen.draw(&m, mouse, blink, background);
         horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
-        // The hovered message part's tooltip, one row per line of its text.
-        if let Some(hover) = self.ui.chat.hover_at(
-            &self.gui.atlas.font,
-            batch.height as i32,
-            f64::from(self.cursor.0),
-            f64::from(self.cursor.1),
-        ) {
-            let lines = hover_rows(&hover);
+        // The hovered message part's tooltip (`renderComponentHoverEffect`),
+        // or the text of the message tag under the cursor.
+        let height = batch.height as i32;
+        let (cx, cy) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
+        let wrap = (batch.width as i32 / 2).max(200);
+        if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
+            if let Some(hover) = style.hover {
+                let lines = self.wrapped_rows(&hover, wrap);
+                self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            } else if let Some(stack) = style
+                .hover_item
+                .as_deref()
+                .and_then(horizon_client::item_data::stack_from_hover)
+                .filter(|s| self.res.items().get(&s.item).is_some())
+            {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
+        } else if self.ui.chat.indicator_at(height, cx, cy) {
+            // GuiMessageTag.systemSinglePlayer's text, split at 210.
+            let tag = Text::translate("chat.tag.system_single_player", &[]);
+            let lines = self.wrapped_rows(&tag, 210);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
+    }
+    /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
+    fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
+        let split = self
+            .gui
+            .atlas
+            .font
+            .split(&text.resolve_legacy(), width as f32);
+        split.into_iter().map(|row| (row, u32::MAX)).collect()
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
     /// `advance_time` allows it.
@@ -1021,27 +1073,4 @@ fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::
 /// commands are allowed, else `ALL` (0).
 fn owner_permission(allow_commands: bool) -> u8 {
     if allow_commands { 4 } else { 0 }
-}
-
-/// A hover text's rows for the tooltip: split at line breaks, each in the
-/// colour of its first styled character (white without one).
-fn hover_rows(hover: &horizon_client::text::Text) -> Vec<(String, u32)> {
-    let mut rows = vec![(String::new(), None)];
-    for (c, style) in hover.resolve_legacy().chars() {
-        if c == '\n' {
-            rows.push((String::new(), None));
-            continue;
-        }
-        let row = rows.last_mut().expect("one row");
-        if row.0.is_empty() {
-            row.1 = style.color;
-        }
-        row.0.push(c);
-    }
-    rows.into_iter()
-        .map(|(text, color)| {
-            let [_, r, g, b] = color.unwrap_or(0xFF_FFFF).to_be_bytes();
-            (text, horizon_client::hud::rgba(r, g, b, 255))
-        })
-        .collect()
 }
