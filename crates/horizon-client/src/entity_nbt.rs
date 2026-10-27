@@ -1360,6 +1360,11 @@ pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> 
     } else if let Tag::Compound(map) = &mut tag {
         map.remove(&"Thrower".into());
     }
+    if let Some(target) = e.target {
+        put(&mut tag, "Owner", Tag::IntArray(target.to_vec()));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Owner".into());
+    }
     tag
 }
 pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemEntity> {
@@ -1371,6 +1376,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         id,
         stack,
         thrower: uuid_from_tag(tag.get("Thrower")),
+        target: uuid_from_tag(tag.get("Owner")),
         position,
         previous: position,
         velocity: motion(tag),
@@ -2280,6 +2286,7 @@ mod tests {
             health: 2,
             fire_ticks: 73,
             thrower: Some([5, 6, 7, 8]),
+            target: None,
             id: 7,
             stack: ItemStack {
                 item: Arc::from("minecraft:diamond_pickaxe"),

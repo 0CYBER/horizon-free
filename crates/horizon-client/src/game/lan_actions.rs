@@ -2879,9 +2879,15 @@ impl Game<'_> {
 
     /// Dropped items touching a guest go into their inventory.
     fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) {
-        let (conn, mode, position, id) = {
+        let (conn, mode, position, id, uuid) = {
             let g = &host.hub.guests[gi];
-            (g.conn, g.game_mode, g.position, g.entity_id)
+            (
+                g.conn,
+                g.game_mode,
+                g.position,
+                g.entity_id,
+                horizon_client::lan::playerdata::uuid_ints(g.uuid),
+            )
         };
         if mode == SPECTATOR || self.dropped.is_empty() {
             return;
@@ -2892,6 +2898,7 @@ impl Game<'_> {
             .enumerate()
             .filter(|(_, d)| {
                 d.pickup_delay == 0
+                    && d.target.is_none_or(|t| t == uuid)
                     && (d.position.x - position[0]).abs() < 1.5
                     && (d.position.z - position[2]).abs() < 1.5
                     && d.position.y > position[1] - 0.6
