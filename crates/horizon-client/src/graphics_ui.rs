@@ -5,8 +5,7 @@ use crate::{
     graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
-    options_ui::Opt,
-    settings::Settings,
+    settings::{Opt, Settings},
     text::Text,
     ui,
 };
@@ -468,6 +467,10 @@ fn max_workers() -> u32 {
 }
 
 impl Item {
+    /// False for a setting whose system is not in Horizon yet (`Opt::available`).
+    fn available(self) -> bool {
+        !matches!(self, Item::Vanilla(o) if !o.available())
+    }
     /// On/off settings and their value.
     pub fn switch(self, s: &Settings) -> Option<bool> {
         let g = &s.horizon;
@@ -510,6 +513,9 @@ impl Item {
         }
     }
     pub fn set_slider(self, s: &mut Settings, v: f32) {
+        if !self.available() {
+            return;
+        }
         match self {
             Item::Vanilla(o) => o.set_slider(s, v),
             Item::Horizon(h) => h.set_slider(s, v),
@@ -517,6 +523,9 @@ impl Item {
         self.touched(s);
     }
     pub fn cycle(self, s: &mut Settings, back: bool, framebuffer: [i32; 2]) {
+        if !self.available() {
+            return;
+        }
         match self {
             Item::Vanilla(o) => o.cycle(s, back, framebuffer),
             Item::Horizon(h) => h.cycle(s, back),
@@ -689,6 +698,7 @@ impl GraphicsUi {
             })
             .collect();
         let mut index = 0;
+        let mut tooltip = None;
         for wd in &widgets {
             let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, 20.0)
                 && (!wd.list || (cursor.1 >= top && cursor.1 < bottom));
@@ -700,6 +710,13 @@ impl GraphicsUi {
                         continue;
                     }
                     let label = item.label(s);
+                    let live = item.available();
+                    if hover && !live {
+                        tooltip = Some(atlas.font.split(
+                            &Text::literal("This feature is not yet available in Horizon."),
+                            170.0,
+                        ));
+                    }
                     match item.slider(s) {
                         Some(value) => STYLE.slider(
                             batch,
@@ -709,7 +726,14 @@ impl GraphicsUi {
                             value,
                             hover || self.dragging == Some(item),
                         ),
-                        None => STYLE.button(batch, atlas, (wd.x, wd.y, wd.w), &label, hover),
+                        None => STYLE.button(
+                            batch,
+                            atlas,
+                            (wd.x, wd.y, wd.w),
+                            &label,
+                            hover && live,
+                            live,
+                        ),
                     }
                     STYLE.description(
                         batch,
@@ -732,6 +756,7 @@ impl GraphicsUi {
                         (wd.x, wd.y, wd.w),
                         &Text::literal(label),
                         hover,
+                        true,
                     );
                 }
             }
@@ -751,6 +776,9 @@ impl GraphicsUi {
             Level::Advanced => "Graphics: Advanced",
         };
         STYLE.title(batch, atlas, &Text::literal(title));
+        if let Some(lines) = tooltip {
+            ui::tooltip(batch, atlas, &lines, cursor);
+        }
     }
     /// A press (or a drag with `drag`) at `(x, y)`.
     pub fn click(
@@ -788,6 +816,8 @@ impl GraphicsUi {
             }
             return match wd.target {
                 Target::Button(action) => vec![Action::ButtonClick, action],
+                // A disabled control does nothing: no sound, no preset change.
+                Target::Item(item) if !item.available() => Vec::new(),
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);

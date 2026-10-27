@@ -10,6 +10,7 @@ use horizon_client::{
     block_entities::{Pos, Ticking},
     containers::{BlockEntity, FurnaceKind, HOPPER_SLOTS},
 };
+use horizon_core::position::BlockPos;
 use horizon_world::registry::BlockStateId;
 
 impl Game<'_> {
@@ -56,6 +57,7 @@ impl Game<'_> {
                 Some(BlockEntity::Beehive(_)) => self.tick_beehive(pos),
                 Some(BlockEntity::Furnace(_)) => self.tick_furnace(pos)?,
                 Some(BlockEntity::Brewing(_)) => self.tick_brewing_stand(pos)?,
+                Some(BlockEntity::DaylightDetector) => self.tick_daylight_detector(pos),
                 Some(BlockEntity::Campfire(_)) => self.tick_campfire(pos)?,
                 _ => {}
             }
@@ -94,6 +96,7 @@ impl Game<'_> {
                     | "minecraft:beehive"
                     | "minecraft:bee_nest"
                     | "minecraft:brewing_stand"
+                    | "minecraft:daylight_detector"
                     // Lit, cookTick; unlit, cooldownTick.
                     | "minecraft:campfire"
                     | "minecraft:soul_campfire" => Ticking::Yes,
@@ -116,6 +119,16 @@ impl Game<'_> {
     fn block_ticking_area(&self) -> impl Fn(i32, i32) -> bool + use<> {
         let levels = self.tickets.levels();
         move |x, z| levels.block_ticking_at(x, z)
+    }
+    /// `DaylightDetectorBlock.tickEntity` of the detector at `pos`.
+    fn tick_daylight_detector(&mut self, pos: Pos) {
+        // It updates every 20 game ticks (the behaviour checks this too).
+        if self.world.game_time % 20 != 0 {
+            return;
+        }
+        let at = BlockPos::new(pos.0, pos.1, pos.2);
+        self.with_level(|b, level, ticks| b.tick_daylight_detector(level, ticks, at));
+        let _ = self.process_level_events();
     }
     /// `AbstractFurnaceBlockEntity.serverTick` of the furnace at `pos`, and
     /// its block's `lit` following it.
