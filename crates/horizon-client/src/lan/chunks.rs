@@ -66,6 +66,7 @@ pub fn block_entity_type(name: &str) -> Option<&'static str> {
         "sculk_catalyst" => "minecraft:sculk_catalyst",
         "sculk_shrieker" => "minecraft:sculk_shrieker",
         "crafter" => "minecraft:crafter",
+        "potent_sulfur" => "minecraft:potent_sulfur",
         "chiseled_bookshelf" => "minecraft:chiseled_bookshelf",
         "trial_spawner" => "minecraft:trial_spawner",
         "vault" => "minecraft:vault",
