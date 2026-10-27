@@ -786,6 +786,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 "entity.wolf.pant"
             }
         }
+        Species::Parrot => super::parrot::ambient(m, w),
         Species::Cat if m.extra.tame && m.extra.in_love > 0 => "entity.cat.purr",
         Species::Cat if !m.extra.tame => "entity.cat.stray_ambient",
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
@@ -837,6 +838,9 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Parrot {
+        super::parrot::ai_step(m, w, level_random, events);
+    }
     // Witch.aiStep runs before super.aiStep().
     if m.species() == Species::Witch {
         let far = m

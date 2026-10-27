@@ -53,6 +53,7 @@ pub mod nautilus;
 pub mod nav;
 pub mod nether;
 pub mod panda;
+pub mod parrot;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
@@ -715,6 +716,8 @@ pub struct Extra {
     pub inventory: Vec<crate::items::ItemStack>,
     pub tame: bool,
     pub sitting: bool,
+    /// `Parrot.partyParrot` and `jukebox`: the playing jukebox it dances to.
+    pub party_jukebox: Option<[i32; 3]>,
     /// The owner's UUID (tamed animals).
     pub owner: Option<[i32; 4]>,
     /// Slime/magma cube size (0 = not sized).
@@ -1466,6 +1469,8 @@ pub struct Seen {
     pub stats: [f64; 3],
     /// `Wolf.isInSittingPose`.
     pub sitting: bool,
+    /// `Entity.isSilent`.
+    pub silent: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
     /// `Attributes.KNOCKBACK_RESISTANCE`.
@@ -1560,6 +1565,7 @@ impl Mob {
                 m.attrs.speed,
             ],
             sitting: m.extra.sitting,
+            silent: m.silent,
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
