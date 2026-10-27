@@ -105,9 +105,13 @@ impl Report {
     }
 }
 
-/// The release this binary is (`v0.2.3`); for a release from before 0.2, its tag and the client's
-/// crate version; for a build from source, that version alone.
+/// The release this binary is (`v0.2.3`); a nightly's label (`Nightly 2026-10-28 · 0c02067`); for a
+/// release from before 0.2, its tag and the client's crate version; for a build from source, that
+/// version alone.
 pub fn version() -> String {
+    if let Some(label) = horizon_core::release::nightly_label() {
+        return label;
+    }
     let version = env!("CARGO_PKG_VERSION");
     match (horizon_core::release::RELEASE, release_tag()) {
         (Some(_), Some(tag)) => tag,
@@ -117,8 +121,12 @@ pub fn version() -> String {
 }
 
 /// The release this binary came with: the version release.yml built in (docs/versioning.md), else
-/// the folder the launcher installed it in, named after the tag (releases from before 0.2).
+/// the folder the launcher installed it in, named after the tag (releases from before 0.2). A
+/// nightly is its version as the launcher installs it (`nightly-2026-10-28-0c02067`).
 pub fn release_tag() -> Option<String> {
+    if let Some(nightly) = horizon_core::release::nightly_version() {
+        return Some(nightly);
+    }
     if let Some(version) = horizon_core::release::RELEASE {
         return Some(format!("v{version}"));
     }
@@ -525,6 +533,11 @@ mod tests {
     #[test]
     fn a_release_reports_its_built_in_version() {
         // release.yml builds with HORIZON_VERSION (docs/versioning.md): `v0.2.3`, wherever it is installed.
+        if let Some(label) = horizon_core::release::nightly_label() {
+            assert_eq!(super::version(), label);
+            assert_eq!(release_tag(), horizon_core::release::nightly_version());
+            return;
+        }
         match horizon_core::release::RELEASE {
             Some(version) => {
                 assert_eq!(release_tag(), Some(format!("v{version}")));
