@@ -3,8 +3,9 @@
 //! matches (docs/mod-browser.md).
 //!
 //! Offered: Java mods (Fabric, NeoForge, Forge), whose content Horizon ports and whose jar is
-//! checked before install ([`java`]), modpacks (imported and ported) and resource packs
-//! (`resourcepacks/`). Java code itself doesn't run in Horizon (docs/mods.md).
+//! checked before install ([`java`]), modpacks (imported and ported), resource packs
+//! (`resourcepacks/`) and data packs (into a world, [`installed::install_datapack`]). Java code
+//! itself doesn't run in Horizon (docs/mods.md).
 pub mod curseforge;
 pub mod details;
 pub mod download;
@@ -31,10 +32,18 @@ pub enum Kind {
     /// One of Horizon's own shader packs (`.hshader`, docs/shaders.md), from Horizon's registry
     /// only.
     Shader,
+    /// A data pack: it goes into one world's `datapacks/` (`crate::datapacks`).
+    DataPack,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack, Kind::Shader];
+    pub const ALL: [Kind; 5] = [
+        Kind::Mod,
+        Kind::Modpack,
+        Kind::ResourcePack,
+        Kind::Shader,
+        Kind::DataPack,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -42,16 +51,17 @@ impl Kind {
             Kind::ResourcePack => "Resource packs",
             Kind::Modpack => "Modpacks",
             Kind::Shader => "Shader packs",
+            Kind::DataPack => "Data packs",
         }
     }
 
-    /// The folder beside `options.txt` the file goes in; a modpack is imported and a mod
-    /// ported instead.
+    /// The folder beside `options.txt` the file goes in; a modpack is imported, a mod ported
+    /// and a data pack put in a world instead.
     pub fn folder(self) -> Option<&'static str> {
         match self {
             Kind::ResourcePack => Some("resourcepacks"),
             Kind::Shader => Some("shaderpacks"),
-            Kind::Modpack | Kind::Mod => None,
+            Kind::Modpack | Kind::Mod | Kind::DataPack => None,
         }
     }
 }
@@ -131,6 +141,19 @@ pub struct Project {
 impl Project {
     pub fn support(&self) -> Support {
         support(self.kind, &self.game_versions, &self.loaders)
+    }
+
+    /// The project as a data pack, for a search of data packs or an install into a world;
+    /// its page is Modrinth's data pack page.
+    pub fn as_datapack(self) -> Project {
+        Project {
+            page: match self.source {
+                SourceId::Modrinth => format!("https://modrinth.com/datapack/{}", self.slug),
+                _ => self.page,
+            },
+            kind: Kind::DataPack,
+            ..self
+        }
     }
 }
 
@@ -286,6 +309,14 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
             Support::Partial("Horizon runs the mods it can port, from your own downloads.".into())
         }
         Kind::Shader => Support::No("Not one of Horizon's own shader packs.".into()),
+        Kind::DataPack => {
+            let made_for = match newest_release(game_versions) {
+                _ if game_versions.iter().any(|v| v == GAME) => String::new(),
+                Some(newest) => format!("Made for {newest}: the game may refuse it. "),
+                None => "Lists no Minecraft version. ".into(),
+            };
+            Support::Partial(format!("{made_for}{DATAPACK_SUPPORT}"))
+        }
         Kind::Mod => {
             if !loaders.iter().any(|l| java::LOADERS.contains(&l.as_str())) {
                 Support::No("Not a Fabric, NeoForge or Forge mod.".into())
@@ -302,6 +333,12 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
         }
     }
 }
+
+/// What a data pack does in Horizon today, said before install; the install says it for the
+/// pack's own files (`crate::datapacks::coverage`).
+pub const DATAPACK_SUPPORT: &str = "Horizon runs a data pack's functions, function tags, \
+     predicates and item modifiers; not yet its recipes, loot tables, advancements, other tags \
+     or worldgen.";
 
 /// A Minecraft version whose mods port-pack carries over: 1.21 and later (the data folders
 /// took their current names in 1.21).
@@ -355,6 +392,15 @@ pub fn pick(kind: Kind, versions: &[Version], everything: bool) -> Option<&Versi
             .filter(java)
             .find(made_for)
             .or_else(|| usable.filter(java).find(|v| everything && ported(v)));
+    }
+    if kind == Kind::DataPack {
+        // Most data packs on Modrinth ship a mod build too: only the data pack files.
+        let mut packs = usable.filter(|v| v.loaders.iter().any(|l| l == "datapack"));
+        let made_for = |v: &&Version| v.game_versions.iter().any(|g| g == GAME);
+        return packs
+            .clone()
+            .find(made_for)
+            .or_else(|| packs.find(|_| everything));
     }
     let runs = |v: &&Version| match support(kind, &v.game_versions, &v.loaders) {
         Support::Works => true,

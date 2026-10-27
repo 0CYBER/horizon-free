@@ -626,46 +626,8 @@ impl Game<'_> {
     /// `HopperBlockEntity.suckInItems`: from the container above, or item entities.
     fn hopper_suck(&mut self, pos: Pos, hopper: &View) -> bool {
         let above = (pos.0, pos.1 + 1, pos.2);
-        let c = self.containers();
-        if let Some(source) = c.view(above, false) {
-            if let Kind::Composter(level) = source.kind {
-                if level != 8 {
-                    return false;
-                }
-                // tryTakeInItemFromSlot on the OutputContainer: removeItem calls
-                // its setChanged, which empties the composter, and so does the
-                // second setChanged after the move or, when the hopper has no
-                // room, the setItem putting the bone meal back into the detached
-                // container (whose bone meal is lost with it).
-                let bone_meal = c.bone_meal.clone();
-                let at = BlockPos::new(above.0, above.1, above.2);
-                self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
-                let moved = self.add_item(None, hopper, bone_meal, None).is_none();
-                self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
-                self.world.modified.insert((above.0 >> 4, above.2 >> 4));
-                return moved;
-            }
-            let source_hopper = (source.kind == Kind::Hopper).then_some(above);
-            for slot in source.slots_for_face(Some(Direction::Down)) {
-                let c = self.containers();
-                let Some(stack) = c.get(&source, slot) else {
-                    continue;
-                };
-                if !c.can_take(&source, slot, stack, Direction::Down) {
-                    continue;
-                }
-                let Some(one) = self.take_one(&source, slot) else {
-                    continue;
-                };
-                match self.add_item(source_hopper, hopper, one, None) {
-                    None => {
-                        self.view_changed(&source);
-                        return true;
-                    }
-                    Some(rest) => self.put_back(&source, slot, rest),
-                }
-            }
-            return false;
+        if let Some(took) = self.suck_from_container(above, hopper) {
+            return took;
         }
         let above_state = self.world.block(above.0, above.1, above.2);
         let blocked = self.res.facts().get(above_state).full_collision
@@ -695,6 +657,56 @@ impl Game<'_> {
         {
             return false;
         }
+        self.suck_item_entities(hopper, min, max)
+    }
+    /// The container half of `HopperBlockEntity.suckInItems`: one item from the
+    /// container at `above`, through its bottom face. `None` when there is no
+    /// container there.
+    fn suck_from_container(&mut self, above: Pos, hopper: &View) -> Option<bool> {
+        let c = self.containers();
+        let source = c.view(above, false)?;
+        if let Kind::Composter(level) = source.kind {
+            if level != 8 {
+                return Some(false);
+            }
+            // tryTakeInItemFromSlot on the OutputContainer: removeItem calls
+            // its setChanged, which empties the composter, and so does the
+            // second setChanged after the move or, when the hopper has no
+            // room, the setItem putting the bone meal back into the detached
+            // container (whose bone meal is lost with it).
+            let bone_meal = c.bone_meal.clone();
+            let at = BlockPos::new(above.0, above.1, above.2);
+            self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+            let moved = self.add_item(None, hopper, bone_meal, None).is_none();
+            self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+            self.world.modified.insert((above.0 >> 4, above.2 >> 4));
+            return Some(moved);
+        }
+        let source_hopper = (source.kind == Kind::Hopper).then_some(above);
+        for slot in source.slots_for_face(Some(Direction::Down)) {
+            let c = self.containers();
+            let Some(stack) = c.get(&source, slot) else {
+                continue;
+            };
+            if !c.can_take(&source, slot, stack, Direction::Down) {
+                continue;
+            }
+            let Some(one) = self.take_one(&source, slot) else {
+                continue;
+            };
+            match self.add_item(source_hopper, hopper, one, None) {
+                None => {
+                    self.view_changed(&source);
+                    return Some(true);
+                }
+                Some(rest) => self.put_back(&source, slot, rest),
+            }
+        }
+        Some(false)
+    }
+    /// The item half of `HopperBlockEntity.suckInItems` (`getItemsAtAndAbove`):
+    /// adds the item entities that meet the box, until one is taken whole.
+    fn suck_item_entities(&mut self, hopper: &View, min: [f64; 3], max: [f64; 3]) -> bool {
         let mut i = 0;
         while i < self.dropped.len() {
             let b = self.dropped[i].bounds();
@@ -718,6 +730,66 @@ impl Game<'_> {
             i += 1;
         }
         false
+    }
+    /// `MinecartHopper.tick`'s `tryConsumeItems` (`suckInItems`) for an enabled
+    /// hopper minecart: one item from the container above, else the item
+    /// entities over it or touching it, each tick without a cooldown.
+    pub(super) fn hopper_cart_suck(&mut self, cart: &mut super::minecarts::Minecart) {
+        // The cart's slots are edited as a container under the placeholder key
+        // its menu uses; when that menu is open the placeholder is the live copy.
+        let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, cart.id as i32);
+        let open = self.world.block_entities.contains_key(&key);
+        if !open {
+            let items = BlockEntity::Chest(std::mem::take(&mut cart.items));
+            self.world.block_entities.insert(key, items);
+        }
+        let size = self
+            .world
+            .block_entities
+            .get(&key)
+            .map_or(0, |e| e.slots().len());
+        let view = View {
+            parts: vec![(key, size)],
+            kind: Kind::Generic,
+        };
+        let p = cart.position;
+        // getLevelY is the cart's y + 0.5, so the container is the block at
+        // y + 1.5, and Hopper.SUCK_AABB (moved by getLevel - 0.5) starts 11/16
+        // above the cart.
+        let above = (
+            p.x.floor() as i32,
+            (p.y + 1.5).floor() as i32,
+            p.z.floor() as i32,
+        );
+        let took = match self.suck_from_container(above, &view) {
+            Some(took) => took,
+            None => self.suck_item_entities(
+                &view,
+                [p.x - 0.5, p.y + 11.0 / 16.0, p.z - 0.5],
+                [p.x + 0.5, p.y + 2.0, p.z + 0.5],
+            ),
+        };
+        if !took {
+            // The cart's own box, inflated by 0.25 sideways.
+            let b = cart.bounds();
+            let (lo, hi) = (b.min_position(), b.max_position());
+            self.suck_item_entities(
+                &view,
+                [lo.x - 0.25, lo.y, lo.z - 0.25],
+                [hi.x + 0.25, hi.y, hi.z + 0.25],
+            );
+        }
+        // The cart's own items stay the one source of truth: a menu copy that
+        // is still around (open, or left by a guest's close) gets the pulled
+        // items back into `cart.items`, so reopening never restores a stale copy.
+        let slots = if open {
+            self.world.block_entities.get(&key).cloned()
+        } else {
+            self.world.block_entities.remove(&key)
+        };
+        if let Some(BlockEntity::Chest(items)) = slots {
+            cart.items = items;
+        }
     }
 
     // ---- dispensers and droppers ----
