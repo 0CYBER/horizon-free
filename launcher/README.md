@@ -244,11 +244,13 @@ minimize, maximize/restore and close; macOS and Linux keep their system title ba
 The launcher looks for a newer Horizon release when it starts and every 30 minutes while it
 is open, and shows a small "available, Install" line on Play.
 
-It also updates itself from GitHub releases tagged `launcher@X.Y.Z` (Horizon's own are `vX.Y.Z`;
-neither is ever taken for the other). Before 0.2 they were `launcher-vX.Y.Z` and `vYYYY.MM.DD`:
-every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloads the new build, replaces its
-own binary, and offers "Restart" in the footer. Development builds and
-`HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
+This fork disables launcher self-updates in the binary, including release builds: neither the
+window nor the CLI replaces the launcher with an upstream build. No environment variable or
+wrapper is required. Game releases are still checked and installed from `horizon-rust/horizon`.
+Launcher release availability can still be reported, but the launcher is never replaced.
+
+Launcher releases have tags `launcher@X.Y.Z` (formerly `launcher-vX.Y.Z`), separate from the game's
+`vX.Y.Z` tags (formerly `vYYYY.MM.DD`).
 
 On Linux a release build that starts writes its applications-menu entry only when there is
 none, or when the program the entry starts (its `TryExec`, else its `Exec`) no longer exists.
@@ -257,8 +259,8 @@ never takes it over. Turning the Settings switch on, or `horizon-launcher deskto
 points the entry at this launcher whatever is there.
 
 Linux packagers can set `HORIZON_LAUNCHER_DESKTOP_EXEC` to a wrapper's absolute path.
-Menu entries the launcher writes then start that wrapper, which can
-set `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` to keep launcher updates with the package manager.
+Menu entries the launcher writes then start that wrapper. This fork already leaves launcher
+updates to manual replacement or the package manager; no self-update environment flag is needed.
 
 Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
 launcher, `horizon-prepare` or `horizon-theme`, the `launcher` workflow builds Linux, macOS and

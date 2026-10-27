@@ -503,7 +503,9 @@ fn offline_play_needs_no_microsoft_account_or_requests() {
         .unwrap()
         .is_none());
     accounts.add_offline("Builder_1").unwrap();
-    accounts.play_as(Player::Offline("Builder_1".into())).unwrap();
+    accounts
+        .play_as(Player::Offline("Builder_1".into()))
+        .unwrap();
     assert_eq!(accounts.name_arg(), Some("Builder_1"));
     assert!(session_for_launch(&ep, &store, &mut accounts)
         .unwrap()
