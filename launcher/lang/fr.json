@@ -178,5 +178,7 @@
   "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.": "Pas préparé. Connectez-vous d'abord avec le compte Microsoft qui possède Minecraft {version}.",
   "Cancel": "Annuler",
   "Delete old versions automatically": "Supprimer automatiquement les anciennes versions",
-  "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Garde les {count} plus récentes, celle utilisée et celles de vos instances. Une version supprimée se réinstalle depuis la page Versions."
+  "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Garde les {count} plus récentes, celle utilisée et celles de vos instances. Une version supprimée se réinstalle depuis la page Versions.",
+  "Installed versions use {size}.": "Les versions installées occupent {size}.",
+  "{size} on disk": "{size} sur le disque"
 }

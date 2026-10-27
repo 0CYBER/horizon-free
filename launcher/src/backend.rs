@@ -619,6 +619,23 @@ pub fn remove(tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The bytes an installed version takes on disk.
+pub fn disk_use(tag: &str) -> u64 {
+    fn size(dir: &Path) -> u64 {
+        fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| match e.metadata() {
+                Ok(m) if m.is_dir() => size(&e.path()),
+                Ok(m) => m.len(),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    size(&version_dir(tag))
+}
+
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
 pub fn game_version(tag: &str) -> String {
     game_version_at(&version_dir(tag))
@@ -2531,6 +2548,8 @@ pub enum Msg {
     Removed(String, Result<(), String>),
     /// `prune_old_versions` ended; these versions were deleted.
     Pruned(Vec<String>),
+    /// What each installed version takes on disk (`disk_use`).
+    DiskUse(Vec<(String, u64)>),
     Line(Job, String),
     Exit(Job, Result<(), String>),
     Updates(Result<Updates, String>),
