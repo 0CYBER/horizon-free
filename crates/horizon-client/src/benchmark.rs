@@ -450,6 +450,54 @@ mod tests {
         assert_eq!(view_chunks(32), 2573);
         assert_eq!(view_chunks(0), 0);
     }
+    /// The status a fake control answers with: the player is where it should
+    /// be, nothing is queued, and the world holds `chunks` resident chunks.
+    fn status(chunks: u64) -> String {
+        serde_json::json!({
+            "player": {"position": [0.0, 64.0, 0.0]},
+            "pending_chunks": 0,
+            "screen": "playing",
+            "render_distance": 12,
+            "chunks": chunks,
+            "generated_chunks": chunks,
+            "meshed_sections": 0,
+            "streaming": {},
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_load_waits_for_the_chunks_a_teleport_starts() {
+        // Right after a teleport the game reports steady counts and nothing
+        // queued for over a second, before the integrated server has sent the
+        // first chunk: the quiet rule alone would call that loaded, and the
+        // scene would be measured over an empty view (#1749).
+        const LATE: usize = 30;
+        let (tx, rx) = mpsc::channel::<Request>();
+        let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&polls);
+        let server = thread::spawn(move || {
+            let mut seen = 0;
+            while let Ok(request) = rx.recv() {
+                if request.line == "status" {
+                    let chunks = if seen < LATE { 0 } else { 400 };
+                    seen += 1;
+                    counted.store(seen, std::sync::atomic::Ordering::SeqCst);
+                    let _ = request.reply.send(status(chunks));
+                } else {
+                    let _ = request.reply.send("{}".to_owned());
+                }
+            }
+        });
+        let control = Control(tx);
+        wait_loaded(&control, |_| true).expect("the scene loads");
+        assert!(
+            polls.load(std::sync::atomic::Ordering::SeqCst) > LATE,
+            "the load finished before the chunks arrived"
+        );
+        drop(control);
+        let _ = server.join();
+    }
 
     #[test]
     fn yaw_matches_vanilla() {

@@ -1532,9 +1532,9 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the mark and the name over the sidebar (in the title bar on Windows), the
-    /// pages with their icons, then the account playing and the Settings button.
-    fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
+    /// The top bar: the mark and name over the sidebar (in the title bar on Windows and Linux
+    /// client-side decorations), the pages with their icons, then the account and Settings.
+    fn topbar(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let mut nav = div().flex().flex_none().h_full().gap(px(2.));
         for (page, label, icon) in Page::ALL {
@@ -1670,8 +1670,8 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
-            // Where the title bar is drawn here (Windows), it carries the mark and the name.
-            .when(!titlebar::DRAWN, |bar| {
+            // Custom title bars carry the mark and name above the sidebar.
+            .when(!titlebar::draws_brand(window), |bar| {
                 bar.child(
                     div()
                         .flex()
@@ -3658,7 +3658,7 @@ impl Render for Launcher {
             window.focus(&self.root_focus);
         }
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
-        let topbar = self.topbar(cx);
+        let topbar = self.topbar(window, cx);
         let sidebar = self.sidebar(cx);
         let mut root = div()
             .id("root")
@@ -3813,6 +3813,7 @@ impl Render for Launcher {
             .bg(t.side)
             .children(titlebar::render(&t, window))
             .child(root.flex_1().min_h_0())
+            .children(titlebar::resize_handles(window))
     }
 }
 
@@ -3942,6 +3943,8 @@ fn main() {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(600.))),
                     titlebar: Some(titlebar::options()),
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     app_id: Some("horizon-launcher".into()),
                     ..Default::default()
                 },

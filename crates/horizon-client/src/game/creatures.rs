@@ -679,6 +679,7 @@ impl Game<'_> {
         self.sync_riders();
         self.tick_skeleton_traps();
         self.tick_apparition();
+        self.guardian_bubbles();
         self.villager_reputation_tick();
         self.merchant_tick();
         self.villager_pickups();
@@ -928,11 +929,29 @@ impl Game<'_> {
             self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
         }
     }
+    /// Adds a projectile, giving it an id from the entity counter
+    /// (`Entity.id`, the same counter as the rest) when it has none.
+    pub(super) fn add_projectile(&mut self, mut p: horizon_client::projectiles::Projectile) {
+        if p.id == 0 {
+            self.next_entity += 1;
+            p.id = self.next_entity;
+        }
+        self.creatures.projectiles.push(p);
+    }
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
+                MobEvent::Drown { mob, at } => {
+                    self.lan_entity_event(mob as i32, super::combat::DROWN_EVENT, at);
+                    let v = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == mob)
+                        .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
+                    self.drown_particles(at, v);
+                }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
@@ -976,6 +995,21 @@ impl Game<'_> {
                         Who::Mob(id) => {
                             if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                                 m.velocity = m.velocity.add_vector(v);
+                            }
+                        }
+                    }
+                }
+                MobEvent::Shift { target, delta } => {
+                    let d = Vec3::new(delta[0], delta[1], delta[2]);
+                    match target {
+                        Who::Player => {
+                            if let Some(p) = self.player.as_mut() {
+                                p.position = p.position.add_vector(d);
+                            }
+                        }
+                        Who::Mob(id) => {
+                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                                m.position = m.position.add_vector(d);
                             }
                         }
                     }
@@ -1119,7 +1153,7 @@ impl Game<'_> {
                         let v = p.velocity;
                         self.particles.llama_spit_burst(at, [v.x, v.y, v.z]);
                     }
-                    self.creatures.projectiles.push(p);
+                    self.add_projectile(p);
                     self.projectile_event("minecraft:projectile_shoot", owner, at);
                 }
                 MobEvent::Spawn(mut m) => {
@@ -1920,6 +1954,7 @@ impl Game<'_> {
         let mut hits = Vec::new();
         let mut deflections: Vec<[f64; 3]> = Vec::new();
         let mut arrow_events = Vec::new();
+        let mut trails = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
                 .mobs
@@ -2011,6 +2046,10 @@ impl Game<'_> {
                 if shooter.is_some() {
                     p.owner = Some(Who::Player);
                 }
+                // AbstractHurtingProjectile.tick ends with createParticleTrail.
+                if super::remote_projectiles::has_smoke_trail(&p.kind) {
+                    trails.push(p.position);
+                }
                 if let Some(a) = p.arrow.as_mut() {
                     arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                 }
@@ -2053,6 +2092,7 @@ impl Game<'_> {
                 keep
             });
         }
+        self.smoke_trails(trails);
         for at in deflections {
             self.audio
                 .play("minecraft:entity.breeze.deflect", Some(at), 1.0, 1.0);
@@ -2217,11 +2257,9 @@ impl Game<'_> {
             ArrowEvent::ShootEvent | ArrowEvent::Drop => {}
         }
     }
-    /// `Level.isRainingAt` for arrows: raining, open to the sky (the biome's
-    /// precipitation is not checked here).
+    /// `Level.isRainingAt` for arrows.
     fn arrow_rain(&self) -> impl Fn(BlockPos) -> bool + '_ {
-        let raining = self.world.weather.levels(1.0).0 > 0.2;
-        move |p: BlockPos| raining && self.world.light(p.x, p.y, p.z) >> 4 == 15
+        move |p: BlockPos| self.raining_at(p)
     }
     /// The level as arrows see it.
     fn arrow_scene<'s>(
@@ -2259,7 +2297,7 @@ impl Game<'_> {
             }
         }
         if keep {
-            self.creatures.projectiles.push(arrow);
+            self.add_projectile(arrow);
         }
     }
     /// `TargetBlock.onProjectileHit`: a target block takes its power from
@@ -3309,7 +3347,7 @@ impl Game<'_> {
             velocity,
             on_ground,
         );
-        self.creatures.projectiles.push(proj);
+        self.add_projectile(proj);
         self.player_projectile_shot();
         // ItemStack.use's applyAfterUseComponentSideEffects: the pearl's
         // second is the `use_cooldown` component, as for any thrown item.
@@ -3402,11 +3440,65 @@ impl Game<'_> {
             }
         }
     }
+    /// `Guardian.aiStep` on a client: two bubbles a tick trailing a guardian
+    /// that swims along, and bubbles up the beam to its target. The server
+    /// never draws them, so the mob's own random stays untouched.
+    pub(super) fn guardian_bubbles(&mut self) {
+        use horizon_client::mobs::guardian;
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let mut swimming = Vec::new();
+        let mut beams = Vec::new();
+        for m in &self.mobs {
+            if !m.alive() || !matches!(m.species(), Species::Guardian | Species::ElderGuardian) {
+                continue;
+            }
+            let at = [m.position.x, m.position.y, m.position.z];
+            if m.extra.flag2 && m.fluids.in_water {
+                let (width, height, _) = m.dims();
+                swimming.push((at, width, height, m.view_vector()));
+            }
+            if let Some((_, scale)) = guardian::beam(m, 0.0)
+                && let Some(t) = self.beam_target(m.ai.target, 1.0)
+            {
+                beams.push(([at[0], m.eye_y(), at[2]], [t.x, t.y, t.z], f64::from(scale)));
+            }
+        }
+        let bubble = ParticleOptions::simple(ParticleType::Bubble);
+        for (at, width, height, view) in swimming {
+            for _ in 0..2 {
+                let (x, y, z) = {
+                    let r = self.particles.random();
+                    (r.next_double(), r.next_double(), r.next_double())
+                };
+                let p = [
+                    at[0] + width * (2.0 * x - 1.0) * 0.5 - view[0] * 1.5,
+                    at[1] + height * y - view[1] * 1.5,
+                    at[2] + width * (2.0 * z - 1.0) * 0.5 - view[2] * 1.5,
+                ];
+                self.particles.add(&bubble, p, [0.0; 3]);
+            }
+        }
+        for (eye, target, scale) in beams {
+            let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if length <= 0.0 {
+                continue;
+            }
+            let mut dist = self.particles.random().next_double();
+            while dist < length {
+                let r = self.particles.random();
+                dist += 1.8 - scale + r.next_double() * (1.7 - scale);
+                let f = dist / length;
+                let p = [eye[0] + d[0] * f, eye[1] + d[1] * f, eye[2] + d[2] * f];
+                self.particles.add(&bubble, p, [0.0; 3]);
+            }
+        }
+    }
     /// Mob models and projectiles for the entity pass.
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        let scale = f64::from(self.settings.entity_distance);
+        let scale = self.view_scale();
         for mob in &self.mobs {
             let entity_start = out.len();
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws.
@@ -3415,9 +3507,16 @@ impl Game<'_> {
             }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
             // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's
-            // mean edge, scaled by the entity distance option.
+            // mean edge, scaled by the view scale. RemotePlayer's box counts
+            // ten times.
             let (w, h, _) = mob.dims();
-            let range = (w + h + w) / 3.0 * 64.0 * scale;
+            let edge = (w + h + w) / 3.0
+                * if &*mob.kind.id == "minecraft:player" {
+                    10.0
+                } else {
+                    1.0
+                };
+            let range = edge * 64.0 * scale;
             if d.length_squared() >= range * range {
                 continue;
             }
@@ -3703,6 +3802,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
         K::SonicBoom => "minecraft:sonic_boom",
+        K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
     }
 }

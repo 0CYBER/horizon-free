@@ -126,6 +126,18 @@ impl Game<'_> {
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
+        // AbstractHorse.mobInteract: a horse a mob rides (`isVehicle`) has no
+        // seat, inventory or feeding to give. Camels seat two and check their
+        // passengers themselves.
+        let id = m.id;
+        if !matches!(species, Species::Camel | Species::CamelHusk)
+            && self
+                .mobs
+                .iter()
+                .any(|p| p.extra.mount == Some(id) && !p.removed && p.alive())
+        {
+            return false;
+        }
         // SkeletonHorse.mobInteract: nothing for an untamed one.
         if species == Species::SkeletonHorse && !m.extra.tame {
             return false;

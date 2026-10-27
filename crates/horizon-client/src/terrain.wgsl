@@ -258,7 +258,7 @@ fn sky_along_ray(d: vec3<f32>) -> vec3<f32> {
 }
 
 // rendertype_lines.vsh: screen-space stroke and camera-space depth separation.
-fn outline_clip(vertex: u32, start: vec3<f32>, end: vec3<f32>) -> vec4<f32> {
+fn outline_clip(vertex: u32, start: vec3<f32>, end: vec3<f32>, width: f32) -> vec4<f32> {
     let position = select(start, end, vertex >= 2u);
     let normal = normalize(end - start);
     let view_shrink = 1.0 - 1.0 / 256.0;
@@ -268,7 +268,7 @@ fn outline_clip(vertex: u32, start: vec3<f32>, end: vec3<f32>) -> vec4<f32> {
     let ndc2 = line_end.xyz / line_end.w;
     let screen = globals.outline_params.xy;
     let direction = normalize((ndc2.xy - ndc1.xy) * screen);
-    var offset = vec2(-direction.y, direction.x) * globals.outline_params.z / screen;
+    var offset = vec2(-direction.y, direction.x) * width / screen;
     if offset.x < 0.0 { offset = -offset; }
     if vertex % 2u != 0u { offset = -offset; }
     return vec4((ndc1 + vec3(offset, 0.0)) * line_start.w, line_start.w);
@@ -277,18 +277,22 @@ struct LineOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) spherical: f32,
     @location(1) cylindrical: f32,
+    @location(2) color: vec4<f32>,
 }
 @vertex fn vs_line(@builtin(vertex_index) vertex: u32,
-    @location(0) start: vec3<f32>, @location(1) end: vec3<f32>) -> LineOut {
+    @location(0) start: vec3<f32>, @location(1) end: vec3<f32>,
+    @location(2) argb: vec4<f32>, @location(3) width: f32) -> LineOut {
     let position = select(start, end, vertex >= 2u);
     var out: LineOut;
-    out.clip = outline_clip(vertex, start, end);
+    out.clip = outline_clip(vertex, start, end, width);
     out.spherical = length(position);
     out.cylindrical = max(length(position.xz), abs(position.y));
+    // ARGB in a little-endian u32 reads as B, G, R, A.
+    out.color = argb.zyxw;
     return out;
 }
 @fragment fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
-    return apply_fog(vec4(0.0, 0.0, 0.0, 0.4), in.spherical, in.cylindrical);
+    return apply_fog(in.color, in.spherical, in.cylindrical);
 }
 // Gizmo lines (rendertype_lines with a per-vertex colour and LineWidth in
 // pixels; no layering transform).

@@ -235,6 +235,26 @@ impl MobWorld<'_> {
         };
         scene.unobstructed(b).unwrap_or(false)
     }
+    /// `LevelReader.containsAnyLiquid`: the blocks from the box's minimum
+    /// corner to the block holding its maximum corner.
+    pub fn contains_any_liquid(&self, b: Aabb) -> bool {
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let (x0, y0, z0) = (
+            lo.x.floor() as i32,
+            lo.y.floor() as i32,
+            lo.z.floor() as i32,
+        );
+        let (x1, y1, z1) = (
+            hi.x.floor() as i32,
+            hi.y.floor() as i32,
+            hi.z.floor() as i32,
+        );
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                (z0..=z1).any(|z| self.facts.get(self.world.block(x, y, z)).fluid != Fluid::None)
+            })
+        })
+    }
 }
 impl Mob {
     /// `Entity.refreshDimensions` after growing from `old_w` by `old_h`:
@@ -281,6 +301,15 @@ impl Mob {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
         let k = &self.kind;
+        // Avatar.POSES: a player's or mannequin's box follows its pose.
+        if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
+            let d = self.extra.avatar_pose.dimensions(1.0);
+            return (
+                f64::from(d.width),
+                f64::from(d.height),
+                f64::from(d.eye_height),
+            );
+        }
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
         if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
@@ -529,13 +558,15 @@ impl Mob {
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
-    /// every 0.55, a strider's every 0.6.
+    /// every 0.55, a strider's every 0.6, a turtle's every 0.15.
     fn next_step(&self) -> f32 {
         let walked = self.ai.steps.move_dist;
         if self.kind.species == super::Species::Warden {
             walked + 0.55
         } else if self.kind.species == super::Species::Strider {
             walked + 0.6
+        } else if self.kind.species == super::Species::Turtle {
+            walked + 0.15
         } else {
             (walked as i32).wrapping_add(1) as f32
         }
@@ -813,14 +844,24 @@ impl Mob {
                 self.velocity.y -= gravity / 4.0;
             }
         }
-        // jumpOutOfFluid
+        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
+        // entities a mob collides with (canBeCollidedWith: living shulkers).
         let m = self.velocity;
+        let ahead = self.bounds().move_by(Vec3::new(
+            m.x,
+            m.y + f64::from(0.6_f32) - self.position.y + old_y,
+            m.z,
+        ));
+        let wide = ahead.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
         if self.horizontal_collision
-            && w.no_collision(self.bounds().move_by(Vec3::new(
-                m.x,
-                m.y + f64::from(0.6_f32) - self.position.y + old_y,
-                m.z,
-            )))
+            && w.no_collision(ahead)
+            && !w.contains_any_liquid(ahead)
+            && !w.others_near(wide).any(|s| {
+                s.id != self.id
+                    && s.alive
+                    && s.species == super::Species::Shulker
+                    && s.bounds.intersects(wide)
+            })
         {
             self.velocity.y = f64::from(0.3_f32);
         }

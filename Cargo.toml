@@ -35,6 +35,7 @@ members = [
     "crates/horizon-mod-sdk/examples/beacons",
     "mods/official/fps-overlay",
     "mods/official/keystrokes",
+    "mods/official/far-view",
     "mods/official/minimap",
     "mods/official/zoom",
     "xtask",

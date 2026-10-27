@@ -1500,7 +1500,7 @@ impl Def {
                 ),
             // Nautilus.handleAirSupply: it dries out on land.
             needs_water: aquatic || s == S::Nautilus,
-            water_sensitive: matches!(s, S::Enderman | S::Blaze | S::SnowGolem),
+            water_sensitive: matches!(s, S::Enderman | S::Blaze | S::SnowGolem | S::Strider),
             animal: !matches!(s, S::Bat | S::SulfurCube | S::Mannequin)
                 && !self.hostile_class()
                 && !aquatic
@@ -1629,6 +1629,7 @@ impl Def {
         match self.species {
             Species::Dolphin | Species::Axolotl => 1.0,
             Species::Slime | Species::MagmaCube | Species::SulfurCube => 0.0,
+            Species::Guardian | Species::ElderGuardian | Species::Shulker => 180.0,
             _ => 40.0,
         }
     }
@@ -1640,6 +1641,9 @@ impl Def {
             Species::Sniffer => 50.0,
             Species::Goat => 15.0,
             Species::Armadillo => 32.0,
+            Species::Ravager => 45.0,
+            Species::Camel | Species::CamelHusk => 30.0,
+            Species::Shulker => 180.0,
             _ => 75.0,
         }
     }

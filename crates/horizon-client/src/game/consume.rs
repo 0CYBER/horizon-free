@@ -19,7 +19,17 @@ use std::convert::Infallible;
 
 type ItemConsumable = Consumable<String, ConsumeEffect>;
 
+/// `EntityEvent.USE_ITEM_COMPLETE`: the server finished the player's use.
+pub(super) const USE_ITEM_COMPLETE_EVENT: i8 = 9;
+
 impl Game<'_> {
+    /// `ServerPlayer.completeUsingItem`: the player's own client is told
+    /// first, and completes the use itself (eating the food there too).
+    pub(super) fn send_use_item_complete(&mut self) {
+        if self.lan_acting.is_some() {
+            self.guest_entity_events.push(USE_ITEM_COMPLETE_EVENT);
+        }
+    }
     /// `Consumable.emitParticlesAndSounds(user.getRandom(), user, stack, count)`.
     pub(super) fn emit_consume(
         &mut self,

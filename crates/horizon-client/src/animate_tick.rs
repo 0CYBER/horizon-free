@@ -73,6 +73,8 @@ enum Animate {
         waterlogged: bool,
     },
     EndPortal,
+    /// `WetSpongeBlock.animateTick`.
+    WetSponge,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -167,6 +169,10 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
         "end_portal" => Animate::EndPortal,
+        "wet_sponge" => Animate::WetSponge,
+        // BrushableBlock has no dust colour of its own, so the dust is the map colour.
+        "suspicious_sand" => Animate::Falling(0xF7E9A3),
+        "suspicious_gravel" => Animate::Falling(0x707070),
         "sculk_sensor" | "calibrated_sculk_sensor"
             if prop("sculk_sensor_phase").as_deref() == Some("active") =>
         {
@@ -961,6 +967,36 @@ fn block_animate_tick(
                     let name = "minecraft:block.potent_sulfur.noxious_gas";
                     sound(engine, name, [fx, fy, fz], 1.0, 1.0);
                 }
+            }
+        }
+        Animate::WetSponge => {
+            // Direction.getRandom: DOWN, UP, NORTH, SOUTH, WEST, EAST.
+            const DIRECTIONS: [[i32; 3]; 6] = [
+                [0, -1, 0],
+                [0, 1, 0],
+                [0, 0, -1],
+                [0, 0, 1],
+                [-1, 0, 0],
+                [1, 0, 0],
+            ];
+            let d = DIRECTIONS[next_int(engine.random(), 6) as usize];
+            // The sponge occludes, so only a sturdy neighbour face hides the drip.
+            if d != [0, 1, 0] && !ctx.sturdy([pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]]) {
+                let r = engine.random();
+                let p = match d {
+                    [0, -1, 0] => [fx + r.next_double(), fy - 0.05, fz + r.next_double()],
+                    [dx, _, 0] => {
+                        let y = fy + r.next_double() * 0.8;
+                        let z = fz + r.next_double();
+                        [fx + if dx > 0 { 1.1 } else { 0.05 }, y, z]
+                    }
+                    [_, _, dz] => {
+                        let y = fy + r.next_double() * 0.8;
+                        let x = fx + r.next_double();
+                        [x, y, fz + if dz > 0 { 1.1 } else { 0.05 }]
+                    }
+                };
+                add(engine, T::DrippingWater, p, [0.0; 3]);
             }
         }
         Animate::Mycelium => {
