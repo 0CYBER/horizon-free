@@ -1049,6 +1049,7 @@ pub fn main() -> horizon_client::Result<()> {
                 alive: true,
                 creative: s.creative,
                 sneaking: false,
+                swimming: false,
                 look: [0.0, 0.0, 1.0],
                 main_hand: s.hand.as_deref().map(Into::into),
                 off_hand: None,
