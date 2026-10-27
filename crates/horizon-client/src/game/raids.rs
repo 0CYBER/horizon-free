@@ -805,7 +805,7 @@ impl Game<'_> {
             let has_rider = ridden.contains(&m.id);
             let target_golem = matches!(m.ai.target, Some(horizon_client::mobs::Who::Mob(t)) if golems.contains(&t));
             let target_player = m.ai.target == Some(horizon_client::mobs::Who::Player);
-            let (health, age, range) = (m.health, m.age, m.attrs.follow_range);
+            let (health, range) = (m.health, m.attrs.follow_range);
             let raids = &mut self.raiding.raids;
             let s = m.extra.raider.get_or_insert_with(Box::default);
             s.rider = has_rider;
@@ -850,11 +850,9 @@ impl Game<'_> {
             {
                 joins.push((m.id, id, health));
             }
-            // PathfindToRaidGoal.recruitNearby.
-            if s.active_raid
-                && !s.raid_over
-                && !s.in_village
-                && age % 20 == 0
+            // PathfindToRaidGoal.tick: recruitNearby, only while the goal runs.
+            if std::mem::take(&mut s.recruit_due)
+                && s.active_raid
                 && let Some(id) = s.raid_id
             {
                 recruit.push((id, position));
