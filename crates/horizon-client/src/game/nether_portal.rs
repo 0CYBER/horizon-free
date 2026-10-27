@@ -908,25 +908,21 @@ impl Game<'_> {
             self.portals.dirty = true;
         }
     }
-    /// Entities waiting for the loaded dimension whose exit area is loaded:
-    /// their exit portal (found or built) or End destination, position,
-    /// turned yaw and motion, and portal cooldown; they join the world with the chunk entities.
     /// The chunks of the arrivals still waiting to land in `dim`, for the
-    /// streaming `extra` areas that light them (`TicketType.ENTITY`).
+    /// streaming `extra` areas that light them: vanilla's portal ticket
+    /// (`Entity.teleport` adds `TicketType.PORTAL` at the destination) keeps
+    /// the area loaded without a player.
     pub(super) fn arrival_chunks(&self, dim: Dim) -> Vec<(i32, i32)> {
         self.portals
             .arrivals
             .iter()
             .filter(|a| a.plan.dim == dim)
-            .map(|a| {
-                (
-                    a.plan.approximate.x >> 4,
-                    a.plan.approximate.z >> 4,
-                )
-            })
+            .map(|a| (a.plan.approximate.x >> 4, a.plan.approximate.z >> 4))
             .collect()
     }
-
+    /// Entities waiting for the loaded dimension whose exit area is loaded:
+    /// their exit portal (found or built) or End destination, position,
+    /// turned yaw and motion, and portal cooldown; they join the world with the chunk entities.
     pub(super) fn resolve_arrivals(&mut self) {
         if self.remote.is_some() {
             return;

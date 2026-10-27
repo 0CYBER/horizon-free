@@ -443,7 +443,7 @@ impl Game<'_> {
                     || forced
                     || self.pregen_level() == Some(*d)
                     // A pending portal arrival keeps its destination level
-                    // running so it can land and tick (`TicketType.ENTITY`).
+                    // running so it can land and tick (the portal ticket).
                     || !self.arrival_chunks(*d).is_empty()
             })
             .collect();
