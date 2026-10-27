@@ -1585,9 +1585,10 @@ pub fn newest_crash_report() -> Option<PathBuf> {
     crash_reports_in(&crash_reports_dir()).pop()
 }
 
-/// The newest crash report written at or after `since` (one from the run that started then).
-pub fn crash_report_since(since: std::time::SystemTime) -> Option<PathBuf> {
-    crash_report_in_since(&crash_reports_dir(), since)
+/// The newest crash report the game playing in `home` wrote at or after `since` (one from the
+/// run that started then).
+pub fn crash_report_since(home: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
+    crash_report_in_since(&home.join("crash-reports"), since)
 }
 
 fn crash_report_in_since(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
@@ -2517,6 +2518,9 @@ pub enum Appearance {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
+    /// The instance Play starts (`instances`), by id. Unset means Horizon, the game's home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
     pub minecraft_dir: Option<PathBuf>,
     pub server_dir: Option<PathBuf>,
     /// Unset means on: only a player who turned it off has `false` here. 0.1.1 wrote its
@@ -2545,6 +2549,13 @@ pub struct Settings {
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
+    /// Seconds the sidebar's partner banner has been on screen, over every start, up to
+    /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
+    #[serde(default)]
+    pub partner_seen_secs: u64,
+    /// The player hid the sidebar's partner banner. The Servers page keeps its own.
+    #[serde(default)]
+    pub partner_hidden: bool,
 }
 
 impl Settings {

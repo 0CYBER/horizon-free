@@ -1791,6 +1791,10 @@ impl Goal for Breed {
         if tamable && (!m.extra.tame || m.extra.sitting) {
             return false;
         }
+        // TurtleBreedGoal.canUse: not while carrying an egg.
+        if species == Species::Turtle && super::turtle::has_egg(m) {
+            return false;
+        }
         let id = m.id;
         // Horses and donkeys breed together (AbstractHorse.canParent: tame).
         // Sniffer.canMate: calm states only.
@@ -1869,6 +1873,10 @@ impl Goal for Breed {
             });
             m.extra.in_love = 0;
             m.extra.age = 6000;
+            // TurtleBreedGoal.breed: the mother carries an egg, not a baby.
+            if m.species() == Species::Turtle {
+                m.extra.flag = true;
+            }
             cx.events.push(MobEvent::Breed {
                 parent: m.id,
                 partner: p.id,

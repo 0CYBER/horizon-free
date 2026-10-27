@@ -663,7 +663,7 @@ pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
         ) {
             m.health = max_health(m);
         }
-        m.extra.can_break_doors = true;
+        super::doors::set_can_break_doors(m, true);
     }
 }
 pub fn max_health(m: &Mob) -> f32 {
@@ -889,6 +889,14 @@ pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
         _ => return,
     }
     gear::set(m, gear_slot(slot), Vec::new());
+}
+/// The enchantments on what `m` has in `slot`.
+pub fn slot_enchantments(m: &Mob, slot: usize) -> gear::Levels {
+    gear::gear(m).map_or_else(Vec::new, |g| g.slots[gear_slot(slot)].clone())
+}
+/// Replace the enchantments of what `m` has in `slot` (after `set_item`).
+pub fn set_slot_enchantments(m: &mut Mob, slot: usize, levels: gear::Levels) {
+    gear::set(m, gear_slot(slot), levels);
 }
 /// `Mob.setDropChance`.
 pub fn set_drop_chance(m: &mut Mob, slot: usize, chance: f32) {
@@ -1205,7 +1213,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                     }
                 }
             }
-            m.extra.can_break_doors = self.float() < special * 0.1;
+            let can_break_doors = self.float() < special * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if reason != Reason::Conversion {
                 self.populate(m);
                 self.enchant(m);

@@ -113,6 +113,9 @@ pub struct ItemInfo {
     pub swappable: bool,
     /// `equippable.dispensable` (dispensers may put it on an entity).
     pub equip_dispensable: bool,
+    /// `equippable.damage_on_hurt`: the item wears when its wearer is hurt
+    /// (false for the elytra).
+    pub equip_damage_on_hurt: bool,
     /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
     pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
@@ -624,6 +627,9 @@ impl Items {
                         .as_bool()
                         .unwrap_or(true),
                     equip_dispensable: c["minecraft:equippable"]["dispensable"]
+                        .as_bool()
+                        .unwrap_or(true),
+                    equip_damage_on_hurt: c["minecraft:equippable"]["damage_on_hurt"]
                         .as_bool()
                         .unwrap_or(true),
                     equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {

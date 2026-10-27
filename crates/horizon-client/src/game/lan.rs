@@ -24,11 +24,24 @@ use horizon_protocol::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The registries and tags are the same for every world: load them once.
-static SYNC: OnceLock<std::result::Result<Arc<SyncData>, String>> = OnceLock::new();
+static SYNC: Mutex<Option<std::result::Result<Arc<SyncData>, String>>> = Mutex::new(None);
+
+/// The registries and tags a server sends, loaded from `root` the first time.
+pub(super) fn sync_data(root: &std::path::Path) -> std::result::Result<Arc<SyncData>, String> {
+    let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    sync.get_or_insert_with(|| SyncData::load(root).map(Arc::new))
+        .clone()
+}
+
+/// Let go of what `sync_data` loaded: for a preload no world used
+/// (game/world_loading.rs).
+pub(super) fn forget_sync_data() {
+    *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
 #[derive(Clone, Copy, Debug)]
@@ -562,10 +575,7 @@ impl Game<'_> {
         config: HubConfig,
         host: Option<u128>,
     ) -> Result<()> {
-        let root = self.options.resources.clone();
-        let sync = SYNC
-            .get_or_init(|| SyncData::load(&root).map(Arc::new))
-            .clone()?;
+        let sync = sync_data(&self.options.resources)?;
         let biome_names: Vec<String> = self
             .res
             .biomes()
@@ -1128,8 +1138,17 @@ impl Game<'_> {
             g.game_mode = default_mode;
         }
         if !known {
-            g.position = spawn;
-            g.previous_position = spawn;
+            // ServerPlayer.adjustSpawnLocation: a player new to the world
+            // stands where PlayerSpawnFinder puts them, not all on one spot
+            // (it reads the loaded level, which holds the spawn when it is
+            // the overworld).
+            let feet = if self.dim == super::Dim::Overworld {
+                self.server_player_spawn(spawn)
+            } else {
+                spawn
+            };
+            g.position = feet;
+            g.previous_position = feet;
             g.health = 20.0;
             g.food = 20;
             g.dimension = super::Dim::Overworld.id().to_owned();
@@ -1409,6 +1428,7 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            m.extra.sprinting = g.sprinting;
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.

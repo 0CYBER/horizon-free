@@ -304,6 +304,9 @@ impl Game<'_> {
             None => 0,
         };
         let at = |p: horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        for f in &self.fangs.list {
+            out.push(state(f.id, "minecraft:evoker_fangs", f.pos, f.yaw, false));
+        }
         // LightningBolt: each client draws and flashes its own.
         for b in self.bolts.iter().filter(|b| b.id != 0) {
             out.push(state(b.id, "minecraft:lightning_bolt", b.at, 0.0, false));

@@ -9,7 +9,8 @@ PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/hor
             "horizon-theme": "crates/horizon-theme", "xtask": "xtask"}
 LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"horizon-client": {"horizon-core"}}
-MODS = " --features horizon-mods/runtime,horizon-mods/pack,horizon-client/mods"
+MODS = " --features horizon-client/mods,horizon-mods/pack"
+CLIPPY = pr_ready.CI_CLIPPY + " && " + pr_ready.CI_CLIPPY_SERVER
 
 
 def args(host="local", quick=False):
@@ -35,6 +36,9 @@ class PrReadyTests(unittest.TestCase):
         self.assertFalse(pr_ready.workspace_rust("crates/horizon-client/README.md"))
         self.assertFalse(pr_ready.workspace_rust("launcher/src/main.rs"))
         self.assertTrue(pr_ready.launcher_rust("launcher/src/main.rs"))
+        # CI's launcher job also runs for the root workspace's manifests and for its own check.
+        self.assertTrue(pr_ready.launcher_rust("Cargo.lock"))
+        self.assertTrue(pr_ready.launcher_rust("tools/ci/rust_changes.py"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-prepare/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-theme/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-telemetry/src/lib.rs"))
@@ -46,10 +50,9 @@ class PrReadyTests(unittest.TestCase):
         with mock.patch.object(pr_ready, "affected_here", return_value=[]):
             steps = pr_ready.plan(args(quick=True), "origin/main", {"crates/horizon-client/src/game.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
         by_name = {step.name: step for step in steps}
-        self.assertEqual(by_name["clippy"].command,
-                         "cargo clippy -p horizon-client --all-targets --locked -- -D warnings")
+        self.assertEqual(by_name["clippy"].command, CLIPPY)
         self.assertEqual(by_name["tests: horizon-client"].command,
-                         "cargo test --locked -p horizon-client --tests")
+                         "cargo test --locked -p horizon-client --features horizon-client/mods --tests")
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-client --doc")
         self.assertIsNone(by_name["doc tests"].status)
 
@@ -58,11 +61,23 @@ class PrReadyTests(unittest.TestCase):
             with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
                 by_name = {step.name: step for step in steps}
-                self.assertEqual(by_name["clippy"].command,
-                                 "cargo clippy --workspace" + MODS + " --all-targets --locked -- -D warnings")
+                self.assertEqual(by_name["clippy"].command, CLIPPY)
                 self.assertEqual(by_name["tests: workspace"].command,
                                  "cargo test --locked --workspace" + MODS + " --tests")
                 self.assertEqual(by_name["doc tests"].command, "cargo test --locked --workspace --doc")
+
+    def test_tests_get_the_features_ci_s_workspace_run_gives_them(self):
+        self.assertEqual(pr_ready.mod_features(["horizon-world"]), "")
+        self.assertEqual(pr_ready.mod_features(["horizon-client"]), " --features horizon-client/mods")
+        self.assertEqual(pr_ready.mod_features(["horizon-mods"]),
+                         " --features horizon-mods/runtime,horizon-mods/pack,horizon-mods/index")
+        self.assertEqual(pr_ready.mod_features(None), MODS)
+
+    def test_python_tests_always_run(self):
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main", {"crates/horizon-core/src/lib.rs"},
+                                  PACKAGES, LIBRARIES, DEPENDENCIES)
+        self.assertIsNone({step.name: step for step in steps}["Python tests"].status)
 
     def test_non_rust_changes_skip_workspace_checks(self):
         for path in ("README.md", "tools/pr_ready.py", "launcher/src/main.rs"):
@@ -77,7 +92,7 @@ class PrReadyTests(unittest.TestCase):
             steps = pr_ready.plan(args(), "origin/main",
                                   {"crates/horizon-core/src/lib.rs", "crates/horizon-client/examples/probe.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
         for step in steps:
-            if step.name in ("clippy", "tests: horizon-client, horizon-core", "doc tests"):
+            if step.name in ("tests: horizon-client, horizon-core", "doc tests"):
                 self.assertIn("-p horizon-client -p horizon-core", step.command)
                 self.assertIsNone(step.status)
 
@@ -94,15 +109,17 @@ class PrReadyTests(unittest.TestCase):
         by_name = {step.name: step for step in steps}
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-core --doc")
 
-    def test_clippy_checks_transitive_consumers_but_tests_only_touched_crates(self):
-        packages = {name: f"crates/{name}" for name in ("core", "world", "client", "unrelated")}
-        dependencies = {"world": {"core"}, "client": {"world"}, "unrelated": set()}
+    def test_clippy_is_ci_s_and_the_server_build_when_the_game_is_affected(self):
+        packages = {name: f"crates/{name}" for name in ("core", "world", "horizon-client", "unrelated")}
+        dependencies = {"world": {"core"}, "horizon-client": {"world"}, "unrelated": set()}
         with mock.patch.object(pr_ready, "affected_here", return_value=[]):
             steps = pr_ready.plan(args(), "origin/main", {"crates/core/src/lib.rs"},
                                   packages, set(packages), dependencies)
+            unrelated = pr_ready.plan(args(), "origin/main", {"crates/unrelated/src/lib.rs"},
+                                      packages, set(packages), dependencies)
+        self.assertEqual({step.name: step for step in unrelated}["clippy"].command, pr_ready.CI_CLIPPY)
         by_name = {step.name: step for step in steps}
-        self.assertEqual(by_name["clippy"].command,
-                         "cargo clippy -p client -p core -p world --all-targets --locked -- -D warnings")
+        self.assertEqual(by_name["clippy"].command, CLIPPY)
         self.assertEqual(by_name["tests: core"].command, "cargo test --locked -p core --tests")
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p core --doc")
 

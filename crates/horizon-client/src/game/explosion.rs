@@ -316,9 +316,6 @@ impl Game<'_> {
                 );
             }
         }
-        if outcome.hurt && !creative {
-            self.hurt_armor(amount);
-        }
         if raised {
             self.after_block(outcome, amount, None, false);
         }

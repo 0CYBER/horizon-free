@@ -115,6 +115,7 @@ impl Game<'_> {
             "in_fire" | "campfire" | "hot_floor" => DamageKind::InFire,
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
+            "dry_out" => DamageKind::DryOut,
             "magic" | "indirect_magic" | "dragon_breath" => DamageKind::Magic,
             "sting" => DamageKind::Sting,
             "cactus" | "sweet_berry_bush" => DamageKind::Cactus,
