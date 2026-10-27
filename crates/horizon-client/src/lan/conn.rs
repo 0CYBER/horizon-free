@@ -32,9 +32,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// ServerCommonPacketListenerImpl.KEEPALIVE_TIME and the disconnect timeout.
+/// ServerCommonPacketListenerImpl.keepConnectionAlive: a keep-alive every 15 s,
+/// and a client that has not answered the last one by the next is dropped.
 const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(15);
-const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// ReadTimeoutHandler(30) in ServerConnectionListener: a connection that sends
+/// nothing for 30 s.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Packets queued for one client beyond this many bytes disconnect it.
 const MAX_PENDING: usize = 96 << 20;
 /// Vanilla's server-side disconnect during login is a JSON component.
@@ -950,7 +953,7 @@ fn offer_pack(
 fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::SocketAddr) {
     let conn_id = shared.next_id();
     let events = shared.events.clone();
-    let _ = c.reader.set_read_timeout(Some(KEEP_ALIVE_TIMEOUT));
+    let _ = c.reader.set_read_timeout(Some(READ_TIMEOUT));
     let (mut reader, writer) = c.split();
     let (tx, rx) = channel();
     let pending = Arc::new(AtomicUsize::new(0));
@@ -1165,7 +1168,7 @@ fn write_loop(
                 let old = latency.load(Ordering::Relaxed);
                 latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
                 sent_at = None;
-            } else if at.elapsed() > KEEP_ALIVE_TIMEOUT {
+            } else if at.elapsed() >= KEEP_ALIVE_EVERY {
                 let _ = writer.send(
                     &play::Clientbound::Disconnect(cfg::Disconnect {
                         reason: translatable("disconnect.timeout", &[]),
