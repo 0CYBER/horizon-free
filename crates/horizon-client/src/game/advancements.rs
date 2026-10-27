@@ -74,9 +74,9 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
-/// Where the player's fall and lava ride began and the blast that last hit the
-/// player (`ServerPlayer`'s fields of the same names). A guest keeps their own,
-/// as `levitation` does.
+/// Where the player's fall, lava ride and Nether trip began and the blast that
+/// last hit the player (`ServerPlayer`'s fields of the same names). A guest
+/// keeps their own, as `levitation` does.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
@@ -85,6 +85,8 @@ pub(super) struct TravelMarks {
     pub(super) blast: Option<([f64; 3], bool)>,
     /// `enteredLavaOnVehiclePosition`.
     pub(super) lava_ride: Option<[f64; 3]>,
+    /// `enteredNetherPosition`.
+    pub(super) nether: Option<[f64; 3]>,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -101,7 +103,7 @@ pub(super) struct AdvState {
     pub(super) last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
-    /// The fall, lava ride and blast `tick_marks` follows.
+    /// The fall, lava ride, Nether trip and blast `tick_marks` follows.
     pub(super) marks: TravelMarks,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
@@ -764,8 +766,8 @@ impl Game<'_> {
         });
     }
     /// `ServerPlayer.tick`: `trackStartFallingPosition` and the end of a fall
-    /// (`resetFallDistance`), `trackEnteredOrExitedLavaOnVehicle` and the wind
-    /// charge blast a fall follows.
+    /// (`resetFallDistance`), `trackEnteredOrExitedLavaOnVehicle`, the way back
+    /// from the Nether and the wind charge blast a fall follows.
     fn tick_marks(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
@@ -803,6 +805,13 @@ impl Game<'_> {
             (true, Some(start)) => self.trigger_distance("minecraft:ride_entity_in_lava", start),
             (false, Some(_)) => self.adv.marks.lava_ride = None,
             (false, None) => {}
+        }
+        // Back in the Overworld from the Nether: measured from where it was entered.
+        if let Some(start) = self.adv.marks.nether
+            && self.dim == Dim::Overworld
+        {
+            self.adv.marks.nether = None;
+            self.trigger_distance("minecraft:nether_travel", start);
         }
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
@@ -1163,12 +1172,20 @@ impl Game<'_> {
                 && test("child", child.as_ref())
         });
     }
-    /// `ChangeDimensionTrigger`.
-    pub(super) fn trigger_dimension(&mut self, from: Dim, to: Dim) {
-        let (from, to) = (from.id().to_owned(), to.id().to_owned());
+    /// `ChangeDimensionTrigger`, and `ServerPlayer.enteredNetherPosition`: the
+    /// Overworld position the player went into the Nether from (`at`) is kept
+    /// for the way back, and any other trip drops it.
+    pub(super) fn trigger_dimension(&mut self, from: Dim, to: Dim, at: [f64; 3]) {
+        let (from_id, to_id) = (from.id().to_owned(), to.id().to_owned());
         self.trigger("minecraft:changed_dimension", move |c, _| {
-            c["from"].as_str().is_none_or(|f| f == from) && c["to"].as_str().is_none_or(|t| t == to)
+            c["from"].as_str().is_none_or(|f| f == from_id)
+                && c["to"].as_str().is_none_or(|t| t == to_id)
         });
+        if from == Dim::Overworld && to == Dim::Nether {
+            self.adv.marks.nether = Some(at);
+        } else if !(from == Dim::Nether && to == Dim::Overworld) {
+            self.adv.marks.nether = None;
+        }
     }
     /// `ToastManager.SLOT_COUNT`.
     pub(super) const TOAST_SLOTS: usize = 5;
