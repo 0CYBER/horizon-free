@@ -304,6 +304,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         map: false,
         exploration: None,
         ominous_amplifier: None,
+        stew_effects: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the
@@ -349,6 +350,9 @@ pub fn loot_entity(m: &Mob, vehicle: Option<LootEntity>) -> LootEntity {
                 [usize::from(m.extra.variant).min(2)]
             .to_owned(),
         );
+    }
+    if s == S::Chicken {
+        e.chicken_variant = super::finalize::variant_component(m).map(|(_, id)| id);
     }
     e.powered = s == S::Creeper && m.extra.charged;
     e.equipment = SLOTS
@@ -453,6 +457,14 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         // WitherBoss.dropCustomDeathLoot.
         if s == Species::Wither {
             out.push(Drop::Item(loot_stack("minecraft:nether_star", 1)));
+        }
+    }
+    // Piglin.dropCustomDeathLoot: everything in its inventory.
+    if s == Species::Piglin {
+        for stack in m.extra.inventory.drain(..) {
+            let mut item = loot_stack(&stack.item, stack.count as i32);
+            item.damage = stack.damage as i32;
+            out.push(Drop::Item(item));
         }
     }
     // dropEquipment: AbstractHorse's inventory, then a chested horse's chest.

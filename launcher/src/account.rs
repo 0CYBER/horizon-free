@@ -60,11 +60,17 @@ impl Endpoints {
     }
 }
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(20))
-        .user_agent(&format!("horizon-launcher/{}", crate::backend::VERSION))
-        .build()
+/// A request to `url`: the launcher's user agent, a 20 s timeout, and the player's proxy when one
+/// is set (`proxy`), since a sign-in has to get out the way downloads do.
+fn request_to(method: &str, url: &str) -> ureq::Request {
+    crate::proxy::agent(
+        ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(20))
+            .user_agent(&format!("horizon-launcher/{}", crate::backend::VERSION)),
+        url,
+    )
+    .build()
+    .request(method, url)
 }
 
 /// One request's result: the status and the JSON body (empty when there is none). Transport
@@ -147,7 +153,7 @@ pub enum Poll {
 
 pub fn device_code(ep: &Endpoints, client_id: &str) -> Result<DeviceCode, String> {
     let (status, v) = send(
-        agent().post(&format!("{}/devicecode", ep.microsoft)),
+        request_to("POST", &format!("{}/devicecode", ep.microsoft)),
         Some(Body::Form(vec![("client_id", client_id), ("scope", SCOPE)])),
         "Microsoft",
     )?;
@@ -190,7 +196,7 @@ fn oauth_error(v: &Value) -> String {
 /// One poll of the token endpoint while the player signs in.
 pub fn poll(ep: &Endpoints, client_id: &str, code: &DeviceCode) -> Result<Poll, String> {
     let (status, v) = send(
-        agent().post(&format!("{}/token", ep.microsoft)),
+        request_to("POST", &format!("{}/token", ep.microsoft)),
         Some(Body::Form(vec![
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ("client_id", client_id),
@@ -247,7 +253,7 @@ pub fn wait_for_sign_in(
 
 fn refresh_ms(ep: &Endpoints, client_id: &str, refresh: &str) -> Result<MsTokens, String> {
     let (status, v) = send(
-        agent().post(&format!("{}/token", ep.microsoft)),
+        request_to("POST", &format!("{}/token", ep.microsoft)),
         Some(Body::Form(vec![
             ("grant_type", "refresh_token"),
             ("client_id", client_id),
@@ -281,7 +287,7 @@ struct Minecraft {
 
 fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String> {
     let (status, xbl) = send(
-        agent().post(&ep.xbox_user),
+        request_to("POST", &ep.xbox_user),
         Some(Body::Json(json!({
             "Properties": {
                 "AuthMethod": "RPS",
@@ -297,7 +303,7 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
         .filter(|_| status == 200)
         .ok_or("Xbox Live refused the sign-in.")?;
     let (status, xsts) = send(
-        agent().post(&ep.xsts),
+        request_to("POST", &ep.xsts),
         Some(Body::Json(json!({
             "Properties": { "SandboxId": "RETAIL", "UserTokens": [xbl_token] },
             "RelyingParty": "rp://api.minecraftservices.com/",
@@ -317,7 +323,10 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
     };
     let xuid = claims.and_then(|c| str_field(c, "xid"));
     let (status, mc) = send(
-        agent().post(&format!("{}/authentication/login_with_xbox", ep.minecraft)),
+        request_to(
+            "POST",
+            &format!("{}/authentication/login_with_xbox", ep.minecraft),
+        ),
         Some(Body::Json(
             json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") }),
         )),
@@ -350,7 +359,7 @@ fn bearer(request: ureq::Request, token: &str) -> ureq::Request {
 fn owns_game(ep: &Endpoints, token: &str) -> Result<bool, String> {
     let (status, v) = send(
         bearer(
-            agent().get(&format!("{}/entitlements/mcstore", ep.minecraft)),
+            request_to("GET", &format!("{}/entitlements/mcstore", ep.minecraft)),
             token,
         ),
         None,
@@ -387,7 +396,7 @@ pub struct Account {
 fn profile(ep: &Endpoints, token: &str) -> Result<Account, String> {
     let (status, v) = send(
         bearer(
-            agent().get(&format!("{}/minecraft/profile", ep.minecraft)),
+            request_to("GET", &format!("{}/minecraft/profile", ep.minecraft)),
             token,
         ),
         None,
@@ -629,6 +638,33 @@ pub struct Accounts {
     pub accounts: Vec<Account>,
     /// The UUID of the account the game starts with; none plays offline.
     pub selected: Option<String>,
+    /// Offline names the player keeps, to switch between (`--name`): no account, no skin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offline: Vec<String>,
+    /// The offline name that plays when no account is selected; none: the name the game made up
+    /// (`horizon-player.txt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_selected: Option<String>,
+    /// Each offline name's skin and cape (`skins`), by the name in lowercase.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub looks: std::collections::BTreeMap<String, crate::skins::Look>,
+}
+
+/// Who plays, as the quick switch lists them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Player {
+    /// A Microsoft account, by UUID.
+    Microsoft(String),
+    /// An offline name.
+    Offline(String),
+    /// Offline as the name the game made up.
+    GameName,
+}
+
+/// Whether `name` can be an offline name: 3 to 16 letters, digits or `_`, as account names are.
+pub fn valid_offline_name(name: &str) -> bool {
+    (3..=16).contains(&name.chars().count())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 impl Accounts {
@@ -678,6 +714,94 @@ impl Accounts {
         }
         Ok(())
     }
+    /// Who plays now.
+    pub fn player(&self) -> Player {
+        match (self.selected(), &self.offline_selected) {
+            (Some(a), _) => Player::Microsoft(a.uuid.clone()),
+            (None, Some(name)) => Player::Offline(name.clone()),
+            (None, None) => Player::GameName,
+        }
+    }
+
+    /// Plays as `who`: an account, an offline name (kept), or the game's own name.
+    pub fn play_as(&mut self, who: Player) -> Result<(), String> {
+        match who {
+            Player::Microsoft(uuid) => {
+                if !self.accounts.iter().any(|a| a.uuid == uuid) {
+                    return Err("That account isn't signed in.".into());
+                }
+                self.selected = Some(uuid);
+            }
+            Player::Offline(name) => {
+                let name = self.add_offline(&name)?;
+                self.selected = None;
+                self.offline_selected = Some(name);
+            }
+            Player::GameName => {
+                self.selected = None;
+                self.offline_selected = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Keeps an offline name (once, in any case); returns it as kept.
+    pub fn add_offline(&mut self, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if !valid_offline_name(name) {
+            return Err(format!(
+                "{name}: an offline name is 3 to 16 letters, digits or _"
+            ));
+        }
+        if let Some(kept) = self.offline.iter().find(|n| n.eq_ignore_ascii_case(name)) {
+            return Ok(kept.clone());
+        }
+        self.offline.push(name.to_string());
+        Ok(name.to_string())
+    }
+
+    /// Forgets an offline name; if it was playing, the game's own name plays.
+    pub fn remove_offline(&mut self, name: &str) -> Result<(), String> {
+        let before = self.offline.len();
+        self.offline.retain(|n| !n.eq_ignore_ascii_case(name));
+        self.looks.remove(&name.to_ascii_lowercase());
+        if self.offline.len() == before {
+            return Err(format!("No offline name {name}."));
+        }
+        if self
+            .offline_selected
+            .as_ref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            self.offline_selected = None;
+        }
+        Ok(())
+    }
+
+    /// An offline name's look (the default: no skin of its own).
+    pub fn look(&self, name: &str) -> crate::skins::Look {
+        self.looks
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The game's variables for the offline name that plays: its skin and cape.
+    pub fn look_env(&self) -> Vec<(&'static str, String)> {
+        match self.name_arg() {
+            Some(name) => crate::skins::env(&crate::skins::dir(), name, &self.look(name)),
+            None => Vec::new(),
+        }
+    }
+
+    /// The game's `--name` for this run: the offline name, when one plays.
+    pub fn name_arg(&self) -> Option<&str> {
+        match self.selected() {
+            Some(_) => None,
+            None => self.offline_selected.as_deref(),
+        }
+    }
+
     /// Sign out: the secrets leave the keychain, the account the list.
     pub fn remove(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         store.delete(uuid)?;
