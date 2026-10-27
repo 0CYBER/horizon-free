@@ -663,7 +663,8 @@ impl Behaviours {
         creative: bool,
         correct_tool: bool,
     ) -> bool {
-        self.sim(level, ticks).player_destroy(pos, creative, correct_tool)
+        self.sim(level, ticks)
+            .player_destroy(pos, creative, correct_tool)
     }
     /// `IceBlock.playerDestroy` after the drops: mined ice melts into water
     /// unless the tool prevents ice melting (silk touch). `destroyed` is the

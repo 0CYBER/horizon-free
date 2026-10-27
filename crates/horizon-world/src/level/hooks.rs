@@ -393,7 +393,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     /// `ServerPlayerGameMode.destroyBlock`: `playerWillDestroy` then
     /// `removeBlock`. Drops are the caller's (tool-dependent loot).
-    pub(crate) fn player_destroy(&mut self, pos: BlockPos, creative: bool, correct_tool: bool) -> bool {
+    pub(crate) fn player_destroy(
+        &mut self,
+        pos: BlockPos,
+        creative: bool,
+        correct_tool: bool,
+    ) -> bool {
         let b = self.b;
         let p = b.props;
         let state = self.state(pos);
@@ -402,7 +407,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         let data = b.data(state);
         // DoorBlock also clears the bottom half when the tool would not drop it.
-        if ((creative && data.is(Class::DoublePlant)) || (data.is(Class::Door) && (creative || !correct_tool)))
+        if ((creative && data.is(Class::DoublePlant))
+            || (data.is(Class::Door) && (creative || !correct_tool)))
             && b.table.text(state, p.half) == "upper"
         {
             let bottom = below(pos);

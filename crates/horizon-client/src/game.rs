@@ -3523,9 +3523,7 @@ impl Game<'_> {
                     kind: "dispense",
                 } => self.dispense_from(pos, state)?,
                 LevelEvent::BlockEvent {
-                    pos,
-                    kind: "golem",
-                    ..
+                    pos, kind: "golem", ..
                 } => self.check_golem_spawn([pos.x, pos.y, pos.z])?,
                 LevelEvent::BlockEvent {
                     pos,
@@ -4009,11 +4007,8 @@ impl Game<'_> {
             let at = pos.map(f64::from);
             self.spawn_item(stack, at, dispenser::new_item_motion(), 10);
         }
-        let correct_tool = !facts.requires_tool
-            || self
-                .res
-                .items()
-                .correct_for_drops(self.held(), &facts.name);
+        let correct_tool =
+            !facts.requires_tool || self.res.items().correct_for_drops(self.held(), &facts.name);
         let removed = self.with_level(|b, level, ticks| {
             b.player_destroy_block(
                 level,
@@ -4264,7 +4259,11 @@ impl Game<'_> {
                     .as_ref()
                     .is_some_and(|s| s.item.ends_with("_hanging_sign"))
                 && {
-                    let name = &self.res.facts().get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2])).name;
+                    let name = &self
+                        .res
+                        .facts()
+                        .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
+                        .name;
                     name.ends_with("_hanging_sign") && !name.contains("_wall_")
                 }
                 && matches!(
