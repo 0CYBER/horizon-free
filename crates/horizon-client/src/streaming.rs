@@ -255,6 +255,8 @@ pub struct Streaming {
     deferred: Vec<Done>,
     sequence: u64,
     pub center: (i32, i32),
+    /// The view distance around `center`; below 0, no area there (a dedicated
+    /// server nobody is on).
     pub radius: i32,
     /// `/forceload`ed chunks: kept loaded whatever the distance.
     pub forced: HashSet<(i32, i32)>,
@@ -1003,7 +1005,9 @@ impl Streaming {
             .iter()
             .filter(|&(&(x, z), p)| {
                 p.is_some()
-                    && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
+                    && (self.radius < 0
+                        || i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2)
+                            > r4 * r4)
                     && !ranges.in_extra(x, z, 4)
                     && !ranges.in_band(x, z, 4)
                     && !ranges
@@ -1450,6 +1454,16 @@ impl Streaming {
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.ranges().in_range(x, z, margin)
     }
+    /// Rank the 3x3 a chunk loaded to FULL decorates, in one generation
+    /// task's order (`ChunkGenerationTask`: x-outer, z-inner), after every
+    /// chunk ranked before.
+    pub fn rank_full_task(&mut self, x: i32, z: i32) {
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.decoration_order.rank_or_append(x + dx, z + dz);
+            }
+        }
+    }
     pub fn band(&self) -> Option<Band> {
         self.band
     }
@@ -1747,7 +1761,7 @@ impl Ranges<'_> {
         let (dx, dz) = (gap(x - self.center.0), gap(z - self.center.1));
         let r = i64::from(self.radius + 1);
         // The extra areas are squares: their finished square grown by `reach`.
-        dx * dx + dz * dz <= r * r
+        (self.radius >= 0 && dx * dx + dz * dz <= r * r)
             || self.in_extra(x, z, 1 + reach)
             || self.in_band(x, z, 1 + reach)
     }
@@ -1780,7 +1794,7 @@ impl Ranges<'_> {
     fn in_main_range(&self, x: i32, z: i32, margin: i32) -> bool {
         let r = i64::from(self.radius + margin);
         let (dx, dz) = (i64::from(x - self.center.0), i64::from(z - self.center.1));
-        if dx * dx + dz * dz <= r * r {
+        if self.radius >= 0 && dx * dx + dz * dz <= r * r {
             return true;
         }
         let reach = (margin - 1).max(0);
@@ -2368,6 +2382,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An idle dedicated server keeps no area around its centre: only a spawn
+    /// search's chunk (FULL alone: its 3x3 decorated, 5x5 generated) and the
+    /// forced chunks.
+    #[test]
+    fn no_area_around_an_idle_servers_centre() {
+        let forced = HashSet::from([(30, 30)]);
+        let extra = [((5, -3), -1)];
+        let r = Ranges {
+            center: (5, -3),
+            radius: -1,
+            extra: &extra,
+            forced: &forced,
+            cover: None,
+            band: None,
+        };
+        for x in -5i32..=15 {
+            for z in -13i32..=7 {
+                let d = (x - 5).abs().max((z + 3).abs());
+                assert_eq!(r.in_range(x, z, 1), d == 0, "({x}, {z})");
+                assert_eq!(r.chunk_kept(x, z, true), d <= 2, "({x}, {z})");
+                assert_eq!(r.requested(x, z, true), d <= 2, "({x}, {z})");
+            }
+        }
+        assert!(r.in_range(30, 30, 1));
+        let idle = Ranges { extra: &[], ..r };
+        assert!(!idle.requested(5, -3, true) && idle.unloaded(5, -3, true));
     }
 
     /// A server player's area (`lan_update_streaming`: the server view
