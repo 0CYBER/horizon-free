@@ -1932,6 +1932,14 @@ impl Game<'_> {
                 .filter_map(|e| super::client_ambient::effect_particle(e.id, e.ambient))
                 .collect();
             m.extra.effect_ambient = visible().all(|e| e.ambient);
+            // Entity.isInvisible: the invisibility effect hides the body (the
+            // model pass, the name tag rules and `trader::is_invisible` read it).
+            m.extra.effects.retain(|e| e.0 != "minecraft:invisibility");
+            if let Some(e) = g.effects.get("invisibility") {
+                m.extra
+                    .effects
+                    .push(("minecraft:invisibility", e.duration, e.amplifier));
+            }
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.
