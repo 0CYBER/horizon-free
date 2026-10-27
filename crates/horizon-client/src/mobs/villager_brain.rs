@@ -4222,6 +4222,13 @@ pub fn woken(m: &mut Mob, now: i64) {
         mem(m).last_woken.set(now);
     }
 }
+/// `BellBlockEntity.updateEntities`: a bell rung within 32 blocks sets
+/// `HEARD_BELL_TIME` to the game time.
+pub fn heard_bell(m: &mut Mob, now: i64) {
+    if brain(m).is_some() {
+        mem(m).heard_bell_time.set(now);
+    }
+}
 /// What other villagers see of this one's brain.
 pub fn potential_job_site(m: &Mob) -> Option<[i32; 3]> {
     mem_ref(m).and_then(|mm| mm.potential_job_site.value())
