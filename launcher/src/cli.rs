@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use horizon_launcher::instances;
+use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -180,6 +181,80 @@ enum InstanceCmd {
     },
     /// Make Play start this instance
     Select { instance: String },
+    /// Keep an instance on one installed Horizon version, or "latest" to follow updates again
+    Version { instance: String, version: String },
+}
+
+#[derive(Subcommand)]
+enum WorldsCmd {
+    /// The worlds: name, mode, version, last played and size (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Zip a world into the instance's backups/ folder, as the game's Make Backup does
+    Backup {
+        /// Its folder or name
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Copy a world beside it, as "<name> (1)"
+    Copy {
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Move a world to the system's trash
+    Delete {
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScreenshotsCmd {
+    /// The screenshots, the newest first, with their files (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Move a screenshot to the system's trash
+    Delete {
+        /// Its file name, with or without .png
+        screenshot: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MultiplayerCmd {
+    /// The servers of the game's Multiplayer screen (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Add a server to the list
+    Add {
+        /// Its address, as in the game's Add Server (host or host:port)
+        address: String,
+        /// Its name in the list (default: Minecraft Server)
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Remove a server from the list: its position from 1, name or address
+    Remove {
+        server: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -300,6 +375,9 @@ enum Cmd {
         /// Join a friend's world with its invite code
         #[arg(long)]
         join: Option<String>,
+        /// Join this server at once: an address, or a server of the list by name or position
+        #[arg(long, conflicts_with_all = ["world", "join"])]
+        server: Option<String>,
         /// An extra argument for the game, passed through as-is (repeatable), for example
         /// --server-thread
         #[arg(long = "arg", value_name = "ARG", allow_hyphen_values = true)]
@@ -375,6 +453,21 @@ enum Cmd {
     Instance {
         #[command(subcommand)]
         action: Option<InstanceCmd>,
+    },
+    /// An instance's single-player worlds: list them, back one up, copy or delete it
+    Worlds {
+        #[command(subcommand)]
+        action: Option<WorldsCmd>,
+    },
+    /// The screenshots F2 took in an instance: list, delete
+    Screenshots {
+        #[command(subcommand)]
+        action: Option<ScreenshotsCmd>,
+    },
+    /// The servers in an instance's Multiplayer list (servers.dat): list, add, remove
+    Multiplayer {
+        #[command(subcommand)]
+        action: Option<MultiplayerCmd>,
     },
     /// Modpacks: import a Java pack, see its coverage report, port what this computer can and
     /// play it as its own profile (docs/modpacks.md)
@@ -645,13 +738,14 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             world,
             creative,
             join,
+            server,
             arg,
         } => {
-            let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
             let instance = match instance {
                 Some(name) => instances::find(&name)?,
                 None => instances::selected(),
             };
+            let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
             instances::apply(&mut cmd, &instance)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
@@ -659,11 +753,21 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             if let Some(world) = world {
                 cmd.arg("--world").arg(world);
             }
+            if let Some(server) = server {
+                let list = server_list::List::load(&instance.home);
+                let ip = server_list::find(&list, &server).map_or(server, |(_, s)| s.ip);
+                cmd.arg("--server").arg(ip);
+            }
             if creative {
                 cmd.arg("--creative");
             }
             cmd.args(arg);
-            attached(cmd)?
+            let started = std::time::Instant::now();
+            let played = attached(cmd);
+            if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
+                eprintln!("Play time not saved: {e}");
+            }
+            played?
         }
         Cmd::Server {
             dir,
@@ -825,6 +929,18 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("Horizon is in the applications menu.");
             }
         }
+        Cmd::Worlds { action } => worlds(
+            action.unwrap_or(WorldsCmd::List { instance: None }),
+            as_json,
+        )?,
+        Cmd::Screenshots { action } => screenshots(
+            action.unwrap_or(ScreenshotsCmd::List { instance: None }),
+            as_json,
+        )?,
+        Cmd::Multiplayer { action } => multiplayer(
+            action.unwrap_or(MultiplayerCmd::List { instance: None }),
+            as_json,
+        )?,
         Cmd::Instance { action } => instance(action.unwrap_or(InstanceCmd::List), as_json)?,
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List), as_json)?,
@@ -1385,6 +1501,8 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
         serde_json::json!({
             "id": i.id, "name": i.name, "kind": format!("{:?}", i.kind).to_lowercase(),
             "home": i.home, "icon": i.icon, "group": i.group, "selected": selected,
+            "version": i.version, "played_secs": i.played.as_secs(),
+            "last_played_ms": i.last_played.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64),
         })
     };
     let line = |i: &instances::Instance, selected: bool| {
@@ -1394,8 +1512,17 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .as_ref()
             .map(|g| format!("  [{g}]"))
             .unwrap_or_default();
+        let pinned = i
+            .version
+            .as_ref()
+            .map(|v| format!("  {v}"))
+            .unwrap_or_default();
+        let played = match i.last_played {
+            Some(_) => format!("  {} played", instances::play_time(i.played)),
+            None => String::new(),
+        };
         println!(
-            "{mark} {} ({}){group}\n    {}",
+            "{mark} {} ({}){pinned}{group}{played}\n    {}",
             i.name,
             i.id,
             i.home.display()
@@ -1430,6 +1557,167 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             changed(instances::edit(&instance, |m| m.group = group)?)
         }
         InstanceCmd::Select { instance } => changed(instances::select(&instance)?),
+        InstanceCmd::Version { instance, version } => {
+            let pin = match version.as_str() {
+                "latest" => None,
+                tag => Some(backend::resolve_version(Some(tag))?),
+            };
+            changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+    }
+    Ok(())
+}
+
+fn screenshots(action: ScreenshotsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::screenshots;
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    match action {
+        ScreenshotsCmd::List { instance } => {
+            let home = home(instance)?;
+            let shots = screenshots::list(&home);
+            if as_json {
+                json(
+                    shots
+                        .iter()
+                        .map(|s| {
+                            let millis = s
+                                .taken
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_millis() as u64);
+                            serde_json::json!({ "name": s.name, "path": s.path, "taken_ms": millis, "size": s.size })
+                        })
+                        .collect(),
+                );
+            } else if shots.is_empty() {
+                println!("No screenshots in {}", screenshots::folder(&home).display());
+            }
+            for s in shots.iter().filter(|_| !as_json) {
+                println!("{}", s.path.display());
+            }
+        }
+        ScreenshotsCmd::Delete {
+            screenshot,
+            instance,
+        } => {
+            let shot = screenshots::find(&home(instance)?, &screenshot)?;
+            screenshots::delete(&shot)?;
+            println!("{} is in the trash.", shot.name);
+        }
+    }
+    Ok(())
+}
+
+fn multiplayer(action: MultiplayerCmd, as_json: bool) -> Result<(), String> {
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    match action {
+        MultiplayerCmd::List { instance } => {
+            let home = home(instance)?;
+            let servers = server_list::List::load(&home).servers();
+            if as_json {
+                json(
+                    servers
+                        .iter()
+                        .map(|s| serde_json::json!({ "name": s.name, "address": s.ip, "icon": s.icon.is_some() }))
+                        .collect(),
+                );
+            } else if servers.is_empty() {
+                println!("No servers in {}", home.join("servers.dat").display());
+            }
+            for (i, s) in servers.iter().enumerate().filter(|_| !as_json) {
+                println!("{}. {} ({})", i + 1, s.name, s.ip);
+            }
+        }
+        MultiplayerCmd::Add {
+            address,
+            name,
+            instance,
+        } => {
+            let home = home(instance)?;
+            let mut list = server_list::List::load(&home);
+            list.add(name.as_deref().unwrap_or(""), &address)?;
+            list.save(&home)?;
+            println!("Added {}.", address.trim());
+        }
+        MultiplayerCmd::Remove { server, instance } => {
+            let home = home(instance)?;
+            let mut list = server_list::List::load(&home);
+            let (i, _) = server_list::find(&list, &server)?;
+            let gone = list.remove(i)?;
+            list.save(&home)?;
+            println!("Removed {} ({}).", gone.name, gone.ip);
+        }
+    }
+    Ok(())
+}
+
+fn worlds(action: WorldsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::worlds::{self, World};
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    let value = |w: &World| {
+        let millis = w
+            .last_played
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        serde_json::json!({
+            "folder": w.folder, "name": w.name, "mode": w.mode, "version": w.version,
+            "last_played_ms": millis, "size": w.size, "path": w.path, "icon": w.icon,
+        })
+    };
+    match action {
+        WorldsCmd::List { instance } => {
+            let home = home(instance)?;
+            let all = worlds::list(&home);
+            if as_json {
+                json(all.iter().map(value).collect());
+            } else if all.is_empty() {
+                println!("No worlds in {}", home.join("saves").display());
+            }
+            for w in all.iter().filter(|_| !as_json) {
+                let version = w.version.as_deref().unwrap_or("unknown version");
+                let mb = w.size as f64 / 1_000_000.0;
+                println!(
+                    "{} ({})\n    {}, {version}, {mb:.1} MB",
+                    w.name, w.folder, w.mode
+                );
+            }
+        }
+        WorldsCmd::Backup { world, instance } => {
+            let home = home(instance)?;
+            let zip = worlds::backup(&home, &worlds::find(&home, &world)?)?;
+            match as_json {
+                true => json(serde_json::json!({ "backup": zip })),
+                false => println!("{}", zip.display()),
+            }
+        }
+        WorldsCmd::Copy { world, instance } => {
+            let home = home(instance)?;
+            let copy = worlds::copy(&worlds::find(&home, &world)?)?;
+            match as_json {
+                true => json(value(&copy)),
+                false => println!("Copied to {} ({})", copy.name, copy.folder),
+            }
+        }
+        WorldsCmd::Delete { world, instance } => {
+            let home = home(instance)?;
+            let w = worlds::find(&home, &world)?;
+            worlds::delete(&w)?;
+            println!("{} is in the trash.", w.name);
+        }
     }
     Ok(())
 }

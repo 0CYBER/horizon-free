@@ -2971,13 +2971,15 @@ def check_fireworks(host, guest, out):
         game('command', command=f'tp @s {x + dx + 0.5} {y} {z + 0.5}')
         game.raw('look-at', x + 0.5, y + 1.5, z + 3.5)
 
-    def red(path):
+    def reds(path):
+        """The red pixels' positions, above the hotbar."""
         rows, bpp = png_rows(path)
-        # Exclude the hotbar and chat at the bottom of the view.
-        return sum(row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]
-                   for row in rows[:len(rows) * 3 // 4] for i in range(0, len(row), bpp))
+        return {(y, i) for y, row in enumerate(rows[:len(rows) * 3 // 4]) for i in range(0, len(row), bpp)
+                if row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]}
 
-    baseline = {g.name: red(g.shot(out, 'fireworks-before')) for g in (host, guest)}
+    # Red where the view had none: the setup's own red chat lines (a fill that changed nothing) are in the
+    # baseline, and fade out before the later shots, which a plain count difference would take as missing sparks.
+    baseline = {g.name: reds(g.shot(out, 'fireworks-before')) for g in (host, guest)}
     before = {g.name: made(g, 'flash') for g in (host, guest)}
     host('command', command='item replace entity @s weapon.mainhand with minecraft:firework_rocket'
          '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
@@ -2990,12 +2992,14 @@ def check_fireworks(host, guest, out):
             break
     flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
     assert all(n == 1 for n in flashes.values()), f'configured burst missing or duplicated: {flashes}'
-    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime.
+    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime (48-59 ticks). A
+    # screenshot takes ~0.6 s where the frame is drawn on the CPU (lavapipe), so the later shots come 4 ticks after
+    # the burst's, not more: by then the tracked rocket is gone.
     burst_shots = {g.name: g.shot(out, 'fireworks-burst') for g in (host, guest)}
-    host.wait(16)
+    host.wait(4)
     trail_shots = {g.name: g.shot(out, 'fireworks-trail-fade') for g in (host, guest)}
-    burst = {name: red(path) - baseline[name] for name, path in burst_shots.items()}
-    trails = {name: red(path) - baseline[name] for name, path in trail_shots.items()}
+    burst = {name: len(reds(path) - baseline[name]) for name, path in burst_shots.items()}
+    trails = {name: len(reds(path) - baseline[name]) for name, path in trail_shots.items()}
     rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
     assert not any(rockets.values()), f'exploded rocket remains: {rockets}'
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'

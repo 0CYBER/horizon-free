@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The default instance's id: the game's home itself.
 pub const DEFAULT: &str = "horizon";
@@ -86,6 +87,20 @@ pub struct Meta {
     pub icon: Option<Icon>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The Horizon version this instance plays, kept when newer ones are installed. None: the
+    /// launcher's own version, which follows updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Seconds played in it, every run started by the launcher (the window or `play`) added up.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub played_secs: u64,
+    /// When its last run ended, in seconds since 1970.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_played: Option<u64>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// `instances.json`: each instance's choices, by id.
@@ -121,6 +136,27 @@ pub struct Instance {
     pub home: PathBuf,
     pub icon: Option<Icon>,
     pub group: Option<String>,
+    /// Its pinned Horizon version, if any (`Meta::version`).
+    pub version: Option<String>,
+    pub played: Duration,
+    pub last_played: Option<SystemTime>,
+}
+
+impl Instance {
+    /// The installed version this instance plays: its pinned one, else `requested` (the
+    /// command line's `--version`) or the launcher's (`backend::resolve_version`).
+    pub fn resolve_version(&self, requested: Option<&str>) -> Result<String, String> {
+        match (requested, &self.version) {
+            (None, Some(pinned)) => backend::resolve_version(Some(pinned)).map_err(|_| {
+                format!(
+                    "{} plays {pinned}, which is not installed: install it, or horizon-launcher \
+                     instance version \"{}\" latest",
+                    self.name, self.name
+                )
+            }),
+            _ => backend::resolve_version(requested),
+        }
+    }
 }
 
 /// The instances, by the default game home and the launcher's data folder: Horizon first, then
@@ -172,6 +208,11 @@ fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
                 name: meta.name.unwrap_or(name),
                 icon: meta.icon,
                 group: meta.group,
+                version: meta.version,
+                played: Duration::from_secs(meta.played_secs),
+                last_played: meta
+                    .last_played
+                    .map(|s| UNIX_EPOCH + Duration::from_secs(s)),
                 id,
                 kind,
                 work,
@@ -371,6 +412,36 @@ fn edit_in(
     }
     store.save(data)?;
     find_in(&list_in(game_home, data), &instance.id)
+}
+
+/// Adds a finished run of the game to the instance's play time (by id: a renamed instance keeps
+/// it).
+pub fn record_play(id: &str, played: Duration) -> Result<(), String> {
+    record_play_in(&backend::data_dir(), id, played, SystemTime::now())
+}
+
+fn record_play_in(
+    data: &Path,
+    id: &str,
+    played: Duration,
+    ended: SystemTime,
+) -> Result<(), String> {
+    let mut store = Store::load(data);
+    let meta = store.instances.entry(id.to_string()).or_default();
+    meta.played_secs = meta.played_secs.saturating_add(played.as_secs());
+    meta.last_played = ended.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+    store.save(data)
+}
+
+/// "12 min", "3 h 05 min", "140 h": the play time as players read it.
+pub fn play_time(played: Duration) -> String {
+    let minutes = played.as_secs() / 60;
+    match (minutes / 60, minutes % 60) {
+        (0, 0) => "under a minute".into(),
+        (0, m) => format!("{m} min"),
+        (h, m) if h < 100 => format!("{h} h {m:02} min"),
+        (h, _) => format!("{h} h"),
+    }
 }
 
 /// Turns the game's command into this instance: its own game folder, and a pack's mods. The

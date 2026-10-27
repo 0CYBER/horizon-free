@@ -19,12 +19,15 @@ mod mcp;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
+mod multiplayer_page;
 mod partner;
 mod perf;
+mod screenshots_page;
 mod scrollbar;
 mod servers_page;
 mod theme;
 mod titlebar;
+mod worlds_page;
 
 use gpui::{
     actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
@@ -185,6 +188,10 @@ struct Launcher {
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
+    /// Where the next start goes at once: `--world <folder>` or `--server <address>`.
+    quick_play: Option<(&'static str, String)>,
+    /// The instance the running game plays and when it started: its play time grows on exit.
+    client_run: Option<(String, Instant)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
     args_input: String,
     args_focused: bool,
@@ -226,6 +233,10 @@ struct Launcher {
     mods: mods_page::Mods,
     /// The instances, for the sidebar and Play, and their dialog (`instances_page.rs`).
     instances: instances_page::Instances,
+    /// Home's Worlds section, of the selected instance (`worlds_page.rs`).
+    worlds: worlds_page::Worlds,
+    multiplayer: multiplayer_page::Multiplayer,
+    screenshots: screenshots_page::Screenshots,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -361,6 +372,8 @@ impl Launcher {
             friend_focused: false,
             friend_focus: cx.focus_handle(),
             joining: None,
+            quick_play: None,
+            client_run: None,
             collection: collection::Collection::load(),
             agents: agents_page::AgentsUi::default(),
             playing: None,
@@ -383,6 +396,9 @@ impl Launcher {
             starting_pack: None,
             mods: mods_page::Mods::new(cx),
             instances: instances_page::Instances::default(),
+            worlds: worlds_page::Worlds::default(),
+            multiplayer: multiplayer_page::Multiplayer::default(),
+            screenshots: screenshots_page::Screenshots::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -542,11 +558,20 @@ impl Launcher {
                         }
                         self.accounts = Accounts::load();
                         // A pack's Play button plays that pack; Play plays the selected instance.
-                        let profile = match self.starting_pack.take() {
+                        let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
-                                horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
+                                let id = instances::list()
+                                    .into_iter()
+                                    .find(|i| i.work == work)
+                                    .map(|i| i.id);
+                                let applied =
+                                    horizon_launcher::modpacks::apply_profile(&mut cmd, &work);
+                                (applied, id)
                             }
-                            None => instances::apply(&mut cmd, &instances::selected()),
+                            None => {
+                                let instance = instances::selected();
+                                (instances::apply(&mut cmd, &instance), Some(instance.id))
+                            }
                         };
                         if let Err(e) = profile {
                             self.client_error = Some(e);
@@ -557,10 +582,16 @@ impl Launcher {
                                 self.client_error = Some(e);
                             }
                         }
+                        if let Some((flag, value)) = self.quick_play.take() {
+                            cmd.arg(flag).arg(value);
+                        }
                         backend::append_game_args(&mut cmd);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
-                            Ok(r) => self.client = Some(r),
+                            Ok(r) => {
+                                self.client = Some(r);
+                                self.client_run = run.map(|id| (id, Instant::now()));
+                            }
                             Err(e) => self.client_error = Some(e),
                         }
                     }
@@ -677,6 +708,16 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            // The game saved: last played, sizes and pictures changed.
+                            self.worlds.stale();
+                            self.multiplayer.stale();
+                            self.screenshots.stale();
+                            if let Some((id, started)) = self.client_run.take() {
+                                if let Err(e) = instances::record_play(&id, started.elapsed()) {
+                                    eprintln!("Play time not saved: {e}");
+                                }
+                                self.reload_instances();
+                            }
                             // The run's own game folder: an instance's or a pack's keeps its reports.
                             let home = self.client_home.clone().unwrap_or_else(backend::game_home);
                             let report = self
@@ -764,7 +805,15 @@ impl Launcher {
         switched
     }
 
+    /// The version Play starts: the selected instance's own, else the launcher's.
     fn selected(&self) -> Option<&String> {
+        self.selected_instance()
+            .and_then(|i| self.version_of(i))
+            .or_else(|| self.launcher_version())
+    }
+
+    /// The launcher's version: what instances without one of their own play.
+    fn launcher_version(&self) -> Option<&String> {
         self.settings
             .selected
             .as_ref()
@@ -1850,16 +1899,20 @@ impl Launcher {
                 .absolute()
                 .top(px(66.))
                 .right_0()
-                .w(px(240.))
+                .w(px(300.))
                 .p(px(6.))
                 .border_2()
                 .border_color(t.outline)
                 .bg(t.surface)
                 .flex()
                 .flex_col();
+            // Picking a version keeps the selected instance on it; the launcher's own version
+            // (newest unless chosen otherwise on Versions) follows updates.
+            let follows = self.launcher_version().cloned();
             for tag in &self.installed {
                 let selected = self.selected() == Some(tag);
                 let tag = tag.clone();
+                let latest = follows.as_ref() == Some(&tag);
                 menu = menu.child(
                     div()
                         .id(SharedString::from(format!("pick-{tag}")))
@@ -1875,12 +1928,20 @@ impl Launcher {
                         .cursor_pointer()
                         .hover(move |s| s.bg(t.plate_soft))
                         .child(tag.clone())
-                        .when(selected, |d| {
-                            d.child(div().size(px(6.)).rounded_full().bg(t.accent))
-                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .when(latest, |d| {
+                                    d.child(caps("follows updates").text_color(t.muted))
+                                })
+                                .when(selected, |d| {
+                                    d.child(div().size(px(6.)).rounded_full().bg(t.accent))
+                                }),
+                        )
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.settings.selected = Some(tag.clone());
-                            this.settings.save();
+                            this.pin_version((!latest).then(|| tag.clone()));
                             this.picker_open = false;
                             cx.notify();
                         })),
@@ -2137,6 +2198,15 @@ impl Launcher {
             page = page.child(notice(e, &t));
         }
         page = page.child(rows);
+        if let Some(worlds) = self.worlds_section(cx) {
+            page = page.child(worlds);
+        }
+        if let Some(servers) = self.multiplayer_section(cx) {
+            page = page.child(servers);
+        }
+        if let Some(shots) = self.screenshots_section(cx) {
+            page = page.child(shots);
+        }
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
@@ -3034,6 +3104,16 @@ impl Launcher {
         )
     }
 
+    /// Plays the selected instance straight into a world (`--world`) or a server (`--server`):
+    /// flags every Horizon release takes.
+    pub(crate) fn quick_play(&mut self, flag: &'static str, value: String) {
+        self.quick_play = Some((flag, value));
+        self.play();
+        if self.starting_client.is_none() {
+            self.quick_play = None;
+        }
+    }
+
     fn join_friend(&mut self) {
         if horizon_friends::invite::parse(&self.friend_code).is_none() {
             return;
@@ -3474,6 +3554,9 @@ impl Render for Launcher {
                     }
                     "escape" if this.servers_escape() => {}
                     "escape" if this.instance_escape() => {}
+                    "escape" if this.screenshot_escape() => {}
+                    "left" if this.screenshot_step(false) => {}
+                    "right" if this.screenshot_step(true) => {}
                     _ => return,
                 }
                 cx.stop_propagation();
@@ -3536,6 +3619,11 @@ impl Render for Launcher {
         }
         if let Some(dialog) = self.instance_dialog(cx) {
             root = root.child(dialog);
+        }
+        if self.page == Page::Play {
+            if let Some(viewer) = self.screenshot_viewer(cx) {
+                root = root.child(viewer);
+            }
         }
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));

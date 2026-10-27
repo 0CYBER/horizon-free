@@ -77,6 +77,25 @@ impl Launcher {
         list.iter().find(|i| i.id == id).or(list.first())
     }
 
+    /// The installed version `instance` plays: its own, else the launcher's.
+    pub(super) fn version_of(&self, instance: &Instance) -> Option<&String> {
+        match &instance.version {
+            Some(own) => self.installed.iter().find(|t| *t == own),
+            None => self.launcher_version(),
+        }
+    }
+
+    /// Keeps the selected instance on `tag`, or lets it follow the launcher's version.
+    pub(super) fn pin_version(&mut self, tag: Option<String>) {
+        let Some(id) = self.selected_instance().map(|i| i.id.clone()) else {
+            return;
+        };
+        match instances::edit(&id, |m| m.version = tag) {
+            Ok(_) => self.reload_instances(),
+            Err(e) => self.client_error = Some(e),
+        }
+    }
+
     fn select_instance(&mut self, instance: &Instance) {
         self.settings.instance =
             (instance.kind != InstanceKind::Default).then(|| instance.id.clone());
@@ -154,15 +173,6 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let t = self.theme;
-        let tag = self.selected().cloned();
-        let prepared = tag.as_deref().is_some_and(backend::is_prepared);
-        let status = if tag.is_none() {
-            "No version installed"
-        } else if prepared {
-            "Ready"
-        } else {
-            "Needs preparing"
-        };
         let selected = self.selected_instance().map(|i| i.id.clone());
         let on_packs = self.page == Page::Mods && self.mods.on_modpacks();
         let mut out = Vec::new();
@@ -174,10 +184,18 @@ impl Launcher {
                     out.push(heading(g.to_uppercase()).into_any_element());
                 }
             }
+            let tag = self.version_of(&i).cloned();
+            let prepared = tag.as_deref().is_some_and(backend::is_prepared);
             let (open, sub) = match i.kind {
                 InstanceKind::Default | InstanceKind::Own => (
                     self.page == Page::Play && selected.as_ref() == Some(&i.id),
-                    status.to_string(),
+                    match (&tag, &i.version) {
+                        (None, Some(own)) => format!("{own} is not installed"),
+                        (None, None) => "No version installed".into(),
+                        (Some(_), _) if !prepared => "Needs preparing".into(),
+                        (Some(tag), Some(_)) => format!("Ready · {tag}"),
+                        (Some(_), None) => "Ready".into(),
+                    },
                 ),
                 InstanceKind::Port => {
                     let slug = &i.id["port:".len()..];
@@ -566,10 +584,34 @@ impl Launcher {
         Some(index_row(
             n,
             "Instance",
-            Some(div().child(instance.name.clone()).into_any_element()),
+            Some(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(10.))
+                    .child(instance.name.clone())
+                    .child(
+                        text(theme::CAPTION)
+                            .text_color(t.muted)
+                            .child(played_line(&instance)),
+                    )
+                    .into_any_element(),
+            ),
             Some(actions.into_any_element()),
             &t,
         ))
+    }
+}
+
+/// "3 h 05 min in total · last played today", or "Not played yet".
+fn played_line(instance: &Instance) -> String {
+    match instance.last_played {
+        Some(when) => format!(
+            "{} in total · last played {}",
+            instances::play_time(instance.played),
+            worlds_page::ago(when)
+        ),
+        None => "Not played yet".into(),
     }
 }
 
