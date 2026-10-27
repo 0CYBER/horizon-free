@@ -3384,13 +3384,12 @@ impl Game<'_> {
         let events = std::mem::take(&mut player.events);
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
-        let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         let feet = [player.position.x, player.position.y, player.position.z];
         for event in events {
             match event {
                 horizon_client::motion::MotionEvent::Emission {
                     state, in_water, ..
-                } if !crouching => {
+                } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Player.playStepSound: muffled under the swim sound in water.
                     let (volume, pitch) = if in_water {
