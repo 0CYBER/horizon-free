@@ -95,6 +95,14 @@ jobs:
         run: |
           python3 tools/ci/nightly.py pick ${FORCE:+--force} | tee -a "$GITHUB_STEP_SUMMARY"
           { echo; cat nightly-notes.md; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Old nightly/build-* branches deleted (scheduled runs only)
+        # Ludovic, 2026-10-27: older than 7 days, but never the newest build or one a published nightly points to;
+        # nothing but nightly/build-* (nightly.py stale_builds, tests/test_nightly.py).
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "### nightly/build-* branches"; python3 tools/ci/nightly.py prune-builds --days 7; } | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: nightly-notes
