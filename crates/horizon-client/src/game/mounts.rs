@@ -126,6 +126,19 @@ impl Game<'_> {
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
+        // AbstractHorse.mobInteract: a horse a mob rides (`isVehicle`) has no
+        // seat, inventory or feeding to give. Camels seat two and check their
+        // passengers themselves.
+        let id = m.id;
+        if !matches!(species, Species::Camel | Species::CamelHusk)
+            && self
+                .mobs
+                .iter()
+                .any(|p| p.extra.mount == Some(id) && !p.removed && p.alive())
+        {
+            return false;
+        }
+        let m = &self.mobs[index];
         // AbstractHorse.mobInteract: shift + use opens a tamed adult's inventory.
         if !m.is_baby()
             && m.extra.tame
@@ -175,17 +188,6 @@ impl Game<'_> {
             return true;
         }
         // doPlayerRide
-        // Entity.canAddPassenger: ordinary horses have one seat. Camels
-        // override that capacity; equipment and feeding above are separate.
-        if !matches!(species, Species::Camel | Species::CamelHusk)
-            && self.mobs.iter().any(|passenger| {
-                passenger.extra.mount == Some(self.mobs[index].id)
-                    && !passenger.removed
-                    && passenger.alive()
-            })
-        {
-            return false;
-        }
         let m = &mut self.mobs[index];
         m.extra.flag = false;
         m.extra.counter = 0;
