@@ -8491,24 +8491,34 @@ impl Game<'_> {
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
     /// Returns the sun and moon quads, and the stars' frame and brightness
-    /// (the renderer keeps their geometry, built once).
+    /// (the renderer keeps their geometry, built once). The bodies fade with
+    /// the rain (`rainBrightness = 1 - rainLevel`, their colour's alpha).
     fn celestial_geometry(
         &self,
         sky: &horizon_client::environment::Sky,
+        rain: f32,
     ) -> (Vec<Vertex>, Option<(glam::Mat4, f32)>) {
+        let body_color =
+            0x00FF_FFFF | (((1.0 - rain).clamp(0.0, 1.0) * 255.0).round() as u32) << 24;
         let mut out = Vec::new();
         let atlas = &self.gui.atlas;
         let frame = |angle: f32| {
             glam::Mat4::from_rotation_y((-90.0f32).to_radians())
                 * glam::Mat4::from_rotation_x(angle.to_radians())
         };
-        let mut body = |name: &str, angle: f32, size: f32, color: u32| {
+        let mut body = |name: &str, angle: f32, size: f32, moon: bool| {
             let Some(r) = atlas.sprites.get(name).copied() else {
                 return;
             };
             let m = frame(angle);
             let corners = [(-size, -size), (size, -size), (size, size), (-size, size)];
-            let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
+            // buildCelestialQuad (sun) vs buildMoonPhases: the moon's UVs run
+            // the other way round.
+            let uv = if moon {
+                [[r.u1, r.v1], [r.u0, r.v1], [r.u0, r.v0], [r.u1, r.v0]]
+            } else {
+                [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]]
+            };
             for ((x, z), uv) in corners.iter().zip(uv) {
                 let p = m.transform_point3(glam::Vec3::new(*x, 100.0, *z));
                 out.push(Vertex {
@@ -8516,19 +8526,14 @@ impl Game<'_> {
                     pos: p.to_array(),
                     uv,
                     layer: 2,
-                    color,
+                    color: body_color,
                     light: 0,
 
                     glint_uv: [0.0, 0.0],
                 });
             }
         };
-        body(
-            "environment/celestial/sun",
-            sky.sun_angle,
-            30.0,
-            0xFFFF_FFFF,
-        );
+        body("environment/celestial/sun", sky.sun_angle, 30.0, false);
         let phases = [
             "full_moon",
             "waning_gibbous",
@@ -8544,7 +8549,7 @@ impl Game<'_> {
             &format!("environment/celestial/moon/{phase}"),
             sky.moon_angle,
             20.0,
-            0xFFFF_FFFF,
+            true,
         );
         // SkyRenderer.renderStars: the static star buffer on the same frame.
         let stars =
@@ -11384,7 +11389,7 @@ impl Game<'_> {
             && self.potions.effects.get("blindness").is_none()
         {
             // Camera.doesMobEffectBlockSky: no sun, moon or stars.
-            self.celestial_geometry(&sky)
+            self.celestial_geometry(&sky, rain)
         } else if self.dim == Dim::End && self.settings.horizon.sky {
             (self.end_flash_geometry(), None)
         } else {
