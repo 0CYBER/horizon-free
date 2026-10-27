@@ -19,17 +19,16 @@ import platform
 import shutil
 import subprocess
 import sys
-import time
 
 try:
     from . import lab, test_rust_parity as base
-    from .test_dedicated_server_parity import Server
-    from .test_locator_bar_parity import generate_world, server_dir
+    from .test_dedicated_server_parity import Server, game_time
+    from .test_locator_bar_parity import Client, generate_world, server_dir
 except ImportError:
     import lab
     import test_rust_parity as base
-    from test_dedicated_server_parity import Server
-    from test_locator_bar_parity import generate_world, server_dir
+    from test_dedicated_server_parity import Server, game_time
+    from test_locator_bar_parity import Client, generate_world, server_dir
 
 NAME = 'server-ops-feedback-parity'
 # (label, what the console does, what the players do).
@@ -53,7 +52,11 @@ QUIET = [
     ('alice', [], ['cmd Alice time set 3000']),
 ]
 CASES = {'broadcast': ({}, BROADCAST), 'quiet': ({'broadcast-console-to-ops': 'false'}, QUIET)}
-STEP_SECONDS = 2.0
+STEP_TICKS = 40
+# A step ends by the server's clock (Client.wait): after a round trip of Alice's (Bob is deopped for a while, so
+# his is not used). While send_command_feedback is off a command has no reply for her, so those steps wait for
+# the ticks alone.
+NO_SYNC = {'feedback-off', 'console-feedback-off'}
 # Steps whose reply can take longer than a step: the next step waits for this console line first. A loaded machine
 # took 2 s to save vanilla's world, and the transcript ended before "Saved the game".
 WAIT_FOR = {'console-save': r'System chat: Saved the game'}
@@ -72,33 +75,26 @@ def run_side(label, case, server_command, client_command, build, world):
     try:
         server.wait_for(r'Done \(')
         with (build / f'{label}-{case}-client.log').open('w') as log:
-            client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
-                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                      text=True)
-
-            def tell(line):
-                client.stdin.write(line + '\n')
-                client.stdin.flush()
+            client = Client(client_command, port, out, log)
             try:
                 for name in ('Alice', 'Bob'):
-                    tell(f'join {name}')
+                    client.tell(f'join {name}')
                     server.wait_for(rf'{name} joined the game', timeout=120)
-                time.sleep(STEP_SECONDS)
-                tell('chat on')
+                client.wait(server, ['Alice'], STEP_TICKS)
+                client.tell('chat on')
                 for step, console, actions in script:
-                    tell(f'step {step}')
+                    client.tell(f'step {step}')
                     for command in console:
                         server.console(command)
+                    game_time(server)  # the console runs its queue in order: these commands have run
                     for action in actions:
-                        tell(action)
+                        client.tell(action)
                     if step in WAIT_FOR:
                         server.wait_for(WAIT_FOR[step], timeout=120)
-                    time.sleep(STEP_SECONDS)
-                tell('end')
-                client.wait(timeout=60)
+                    client.wait(server, [] if step in NO_SYNC else ['Alice'], STEP_TICKS)
+                client.end()
             finally:
-                if client.poll() is None:
-                    client.kill()
+                client.kill()
     finally:
         server.stop()
     if not out.exists():
@@ -122,12 +118,12 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
                    check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
     client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.LocatorBarClient']

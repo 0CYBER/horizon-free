@@ -464,7 +464,28 @@ impl Game<'_> {
             return;
         }
         // The Chat option's Hidden level takes the server's messages too.
-        if !self.ui.chat.shows(ChatSource::Server) {
+        self.local_chat_line(text, Some(SYSTEM_INDICATOR), ChatSource::Server);
+    }
+    /// A player's chat line on the window's own chat: a LAN guest's message
+    /// while the host runs in-frame (`HostEvent::Chat`). `ChatListener`
+    /// checks `canReceivePlayerMessages` for these, so Commands Only and
+    /// Hidden drop them; command feedback (`/list`, `/tp`) is a system
+    /// message and takes the system-message permission instead.
+    pub(super) fn player_message(&mut self, text: Text) {
+        if let Some(capture) = self.chat_capture.as_mut() {
+            capture.push(text);
+            return;
+        }
+        // A server's client receives the line as a packet (PlayerChat or
+        // DisguisedChat) and filters it there.
+        if self.remote.is_none() {
+            self.local_chat_line(text, None, ChatSource::Player);
+        }
+    }
+    /// A line on the window's own chat when the Chat option lets `source`
+    /// through; running mods hear it.
+    fn local_chat_line(&mut self, text: Text, indicator: Option<u32>, source: ChatSource) {
+        if !self.ui.chat.shows(source) {
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -472,8 +493,8 @@ impl Game<'_> {
         self.ui.chat.add(
             &self.gui.atlas,
             text,
-            Some(SYSTEM_INDICATOR),
-            ChatSource::Server,
+            indicator,
+            source,
             self.ticks,
             focused,
         );
@@ -602,7 +623,10 @@ impl Game<'_> {
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
-            self.run_command(command);
+            // A client mod's command first, then a server mod's, as on a server.
+            if !self.mod_command(command) && !self.local_server_mod_command(command) {
+                self.run_command(command);
+            }
         } else {
             let line = Text::translate(
                 "chat.type.text",
@@ -622,6 +646,7 @@ impl Game<'_> {
                 self.mods_chat(&line);
             }
             self.lan_host_chat(message);
+            self.mod_player_chat(super::server_mods::Who::Local, message);
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
@@ -757,6 +782,7 @@ impl Game<'_> {
             max_snow_accumulation_height: r.int("max_snow_accumulation_height"),
             spawn_mobs: r.bool("spawn_mobs"),
             spawn_monsters: r.bool("spawn_monsters"),
+            fire_spread_radius_around_player: r.int("fire_spread_radius_around_player"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).
