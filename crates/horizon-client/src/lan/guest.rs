@@ -614,6 +614,21 @@ fn network_stack(
             ));
         }
         stack.added.extend(firework_components(d));
+        // The compass's lodestone target.
+        if let Some(t) = d.other("minecraft:lodestone_tracker") {
+            let target = t.get("target").and_then(|g| {
+                let Some(horizon_world::nbt::Tag::IntArray(pos)) = g.get("pos") else {
+                    return None;
+                };
+                let dimension = crate::save::text(g.get("dimension"))?;
+                Some((dimension, [*pos.first()?, *pos.get(1)?, *pos.get(2)?]))
+            });
+            let tracked = crate::save::number(t.get("tracked")).is_none_or(|v| v != 0);
+            stack.added.push((
+                horizon_protocol::item::component::LODESTONE_TRACKER,
+                horizon_protocol::item::Component::LodestoneTracker { target, tracked },
+            ));
+        }
         // PotionContents: the potion by its `minecraft:potion` id.
         if let Some(id) = (d.potion.as_deref()).and_then(|potion| {
             synced_id(

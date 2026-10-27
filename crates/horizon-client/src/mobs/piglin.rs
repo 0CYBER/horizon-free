@@ -466,9 +466,44 @@ fn find_piglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
                 || w.prop(p[0], p[1], p[2], "lit") == Some("true"))
     })
 }
+/// `HoglinBase.throwTarget`: a shove away and up of the attack knockback less
+/// the target's knockback resistance (none at all when that is used up).
+fn throw_target(m: &mut Mob, who: Who, cx: &mut Cx) {
+    let resistance = match who {
+        Who::Mob(id) => cx.w.seen(id).map_or(0.0, |s| s.knockback_resistance),
+        Who::Player => 0.0,
+    };
+    let power = m.kind.attack_knockback - resistance;
+    let Some(t) = cx.w.target_info(who) else {
+        return;
+    };
+    if power <= 0.0 {
+        return;
+    }
+    let away = Vec3::new(
+        t.position.x - m.position.x,
+        0.0,
+        t.position.z - m.position.z,
+    );
+    // `yRot` takes the random whole number of degrees as radians, as vanilla does.
+    let angle = (m.random.next_int_bound(21).unwrap_or(10) - 10) as f32;
+    let scale = power * f64::from(m.random.next_float() * 0.5 + 0.2);
+    let push = away.normalize().scale(scale).rotate_y(angle);
+    let up = power * f64::from(m.random.next_float()) * 0.5;
+    cx.events.push(MobEvent::Push {
+        target: who,
+        velocity: [push.x, up, push.z],
+    });
+}
 /// `HoglinBase.hurtAndThrowTarget`.
 pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     m.extra.anim_ticks = 10;
+    // Entity event 4: clients start the headbutt.
+    cx.events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 4,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
     let attack = m.attrs.attack_damage;
     let amount = if !m.is_baby() && attack as i32 > 0 {
         attack / 2.0 + m.random.next_int_bound(attack as i32).unwrap_or(0) as f32
@@ -485,11 +520,7 @@ pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
         }),
     }
     if !m.is_baby() {
-        // throwTarget: a strong shove up and away.
-        cx.events.push(MobEvent::Launch {
-            target: who,
-            up: 0.5 * f64::from(m.random.next_float()) + 0.3,
-        });
+        throw_target(m, who, cx);
     }
     let sound = if m.species() == Species::Zoglin {
         "entity.zoglin.attack"
@@ -601,6 +632,19 @@ pub fn piglin_pose(
             }
         }
         _ => {}
+    }
+}
+/// `Hoglin.handleEntityEvent` and `Zoglin`'s event 4 on a client: the
+/// headbutt, which `aiStep` then counts down.
+pub fn client_event(m: &mut Mob, event: u8) {
+    if event == 4 {
+        m.extra.anim_ticks = 10;
+    }
+}
+/// The headbutt's countdown (`Hoglin.aiStep`, `Zoglin.aiStep`) on a client.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.anim_ticks > 0 {
+        m.extra.anim_ticks -= 1;
     }
 }
 /// `HoglinModel.setupAnim`.
