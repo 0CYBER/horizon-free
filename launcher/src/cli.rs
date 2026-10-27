@@ -339,8 +339,12 @@ enum MultiplayerCmd {
 
 #[derive(Subcommand)]
 enum ModsCmd {
-    /// What the browser installed (the default)
-    List,
+    /// What the browser installed in an instance (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
     /// Search for packs Horizon loads
     Search {
         text: Vec<String>,
@@ -362,10 +366,14 @@ enum ModsCmd {
         #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
         source: SourceArg,
     },
-    /// Install a pack and what it needs, by its id or slug (checksums checked); a Java mod is
-    /// ported into horizon-mods and turned on; a modpack is imported
+    /// Install a pack and what it needs into an instance, by its id or slug (checksums
+    /// checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as
+    /// an instance of its own
     Install {
         project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
         /// Allow a version made for another Minecraft version
         #[arg(long)]
         everything: bool,
@@ -378,13 +386,31 @@ enum ModsCmd {
         /// Only say what is newer
         #[arg(long)]
         check: bool,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
     },
     /// Remove a pack the browser installed
-    Remove { project: String },
+    Remove {
+        project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
     /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
-    Enable { project: String },
+    Enable {
+        project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
     /// Turn off a mod the browser installed; it stays installed
-    Disable { project: String },
+    Disable {
+        project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1035,7 +1061,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         )?,
         Cmd::Instance { action } => instance(action.unwrap_or(InstanceCmd::List), as_json)?,
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
-        Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List), as_json)?,
+        Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
     }
@@ -1337,7 +1363,20 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     use horizon_launcher::browser::{horizon, installed, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
-    let home = backend::game_home();
+    // What the browser installs goes into an instance's game folder; Java mods' checks are kept
+    // in the default one, shared by all.
+    let home = match &action {
+        ModsCmd::List { instance }
+        | ModsCmd::Install { instance, .. }
+        | ModsCmd::Update { instance, .. }
+        | ModsCmd::Remove { instance, .. }
+        | ModsCmd::Enable { instance, .. }
+        | ModsCmd::Disable { instance, .. } => match instance {
+            Some(name) => instances::find(name)?.home,
+            None => instances::selected().home,
+        },
+        ModsCmd::Search { .. } | ModsCmd::Check { .. } => backend::game_home(),
+    };
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
     let from_registry = installed::Installed::load(&home)
@@ -1353,7 +1392,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     }
     let on = matches!(action, ModsCmd::Enable { .. });
     match action {
-        ModsCmd::List => {
+        ModsCmd::List { .. } => {
             let list = installed::Installed::load(&home).entries;
             if as_json {
                 json(list.iter().map(entry_json).collect());
@@ -1476,6 +1515,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             project,
             everything,
             source,
+            ..
         } => {
             let source = source.get()?;
             let p = source.project(&project)?;
@@ -1521,7 +1561,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        ModsCmd::Update { project, check } => {
+        ModsCmd::Update { project, check, .. } => {
             let list = installed::Installed::load(&home).entries;
             let chosen: Vec<_> = list
                 .iter()
@@ -1556,11 +1596,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        ModsCmd::Remove { project } => {
+        ModsCmd::Remove { project, .. } => {
             let e = installed::remove(&home, &project)?;
             println!("Removed {} ({}).", e.title, e.file);
         }
-        ModsCmd::Enable { project } | ModsCmd::Disable { project } => {
+        ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
             let e = installed::Installed::load(&home)
                 .lookup(&project)
                 .cloned()
@@ -2069,5 +2109,40 @@ mod tests {
             }
             _ => panic!("expected game-args"),
         }
+    }
+
+    #[test]
+    fn mods_commands_name_their_instance() {
+        let parse = |args: &[&str]| {
+            let cli = Cli::try_parse_from([&["horizon-launcher", "mods"], args].concat()).unwrap();
+            match cli.command {
+                Some(Cmd::Mods { action }) => action,
+                _ => panic!("expected mods"),
+            }
+        };
+        match parse(&["install", "fresh-animations", "--instance", "Skyblock"]) {
+            Some(ModsCmd::Install {
+                project, instance, ..
+            }) => assert_eq!(
+                (project.as_str(), instance.as_deref()),
+                ("fresh-animations", Some("Skyblock"))
+            ),
+            _ => panic!("expected mods install"),
+        }
+        assert!(matches!(
+            parse(&["list"]),
+            Some(ModsCmd::List { instance: None })
+        ));
+        assert!(parse(&[]).is_none());
+        // Search and Check read no instance: checks are shared.
+        assert!(Cli::try_parse_from([
+            "horizon-launcher",
+            "mods",
+            "search",
+            "x",
+            "--instance",
+            "A"
+        ])
+        .is_err());
     }
 }

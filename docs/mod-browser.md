@@ -18,6 +18,11 @@ yet (Modrinth has no `horizon` loader).
 | Modpacks (`.mrpack`, CurseForge zip) | the Modpacks page's import | **Partly**: Horizon runs the mods it can port, from the player's own downloads ([modpacks.md](modpacks.md)) |
 | Shader packs (`.hshader`, Horizon's registry only) | `shaderpacks/` beside `options.txt` | **Works** when made for 26.3: checked by the game's own check before install ([shaders.md](shaders.md)). The `shaders/`-format packs on Modrinth and CurseForge are not offered |
 
+Mods, resource packs and shader packs go into the game folder of the instance selected in the sidebar, and the
+Installed list, updates and Remove are that instance's: picking another instance reads its list. The page says which
+instance it installs into when there is more than one. The CLI's `mods list|install|update|remove|enable|disable` take
+`--instance <name>` (default: the selected one). A modpack becomes an instance of its own.
+
 By default a search shows only what runs: Java mods made for 26.3, resource packs made for 26.3, and every modpack. **Show everything** lists the rest of the kind too, each marked with how well it runs; what doesn't run is
 never offered for install.
 
