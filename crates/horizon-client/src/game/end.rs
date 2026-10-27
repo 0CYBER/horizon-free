@@ -19,7 +19,7 @@ use horizon_core::{
 use std::{collections::HashMap, sync::Arc};
 
 /// ServerLevel.END_SPAWN_POINT.
-const END_SPAWN: [i32; 3] = [100, 50, 0];
+pub(super) const END_SPAWN: [i32; 3] = [100, 50, 0];
 /// EnderDragonFight gateway ring radius and height.
 const GATEWAY_RADIUS: f64 = 96.0;
 const GATEWAY_Y: i32 = 75;

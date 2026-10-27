@@ -6,7 +6,7 @@ use horizon_core::geometry::trig;
 /// `2.5000003E-7F` widened: the squared distance controls treat as arrived.
 const ARRIVED: f64 = 2.500_000_3e-7_f32 as f64;
 /// `1.0E-5F` widened.
-const EPSILON: f64 = 1.0e-5_f32 as f64;
+pub(super) const EPSILON: f64 = 1.0e-5_f32 as f64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Operation {
@@ -90,6 +90,9 @@ pub enum LookKind {
     Fixed,
     /// `HappyGhast.HappyGhastLookControl`.
     HappyGhast,
+    /// `Shulker.ShulkerLookControl`: the yaw turns in the attach face's
+    /// plane and the head is never clamped to the body.
+    Shulker,
 }
 #[derive(Clone, Debug, Default)]
 pub struct LookControl {
@@ -138,6 +141,9 @@ impl Mob {
         // Fox.FoxMoveControl.tick: still while asleep, sitting or faceplanted.
         if self.species() == super::Species::Fox && !super::fox::can_move(self) {
             return;
+        }
+        if self.species() == super::Species::Turtle {
+            return super::turtle::move_control(self);
         }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
@@ -353,6 +359,20 @@ impl Mob {
                 } else if diff > max {
                     self.body_yaw += 4.0;
                 }
+            }
+            LookKind::Shulker => {
+                // ShulkerLookControl: resetXRotOnTick, getXRotD 0, and the
+                // yaw worked out in the attach face's plane (getYRotD).
+                self.head_pitch = 0.0;
+                if look.cooldown > 0 {
+                    self.ai.look.cooldown -= 1;
+                    if let Some(y) = super::shulker::look_yaw(self, look.wanted) {
+                        self.head_yaw = rotate_towards(self.head_yaw, y, look.y_max_rot_speed);
+                    }
+                } else {
+                    self.head_yaw = rotate_towards(self.head_yaw, self.body_yaw, 10.0);
+                }
+                // clampHeadRotationToBody does nothing for a shulker.
             }
             LookKind::Default | LookKind::Fixed => {
                 // FoxLookControl.resetXRotOnTick keeps a stalking or pouncing pitch.

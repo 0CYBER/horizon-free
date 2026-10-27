@@ -56,6 +56,19 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-client --doc")
         self.assertIsNone(by_name["doc tests"].status)
 
+    def test_content_root_tests_run_only_when_what_they_load_changes(self):
+        def content_step(path):
+            with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+            return {step.name: step for step in steps}["content root tests"]
+        self.assertEqual(content_step("crates/horizon-client/src/game.rs").skip, "content root untouched")
+        for path in ["crates/horizon-client/src/mod_content.rs", "crates/horizon-client/src/mod_content_tests.rs",
+                     "crates/horizon-mods/src/content.rs", "crates/horizon-assets/src/lib.rs", "Cargo.lock"]:
+            with self.subTest(path=path):
+                step = content_step(path)
+                self.assertIsNone(step.skip)
+                self.assertEqual(step.command, pr_ready.CONTENT_ROOT_TESTS)
+
     def test_shared_rust_configuration_keeps_workspace_coverage(self):
         for path in sorted(pr_ready.ROOT_RUST | {".cargo/config.toml", "crates/unknown/src/lib.rs"}):
             with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):

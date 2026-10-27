@@ -117,13 +117,17 @@ pub(super) struct Remote {
     joined: bool,
     status: String,
     pub(super) entity_id: i32,
+    /// The item the player's use began with (`LivingEntity.useItem`).
+    pub(super) use_item: Option<Arc<str>>,
     dimension: DimensionType,
     /// What chunk packets decode with (the dimension's height and sky, the
     /// biome registry); replaced whenever one of them changes.
     pub(super) chunk_format: Arc<ChunkFormat>,
     /// Decodes chunk packets as they arrive, off the frame.
     decoder: ChunkDecoder,
-    view_distance: i32,
+    /// Options.serverRenderDistance: the server's view distance from the
+    /// login or the last chunk-cache-radius packet.
+    pub(super) view_distance: i32,
     sequence: i32,
     position_sender: horizon_client::player_sync::PositionSender,
     last_input: u8,
@@ -189,6 +193,10 @@ pub(super) struct Remote {
     destroying: Option<([i32; 3], u8, f32)>,
     destroy_delay: u32,
     input: horizon_client::interaction_input::InteractionInput,
+    /// Keys whose presses send a packet (swap hands, drop, a mount's
+    /// inventory): like the click queue, they wait for the tick's
+    /// `handleKeybinds` phase rather than going out between window events.
+    pub(super) pending_keys: Vec<KeyCode>,
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
     death_message: Option<String>,
@@ -212,6 +220,9 @@ pub(super) struct Remote {
     /// `ClientboundTransferPacket`'s target: when the connection ends the
     /// game connects here, the stored cookies carried over (`TransferState`).
     transfer: Option<String>,
+    /// `ClientCommonPacketListenerImpl.serverLinks`: the links "Server
+    /// Links..." in the pause menu lists (only `http`/`https` URIs kept).
+    pub(super) server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
 }
 
 /// The time a frame spends on chunk packets before it leaves the rest of
@@ -394,6 +405,9 @@ impl Game<'_> {
         self.carried = None;
         self.using = None;
         self.clicks.miss_time = 0;
+        // A new LocalPlayer has no effects: the server sends what it has
+        // (ClientboundUpdateMobEffectPacket on placement).
+        self.potions = Default::default();
         self.set_mode_id(0);
         self.experience = Experience {
             level: 0,
@@ -428,6 +442,7 @@ impl Game<'_> {
             joined: false,
             status: "Connecting to the server...".into(),
             entity_id: 0,
+            use_item: None,
             dimension: DimensionType::vanilla("minecraft:overworld"),
             chunk_format: Arc::new(ChunkFormat::new(
                 &DimensionType::vanilla("minecraft:overworld"),
@@ -473,6 +488,7 @@ impl Game<'_> {
             destroying: None,
             destroy_delay: 0,
             input: Default::default(),
+            pending_keys: Vec::new(),
             stop_mining: false,
             placing: None,
             death_message: None,
@@ -486,6 +502,7 @@ impl Game<'_> {
             chunk_center: (0, 0),
             backlog: VecDeque::new(),
             backlog_since: None,
+            server_links: Vec::new(),
             transfer: None,
         });
         // The level's TickRateManager follows the server's ticking packets.
@@ -862,6 +879,11 @@ impl Game<'_> {
                 }
                 Event::PackPush(p) => self.handle_pack_push(p),
                 Event::PackPop(id) => self.handle_pack_pop(id),
+                Event::ServerLinks(links) => {
+                    if let Some(r) = self.remote.as_mut() {
+                        r.server_links = super::server_links::trusted(links);
+                    }
+                }
                 Event::ShowDialog(dialog) => self.show_dialog(&dialog),
                 Event::ClearDialog => self.clear_dialog(),
                 Event::DecodeError(e) => {
@@ -1621,7 +1643,11 @@ impl Game<'_> {
             }
             C::Login(p) => {
                 self.level.hardcore = p.hardcore;
+                // handleLogin makes a new MultiPlayerGameMode (carried index 0) and a
+                // new LocalPlayer (slot 0).
+                self.selected = 0;
                 if let Some(r) = self.remote.as_mut() {
+                    r.carried = Some(0);
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
                     r.view_distance = p.chunk_radius;
@@ -1639,8 +1665,10 @@ impl Game<'_> {
                 self.send(S::ClientInformation(info));
             }
             C::Respawn(p) => {
-                // A new player, without effects: the server sends them again.
+                // A new player, without effects (the server sends them
+                // again) and with no item in use.
                 self.potions.effects.clear();
+                self.using = None;
                 self.enter_remote_dimension(&p.spawn, true);
                 self.screen = Screen::Playing;
                 if let Some(r) = self.remote.as_mut() {
@@ -2197,6 +2225,11 @@ impl Game<'_> {
                         self.honey_slide_particles(at);
                     }
                 }
+                if p.event == super::consume::USE_ITEM_COMPLETE_EVENT
+                    && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
+                {
+                    self.remote_complete_using();
+                }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
             // ClientPacketListener.handleSwingAnimation: the entity swings
@@ -2359,10 +2392,11 @@ impl Game<'_> {
                 }
                 self.apply_remote_abilities();
             }
+            // ClientPacketListener.handleSetHeldSlot: a hotbar slot only, and the
+            // carried index stays, so the next tick answers with SetCarriedItem.
             C::SetHeldSlot(p) => {
-                self.selected = p.slot.clamp(0, 8) as usize;
-                if let Some(r) = self.remote.as_mut() {
-                    r.carried = Some(self.selected);
+                if (0..9).contains(&p.slot) {
+                    self.selected = p.slot as usize;
                 }
             }
             C::ContainerSetContent(p) => {
@@ -3194,12 +3228,6 @@ impl Game<'_> {
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         self.track_experience_display();
-        // Player.tick's ItemCooldowns.tick: this path replaces `tick_world`'s
-        // for a server's client (multiplayer and the default single player),
-        // so the entries advance here or the slot stays shaded until the
-        // server says the entry ended. `onCooldownEnded` is the plain
-        // ItemCooldowns' no-op on a client.
-        self.cooldowns.tick();
         // Leaving a slot clears its bundle's selection here and on the server.
         self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
@@ -3235,6 +3263,14 @@ impl Game<'_> {
         // Window callbacks only queue clicks, so an interaction cannot leak
         // between CLIENT_TICK_END and a later pong.
         self.remote_handle_input();
+        // Player.tick's ItemCooldowns.tick, in ClientLevel.tickEntities after
+        // handleKeybinds: this path replaces `tick_world`'s for a server's
+        // client (multiplayer and the default single player), so the entries
+        // advance here or the slot stays shaded until the server says the
+        // entry ended. `onCooldownEnded` is the plain ItemCooldowns' no-op on
+        // a client. Ticking it after the keybinds keeps a held use from
+        // trying again a tick before the server's entry ends.
+        self.cooldowns.tick();
         // ClientLevel.tick: the border's size change.
         self.border.tick();
         self.player_border();
@@ -4003,6 +4039,9 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.destroying = Some((hit.pos, face, 0.0));
             }
+            // startDestroyBlock plays the first hit and crack itself; the
+            // server's level events 2019 and 2020 do the rest.
+            self.breaking_block_effects(hit.pos, hit.face, true);
             self.mining = Some(Mining {
                 pos: hit.pos,
                 progress: 0.0,
@@ -4015,20 +4054,6 @@ impl Game<'_> {
         };
         let done = done + progress;
         let ticks = self.mining.as_ref().map_or(0, |m| m.ticks) + 1;
-        if ticks % 4 == 1 {
-            let c = [
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ];
-            self.audio.play(
-                &facts.sounds.hit,
-                Some(c),
-                (facts.sounds.volume + 1.0) / 8.0,
-                facts.sounds.pitch * 0.5,
-            );
-        }
-        self.crack_particle(pos, hit.face, state);
         if done >= 1.0 {
             let seq = self.next_sequence();
             self.predict_break(pos, state, seq);
@@ -4427,13 +4452,27 @@ impl Game<'_> {
         let Some(info) = self.res.items().get(&held.item).cloned() else {
             return false;
         };
-        // MultiPlayerGameMode.useItem runs the use here too (inside
-        // startPrediction): the `use_cooldown` component starts its entry, and
-        // the server's ClientboundCooldownPacket confirms it.
-        self.apply_use_cooldown(&held);
-        // Food starts being eaten (Consumable.startConsuming), a book and
-        // quill opens.
-        self.with_hand(hand, |g| g.start_eating(&info));
+        // MultiPlayerGameMode.useItem's prediction: an item cooling down
+        // passes (its packet still goes).
+        let group = horizon_client::cooldowns::group(&held, info.use_cooldown.as_ref());
+        if self.cooldowns.is_on_cooldown(&group) {
+            return false;
+        }
+        // Food starts being eaten (Consumable.startConsuming). A food that
+        // can't be eaten (full and not always-edible) fails the use
+        // (InteractionResult.FAIL): startUseItem tries the other hand, and
+        // no cooldown or use animation starts.
+        let eating = self.with_hand(hand, |g| g.start_eating(&info));
+        if info.food.is_some() && !eating {
+            return false;
+        }
+        // It runs the use here too: ItemStack.use starts the `use_cooldown`
+        // of an item with no use time, and the server's
+        // ClientboundCooldownPacket confirms it; one held in use starts it at
+        // finishUsingItem (remote_complete_using).
+        if !info.consumable.as_ref().is_some_and(|c| c.ticks() > 0) {
+            self.apply_use_cooldown(&held);
+        }
         if self.with_hand(hand, |g| g.remote_use_book(&held)) {
             return true;
         }
@@ -4505,14 +4544,25 @@ impl Game<'_> {
         self.remote_use_item(Hand::Off);
     }
     /// `LivingEntity.updatingUsingItem` on a server client: an item held in
-    /// use (`held_until_released`), and a
-    /// consumable's eating animation and its crumbs. The server eats it and
-    /// sends the stack, the hunger and the sounds.
+    /// use (`held_until_released`), and a consumable's eating animation and
+    /// its crumbs until the server's USE_ITEM_COMPLETE. The server sends the
+    /// stack, its hunger and the sounds.
     fn remote_tick_using(&mut self) {
         let Some((slot, ticks)) = self.using else {
             return;
         };
         let stack = self.stack_in(slot).cloned();
+        // The use stops when the hand no longer holds the item it began with
+        // (ItemStack.isSameItem).
+        let item = stack.as_ref().map(|s| Arc::clone(&s.item));
+        if let Some(r) = self.remote.as_mut() {
+            if ticks == 0 {
+                r.use_item = item;
+            } else if r.use_item != item {
+                self.using = None;
+                return;
+            }
+        }
         // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
         // different stack in the hand. The off hand keeps its item.
         let in_hand = slot == self.selected || slot == super::shield::OFFHAND_SLOT;
@@ -4537,20 +4587,51 @@ impl Game<'_> {
             self.using = None;
             return;
         }
-        // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item.
-        let duration = consumable.ticks().max(0) as u32;
-        let remaining = duration - ticks.min(duration);
-        if consumable.particles && consumable.should_emit(remaining as i32) {
+        // Consumable.startConsuming eats one with no use time at once, without
+        // a use (nor a USE_ITEM_COMPLETE).
+        if consumable.ticks() <= 0 {
+            self.using = None;
+            return;
+        }
+        // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item. The
+        // countdown goes on past zero (LivingEntity.updateUsingItem completes
+        // only on the server) until the server's USE_ITEM_COMPLETE.
+        let remaining = consumable.ticks() - ticks as i32;
+        if consumable.particles && consumable.should_emit(remaining) {
             self.eat_particles(&stack, 5);
         }
-        if ticks + 1 >= duration {
-            self.using = None;
-            if consumable.particles {
-                self.eat_particles(&stack, 16);
-            }
-        } else {
-            self.using = Some((slot, ticks + 1));
+        self.using = Some((slot, ticks + 1));
+    }
+    /// `Player.handleEntityEvent(9)`: `completeUsingItem` on the client. A consumable's last crumbs, and FoodProperties.onConsume,
+    /// which runs on the client too (Consumable.onConsume calls its
+    /// ConsumableListeners on both sides): the client's FoodData eats at once,
+    /// so a held right click finds `Player.canEat` false instead of starting
+    /// another bite before the server's ClientboundSetHealth arrives.
+    fn remote_complete_using(&mut self) {
+        let Some((slot, _)) = self.using.take() else {
+            return;
+        };
+        let Some(stack) = self.stack_in(slot).cloned() else {
+            return;
+        };
+        let Some(info) = self.res.items().get(&stack.item).cloned() else {
+            return;
+        };
+        if info.consumable.as_ref().is_some_and(|c| c.particles) {
+            self.eat_particles(&stack, 16);
         }
+        if let Some((nutrition, saturation)) = info.food
+            && let Some(r) = self.remote.as_mut()
+        {
+            // FoodData.eat(nutrition, saturation), as finish_consuming does;
+            // the next ClientboundSetHealth replaces it.
+            let (_, food, sat) = &mut r.health;
+            *food = (*food + nutrition as i32).clamp(0, 20);
+            *sat = (*sat + saturation).clamp(0.0, *food as f32);
+            self.apply_remote_health();
+        }
+        // ItemStack.finishUsingItem's applyAfterUseComponentSideEffects.
+        self.apply_use_cooldown(&stack);
     }
     /// MouseHandler updates KeyMapping; handleKeybinds sends packets on a tick.
     pub(super) fn remote_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
@@ -4615,6 +4696,31 @@ impl Game<'_> {
         }
         let (attack, use_item) = (self.left, self.right);
         input.tick(&mut RemoteInputWorld(self), attack, use_item);
+        // handleKeybinds' keybind polls: the queued presses act now, in tick
+        // order, so no packet goes out between CLIENT_TICK_END and a pong.
+        let pending = self
+            .remote
+            .as_mut()
+            .map(|r| std::mem::take(&mut r.pending_keys))
+            .unwrap_or_default();
+        for key in pending {
+            match key {
+                KeyCode::KeyF if !self.spectator() => self.remote_swap_hands(),
+                KeyCode::KeyQ if !self.spectator() => {
+                    let all = self.keys.contains(&KeyCode::ControlLeft);
+                    self.remote_drop(all);
+                }
+                KeyCode::KeyE if self.riding_mount_with_menu() => {
+                    let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+                    self.send(S::PlayerCommand(play::PlayerCommand {
+                        id,
+                        action: 5,
+                        data: 0,
+                    }));
+                }
+                _ => {}
+            }
+        }
         if self.clicks.miss_time > 0 {
             self.clicks.miss_time -= 1;
         }
@@ -4726,22 +4832,8 @@ impl Game<'_> {
                 if self.spectator() {
                     return Ok(true);
                 }
-                let all = self.keys.contains(&KeyCode::ControlLeft);
-                // MultiPlayerGameMode.dropItem: predict removal before sending
-                // the action, then swing only if a nonempty stack was removed.
-                let dropped = horizon_client::items::take_held_drop(
-                    &mut self.inventory[self.selected],
-                    all,
-                    false,
-                );
-                self.send(S::PlayerAction(play::PlayerAction {
-                    action: if all { 4 } else { 5 },
-                    pos: [0; 3],
-                    direction: 0,
-                    sequence: 0,
-                }));
-                if dropped.is_some() {
-                    self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
+                if let Some(r) = self.remote.as_mut() {
+                    r.pending_keys.push(key);
                 }
                 Ok(true)
             }
@@ -4749,12 +4841,9 @@ impl Game<'_> {
             // horse or llama, the server opens its inventory
             // (ServerboundPlayerCommandPacket OPEN_INVENTORY).
             KeyCode::KeyE if self.riding_mount_with_menu() => {
-                let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
-                self.send(S::PlayerCommand(play::PlayerCommand {
-                    id,
-                    action: 5,
-                    data: 0,
-                }));
+                if let Some(r) = self.remote.as_mut() {
+                    r.pending_keys.push(key);
+                }
                 Ok(true)
             }
             KeyCode::KeyE => {
@@ -4799,6 +4888,21 @@ impl Game<'_> {
                     checksum: 0,
                 },
             }));
+        }
+    }
+    /// MultiPlayerGameMode.dropItem (key.drop): predict the removal, then send
+    /// the action; swing only if a nonempty stack was removed.
+    fn remote_drop(&mut self, all: bool) {
+        let dropped =
+            horizon_client::items::take_held_drop(&mut self.inventory[self.selected], all, false);
+        self.send(S::PlayerAction(play::PlayerAction {
+            action: if all { 4 } else { 5 },
+            pos: [0; 3],
+            direction: 0,
+            sequence: 0,
+        }));
+        if dropped.is_some() {
+            self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
         }
     }
     /// Minecraft.handleKeybinds, key.swapOffhand: the server swaps the hands

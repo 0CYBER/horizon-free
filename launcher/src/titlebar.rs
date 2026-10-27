@@ -1,11 +1,24 @@
-//! Custom Windows chrome. Other platforms keep their native window decorations; on macOS,
-//! `apply_appearance` repaints that chrome (the title bar) to match the chosen look.
+//! Window chrome: Windows and Linux client-side decorations are custom drawn; macOS and Linux
+//! server-side decorations use the platform's native chrome.
 use crate::theme::Theme;
 use gpui::{Div, TitlebarOptions, Window};
 use horizon_launcher::backend::Appearance;
 
-/// Whether the launcher draws its own title bar (`render`) rather than the system.
+/// Whether Windows uses a transparent native title bar for the launcher's custom chrome.
 pub const DRAWN: bool = cfg!(target_os = "windows");
+
+pub fn draws_brand(window: &Window) -> bool {
+    #[cfg(target_os = "linux")]
+    return matches!(
+        window.window_decorations(),
+        gpui::Decorations::Client { .. }
+    );
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        DRAWN
+    }
+}
 
 pub fn options() -> TitlebarOptions {
     TitlebarOptions {
@@ -15,15 +28,228 @@ pub fn options() -> TitlebarOptions {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
 pub fn render(_theme: &Theme, _window: &Window) -> Option<Div> {
+    None
+}
+
+/// Draw the launcher's Linux title bar when the platform uses client-side decorations.
+#[cfg(target_os = "linux")]
+pub fn render(theme: &Theme, window: &Window) -> Option<Div> {
+    use crate::{blocks, mark};
+    use gpui::{div, prelude::*, px, Decorations, FontWeight, MouseButton};
+
+    if matches!(window.window_decorations(), Decorations::Server) {
+        return None;
+    }
+
+    let controls = window.window_controls();
+    let drag = div()
+        .id("window-drag")
+        .flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .gap(px(8.))
+        .px(px(12.))
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+        .child(mark(16., theme))
+        .child(blocks::pixel(13., FontWeight::MEDIUM).child("Horizon"));
+
+    let mut bar = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(32.))
+        .bg(theme.side)
+        .text_color(theme.muted)
+        .border_b_1()
+        .border_color(theme.outline)
+        .child(drag);
+
+    if controls.minimize {
+        let color = theme.ink_soft;
+        let hover = theme.raised;
+        bar = bar.child(
+            div()
+                .id("window-minimize")
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(px(46.))
+                .h_full()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(div().w(px(10.)).h(px(1.)).bg(color))
+                .on_click(|_, window, _| window.minimize_window()),
+        );
+    }
+
+    if controls.maximize {
+        let color = theme.ink_soft;
+        let hover = theme.raised;
+        let maximized = window.is_maximized();
+        let square = || {
+            div()
+                .absolute()
+                .size(px(10.))
+                .border_1()
+                .border_color(color)
+        };
+        let icon = div().relative().size(px(14.));
+        let icon = if maximized {
+            icon.child(
+                div()
+                    .absolute()
+                    .left(px(4.))
+                    .top_0()
+                    .size(px(10.))
+                    .border_t_1()
+                    .border_r_1()
+                    .border_color(color),
+            )
+            .child(square().left(px(1.)).top(px(3.)))
+        } else {
+            icon.child(square().left(px(2.)).top(px(2.)))
+        };
+        bar = bar.child(
+            div()
+                .id("window-maximize")
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(px(46.))
+                .h_full()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(icon)
+                .on_click(|_, window, _| window.zoom_window()),
+        );
+    }
+
+    let close_hover = theme.page;
+    let close_bg = theme.danger;
+    Some(
+        bar.child(
+            div()
+                .id("window-close")
+                .group("linux-window-close")
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(px(46.))
+                .h_full()
+                .cursor_pointer()
+                .hover(move |style| style.bg(close_bg).text_color(close_hover))
+                .child(
+                    blocks::icon("close", 14., theme.ink_soft)
+                        .group_hover("linux-window-close", move |style| {
+                            style.text_color(close_hover)
+                        }),
+                )
+                .on_click(|_, window, _| window.remove_window()),
+        ),
+    )
+}
+
+#[cfg(target_os = "linux")]
+pub fn resize_handles(window: &Window) -> Option<Div> {
+    use gpui::{div, prelude::*, px, CursorStyle, Decorations, MouseButton, ResizeEdge};
+
+    if matches!(window.window_decorations(), Decorations::Server) || window.is_maximized() {
+        return None;
+    }
+
+    let handle = |id, edge, cursor| {
+        div()
+            .id(id)
+            .absolute()
+            .cursor(cursor)
+            .on_mouse_down(MouseButton::Left, move |_, window, _| {
+                window.start_window_resize(edge)
+            })
+    };
+
+    Some(
+        div()
+            .absolute()
+            .size_full()
+            .child(
+                handle("resize-left", ResizeEdge::Left, CursorStyle::ResizeLeft)
+                    .left_0()
+                    .top(px(8.))
+                    .bottom(px(8.))
+                    .w(px(5.)),
+            )
+            .child(
+                handle("resize-right", ResizeEdge::Right, CursorStyle::ResizeRight)
+                    .right_0()
+                    .top(px(8.))
+                    .bottom(px(8.))
+                    .w(px(5.)),
+            )
+            .child(
+                handle("resize-bottom", ResizeEdge::Bottom, CursorStyle::ResizeDown)
+                    .bottom_0()
+                    .left(px(8.))
+                    .right(px(8.))
+                    .h(px(5.)),
+            )
+            .child(
+                handle(
+                    "resize-top-left",
+                    ResizeEdge::TopLeft,
+                    CursorStyle::ResizeUpLeftDownRight,
+                )
+                .left_0()
+                .top_0()
+                .size(px(8.)),
+            )
+            .child(
+                handle(
+                    "resize-top-right",
+                    ResizeEdge::TopRight,
+                    CursorStyle::ResizeUpRightDownLeft,
+                )
+                .right_0()
+                .top_0()
+                .size(px(8.)),
+            )
+            .child(
+                handle(
+                    "resize-bottom-left",
+                    ResizeEdge::BottomLeft,
+                    CursorStyle::ResizeUpRightDownLeft,
+                )
+                .left_0()
+                .bottom_0()
+                .size(px(8.)),
+            )
+            .child(
+                handle(
+                    "resize-bottom-right",
+                    ResizeEdge::BottomRight,
+                    CursorStyle::ResizeUpLeftDownRight,
+                )
+                .right_0()
+                .bottom_0()
+                .size(px(8.)),
+            ),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn resize_handles(_: &Window) -> Option<Div> {
     None
 }
 
 /// macOS keeps the window's appearance on the system setting, so a launcher set to Dark still
 /// draws a light title bar on a light desktop. Pin the NSWindow's appearance to the choice
 /// instead (`theme::pinned_dark`: `System` clears the pin, handing the chrome back to the
-/// system). Elsewhere the chrome is ours (Windows) or the system's (Linux).
+/// system). Windows uses custom chrome; Linux draws it only when the compositor requests it.
 #[cfg(target_os = "macos")]
 pub fn apply_appearance(window: &Window, choice: Appearance) {
     use objc2_app_kit::{

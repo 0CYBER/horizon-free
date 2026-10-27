@@ -21,6 +21,7 @@ use horizon_core::geometry::Vec3;
 use horizon_protocol::{
     crypto::offline_uuid,
     entity_data::{Value, serializer},
+    packets::play::{self, Clientbound as C},
 };
 use std::{
     collections::HashMap,
@@ -881,6 +882,7 @@ impl Game<'_> {
         self.audio.capture = None;
         self.lan_events.clear();
         self.lan_critical_hits.clear();
+        self.lan_cushion_breaks.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -1441,8 +1443,9 @@ impl Game<'_> {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, or anvil result sounds
-                    // (these levelEvent calls name no excluded player).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                    // (these levelEvent calls name no excluded player), nor
+                    // the digger's own crack and hit sound (2019, 2020).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020) {
                         None
                     } else {
                         self.lan_acting
@@ -1504,6 +1507,33 @@ impl Game<'_> {
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         let critical_hits = std::mem::take(&mut self.lan_critical_hits);
+        for (state, at) in std::mem::take(&mut self.lan_cushion_breaks) {
+            if let Some(id) = host
+                .hub
+                .registry_id("minecraft:particle_type", "minecraft:block")
+            {
+                host.hub.broadcast_near(
+                    at,
+                    32.0,
+                    &C::LevelParticles(play::LevelParticles {
+                        particle: horizon_protocol::entity_data::Particle {
+                            id,
+                            data: Some(horizon_protocol::entity_data::ParticleData::State(
+                                state.0 as i32,
+                            )),
+                        },
+                        override_limiter: false,
+                        always_show: false,
+                        pos: at,
+                        dist: [0.25, 0.0625, 0.25],
+                        max_speed: [0.05; 3],
+                        count: 10,
+                        randomization: 0,
+                    }),
+                    None,
+                );
+            }
+        }
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
