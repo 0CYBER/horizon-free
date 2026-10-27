@@ -53,6 +53,8 @@ pub(super) struct Creatures {
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// The cat spawner's countdown (`CatSpawner.nextTick`).
+    pub cat_tick: i32,
     /// Particles from a guest's turn, waiting for it to end
     /// (`lan_send_particles`: options, centre, spread, speed, count).
     pub lan_particles: Vec<(
@@ -499,6 +501,7 @@ impl Game<'_> {
         if self.ui.rules.bool("spawn_mobs") {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
+            self.tick_cat_spawner();
         }
         self.tick_raids();
         self.tick_creature_entities()
