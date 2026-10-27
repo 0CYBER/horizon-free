@@ -262,7 +262,9 @@ pub enum LevelEvent {
     /// block's scheduled tick: `checkReset`), `"hatch"` (frogspawn
     /// hatched into tadpoles; the block is already destroyed), `"portal_spawn"`
     /// (a nether portal won its zombified piglin roll; the caller checks
-    /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal).
+    /// `anyPlayerCloseEnoughForSpawning` and spawns below the portal),
+    /// `"golem"` (a carved pumpkin was placed; the caller builds the golem
+    /// its blocks complete).
     BlockEvent {
         pos: BlockPos,
         state: BlockStateId,

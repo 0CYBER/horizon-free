@@ -3524,6 +3524,11 @@ impl Game<'_> {
                 } => self.dispense_from(pos, state)?,
                 LevelEvent::BlockEvent {
                     pos,
+                    kind: "golem",
+                    ..
+                } => self.check_golem_spawn([pos.x, pos.y, pos.z])?,
+                LevelEvent::BlockEvent {
+                    pos,
                     kind: "command_block",
                     ..
                 } => self.command_block_tick(pos),
