@@ -1719,7 +1719,7 @@ fn compress_records(
     let compress = |record: &Record| {
         record
             .tag()
-            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
+            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::saved()))
             .transpose()
     };
     let helpers = std::thread::available_parallelism()
@@ -1836,7 +1836,7 @@ fn read_region_record(
         .map_err(|_| "region file poisoned")?
         .read(ChunkPos::new(x, z))?;
     Ok(match record {
-        Some(r) => Some(r.nbt(Limits::default())?),
+        Some(r) => Some(r.nbt(Limits::saved())?),
         None => None,
     })
 }
@@ -2267,11 +2267,11 @@ impl Drop for SaveDir {
 
 pub fn read_dat(path: &Path) -> Option<Tag> {
     let bytes = fs::read(path).ok()?;
-    let raw = match Compression::Gzip.decode(&bytes, 64 << 20) {
+    let raw = match Compression::Gzip.decode(&bytes, Limits::saved().max_bytes) {
         Ok(raw) => raw,
         Err(_) => bytes,
     };
-    Some(nbt::read_named(&raw, Limits::default()).ok()?.0.tag)
+    Some(nbt::read_named(&raw, Limits::saved()).ok()?.0.tag)
 }
 /// `FileNameDateFormatter`: the time in the names of backed-up unreadable files.
 fn backup_stamp() -> String {
@@ -2320,7 +2320,7 @@ pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
             name: "".into(),
             tag,
         },
-        Limits::default(),
+        Limits::saved(),
     )
     .map_err(|e| e.to_string())?;
     let compressed = Compression::Gzip.encode(&bytes)?;
