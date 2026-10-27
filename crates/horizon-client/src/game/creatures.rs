@@ -3268,8 +3268,9 @@ impl Game<'_> {
                     .items()
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
-                    .map_or(2.0, |f| f.0 as f32);
-                // TamableAnimal.feed: playEatingSound, which wolves leave empty.
+                    .map_or(2.0, |f| f.0 as f32 * 2.0);
+                // TamableAnimal.feed(.., 2.0F, 2.0F): heals twice the nutrition,
+                // then playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
             }
