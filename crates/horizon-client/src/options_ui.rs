@@ -540,9 +540,9 @@ impl Opt {
             Opt::HideLightningFlashes => on_off(s.file.bool("hideLightningFlashes")),
             Opt::MonochromeLogo => on_off(s.file.bool("darkMojangStudiosBackground")),
             Opt::HideSplashTexts => on_off(s.file.bool("hideSplashTexts")),
-            Opt::HideMatchedNames
-            | Opt::OnlySecureChat
-            | Opt::SaveChatDrafts => on_off(s.file.bool(self.file_key().unwrap())),
+            Opt::HideMatchedNames | Opt::OnlySecureChat | Opt::SaveChatDrafts => {
+                on_off(s.file.bool(self.file_key().unwrap()))
+            }
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
