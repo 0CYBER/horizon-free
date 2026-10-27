@@ -31,6 +31,12 @@ pub trait TerrainAquifer {
         density: f64,
     ) -> Result<Option<BlockStateId>, AquiferError>;
     fn should_schedule_fluid_update(&self) -> bool;
+    /// The y above which every non-positive density is the aquifer's air. The
+    /// fill skips those blocks without asking the aquifer; `None` keeps the
+    /// per-block call for aquifers whose global fluid can vary with x/z.
+    fn air_above_y(&self) -> Option<i32> {
+        None
+    }
 }
 impl<P: FluidPicker> TerrainAquifer for DisabledAquifer<P> {
     fn compute_substance(
@@ -58,6 +64,9 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> TerrainAquifer
     }
     fn should_schedule_fluid_update(&self) -> bool {
         NoiseBasedAquifer::should_schedule_fluid_update(self)
+    }
+    fn air_above_y(&self) -> Option<i32> {
+        NoiseBasedAquifer::air_above_y(self)
     }
 }
 
@@ -474,6 +483,7 @@ pub fn fill_noise<B: TerrainBlockStates>(
     chunk.ensure_heightmap(HeightmapType::WorldSurfaceWg);
     let mut density = vec![0.; volume.size()];
     final_density.sample_volume(context, &mut density, volume)?;
+    let air_above = aquifer.air_above_y();
     const MAPS: [HeightmapType; 2] = [HeightmapType::OceanFloorWg, HeightmapType::WorldSurfaceWg];
     for z in 0..sz {
         let world_z = bz.wrapping_add(z as i32);
@@ -491,9 +501,18 @@ pub fn fill_noise<B: TerrainBlockStates>(
             for y in (0..sy).rev() {
                 let world_y = by.wrapping_add(y as i32);
                 let value = density[volume.index([x, y, z]).expect("valid density coordinates")];
-                let state = aquifer
-                    .compute_substance(context, [world_x, world_y, world_z], f64::from(value))?
-                    .unwrap_or(default_block);
+                // The aquifer answers `None` for positive density, which the fill
+                // writes as the default block, and air above its skip/fluid level.
+                // Both are decided here so the per-block call is not made at all.
+                let state = if value > 0.0 {
+                    default_block
+                } else if air_above.is_some_and(|limit| world_y > limit) {
+                    continue;
+                } else {
+                    aquifer
+                        .compute_substance(context, [world_x, world_y, world_z], f64::from(value))?
+                        .unwrap_or(default_block)
+                };
                 if state == chunk.blocks.air {
                     continue;
                 }
