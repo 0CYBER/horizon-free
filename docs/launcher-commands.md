@@ -572,9 +572,11 @@ MCP: `modpack_remove`, needs `confirm: true`.
 
 ## `horizon-launcher mods list`
 
-What the browser installed (the default).
+What the browser installed in an instance (the default).
 
     horizon-launcher mods list
+
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_list`.
 
@@ -605,11 +607,12 @@ MCP: `mods_check`.
 
 ## `horizon-launcher mods install`
 
-Install a pack and what it needs, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported.
+Install a pack and what it needs into an instance, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as an instance of its own.
 
     horizon-launcher mods install <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 - `--everything`: Allow a version made for another Minecraft version
 - `--source` (modrinth, curseforge, horizon)
 
@@ -623,6 +626,7 @@ Update what the browser installed (or one pack).
 
 - `PROJECT`
 - `--check`: Only say what is newer
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_update`.
 
@@ -633,6 +637,7 @@ Remove a pack the browser installed.
     horizon-launcher mods remove <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_remove`, needs `confirm: true`.
 
@@ -643,6 +648,7 @@ Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > M
     horizon-launcher mods enable <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_enable`.
 
@@ -653,6 +659,7 @@ Turn off a mod the browser installed; it stays installed.
     horizon-launcher mods disable <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_disable`.
 

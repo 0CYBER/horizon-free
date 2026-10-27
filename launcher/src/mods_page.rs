@@ -12,6 +12,7 @@ use horizon_launcher::browser::{
 use horizon_launcher::modpacks;
 use horizon_port_pack::check::Check;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// The kinds, as the Mods page's tabs: name and icon.
 const KINDS: [(PackKind, &str, &str); 4] = [
@@ -71,6 +72,8 @@ pub(super) struct Mods {
     error: Option<String>,
     installed: Vec<installed::Entry>,
     loaded: bool,
+    /// The game folder the browser installs into and lists: the selected instance's.
+    home: Option<PathBuf>,
     /// The project being installed, and the line and fraction of its download.
     pub(super) busy: Option<(String, String, f32)>,
     message: Option<Result<String, String>>,
@@ -91,6 +94,11 @@ impl Mods {
         self.results_list.reset();
         self.installed_list.reset();
         self.report_list.reset();
+    }
+
+    /// The game folder installs go into: the selected instance's, once the page has read it.
+    pub(super) fn home(&self) -> PathBuf {
+        self.home.clone().unwrap_or_else(backend::game_home)
     }
 
     /// Whether the Modpacks tab is open (the sidebar marks the pack shown there).
@@ -130,6 +138,7 @@ impl Mods {
             error: None,
             installed: Vec::new(),
             loaded: false,
+            home: None,
             busy: None,
             message: None,
             updates: HashMap::new(),
@@ -264,7 +273,7 @@ impl Launcher {
                 Event::Done(result, modpack) => {
                     m.busy = None;
                     m.message = Some(result);
-                    m.installed = installed::Installed::load(&backend::game_home()).entries;
+                    m.installed = installed::Installed::load(&m.home()).entries;
                     m.installed_list.reset();
                     if modpack {
                         // The Modpacks page reads its list again.
@@ -287,7 +296,7 @@ impl Launcher {
                 }
                 Event::TakenDown(lines) => {
                     m.message = Some(Ok(lines.join("\n")));
-                    m.installed = installed::Installed::load(&backend::game_home()).entries;
+                    m.installed = installed::Installed::load(&m.home()).entries;
                     m.installed_list.reset();
                 }
             }
@@ -363,11 +372,12 @@ impl Launcher {
             return;
         }
         let tx = self.mods.tx.clone();
+        let home = self.mods.home();
         std::thread::spawn(move || {
             let Ok(index) = horizon::index() else {
                 return;
             };
-            let lines = horizon::turn_off_revoked(&index, &backend::game_home());
+            let lines = horizon::turn_off_revoked(&index, &home);
             if !lines.is_empty() {
                 let _ = tx.send(Event::TakenDown(lines));
             }
@@ -376,7 +386,7 @@ impl Launcher {
 
     /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does.
     fn mods_switch(&mut self, e: &installed::Entry) {
-        let home = backend::game_home();
+        let home = self.mods.home();
         let Some(id) = horizon::mod_id(e) else {
             return;
         };
@@ -418,6 +428,7 @@ impl Launcher {
         let tx = m.tx.clone();
         let queue = std::sync::Mutex::new(todo.into_iter());
         std::thread::spawn(move || {
+            // Checks are kept in the default game folder, shared by every instance.
             let home = backend::game_home();
             std::thread::scope(|s| {
                 for _ in 0..CHECKING {
@@ -490,8 +501,8 @@ impl Launcher {
         self.mods.busy = Some(("all".into(), "Updating…".into(), 0.));
         self.mods.updates.clear();
         let tx = self.mods.tx.clone();
+        let home = self.mods.home();
         std::thread::spawn(move || {
-            let home = backend::game_home();
             let count = todo.len();
             let (mut done, mut failed) = (Vec::new(), Vec::new());
             for (i, (source_id, id, title)) in todo.into_iter().enumerate() {
@@ -548,6 +559,7 @@ impl Launcher {
             .filter(|tag| backend::is_prepared(tag))
             .map(|tag| backend::resources(tag));
         let tx = self.mods.tx.clone();
+        let home = self.mods.home();
         std::thread::spawn(move || {
             let last = std::cell::Cell::new(-1);
             let progress = |line: &str, f: f32| {
@@ -587,7 +599,6 @@ impl Launcher {
                             modpacks::outcome(&pack)
                         ));
                     }
-                    let home = backend::game_home();
                     let done = installed::install(&*source, &p, everything, &home, &progress)?;
                     let names: Vec<String> = done
                         .iter()
@@ -690,12 +701,20 @@ impl Launcher {
 
     pub(super) fn mods_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        if !self.mods.loaded {
-            self.mods.loaded = true;
-            self.mods.installed = installed::Installed::load(&backend::game_home()).entries;
+        // Packs and mods go into the selected instance: picking another reads its list.
+        let home = self.selected_instance().map(|i| i.home.clone());
+        if !self.mods.loaded || (home.is_some() && self.mods.home != home) {
+            self.mods.home = home;
+            self.mods.installed = installed::Installed::load(&self.mods.home()).entries;
+            self.mods.installed_list.reset();
+            self.mods.updates.clear();
+            self.mods.confirm_remove = None;
             self.mods_check_updates();
             self.mods_taken_down();
-            self.mods_search(0);
+            if !self.mods.loaded {
+                self.mods_search(0);
+            }
+            self.mods.loaded = true;
         }
         let header = page_header(
             "Mods",
@@ -763,7 +782,8 @@ impl Launcher {
                     .when(!registry, |d| d.child(toggle)),
             )
             .child(source_note)
-            .children(filters);
+            .children(filters)
+            .children(self.mods_target_line());
         // The kinds are inventory tabs on the panel that holds the open one.
         let body = blocks::panel(&t).flex().flex_col().gap(px(24.)).p(px(20.));
         let page = |body: Div| {
@@ -789,6 +809,23 @@ impl Launcher {
             body = body.child(list);
         }
         page(body.child(self.mods_results(cx)))
+    }
+
+    /// Which instance installs go into, when there is more than one to pick from. A modpack
+    /// becomes an instance of its own.
+    fn mods_target_line(&self) -> Option<Div> {
+        let instance = self.selected_instance()?;
+        if self.instances.list.len() < 2 || self.mods.kind == PackKind::Modpack {
+            return None;
+        }
+        Some(
+            text(theme::CAPTION)
+                .text_color(self.theme.muted)
+                .child(format!(
+                    "Installs into {}: pick another instance on the left.",
+                    instance.name
+                )),
+        )
     }
 
     /// The install under way and the last install's answer.
@@ -885,7 +922,7 @@ impl Launcher {
             .when(confirming, |b| b.text_color(t.danger))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if this.mods.confirm_remove.as_ref() == Some(&id) {
-                    let home = backend::game_home();
+                    let home = this.mods.home();
                     this.mods.message = Some(
                         installed::remove(&home, &id).map(|e| format!("Removed {}.", e.title)),
                     );
@@ -898,8 +935,8 @@ impl Launcher {
                 cx.notify();
             }));
             if e.source == SourceId::Horizon && e.kind == PackKind::Mod {
-                let on = horizon::mod_id(e)
-                    .is_some_and(|id| java::is_enabled(&backend::game_home(), id));
+                let on =
+                    horizon::mod_id(e).is_some_and(|id| java::is_enabled(&self.mods.home(), id));
                 let entry = e.clone();
                 right = right.child(
                     div()
