@@ -132,8 +132,16 @@ impl Game<'_> {
         match t {
             Target::Player => Some(self.acting_player_name().to_owned()),
             Target::Guest(conn) => self.command_guest(conn).map(|g| g.name.clone()),
-            Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
-            _ => None,
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Other(id) => Some(uuid_text(self.uuid_for(id))),
+            // Orbs and projectiles are addressed by index and have no UUID here.
+            Target::Orb(_) | Target::Projectile(_) => None,
         }
     }
     fn holder_for(&mut self, t: Target) -> Option<Holder> {

@@ -77,7 +77,7 @@ impl Launcher {
                 &t,
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+                copy_to_clipboard(cx, gpui::ClipboardItem::new_string(text.clone()));
                 this.agents.copied = Some(id);
                 cx.notify();
             }))
