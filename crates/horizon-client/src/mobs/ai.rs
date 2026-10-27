@@ -180,13 +180,12 @@ pub fn register(m: &mut Mob) {
         Family::Undead => undead::register(m),
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
+        // Turtle.registerGoals has its own list, none of the generic goals.
+        Family::Generic if m.species() == Species::Turtle => super::turtle::register(m),
         Family::Generic => {
             generic(m);
             if m.species() == Species::Rabbit {
                 super::rabbit::register(m);
-            }
-            if m.species() == Species::Turtle {
-                super::turtle::register(m);
             }
         }
         Family::Inert => {}
@@ -1297,6 +1296,9 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     }
     if m.species() == Species::Strider {
         return super::strider::walk_target_value(m, w, p);
+    }
+    if m.species() == Species::Turtle {
+        return super::turtle::walk_target_value(m, w, p, light());
     }
     // Hoglin.getWalkTargetValue: nowhere near a repellent, crimson nylium best.
     if m.species() == Species::Hoglin {
