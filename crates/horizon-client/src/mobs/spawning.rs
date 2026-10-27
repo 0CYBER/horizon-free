@@ -307,6 +307,17 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         }
         S::Fox | S::Panda | S::Dolphin => m.extra.pick_up_loot = true,
         S::TropicalFish => super::aquatic::finalize(m),
+        // Salmon.finalizeSpawn: a weighted size (small 30, medium 50, large 15).
+        S::Salmon => {
+            let r = m.random.next_int_bound(95).unwrap_or(0);
+            m.extra.variant = if r < 30 {
+                0
+            } else if r < 80 {
+                1
+            } else {
+                2
+            };
+        }
         S::Slime | S::MagmaCube => super::cube::finalize(m),
         _ => {}
     }
