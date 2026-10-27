@@ -2904,6 +2904,14 @@ impl Game<'_> {
             self.swing_arm();
             return Ok(true);
         }
+        if self.interact_armadillo(index, &item) {
+            if let Some(stack) = &held {
+                let target = self.mob_entity(&self.mobs[index]);
+                self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
         if self.interact_copper_golem(index, &item) {
             self.swing_arm();
             return Ok(true);
@@ -3305,6 +3313,50 @@ impl Game<'_> {
             }
         }
         Ok(true)
+    }
+    /// `Armadillo.mobInteract`: a brush brushes a scute off an adult
+    /// (`brushOffScute`) and loses 16 durability.
+    fn interact_armadillo(&mut self, index: usize, item: &str) -> bool {
+        let m = &self.mobs[index];
+        if item != "minecraft:brush"
+            || m.species() != Species::Armadillo
+            || !m.alive()
+            || m.is_baby()
+        {
+            return false;
+        }
+        let (id, at) = (m.id, m.position);
+        let feet = [at.x, at.y, at.z];
+        let tool = self.held().cloned();
+        let table = "minecraft:brush/armadillo";
+        for d in self.sequence_loot(table, table, tool.as_ref()) {
+            self.spawn_at_location(at, 0.0, d);
+        }
+        self.audio
+            .play("minecraft:entity.armadillo.brush", Some(feet), 1.0, 1.0);
+        let ctx = self.who_context(Some(Who::Mob(id)), None);
+        self.post_game_event("minecraft:entity_interact", feet, ctx);
+        // ItemStack.hurtAndBreak(16).
+        if !self.creative
+            && let Some(stack) = tool
+        {
+            let max = self
+                .res
+                .items()
+                .get(&stack.item)
+                .map_or(0, |i| i.max_damage);
+            if max > 0 {
+                let loss = self.durability_loss(&stack, 16);
+                let slot = self.held_slot();
+                if let Some(held) = self.stack_in_mut(slot).as_mut() {
+                    held.damage += loss;
+                    if held.damage >= max {
+                        *self.stack_in_mut(slot) = None;
+                    }
+                }
+            }
+        }
+        true
     }
     pub(super) fn damage_held_tool(&mut self) {
         if self.creative {
