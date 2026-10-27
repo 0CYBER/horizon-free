@@ -3478,15 +3478,9 @@ impl Game<'_> {
             self.open_ender_chest(key);
             // EnderChestBlock.useWithoutItem
             self.stats.custom("open_enderchest", 1);
-            self.container_opener_event(key, true);
-            let at = [
-                f64::from(key.0) + 0.5,
-                f64::from(key.1) + 0.5,
-                f64::from(key.2) + 0.5,
-            ];
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio
-                .play("minecraft:block.ender_chest.open", Some(at), 0.5, pitch);
+            if self.container_opener_event(key, true) {
+                self.container_edge_sound(key, true);
+            }
         } else if &*name == "minecraft:beacon" && self.open_station(pos, &name) {
             self.world.block_entities.get_or_insert_with(key, || {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
@@ -3502,7 +3496,7 @@ impl Game<'_> {
             ];
             self.resolve_container_maps(key, centre);
             self.container = Some(key);
-            self.container_opener_event(key, true);
+            let first = self.container_opener_event(key, true);
             self.post_block_game_event(
                 "minecraft:container_open",
                 [key.0, key.1, key.2],
@@ -3526,26 +3520,8 @@ impl Game<'_> {
             if self.guarded_by_piglins(&name) {
                 self.anger_piglins(true);
             }
-            let sound = if storage::is_shulker_box(&name) {
-                Some("minecraft:block.shulker_box.open")
-            } else if name.contains("chest") {
-                Some("minecraft:block.chest.open")
-            } else if &*name == "minecraft:barrel" {
-                Some("minecraft:block.barrel.open")
-            } else {
-                None
-            };
-            if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+            if first {
+                self.container_edge_sound(key, true);
             }
         } else if self.open_station(pos, &name) {
             // Workstation menus: game/stations.rs.
@@ -6236,41 +6212,15 @@ impl Game<'_> {
         if let Some(key) = self.container.take() {
             // A cart's or chest boat's items go back to it.
             self.close_cart_container(key);
-            self.container_opener_event(key, false);
+            let last = self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
                 [key.0, key.1, key.2],
                 Some(horizon_client::mobs::Who::Player),
                 None,
             );
-            let name = self
-                .res
-                .facts()
-                .get(self.world.block(key.0, key.1, key.2))
-                .name
-                .clone();
-            let sound = if storage::is_shulker_box(&name) {
-                Some("minecraft:block.shulker_box.close")
-            } else if &*name == "minecraft:ender_chest" {
-                Some("minecraft:block.ender_chest.close")
-            } else if name.contains("chest") {
-                Some("minecraft:block.chest.close")
-            } else if &*name == "minecraft:barrel" {
-                Some("minecraft:block.barrel.close")
-            } else {
-                None
-            };
-            if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+            if last {
+                self.container_edge_sound(key, false);
             }
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
