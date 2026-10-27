@@ -123,6 +123,17 @@ impl Game<'_> {
     /// `DialogScreen.runAction`: the click event, then the screen the dialog's
     /// `after_action` leaves.
     fn run_dialog_action(&mut self, click: Option<Click>, after: AfterAction) -> Result<()> {
+        // defaultHandleClickEvent: an open_url never sets the screen itself, so
+        // the dialog stays unless the confirmation takes over (Web Links off,
+        // or Prompt on Links off, opens nothing or the browser behind it).
+        if let Some(Click::OpenUrl(url)) = &click
+            && !(self.settings.chat_links && self.settings.file.bool("chatLinksPrompt"))
+        {
+            if self.settings.chat_links {
+                super::packs::open_uri(url);
+            }
+            return Ok(());
+        }
         match after {
             AfterAction::None => {}
             AfterAction::Close => self.dialogs.open = None,
@@ -153,7 +164,11 @@ impl Game<'_> {
                 use horizon_client::clipboard::Clipboard;
                 self.clipboard.set(&value);
             }
-            Some(other) => log::info!("Horizon: dialog action {other:?} is not supported yet"),
+            // ConfirmLinkScreen over the screen the dialog leaves.
+            Some(Click::OpenUrl(url)) => self.click_url(url),
+            // Screen.insertText: the screen after the dialog takes no text.
+            Some(Click::SuggestCommand(_)) => {}
+            Some(other) => log::error!("Don't know how to handle {other:?}"),
             None => {}
         }
         if !self.dialog_open() {
