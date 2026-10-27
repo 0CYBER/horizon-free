@@ -26,16 +26,15 @@ places it in the design system; `candidates/` keeps the two alternatives that we
 | `packaging/icons/horizon.ico` | Windows: embedded in `horizon-client.exe`, its tools and `horizon-launcher.exe` as icon resource 1 (`build.rs` of each, Windows builds only) |
 | `packaging/icons/horizon.icns` | macOS: `Horizon.app/Contents/Resources/horizon.icns`, packaged with the .dmg by `packaging/macos/package.sh` |
 | `crates/horizon-theme/icons/horizon-64.png` | the game window's icon at run time (X11 and Windows title bars, `window::icon`) |
-| `website/public/favicon.svg`, `favicon-32.png`, `apple-touch-icon.png` | the website |
+| `web/favicon.svg`, `web/favicon-32.png`, `web/apple-touch-icon.png` | the website (its `npm run assets` copies them into its `public/`) |
 | `icon-1024.png`, `icon-macos-1024.png` | previews, store listings |
 | `social/github-avatar-500.png` | GitHub: the organisation or account avatar |
 
-The page in `social/` is a screenshot, at their exact size, with Playwright from the
-website's dev dependencies:
+The page in `social/` is a screenshot, at their exact size, with Playwright, from the repository's root:
 
 ```sh
-cd website && npm install
-node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();for(const[f,w,h,o]of[["card",1280,640,"github-social-1280x640"]]){const p=await b.newPage({viewport:{width:w,height:h}});await p.goto("file://"+require("path").resolve("../docs/media/brand/social/"+f+".html"));await p.waitForTimeout(300);await p.screenshot({path:"../docs/media/brand/social/"+o+".png"})}await b.close()})()'
+d=$(mktemp -d) && npm install --prefix "$d" playwright && npx --prefix "$d" playwright install chromium
+NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();for(const[f,w,h,o]of[["card",1280,640,"github-social-1280x640"]]){const p=await b.newPage({viewport:{width:w,height:h}});await p.goto("file://"+require("path").resolve("docs/media/brand/social/"+f+".html"));await p.waitForTimeout(300);await p.screenshot({path:"docs/media/brand/social/"+o+".png"})}await b.close()})()'
 ```
 
 ## Drawn in code

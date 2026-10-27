@@ -240,9 +240,33 @@ class ReleaseTrainTests(unittest.TestCase):
     def test_known_issues_are_the_bullets_of_the_file(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp, "known-issues.md")
-            path.write_text("# Known issues\n\nSome text.\n\n- One.\n- Two, with **bold**.\n  continued\n")
-            self.assertEqual(train.known_issues(path), ["- One.", "- Two, with **bold**."])
+            path.write_text("# Known issues\n\nSome text.\n\n- One.\n- Two, with **bold**.  \n"
+                            "  continued with `code`\n\tand a [link](https://example.com).  \n- Three.\n")
+            self.assertEqual(train.known_issues(path),
+                             ["- One.", "- Two, with **bold**. continued with `code` and a [link](https://example.com).",
+                              "- Three."])
             self.assertEqual(train.known_issues(Path(temp, "missing.md")), [])
+
+    def test_known_issues_do_not_include_unrelated_text(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp, "known-issues.md")
+            for separator in ["\n", "  \n", "# Heading\n", "Some text.\n"]:
+                with self.subTest(separator=separator):
+                    path.write_text("  Intro.\n- One.\n  continued.\n" + separator + "  Not an issue.\n- Two.\n")
+                    self.assertEqual(train.known_issues(path), ["- One. continued.", "- Two."])
+            path.write_text("# Known issues\n\nNo issues.\n")
+            self.assertEqual(train.known_issues(path), [])
+            path.write_text("")
+            self.assertEqual(train.known_issues(path), [])
+
+    def test_notes_keep_the_wrapped_shaderpacks_issue(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp, "known-issues.md")
+            path.write_text("- Shader packs have been removed for now. Packs in your\n"
+                            "  `shaderpacks` folder are left where they are.\n")
+            _, body = train.notes("game", "v0.2.70", [pr(1)], train.known_issues(path))
+            self.assertIn("### Known issues\n- Shader packs have been removed for now. Packs in your "
+                          "`shaderpacks` folder are left where they are.\n", body)
 
 
 if __name__ == "__main__":

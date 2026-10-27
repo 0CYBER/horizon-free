@@ -244,7 +244,11 @@ impl Game<'_> {
     /// hand them the next jobs as soon as each one is done, rather than once
     /// a tick.
     pub(in crate::game) fn pump_pregen(&mut self, until: Instant) {
-        while self.pregen_runs_here() {
+        // Force-loaded chunks too: decorating in vanilla's order, a chunk
+        // waits for its neighbours far more often than once a tick allows.
+        while self.pregen_runs_here()
+            || (!self.streaming.forced.is_empty() && self.streaming.busy())
+        {
             let now = Instant::now();
             if now >= until {
                 break;

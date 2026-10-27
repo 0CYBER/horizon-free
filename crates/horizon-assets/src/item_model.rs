@@ -1031,19 +1031,22 @@ pub struct ItemModels {
 }
 
 impl ItemModels {
-    pub fn components(&self, stack: &StackView) -> Components {
-        let mut out = self
-            .prototypes
-            .get(&stack.item)
-            .cloned()
-            .unwrap_or_default();
+    /// The stack's components: its item's defaults with the stack's patch on top. A stack
+    /// with no patch (most stacks a screen draws) borrows the defaults instead of copying them.
+    pub fn components(&self, stack: &StackView) -> std::borrow::Cow<'_, Components> {
+        static NONE: Components = BTreeMap::new();
+        let prototype = self.prototypes.get(&stack.item).unwrap_or(&NONE);
+        if stack.patch.is_empty() {
+            return std::borrow::Cow::Borrowed(prototype);
+        }
+        let mut out = prototype.clone();
         for (key, value) in &stack.patch {
             match value {
                 Some(v) => out.insert(key.clone(), v.clone()),
                 None => out.remove(key),
             };
         }
-        out
+        std::borrow::Cow::Owned(out)
     }
     /// `ItemModelResolver.updateForTopItem`.
     pub fn resolve(&self, stack: &StackView, ctx: &Context, env: &dyn ItemEnv) -> ResolvedItem {

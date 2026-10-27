@@ -144,15 +144,16 @@ impl Game<'_> {
             .offers
             .iter()
             .filter_map(|o| {
-                let cost =
-                    |st: &ItemStack, hub: &mut horizon_client::lan::hub::Hub| play::NetCost {
-                        item: hub.item_id(&st.item),
-                        count: st.count as i32,
-                    };
+                let cost = |st: &ItemStack, hub: &mut horizon_client::lan::hub::Hub| {
+                    hub.stack(&Some(st.clone())).map(play::NetCost::from)
+                };
                 Some(play::NetOffer {
-                    cost_a: cost(&o.base_cost_a.stack, &mut host.hub),
+                    cost_a: cost(&o.base_cost_a.stack, &mut host.hub)?,
                     result: host.hub.stack(&Some(o.result.clone()))?,
-                    cost_b: o.cost_b.as_ref().map(|b| cost(&b.stack, &mut host.hub)),
+                    cost_b: match &o.cost_b {
+                        Some(b) => Some(cost(&b.stack, &mut host.hub)?),
+                        None => None,
+                    },
                     out_of_stock: o.out_of_stock(),
                     uses: o.uses,
                     max_uses: o.max_uses,
@@ -276,7 +277,12 @@ impl Game<'_> {
             g.carried = menu.carried.take();
         }
         self.register_exploration_maps(made);
-        gm.merchant.session = self.merchant_apply(session, gm.merchant.mob);
+        let (session, traded) = self.merchant_apply(session, gm.merchant.mob);
+        gm.merchant.session = session;
+        if !traded.is_empty() {
+            // The guest's own statistic and advancements.
+            self.as_guest(host, conn, |g| g.merchant_traded(gm.merchant.mob, &traded));
+        }
         self.drop_guest_items(host, gi, dropped);
         self.lan_send_offers(host, conn, &mut gm, false);
         self.lan_send_merchant_content(host, conn, &mut gm);

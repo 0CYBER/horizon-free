@@ -164,11 +164,12 @@ impl Game<'_> {
         } else {
             [self.yaw, self.pitch]
         };
+        let scale = self.view_scale();
         for display in self.text_displays.values_mut() {
             display.last_progress = display.progress(partial as f32);
             let d = display.shown.blend(&display.from, display.last_progress);
             let position = display.previous.lerp(display.position, partial);
-            let range = f64::from(d.view_range) * 64.0 * f64::from(self.settings.entity_distance);
+            let range = f64::from(d.view_range) * 64.0 * scale;
             if position.distance_squared(camera) >= range * range || d.text.is_empty() {
                 continue;
             }
