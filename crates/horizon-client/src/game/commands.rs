@@ -1162,6 +1162,17 @@ impl Game<'_> {
         // An air stack is empty: nothing is given (but the message still is).
         let empty = id == "minecraft:air";
         for &t in targets.iter().filter(|_| !empty) {
+            // The player's UUID, which an item they could not hold is set to.
+            let conn = match t {
+                Target::Guest(conn) => Some(conn),
+                _ => self.lan_acting,
+            };
+            let uuid = match conn {
+                Some(conn) => self
+                    .command_guest(conn)
+                    .map(|g| horizon_client::lan::playerdata::uuid_ints(g.uuid)),
+                None => Some(self.level.ensure_player_uuid()),
+            };
             self.for_player(t, |g| {
                 let mut remaining = count;
                 while remaining > 0 {
@@ -1178,8 +1189,19 @@ impl Game<'_> {
                         .target_position(Target::Player)
                         .unwrap_or(g.source_position());
                     if let Some(rest) = left {
-                        // Inventory full: drop the rest at the player's feet without pickup delay.
-                        g.spawn_item(rest, [p[0], p[1] + 1.32, p[2]], [0.0, 0.0, 0.0], 0);
+                        // Inventory full: Player.createItemStackToDrop (thrown from
+                        // the eyes), then setNoPickUpDelay and setTarget(player).
+                        let eye = g.eye_position().unwrap_or([
+                            p[0],
+                            p[1] + g.target_eye_height(Target::Player),
+                            p[2],
+                        ]);
+                        g.throw_from_eyes(rest, eye, false);
+                        if let Some(item) = g.dropped.last_mut() {
+                            item.thrower = None;
+                            item.pickup_delay = 0;
+                            item.target = uuid;
+                        }
                     } else {
                         let r = &mut g.world.random;
                         let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
@@ -1447,7 +1469,7 @@ impl Game<'_> {
         {
             return Err(err("commands.teleport.invalidPosition", &[]));
         }
-        let mut rotation = match ctx.get("rotation") {
+        let rotation = match ctx.get("rotation") {
             Some(Arg::Coords(c)) => Some(c.rotation(self.source_rotation())),
             _ => None,
         };
@@ -1462,21 +1484,31 @@ impl Game<'_> {
             (Some(f), _) => Some(f),
             (None, Some(_)) => {
                 let e = self.entities(ctx, "facingEntity", false)?[0];
+                // EntityAnchorArgument.Anchor.apply: the feet, or the eyes.
                 let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
+                let eye_height = if eyes { self.target_eye_height(e) } else { 0.0 };
                 self.target_position(e)
-                    .map(|p| [p[0], p[1] + if eyes { 1.62 } else { 0.0 }, p[2]])
+                    .map(|p| [p[0], p[1] + eye_height, p[2]])
             }
             _ => None,
         };
-        if let Some(f) = facing {
-            let eye = pos[1] + 1.62;
+        // Entity.lookAt: from the source's anchor (the feet, unless `anchored
+        // eyes`) on the teleported entity, so the eyes depend on the target.
+        let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+        let look_at = |this: &Self, t: Target| {
+            let f = facing?;
+            let eye = if anchored_eyes {
+                pos[1] + this.target_eye_height(t)
+            } else {
+                pos[1]
+            };
             let (dx, dy, dz) = (f[0] - pos[0], f[1] - eye, f[2] - pos[2]);
             let horizontal = (dx * dx + dz * dz).sqrt();
-            rotation = Some([
+            Some([
                 ((dz.atan2(dx).to_degrees()) - 90.0) as f32,
                 (-(dy.atan2(horizontal).to_degrees())) as f32,
-            ]);
-        }
+            ])
+        };
         // A server's player in another level than the source's (`execute
         // in`, the console's Overworld) moves there (ServerPlayer.teleport
         // into another level), after the command.
@@ -1486,6 +1518,7 @@ impl Game<'_> {
             None => self.dim,
         };
         for &t in &targets {
+            let rotation = look_at(self, t).or(rotation);
             if self.teleport_across(t, source_level, pos, rotation) {
                 continue;
             }

@@ -4,11 +4,15 @@
     nightly.py pick [--force]      which commit tonight's nightly builds: GitHub outputs and nightly-notes.md
     nightly.py rotate              renames the current `nightly` pre-release to nightly-<its date>, frees the tag
     nightly.py prune [--days 7]    deletes the nightly-<date> pre-releases and tags older than that, nothing else
+    nightly.py prune-builds [--days 7]   deletes the nightly/build-<date>-<n> branches older than that, but the
+                                   newest and any a published nightly points to (Ludovic, 2026-10-27)
 
-A nightly builds the newest union branch on origin (`union/<agent>-<name>`: main plus pull requests the contribution
-gate proved together), or main when no union is newer than main's head. It is published as the `nightly`
-pre-release; the previous one stays a week as nightly-<date>. Runs from main's checkout with `gh`; it reads the
-branch it picks with git and never runs anything from it.
+A nightly builds main plus the pull requests the trusted reviewers picked (the set: tools/ci/nightly_set.py), merged
+in their order and pushed as nightly/build-<date>-<n>. With no set it builds the newest union branch on origin
+(`union/<agent>-<name>`: main plus pull requests the contribution gate proved together), or main when no union is
+newer than main's head. It is published as the `nightly` pre-release; the previous one stays a week as
+nightly-<date>. Runs from main's checkout with `gh`; it reads and merges the branches with git and never runs
+anything from them.
 """
 from __future__ import annotations
 
@@ -20,6 +24,12 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+if __package__:  # imported as tools.ci.nightly (the tests)
+    from . import nightly_set as ns
+else:  # run as tools/ci/nightly.py: its folder is on the path
+    import nightly_set as ns
 
 DATED = re.compile(r"^nightly-(\d{4}-\d{2}-\d{2})$")
 TITLE_DATE = re.compile(r"Nightly (\d{4}-\d{2}-\d{2})")
@@ -69,11 +79,27 @@ def output(**values: str) -> None:
             f.write(f"{k}={v}\n")
 
 
-def notes(today: str, chosen: Ref, held: list[dict]) -> str:
-    lines = [f"Nightly {today} · {chosen.sha[:7]}: built from `{chosen.name}` ({chosen.sha}).", "",
-             "**Opt-in, not a release.** Fixes the maintainers reviewed but haven't released yet: it may break. "
-             "Turn it on in the launcher's settings; your release install and your worlds stay as they are. "
-             "Report bugs with the version the game shows (\"Nightly <date> · <commit>\").", ""]
+OPT_IN = ("**Opt-in, not a release.** A Nightly can include pull requests not reviewed yet, picked by trusted "
+          "reviewers: it may break. Turn it on in the launcher's settings; your release install and your worlds stay "
+          "as they are. Report bugs with the version the game shows (\"Nightly <date> · <commit>\").")
+
+
+def set_notes(today: str, chosen: Ref, main: Ref, prs: list[dict], left_out: list[str]) -> str:
+    """The notes of a build of main plus the reviewers' set."""
+    lines = [f"Nightly {today} · {chosen.sha[:7]}: main ({main.sha[:7]}) with {len(prs)} pull requests merged in, "
+             f"built from `{chosen.name}` ({chosen.sha}).", "", OPT_IN, "",
+             f"### Pull requests in this Nightly ({len(prs)})", ""]
+    lines += [f"- {ns.plain(e['title'])} (#{e['number']}) by {e['author']}, at {e['head'][:7]}, picked by "
+              f"{e['asked_by']}" for e in prs]
+    if left_out:
+        lines += ["", f"### Left out ({len(left_out)})", ""] + [f"- {ns.plain(why)}" for why in left_out]
+    return "\n".join(lines) + "\n"
+
+
+def notes(today: str, chosen: Ref, held: list[dict], left_out: list[str] | None = None) -> str:
+    lines = [f"Nightly {today} · {chosen.sha[:7]}: built from `{chosen.name}` ({chosen.sha}).", "", OPT_IN, ""]
+    if left_out:
+        lines += [f"The reviewers' set had nothing left to build: {'; '.join(ns.plain(w) for w in left_out)}.", ""]
     if held:
         lines += [f"### Not on main yet ({len(held)})", ""]
         lines += [f"- {p['title']} (#{p['number']})" for p in held]
@@ -82,12 +108,116 @@ def notes(today: str, chosen: Ref, held: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def refresh(entries: list[dict], get, patterns: list[str]) -> tuple[list[dict], list[str]]:
+    """The scheduled nightly's set: each pull request at its newest head; merged, closed and refused ones out."""
+    kept, left_out = [], []
+    for e in entries:
+        pr = get(e["number"])
+        if pr is not None and pr.state == "merged":
+            left_out.append(f"#{e['number']} {e['title']}: merged, so it's in main")
+        elif why := ns.check(pr, e["number"], patterns):
+            left_out.append(f"{why}: left out")
+        else:
+            kept.append({**e, "head": pr.head, "title": pr.title})
+    return kept, left_out
+
+
+def requested(spec: str, get) -> list[dict]:
+    """A dry run's set from its input: `2640@<head> 2642@<head>`."""
+    prs = []
+    for word in spec.split():
+        number, _, head = word.partition("@")
+        pr = get(int(number))
+        prs.append({"number": int(number), "head": head or (pr.head if pr else ""), "title": pr.title if pr else "?",
+                    "author": pr.author if pr else "?", "asked_by": "dry run"})
+    return prs
+
+
+def stop(repo: str, issue: str, text: str) -> None:
+    """Says why the build stopped, where it was asked for, and fails the job."""
+    print(text)
+    if issue and repo:
+        ns.answer(repo, issue, text)
+    sys.exit(1)
+
+
+def build_set(main: Ref, prs: list[dict], left_out: list[str], today: str, force: bool) -> None:
+    """main + the set, merged with git only (nightly_set.assemble), pushed as nightly/build-<date>-<n>."""
+    repo, issue = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("NIGHTLY_ISSUE", "")
+    token, event = os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_EVENT_NAME", "")
+    dry_run = os.environ.get("DRY_RUN") == "true"
+    patterns = ns.guarded_patterns(Path(ns.CODEOWNERS).read_text() if Path(ns.CODEOWNERS).exists() else "")
+    gone = set(ns.fetch_heads([(e["number"], e["head"]) for e in prs]))
+    kept = []
+    for e in prs:
+        if e["number"] in gone:
+            left_out.append(f"#{e['number']} {e['title']}: its head {e['head'][:7]} is gone; ask for it again")
+        elif bad := [f for f in ns.changed_files(main.sha, e["head"]) if ns.guarded(f, patterns)]:
+            left_out.append(f"#{e['number']} {e['title']}: changes `{bad[0]}`, which only Ludovic merges")
+        else:
+            kept.append(e)
+    if not kept:
+        return build_union(main, today, force, left_out)
+    try:
+        sha = ns.assemble(main.sha, [(e["number"], e["head"]) for e in kept])
+    except ns.Conflict as c:
+        state, _, _ = ns.load_state()
+        asked_in = issue or next((x["issue"] for x in reversed(state.get("log", [])) if x.get("issue")), "")
+        stop(repo, asked_in, f"the build stopped: {c.text()}")
+    previous = git("ls-remote", "--tags", "origin", "refs/tags/nightly").split("\t")[0] or None
+    build = force or previous != sha
+    name = "(unchanged)"
+    if build:
+        done = ns.builds_today(today)
+        if len(done) >= ns.MAX_BUILDS_PER_DAY and event != "schedule":
+            stop(repo, issue, f"{len(done)} Nightly builds today already, the most a day takes: the next scheduled "
+                              "one (20:17 UTC) builds the set.")
+        name = ns.next_build(today, done)
+        if not ns.push(sha, name, token):
+            stop(repo, issue, f"could not push {name}")
+        record = {"ref": name, "sha": sha, "main": main.sha, "at": dt.datetime.now(dt.timezone.utc).isoformat(
+            timespec="seconds"), "event": event, "dry_run": dry_run, "run": os.environ.get("GITHUB_RUN_ID", ""),
+            "prs": [{k: e[k] for k in ("number", "head", "title", "author", "asked_by")} for e in kept],
+            "left_out": left_out}
+        ns.update_state(lambda st, builds: (st, builds + json.dumps(record) + "\n", f"build {name}"), token)
+    chosen = Ref(name, sha, dt.datetime.now(dt.timezone.utc))
+    with open("nightly-notes.md", "w") as f:
+        f.write(set_notes(today, chosen, main, kept, left_out))
+    output(build=str(build).lower(), sha=sha, short=sha[:7], source=name, date=today, version=f"nightly-{today}",
+           nightly=f"{today} {sha[:7]}")
+    print(f"{'build' if build else 'skip (unchanged since the last nightly)'}: {name} {sha}, main {main.sha[:7]} + "
+          + ", ".join(f"#{e['number']}" for e in kept))
+
+
 def pick(force: bool) -> None:
     git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main",
         "+refs/heads/union/*:refs/remotes/origin/union/*")
     main = refs("refs/remotes/origin/main")[0]
-    chosen = choose(main, refs("refs/remotes/origin/union/"))
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    repo, token = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("GH_TOKEN", "")
+    if spec := os.environ.get("NIGHTLY_PRS", "").strip():  # a dry run's own set; the saved one stays
+        return build_set(main, requested(spec, ns.lookup(repo)), [], today, force)
+    state, _, _ = ns.load_state()
+    prs, left_out = state.get("prs", []), []
+    if prs and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        patterns = ns.guarded_patterns(Path(ns.CODEOWNERS).read_text() if Path(ns.CODEOWNERS).exists() else "")
+        get = ns.lookup(repo)
+
+        def fresh(st: dict, builds: str):
+            kept, out = refresh(st.get("prs", []), get, patterns)
+            left_out[:] = out
+            if kept == st.get("prs", []):
+                return None
+            return {**st, "prs": kept}, builds, "the scheduled nightly takes the newest heads"
+        prs = ns.update_state(fresh, token).get("prs", [])
+    if prs:
+        return build_set(main, prs, left_out, today, force)
+    build_union(main, today, force, left_out)
+
+
+def build_union(main: Ref, today: str, force: bool, left_out: list[str] | None = None) -> None:
+    """No set: the newest proven union, or main."""
+    chosen = choose(main, refs("refs/remotes/origin/union/"))
     previous = git("ls-remote", "--tags", "origin", "refs/tags/nightly").split("\t")[0] or None
     build = force or previous != chosen.sha
     # The open pull requests this build holds beyond main: their heads are in it and not in main.
@@ -101,7 +231,7 @@ def pick(force: bool) -> None:
             held.append(pr)
     held.sort(key=lambda p: p["number"])
     with open("nightly-notes.md", "w") as f:
-        f.write(notes(today, chosen, held))
+        f.write(notes(today, chosen, held, left_out))
     output(build=str(build).lower(), sha=chosen.sha, short=chosen.sha[:7], source=chosen.name, date=today,
            version=f"nightly-{today}", nightly=f"{today} {chosen.sha[:7]}")
     print(f"{'build' if build else 'skip (unchanged since the last nightly)'}: {chosen.name} {chosen.sha}, "
@@ -136,17 +266,63 @@ def prune(days: int) -> None:
         print(f"deleted {tag}")
 
 
+BUILD = re.compile(r"^nightly/build-(\d{4}-\d{2}-\d{2})-(\d+)$")
+
+
+def stale_builds(branches: dict[str, str], published: set[str], today: dt.date, days: int) -> list[str]:
+    """The nightly/build-<date>-<n> branches (name -> commit) to delete: older than `days`, never the newest build,
+    never one whose commit a published nightly release points to, never a branch not named like a build."""
+    builds = {name: sha for name, sha in branches.items() if BUILD.match(name)}
+    if not builds:
+        return []
+    order = lambda name: (BUILD.match(name).group(1), int(BUILD.match(name).group(2)))  # noqa: E731
+    newest = max(builds, key=order)
+    cutoff = today - dt.timedelta(days=days)
+    return sorted(name for name, sha in builds.items() if name != newest and sha not in published
+                  and dt.date.fromisoformat(BUILD.match(name).group(1)) < cutoff)
+
+
+def remote_refs(pattern: str) -> dict[str, str]:
+    """origin's refs matching `pattern`: short name -> commit (annotated tags peeled)."""
+    refs: dict[str, str] = {}
+    for line in git("ls-remote", "origin", pattern).splitlines():
+        sha, ref = line.split("\t", 1)
+        name = ref.removeprefix("refs/heads/").removeprefix("refs/tags/")
+        if name.endswith("^{}"):
+            refs[name[:-3]] = sha  # the peeled commit wins over the tag object
+        else:
+            refs.setdefault(name, sha)
+    return refs
+
+
+def prune_builds(days: int) -> None:
+    """Deletes old nightly/build-* branches on origin through the API, one line per deletion (the run summary)."""
+    branches = remote_refs("refs/heads/nightly/build-*")
+    tags = {name: sha for name, sha in remote_refs("refs/tags/nightly*").items()
+            if name == "nightly" or DATED.match(name)}
+    today = dt.datetime.now(dt.timezone.utc).date()
+    doomed = stale_builds(branches, set(tags.values()), today, days)
+    for name in doomed:
+        gh("api", "-X", "DELETE", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/refs/heads/{name}")
+        print(f"- deleted `{name}` ({branches[name][:7]})")
+    print(f"{len(doomed)} of {len(branches)} nightly/build-* branches deleted (kept: the newest, the published "
+          f"nightlies' and the last {days} days')")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("pick").add_argument("--force", action="store_true")
     sub.add_parser("rotate")
     sub.add_parser("prune").add_argument("--days", type=int, default=7)
+    sub.add_parser("prune-builds").add_argument("--days", type=int, default=7)
     args = ap.parse_args()
     if args.cmd == "pick":
         pick(args.force)
     elif args.cmd == "rotate":
         rotate()
+    elif args.cmd == "prune-builds":
+        prune_builds(args.days)
     else:
         prune(args.days)
 
