@@ -39,7 +39,9 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
+REPO = os.environ.get("GITHUB_REPOSITORY", "horizon-rust/horizon")
+# The maintainer, left out of the notes' thanks (the repository's owner is the horizon-rust organization).
+MAINTAINER = "ludovic111"
 # Releases ship in batches, so players get a few releases a day rather than one per merge: BATCH player-facing pull
 # requests, settled for DEBOUNCE, or whatever is waiting once the oldest has waited MAX_WAIT.
 BATCH = 5
@@ -400,7 +402,7 @@ def notes(kind, version, prs, issues, previous=None):
         parts.append("### Fixed\n" + "\n".join(map(bullet, fixed)))
     if issues and kind == "game":
         parts.append("### Known issues\n" + "\n".join(issues))
-    contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != REPO.split("/")[0]})
+    contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != MAINTAINER})
     if contributors:
         parts.append("Thanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
     if kind == "launcher":
