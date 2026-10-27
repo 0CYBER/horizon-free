@@ -137,9 +137,12 @@ impl<B: TerrainBlockStates> MaterialColumn for Column<'_, '_, B> {
     }
     fn set_block(&mut self, y: i32, state: BlockStateId) -> Result<(), SurfaceError> {
         if y >= self.min && y <= self.max {
-            self.chunk.set_block_worldgen(self.x, y, self.z, state)?;
-            if let Some(index) = self.cache_index(y) {
-                self.cache[index] = state;
+            // Most of the Nether's rule writes netherrack over netherrack.
+            if self.block(y)? != state {
+                self.chunk.set_block_worldgen(self.x, y, self.z, state)?;
+                if let Some(index) = self.cache_index(y) {
+                    self.cache[index] = state;
+                }
             }
             if self.chunk.block_properties(state).has_fluid() {
                 self.chunk.mark_postprocessing(self.x, y, self.z);
