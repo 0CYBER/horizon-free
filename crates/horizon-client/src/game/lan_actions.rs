@@ -1968,6 +1968,10 @@ impl Game<'_> {
         }
         if let Some(config) = elsewhere {
             self.respawn_trip(conn, config);
+        } else if in_frame_bed.is_none() && host.hub.guests[i].spawn.is_none() {
+            // TeleportTransition.createDefault: no point of its own, so the
+            // world spawn's free column once its chunks have loaded.
+            self.world_spawn_trip(conn);
         }
         if let Some(c) = in_frame_bed
             && self.dim == super::Dim::Overworld
@@ -1986,6 +1990,10 @@ impl Game<'_> {
                 host.hub.guests[i].yaw = yaw;
                 [at.x, at.y, at.z]
             });
+            if found.is_none() {
+                // TeleportTransition.missingRespawnBlock.
+                self.world_spawn_trip(conn);
+            }
             host.hub.teleport(i, Some(at));
         }
         if away && let Err(e) = self.enter_level(Some(host), back) {
