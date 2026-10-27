@@ -951,6 +951,8 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             entries.push(("components", Tag::Compound(b.components.clone())));
             Some(Tag::compound(entries))
         }
+        // VaultBlockEntity.getUpdateTag: the shared data, which holds the display item.
+        BlockEntity::Vault(v) => Some(v.update_tag()),
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();
