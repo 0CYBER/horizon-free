@@ -732,6 +732,7 @@ impl Game<'_> {
         self.guardian_bubbles();
         self.villager_reputation_tick();
         self.merchant_tick();
+        self.villager_item_sense();
         self.villager_pickups();
         for m in dead {
             self.mob_died(&m);

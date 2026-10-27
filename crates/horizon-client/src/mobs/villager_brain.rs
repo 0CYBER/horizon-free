@@ -204,6 +204,8 @@ pub struct Memories {
     pub nearest_hostile: Slot<Who>,
     pub hiding_place: Slot<[i32; 3]>,
     pub heard_bell_time: Slot<i64>,
+    /// `NEAREST_VISIBLE_WANTED_ITEM`: where the item entity lies.
+    pub nearest_wanted_item: Slot<[f64; 3]>,
     pub cant_reach_walk_target_since: Slot<i64>,
     pub golem_detected_recently: Slot<bool>,
     pub last_slept: Slot<i64>,
@@ -236,6 +238,7 @@ impl Memories {
         self.nearest_hostile.tick();
         self.hiding_place.tick();
         self.heard_bell_time.tick();
+        self.nearest_wanted_item.tick();
         self.cant_reach_walk_target_since.tick();
         self.golem_detected_recently.tick();
         self.last_slept.tick();
@@ -322,6 +325,8 @@ pub struct Brain {
     baby: bool,
     /// Whether the nearest-bed sensor's batch cache is used (`NearestBedSensor`).
     bed_cache: Vec<([i32; 3], i64)>,
+    /// `NearestItemSensor` is due; the game, which knows the items, answers.
+    scan_items: bool,
 }
 #[derive(Clone, Debug)]
 struct Entry {
@@ -362,6 +367,7 @@ impl Brain {
             shuffle_seed,
             baby,
             bed_cache: Vec::new(),
+            scan_items: false,
         };
         b.list = packages(baby, shuffle_seed, farmer);
         b
@@ -556,7 +562,7 @@ fn tick_sensors(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
         match i {
             0 => sense_living(m, w),
             1 => sense_players(m, w),
-            2 => {}
+            2 => brain_mut(m).scan_items = true,
             3 => sense_bed(m, w, lr),
             4 => sense_hurt(m, w),
             5 => sense_hostiles(m, w),
@@ -1868,7 +1874,32 @@ impl B {
                 },
                 r,
             ),
-            B::GoToWantedItem(_) => false,
+            B::GoToWantedItem(r) => one(
+                || {
+                    let mm = mem(m);
+                    if mm.walk_target.present() {
+                        return false;
+                    }
+                    let Some(at) = mm.nearest_wanted_item.value() else {
+                        return false;
+                    };
+                    // item.closerThan(body, 4); a villager can pick up loot.
+                    if m.position.distance_squared(Vec3::new(at[0], at[1], at[2])) >= 16.0 {
+                        return false;
+                    }
+                    let mm = mem(m);
+                    // The item's eye height is 0.2125.
+                    mm.look_target
+                        .set(Tracker::Point([at[0], at[1] + 0.2125, at[2]]));
+                    mm.walk_target.set(WalkTarget {
+                        target: Tracker::Point(at),
+                        speed: 0.5,
+                        close: 0,
+                    });
+                    true
+                },
+                r,
+            ),
             B::AcquirePoi {
                 running,
                 filter,
@@ -4336,6 +4367,14 @@ pub fn heard_bell(m: &mut Mob, now: i64) {
     if brain(m).is_some() {
         mem(m).heard_bell_time.set(now);
     }
+}
+/// Whether `NearestItemSensor` is due for this villager (it is then reset).
+pub fn take_item_scan(m: &mut Mob) -> bool {
+    brain(m).is_some() && std::mem::take(&mut brain_mut(m).scan_items)
+}
+/// `NearestItemSensor.doTick`: the nearest wanted item in sight, or none.
+pub fn set_wanted_item(m: &mut Mob, at: Option<[f64; 3]>) {
+    mem(m).nearest_wanted_item.set_opt(at);
 }
 /// What other villagers see of this one's brain.
 pub fn potential_job_site(m: &Mob) -> Option<[i32; 3]> {
