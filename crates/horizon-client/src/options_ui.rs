@@ -3607,22 +3607,22 @@ mod tests {
         let (x, y) = (slider.x + slider.w - 1.0, slider.y + 1.0);
         assert_eq!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
-            vec![Event::Changed]
+            vec![Event::SliderDrag]
         );
         assert_eq!(s.master_volume, 1.0);
-        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(ui.release().is_empty());
         assert_eq!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
-            vec![Event::Changed]
+            vec![Event::SliderDrag]
         );
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
                 ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
-                vec![Event::Changed]
+                vec![Event::SliderDrag]
             );
         }
-        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
                 .is_empty()
