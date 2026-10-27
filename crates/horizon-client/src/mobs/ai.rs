@@ -1472,6 +1472,46 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
             "entity.baby_horse.hurt",
             "entity.baby_horse.death",
         ],
+        // Drowned, Guardian and ElderGuardian: the hurt and death sounds by
+        // water or land.
+        Species::Drowned if m.fluids.in_water => [
+            "entity.drowned.ambient_water",
+            "entity.drowned.hurt_water",
+            "entity.drowned.death_water",
+        ],
+        Species::Guardian if !m.fluids.in_water => [
+            m.kind.sounds[0],
+            "entity.guardian.hurt_land",
+            "entity.guardian.death_land",
+        ],
+        Species::ElderGuardian if !m.fluids.in_water => [
+            m.kind.sounds[0],
+            "entity.elder_guardian.hurt_land",
+            "entity.elder_guardian.death_land",
+        ],
+        // Slime and MagmaCube.getHurtSound and getDeathSound: tiny ones.
+        Species::Slime if m.extra.size <= 1 => [
+            m.kind.sounds[0],
+            "entity.slime.hurt_small",
+            "entity.slime.death_small",
+        ],
+        Species::MagmaCube if m.extra.size <= 1 => [
+            m.kind.sounds[0],
+            "entity.magma_cube.hurt_small",
+            "entity.magma_cube.death_small",
+        ],
+        // Shulker.getHurtSound: a closed shell.
+        Species::Shulker if m.extra.counter == 0 => [
+            m.kind.sounds[0],
+            "entity.shulker.hurt_closed",
+            m.kind.sounds[2],
+        ],
+        // Turtle.getHurtSound and getDeathSound by age.
+        Species::Turtle if m.is_baby() => [
+            m.kind.sounds[0],
+            "entity.turtle.hurt_baby",
+            "entity.turtle.death_baby",
+        ],
         // SkeletonHorse.getAmbientSound: its own under water.
         Species::SkeletonHorse if m.fluids.eye_in_water => [
             "entity.skeleton_horse.ambient_water",
