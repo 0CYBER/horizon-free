@@ -172,10 +172,12 @@ impl<B: TerrainBlockStates> HeightmapChunk for TerrainBlocks<'_, B> {
     }
 }
 impl<B: TerrainBlockStates> TerrainBlocks<'_, B> {
+    #[inline]
     fn section_index(&self, y: i32) -> Option<usize> {
         let dy = i64::from(y) - i64::from(self.min_y);
         (dy >= 0 && dy < i64::from(self.height)).then_some((dy >> 4) as usize)
     }
+    #[inline]
     fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         let Some(section) = self.section_index(y) else {
             return self.void_air;
@@ -183,11 +185,10 @@ impl<B: TerrainBlockStates> TerrainBlocks<'_, B> {
         if self.non_air[section] == 0 {
             return self.air;
         }
-        self.sections[section]
-            .get(local_index(x, y, z))
-            .expect("valid section coordinates")
+        self.sections[section].state(local_index(x, y, z))
     }
 }
+#[inline]
 fn local_index(x: i32, y: i32, z: i32) -> usize {
     (((y & 15) << 8) | ((z & 15) << 4) | (x & 15)) as usize
 }
@@ -334,6 +335,7 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
         self.blocks.highest_section_y()
     }
     /// ProtoChunk reads collapse an all-air section to its default AIR state.
+    #[inline]
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.blocks.block(x, y, z)
     }

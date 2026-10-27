@@ -574,6 +574,7 @@ impl DecorationWorld for World<'_> {
 }
 impl FeatureWorld for World<'_> {
     type Error = RegionError;
+    #[inline]
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, RegionError> {
         self.region.block(position)
     }

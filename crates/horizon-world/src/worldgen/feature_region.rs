@@ -118,6 +118,7 @@ impl ChunkIndex {
             cells,
         })
     }
+    #[inline]
     fn get(&self, x: i32, z: i32) -> Option<usize> {
         match self {
             Self::Grid {
@@ -246,9 +247,11 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn chunks(&self) -> impl Iterator<Item = &TerrainChunk<'r, B>> {
         self.chunks.iter()
     }
+    #[inline]
     fn index(&self, x: i32, z: i32) -> Option<usize> {
         self.index.get(x, z)
     }
+    #[inline]
     pub fn chunk(&self, x: i32, z: i32) -> Result<&TerrainChunk<'r, B>, RegionError> {
         match self.index(x, z) {
             Some(i) => Ok(&self.chunks[i]),
@@ -261,6 +264,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
             None => Err(RegionError::MissingChunk([x, z])),
         }
     }
+    #[inline]
     pub fn block(&self, [x, y, z]: [i32; 3]) -> Result<BlockStateId, RegionError> {
         Ok(self.chunk(x >> 4, z >> 4)?.block(x, y, z))
     }
