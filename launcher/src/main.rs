@@ -1755,7 +1755,7 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(4.))
-            .child(heading("INSTANCES".into()).child(add))
+            .child(heading(tr("INSTANCES").into()).child(add))
             .children(self.instance_items(heading, cx));
         let servers: Vec<_> = self
             .servers
@@ -1764,7 +1764,7 @@ impl Launcher {
             .unwrap_or_else(|| self.side_servers.clone());
         let mut list = list;
         if !servers.is_empty() {
-            list = list.child(heading("SERVERS".into()));
+            list = list.child(heading(tr("SERVERS").into()));
         }
         for e in servers {
             let up = self.servers.is_up(&e.dir);
@@ -1790,7 +1790,7 @@ impl Launcher {
                             .flex_col()
                             .min_w_0()
                             .child(title(e.name.clone()))
-                            .child(sub(if up { "Running" } else { "Stopped" }.into())),
+                            .child(sub(tr(if up { "Running" } else { "Stopped" }).into())),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.servers.open = Some(dir.clone());
@@ -1874,7 +1874,7 @@ impl Launcher {
                         text(theme::MICRO)
                             .text_color(t.muted)
                             .hover(move |s| s.text_color(t.ink))
-                            .child("HIDE"),
+                            .child(tr("HIDE")),
                     )
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.settings.partner_hidden = true;
@@ -1896,7 +1896,7 @@ impl Launcher {
         if !self.links.website.is_empty() {
             foot = foot.child(link(
                 "website",
-                "Website",
+                tr("Website"),
                 "globe",
                 self.links.website.clone(),
             ));
@@ -2061,7 +2061,7 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
-                .child(centered("No version installed yet.", &t).child(
+                .child(centered(tr("No version installed yet."), &t).child(
                     button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.go(Page::Versions);
@@ -2077,10 +2077,12 @@ impl Launcher {
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
         let play_label = if running { "Running" } else { "Play" };
+        // The label clears the icon in every language ("Играть" is wider than "Play").
         let mut play = button("play", play_label, Kind::Primary, &t)
             .min_w(px(200.))
             .h(px(60.))
-            .px(px(28.))
+            .pl(px(60.))
+            .pr(px(28.))
             .text_size(px(28.))
             .font_weight(FontWeight::SEMIBOLD)
             .child(
@@ -2121,7 +2123,7 @@ impl Launcher {
             );
 
         let resources_value = if self.preparing {
-            "Preparing…".to_string()
+            tr("Preparing…").to_string()
         } else {
             backend::resources_summary(prepared, !silent, &version)
         };
@@ -2146,7 +2148,9 @@ impl Launcher {
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child("Not found. Choose the folder where your launcher keeps Minecraft.")
+                    .child(tr(
+                        "Not found. Choose the folder where your launcher keeps Minecraft.",
+                    ))
                     .into_any_element()
             },
             |p| {
@@ -2165,14 +2169,14 @@ impl Launcher {
             .children(self.launch_panel(cx))
             .child(index_row(
                 2,
-                "Resources",
+                tr("Resources"),
                 Some(div().child(resources_value).into_any_element()),
                 Some(prepare.into_any_element()),
                 &t,
             ))
             .child(index_row(
                 3,
-                "Minecraft folder",
+                tr("Minecraft folder"),
                 Some(minecraft),
                 Some(
                     button("choose-mc", "Choose…", Kind::Ghost, &t)
@@ -2188,10 +2192,10 @@ impl Launcher {
             if self.accounts.selected().is_none() && account::client_id().is_some() {
                 rows = rows.child(index_row(
                     5,
-                    "Playing offline",
+                    tr("Playing offline"),
                     Some(
                         div()
-                            .child("Online servers need a Microsoft account.")
+                            .child(tr("Online servers need a Microsoft account."))
                             .into_any_element(),
                     ),
                     Some(
@@ -2276,7 +2280,7 @@ impl Launcher {
                     .child(
                         text(theme::CAPTION)
                             .text_color(t.muted)
-                            .child("The first preparation takes a few minutes."),
+                            .child(tr("The first preparation takes a few minutes.")),
                     ),
             );
         }
@@ -2370,11 +2374,11 @@ impl Launcher {
                 },
             )),
         );
-        let help = if crash.report.is_some() {
+        let help = tr(if crash.report.is_some() {
             "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing."
         } else {
             "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing."
-        };
+        });
         let mut body = div()
             .flex_1()
             .min_w_0()
@@ -2384,7 +2388,7 @@ impl Launcher {
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
-                    .child("Horizon crashed"),
+                    .child(tr("Horizon crashed")),
             );
         if !crash.summary.is_empty() {
             body = body.child(div().text_color(t.ink_soft).child(crash.summary));
@@ -2460,7 +2464,7 @@ impl Launcher {
                             .child(caps(format!("Minecraft {version}")).text_color(t.ink_soft))
                             .child(div().size(px(4.)).bg(t.muted))
                             .child(
-                                caps(if prepared { "Ready" } else { "Needs preparing" })
+                                caps(tr(if prepared { "Ready" } else { "Needs preparing" }))
                                     .text_color(if prepared { t.success } else { t.warn }),
                             ),
                     )
@@ -3153,7 +3157,7 @@ impl Launcher {
             .text_size(px(12.))
             .cursor_text()
             .child(if self.friend_code.is_empty() && !focused {
-                div().text_color(t.muted).child("Paste an invite code")
+                div().text_color(t.muted).child(tr("Paste an invite code"))
             } else {
                 // The end of a long code stays in view while typing.
                 let shown: String = {
@@ -3203,10 +3207,10 @@ impl Launcher {
         }
         index_row(
             4,
-            "Join a friend",
+            tr("Join a friend"),
             Some(
                 div()
-                    .child("Paste the code a friend shows when they invite you.")
+                    .child(tr("Paste the code a friend shows when they invite you."))
                     .into_any_element(),
             ),
             Some(
