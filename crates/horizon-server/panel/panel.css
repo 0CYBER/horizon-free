@@ -1,4 +1,4 @@
-/* The Horizon server panel. Colours and spacing are horizon-theme's tokens (website/src/tokens.css). */
+/* The Horizon server panel. Colours and spacing are horizon-theme's tokens (crates/horizon-theme/tokens.css). */
 :root {
   --page: #fafafc;
   --plate-soft: #f3f3f8;

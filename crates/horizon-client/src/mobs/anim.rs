@@ -102,7 +102,7 @@ impl AnimState {
     pub fn end_tick(&mut self, _swinging: bool) {}
 }
 /// Part poses for one draw, keyed by part name.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Poses {
     map: HashMap<String, [f32; 9]>,
     dummy: [f32; 9],
@@ -113,20 +113,24 @@ pub struct Poses {
 }
 impl Poses {
     pub fn new(model: &Part) -> Self {
-        let mut map = HashMap::new();
+        let mut poses = Self::default();
+        poses.reset(model);
+        poses
+    }
+    /// Refills this for another model, keeping the map and the sets' capacity:
+    /// a mob draws its body and every equipment layer each frame.
+    pub fn reset(&mut self, model: &Part) {
         fn walk(p: &Part, map: &mut HashMap<String, [f32; 9]>) {
             map.insert(p.name.clone(), p.pose);
             for c in &p.children {
                 walk(c, map);
             }
         }
-        walk(model, &mut map);
-        Self {
-            map,
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-        }
+        self.map.clear();
+        self.dummy = [0.0; 9];
+        self.skipped.clear();
+        self.hidden.clear();
+        walk(model, &mut self.map);
     }
     pub fn get(&mut self, name: &str) -> &mut [f32; 9] {
         match self.map.get_mut(name) {
@@ -189,14 +193,16 @@ pub fn state(m: &Mob, alpha: f32) -> State {
         swing += 1.0;
     }
     let swing = m.anim.attack_anim_o + swing * alpha;
-    let alive = m.alive();
+    // LivingEntityRenderer.extractRenderState: riding motion is not walking.
+    let walking = m.alive() && !m.extra.passenger;
     State {
-        pos: if alive {
-            m.limb_position - m.limb_speed * (1.0 - alpha)
+        pos: if walking {
+            // WalkAnimationState.position(partial): babies' legs move 3 times as far.
+            (m.limb_position - m.limb_speed * (1.0 - alpha)) * if m.is_baby() { 3.0 } else { 1.0 }
         } else {
             0.0
         },
-        speed: if alive {
+        speed: if walking {
             (m.previous_limb_speed + (m.limb_speed - m.previous_limb_speed) * alpha).min(1.0)
         } else {
             0.0
@@ -243,18 +249,24 @@ pub enum ArmPose {
 pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
     humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
 }
-/// `AnimationUtils.swingWeaponDown` with the right arm as the main arm.
-pub(super) fn swing_weapon_down(p: &mut Poses, swing: f32, age: f32) {
+/// `AnimationUtils.swingWeaponDown`: the main arm swings down, the other
+/// one hangs and bobs.
+pub(super) fn swing_weapon_down(p: &mut Poses, swing: f32, age: f32, left_main: bool) {
     let attack2 = (swing * PI).msin();
     let attack = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
+    let (main, off) = if left_main {
+        ("left_arm", "right_arm")
+    } else {
+        ("right_arm", "left_arm")
+    };
     p.zrot("right_arm", 0.0);
     p.zrot("left_arm", 0.0);
     p.yrot("right_arm", PI / 20.0);
     p.yrot("left_arm", -PI / 20.0);
-    p.xrot("right_arm", -1.884_955_8 + (age * 0.09).mcos() * 0.15);
-    p.xrot("left_arm", -0.0 + (age * 0.19).mcos() * 0.5);
-    p.get("right_arm")[3] += attack2 * 2.2 - attack * 0.4;
-    p.get("left_arm")[3] += attack2 * 1.2 - attack * 0.4;
+    p.xrot(main, -1.884_955_8 + (age * 0.09).mcos() * 0.15);
+    p.xrot(off, -0.0 + (age * 0.19).mcos() * 0.5);
+    p.get(main)[3] += attack2 * 2.2 - attack * 0.4;
+    p.get(off)[3] += attack2 * 1.2 - attack * 0.4;
     bob(p, "right_arm", age, 1.0);
     bob(p, "left_arm", age, -1.0);
 }
@@ -281,6 +293,8 @@ pub struct Hum {
     pub using_item: bool,
     /// The arm the current swing moves (`Some(true)` for the right one).
     pub swing_right_arm: Option<bool>,
+    /// `mainArm` is the left one (`Mob.isLeftHanded`): a mob's swing uses it.
+    pub left_main: bool,
 }
 impl Hum {
     pub fn new(right: ArmPose, left: ArmPose) -> Self {
@@ -298,6 +312,7 @@ impl Hum {
             swim: 0.0,
             using_item: false,
             swing_right_arm: None,
+            left_main: false,
         }
     }
 }
@@ -310,7 +325,7 @@ impl ArmPose {
     }
 }
 /// `AnimationUtils.animateCrossbowHold`.
-fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
+pub(super) fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
     let (hold, shoot) = if in_right {
         ("right_arm", "left_arm")
     } else {
@@ -322,7 +337,7 @@ fn crossbow_hold(p: &mut Poses, hx: f32, hy: f32, in_right: bool) {
     p.xrot(shoot, -1.5 + hx);
 }
 /// `AnimationUtils.animateCrossbowCharge`.
-fn crossbow_charge(p: &mut Poses, max: f32, ticks: f32, in_right: bool) {
+pub(super) fn crossbow_charge(p: &mut Poses, max: f32, ticks: f32, in_right: bool) {
     let (hold, pull) = if in_right {
         ("right_arm", "left_arm")
     } else {
@@ -413,13 +428,17 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
             pose_arm(p, h.right, true, h);
         }
     }
-    // setupAttackAnimation (WHACK swing with the right arm).
+    // setupAttackAnimation (WHACK swing with the arm of the swinging hand).
     let hx = p.get("head")[3];
     let swing = s.swing;
+    let swing_left = h.swing_right_arm.map_or(h.left_main, |right| !right);
     if swing > 0.0 && h.weapon_swing {
-        swing_weapon_down(p, swing, s.age);
+        swing_weapon_down(p, swing, s.age, h.left_main);
     } else if swing > 0.0 {
-        let body_y = (swing.sqrt() * PI * 2.0).msin() * 0.2;
+        let mut body_y = (swing.sqrt() * PI * 2.0).msin() * 0.2;
+        if swing_left {
+            body_y = -body_y;
+        }
         p.yrot("body", body_y);
         let age_scale = if s.baby { 0.5 } else { 1.0 };
         {
@@ -439,7 +458,7 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
         let eased = 1.0 - (1.0 - swing).powi(4);
         let aa = (eased * PI).msin();
         let bb = (swing * PI).msin() * -(hx - 0.7) * 0.75;
-        let r = p.get("right_arm");
+        let r = p.get(if swing_left { "left_arm" } else { "right_arm" });
         r[3] -= aa * 1.2 + bb;
         r[4] += body_y * 2.0;
         r[5] += (swing * PI).msin() * -0.4;
@@ -647,6 +666,7 @@ pub fn setup(
             } else {
                 Hum::new(main, ArmPose::Empty)
             };
+            h.left_main = m.main_arm_left();
             h.zombie = Some(m.ai.aggressive);
             h.holding = m.extra.main_hand.is_some();
             h.crouching = m.extra.crouching;
@@ -710,6 +730,7 @@ pub fn setup(
             h.swim = m.extra.swim.amount(s.partial);
             h.using_item = m.extra.using_item > 0;
             h.swing_right_arm = m.extra.swing_right_arm;
+            h.left_main = m.main_arm_left();
             humanoid(p, s, &h);
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.

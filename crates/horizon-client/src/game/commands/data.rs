@@ -286,6 +286,7 @@ impl Game<'_> {
                 if let Tag::Compound(c) = &mut tag {
                     c.remove(&"keepPacked".into());
                 }
+                self.restore_loot_table(key, &mut tag);
                 Ok(tag)
             }
             DataRef::Storage(id) => Ok(self.score.storage.get(id)),
@@ -296,7 +297,8 @@ impl Game<'_> {
             DataRef::Entity(t) => self.apply_entity_nbt(*t, tag),
             DataRef::Block(p) => {
                 let key = (p[0], p[1], p[2]);
-                if let Some((_, new)) = save::decode_block_entity(&tag) {
+                if let Some((_, mut new)) = save::decode_block_entity(&tag) {
+                    self.take_loot_table(key, &tag, &mut new);
                     self.world.block_entities.insert(key, new);
                     let state = self.world.block(p[0], p[1], p[2]);
                     // Redraw what shows the block entity (signs, banners).

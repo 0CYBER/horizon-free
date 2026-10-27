@@ -33,6 +33,55 @@ impl Game<'_> {
         self.container = Some(key);
         self.ender_open = Some(key);
     }
+    /// The block above `key` is a redstone conductor.
+    fn conductor_above(&self, key: (i32, i32, i32)) -> bool {
+        let above = self.world.block(key.0, key.1 + 1, key.2);
+        self.res.behaviours().facts(above).flags
+            & horizon_world::level::data::state_flags::CONDUCTOR
+            != 0
+    }
+    /// `ChestBlock.isChestBlockedAt`: a redstone conductor above the chest or
+    /// a cat sitting on it.
+    fn chest_blocked_at(&self, key: (i32, i32, i32)) -> bool {
+        if self.conductor_above(key) {
+            return true;
+        }
+        // isCatSittingOnChest: a cat whose box meets the block above.
+        let area = horizon_core::geometry::Aabb::new(
+            horizon_core::geometry::Vec3::new(
+                f64::from(key.0),
+                f64::from(key.1 + 1),
+                f64::from(key.2),
+            ),
+            horizon_core::geometry::Vec3::new(
+                f64::from(key.0 + 1),
+                f64::from(key.1 + 2),
+                f64::from(key.2 + 1),
+            ),
+        );
+        self.mobs.iter().any(|m| {
+            m.species() == horizon_client::mobs::Species::Cat
+                && m.alive()
+                && horizon_client::mobs::tame::cat_sitting(m)
+                && m.bounds().intersects(area)
+        })
+    }
+    /// `ChestBlock.getMenuProvider` (`combine(.., false)`) and
+    /// `EnderChestBlock.useWithoutItem`: a blocked chest, or a double chest
+    /// with either half blocked, opens no menu.
+    pub(super) fn chest_menu_blocked(&self, key: (i32, i32, i32), name: &str) -> bool {
+        match name {
+            "minecraft:chest" | "minecraft:trapped_chest" => {
+                self.chest_blocked_at(key)
+                    || self
+                        .chest_partner(key)
+                        .is_some_and(|(other, _)| self.chest_blocked_at(other))
+            }
+            // The ender chest only looks at the block above (no cat check).
+            "minecraft:ender_chest" => self.conductor_above(key),
+            _ => false,
+        }
+    }
     /// Closing it copies the items back and leaves no block-entity contents.
     pub(super) fn close_ender_chest(&mut self) {
         let Some(key) = self.ender_open.take() else {
