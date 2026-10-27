@@ -3458,6 +3458,22 @@ impl Game<'_> {
                     horizon_client::particles::Burst::HORSE_EATING,
                 );
             }
+            // Bee.mobInteract: a wither rose or an open eyeblossom is eaten for
+            // its `getBeeInteractionEffect` instead of breeding the bee.
+            Species::Bee
+                if is_food
+                    && matches!(
+                        &*item,
+                        "minecraft:wither_rose" | "minecraft:open_eyeblossom"
+                    ) =>
+            {
+                if &*item == "minecraft:wither_rose" {
+                    m.add_effect("minecraft:wither", 40, 0);
+                } else {
+                    m.add_effect("minecraft:poison", 25, 0);
+                }
+                consume = true;
+            }
             // HappyGhast.canFallInLove: never, so only a ghastling takes food.
             _ if is_food
                 && m.kind.flags.animal
