@@ -320,6 +320,18 @@ impl MobWorld<'_> {
         };
         scene.unobstructed(b).unwrap_or(false)
     }
+    /// `Entity.isFree`: no collision and `LevelReader.containsAnyLiquid` false
+    /// over the blocks from the box's minimum corner to its maximum corner.
+    pub fn is_free(&self, b: Aabb) -> bool {
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let liquid = (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
+            (lo.y.floor() as i32..=hi.y.floor() as i32).any(|y| {
+                (lo.z.floor() as i32..=hi.z.floor() as i32)
+                    .any(|z| self.facts.get(self.world.block(x, y, z)).fluid != Fluid::None)
+            })
+        });
+        !liquid && self.no_collision(b)
+    }
 }
 impl Mob {
     /// `Entity.refreshDimensions` after growing from `old_w` by `old_h`:
@@ -938,7 +950,7 @@ impl Mob {
         // jumpOutOfFluid
         let m = self.velocity;
         if self.horizontal_collision
-            && w.no_collision(self.bounds().move_by(Vec3::new(
+            && w.is_free(self.bounds().move_by(Vec3::new(
                 m.x,
                 m.y + f64::from(0.6_f32) - self.position.y + old_y,
                 m.z,
