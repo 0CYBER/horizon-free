@@ -63,10 +63,15 @@ impl Game<'_> {
 impl Game<'_> {
     /// Entity.setViewScale (LevelExtractor.extractVisibleEntities): the entity
     /// distance option times the render distance's boost — 1 at 8 chunks, 2.5
-    /// at 20 or more (`streaming.radius` is the effective render distance).
+    /// at 20 or more. The render distance is the client setting, capped by
+    /// the server's view distance when connected
+    /// (Options.getEffectiveRenderDistance).
     pub(super) fn view_scale(&self) -> f64 {
-        (f64::from(self.streaming.radius) / 8.0).clamp(1.0, 2.5)
-            * f64::from(self.settings.entity_distance)
+        let distance = match &self.remote {
+            Some(r) => self.settings.render_distance.min(r.view_distance),
+            None => self.settings.render_distance,
+        };
+        (f64::from(distance) / 8.0).clamp(1.0, 2.5) * f64::from(self.settings.entity_distance)
     }
 }
 
