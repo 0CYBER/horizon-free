@@ -4740,6 +4740,14 @@ impl Game<'_> {
                     self.audio
                         .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
                 }
+                MotionEvent::Chime { volume, pitch } => {
+                    self.audio.play(
+                        "minecraft:block.amethyst_block.chime",
+                        Some(feet),
+                        volume,
+                        pitch,
+                    );
+                }
                 MotionEvent::Drown => {
                     // LivingEntity.makeDrownParticles: eight bubbles moving
                     // with the player.

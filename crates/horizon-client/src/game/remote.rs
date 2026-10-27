@@ -3403,6 +3403,14 @@ impl Game<'_> {
                     self.audio
                         .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
                 }
+                horizon_client::motion::MotionEvent::Chime { volume, pitch } => {
+                    self.audio.play(
+                        "minecraft:block.amethyst_block.chime",
+                        Some(feet),
+                        volume,
+                        pitch,
+                    );
+                }
                 // NetherPortalBlock.entityInside on the client's own level:
                 // the portal overlay and its trigger sound (the server moves
                 // the player).
