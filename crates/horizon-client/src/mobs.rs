@@ -2134,8 +2134,10 @@ impl Mob {
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
     /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
     pub fn movement_speed(&self) -> f64 {
-        let mut v = strider::movement_speed(self, witch::speed(self, self.attrs.speed))
-            * self.speed_bonus();
+        let mut v = strider::movement_speed(
+            self,
+            witch::speed(self, self.attrs.speed) + enderman::attacking_speed(self),
+        ) * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
