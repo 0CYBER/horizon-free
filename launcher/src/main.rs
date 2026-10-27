@@ -207,6 +207,9 @@ struct Launcher {
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
     keychain: bool,
+    /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
+    /// none until the keychain has been read.
+    owner: Option<bool>,
     /// The game is waiting for its session (a token renewal) before it starts.
     starting_client: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
@@ -411,6 +414,7 @@ impl Launcher {
             sign_in: None,
             sign_in_state: None,
             keychain: true,
+            owner: None,
             starting_client: None,
             friend_code: String::new(),
             friend_focused: false,
@@ -463,8 +467,11 @@ impl Launcher {
         let tx = this.tx.clone();
         let keychain_tx = this.tx.clone();
         // Asking the keychain can block (D-Bus), so not on this thread.
+        let accounts = this.accounts.clone();
         std::thread::spawn(move || {
-            let _ = keychain_tx.send(Msg::Keychain(account::store().persistent()));
+            let store = account::store();
+            let _ = keychain_tx.send(Msg::Keychain(store.persistent()));
+            let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
         });
         std::thread::spawn(move || {
             let reused = backend::reuse_prepared_everywhere();
@@ -632,17 +639,29 @@ impl Launcher {
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::Session(session) => {
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
-                        match session {
-                            Ok(Some(file)) => {
-                                cmd.arg("--session-file").arg(file);
+                        let (file, offline) = match session {
+                            Ok(pass) => pass,
+                            Err(account::NoOwner) => {
+                                self.owner = Some(false);
+                                self.client_error = Some(format!("{}.", tr(account::NEEDS_OWNER)));
+                                self.starting_pack = None;
+                                self.joining = None;
+                                self.quick_play = None;
+                                continue;
                             }
-                            Ok(None) => {}
-                            // Still play, offline, and say why.
-                            Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
+                        };
+                        self.owner = Some(true);
+                        if let Some(file) = file {
+                            cmd.arg("--session-file").arg(file);
+                        }
+                        // Still play, offline, and say why.
+                        if let Some(e) = offline {
+                            self.client_error = Some(format!("Playing offline: {e}"));
                         }
                         self.accounts = Accounts::load();
                         // An offline name the player picked (the quick switch).
@@ -896,6 +915,9 @@ impl Launcher {
             if changed_state {
                 if let SignInState::Done(Ok(_)) = state {
                     self.accounts = Accounts::load();
+                    // Sign-in refuses accounts that don't own the game.
+                    self.owner = Some(true);
+                    self.client_error = None;
                 }
                 self.sign_in_state = Some(state);
                 changed = true;
@@ -1061,21 +1083,17 @@ impl Launcher {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             backend::complete_assets(&tag);
-            let session = (|| {
-                let mut accounts = Accounts::load();
-                let Some((a, secrets)) = account::session_for_launch(
-                    &account::Endpoints::live(),
-                    account::store(),
-                    &mut accounts,
-                )?
-                else {
-                    return Ok(None);
-                };
-                account::write_session_file(&backend::game_home().join("sessions"), &a, &secrets)
-                    .map(Some)
-            })();
+            let session = account::session_for_game(&backend::game_home());
             let _ = tx.send(Msg::Session(session));
         });
+    }
+
+    /// Starts the Microsoft sign-in; Settings shows its code.
+    fn start_sign_in(&mut self) {
+        if let Some(old) = self.sign_in.replace(SignIn::start()) {
+            old.cancel();
+        }
+        self.sign_in_state = Some(SignInState::Starting);
     }
 
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
@@ -2270,8 +2288,28 @@ impl Launcher {
         {
             rows = rows.child(self.join_friend_row(prepared && !running, cx));
             // The top bar shows who plays; a row only when there is something to do about it:
-            // offline, in a build that can sign in.
-            if self.accounts.selected().is_none() && account::client_id().is_some() {
+            // no account that owns the game (Play needs one), or offline.
+            if self.owner == Some(false) {
+                rows = rows.child(index_row(
+                    5,
+                    tr("Microsoft account"),
+                    Some(
+                        div()
+                            .child(format!("{}.", tr(account::NEEDS_OWNER)))
+                            .into_any_element(),
+                    ),
+                    Some(
+                        button("gate-sign-in", "Sign in", Kind::Primary, &t)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.start_sign_in();
+                                this.go(Page::Settings);
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    ),
+                    &t,
+                ));
+            } else if self.accounts.selected().is_none() && account::client_id().is_some() {
                 rows = rows.child(index_row(
                     5,
                     tr("Playing offline"),
@@ -3129,6 +3167,7 @@ impl Launcher {
                             this.sign_in_state = Some(SignInState::Done(Err(e)));
                         }
                         let _ = this.accounts.save();
+                        this.owner = Some(this.accounts.has_owner(store));
                         cx.notify();
                     },
                 )),
@@ -3174,9 +3213,9 @@ impl Launcher {
                 ),
             Some(SignInState::Done(Ok(a))) => div().child(format!("Signed in as {}.", a.name)),
             Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
-            None if self.accounts.accounts.is_empty() => div().child(
-                "Sign in to play on online servers with your name and skin. Without an account the game plays offline.",
-            ),
+            None if self.accounts.accounts.is_empty() => div().child(tr(
+                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
+            )),
             None => div().child(tr("Add another account.")),
         };
         let detail = if self.keychain || self.accounts.accounts.is_empty() {
@@ -3190,8 +3229,7 @@ impl Launcher {
                 .child(div().child(account::NO_KEYCHAIN))
         };
         let action = if !configured {
-            // No client ID in this build: the button says what's coming and does nothing.
-            Some(button("sign-in", "Coming soon", Kind::Ghost, &t).into_any_element())
+            None
         } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
             let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
             Some(
@@ -3231,17 +3269,14 @@ impl Launcher {
             Some(
                 button("sign-in", "Sign in with Microsoft", Kind::Secondary, &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.sign_in = Some(SignIn::start());
-                        this.sign_in_state = Some(SignInState::Starting);
+                        this.start_sign_in();
                         cx.notify();
                     }))
                     .into_any_element(),
             )
         };
         n += 1;
-        let title = if !configured {
-            "Microsoft account (coming soon)"
-        } else if self.accounts.accounts.is_empty() {
+        let title = if self.accounts.accounts.is_empty() {
             "Microsoft account"
         } else {
             "Another account"
