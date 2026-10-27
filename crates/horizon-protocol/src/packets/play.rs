@@ -2293,6 +2293,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
     ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
+    RecipeBookChangeSettings(super::recipes::RecipeBookChangeSettings) = RECIPE_BOOK_CHANGE_SETTINGS,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
