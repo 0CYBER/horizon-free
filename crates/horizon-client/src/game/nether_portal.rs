@@ -297,7 +297,8 @@ impl Game<'_> {
         let p = plan.approximate;
         let centre = Vec3::new(f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5);
         if plan.dim == Dim::End {
-            if let Err(e) = self.end_arrival(centre) {
+            // In the End the arrival only builds the platform: no spawn search.
+            if let Err(e) = self.end_arrival(centre, &mut None) {
                 log::error!("End platform: {e}");
             }
             return centre;
