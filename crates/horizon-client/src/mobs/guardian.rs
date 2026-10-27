@@ -291,7 +291,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && let Some((d, _)) = m.last_damage
         && matches!(
             d.kind,
-            DamageKind::PlayerAttack | DamageKind::MaceSmash | DamageKind::MobAttack
+            DamageKind::PlayerAttack
+                | DamageKind::MaceSmash
+                | DamageKind::Spear
+                | DamageKind::MobAttack
         )
     {
         let from = [m.position.x, m.position.y, m.position.z];

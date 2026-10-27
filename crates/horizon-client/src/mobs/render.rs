@@ -439,13 +439,37 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         })
     };
     match m.species() {
-        // WolfCollarLayer.
+        // WolfArmorLayer, then WolfCollarLayer.
         S::Wolf if m.extra.tame => {
             let (model, texture) = if m.is_baby() {
                 ("wolf_baby#main", "entity/wolf/wolf_collar_baby")
             } else {
                 ("wolf#main", "entity/wolf/wolf_collar")
             };
+            // The armor, then the cracks of its damage (`Crackiness.WOLF_ARMOR`).
+            if !m.is_baby() && m.extra.head.as_deref() == Some("minecraft:wolf_armor") {
+                let left = (super::WOLF_ARMOR_DURABILITY - m.extra.body_damage) as f32
+                    / super::WOLF_ARMOR_DURABILITY as f32;
+                push(
+                    &mut v,
+                    "wolf_armor#main",
+                    "entity/equipment/wolf_body/armadillo_scute",
+                    white,
+                    false,
+                );
+                let crack = [(0.32, "high"), (0.69, "medium"), (0.95, "low")]
+                    .iter()
+                    .find(|(t, _)| left < *t);
+                if let Some((_, level)) = crack {
+                    push(
+                        &mut v,
+                        "wolf_armor#main",
+                        &format!("entity/wolf/wolf_armor_crackiness_{level}"),
+                        white,
+                        false,
+                    );
+                }
+            }
             push(
                 &mut v,
                 model,
@@ -1452,7 +1476,23 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    hand_base(m, &model, base, &poses, left)
+    let mut t = hand_base(m, &model, base, &poses, left)?;
+    // ItemInHandLayer: a spear in use (ArmPose.SPEAR's animateUseItem).
+    let off_hand = left != m.main_arm_left();
+    if m.extra.using_item > 0
+        && m.extra.using_off_hand == off_hand
+        && let Some(kinetic) = (if off_hand {
+            &m.extra.off_hand
+        } else {
+            &m.extra.main_hand
+        })
+        .as_deref()
+        .and_then(crate::spear::Kinetic::of)
+    {
+        let time_held = m.extra.using_item as f32 + s.partial;
+        t *= crate::spear::third_person_use_item(&kinetic, time_held, s.swing, 0.0, !left);
+    }
+    Some(t)
 }
 
 #[cfg(test)]

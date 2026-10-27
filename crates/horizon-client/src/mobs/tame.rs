@@ -100,6 +100,48 @@ pub fn register(m: &mut Mob) {
         ),
     );
 }
+/// `Parrot.registerGoals`: a tamed parrot sits when told to and follows its
+/// owner from five blocks away (the wander and the shoulder come as they are).
+pub fn register_parrot(m: &mut Mob) {
+    let g = &mut m.ai.goals;
+    g.add(0, TamePanic(Panic::new(1.25)));
+    g.add(0, Float);
+    g.add(1, LookAtPlayer::new(8.0));
+    g.add(2, SitWhenOrdered);
+    g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
+    g.add(2, Stroll::avoiding_water(1.0));
+    g.add(3, LandOnOwnersShoulder);
+}
+/// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
+/// the shoulder of the owner it touches; the host does the landing.
+#[derive(Clone, Debug)]
+struct LandOnOwnersShoulder;
+impl Goal for LandOnOwnersShoulder {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // ShoulderRidingEntity.canSitOnShoulder: rideCooldownCounter > 100.
+        is_owner(m, cx.w)
+            && owner(m, cx.w).is_some_and(|(_, _, spectator)| !spectator)
+            && !m.extra.sitting
+            && m.age > 100
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if !m.extra.sitting
+            && m.extra.leash.is_none()
+            && is_owner(m, cx.w)
+            && cx
+                .w
+                .player
+                .as_ref()
+                .is_some_and(|p| m.bounds().intersects(p.bounds))
+        {
+            cx.events.push(MobEvent::ParrotToShoulder { mob: m.id });
+        }
+    }
+}
 /// `Wolf.PREY_SELECTOR`: sheep, rabbits and foxes.
 fn wolf_prey(s: &super::Seen) -> bool {
     matches!(s.species, Species::Sheep | Species::Rabbit | Species::Fox)
@@ -137,6 +179,18 @@ fn owner_view<'a>(m: &Mob, w: &'a MobWorld) -> Option<&'a PlayerView> {
 fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
     let p = owner_view(m, w)?;
     Some((p.position, p.eye[1], p.spectator))
+}
+/// Whether the player the mob sees is the one saved as its owner (with
+/// guests on, that player is whoever stands nearest).
+fn is_owner(m: &Mob, w: &MobWorld) -> bool {
+    w.player
+        .as_ref()
+        .is_some_and(|p| owned_by(m.extra.owner, p.uuid))
+}
+/// Whether `uuid` is the saved owner. A host with no UUID yet owns what it
+/// tamed under the placeholder `[0, 0, 0, 1]`.
+pub fn owned_by(owner: Option<[i32; 4]>, uuid: [i32; 4]) -> bool {
+    owner.is_some_and(|o| o == uuid || (o == [0, 0, 0, 1] && uuid == [0; 4]))
 }
 /// `TamableAnimal.unableToMoveToOwner`.
 fn unable_to_move_to_owner(m: &Mob, w: &MobWorld) -> bool {
@@ -448,7 +502,8 @@ impl Goal for OwnerHurt {
         m.ai.target = None;
     }
 }
-/// `Wolf.wantsToAttack`: never creepers, ghasts or tame wolves and cats.
+/// `Wolf.wantsToAttack`: never creepers, ghasts, tame cats and parrots, or a
+/// tame wolf of the same owner.
 fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     let Who::Mob(id) = who else {
         return false;
@@ -461,7 +516,8 @@ fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     };
     match s.species {
         Species::Creeper | Species::Ghast => false,
-        Species::Wolf | Species::Cat | Species::Parrot => !s.tame,
+        Species::Wolf => !s.tame || s.owner != m.extra.owner,
+        Species::Cat | Species::Parrot => !s.tame,
         Species::Horse | Species::Donkey | Species::Mule | Species::Llama => !s.tame,
         _ => true,
     }

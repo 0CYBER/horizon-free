@@ -190,19 +190,31 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
                 .filter(|p| *p >= 1)
                 .map(crate::text::ClickEvent::ChangePage),
             Some("suggest_command") => text("command").map(crate::text::ClickEvent::SuggestCommand),
+            Some("run_command") => text("command").map(crate::text::ClickEvent::RunCommand),
             Some("copy_to_clipboard") => {
                 text("value").map(crate::text::ClickEvent::CopyToClipboard)
             }
             _ => None,
         };
     }
-    // HoverEvent.ShowText.
-    if let Some(e) = o.get("hover_event").and_then(Value::as_object)
-        && e.get("action").and_then(Value::as_str) == Some("show_text")
-        && let Some(value) = e.get("value")
-    {
-        style.hover = Some(Box::new(to_text(value, &mut |s| Text::literal(s))));
+    // HoverEvent.ShowText and ShowItem.
+    if let Some(e) = o.get("hover_event").and_then(Value::as_object) {
+        match e.get("action").and_then(Value::as_str) {
+            Some("show_text") => {
+                if let Some(value) = e.get("value") {
+                    style.hover = Some(Box::new(to_text(value, &mut |s| Text::literal(s))));
+                }
+            }
+            Some("show_item") if e.get("id").is_some_and(Value::is_string) => {
+                style.hover_item = Some(Box::new(Value::Object(e.clone())));
+            }
+            _ => {}
+        }
     }
+    style.insertion = o
+        .get("insertion")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     style
 }
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
