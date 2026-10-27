@@ -417,6 +417,22 @@ fn build_overlay_uncached(
             files.insert(name, (i, provided));
         }
     }
+    // FallbackResourceManager: a file's `.mcmeta` counts only from the pack that
+    // supplies the file or one above it; vanilla's own sits below every pack.
+    let hidden: BTreeSet<String> = files
+        .iter()
+        .filter(|(name, _)| !name.ends_with(".mcmeta"))
+        .filter_map(|(name, (owner, _))| {
+            let meta = format!("{name}.mcmeta");
+            match files.get(&meta) {
+                Some((meta_owner, _)) if meta_owner >= owner => None,
+                _ => Some(meta),
+            }
+        })
+        .collect();
+    for name in &hidden {
+        files.remove(name);
+    }
     // Vanilla sits below every pack, so filters hide its files too.
     let filters: Vec<&Filter> = packs.iter().flat_map(|p| &p.filter).collect();
     let touched_dirs: BTreeSet<String> = files
@@ -468,6 +484,7 @@ fn build_overlay_uncached(
         vanilla: &Path,
         out: &Path,
         touched: &BTreeSet<String>,
+        hidden: &BTreeSet<String>,
         files: &BTreeMap<String, (usize, Provided)>,
         merged: &BTreeMap<String, Vec<u8>>,
         filters: &[&Filter],
@@ -504,6 +521,9 @@ fn build_overlay_uncached(
         }
         for name in names {
             let child = format!("{prefix}{name}");
+            if hidden.contains(&child) {
+                continue;
+            }
             if let Some(bytes) = merged.get(&child) {
                 fs::write(out.join(&child), bytes)?;
             } else if let Some((owner, (path, inner))) = files.get(&child) {
@@ -528,6 +548,7 @@ fn build_overlay_uncached(
                     vanilla,
                     out,
                     touched,
+                    hidden,
                     files,
                     merged,
                     filters,
@@ -551,6 +572,7 @@ fn build_overlay_uncached(
         vanilla,
         out,
         &touched_dirs,
+        &hidden,
         &files,
         &merged,
         &filters,
