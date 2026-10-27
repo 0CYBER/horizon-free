@@ -324,7 +324,7 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
         Who::Player => {
             cx.events.push(MobEvent::AttackPlayer(amount, from));
             // Poison only on normal (10 s) and hard (18 s).
-            let seconds = match cx.w.difficulty.base {
+            let seconds = match cx.w.difficulty.id {
                 2 => 10,
                 3 => 18,
                 _ => 0,
