@@ -106,6 +106,16 @@ impl StackData {
     pub fn other(&self, id: &str) -> Option<&Tag> {
         self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
     }
+    /// `SetNameFunction.run`: a loot text component stored as `custom_name`
+    /// (plain text, as modelled) or as the unmodelled `item_name`.
+    pub fn set_loot_name(&mut self, id: &str, text: &serde_json::Value) {
+        let tag = crate::scoreboard::json_to_tag(text);
+        if id == "minecraft:custom_name" {
+            self.custom_name = read_text(&tag);
+        } else {
+            self.set_other(id, Some(tag));
+        }
+    }
     /// Set (or with None remove) an unmodelled component.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
         self.other.retain(|(k, _)| k != id);
@@ -428,6 +438,11 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
             })
         }
     }
+}
+/// The stack a `show_item` hover event holds (`HoverEvent.ShowItem`): its
+/// `{id, count?, components?}` object.
+pub fn stack_from_hover(event: &serde_json::Value) -> Option<ItemStack> {
+    template_from(&crate::scoreboard::json_to_tag(event))
 }
 /// Sorted-key, type-annotated text of a tag (the differential harnesses
 /// print the same form from the vanilla side).

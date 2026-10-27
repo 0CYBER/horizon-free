@@ -46,8 +46,12 @@ impl Game<'_> {
             if !self.with_level(|b, level, _| b.is_raining_at(level, p)) {
                 continue;
             }
-            // Skeleton trap: effective difficulty / 100 (regional difficulty approximated).
-            let difficulty = f64::from(self.ui.difficulty) * 0.75;
+            // Skeleton trap: the local effective difficulty / 100
+            // (`getCurrentDifficultyAt(pos)`).
+            let difficulty = f64::from(
+                self.local_difficulty([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])])
+                    .effective,
+            );
             let below = &self
                 .res
                 .facts()

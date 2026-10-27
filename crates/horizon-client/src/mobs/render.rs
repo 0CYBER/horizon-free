@@ -143,6 +143,10 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Panda => (
+            baby_or(m, "panda#main", "panda_baby#main"),
+            super::panda::texture(m),
+        ),
         S::HappyGhast => (
             baby_or(m, "happy_ghast#main", "happy_ghast_baby#main"),
             if baby {
@@ -249,6 +253,20 @@ pub fn body(m: &Mob) -> (String, String) {
         S::Armadillo => (
             baby_or(m, "armadillo#main", "armadillo_baby#main"),
             b(&m.kind.texture),
+        ),
+        // FoxRenderer.getTextureLocation: snow variant, sleeping, baby.
+        S::Fox => (
+            baby_or(m, "fox#main", "fox_baby#main"),
+            format!(
+                "entity/fox/fox{}{}{}",
+                if m.extra.variant == 0 { "" } else { "_snow" },
+                if super::fox::flag(m, super::fox::SLEEPING) {
+                    "_sleep"
+                } else {
+                    ""
+                },
+                if baby { "_baby" } else { "" },
+            ),
         ),
         S::Pig => {
             let model = if baby {
@@ -421,13 +439,37 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         })
     };
     match m.species() {
-        // WolfCollarLayer.
+        // WolfArmorLayer, then WolfCollarLayer.
         S::Wolf if m.extra.tame => {
             let (model, texture) = if m.is_baby() {
                 ("wolf_baby#main", "entity/wolf/wolf_collar_baby")
             } else {
                 ("wolf#main", "entity/wolf/wolf_collar")
             };
+            // The armor, then the cracks of its damage (`Crackiness.WOLF_ARMOR`).
+            if !m.is_baby() && m.extra.head.as_deref() == Some("minecraft:wolf_armor") {
+                let left = (super::WOLF_ARMOR_DURABILITY - m.extra.body_damage) as f32
+                    / super::WOLF_ARMOR_DURABILITY as f32;
+                push(
+                    &mut v,
+                    "wolf_armor#main",
+                    "entity/equipment/wolf_body/armadillo_scute",
+                    white,
+                    false,
+                );
+                let crack = [(0.32, "high"), (0.69, "medium"), (0.95, "low")]
+                    .iter()
+                    .find(|(t, _)| left < *t);
+                if let Some((_, level)) = crack {
+                    push(
+                        &mut v,
+                        "wolf_armor#main",
+                        &format!("entity/wolf/wolf_armor_crackiness_{level}"),
+                        white,
+                        false,
+                    );
+                }
+            }
             push(
                 &mut v,
                 model,
@@ -927,7 +969,13 @@ fn flip_degrees(m: &Mob) -> f32 {
 fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Cat => super::tame::cat_rotations(m, alpha),
+        Species::Panda => super::panda::rotations(m, alpha),
         Species::Shulker => super::shulker::rotations(m),
+        // FoxRenderer.setupRotations: the body follows a pounce's pitch.
+        Species::Fox if super::fox::flag(m, super::fox::POUNCING | super::fox::FACEPLANTED) => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x((-pitch).to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1409,6 +1457,12 @@ pub fn held_item_transform(
     data: &MobData,
     left: bool,
 ) -> Option<glam::Mat4> {
+    // PandaHoldsItemLayer: the main hand's item in its mouth.
+    if m.species() == Species::Panda {
+        return super::panda::item_offset(m, alpha)
+            .filter(|_| !left)
+            .map(|offset| base_transform(m, alpha, camera) * offset);
+    }
     if !super::illager::shows_item(m) {
         return None;
     }
@@ -1422,7 +1476,23 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    hand_base(m, &model, base, &poses, left)
+    let mut t = hand_base(m, &model, base, &poses, left)?;
+    // ItemInHandLayer: a spear in use (ArmPose.SPEAR's animateUseItem).
+    let off_hand = left != m.main_arm_left();
+    if m.extra.using_item > 0
+        && m.extra.using_off_hand == off_hand
+        && let Some(kinetic) = (if off_hand {
+            &m.extra.off_hand
+        } else {
+            &m.extra.main_hand
+        })
+        .as_deref()
+        .and_then(crate::spear::Kinetic::of)
+    {
+        let time_held = m.extra.using_item as f32 + s.partial;
+        t *= crate::spear::third_person_use_item(&kinetic, time_held, s.swing, 0.0, !left);
+    }
+    Some(t)
 }
 
 #[cfg(test)]
