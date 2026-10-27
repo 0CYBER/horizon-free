@@ -600,7 +600,7 @@ impl Game<'_> {
         *self.persist.uuids.entry(id).or_insert_with(random_uuid)
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
-    fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
+    pub(super) fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
         let registry = self.pack.assets.registry;
         let state = match tag.get("Name") {
             Some(Tag::String(name)) => BlockState {

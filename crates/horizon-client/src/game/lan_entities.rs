@@ -9,7 +9,7 @@ use horizon_client::lan::{
     hub::Hub,
 };
 use horizon_protocol::entity_data::{Value, serializer};
-use horizon_world::nbt::Tag;
+use horizon_world::{nbt::Tag, registry::BlockStateId};
 
 fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> EntityState {
     EntityState {
@@ -274,12 +274,69 @@ impl Game<'_> {
             let mut e = state(o.id, &o.kind, [p.x, p.y, p.z], o.yaw, false);
             e.pitch = o.pitch;
             e.head_yaw = o.yaw;
+            if let Some(tag) = self.persist.raw.get(&o.id) {
+                self.lan_display_data(tag, hub, &mut e);
+            }
             out.push(e);
         }
     }
 }
 
 impl Game<'_> {
+    /// The synched data of a text, block or item display kept unsimulated,
+    /// from its compound (`Display.readAdditionalSaveData`), with the
+    /// defaults to send when a value goes back to one.
+    fn lan_display_data(&self, tag: &Tag, hub: &mut Hub, e: &mut EntityState) {
+        use horizon_client::text_display::{display_data, text_display_data};
+        let empty = Tag::Compound(Default::default());
+        let (meta, defaults) = match e.kind.as_str() {
+            "minecraft:text_display" => (text_display_data(tag, false), text_display_data(&empty, true)),
+            "minecraft:block_display" => {
+                // DATA_BLOCK_STATE_ID, air by default.
+                let state = |t: Option<BlockStateId>| {
+                    (23, serializer::BLOCK_STATE, Value::Id(t.map_or(0, |s| s.0 as i32)))
+                };
+                let air = self.pack.assets.registry.default_state("minecraft:air");
+                let shown = tag.get("block_state").and_then(|t| self.state_from_nbt(t));
+                (vec![state(shown.or(air))], vec![state(air)])
+            }
+            "minecraft:item_display" => {
+                // DATA_ITEM_STACK and DATA_ITEM_DISPLAY_ID (`ItemDisplayContext`).
+                let item = tag.get("item").and_then(horizon_client::save::item_from_nbt);
+                let context = match tag.get("item_display") {
+                    Some(Tag::String(s)) => match s.to_string_lossy().as_str() {
+                        "thirdperson_lefthand" => 1,
+                        "thirdperson_righthand" => 2,
+                        "firstperson_lefthand" => 3,
+                        "firstperson_righthand" => 4,
+                        "head" => 5,
+                        "gui" => 6,
+                        "ground" => 7,
+                        "fixed" => 8,
+                        "on_shelf" => 9,
+                        _ => 0,
+                    },
+                    _ => 0,
+                };
+                (
+                    vec![
+                        (23, serializer::ITEM_STACK, Value::Item(hub.stack(&item))),
+                        (24, serializer::BYTE, Value::Byte(context)),
+                    ],
+                    vec![
+                        (23, serializer::ITEM_STACK, Value::Item(None)),
+                        (24, serializer::BYTE, Value::Byte(0)),
+                    ],
+                )
+            }
+            _ => return,
+        };
+        e.meta = display_data(tag, false);
+        e.meta.extend(meta);
+        e.defaults = display_data(&empty, true);
+        e.defaults.extend(defaults);
+    }
+
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {
