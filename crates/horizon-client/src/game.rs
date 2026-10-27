@@ -3395,6 +3395,7 @@ impl Game<'_> {
                         f64::from(pos.z) + 0.5,
                     ]);
                     let sound = match id {
+                        1503 => Some(("minecraft:block.end_portal_frame.fill", 1.0)),
                         1501 => Some(("minecraft:block.lava.extinguish", 0.5)),
                         1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
@@ -3450,21 +3451,25 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        if matches!(id, 1019 | 1021 | 1029 | 1030 | 1045 | 1052 | 1053 | 1054) {
-                            // Clients play the anvil sound from its level event;
+                        if matches!(
+                            id,
+                            1019 | 1021 | 1029 | 1030 | 1045 | 1052 | 1053 | 1054 | 1503
+                        ) {
+                            // Clients play these sounds from their level events;
                             // capturing it also sends a duplicate sound packet.
                             self.audio.play_unshared(name, c, volume, pitch);
                         } else {
                             self.audio.play(name, c, volume, pitch);
                         }
                     }
-                    // LevelEventHandler 1501 and 1502 draw their smoke after the sound.
+                    // LevelEventHandler draws smoke after the sound.
                     match id {
                         1501 => self.puffs_above_block(
                             pos,
                             horizon_client::particles::ParticleType::LargeSmoke,
                         ),
                         1502 => self.torch_burnout_smoke(pos),
+                        1503 => self.end_portal_frame_smoke(pos),
                         _ => {}
                     }
                 }
