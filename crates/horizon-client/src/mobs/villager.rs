@@ -353,18 +353,14 @@ pub fn food_points(item: &str) -> i32 {
         _ => 0,
     }
 }
-/// The farmer's `requestedItems`.
+/// The farmer's `requestedItems` (`VillagerProfession.FARMER`). Food is picked
+/// up and traded separately, through its villager food value.
 pub fn farmer_items() -> &'static [&'static str] {
     &[
-        "minecraft:bread",
-        "minecraft:potato",
-        "minecraft:carrot",
         "minecraft:wheat",
         "minecraft:wheat_seeds",
-        "minecraft:beetroot",
         "minecraft:beetroot_seeds",
-        "minecraft:torchflower_seeds",
-        "minecraft:pitcher_pod",
+        "minecraft:bone_meal",
     ]
 }
 /// A villager's `requestedItems` by profession.

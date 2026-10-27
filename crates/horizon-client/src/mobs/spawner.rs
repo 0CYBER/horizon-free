@@ -152,6 +152,34 @@ pub(crate) fn cube_scale(id: &str, entity: &Compound) -> f32 {
         .map_or(1, |size| (size as i32).saturating_add(1).clamp(1, 127)) as f32
 }
 
+/// `EquipmentTable.CODEC`: the loot table and the drop chance of each
+/// `EquipmentSlot` (`drops::SLOTS` order) the table names, `slot_drop_chances`
+/// being one number for every slot or a map by slot name.
+pub fn equipment_table(tag: &Tag) -> Option<(String, [Option<f32>; 8])> {
+    let chance = |t: &Tag| match t {
+        Tag::Float(v) => Some(f32::from_bits(*v)),
+        Tag::Double(v) => Some(f64::from_bits(*v) as f32),
+        Tag::Byte(v) => Some(f32::from(*v)),
+        Tag::Short(v) => Some(f32::from(*v)),
+        Tag::Int(v) => Some(*v as f32),
+        Tag::Long(v) => Some(*v as f32),
+        _ => None,
+    };
+    let Some(Tag::String(table)) = tag.get("loot_table") else {
+        return None;
+    };
+    let mut chances = [None; 8];
+    match tag.get("slot_drop_chances") {
+        Some(Tag::Compound(map)) => {
+            for (i, slot) in super::drops::SLOTS.iter().enumerate() {
+                chances[i] = map.get(&JavaString::from(*slot)).and_then(chance);
+            }
+        }
+        Some(all) => chances = [Some(chance(all)?); 8],
+        None => {}
+    }
+    Some((table.to_string_lossy(), chances))
+}
 /// A whole number from any numeric tag (`NumericTag.intValue`: floats floor).
 pub(crate) fn number(tag: Option<&Tag>) -> Option<i64> {
     Some(match tag? {

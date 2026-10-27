@@ -47,6 +47,8 @@ pub enum ClickEvent {
     /// `ClickEvent.ChangePage`: a book's page, counted from 1.
     ChangePage(i32),
     SuggestCommand(String),
+    /// `ClickEvent.RunCommand`: the command, with or without its `/`.
+    RunCommand(String),
     CopyToClipboard(String),
     /// A local file to open with the system handler.
     /// Only allow this in locally constructed messages, never server/LAN text.
@@ -65,6 +67,10 @@ pub struct Style {
     pub click: Option<ClickEvent>,
     /// Hover text.
     pub hover: Option<Box<Text>>,
+    /// `HoverEvent.ShowItem`: the event's `{id, count?, components?}` object.
+    pub hover_item: Option<Box<Value>>,
+    /// `Style.insertion`: the text a Shift-click puts in the chat box.
+    pub insertion: Option<String>,
     /// The font (`FontDescription.Resource`), a full id like
     /// `minecraft:alt`; the default font when unset.
     pub font: Option<String>,
@@ -93,6 +99,12 @@ impl Style {
         }
         if self.hover.is_none() {
             self.hover.clone_from(&base.hover);
+        }
+        if self.hover_item.is_none() {
+            self.hover_item.clone_from(&base.hover_item);
+        }
+        if self.insertion.is_none() {
+            self.insertion.clone_from(&base.insertion);
         }
         if self.font.is_none() {
             self.font.clone_from(&base.font);
@@ -499,7 +511,7 @@ impl Text {
 }
 
 /// The style fields of a component's JSON.
-const STYLE_KEYS: [&str; 9] = [
+const STYLE_KEYS: [&str; 10] = [
     "color",
     "bold",
     "italic",
@@ -508,6 +520,7 @@ const STYLE_KEYS: [&str; 9] = [
     "obfuscated",
     "click_event",
     "hover_event",
+    "insertion",
     "font",
 ];
 /// Style.Serializer: the fields a style sets.
@@ -541,6 +554,9 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
             ClickEvent::CopyToClipboard(value) => {
                 json!({ "action": "copy_to_clipboard", "value": value })
             }
+            ClickEvent::RunCommand(command) => {
+                json!({ "action": "run_command", "command": command })
+            }
             ClickEvent::OpenFile(path) => json!({ "action": "open_file", "path": path }),
         };
         out.push(("click_event".to_owned(), event));
@@ -550,6 +566,13 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
             "hover_event".to_owned(),
             json!({ "action": "show_text", "value": hover.component() }),
         ));
+    } else if let Some(Value::Object(item)) = style.hover_item.as_deref() {
+        let mut event = item.clone();
+        event.insert("action".into(), "show_item".into());
+        out.push(("hover_event".to_owned(), Value::Object(event)));
+    }
+    if let Some(insertion) = &style.insertion {
+        out.push(("insertion".to_owned(), insertion.clone().into()));
     }
     if let Some(font) = &style.font {
         out.push(("font".to_owned(), font.clone().into()));
