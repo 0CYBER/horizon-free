@@ -104,6 +104,9 @@ impl Game<'_> {
             };
             let m = &mut self.mobs[i];
             if let Some(h) = holder {
+                if h == Holder::Player {
+                    m.extra.leash_player = Some(player_uuid);
+                }
                 m.extra.leash = Some(h);
                 m.extra.leash_pending = None;
             } else if m.age > 100 {
@@ -201,7 +204,9 @@ impl Game<'_> {
                 if self.mobs[index].extra.leash.is_some() {
                     self.break_leash(id, true, false);
                 }
+                let holder = self.acting_player_uuid();
                 self.mobs[index].extra.leash = Some(Holder::Player);
+                self.mobs[index].extra.leash_player = Some(holder);
                 self.lead_sound("tied", at);
                 // The lead is always used up.
                 if let Some(stack) = self.held_mut().as_mut() {

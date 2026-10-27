@@ -145,8 +145,41 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
-            _ => 0.0,
+            // ArmorStand.getDefaultDimensions: a marker's are empty, a small
+            // stand's are BABY_DIMENSIONS, whose eye height is 0.9875F.
+            Target::Stand(id) => match self.armor_stands.iter().find(|a| a.id == id) {
+                Some(a) if a.marker => 0.0,
+                Some(a) if a.small => f64::from(0.9875f32),
+                _ => self.type_eye_height(&self.target_type(t)),
+            },
+            // Entity.getEyeHeight: the type's dimensions.
+            _ => self.type_eye_height(&self.target_type(t)),
         }
+    }
+    /// `EntityType.getDimensions().eyeHeight()` from `entity-types.json`,
+    /// read once: a float, widened as `Entity.getEyeY` does.
+    fn type_eye_height(&self, ty: &str) -> f64 {
+        static EYE_HEIGHTS: std::sync::OnceLock<std::collections::HashMap<String, f64>> =
+            std::sync::OnceLock::new();
+        EYE_HEIGHTS
+            .get_or_init(|| {
+                std::fs::read(self.options.resources.join("entity-types.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| {
+                        v.as_object().map(|o| {
+                            o.iter()
+                                .filter_map(|(k, t)| {
+                                    Some((k.clone(), f64::from(t["eye_height"].as_f64()? as f32)))
+                                })
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default()
+            })
+            .get(ty)
+            .copied()
+            .unwrap_or(0.0)
     }
     /// EntityAnchorArgument.Anchor.apply.
     pub(super) fn anchor_position(&self, s: &Source) -> [f64; 3] {
@@ -467,9 +500,10 @@ impl Game<'_> {
             "positioned" if c.has("as") => targets(self)?
                 .into_iter()
                 .filter_map(|t| {
+                    // withPosition keeps the anchor (only `positioned <pos>`
+                    // resets it to the feet).
                     Some(Source {
                         pos: self.target_position(t)?,
-                        eyes: false,
                         ..s
                     })
                 })
@@ -602,6 +636,73 @@ impl Game<'_> {
                     .find(|m| m.id == id)
                     .and_then(|m| m.extra.owner)
                     .and_then(|u| self.target_with_uuid(u))
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            },
+            // Leashable.getLeashHolder: a fence knot is not an entity here.
+            Some("leasher") => match entity {
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .and_then(|m| m.extra.leash.map(|holder| (holder, m.extra.leash_player)))
+                    .and_then(|(holder, player)| match holder {
+                        // The player who tied it (the host's when unrecorded).
+                        horizon_client::mobs::leash::Holder::Player => {
+                            let uuid = player.or(self.level.player_uuid)?;
+                            self.target_by_uuid(horizon_client::lan::playerdata::ints_uuid(uuid))
+                        }
+                        horizon_client::mobs::leash::Holder::Mob(i) => Some(Target::Mob(i)),
+                        horizon_client::mobs::leash::Holder::Knot(_) => None,
+                    })
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            },
+            // TraceableEntity.getOwner: who shot a projectile, who threw an
+            // item, who summoned a vex.
+            Some("origin") => match entity {
+                Target::Projectile(id) => self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .find(|p| p.id == id)
+                    .and_then(|p| match (p.owner?, p.guest) {
+                        // A guest's shot: `Who::Player` is them.
+                        (horizon_client::mobs::Who::Player, Some(conn))
+                            if self.lan_acting == Some(conn) =>
+                        {
+                            Some(Target::Player)
+                        }
+                        (horizon_client::mobs::Who::Player, Some(conn)) => {
+                            Some(Target::Guest(conn))
+                        }
+                        (horizon_client::mobs::Who::Player, None) => Some(Target::Player),
+                        (horizon_client::mobs::Who::Mob(id), _) => Some(Target::Mob(id)),
+                    })
+                    .into_iter()
+                    .collect(),
+                Target::Item(id) => self
+                    .dropped
+                    .iter()
+                    .find(|d| d.id == id)
+                    .and_then(|d| d.thrower)
+                    .and_then(|words| {
+                        let uuid = words
+                            .iter()
+                            .fold(0u128, |all, w| all << 32 | u128::from(*w as u32));
+                        self.target_by_uuid(uuid)
+                    })
+                    .into_iter()
+                    .collect(),
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && m.kind.id == "minecraft:vex")
+                    .map(|m| m.extra.counter2 as u32)
+                    .filter(|owner| *owner != 0)
+                    .map(Target::Mob)
                     .into_iter()
                     .collect(),
                 _ => Vec::new(),
@@ -807,10 +908,12 @@ impl Game<'_> {
                 .coords(c, "pos")
                 .map(|co| co.block(self.source_position(), self.source_rotation()));
             let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
-            return Ok(flag(
-                dimension == self.dim
-                    && p.is_some_and(|p| self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))),
-            ));
+            // ExecuteCommand.isChunkLoaded: ENTITY_TICKING, which is past lit.
+            let loaded = |p: [i32; 3]| {
+                let key = (p[0] >> 4, p[2] >> 4);
+                self.world.chunks.contains_key(&key) && self.streaming.is_lit(key.0, key.1)
+            };
+            return Ok(flag(dimension == self.dim && p.is_some_and(loaded)));
         }
         if c.has("dimension") {
             let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
