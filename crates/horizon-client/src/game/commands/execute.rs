@@ -663,10 +663,11 @@ impl Game<'_> {
             // TraceableEntity.getOwner: who shot a projectile, who threw an
             // item, who summoned a vex.
             Some("origin") => match entity {
-                Target::Projectile(i) => self
+                Target::Projectile(id) => self
                     .creatures
                     .projectiles
-                    .get(i)
+                    .iter()
+                    .find(|p| p.id == id)
                     .and_then(|p| match (p.owner?, p.guest) {
                         // A guest's shot: `Who::Player` is them.
                         (horizon_client::mobs::Who::Player, Some(conn))
@@ -907,10 +908,12 @@ impl Game<'_> {
                 .coords(c, "pos")
                 .map(|co| co.block(self.source_position(), self.source_rotation()));
             let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
-            return Ok(flag(
-                dimension == self.dim
-                    && p.is_some_and(|p| self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))),
-            ));
+            // ExecuteCommand.isChunkLoaded: ENTITY_TICKING, which is past lit.
+            let loaded = |p: [i32; 3]| {
+                let key = (p[0] >> 4, p[2] >> 4);
+                self.world.chunks.contains_key(&key) && self.streaming.is_lit(key.0, key.1)
+            };
+            return Ok(flag(dimension == self.dim && p.is_some_and(loaded)));
         }
         if c.has("dimension") {
             let dimension = self.command_source.map_or(self.dim, |s| s.dimension);

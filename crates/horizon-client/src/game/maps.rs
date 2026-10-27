@@ -324,6 +324,13 @@ const DECORATION_TYPES: [(&str, &str); 24] = [
     ("mineshaft", "map/decorations/mineshaft"),
     ("ocean_ruin_warm", "map/decorations/warm_ocean_ruins"),
 ];
+/// `MapDecorationType.showOnItemFrame` is false for the player arrows and the two markers.
+fn shown_on_frame(sprite: &str) -> bool {
+    !matches!(
+        decoration_type(sprite),
+        Some("player" | "red_marker" | "blue_marker" | "player_off_map" | "player_off_limits")
+    )
+}
 /// The sprite of a decoration type that a `minecraft:map_decorations`
 /// entry or a server's packet names.
 fn decoration_sprite(id: &str) -> Option<&'static str> {
@@ -1114,9 +1121,12 @@ impl Game<'_> {
     }
     /// `MapRenderer.render`: the map texture and its decorations under `m`
     /// (map pixels 0..128, y down), drawn at depth offsets toward the viewer.
+    /// `show_only_frame` (a map in an item frame) leaves out the decorations that
+    /// do not show on frames.
     pub(super) fn map_vertices(
         &mut self,
         id: i32,
+        show_only_frame: bool,
         m: glam::Mat4,
         light: u32,
         out: &mut Vec<Vertex>,
@@ -1133,6 +1143,8 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         };
@@ -1158,14 +1170,18 @@ impl Game<'_> {
             .get(&id)
             .map(|m| m.decorations.clone())
             .unwrap_or_default();
-        for (i, d) in decorations.iter().enumerate() {
+        let mut count = 0;
+        for d in &decorations {
+            if show_only_frame && !shown_on_frame(d.sprite) {
+                continue;
+            }
             let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
                 continue;
             };
             let dm = glam::Mat4::from_translation(glam::Vec3::new(
                 f32::from(d.x) / 2.0 + 64.0,
                 f32::from(d.y) / 2.0 + 64.0,
-                -0.02 - i as f32 * 0.001,
+                -0.02 - count as f32 * 0.001,
             )) * glam::Mat4::from_rotation_z(
                 (f32::from(d.rot) * 360.0 / 16.0).to_radians(),
             ) * glam::Mat4::from_scale(glam::Vec3::splat(4.0))
@@ -1180,6 +1196,8 @@ impl Game<'_> {
                         layer: 0,
                         color: 0xFFFF_FFFF,
                         light,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             };
@@ -1187,6 +1205,7 @@ impl Game<'_> {
                 [p(-1.0, 1.0), p(1.0, 1.0), p(1.0, -1.0), p(-1.0, -1.0)],
                 [[s.u0, s.v0], [s.u1, s.v0], [s.u1, s.v1], [s.u0, s.v1]],
             );
+            count += 1;
         }
     }
     /// `renderTwoHandedMap`: map `id` held in both hands, in view space (the
@@ -1251,11 +1270,13 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
         if has_data {
-            self.map_vertices(id, m, light, out);
+            self.map_vertices(id, false, m, light, out);
         }
     }
 }
