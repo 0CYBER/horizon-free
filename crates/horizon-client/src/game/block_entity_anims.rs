@@ -547,7 +547,7 @@ impl Game<'_> {
         });
     }
     /// `Entity.isInRain`: rain at the block position or at the top of the box.
-    fn in_rain(&mut self, at: Vec3, top: f64) -> bool {
+    pub(super) fn in_rain(&mut self, at: Vec3, top: f64) -> bool {
         let p = BlockPos::new(
             at.x.floor() as i32,
             at.y.floor() as i32,
@@ -725,21 +725,38 @@ impl Game<'_> {
     /// the player head at `pos`. The skin download is started here; while it
     /// is in flight (or when it cannot be got) the profile's default skin
     /// stands in. A head with no profile answers None: `SKIN_BY_TYPE`.
-    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<&str> {
+    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<String> {
         let Some(BlockEntity::Skull(skull)) =
             self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
         else {
             return None;
         };
         let skin = skull.skin.as_ref()?;
-        if let Some((url, location)) = &skin.download {
-            self.skin_downloads
-                .borrow_mut()
-                .state(skins::Kind::Skin, url);
-            if self.gui.atlas.sprites.contains_key(location) {
+        // The texture a packed or resolved `textures` property fetches: the
+        // download of a static profile, or the one the services answer for a
+        // `Dynamic` (name- or id-only) profile.
+        let download = skin.download.clone().or_else(|| {
+            let key = skin.dynamic.as_ref()?;
+            let skins::Resolve::Done(Some(profile)) = self.skin_profiles.borrow_mut().state(key)
+            else {
+                return None;
+            };
+            let (value, signature) = profile.textures()?;
+            let url = skins::unpack(&value, signature, &skins::TEXTURE_URIS).skin?;
+            let location = skins::skin_location(&skins::texture_hash(&url)?);
+            Some((url, location))
+        });
+        if let Some((url, location)) = download {
+            let mut downloads = self.skin_downloads.borrow_mut();
+            if self.gui.atlas.sprites.contains_key(&location) {
+                let _ = downloads.state(skins::Kind::Skin, &url);
                 return Some(location);
             }
+            // Its slot was evicted: offer the image again.
+            if downloads.state(skins::Kind::Skin, &url) == skins::Download::Ready {
+                downloads.again(&location);
+            }
         }
-        Some(skin.fallback)
+        Some(skin.fallback.to_owned())
     }
 }

@@ -116,7 +116,7 @@ MCP: `account_sign_out`, needs `confirm: true`.
 
 ## `horizon-launcher account select`
 
-Play as this account.
+Play as this account, or as one of your offline names.
 
     horizon-launcher account select <WHO>
 
@@ -126,19 +126,46 @@ MCP: `account_select`.
 
 ## `horizon-launcher account offline`
 
-Play offline, without an account.
+Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
 
-    horizon-launcher account offline
+    horizon-launcher account offline [NAME]
+
+- `NAME`
 
 MCP: `account_offline`.
 
+## `horizon-launcher account forget-offline`
+
+Forget one of your offline names.
+
+    horizon-launcher account forget-offline <NAME>
+
+- `NAME`
+
+MCP: `account_forget_offline`.
+
+## `horizon-launcher account skin`
+
+Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape PNG, the model. Kept by the launcher and given to the game when that name plays.
+
+    horizon-launcher account skin <NAME> [FILE]
+
+- `NAME`
+- `FILE`: The skin's PNG
+- `--model`: classic or slim arms
+- `--cape`: The cape's PNG
+- `--no-skin`: Back to the default skin
+- `--no-cape`: Take the cape off
+
+MCP: `account_skin`.
+
 ## `horizon-launcher settings`
 
-Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, opening-animation on|off, proxy http://host:port ("default" removes it).
+Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, opening-animation on|off, proxy http://host:port ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language system|en|fr|ru (the window's language; system follows the computer's), accent violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default" shows Horizon's landscape).
 
     horizon-launcher settings [KEY] [VALUE]
 
-- `KEY` (selected-version, minecraft-dir, server-dir, install-new-versions, opening-animation, proxy)
+- `KEY` (selected-version, minecraft-dir, server-dir, install-new-versions, opening-animation, proxy, while-playing, language, accent, background)
 - `VALUE`: The new value (with KEY)
 
 MCP: `settings`.
@@ -363,6 +390,33 @@ Export an instance (or a port) to share: its settings, packs, Horizon mods and t
 - `--out`: Where to write it (default: "<name>.mrpack" in the current folder)
 
 MCP: `instance_export`.
+
+## `horizon-launcher instance launch`
+
+Show or set what runs around an instance's game: a shell command before it (the game starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode, MangoHud and the dedicated graphics card, when the computer has them.
+
+    horizon-launcher instance launch <INSTANCE>
+
+- `INSTANCE`
+- `--pre-launch`
+- `--wrapper`
+- `--env`
+- `--gamemode`: Linux: run it through GameMode (gamemoderun), on or off
+- `--mangohud`: Linux: MangoHud's overlay, on or off
+- `--dedicated-gpu`: Linux: the dedicated graphics card (DRI_PRIME, or NVIDIA's offload), on or off
+
+MCP: `instance_launch`, needs `confirm: true`.
+
+## `horizon-launcher instance shortcut`
+
+Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows.
+
+    horizon-launcher instance shortcut [INSTANCE]
+
+- `INSTANCE`: The instance (default: the selected one)
+- `--remove`: Move the instance's shortcuts to the trash instead
+
+MCP: `instance_shortcut`.
 
 ## `horizon-launcher instance import`
 

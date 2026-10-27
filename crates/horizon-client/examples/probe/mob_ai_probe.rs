@@ -1062,6 +1062,7 @@ pub fn main() -> horizon_client::Result<()> {
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
+                passenger: false,
             }
         });
         let mut scratch = LegacyRandom::new(0);
@@ -1082,6 +1083,7 @@ pub fn main() -> horizon_client::Result<()> {
                     world: &world,
                     registry,
                     facts: &facts,
+                    fluid_tables: &motion.fluids,
                     movement: &motion.blocks,
                     collision: &collision,
                     data: &data,

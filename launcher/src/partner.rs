@@ -38,7 +38,7 @@ pub fn banner(id: &'static str, width: f32, t: &Theme) -> Stateful<Div> {
             crate::text(crate::theme::MICRO)
                 .text_color(t.muted)
                 .group_hover(id, move |s| s.text_color(t.ink))
-                .child("PARTNER"),
+                .child(horizon_launcher::i18n::tr("PARTNER")),
         )
         .child(
             div().relative().group_hover(id, |s| s.top(px(-2.))).child(
