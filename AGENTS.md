@@ -15,8 +15,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 - **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
   Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
   contributor's agent names its own person and tool (issues: "Filed by", reviews: "Review by"). Every
-  comment starts with `🤖 Agent:`. Name people by their GitHub handle (`gh api user --jq .login`), never a
-  real name. Never write as Ludovic or as anyone else.
+  comment starts with `🤖 Agent:`. Never write as Ludovic or as anyone else.
 - **Attribution.** Commits end with a `Co-Authored-By:` line for the agent that wrote them, and PR bodies
   with that agent's own "Generated with" line. Ludovic's agents use
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and

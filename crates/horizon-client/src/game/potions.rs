@@ -427,11 +427,9 @@ impl Game<'_> {
     /// `MobEffectInstance.tickClient`): they count down, and the server
     /// removes them. Their modifiers and flags move the predicted player.
     pub(super) fn tick_client_effects(&mut self) {
-        // LivingEntity.tickEffects (client): an exhausted effect drops.
-        self.potions.effects.list.retain_mut(|e| {
+        for e in &mut self.potions.effects.list {
             e.tick_client();
-            e.duration != 0
-        });
+        }
         self.apply_effect_status();
     }
     /// Add an active effect to the player and update attributes / absorption.
