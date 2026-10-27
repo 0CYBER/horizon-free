@@ -129,6 +129,16 @@ fn is_animal(id: &str) -> bool {
             | "zombie_nautilus"
     )
 }
+/// The `NeutralMob`s whose anger is `Extra::anger`: they write and read
+/// `anger_end_time` and `angry_at`. The bee keeps its own anger, and a
+/// piglin's is a brain memory, not `NeutralMob`'s.
+fn persistent_anger(s: crate::mobs::Species) -> bool {
+    use crate::mobs::Species as S;
+    matches!(
+        s,
+        S::Wolf | S::IronGolem | S::PolarBear | S::Enderman | S::ZombifiedPiglin
+    )
+}
 /// The single player's UUID (`offline_uuid("Player")`): the entity the
 /// neutral mobs are angry at.
 fn player_uuid() -> [i32; 4] {
@@ -172,17 +182,19 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     }
     // `NeutralMob.addPersistentAngerSaveData`: the anger ends at an
     // absolute game time, and the target is the entity the mob is angry at.
-    put(
-        &mut tag,
-        "anger_end_time",
-        Tag::Long(if m.extra.anger_end > 0 {
-            m.extra.anger_end
-        } else {
-            -1
-        }),
-    );
-    if m.extra.angry_at == Some(crate::mobs::Who::Player) {
-        put(&mut tag, "angry_at", Tag::IntArray(player_uuid().to_vec()));
+    if persistent_anger(m.species()) {
+        put(
+            &mut tag,
+            "anger_end_time",
+            Tag::Long(if m.extra.anger_end > 0 {
+                m.extra.anger_end
+            } else {
+                -1
+            }),
+        );
+        if m.extra.angry_at == Some(crate::mobs::Who::Player) {
+            put(&mut tag, "angry_at", Tag::IntArray(player_uuid().to_vec()));
+        }
     }
     // `Entity.saveWithoutId` writes the flag only when set.
     if m.name_visible {
@@ -991,12 +1003,14 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.persistent = flag(tag, "PersistenceRequired");
     // `NeutralMob.readPersistentAngerSaveData`: the anger end time and the
     // target come back with the mob.
-    m.extra.anger_end = number(tag.get("anger_end_time")).unwrap_or(-1);
-    if tag
-        .get("angry_at")
-        .is_some_and(|t| uuid_from_tag(Some(t)) == Some(player_uuid()))
-    {
-        m.extra.angry_at = Some(crate::mobs::Who::Player);
+    if persistent_anger(m.species()) {
+        m.extra.anger_end = number(tag.get("anger_end_time")).unwrap_or(-1);
+        if tag
+            .get("angry_at")
+            .is_some_and(|t| uuid_from_tag(Some(t)) == Some(player_uuid()))
+        {
+            m.extra.angry_at = Some(crate::mobs::Who::Player);
+        }
     }
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
@@ -3050,6 +3064,10 @@ mod neutral_anger_tests {
         let back = mob_from_nbt(&tag, &types, 2).unwrap();
         assert_eq!(back.extra.anger_end, 3000);
         assert_eq!(back.extra.angry_at, Some(crate::mobs::Who::Player));
+        // A mob that is no NeutralMob writes no anger.
+        let pig = Mob::new(3, types["minecraft:pig"].clone(), Vec3::ZERO, 0.0);
+        let tag = mob_to_nbt(&pig, [1, 2, 3, 5], None);
+        assert!(tag.get("anger_end_time").is_none());
         // The anger that is left when the mob comes back.
         assert_eq!(crate::mobs::anger_left(3000, 1000), 2000);
         assert_eq!(crate::mobs::anger_left(3000, 4000), 0);
