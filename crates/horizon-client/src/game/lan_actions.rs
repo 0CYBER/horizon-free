@@ -1541,9 +1541,13 @@ impl Game<'_> {
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
             if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
                 && self.pvp_land(host, victim, &strike)
-                && strike.stops_sprint()
             {
-                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
+                self.as_guest(host, conn, |g| {
+                    g.pvp_exhaustion();
+                    if strike.stops_sprint() {
+                        g.stop_sprint_after_extra_knockback();
+                    }
+                });
             }
             return;
         }

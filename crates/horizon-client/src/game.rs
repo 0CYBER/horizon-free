@@ -8095,11 +8095,6 @@ impl Game<'_> {
         let sweep = self.sweep_attack_position(scale, crit);
         let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
-        if let Some(p) = self.player.as_mut()
-            && !self.creative
-        {
-            p.cause_food_exhaustion(0.1);
-        }
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         if knockback_attack {
@@ -8209,6 +8204,13 @@ impl Game<'_> {
                 }
             }
             self.weapon_hit(index);
+            // Player.attack: causeFoodExhaustion(0.1F) only when the hit hurt
+            // (inside `if (wasHurt)`), after damageStatsAndHearts.
+            if let Some(p) = self.player.as_mut()
+                && !self.creative
+            {
+                p.cause_food_exhaustion(0.1);
+            }
         } else {
             self.audio
                 .play("minecraft:entity.player.attack.nodamage", from, 1.0, 1.0);
@@ -8772,6 +8774,10 @@ impl Game<'_> {
         }
         self.lan_close(false);
         self.save_game()?;
+        if let Some(mut remote) = self.remote.take() {
+            // Minecraft.disconnect closes the connection, so the host sees a clean leave.
+            remote.session.disconnect();
+        }
         self.saved_for_exit = true;
         Ok(())
     }
@@ -12773,6 +12779,16 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if horizon_threads::stop_requests() > 0
+            && self.pending_save.as_ref().is_none_or(|save| !save.quit)
+        {
+            // SIGTERM, SIGINT or SIGHUP: the shutdown hook's server halt, as a window close.
+            if let Err(error) = self.begin_closing_save(true) {
+                self.error = Some(error);
+                event_loop.exit();
+                return;
+            }
+        }
         if self.pending_save.is_some() {
             match self.poll_closing_save() {
                 Ok(true) => event_loop.exit(),
@@ -14263,6 +14279,11 @@ impl Loading {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if horizon_threads::stop_requests() > 0 {
+            // No world is open yet: nothing to save.
+            event_loop.exit();
+            return;
+        }
         if let Err(error) = self.poll_menu_resources() {
             self.error = Some(error);
             event_loop.exit();
@@ -14539,6 +14560,9 @@ pub fn run() -> Result<()> {
         && options.world_frames.is_none()
     {
         horizon_client::heartbeat::start();
+    }
+    if options.execution_role.is_client() {
+        horizon_threads::catch_stop_signals();
     }
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());

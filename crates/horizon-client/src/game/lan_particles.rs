@@ -318,12 +318,21 @@ impl Game<'_> {
     /// sound and the push reach them on their own (the level's sounds, the
     /// motion a hurt player is sent), so the packet carries neither.
     pub(super) fn lan_explode(
-        &self,
+        &mut self,
         center: [f64; 3],
         small: bool,
         radius: f32,
         block_count: usize,
     ) {
+        // In a guest's turn (their hit on an end crystal or a minecart) the
+        // host holds the players (`as_guest`): the packet waits for the turn
+        // to end so that it reaches every player, the guest too.
+        if self.lan_acting.is_some() && self.lan.is_none() {
+            self.creatures
+                .lan_explosions
+                .push((center, small, radius, block_count));
+            return;
+        }
         let emitter = if small {
             "minecraft:explosion"
         } else {
@@ -334,6 +343,15 @@ impl Game<'_> {
             self.explosion_packet(center, radius, block_count, emitter, sound, true)
         {
             self.send_explosion(packet, &[]);
+        }
+    }
+
+    /// The explosions guests' turns put off.
+    pub(super) fn flush_lan_explosions(&mut self) {
+        for (center, small, radius, block_count) in
+            std::mem::take(&mut self.creatures.lan_explosions)
+        {
+            self.lan_explode(center, small, radius, block_count);
         }
     }
 
