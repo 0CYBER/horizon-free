@@ -129,6 +129,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   the Console's Share log takes them out of the log too. `horizon-launcher account offline
   [NAME]`, `account select <name>` (an account or an offline name), `account forget-offline
   <name>`.
+- **Skin and cape**: each offline name's **Skin…** in Settings > Account shows the front of its
+  skin and cape, takes a skin PNG (64×64, or the older 64×32) and a cape PNG (64×32), and picks
+  classic or slim arms. The launcher keeps copies in its `skins/` folder and gives the game
+  `HORIZON_OFFLINE_SKIN`, `HORIZON_OFFLINE_SKIN_MODEL` and `HORIZON_OFFLINE_CAPE` when that name
+  plays; the game draws the default skins until it reads them. A Microsoft account's skin and
+  cape: coming soon, with sign-in. `horizon-launcher account skin <name> [FILE] [--model
+  classic|slim] [--cape FILE] [--no-skin] [--no-cape]`.
 - **Console**: Home's Console shows the game's output of this run as it comes: a search (every
   word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
   and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste

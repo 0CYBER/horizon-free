@@ -144,6 +144,21 @@ Forget one of your offline names.
 
 MCP: `account_forget_offline`.
 
+## `horizon-launcher account skin`
+
+Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape PNG, the model. Kept by the launcher and given to the game when that name plays.
+
+    horizon-launcher account skin <NAME> [FILE]
+
+- `NAME`
+- `FILE`: The skin's PNG
+- `--model`: classic or slim arms
+- `--cape`: The cape's PNG
+- `--no-skin`: Back to the default skin
+- `--no-cape`: Take the cape off
+
+MCP: `account_skin`.
+
 ## `horizon-launcher settings`
 
 Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, opening-animation on|off, proxy http://host:port ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs).

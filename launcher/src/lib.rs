@@ -24,6 +24,7 @@ pub mod server_list;
 pub mod servers;
 pub mod shortcut;
 pub mod signed;
+pub mod skins;
 pub mod sources;
 pub mod tailscale;
 pub mod telemetry;

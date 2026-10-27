@@ -645,6 +645,9 @@ pub struct Accounts {
     /// (`horizon-player.txt`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offline_selected: Option<String>,
+    /// Each offline name's skin and cape (`skins`), by the name in lowercase.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub looks: std::collections::BTreeMap<String, crate::skins::Look>,
 }
 
 /// Who plays, as the quick switch lists them.
@@ -761,6 +764,7 @@ impl Accounts {
     pub fn remove_offline(&mut self, name: &str) -> Result<(), String> {
         let before = self.offline.len();
         self.offline.retain(|n| !n.eq_ignore_ascii_case(name));
+        self.looks.remove(&name.to_ascii_lowercase());
         if self.offline.len() == before {
             return Err(format!("No offline name {name}."));
         }
@@ -772,6 +776,22 @@ impl Accounts {
             self.offline_selected = None;
         }
         Ok(())
+    }
+
+    /// An offline name's look (the default: no skin of its own).
+    pub fn look(&self, name: &str) -> crate::skins::Look {
+        self.looks
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The game's variables for the offline name that plays: its skin and cape.
+    pub fn look_env(&self) -> Vec<(&'static str, String)> {
+        match self.name_arg() {
+            Some(name) => crate::skins::env(&crate::skins::dir(), name, &self.look(name)),
+            None => Vec::new(),
+        }
     }
 
     /// The game's `--name` for this run: the offline name, when one plays.
