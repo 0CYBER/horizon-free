@@ -1494,6 +1494,9 @@ struct Game<'a> {
     armor: [Option<ItemStack>; 4],
     /// The off hand (Inventory slot 40, saved as slot 150; menu slot 504 here).
     offhand: Option<ItemStack>,
+    /// `ItemStack.popTime` of the nine hotbar stacks, then the off hand: set to 5
+    /// when a slot gains items, counted down each tick.
+    hotbar_pop: [u8; 10],
     /// The hand an item use acts with (`InteractionHand`): the off hand only
     /// for its turn in `use_item` and while its item is being used.
     hand: Hand,
@@ -5563,7 +5566,10 @@ impl Game<'_> {
         let decorations = hud_overlays::ItemDecorations {
             count: stack.count,
             count_text,
-            bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
+            // BundleItem overrides the bar with its fullness.
+            bar: horizon_client::bundle::Contents::of(self.res.items(), stack)
+                .map(|c| c.bar())
+                .unwrap_or_else(|| hud_overlays::damage_bar(stack.damage as i32, max_damage)),
             cooldown: self.cooldowns.percent(&cooldown, partial),
         };
         let mut draws = vec![hud_layout::GuiDraw::Push(vec![
@@ -5668,12 +5674,17 @@ impl Game<'_> {
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
             if !spectator {
+                let partial = self.clock.fraction() as f32;
                 let inputs = hud_layout::HotbarInputs {
                     selected: self.selected as i32,
                     right_handed: !self.settings.main_hand_left,
                     offhand: self.offhand.is_some(),
-                    slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
-                    offhand_pop: 0.0,
+                    slots: std::array::from_fn(|i| {
+                        self.inventory[i]
+                            .as_ref()
+                            .map(|_| (f32::from(self.hotbar_pop[i]) - partial).max(0.0))
+                    }),
+                    offhand_pop: (f32::from(self.hotbar_pop[9]) - partial).max(0.0),
                     attack: (indicator == 2).then_some(strength),
                 };
                 let draws = hud_layout::hotbar(wi, hi, &inputs);
@@ -13388,6 +13399,7 @@ impl<'a> Game<'a> {
             title: None,
             armor: [None, None, None, None],
             offhand: None,
+            hotbar_pop: [0; 10],
             hand: Hand::Main,
             shield_cooldown: 0,
             cooldowns: Default::default(),
