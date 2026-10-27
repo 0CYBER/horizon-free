@@ -5374,12 +5374,12 @@ impl Game<'_> {
         // The ToastManager draws over every screen: a server's packs
         // download while the connection screen shows.
         if self.remote_overlay(&mut batch) {
-            self.draw_pack_toasts(&mut batch);
+            self.draw_pack_toasts(&mut batch, false);
             return batch;
         }
         if let Some(reason) = self.loading_reason() {
             self.draw_level_loading(&mut batch, reason);
-            self.draw_pack_toasts(&mut batch);
+            self.draw_pack_toasts(&mut batch, false);
             return batch;
         }
         // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
@@ -5594,8 +5594,9 @@ impl Game<'_> {
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
         self.draw_saving_indicator(&mut batch);
-        self.draw_toasts(&mut batch);
-        self.draw_pack_toasts(&mut batch);
+        // ToastManager.extractRenderState: F1 hides the toasts too.
+        self.draw_toasts(&mut batch, !show_hud);
+        self.draw_pack_toasts(&mut batch, !show_hud);
         self.remote_hud(&mut batch);
         self.draw_sign_editor(&mut batch);
         self.draw_book(&mut batch);
