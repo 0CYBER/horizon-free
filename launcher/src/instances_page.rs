@@ -590,6 +590,7 @@ impl Launcher {
                     cx.notify();
                 })),
             )
+            .child(self.shortcut_button(&instance, cx))
             .child(
                 button("instance-folder", "Open folder", Kind::Ghost, &t).on_click(
                     move |_, _, cx| {
@@ -604,14 +605,20 @@ impl Launcher {
             Some(
                 div()
                     .flex()
-                    .items_baseline()
-                    .gap(px(10.))
-                    .child(instance.name.clone())
+                    .flex_col()
                     .child(
-                        text(theme::CAPTION)
-                            .text_color(t.muted)
-                            .child(played_line(&instance)),
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(10.))
+                            .child(instance.name.clone())
+                            .child(
+                                text(theme::CAPTION)
+                                    .text_color(t.muted)
+                                    .child(played_line(&instance)),
+                            ),
                     )
+                    .children(self.shortcut_note(&instance.id))
                     .into_any_element(),
             ),
             Some(actions.into_any_element()),

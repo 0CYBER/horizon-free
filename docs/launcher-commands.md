@@ -364,6 +364,17 @@ Export an instance (or a port) to share: its settings, packs, Horizon mods and t
 
 MCP: `instance_export`.
 
+## `horizon-launcher instance shortcut`
+
+Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows.
+
+    horizon-launcher instance shortcut [INSTANCE]
+
+- `INSTANCE`: The instance (default: the selected one)
+- `--remove`: Move the instance's shortcuts to the trash instead
+
+MCP: `instance_shortcut`.
+
 ## `horizon-launcher instance import`
 
 Import what a file is, as dropping it on the window does: a shared instance (a .mrpack without mod loaders, such as `instance export` writes, or a game folder zip) becomes a new instance; a Java modpack goes to the Modpacks import; a resource or shader pack into the instance (default: the selected one).

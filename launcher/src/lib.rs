@@ -21,6 +21,7 @@ pub mod proxy;
 pub mod screenshots;
 pub mod server_list;
 pub mod servers;
+pub mod shortcut;
 pub mod signed;
 pub mod sources;
 pub mod tailscale;
