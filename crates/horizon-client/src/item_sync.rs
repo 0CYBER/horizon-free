@@ -25,6 +25,11 @@ pub fn from_network(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> ItemStack
         *out.data_mut() = *data;
     }
     out.tidy();
+    // What it decoded to, to send the server's own patch back if that holds.
+    if let Some(patch) = &s.wire.0 {
+        let decoded = out.clone();
+        out.data_mut().wire = crate::item_data::Wire::new(decoded, patch.clone());
+    }
     out
 }
 

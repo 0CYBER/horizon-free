@@ -111,6 +111,7 @@ impl From<NetCost> for Stack {
             count: cost.count,
             added: cost.components,
             removed: Vec::new(),
+            wire: Default::default(),
         }
     }
 }
