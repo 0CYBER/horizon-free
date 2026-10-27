@@ -55,6 +55,8 @@ pub struct MotionResources {
     /// `BlockTags.SOUL_SPEED_BLOCKS`: what Soul Speed's effects look for.
     pub soul_speed_blocks: BTreeSet<String>,
     pub fall_reset: BTreeSet<String>,
+    /// `BlockTags.CRYSTAL_SOUND_BLOCKS`: blocks that chime under footsteps.
+    pub crystal_sound: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
     pub health: crate::health::HealthResources,
     pub fluids: FluidResources,
@@ -115,6 +117,7 @@ impl MotionResources {
             glide_through: tag("minecraft:can_glide_through")?,
             soul_speed_blocks: tag("minecraft:soul_speed_blocks")?,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
+            crystal_sound: tag("minecraft:crystal_sound_blocks")?,
         })
     }
 }
@@ -164,6 +167,11 @@ pub enum MotionEvent {
         position: BlockPos,
         state: BlockStateId,
         in_water: bool,
+    },
+    /// `Entity.playAmethystStepSound`: `block.amethyst_block.chime`.
+    Chime {
+        volume: f32,
+        pitch: f32,
     },
     /// `Entity.waterSwimSound`: `entity.player.swim`.
     Swim {
@@ -226,6 +234,14 @@ pub enum MotionEvent {
         bubble: bool,
         position: Vec3,
     },
+    /// `HoneyBlock.maybeDoSlideEffects` for a player sliding down the side of
+    /// the honey block at `pos`: its slide sound, and the server's entity
+    /// event 53 (the five block particles at the player).
+    HoneySlide {
+        pos: BlockPos,
+        sound: bool,
+        particles: bool,
+    },
     /// Entity event 67 (`LivingEntity.makeDrownParticles`): eight bubbles
     /// around a drowning player.
     Drown,
@@ -272,6 +288,8 @@ pub struct PlayerMotion {
     pub pitch: f32,
     /// Gliding (shared flag 7) and LivingEntity.fallFlyTicks.
     pub fall_flying: bool,
+    /// Asleep in a bed (`LivingEntity.isSleeping`): the sleeping pose.
+    pub sleeping: bool,
     pub fall_fly_ticks: i32,
     /// The server saw the glide end last tick (`updateFallFlying`'s `canGlide`
     /// failed): the cleared flag reaches the client at its next tick.
@@ -301,6 +319,10 @@ pub struct PlayerMotion {
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
     pub steps: MovementDistances,
+    /// `Entity.crystalSoundIntensity` and `lastCrystalSoundPlayTick`: the
+    /// amethyst chime grows with steps taken close together.
+    pub crystal_sound_intensity: f32,
+    pub last_crystal_sound_play_tick: i32,
     pub needs_sync: bool,
     pub sync_position: bool,
     /// Moved by an ender pearl (`ServerPlayer.teleport`): a server sends the
@@ -468,6 +490,7 @@ impl PlayerMotion {
             glider: false,
             pitch: 0.0,
             fall_flying: false,
+            sleeping: false,
             fall_fly_ticks: 0,
             glide_ending: false,
             glider_wear: 0,
@@ -493,6 +516,8 @@ impl PlayerMotion {
                 next_step: 1.0,
                 ..MovementDistances::default()
             },
+            crystal_sound_intensity: 0.0,
+            last_crystal_sound_play_tick: 0,
             needs_sync: false,
             sync_position: false,
             teleported: false,
@@ -1449,6 +1474,9 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // HoneyBlock.entityInside: a server's player slides too, so
+                    // its fall distance resets (its client moves it).
+                    "minecraft:honey_block" => self.honey_block_inside(p)?,
                     // PowderSnowBlock.entityInside's FREEZE.
                     "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
@@ -1478,6 +1506,50 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         Ok(iterations + 1)
+    }
+    /// `HoneyBlock.entityInside`: a falling player touching a side of the block
+    /// slides down it (`isSlidingDown`, `doSlideMovement`, `maybeDoSlideEffects`).
+    fn honey_block_inside(&mut self, pos: BlockPos) -> Result<()> {
+        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+        let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+        let position = self.player.position;
+        let velocity = self.player.velocity;
+        if self.player.ground.on_ground
+            || position.y > f64::from(pos.y) + 0.9375 - 1.0e-7
+            || old_delta_y(velocity.y) >= -0.08
+        {
+            return Ok(());
+        }
+        let dx = (f64::from(pos.x) + 0.5 - position.x).abs();
+        let dz = (f64::from(pos.z) + 0.5 - position.z).abs();
+        let overlap = 0.4375 + f64::from(self.player.dimensions.width / 2.0);
+        if !(dx + 1.0e-7 > overlap || dz + 1.0e-7 > overlap) {
+            return Ok(());
+        }
+        // doSlideMovement
+        let old = old_delta_y(velocity.y);
+        if old < -0.13 {
+            let factor = -0.05 / old;
+            self.player.velocity =
+                Vec3::new(velocity.x * factor, new_delta_y(-0.05), velocity.z * factor);
+        } else {
+            self.player.velocity = Vec3::new(velocity.x, new_delta_y(-0.05), velocity.z);
+        }
+        self.player.fall_distance = 0.0;
+        // maybeDoSlideEffects: the sound, then the server's event 53.
+        let random = &mut self.scene.random;
+        let sound = random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        // Only the server broadcasts event 53 (`!level.isClientSide()`).
+        let particles = !self.player.client_side
+            && random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        if sound || particles {
+            self.player.events.push(MotionEvent::HoneySlide {
+                pos,
+                sound,
+                particles,
+            });
+        }
+        Ok(())
     }
     /// `Player.makeStuckInBlock`: the next move is scaled by `multiplier`
     /// (and the fall forgotten) unless flying; the impulse context resets
@@ -2109,6 +2181,30 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
             state,
             in_water,
         });
+        // Entity.walkingStepSound: the amethyst chime after the step.
+        let name = &self
+            .assets
+            .registry
+            .state(state)
+            .ok_or("missing scene state")?
+            .name;
+        let tick = self.player.health.tick_count;
+        if self.resources.crystal_sound.contains(name)
+            && tick >= self.player.last_crystal_sound_play_tick + 20
+        {
+            // Entity.playAmethystStepSound (the level random stands in for
+            // the entity's).
+            let elapsed = f64::from(tick - self.player.last_crystal_sound_play_tick);
+            let decayed = self.player.crystal_sound_intensity * 0.997_f64.powf(elapsed) as f32;
+            let intensity = 1.0_f32.min(decayed + 0.07);
+            self.player.crystal_sound_intensity = intensity;
+            let pitch = 0.5 + intensity * self.scene.random.next_float() * 1.2;
+            let volume = 0.1 + intensity * 1.2;
+            self.player
+                .events
+                .push(MotionEvent::Chime { volume, pitch });
+            self.player.last_crystal_sound_play_tick = tick;
+        }
         Ok(())
     }
     fn step_event(&mut self, _: BlockStateId) -> Result<()> {
@@ -3986,6 +4082,192 @@ mod tests {
         assert!(
             (walked as f64 - metres).abs() <= 1.5,
             "{walked} steps over {metres} step-metres"
+        );
+    }
+    /// Vanilla sprint is a state, not a held key: `LocalPlayer.aiStep` starts
+    /// it with the sprint key and stops it only on a vanilla stop condition.
+    /// Releasing the key while swimming keeps the sprint and its swim speed.
+    #[test]
+    fn a_sprint_survives_the_sprint_key_coming_up_while_swimming() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprinting = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        // The same swim with the sprint key held, and with the key released
+        // once the sprint has started: the speed must not change.
+        let mut swims = Vec::new();
+        for release in [false, true] {
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+            for x in 19..=21 {
+                for y in 4..=8 {
+                    for z in 19..=31 {
+                        scene.set(x, y, z, water).unwrap();
+                    }
+                }
+            }
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            let mut speed = Vec::new();
+            for tick in 0..12 {
+                // The key comes up on the fourth tick, after the sprint has
+                // started and the player swims.
+                let keys = if release && tick >= 4 {
+                    forward
+                } else {
+                    sprinting
+                };
+                w.controlled_simulation_tick(keys).unwrap();
+                speed.push(w.player.velocity.z);
+            }
+            assert!(
+                w.player.sprinting,
+                "the sprint state survives the sprint key in water"
+            );
+            assert!(w.player.swimming, "a sprinting player in water swims");
+            swims.push(speed);
+        }
+        assert_eq!(
+            swims[0], swims[1],
+            "the swim speed must not drop when the sprint key comes up"
+        );
+    }
+
+    /// Vanilla: `LivingEntity.jumpFromGround` adds its 0.2 forward impulse
+    /// while the sprint state holds, so a jump taken after the sprint key
+    /// comes up is still a sprint jump.
+    #[test]
+    fn a_sprint_jump_keeps_its_impulse_when_the_sprint_key_comes_up() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprinting = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        for _ in 0..20 {
+            w.controlled_simulation_tick(sprinting).unwrap();
+        }
+        assert!(w.player.ground.on_ground, "the player settles on the floor");
+        assert!(w.player.sprinting, "the sprint key starts the sprint");
+        let running = w.player.velocity.z;
+        // The sprint key comes up and the player jumps.
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            jump: true,
+            ..forward
+        })
+        .unwrap();
+        assert!(
+            w.player.sprinting,
+            "the sprint state survives the sprint key in the air"
+        );
+        assert!(
+            w.player.velocity.z > running + 0.05,
+            "the sprint jump keeps its forward impulse: {:?} vs {running}",
+            w.player.velocity
+        );
+    }
+
+    /// Vanilla `Player.getFlyingSpeed`: a flying player moves at the ability
+    /// speed, doubled while the sprint state holds. The sprint key starts the
+    /// state; releasing it does not change the speed.
+    #[test]
+    fn the_flight_speed_follows_the_sprint_state_not_the_sprint_key() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.player.may_fly = true;
+        w.player.flying = true;
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprinting = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        assert_eq!(
+            w.flying_speed().unwrap(),
+            0.05,
+            "a flying player without a sprint moves at the ability speed"
+        );
+        // The sprint key starts the sprint, and the state doubles the speed.
+        w.controlled_simulation_tick(sprinting).unwrap();
+        assert!(w.player.sprinting, "the sprint key starts the sprint");
+        assert_eq!(
+            w.flying_speed().unwrap(),
+            0.1,
+            "a sprinting player flies at twice the ability speed"
+        );
+        // Releasing the sprint key keeps the state, so the speed stays.
+        w.controlled_simulation_tick(forward).unwrap();
+        assert!(
+            w.player.sprinting,
+            "the sprint state survives the sprint key in the air"
+        );
+        assert_eq!(
+            w.flying_speed().unwrap(),
+            0.1,
+            "the flight speed follows the sprint state, not the sprint key"
         );
     }
 }

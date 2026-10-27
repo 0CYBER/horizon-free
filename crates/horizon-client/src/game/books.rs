@@ -1009,9 +1009,12 @@ impl Game<'_> {
             }
         };
         let indicator = |batch: &mut HudBatch, page: usize, count: usize| {
-            let text = tr("book.pageIndicator", "Page %s of %s")
-                .replacen("%s", &(page + 1).to_string(), 1)
-                .replacen("%s", &count.max(1).to_string(), 1);
+            // BookViewScreen.getPageNumberMessage: 26.3's en_us template is
+            // positional ("Page %1$s of %2$s").
+            let text = horizon_protocol::text::format_java(
+                &tr("book.pageIndicator", "Page %1$s of %2$s"),
+                &[(page + 1).to_string(), count.max(1).to_string()],
+            );
             let tw = HudBatch::text_width(atlas, &text);
             batch.text(atlas, &text, left + 148.0 - tw, top + 16.0, BLACK, false);
         };

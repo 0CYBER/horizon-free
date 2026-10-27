@@ -7,7 +7,12 @@ use crate::{
     items::{ItemStack, Items},
 };
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
@@ -93,6 +98,24 @@ pub const EFFECTS: &[EffectDef] = &[
 pub fn effect(id: &str) -> Option<&'static EffectDef> {
     let id = id.trim_start_matches("minecraft:");
     EFFECTS.iter().find(|e| e.id == id)
+}
+/// Namespaced effect ids for mob effect storage.
+pub fn namespaced(id: &'static str) -> &'static str {
+    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        EFFECTS
+            .iter()
+            .map(|e| {
+                (
+                    e.id,
+                    &*Box::leak(format!("minecraft:{}", e.id).into_boxed_str()),
+                )
+            })
+            .collect()
+    })
+    .get(id)
+    .copied()
+    .unwrap_or(id)
 }
 /// A `Potion`: id, name suffix (`item.minecraft.potion.effect.<name>`) and
 /// effects as (effect, duration ticks, amplifier).
