@@ -425,6 +425,9 @@ impl Game<'_> {
             let mut e = state(t.id, "minecraft:trident", at(t.position), t.yaw, false);
             e.pitch = t.pitch;
             e.velocity = at(t.velocity);
+            // Projectile.getAddEntityPacket: the owner's id; a trident here is
+            // always the host player's.
+            e.data = owner(Some(horizon_client::mobs::Who::Player));
             e.meta = arrow_meta(false, t.no_physics, 0, t.in_ground);
             // ThrownTrident.ID_LOYALTY and ID_FOIL.
             if t.loyalty != 0 {
