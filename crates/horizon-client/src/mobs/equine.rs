@@ -127,9 +127,9 @@ pub fn finalize(m: &mut Mob) {
     }
     match species {
         Species::Horse => {
-            m.attrs.speed = (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3
-                + r.next_double() * 0.3)
-                * 0.25;
+            m.attrs.speed =
+                (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3)
+                    * 0.25;
             m.extra.vector[0] =
                 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
             m.extra.variant = r.next_int_bound(7).unwrap_or(0) as u8;
@@ -139,9 +139,10 @@ pub fn finalize(m: &mut Mob) {
         Species::ZombieHorse => {
             // ZombieHorse.generateZombieHorseJumpStrength and ...Speed.
             let d = 0.066_666_666_666_666_67;
-            m.extra.vector[0] = 0.5 + r.next_double() * d + r.next_double() * d + r.next_double() * d;
-            m.attrs.speed = (9.0 + r.next_double() + r.next_double() + r.next_double())
-                / f64::from(42.16f32);
+            m.extra.vector[0] =
+                0.5 + r.next_double() * d + r.next_double() * d + r.next_double() * d;
+            m.attrs.speed =
+                (9.0 + r.next_double() + r.next_double() + r.next_double()) / f64::from(42.16f32);
         }
         _ => {
             m.extra.vector[0] =

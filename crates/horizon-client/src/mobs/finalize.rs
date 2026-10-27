@@ -2081,7 +2081,10 @@ pub fn variant_sound(m: &Mob, kind: &str) -> Option<&'static str> {
     static IDS: Mutex<Option<HashMap<String, &'static str>>> = Mutex::new(None);
     let mut ids = IDS.lock().ok()?;
     let ids = ids.get_or_insert_with(HashMap::new);
-    Some(*ids.entry(id).or_insert_with_key(|k| Box::leak(k.clone().into_boxed_str())))
+    Some(
+        *ids.entry(id)
+            .or_insert_with_key(|k| Box::leak(k.clone().into_boxed_str())),
+    )
 }
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {

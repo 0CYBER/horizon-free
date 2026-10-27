@@ -1522,13 +1522,12 @@ pub fn age_up(m: &mut Mob, seconds: i32, forced: bool) {
     }
 }
 /// `Animal.playEatingSound` (empty) and its overrides, as (sound, volume,
-/// pitch); `level` is the level's random. Pigs and cats use the classic sound
-/// set, like their other sounds here.
+/// pitch); `level` is the level's random. Pigs and cats play their sound
+/// variant's set.
 pub fn eating_sound(
     m: &mut Mob,
     level: &mut impl RandomSource,
 ) -> Option<(&'static str, f32, f32)> {
-    let baby = m.is_baby();
     // Mth.randomBetween(level.getRandom(), 0.8, 1.2).
     let mut between = || level.next_float() * 0.4 + 0.8;
     let (sound, volume, pitch, entity_sound) = match m.species() {
@@ -1536,7 +1535,9 @@ pub fn eating_sound(
         Species::Armadillo | Species::Pig | Species::SulfurCube => {
             let sound = match m.species() {
                 Species::Armadillo => "entity.armadillo.eat",
-                Species::Pig => super::finalize::variant_sound(m, "eat").unwrap_or("entity.pig.eat"),
+                Species::Pig => {
+                    super::finalize::variant_sound(m, "eat").unwrap_or("entity.pig.eat")
+                }
                 _ => "entity.small_sulfur_cube.eat",
             };
             let pitch = m.voice_pitch();
