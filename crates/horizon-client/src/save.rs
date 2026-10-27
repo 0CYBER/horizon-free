@@ -2482,6 +2482,30 @@ impl WorldGen {
             bonus_chest: flag("bonus_chest", false),
         })
     }
+    /// The bundled world preset a saved world's overworld was generated
+    /// with, from its generator: `minecraft:amplified` and
+    /// `minecraft:large_biomes` by their noise settings, and
+    /// `minecraft:single_biome_surface` by a fixed biome source. Anything
+    /// else (and any world without settings) is `minecraft:normal`.
+    pub fn preset(world: &Path) -> &'static str {
+        let settings = world_gen_settings(world);
+        let generator = settings
+            .as_ref()
+            .and_then(|s| s.get("dimensions"))
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"));
+        let noise = text(generator.and_then(|g| g.get("settings")));
+        let fixed_biome = generator
+            .and_then(|g| g.get("biome_source"))
+            .and_then(|b| text(b.get("type")))
+            .is_some_and(|t| t == "minecraft:fixed");
+        match noise.as_deref() {
+            Some("minecraft:amplified") => "minecraft:amplified",
+            Some("minecraft:large_biomes") => "minecraft:large_biomes",
+            Some("minecraft:overworld") if fixed_biome => "minecraft:single_biome_surface",
+            _ => "minecraft:normal",
+        }
+    }
 }
 impl Default for WorldGen {
     fn default() -> Self {
