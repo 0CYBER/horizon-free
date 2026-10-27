@@ -514,6 +514,8 @@ pub enum DamageKind {
     PlayerAttack,
     /// `mace_smash`: a mace hit after a fall (the player attack tags too).
     MaceSmash,
+    /// `spear`: a stab of a spear (the player attack tags too).
+    Spear,
     MobAttack,
     Arrow,
     Thrown,
@@ -574,6 +576,14 @@ impl Damage {
     pub fn mace(from: [f64; 3]) -> Self {
         Self {
             kind: DamageKind::MaceSmash,
+            attacker: Some(Who::Player),
+            from: Some(from),
+        }
+    }
+    /// `DamageSources.spear`: a player's stab with a spear.
+    pub fn spear(from: [f64; 3]) -> Self {
+        Self {
+            kind: DamageKind::Spear,
             attacker: Some(Who::Player),
             from: Some(from),
         }

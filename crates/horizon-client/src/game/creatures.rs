@@ -4289,6 +4289,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
     match kind {
         K::PlayerAttack => "minecraft:player_attack",
         K::MaceSmash => "minecraft:mace_smash",
+        K::Spear => "minecraft:spear",
         K::MobAttack => "minecraft:mob_attack",
         K::Arrow => "minecraft:arrow",
         K::Thrown => "minecraft:thrown",
