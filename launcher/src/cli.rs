@@ -604,7 +604,7 @@ enum Cmd {
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
     /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
     /// while-playing stay|minimize|hide (what the window does while the game runs), language
-    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// system|en|fr|ru|zh (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
     Settings {
@@ -798,7 +798,7 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
                 "system" | "default" => None,
                 code => Some(
                     Language::parse(code)
-                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
+                        .ok_or_else(|| format!("{value}: say system, en, fr, ru or zh"))?,
                 ),
             }
         }
