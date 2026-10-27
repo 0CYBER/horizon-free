@@ -1215,9 +1215,28 @@ impl Game<'_> {
             }
         }
     }
-    /// `Hud.extractEffects`: icons top-right, beneficial row then harmful row.
+    /// `Screen.showsActiveEffects`: the survival and creative inventories
+    /// draw their own effect list when `EffectsInInventory.canSeeEffects`
+    /// (32 or more pixels right of the screen).
+    fn screen_shows_active_effects(&self, batch: &HudBatch) -> bool {
+        let (ox, image_width) = match self.screen {
+            Screen::Inventory
+                if self.container.is_none() && self.craft_size == 2 && !self.mount_active() =>
+            {
+                (self.inventory_origin(batch).0, 176)
+            }
+            Screen::Creative => (
+                Self::creative_origin(batch).0,
+                horizon_client::creative::Creative::WIDTH as i32,
+            ),
+            _ => return false,
+        };
+        batch.width as i32 - (ox as i32 + image_width + 2) >= 32
+    }
+    /// `Hud.extractEffects`: icons top-right, beneficial row then harmful row;
+    /// every screen but the inventories keeps them.
     pub(super) fn draw_effect_icons(&self, batch: &mut HudBatch) {
-        if self.screen != Screen::Playing || self.potions.effects.list.is_empty() {
+        if self.potions.effects.list.is_empty() || self.screen_shows_active_effects(batch) {
             return;
         }
         let icons: Vec<hud_overlays::EffectIcon> = self

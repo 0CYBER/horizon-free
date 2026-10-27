@@ -1465,7 +1465,16 @@ impl Game<'_> {
                     }
                 }
                 let d2 = (pp.x - pos.x).powi(2) + (pp.y - pos.y).powi(2) + (pp.z - pos.z).powi(2);
-                if d2 < 4096.0 {
+                // Entity.hasLineOfSight: eye to eye (the dragon's eye is 0.85 of
+                // its 8 block height), blocks only.
+                let sees = d2 < 4096.0 && {
+                    let eye = Vec3::new(pos.x, pos.y + 6.8, pos.z);
+                    let target_eye =
+                        tracked.map_or(pp.y + 1.62, |p| p.bounds.max_position().y - 0.18);
+                    self.mob_world_base(&[])
+                        .line_of_sight(eye, Vec3::new(pp.x, target_eye, pp.z))
+                };
+                if sees {
                     *charge += 1;
                     let d = self.dragon.as_ref().expect("dragon");
                     let r = d.yaw.to_radians();
