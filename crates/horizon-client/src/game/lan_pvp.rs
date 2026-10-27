@@ -264,7 +264,7 @@ impl Game<'_> {
         if hurt {
             let died = match victim {
                 // A totem that fired is applied on the next tick_totem, so the
-                // host is still at zero health but is not dying.
+                // victim is still at zero health but is not dying.
                 Victim::Host => self
                     .player
                     .as_ref()
@@ -273,7 +273,7 @@ impl Game<'_> {
                     .hub
                     .guest(conn)
                     .and_then(|g| g.motion.as_deref())
-                    .is_some_and(|p| p.health.dead_or_dying()),
+                    .is_some_and(|p| p.health.dead_or_dying() && !p.health.totem_used),
             };
             if died {
                 match s.attacker {
