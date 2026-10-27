@@ -1708,25 +1708,31 @@ fn tick_effects(m: &mut Mob) {
     let mut effects = std::mem::take(&mut m.extra.effects);
     for (effect, ticks, amp) in &mut effects {
         let interval = |base: i32| (base >> (*amp).max(0)).max(1);
+        // MobEffectInstance.tickServer: an infinite (-1) effect times its
+        // ticks by the mob's tickCount and never counts down.
+        let infinite = *ticks == -1;
+        let count = if infinite { m.age as i32 } else { *ticks };
         match *effect {
             "minecraft:poison"
-                if *ticks % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
+                if count % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
             {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "minecraft:wither" if *ticks % interval(40) == 0 => {
+            "minecraft:wither" if count % interval(40) == 0 => {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
             "minecraft:regeneration"
-                if *ticks % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
+                if count % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
             {
                 m.health = (m.health + 1.0).min(m.attrs.max_health);
             }
             _ => {}
         }
-        *ticks -= 1;
+        if !infinite {
+            *ticks -= 1;
+        }
     }
-    effects.retain(|e| e.1 > 0);
+    effects.retain(|e| e.1 > 0 || e.1 == -1);
     m.extra
         .hidden_effects
         .retain(|h| effects.iter().any(|e| e.0 == *h));
