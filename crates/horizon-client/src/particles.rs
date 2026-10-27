@@ -588,15 +588,17 @@ pub fn on_block_faces_between(
     }
 }
 /// `ParticleUtils.spawnParticlesAlongAxis(axis, level, pos, 0.125, particle,
-/// UniformInt.of(10, 19))` (level event 3002 on a lightning rod): sparks along
-/// the rod, moving along it. `axis` is 0, 1, 2 for X, Y, Z.
+/// UniformInt.of(min, max))` (`count` is the range; level event 3002 on a
+/// lightning rod uses 10 to 19): sparks along the rod, moving along it.
+/// `axis` is 0, 1, 2 for X, Y, Z.
 pub fn along_axis(
     random: &mut impl RandomSource,
     axis: usize,
     pos: [i32; 3],
+    (min, max): (i32, i32),
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
-    let count = random.next_int_bound(19 - 10 + 1).unwrap_or(0) + 10;
+    let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
     for _ in 0..count {
         let p: [f64; 3] = std::array::from_fn(|i| {
             f64::from(pos[i])
@@ -1197,6 +1199,43 @@ impl ParticleEngine {
                 to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) + 0.5,
             ];
             self.add(&options, position, velocity);
+        }
+    }
+    /// `LevelEventHandler.levelEvent` 2018: an enderman's portal trail from
+    /// where it was (`from`) to where it went, which `data` packs within
+    /// (127, 127, 127). 128 portal particles along the way, spread about the
+    /// width and height of an enderman.
+    pub fn enderman_teleportation(&mut self, from: [i32; 3], data: i32, particle_level: u8) {
+        // EntityTypes.ENDERMAN's dimensions.
+        const WIDTH: f64 = 0.6_f32 as f64;
+        const HEIGHT: f64 = 2.9_f32 as f64;
+        let to = [
+            from[0].wrapping_add(((data >> 16) & 255) - 127),
+            from[1].wrapping_add(((data >> 8) & 255) - 127),
+            from[2].wrapping_add((data & 255) - 127),
+        ]
+        .map(f64::from);
+        let from = from.map(f64::from);
+        let options = ParticleOptions::simple(ParticleType::Portal);
+        for _ in 0..128 {
+            let r = &mut self.level_random;
+            let t = r.next_double();
+            let velocity = std::array::from_fn(|_| f64::from((r.next_float() - 0.5) * 0.2));
+            // Mth.lerp(t, to, from).
+            let position = [
+                to[0] + t * (from[0] - to[0]) + (r.next_double() - 0.5) * WIDTH * 2.0,
+                to[1] + t * (from[1] - to[1]) + r.next_double() * HEIGHT,
+                to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) * WIDTH * 2.0,
+            ];
+            // The option roll shares the level random and precedes the distance check.
+            let limited = match particle_level {
+                1 => r.next_int_bound(3).unwrap_or(0) == 0,
+                2 => true,
+                _ => false,
+            };
+            if !limited {
+                self.add(&options, position, velocity);
+            }
         }
     }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the

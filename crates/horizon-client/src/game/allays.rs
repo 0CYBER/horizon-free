@@ -8,7 +8,6 @@ use horizon_core::random::RandomSource;
 impl Game<'_> {
     pub(super) fn tick_allays(&mut self) {
         let griefing = self.ui.rules.bool("mob_griefing");
-        let player = self.player.as_ref().map(|p| p.position);
         // The playing jukeboxes, found at the first allay: no allay starts
         // or stops one, and the block entities run into the thousands.
         let mut jukeboxes: Option<Vec<(i32, i32, i32)>> = None;
@@ -58,7 +57,7 @@ impl Game<'_> {
             };
             let Some((j, _)) = wanted else {
                 self.mobs[i].extra.point = None;
-                self.allay_deliver(i, player);
+                self.allay_deliver(i);
                 continue;
             };
             let e = &self.dropped[j];
@@ -90,14 +89,46 @@ impl Game<'_> {
             }
         }
     }
+    /// `AllayAi.getLikedPlayer`: the player the allay was given an item by,
+    /// found by UUID among the host and the guests of the level (the window
+    /// is a guest on the server thread), when they are not a spectator and
+    /// within 64 blocks.
+    fn allay_liked_player(&self, i: usize) -> Option<horizon_core::geometry::Vec3> {
+        let m = &self.mobs[i];
+        if !m.extra.tame {
+            return None;
+        }
+        // An allay saved before its player was kept belongs to the host.
+        let uuid = m
+            .extra
+            .owner
+            .filter(|u| *u != [0, 0, 0, 1])
+            .or(self.level.player_uuid)
+            .unwrap_or([0, 0, 0, 1]);
+        let host = self
+            .player_view()
+            .filter(|p| !p.spectator && self.level.player_uuid.unwrap_or([0, 0, 0, 1]) == uuid)
+            .map(|p| p.position);
+        let found = host.or_else(|| {
+            self.lan_present()
+                .into_iter()
+                .find(|p| p.uuid == uuid && !p.spectator)
+                .map(|p| {
+                    horizon_core::geometry::Vec3::new(p.position[0], p.position[1], p.position[2])
+                })
+        });
+        found.filter(|p| p.distance_squared(m.position) < 64.0 * 64.0)
+    }
     /// `GoAndGiveItemsToTarget` / `AllayAi.throwItem`: within 3 blocks of
     /// the deposit, one item a tick, each restarting the three-second pause
     /// before it picks anything up again.
-    fn allay_deliver(&mut self, i: usize, player: Option<horizon_core::geometry::Vec3>) {
+    fn allay_deliver(&mut self, i: usize) {
         let m = &self.mobs[i];
         if m.extra.ints[1] <= 0 {
             return;
         }
+        let player = self.allay_liked_player(i);
+        let m = &self.mobs[i];
         let target = match m.extra.home.filter(|_| m.extra.ints[2] > 0) {
             Some(h) => horizon_core::geometry::Vec3::new(
                 f64::from(h[0]) + 0.5,
@@ -167,11 +198,14 @@ impl Game<'_> {
             self.consume_held();
             return true;
         }
+        let acting = self.acting_uuid();
         let holds = m.extra.main_hand.is_some();
         if !holds && !item.is_empty() {
             let m = &mut self.mobs[index];
             m.extra.main_hand = Some(item.into());
             m.extra.tame = true;
+            // `Allay.mobInteract` remembers LIKED_PLAYER by UUID.
+            m.extra.owner = Some(acting);
             self.audio
                 .play("minecraft:entity.allay.item_given", Some(at), 2.0, 1.0);
             self.consume_held();
@@ -186,6 +220,7 @@ impl Game<'_> {
                 .unwrap_or_else(|| "minecraft:air".into());
             let carried = std::mem::take(&mut m.extra.ints[1]);
             m.extra.tame = false;
+            m.extra.owner = None;
             self.audio
                 .play("minecraft:entity.allay.item_taken", Some(at), 2.0, 1.0);
             if carried > 0 {

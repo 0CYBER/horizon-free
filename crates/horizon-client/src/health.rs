@@ -25,29 +25,7 @@ use std::{fs, io, path::Path};
 pub(crate) type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
 pub(crate) type State = HurtState<DamageTypeId>;
 
-#[derive(Clone, Copy, Debug)]
-pub struct HealthRules {
-    pub difficulty: Difficulty,
-    pub natural_regeneration: bool,
-    /// The `drowning_damage`, `fall_damage`, `fire_damage` and
-    /// `freeze_damage` rules `Player.isInvulnerableTo` reads.
-    pub drowning_damage: bool,
-    pub fall_damage: bool,
-    pub fire_damage: bool,
-    pub freeze_damage: bool,
-}
-impl Default for HealthRules {
-    fn default() -> Self {
-        Self {
-            difficulty: Difficulty::Normal,
-            natural_regeneration: true,
-            drowning_damage: true,
-            fall_damage: true,
-            fire_damage: true,
-            freeze_damage: true,
-        }
-    }
-}
+pub use crate::world::HealthRules;
 pub struct HealthResources {
     pub damage: Catalog,
     pub ids: PlayerFloatIds,

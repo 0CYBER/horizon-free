@@ -535,7 +535,7 @@ pub(crate) fn mob_spawn_rules<L: NaturalLevel>(s: Species, l: &L, x: i32, y: i32
     value >= 0.0
 }
 /// `InfestedBlock.isCompatibleHostBlock`.
-fn infested_host(block: &str) -> bool {
+pub fn infested_host(block: &str) -> bool {
     matches!(
         block,
         "minecraft:stone"

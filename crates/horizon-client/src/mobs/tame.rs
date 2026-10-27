@@ -2,7 +2,7 @@
 //! sitting, following and defending the owner, begging, anger and shaking
 //! off water (`Wolf`, `WolfModel`).
 use super::{
-    Damage, Mob, MobEvent, MobWorld, Species, Who,
+    Damage, Mob, MobEvent, MobWorld, PlayerView, Species, Who,
     anim::{Poses, State},
     goals::{
         Breed, Cx, Float, Goal, HurtByTarget, JUMP, LOOK, LeapAtTarget, LookAtPlayer, MOVE,
@@ -100,6 +100,48 @@ pub fn register(m: &mut Mob) {
         ),
     );
 }
+/// `Parrot.registerGoals`: a tamed parrot sits when told to and follows its
+/// owner from five blocks away (the wander and the shoulder come as they are).
+pub fn register_parrot(m: &mut Mob) {
+    let g = &mut m.ai.goals;
+    g.add(0, TamePanic(Panic::new(1.25)));
+    g.add(0, Float);
+    g.add(1, LookAtPlayer::new(8.0));
+    g.add(2, SitWhenOrdered);
+    g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
+    g.add(2, Stroll::avoiding_water(1.0));
+    g.add(3, LandOnOwnersShoulder);
+}
+/// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
+/// the shoulder of the owner it touches; the host does the landing.
+#[derive(Clone, Debug)]
+struct LandOnOwnersShoulder;
+impl Goal for LandOnOwnersShoulder {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // ShoulderRidingEntity.canSitOnShoulder: rideCooldownCounter > 100.
+        is_owner(m, cx.w)
+            && owner(m, cx.w).is_some_and(|(_, _, spectator)| !spectator)
+            && !m.extra.sitting
+            && m.age > 100
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if !m.extra.sitting
+            && m.extra.leash.is_none()
+            && is_owner(m, cx.w)
+            && cx
+                .w
+                .player
+                .as_ref()
+                .is_some_and(|p| m.bounds().intersects(p.bounds))
+        {
+            cx.events.push(MobEvent::ParrotToShoulder { mob: m.id });
+        }
+    }
+}
 /// `Wolf.PREY_SELECTOR`: sheep, rabbits and foxes.
 fn wolf_prey(s: &super::Seen) -> bool {
     matches!(s.species, Species::Sheep | Species::Rabbit | Species::Fox)
@@ -124,17 +166,35 @@ pub fn set_tame(m: &mut Mob, tame: bool) {
         m.attrs.max_health = 8.0;
     }
 }
-/// The owner (the local player) when tame.
-fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
+/// `TamableAnimal.getOwner`: the player the saved owner UUID names, when it
+/// is the one this mob sees; anyone else nearby is not its owner.
+fn owner_view<'a>(m: &Mob, w: &'a MobWorld) -> Option<&'a PlayerView> {
     if !m.extra.tame {
         return None;
     }
     let p = w.player.as_ref()?;
+    (m.extra.owner == Some(p.uuid)).then_some(p)
+}
+/// The owner's position, eye height and spectator flag when tame.
+fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
+    let p = owner_view(m, w)?;
     Some((p.position, p.eye[1], p.spectator))
+}
+/// Whether the player the mob sees is the one saved as its owner (with
+/// guests on, that player is whoever stands nearest).
+fn is_owner(m: &Mob, w: &MobWorld) -> bool {
+    w.player
+        .as_ref()
+        .is_some_and(|p| owned_by(m.extra.owner, p.uuid))
+}
+/// Whether `uuid` is the saved owner. A host with no UUID yet owns what it
+/// tamed under the placeholder `[0, 0, 0, 1]`.
+pub fn owned_by(owner: Option<[i32; 4]>, uuid: [i32; 4]) -> bool {
+    owner.is_some_and(|o| o == uuid || (o == [0, 0, 0, 1] && uuid == [0; 4]))
 }
 /// `TamableAnimal.unableToMoveToOwner`.
 fn unable_to_move_to_owner(m: &Mob, w: &MobWorld) -> bool {
-    m.extra.sitting || w.player.as_ref().is_some_and(|p| p.spectator)
+    m.extra.sitting || owner_view(m, w).is_some_and(|p| p.spectator)
 }
 /// `TamableAnimal.tryToTeleportToOwner`: ten tries around the owner.
 fn teleport_to_owner(m: &mut Mob, w: &MobWorld) {
@@ -240,7 +300,7 @@ impl Goal for SitWhenOrdered {
         match owner_distance_sqr(m, cx.w) {
             None => true,
             Some(d) => {
-                let attacked = cx.w.player.as_ref().is_some_and(|p| p.hurt_by.is_some());
+                let attacked = owner_view(m, cx.w).is_some_and(|p| p.hurt_by.is_some());
                 !(d < 144.0 && attacked) && m.extra.sitting
             }
         }
@@ -388,7 +448,7 @@ impl Goal for OwnerHurtBy {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) else {
+        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.hurt_by) else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -399,7 +459,7 @@ impl Goal for OwnerHurtBy {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) {
+        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.hurt_by) {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -422,7 +482,7 @@ impl Goal for OwnerHurt {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) else {
+        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -433,7 +493,7 @@ impl Goal for OwnerHurt {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) {
+        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -442,7 +502,8 @@ impl Goal for OwnerHurt {
         m.ai.target = None;
     }
 }
-/// `Wolf.wantsToAttack`: never creepers, ghasts or tame wolves and cats.
+/// `Wolf.wantsToAttack`: never creepers, ghasts, tame cats and parrots, or a
+/// tame wolf of the same owner.
 fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     let Who::Mob(id) = who else {
         return false;
@@ -455,7 +516,8 @@ fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     };
     match s.species {
         Species::Creeper | Species::Ghast => false,
-        Species::Wolf | Species::Cat | Species::Parrot => !s.tame,
+        Species::Wolf => !s.tame || s.owner != m.extra.owner,
+        Species::Cat | Species::Parrot => !s.tame,
         Species::Horse | Species::Donkey | Species::Mule | Species::Llama => !s.tame,
         _ => true,
     }
@@ -822,7 +884,7 @@ impl Goal for CatLieOnBlock {
         m.extra.flag = self.0.reached;
     }
 }
-/// `CatSitOnBlockGoal`: chests, lit furnaces and beds.
+/// `CatSitOnBlockGoal`: unopened chests, lit furnaces and the foot of beds.
 #[derive(Clone, Debug)]
 struct CatSitOnBlock(super::goals::MoveToBlock);
 fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
@@ -833,7 +895,15 @@ fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
     match f.name.as_ref() {
         // The lit state is the only light source a furnace has.
         "minecraft:furnace" => f.emission > 0,
-        _ => true,
+        // `ChestBlockEntity.getOpenCount(level, pos) < 1`: players' openers
+        // and the copper golems' own count.
+        "minecraft:chest" => {
+            let key = (p[0], p[1], p[2]);
+            !w.lid_openers.contains_key(&key)
+                && w.world.chest_openers.get(&key).is_none_or(|o| o.0 < 1)
+        }
+        // A bed's foot only (`BedBlock.PART != HEAD`).
+        _ => w.prop(p[0], p[1], p[2], "part") != Some("head"),
     }
 }
 impl Goal for CatSitOnBlock {

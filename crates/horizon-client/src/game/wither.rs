@@ -71,7 +71,8 @@ impl Game<'_> {
     /// After a wither skeleton skull is placed: the T of soul sand (or soul
     /// soil) under three skulls, upright along X or Z, becomes a wither.
     pub(super) fn check_wither_spawn(&mut self, placed: [i32; 3]) -> horizon_client::Result<()> {
-        if !self.is_wither_skull(placed) {
+        // Nothing is built in Peaceful (`level.getDifficulty() != PEACEFUL`).
+        if self.ui.difficulty == 0 || !self.is_wither_skull(placed) {
             return Ok(());
         }
         // Pattern rows top to bottom: "^^^", "###", "~#~" ('~' air).

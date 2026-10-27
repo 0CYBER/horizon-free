@@ -567,7 +567,13 @@ fn print_heart(
 /// The damage of a mob's direct hit on the player (others count as none).
 fn player_damage(e: &MobEvent) -> f32 {
     match e {
-        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::AttackPlayer(amount, _)
+        | MobEvent::AttackPlayerWithEffect { amount, .. }
+        | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => 10.0,
         _ => 0.0,
     }
 }
@@ -578,7 +584,13 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
         return false;
     };
     match e {
-        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::AttackPlayer(amount, _)
+        | MobEvent::AttackPlayerWithEffect { amount, .. }
+        | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => true,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
         MobEvent::Explode(at, radius, _) => {
             let d = Vec3::new(at[0], at[1], at[2])
@@ -1045,6 +1057,7 @@ pub fn main() -> horizon_client::Result<()> {
                 alive: true,
                 creative: s.creative,
                 sneaking: false,
+                swimming: false,
                 look: [0.0, 0.0, 1.0],
                 main_hand: s.hand.as_deref().map(Into::into),
                 off_hand: None,
@@ -1057,6 +1070,8 @@ pub fn main() -> horizon_client::Result<()> {
                 last_hurt: None,
                 velocity: Vec3::ZERO,
                 yaw: 0.0,
+                sprinting: false,
+                riding: false,
                 hero: false,
                 effects: Vec::new(),
                 uuid: PLAYER_UUID,
@@ -1072,6 +1087,8 @@ pub fn main() -> horizon_client::Result<()> {
         for (i, m) in mobs.iter().enumerate() {
             print(&mut out, 0, i, m, s.creative, world.game_time);
         }
+        // No player has a chest open in the scenarios.
+        let lid_openers = std::collections::HashMap::new();
         // The MobWorld every step sees, over a snapshot of the mobs.
         macro_rules! mob_world {
             ($snapshot:expr) => {
@@ -1108,6 +1125,7 @@ pub fn main() -> horizon_client::Result<()> {
                     // FlatLevelSource.getSeaLevel.
                     sea_level: -63,
                     items: Some(&items),
+                    lid_openers: &lid_openers,
                 }
             };
         }

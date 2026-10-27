@@ -4,6 +4,8 @@
 //! OptionsList screens and drawn with the shared widgets.
 use std::time::Instant;
 
+pub use crate::settings::Opt;
+
 use crate::{
     gamepad::{self, GlyphStyle},
     hud::{HudAtlas, HudBatch, rgba},
@@ -14,95 +16,6 @@ use crate::{
     ui,
 };
 
-/// One option instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Opt {
-    Fov,
-    RenderDistance,
-    SimulationDistance,
-    Sensitivity,
-    WheelSensitivity,
-    InvertY,
-    DiscreteScroll,
-    Volume(usize),
-    GuiScale,
-    ViewBobbing,
-    Gamma,
-    MaxFps,
-    Vsync,
-    Fullscreen,
-    SmoothLighting,
-    Clouds,
-    CloudRange,
-    Particles,
-    EntityDistance,
-    EntityShadows,
-    BiomeBlend,
-    Preset,
-    Mipmaps,
-    WeatherRadius,
-    ChunkFade,
-    Vignette,
-    Autosave,
-    CutoutLeaves,
-    ImprovedTransparency,
-    AttackIndicator,
-    InactivityFps,
-    ChunkBuilder,
-    MenuBlur,
-    ToggleCrouch,
-    ToggleSprint,
-    AutoJump,
-    ChatVisibility,
-    ChatColors,
-    ChatLinks,
-    ChatLinksPrompt,
-    ChatOpacity,
-    TextBackgroundOpacity,
-    ChatScale,
-    ChatWidth,
-    ChatHeightFocused,
-    ChatHeightUnfocused,
-    ChatLineSpacing,
-    AutoSuggestions,
-    ReducedDebugInfo,
-    HighContrast,
-    ShowSubtitles,
-    MusicFrequency,
-    NotificationDisplayTime,
-    Narrator,
-    TextBackground,
-    ChatDelay,
-    DistortionEffects,
-    FovEffects,
-    DarknessPulsing,
-    DamageTilt,
-    GlintSpeed,
-    GlintStrength,
-    HideLightningFlashes,
-    MonochromeLogo,
-    PanoramaSpeed,
-    HideSplashTexts,
-    NarratorHotkey,
-    RotateWithMinecarts,
-    HighContrastBlockOutlines,
-    ForceUnicode,
-    JapaneseGlyphs,
-    /// Horizon's controller settings (`horizon-controller.txt`).
-    PadEnabled,
-    PadVibration,
-    PadAdaptiveTriggers,
-    PadLightbar,
-    PadLookSensitivity,
-    PadInvertX,
-    PadInvertY,
-    PadToggleSneak,
-    PadMoveDeadzone,
-    PadLookDeadzone,
-    PadGlyphs,
-    PadMenuNav,
-    PadKeyboard,
-}
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
 }
@@ -168,6 +81,11 @@ impl Opt {
             Opt::Narrator
                 | Opt::NarratorHotkey
                 | Opt::ChatDelay
+                // Stored, but there are no blocked players, signed chat or
+                // chat drafts yet.
+                | Opt::HideMatchedNames
+                | Opt::OnlySecureChat
+                | Opt::SaveChatDrafts
                 | Opt::DistortionEffects
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
@@ -183,6 +101,9 @@ impl Opt {
             Opt::Narrator => "narrator",
             Opt::TextBackground => "backgroundForChatOnly",
             Opt::ChatDelay => "chatDelay",
+            Opt::HideMatchedNames => "hideMatchedNames",
+            Opt::OnlySecureChat => "onlyShowSecureChat",
+            Opt::SaveChatDrafts => "saveChatDrafts",
             Opt::DistortionEffects => "screenEffectScale",
             Opt::FovEffects => "fovEffectScale",
             Opt::DarknessPulsing => "darknessEffectScale",
@@ -251,6 +172,9 @@ impl Opt {
             Opt::ChatHeightUnfocused => "options.chat.height.unfocused",
             Opt::ChatLineSpacing => "options.chat.line_spacing",
             Opt::AutoSuggestions => "options.autoSuggestCommands",
+            Opt::HideMatchedNames => "options.hideMatchedNames",
+            Opt::OnlySecureChat => "options.onlyShowSecureChat",
+            Opt::SaveChatDrafts => "options.chat.drafts",
             Opt::ReducedDebugInfo => "options.reducedDebugInfo",
             Opt::HighContrast => "options.accessibility.high_contrast",
             Opt::ShowSubtitles => "options.showSubtitles",
@@ -524,6 +448,9 @@ impl Opt {
             Opt::HideLightningFlashes => on_off(s.file.bool("hideLightningFlashes")),
             Opt::MonochromeLogo => on_off(s.file.bool("darkMojangStudiosBackground")),
             Opt::HideSplashTexts => on_off(s.file.bool("hideSplashTexts")),
+            Opt::HideMatchedNames | Opt::OnlySecureChat | Opt::SaveChatDrafts => {
+                on_off(s.file.bool(self.file_key().unwrap()))
+            }
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
@@ -722,7 +649,12 @@ impl Opt {
                     value + 1
                 };
             }
-            Opt::TextBackground | Opt::HideLightningFlashes | Opt::HideSplashTexts => {
+            Opt::TextBackground
+            | Opt::HideLightningFlashes
+            | Opt::HideSplashTexts
+            | Opt::HideMatchedNames
+            | Opt::OnlySecureChat
+            | Opt::SaveChatDrafts => {
                 let key = self.file_key().unwrap();
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
@@ -1521,7 +1453,10 @@ impl OptionsUi {
                 Opt::ChatHeightFocused,
                 Opt::ChatHeightUnfocused,
                 Opt::AutoSuggestions,
+                Opt::HideMatchedNames,
                 Opt::ReducedDebugInfo,
+                Opt::OnlySecureChat,
+                Opt::SaveChatDrafts,
             ]),
             Page::Accessibility => {
                 let mut rows = vec![Row::Buttons(
