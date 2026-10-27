@@ -100,9 +100,12 @@ pub enum Capability {
     /// Blocks in the server's loaded chunks, and changes to them (server
     /// mods; client mods later, where the game runs the world).
     World,
+    /// The recipes and items the game knows, for recipe viewers
+    /// (interface `recipes`).
+    Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 11] = [
+    pub const ALL: [Capability; 12] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -114,6 +117,7 @@ impl Capability {
         Capability::Input,
         Capability::Players,
         Capability::World,
+        Capability::Recipes,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -136,6 +140,7 @@ impl Capability {
             Capability::Input => "input",
             Capability::Players => "players",
             Capability::World => "world",
+            Capability::Recipes => "recipes",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -143,7 +148,7 @@ impl Capability {
     pub fn is_experimental(self) -> bool {
         matches!(
             self,
-            Capability::Ui | Capability::Render | Capability::Input
+            Capability::Ui | Capability::Render | Capability::Input | Capability::Recipes
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -162,6 +167,9 @@ impl Capability {
             }
             Capability::Players => "see who is on the server and message them",
             Capability::World => "read and change the world's blocks",
+            Capability::Recipes => {
+                "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -175,6 +183,10 @@ impl Capability {
         }
         if interface == "log" {
             return Ok(None);
+        }
+        // A recipe viewer's panel is part of capability `ui`.
+        if interface == "browser" {
+            return Ok(Some(Capability::Ui));
         }
         Capability::ALL
             .into_iter()
@@ -198,6 +210,7 @@ impl fmt::Display for Capability {
             Capability::Input => "input",
             Capability::Players => "players",
             Capability::World => "world",
+            Capability::Recipes => "recipes",
         };
         f.write_str(name)
     }

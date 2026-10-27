@@ -15,7 +15,7 @@ use crate::{
         configuration::{
             ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
             Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
-            StoreCookie, Transfer, UpdateTags,
+            ServerLinks, StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -1903,6 +1903,9 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     StopSound(StopSound) = STOP_SOUND,
     StartConfiguration(Empty) = START_CONFIGURATION,
     StoreCookie(StoreCookie) = STORE_COOKIE,
+    // A common packet: the same `configuration::ServerLinks` the
+    // configuration phase sends.
+    ServerLinks(ServerLinks) = SERVER_LINKS,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
@@ -2249,6 +2252,11 @@ packet!(
     /// Input flags: forward 1, backward 2, left 4, right 8, jump 16, shift 32, sprint 64.
     PlayerInput { flags: u8 => UByte }
 );
+packet!(
+    /// ServerboundSelectBundleItemPacket: the menu slot of a bundle and the
+    /// index of its selected item (-1: none).
+    SelectBundleItem { slot: i32 => VarInt, index: i32 => VarInt }
+);
 packet!(SetCarriedItem { slot: i16 => Short });
 packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => Slot });
 packet!(UseItem { hand: i32 => VarInt, sequence: i32 => VarInt, yaw: f32 => Float, pitch: f32 => Float });
@@ -2285,6 +2293,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
     ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
+    RecipeBookChangeSettings(super::recipes::RecipeBookChangeSettings) = RECIPE_BOOK_CHANGE_SETTINGS,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
@@ -2317,6 +2326,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
+    SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,

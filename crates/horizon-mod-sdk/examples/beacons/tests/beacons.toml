@@ -1,4 +1,4 @@
-# /ground reads the block under the player and the biome; /beacon sets four blocks of glowstone two to the east.
+# /ground [pos] reads the block under the player (or at pos) and the biome; /beacon [height] sets glowstone two to the east.
 
 [[step]]
 join = "Alex"
@@ -20,3 +20,20 @@ expect.blocks = [
 player = { x = 10.5, z = 10.5 }
 command = "ground"
 expect.feedback = "You are standing on minecraft:air in minecraft:plains"
+
+# Typed arguments: a height, a position relative to the player.
+[[step]]
+player = { x = 5.5, y = 64.0, z = 5.5 }
+command = "beacon 2"
+expect.blocks = [
+    { x = 7, y = 65, z = 5, state = "minecraft:glowstone" },
+    { x = 7, y = 66, z = 5, state = "minecraft:air" },
+]
+
+[[step]]
+command = "beacon 65"
+expect.error = "Integer must not be more than 64, found 65"
+
+[[step]]
+command = "ground ~2 ~1 ~"
+expect.feedback = "7 65 5 is minecraft:glowstone in minecraft:plains"

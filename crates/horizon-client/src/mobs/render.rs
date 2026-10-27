@@ -1235,6 +1235,15 @@ fn hand_base(
         0.0
     };
     let mut t = part_matrix(model, base, poses, arm, offset)?;
+    if m.species() == Species::Vex {
+        // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
+        t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
+        t *= glam::Mat4::from_translation(glam::Vec3::new(
+            if left { -0.046_875 } else { 0.046_875 },
+            -0.156_25,
+            0.078_125,
+        ));
+    }
     let (ox, oy, oz) = if m.is_baby() {
         (0.0, 1.0, -4.5)
     } else {
@@ -1419,6 +1428,42 @@ mod tests {
                 "a swallowed block still hides the default core"
             );
             assert!(vertices.iter().all(|v| v.uv[0] >= 0.5));
+        }
+    }
+    /// `VexModel.translateToHand`: the held item is drawn at 0.55 scale and
+    /// moved by the vex's own offset, so the vex's sword is the tiny one
+    /// vanilla shows. It was drawn at the full size, like a zombie's.
+    #[test]
+    fn the_vex_holds_its_item_at_the_small_scale() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:vex"].clone());
+        let mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        for left in [false, true] {
+            let t = held_item_transform(&mob, 0.5, glam::DVec3::ZERO, &data, left).unwrap();
+            // The model's own part scale is 1, so the item's scale is the
+            // renderer's: `poseStack.scale(0.55F, 0.55F, 0.55F)`.
+            for axis in [t.x_axis, t.y_axis, t.z_axis] {
+                let scale = axis.truncate().length();
+                assert!(
+                    (scale - 0.55).abs() < 1.0e-5,
+                    "the vex's item is drawn at 0.55 scale, got {scale}"
+                );
+            }
         }
     }
 }

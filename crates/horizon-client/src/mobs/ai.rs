@@ -106,6 +106,7 @@ pub enum Family {
     Strider,
     Bat,
     Bee,
+    PolarBear,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -167,6 +168,7 @@ pub fn family(s: Species) -> Family {
         S::Strider => Family::Strider,
         S::Bat => Family::Bat,
         S::Bee => Family::Bee,
+        S::PolarBear => Family::PolarBear,
         _ => Family::Generic,
     }
 }
@@ -185,6 +187,20 @@ pub fn register(m: &mut Mob) {
             }
             if m.species() == Species::Turtle {
                 super::turtle::register(m);
+            }
+            if m.species() == Species::Frog {
+                // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true).
+                // The frog's movement speed is 1.0, so the controller's 0.1
+                // outside-water speed is what keeps a walking frog at
+                // vanilla's pace; the plain ground controller walks ten
+                // times too fast (#2213).
+                m.ai.mov.kind = super::control::MoveKind::SmoothSwimming {
+                    max_turn_x: 85.0,
+                    max_turn_y: 10.0,
+                    in_water: 0.02,
+                    outside: 0.1,
+                    gravity: true,
+                };
             }
         }
         Family::Inert => {}
@@ -227,6 +243,7 @@ pub fn register(m: &mut Mob) {
         Family::Strider => super::strider::register(m),
         Family::Bat => super::bat::register(m),
         Family::Bee => super::bee::register(m),
+        Family::PolarBear => super::polar_bear::register(m),
     }
     // FloatGoal's constructor lets the navigation float, as do the
     // constructors of these brain-driven and flying mobs. A floater rises
@@ -416,6 +433,7 @@ pub fn tick(
     super::axolotl::tick_animation(m);
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
+    flower_contact_effects(m, w);
     if m.species() == Species::CopperGolem {
         // CopperGolem.tick: updateWeathering after the living tick.
         super::copper_golem::update_weathering(m, w, level_random, events);
@@ -443,6 +461,34 @@ pub fn tick_swing(m: &mut Mob) {
         m.ai.swing_time = 0;
     }
     m.anim.attack_anim = m.ai.swing_time as f32 / 6.0;
+}
+/// `LivingEntity.baseTick` refills a breather's air by 4, then
+/// `Axolotl.handleAirSupply` (unless the mob has no AI): water or rain fills
+/// it, anywhere else it runs down from the pre-tick value, and at -20 the
+/// axolotl dries out.
+fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
+    let before = m.air;
+    m.air = (m.air + 4).min(super::axolotl::MAX_AIR);
+    if m.no_ai {
+        return;
+    }
+    // Entity.isInRain: rain at the block, or at the top of the box.
+    let (x, y, z) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    let top = (m.position.y + f64::from(m.height())).floor() as i32;
+    let in_rain = w.raining_at(x, y, z) || w.raining_at(x, top, z);
+    if m.fluids.in_water || in_rain {
+        m.air = super::axolotl::MAX_AIR;
+    } else {
+        m.air = before - 1;
+        if m.air <= -20 {
+            m.air = 0;
+            m.damage(2.0, Damage::of(DamageKind::DryOut));
+        }
+    }
 }
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -503,7 +549,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.damage(1.0, Damage::of(DamageKind::InWall));
         }
         // Air supply and drowning (WaterAnimal.handleAirSupply for aquatic mobs).
-        if m.kind.flags.needs_water {
+        if m.species() == Species::Axolotl {
+            axolotl_air_supply(m, w);
+        } else if m.kind.flags.needs_water {
             if !m.fluids.in_water {
                 m.air -= 1;
                 if m.air == -20 {
@@ -644,7 +692,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     }
     // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
     if super::equine::is_equine(m.species()) {
-        let _ = m.random.next_int_bound(200);
+        super::equine::tail_tick(m);
     }
     // Monster.aiStep: updateNoActionTime (Raider: always +2).
     if is_monster(m.species())
@@ -671,6 +719,9 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     // serverAiStep has no goals, so it only falls and is pushed.
     let immobile = (m.species() == Species::Ravager && super::ravager::immobile(m))
         || m.species() == Species::Mannequin;
+    if m.species() == Species::Piglin && m.alive() {
+        super::piglin::celebrate(m, w);
+    }
     if m.alive() && !immobile {
         server_ai_step(m, w, level_random, events);
     } else {
@@ -995,6 +1046,7 @@ fn species_ai_step(
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
         Species::Bee => super::bee::ai_step(m, w),
+        Species::PolarBear => super::polar_bear::ai_step(m, w),
         Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
@@ -1487,6 +1539,56 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
     }
 }
 
+/// `Entity.applyEffectsFromBlocks` for the flowers that give an effect:
+/// `WitherRoseBlock.entityInside` (wither for 40 ticks on a living mob that
+/// can take it, not in peaceful) and `EyeblossomBlock.entityInside` (poison
+/// for 25 ticks on a bee, when the open flower attracts bees). The blocks
+/// are those the mob's box touches where it started the tick and where it
+/// ended.
+fn flower_contact_effects(m: &mut Mob, w: &MobWorld) {
+    if !m.alive() || w.difficulty.effective == 0.0 {
+        return;
+    }
+    let half = f64::from(m.width()) / 2.0 - 1.0e-5;
+    let height = f64::from(m.height()) - 1.0e-5;
+    let mut visited: Vec<[i32; 3]> = Vec::new();
+    for at in [m.previous, m.position] {
+        let cells = |lo: f64, hi: f64| lo.floor() as i32..=hi.floor() as i32;
+        for x in cells(at.x - half, at.x + half) {
+            for y in cells(at.y + 1.0e-5, at.y + height) {
+                for z in cells(at.z - half, at.z + half) {
+                    let p = [x, y, z];
+                    if visited.contains(&p) {
+                        continue;
+                    }
+                    match w.block_name(x, y, z) {
+                        "minecraft:wither_rose" => {
+                            // isInvulnerableTo(wither): the invulnerable time
+                            // after a hit; WitherBoss and WitherSkeleton
+                            // refuse the effect (`canBeAffected`).
+                            if m.invulnerable <= 0
+                                && !m.invulnerable_flag
+                                && !matches!(m.species(), Species::Wither | Species::WitherSkeleton)
+                            {
+                                m.add_effect("minecraft:wither", 40, 0);
+                            }
+                        }
+                        "minecraft:open_eyeblossom"
+                            if m.species() == Species::Bee
+                                && super::bee::attracts_bees(w, p)
+                                && !m.has_effect("minecraft:poison") =>
+                        {
+                            m.add_effect("minecraft:poison", 25, 0);
+                        }
+                        _ => continue,
+                    }
+                    visited.push(p);
+                }
+            }
+        }
+    }
+}
+
 /// MobEffect ticking for the effects mobs receive (poison, wither, regeneration).
 fn tick_effects(m: &mut Mob) {
     let mut effects = std::mem::take(&mut m.extra.effects);
@@ -1511,6 +1613,9 @@ fn tick_effects(m: &mut Mob) {
         *ticks -= 1;
     }
     effects.retain(|e| e.1 > 0);
+    m.extra
+        .hidden_effects
+        .retain(|h| effects.iter().any(|e| e.0 == *h));
     m.extra.effects = effects;
 }
 
@@ -1669,5 +1774,43 @@ mod despawn_tests {
         for s in [Species::Zombie, Species::ZombieVillager, Species::Pillager] {
             assert!(!never_removed_when_far(s), "{s:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod frog_tests {
+    use super::*;
+    use crate::mobs::MobTypes;
+    use crate::mobs::control::MoveKind;
+    use std::sync::Arc;
+
+    /// `Frog()`: `new SmoothSwimmingMoveControl<>(this, 85, 10, 0.02F, 0.1F, true)`.
+    /// The frog's movement speed is 1.0, so the controller's 0.1 outside-water
+    /// speed is what keeps a walking frog at vanilla's pace. The plain ground
+    /// controller walks it ten times too fast, which is the jitter, the
+    /// teleporting and the flying of #2213.
+    #[test]
+    fn a_frog_walks_at_the_vanilla_speed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists() {
+            return;
+        }
+        let data = MobTypes::load(&root).unwrap();
+        let kind = Arc::new(data.types.get("minecraft:frog").unwrap().clone());
+        assert_eq!(kind.speed, 1.0, "the frog's movement speed attribute");
+        let mut m = Mob::new(1, kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        register(&mut m);
+        assert_eq!(
+            m.ai.mov.kind,
+            MoveKind::SmoothSwimming {
+                max_turn_x: 85.0,
+                max_turn_y: 10.0,
+                in_water: 0.02,
+                outside: 0.1,
+                gravity: true,
+            }
+        );
     }
 }

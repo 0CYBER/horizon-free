@@ -931,6 +931,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
+name = "far-view"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1372,6 +1379,8 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-bench",
+ "horizon-client-core",
+ "horizon-command",
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
@@ -1401,6 +1410,23 @@ dependencies = [
  "winit",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "horizon-client-core"
+version = "0.1.0"
+dependencies = [
+ "horizon-world",
+ "serde_json",
+]
+
+[[package]]
+name = "horizon-command"
+version = "0.1.0"
+dependencies = [
+ "horizon-client-core",
+ "horizon-protocol",
+ "horizon-world",
 ]
 
 [[package]]
@@ -2976,6 +3002,13 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+]
+
+[[package]]
+name = "recipes"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
 ]
 
 [[package]]
