@@ -2715,17 +2715,61 @@ impl B {
                     if cx.lr.next_int_bound(10).unwrap_or(0) != 0 {
                         return false;
                     }
-                    // Who chases whom is in the other kids' brains: chase the
-                    // first friend.
-                    if let Some(&kid) = friends.first() {
-                        let mm = mem(m);
-                        mm.interaction_target.set(kid);
-                        mm.look_target.set(Tracker::Entity(kid, true));
-                        mm.walk_target.set(WalkTarget {
-                            target: Tracker::Entity(kid, false),
-                            speed: 0.6,
-                            close: 1,
-                        });
+                    // What a friend chases is its INTERACTION_TARGET.
+                    let chasing = |who: Who| match who {
+                        Who::Mob(id) => cx
+                            .w
+                            .seen(id)
+                            .and_then(|s| s.villager.as_ref())
+                            .and_then(|v| v.interaction_target),
+                        Who::Player => None,
+                    };
+                    let me = Who::Mob(m.id);
+                    if !friends.iter().any(|&f| chasing(f) == Some(me)) {
+                        // The kid chased by the fewest (one to five) chasers, else any friend.
+                        let mut chased: Vec<(Who, i32)> = Vec::new();
+                        for &f in &friends {
+                            if let Some(c) = chasing(f) {
+                                match chased.iter_mut().find(|(k, _)| *k == c) {
+                                    Some(e) => e.1 += 1,
+                                    None => chased.push((c, 1)),
+                                }
+                            }
+                        }
+                        let target = chased
+                            .iter()
+                            .filter(|(_, n)| *n > 0 && *n <= 5)
+                            .min_by_key(|(_, n)| *n)
+                            .map(|&(k, _)| k)
+                            .or_else(|| friends.first().copied());
+                        if let Some(kid) = target {
+                            let mm = mem(m);
+                            mm.interaction_target.set(kid);
+                            mm.look_target.set(Tracker::Entity(kid, true));
+                            mm.walk_target.set(WalkTarget {
+                                target: Tracker::Entity(kid, false),
+                                speed: 0.6,
+                                close: 1,
+                            });
+                        }
+                    } else {
+                        // Chased: run to a spot inside the village.
+                        let villages = village_sections(m, cx.w);
+                        for _ in 0..10 {
+                            let Some(p) = m.land_random_pos(cx.w, 20, 8) else {
+                                continue;
+                            };
+                            let at = [
+                                p[0].floor() as i32,
+                                p[1].floor() as i32,
+                                p[2].floor() as i32,
+                            ];
+                            let section = [at[0] >> 4, at[1] >> 4, at[2] >> 4];
+                            if sections_to_village(&villages, section) <= 1 {
+                                mem(m).walk_target.set(WalkTarget::point(p, 0.6, 0));
+                                break;
+                            }
+                        }
                     }
                     true
                 },
