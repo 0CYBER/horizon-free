@@ -339,7 +339,7 @@ impl SaveTables {
     }
 }
 
-pub use crate::chunk::{ChunkExtras, RolledLoot};
+pub use crate::chunk::{ChunkExtras, RolledLoot, SavedProto};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -1476,21 +1476,6 @@ fn decode_column(
     Some(chunk)
 }
 
-/// A proto chunk saved before it became final. Decoration writes into a
-/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
-/// past the finished ones hold writes that generating them again would lose
-/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
-pub struct SavedProto {
-    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
-    pub column: Chunk,
-    /// Decorated itself (`features`), not only written to by its neighbours
-    /// (`terrain`).
-    pub decorated: bool,
-    /// Block entity data in placement order, with `x`, `y` and `z`.
-    pub block_entities: Vec<Tag>,
-    /// Entities placed by structures, with absolute `Pos`.
-    pub entities: Vec<Tag>,
-}
 pub fn encode_proto(
     proto: &SavedProto,
     registry: &BlockRegistry,
