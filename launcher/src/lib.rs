@@ -13,6 +13,7 @@ pub mod game_log;
 pub mod heads;
 pub mod import;
 pub mod instances;
+pub mod launch;
 pub mod modpacks;
 pub mod mojang;
 pub mod packs;

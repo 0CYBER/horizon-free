@@ -8,6 +8,7 @@
 //! launcher's data folder, so renaming one never moves a folder.
 use crate::backend;
 use crate::browser::horizon::pack as registry_pack;
+use crate::launch::Launch;
 use crate::modpacks;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -97,6 +98,9 @@ pub struct Meta {
     /// When its last run ended, in seconds since 1970.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_played: Option<u64>,
+    /// What runs around the game: a pre-launch command, a wrapper, variables (`launch`).
+    #[serde(default, skip_serializing_if = "Launch::is_empty")]
+    pub launch: Launch,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -140,6 +144,8 @@ pub struct Instance {
     pub version: Option<String>,
     pub played: Duration,
     pub last_played: Option<SystemTime>,
+    /// What runs around the game (`launch::wrap`).
+    pub launch: Launch,
 }
 
 impl Instance {
@@ -213,6 +219,7 @@ fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
                 last_played: meta
                     .last_played
                     .map(|s| UNIX_EPOCH + Duration::from_secs(s)),
+                launch: meta.launch,
                 id,
                 kind,
                 work,
@@ -403,9 +410,13 @@ fn edit_in(
         if name.is_empty() {
             return Err("An instance needs a name.".into());
         }
-        if all
-            .iter()
-            .any(|i| i.id != instance.id && i.name.eq_ignore_ascii_case(name))
+        // Only a new name is checked: an import can share a name, and changing anything
+        // else about it must still work.
+        let renamed = !name.eq_ignore_ascii_case(&instance.name);
+        if renamed
+            && all
+                .iter()
+                .any(|i| i.id != instance.id && i.name.eq_ignore_ascii_case(name))
         {
             return Err(format!("There is already an instance called {name}."));
         }

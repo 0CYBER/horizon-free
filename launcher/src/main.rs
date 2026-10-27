@@ -18,6 +18,7 @@ mod game_tools;
 mod import_page;
 mod instances_page;
 mod internet;
+mod launch_page;
 mod markdown;
 mod mcp;
 mod modpacks_page;
@@ -247,6 +248,7 @@ struct Launcher {
     game_packs: packs_page::Packs,
     world_packs: datapacks_page::WorldPacks,
     export: Option<export_page::ExportPanel>,
+    launch: Option<launch_page::LaunchPanel>,
     importing: import_page::Importing,
     console: console_page::Console,
     /// What the window did when the game started (`while_playing.rs`).
@@ -418,6 +420,7 @@ impl Launcher {
             game_packs: packs_page::Packs::default(),
             world_packs: datapacks_page::WorldPacks::default(),
             export: None,
+            launch: None,
             importing: Default::default(),
             console: Default::default(),
             aside: while_playing::Aside::new(window.window_handle()),
@@ -609,6 +612,14 @@ impl Launcher {
                             cmd.arg(flag).arg(value);
                         }
                         backend::append_game_args(&mut cmd);
+                        // Last, around every argument: the instance's pre-launch command,
+                        // wrapper and variables.
+                        let launch = run
+                            .as_ref()
+                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id))
+                            .map(|i| i.launch)
+                            .unwrap_or_default();
+                        let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => {
@@ -2129,6 +2140,7 @@ impl Launcher {
             .child(section_title("Ready to play", "check", &t).mb(px(12.)))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
+            .children(self.launch_panel(cx))
             .child(index_row(
                 2,
                 "Resources",
