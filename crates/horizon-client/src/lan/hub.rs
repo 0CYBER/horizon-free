@@ -21,7 +21,7 @@ use crate::{
 use horizon_core::geometry::{Aabb, ShapeOp, Vec3, VoxelShape};
 use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
-    entity_data::{Value, serializer},
+    entity_data::{Particle, ParticleData, Value, serializer},
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::{literal, translatable},
 };
@@ -1553,6 +1553,49 @@ impl Hub {
 
     // ---- entities ------------------------------------------------------
 
+    /// `LivingEntity.updateSynchronizedMobEffectParticles`: DATA_EFFECT_PARTICLES
+    /// (10) and DATA_EFFECT_AMBIENCE_ID (11) for the visible `effects`, as
+    /// (effect, ambient). The entries are left out when there is nothing to
+    /// show, which is their default.
+    pub fn effect_meta<'a>(
+        &self,
+        effects: impl IntoIterator<Item = (&'a str, bool)>,
+    ) -> Vec<(u8, i32, Value)> {
+        let mut particles = Vec::new();
+        let mut all_ambient = true;
+        for (effect, ambient) in effects {
+            let effect = effect.trim_start_matches("minecraft:");
+            // MobEffect.particleFactory: the omens have their own particles,
+            // the others an entity effect in their colour (faint if ambient).
+            let (name, data) = match effect {
+                "trial_omen" | "raid_omen" => (effect, None),
+                _ => {
+                    let Some(def) = crate::brewing::effect(effect) else {
+                        continue;
+                    };
+                    let alpha = if ambient { 38 } else { 255 };
+                    let argb = (alpha << 24) | def.color as i32;
+                    ("entity_effect", Some(ParticleData::Color(argb)))
+                }
+            };
+            let Some(id) =
+                self.registry_id("minecraft:particle_type", &format!("minecraft:{name}"))
+            else {
+                continue;
+            };
+            particles.push(Particle { id, data });
+            all_ambient &= ambient;
+        }
+        if particles.is_empty() {
+            return Vec::new();
+        }
+        let mut meta = vec![(10, serializer::PARTICLES, Value::Particles(particles))];
+        if all_ambient {
+            meta.push((11, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        meta
+    }
+
     fn player_state(
         &self,
         id: i32,
@@ -1568,6 +1611,7 @@ impl Hub {
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         attributes: Vec<play::AttributeSnapshot>,
+        effects: &[EffectInstance],
     ) -> EntityState {
         let (sneaking, sprinting, sleeping) = flags;
         let shared = shared_flags(sneaking, sprinting, &body);
@@ -1607,6 +1651,14 @@ impl Hub {
         if skin != 0 {
             meta.push((16, serializer::BYTE, Value::Byte(skin as i8)));
         }
+        meta.extend(
+            self.effect_meta(
+                effects
+                    .iter()
+                    .filter(|e| e.visible)
+                    .map(|e| (e.id, e.ambient)),
+            ),
+        );
         EntityState {
             id,
             uuid,
@@ -1619,7 +1671,11 @@ impl Hub {
             velocity: [0.0; 3],
             data: 0,
             meta,
-            defaults: Vec::new(),
+            // The effect swirls go back to none.
+            defaults: vec![
+                (10, serializer::PARTICLES, Value::Particles(Vec::new())),
+                (11, serializer::BOOLEAN, Value::Bool(false)),
+            ],
             equipment,
             attributes,
             precise: false,
@@ -1675,6 +1731,7 @@ impl Hub {
                 h.health,
                 equipment,
                 h.attributes.clone(),
+                &[],
             ));
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -1711,6 +1768,7 @@ impl Hub {
                         .as_ref()
                         .map(|m| super::attributes::syncable(&m.attributes))
                         .unwrap_or_default(),
+                    &g.effects.list,
                 )
             })
             .collect();

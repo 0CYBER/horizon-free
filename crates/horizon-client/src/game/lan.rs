@@ -191,6 +191,17 @@ fn mob_meta(
         meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
+    // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID: the
+    // swirls of its effects (the ones a mob has are visible, not ambient).
+    meta.extend(
+        hub.effect_meta(
+            (m.extra.effects.iter())
+                .filter(|e| !m.extra.hidden_effects.contains(&e.0))
+                .map(|e| (e.0, false)),
+        ),
+    );
+    defaults.push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
+    defaults.push((11, serializer::BOOLEAN, Value::Bool(false)));
     // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4 (what
     // draws a vindicator's axe, a skeleton's drawn bow, a piglin's raised
     // weapon).
@@ -1474,6 +1485,12 @@ impl Game<'_> {
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
             m.extra.sprinting = g.sprinting;
+            // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
+            let visible = || g.effects.list.iter().filter(|e| e.visible);
+            m.extra.effect_particles = visible()
+                .filter_map(|e| super::client_ambient::effect_particle(e.id, e.ambient))
+                .collect();
+            m.extra.effect_ambient = visible().all(|e| e.ambient);
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.
