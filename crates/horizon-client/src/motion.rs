@@ -44,7 +44,7 @@ use std::{
 
 pub(crate) mod environment;
 mod fluids;
-pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER};
+pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER, bubble_column_push};
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
@@ -55,6 +55,10 @@ pub struct MotionResources {
     /// `BlockTags.SOUL_SPEED_BLOCKS`: what Soul Speed's effects look for.
     pub soul_speed_blocks: BTreeSet<String>,
     pub fall_reset: BTreeSet<String>,
+    /// `BlockTags.INSIDE_STEP_SOUND_BLOCKS`.
+    pub inside_step_sound: BTreeSet<String>,
+    /// `BlockTags.COMBINATION_STEP_SOUND_BLOCKS`.
+    pub combination_step_sound: BTreeSet<String>,
     /// `BlockTags.CRYSTAL_SOUND_BLOCKS`: blocks that chime under footsteps.
     pub crystal_sound: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
@@ -117,6 +121,8 @@ impl MotionResources {
             glide_through: tag("minecraft:can_glide_through")?,
             soul_speed_blocks: tag("minecraft:soul_speed_blocks")?,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
+            inside_step_sound: tag("minecraft:inside_step_sound_blocks")?,
+            combination_step_sound: tag("minecraft:combination_step_sound_blocks")?,
             crystal_sound: tag("minecraft:crystal_sound_blocks")?,
         })
     }
@@ -162,11 +168,12 @@ pub enum MotionEvent {
         position: BlockPos,
     },
     /// `Entity.walkingStepSound` on this block: `Player.playStepSound`
-    /// muffles it under a swim sound when `in_water`.
+    /// mutes it (`playMuffledStepSound`) under a swim sound in water or
+    /// under a combination block's own step.
     Emission {
         position: BlockPos,
         state: BlockStateId,
-        in_water: bool,
+        muffled: bool,
     },
     /// `Entity.playAmethystStepSound`: `block.amethyst_block.chime`.
     Chime {
@@ -259,6 +266,9 @@ pub struct PlayerMotion {
     pub history: MovementHistory,
     pub fall_distance: f64,
     pub stuck_multiplier: Vec3,
+    /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
+    /// block has pushed this entity this tick (0.51 at most on any axis).
+    pub piston: horizon_world::piston_movement::PistonMovement,
     pub yaw: f32,
     pub head_yaw: f32,
     pub jumping: bool,
@@ -472,6 +482,7 @@ impl PlayerMotion {
             history: MovementHistory::default(),
             fall_distance: 0.0,
             stuck_multiplier: Vec3::ZERO,
+            piston: Default::default(),
             yaw: 0.0,
             head_yaw: 0.0,
             jumping: false,
@@ -1907,8 +1918,14 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     fn set_collision_flags(&mut self, value: CollisionFlags) {
         self.player.collision = value;
     }
-    fn limit_piston_movement(&mut self, _: Vec3) -> Result<Vec3> {
-        Err("piston movement requires a ticking entity runtime".into())
+    /// `Entity.limitPistonMovement`: the per-tick 0.51-block budget shared by
+    /// every move on an axis. A failed game-time read leaves the accumulator
+    /// as it was, as native does.
+    fn limit_piston_movement(&mut self, movement: Vec3) -> Result<Vec3> {
+        let time = self.scene.game_time;
+        self.player
+            .piston
+            .limit(movement, || Ok::<i64, Box<dyn std::error::Error>>(time))
     }
     fn stuck_multiplier(&self) -> Vec3 {
         self.player.stuck_multiplier
@@ -1927,7 +1944,8 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         let input = EdgeBackoffInput {
             movement,
             bounds: self.player.bounds(),
-            flying: false,
+            // Player.maybeBackOffFromEdge: not while flying.
+            flying: self.player.flying,
             self_or_player: matches!(mover, MoverType::SelfMovement | MoverType::Player),
             fall_distance: self.player.fall_distance,
             query_budget: 1_000_000,
@@ -2170,18 +2188,54 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     fn in_water(&mut self) -> Result<bool> {
         Ok(self.player.fluids.was_touching_water)
     }
-    /// `Player.playStepSound`: in water a swim sound, then the step muffled.
+    /// `Player.playStepSound`: in water a swim sound, then the step muffled;
+    /// on land the step of an inside-sound block above the floor, or of a
+    /// combination block above it with the floor's step muffled.
     fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
-        let in_water = self.player.fluids.was_touching_water;
-        if in_water {
+        let muffled = self.player.fluids.was_touching_water;
+        let mut stepped = false;
+        if muffled {
             self.water_swim_sound()?;
+        } else {
+            // Entity.getPrimaryStepSoundBlockPos.
+            let above = BlockPos {
+                y: position.y + 1,
+                ..position
+            };
+            let above_state = self.block(above);
+            let name = &self
+                .assets
+                .registry
+                .state(above_state)
+                .ok_or("missing scene state")?
+                .name;
+            let combination = self.resources.combination_step_sound.contains(name);
+            if combination || self.resources.inside_step_sound.contains(name) {
+                self.player.events.push(MotionEvent::Emission {
+                    position: above,
+                    state: above_state,
+                    muffled: false,
+                });
+                if combination {
+                    // Entity.playCombinationStepSounds.
+                    self.player.events.push(MotionEvent::Emission {
+                        position,
+                        state,
+                        muffled: true,
+                    });
+                }
+                stepped = true;
+            }
         }
-        self.player.events.push(MotionEvent::Emission {
-            position,
-            state,
-            in_water,
-        });
-        // Entity.walkingStepSound: the amethyst chime after the step.
+        if !stepped {
+            self.player.events.push(MotionEvent::Emission {
+                position,
+                state,
+                muffled,
+            });
+        }
+        // Entity.walkingStepSound: the amethyst chime after the step, by the
+        // floor's state even when the step sound was the block above's.
         let name = &self
             .assets
             .registry

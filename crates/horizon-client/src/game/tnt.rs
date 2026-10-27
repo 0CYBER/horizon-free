@@ -178,7 +178,9 @@ impl Game<'_> {
                 ];
                 self.tnts.remove(i);
                 count -= 1;
-                self.server_explode(center, 4.0, BlockInteraction::Destroy, false)?;
+                self.with_hive_emptying_blast(|g| {
+                    g.server_explode(center, 4.0, BlockInteraction::Destroy, false)
+                })?;
             } else {
                 i += 1;
             }
@@ -332,6 +334,8 @@ impl Game<'_> {
                         layer: if lit { 5 } else { 0 },
                         color,
                         light: packed,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
