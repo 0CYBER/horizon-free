@@ -3002,6 +3002,22 @@ impl Renderer {
         }
         config
     }
+    /// The F3 screen's HDR line while the setting is on: the swapchain HDR presents to with
+    /// its paper white and peak, or that the surface offers none.
+    pub fn hdr_line(&self) -> String {
+        match &self.hdr {
+            Some(hdr) => format!(
+                "HDR: {}, {}/{} nits",
+                match hdr.output {
+                    hdr::Output::Pq => "HDR10 (PQ)",
+                    hdr::Output::ScRgb => "scRGB",
+                },
+                hdr.paper_white.round(),
+                hdr.peak.round()
+            ),
+            None => "HDR: not offered by this display".into(),
+        }
+    }
     /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
     pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32) {
