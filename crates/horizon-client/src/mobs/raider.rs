@@ -46,6 +46,9 @@ pub struct State {
     /// Banners with no path to them, and until when (game time):
     /// `unreachableBannerCache`.
     pub unreachable_banners: Vec<(u32, i64)>,
+    /// `PathfindToRaidGoal.tick` ran its 20 tick recruitment: the game
+    /// recruits the raiders around this one.
+    pub recruit_due: bool,
     /// Beds around the raid's centre.
     pub homes: Option<std::sync::Arc<Vec<[i32; 3]>>>,
     /// A ravager carrying a raider, set every tick from `Extra::rider`.
@@ -105,6 +108,10 @@ pub fn state(m: &Mob) -> Option<&State> {
 pub fn state_mut(m: &mut Mob) -> &mut State {
     m.extra.raider.get_or_insert_with(Box::default)
 }
+/// `Raider.getCurrentRaid() != null`.
+pub fn in_raid(m: &Mob) -> bool {
+    state(m).is_some_and(|s| s.raid_id.is_some())
+}
 pub fn has_active_raid(m: &Mob) -> bool {
     state(m).is_some_and(|s| s.active_raid)
 }
@@ -122,7 +129,7 @@ pub fn register(m: &mut Mob) {
     m.extra.raider = Some(Box::default());
     m.ai.goals.add(4, LongDistancePatrol::new(0.7, 0.595));
     m.ai.goals.add(1, ObtainBanner::default());
-    m.ai.goals.add(3, PathfindToRaid);
+    m.ai.goals.add(3, PathfindToRaid::default());
     m.ai.goals.add(4, MoveThroughVillage::new(1.05, 1.0));
     m.ai.goals.add(5, Celebration);
 }
@@ -379,9 +386,11 @@ impl Goal for ObtainBanner {
 }
 
 /// `PathfindToRaidGoal`: outside the village, head for the raid's centre in
-/// hops of up to 15 blocks.
-#[derive(Clone, Debug)]
-pub struct PathfindToRaid;
+/// hops of up to 15 blocks, recruiting nearby raiders every 20 ticks.
+#[derive(Clone, Debug, Default)]
+pub struct PathfindToRaid {
+    recruitment_tick: i32,
+}
 impl PathfindToRaid {
     fn valid(s: &State) -> bool {
         s.active_raid && !s.raid_over && !s.in_village
@@ -402,6 +411,12 @@ impl Goal for PathfindToRaid {
         let Some(c) = state(m).map(|s| s.raid_center) else {
             return;
         };
+        if m.age as i32 > self.recruitment_tick {
+            self.recruitment_tick = m.age as i32 + 20;
+            if let Some(s) = m.extra.raider.as_deref_mut() {
+                s.recruit_due = true;
+            }
+        }
         if m.ai.nav.is_done() {
             let to = [
                 f64::from(c[0]) + 0.5,

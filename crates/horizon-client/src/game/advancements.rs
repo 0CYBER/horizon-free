@@ -876,6 +876,35 @@ impl Game<'_> {
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
+    /// `ConstructBeaconTrigger`: the pyramid levels of the new beacon.
+    pub(super) fn trigger_construct_beacon(&mut self, levels: i32) {
+        let me = self.player_entity();
+        self.trigger("minecraft:construct_beacon", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w) && adv::range_i(&c["level"], i64::from(levels))
+        });
+    }
+    /// `EnchantedItemTrigger`: the enchanted item and the levels it cost.
+    pub(super) fn trigger_enchanted_item(&mut self, stack: &ItemStack, levels: i32) {
+        let me = self.player_entity();
+        let it = item_view(stack);
+        self.trigger("minecraft:enchanted_item", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::item(&c["item"], &it, w)
+                && adv::range_i(&c["levels"], i64::from(levels))
+        });
+    }
     /// `BrewedPotionTrigger`: the potion contents of a stack taken from a
     /// brewing stand.
     pub(super) fn trigger_brewed_potion(&mut self, stack: &ItemStack) {

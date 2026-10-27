@@ -147,9 +147,9 @@ class Render(unittest.TestCase):
         self.assertIn("## Recently shipped", text)
         self.assertNotIn("## Later", text)
         self.assertIn("- **Fast**: Faster.", text)
-        self.assertIn("Multiply, not divide ([#10](https://github.com/ludovic111/horizon/issues/10)).", text)
+        self.assertIn("Multiply, not divide ([#10](https://github.com/horizon-rust/horizon/issues/10)).", text)
         # A link the technical text already gives isn't repeated; the others are listed after it.
-        self.assertIn("More: [#12](https://github.com/ludovic111/horizon/issues/12)", text)
+        self.assertIn("More: [#12](https://github.com/horizon-rust/horizon/issues/12)", text)
         self.assertIn("- **Old** (v0.2.1): Done.", text)
 
 
