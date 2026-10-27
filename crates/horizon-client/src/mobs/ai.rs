@@ -538,14 +538,19 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     m.first_tick = false;
     if m.alive() {
-        // LivingEntity.baseTick: suffocation inside full blocks.
+        // LivingEntity.baseTick: suffocation inside full blocks. Entity.isInWall
+        // is false under noPhysics, which Vex.tick holds while it ticks.
         let (ex, ey, ez) = (
             m.position.x.floor() as i32,
             m.eye_y().floor() as i32,
             m.position.z.floor() as i32,
         );
         let at_eye = w.facts.get(w.world.block(ex, ey, ez));
-        if at_eye.full_collision && at_eye.solid_render && m.width() < 1.0 {
+        if at_eye.full_collision
+            && at_eye.solid_render
+            && m.width() < 1.0
+            && m.species() != Species::Vex
+        {
             m.damage(1.0, Damage::of(DamageKind::InWall));
         }
         // Air supply and drowning (WaterAnimal.handleAirSupply for aquatic mobs).
