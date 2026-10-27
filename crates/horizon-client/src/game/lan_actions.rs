@@ -1716,9 +1716,21 @@ impl Game<'_> {
         if self.look_at_entity(host, gi, id, None).is_none() {
             return;
         }
-        self.as_guest(host, conn, |g| {
-            g.attack();
-        });
+        // A mace's smash sets the attacker's velocity and sends it at once, before the
+        // Wind Burst's push (MaceItem.hurtEnemy, then the post-attack effects).
+        let sent = self
+            .as_guest(host, conn, |g| {
+                let marked = g
+                    .player
+                    .as_mut()
+                    .is_some_and(|p| std::mem::take(&mut p.health.sync_velocity));
+                g.attack();
+                let p = g.player.as_mut()?;
+                let sent = std::mem::replace(&mut p.health.sync_velocity, marked);
+                sent.then_some(p.velocity)
+            })
+            .flatten();
+        self.send_guest_motion(host, conn, sent);
         // The mob now answers to this guest (game/lan_mobs.rs).
         if let Ok(id) = u32::try_from(id) {
             host.mob_players.insert(id, conn);
