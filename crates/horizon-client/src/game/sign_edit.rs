@@ -20,8 +20,8 @@ pub(super) struct SignEditor {
     pub line: usize,
     /// The line being edited (`AbstractSignEditScreen`'s text field).
     edit: EditBox,
-    /// `AbstractSignEditScreen.messages`: the lines when it opened, sent if
-    /// the sign is gone by the time the editor closes.
+    /// `AbstractSignEditScreen.messages`: the side's lines as edited, sent
+    /// when the editor closes, even if the sign is gone by then.
     lines: [String; 4],
 }
 
@@ -61,14 +61,9 @@ impl Game<'_> {
     pub(super) fn close_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
             if self.remote.is_some() {
-                let lines = match self.world.block_entities.get(&edit.pos) {
-                    Some(BlockEntity::Sign(sign)) if edit.front => sign.front.lines.clone(),
-                    Some(BlockEntity::Sign(sign)) => sign.back.lines.clone(),
-                    _ => edit.lines,
-                };
                 self.send(S::SignUpdate(play::SignUpdate {
                     pos: [edit.pos.0, edit.pos.1, edit.pos.2],
-                    lines,
+                    lines: edit.lines,
                     front: edit.front,
                 }));
             } else {
@@ -219,7 +214,8 @@ impl Game<'_> {
             edit.edit.set_value(&text);
         }
     }
-    /// The box's text onto the sign, when it still fits the line.
+    /// The box's text onto the editor's lines and the sign
+    /// (`AbstractSignEditScreen.setMessage`), when it still fits the line.
     fn sign_write(&mut self) {
         let Some(edit) = self.sign_edit.as_ref() else {
             return;
@@ -227,6 +223,9 @@ impl Game<'_> {
         let (pos, front, line, value) = (edit.pos, edit.front, edit.line, edit.edit.value.clone());
         if !self.sign_fits(&value) {
             return;
+        }
+        if let Some(edit) = self.sign_edit.as_mut() {
+            edit.lines[line].clone_from(&value);
         }
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&pos) else {
             return;
