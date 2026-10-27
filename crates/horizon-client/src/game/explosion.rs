@@ -598,6 +598,11 @@ impl Game<'_> {
         }
         let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
+        // CreakingHeartBlock.onExplosionHit: its creaking dies (no
+        // experience, as Horizon does not track a TNT's owner).
+        if &*name == "minecraft:creaking_heart" {
+            self.creaking_heart_broken(pos, false);
+        }
         // Block.onExplosionHit: the drops copy from the block entity, which
         // then spills its contents as the block turns to air.
         let key = (pos[0], pos[1], pos[2]);
