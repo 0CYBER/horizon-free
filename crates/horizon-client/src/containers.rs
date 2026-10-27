@@ -190,6 +190,9 @@ impl Skull {
 #[derive(Clone, Debug)]
 pub struct SkullSkin {
     pub download: Option<(String, String)>,
+    /// `ResolvableProfile.nameOrId` when the profile is `Dynamic` (a name or
+    /// an id only): the key `skins::Resolver` resolves it by.
+    pub dynamic: Option<crate::skins::NameOrId>,
     pub fallback: &'static str,
 }
 impl SkullSkin {
@@ -198,10 +201,21 @@ impl SkullSkin {
             let location = crate::skins::skin_location(&crate::skins::texture_hash(&url)?);
             Some((url, location))
         });
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services when the skull is drawn.
+        let dynamic = crate::skins::dynamic_nbt(profile);
         // DefaultPlayerSkin.get(id), or getDefaultSkin (slim steve) without an id.
         let fallback = crate::skins::profile_uuid_nbt(profile)
+            .or_else(|| {
+                crate::skins::nbt_text(profile.get("name"))
+                    .map(|name| horizon_protocol::crypto::offline_uuid(&name))
+            })
             .map_or("entity/player/slim/steve", crate::tab_list::default_skin);
-        Self { download, fallback }
+        Self {
+            download,
+            dynamic,
+            fallback,
+        }
     }
 }
 /// The skull and head blocks (`SkullBlock`, `WallSkullBlock`): every
@@ -728,6 +742,18 @@ impl Furnace {
                                     .recipes_used
                                     .entry(recipe_used_key(&recipe.id))
                                     .or_insert(0) += 1;
+                                // AbstractFurnaceBlockEntity.burn: drying a wet sponge fills
+                                // the bucket in the fuel slot.
+                                if self.items[0]
+                                    .as_ref()
+                                    .is_some_and(|i| &*i.item == "minecraft:wet_sponge")
+                                    && self.items[1]
+                                        .as_ref()
+                                        .is_some_and(|f| &*f.item == "minecraft:bucket")
+                                {
+                                    self.items[1] =
+                                        Some(ItemStack::new("minecraft:water_bucket", 1));
+                                }
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {

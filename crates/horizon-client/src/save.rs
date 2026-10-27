@@ -2742,7 +2742,7 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
-    /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
+    /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
@@ -3022,7 +3022,7 @@ impl Level {
                         get("duration").unwrap_or(0) as i32,
                         get("amplifier").unwrap_or(0) as i32,
                         get("ambient").unwrap_or(0) != 0,
-                        get("show_icon").is_none_or(|v| v != 0),
+                        get("show_particles").is_none_or(|v| v != 0),
                     ))
                 })
                 .collect(),
@@ -3124,14 +3124,14 @@ impl Level {
                 Tag::List(
                     self.active_effects
                         .iter()
-                        .map(|(id, duration, amplifier, ambient, icon)| {
+                        .map(|(id, duration, amplifier, ambient, particles)| {
                             Tag::compound([
                                 ("id", string(id)),
                                 ("duration", Tag::Int(*duration)),
                                 ("amplifier", Tag::Byte(*amplifier as i8)),
                                 ("ambient", Tag::Byte(i8::from(*ambient))),
-                                ("show_particles", Tag::Byte(1)),
-                                ("show_icon", Tag::Byte(i8::from(*icon))),
+                                ("show_particles", Tag::Byte(i8::from(*particles))),
+                                ("show_icon", Tag::Byte(i8::from(*particles))),
                             ])
                         })
                         .collect(),
@@ -3819,6 +3819,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn is_decorated(&self, proto: &crate::streaming::Proto) -> bool {
         self.inner.is_decorated(proto)
+    }
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        self.inner.light_view(proto)
     }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save

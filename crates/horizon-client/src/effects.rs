@@ -180,13 +180,14 @@ impl PlayerEffects {
         self.list.clear();
     }
     /// The effects of a saved player (`Player.active_effects`: id,
-    /// duration, amplifier, ambient, visible).
+    /// duration, amplifier, ambient, particles visible).
     pub fn from_saved(saved: &[(String, i32, i32, bool, bool)]) -> Self {
         let mut effects = Self::default();
-        for (id, duration, amplifier, ambient, _) in saved {
+        for (id, duration, amplifier, ambient, particles) in saved {
             if let Some(def) = brewing::effect(id) {
                 let mut e = EffectInstance::new(def.id, *duration, *amplifier);
                 e.ambient = *ambient;
+                e.visible = *particles;
                 effects.add(e);
             }
         }
@@ -214,8 +215,9 @@ impl PlayerEffects {
     }
     /// `LivingEntity.tickEffects` (server part) with the omens' effect ticks:
     /// `omen` answers `BadOmenMobEffect` (every tick) and `RaidOmenMobEffect`
-    /// (on its last tick). Returns the actions to apply, in order, and
-    /// whether Raid Omen was newly added.
+    /// (on its last tick); `absorption_empty` is `AbsorptionMobEffect`'s
+    /// answer: the effect ends once the absorption is used up. Returns the
+    /// actions to apply, in order, and whether Raid Omen was newly added.
     ///
     /// Bad Omen turning into a new Raid Omen adds an entry to the map being
     /// iterated: vanilla's iterator then throws a
@@ -225,6 +227,7 @@ impl PlayerEffects {
     pub fn tick_with(
         &mut self,
         omen: &mut dyn FnMut(&EffectInstance) -> OmenTick,
+        absorption_empty: bool,
     ) -> (Vec<EffectAction>, bool) {
         self.tick_count = self.tick_count.wrapping_add(1);
         let mut actions = Vec::new();
@@ -247,6 +250,7 @@ impl PlayerEffects {
             let answer = match e.id {
                 "bad_omen" => omen(e),
                 "raid_omen" if t == 1 => omen(e),
+                "absorption" if absorption_empty => OmenTick::Remove,
                 _ => OmenTick::Continue,
             };
             match answer {
@@ -466,13 +470,13 @@ mod tests {
         };
         // The first tick adds Raid Omen and stops there (the iterator's
         // ConcurrentModificationException): Bad Omen and Speed stay as they were.
-        let (_, added) = fx.tick_with(&mut convert);
+        let (_, added) = fx.tick_with(&mut convert, false);
         assert!(added);
         assert_eq!(fx.get("bad_omen").unwrap().duration, 100);
         assert_eq!(fx.get("speed").unwrap().duration, 50);
         assert_eq!(fx.get("raid_omen").unwrap().duration, 600);
         // The second refreshes Raid Omen and drops Bad Omen.
-        let (_, added) = fx.tick_with(&mut convert);
+        let (_, added) = fx.tick_with(&mut convert, false);
         assert!(!added);
         assert!(fx.get("bad_omen").is_none());
         assert_eq!(fx.get("speed").unwrap().duration, 49);
@@ -487,9 +491,9 @@ mod tests {
             seen.push(e.duration);
             OmenTick::Remove
         };
-        fx.tick_with(&mut watch);
+        fx.tick_with(&mut watch, false);
         assert!(fx.get("raid_omen").is_some());
-        fx.tick_with(&mut watch);
+        fx.tick_with(&mut watch, false);
         assert!(fx.get("raid_omen").is_none());
         assert_eq!(seen, vec![1]);
     }
