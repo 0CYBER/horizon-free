@@ -84,15 +84,63 @@ struct Column<'a, 'r, B: TerrainBlockStates> {
     z: i32,
     min: i32,
     max: i32,
+    /// Resolved block ids for `low..=high`, reused across columns and updated by
+    /// `set_block`. The surface walk reads a column twice (top to bottom, then the
+    /// stone-depth look-behind); the palette decode is paid once per column.
+    cache: &'a mut Vec<BlockStateId>,
+    low: i32,
+    high: i32,
+}
+impl<'a, 'r, B: TerrainBlockStates> Column<'a, 'r, B> {
+    fn new(
+        chunk: &'a mut TerrainChunk<'r, B>,
+        x: i32,
+        z: i32,
+        min: i32,
+        max: i32,
+        top: i32,
+        cache: &'a mut Vec<BlockStateId>,
+    ) -> Self {
+        let chunk_min = chunk.min_y();
+        let chunk_max = chunk_min.wrapping_add(chunk.height()).wrapping_sub(1);
+        let high = top.min(chunk_max);
+        let low = min.max(chunk_min);
+        cache.clear();
+        if high >= low {
+            cache.reserve((high - low + 1) as usize);
+            for y in low..=high {
+                cache.push(chunk.block(x, y, z));
+            }
+        }
+        Self {
+            chunk,
+            x,
+            z,
+            min,
+            max,
+            cache,
+            low,
+            high,
+        }
+    }
+    fn cache_index(&self, y: i32) -> Option<usize> {
+        (y >= self.low && y <= self.high).then(|| (y - self.low) as usize)
+    }
 }
 impl<B: TerrainBlockStates> MaterialColumn for Column<'_, '_, B> {
     type Error = SurfaceError;
     fn block(&mut self, y: i32) -> Result<BlockStateId, SurfaceError> {
-        Ok(self.chunk.block(self.x, y, self.z))
+        Ok(match self.cache_index(y) {
+            Some(index) => self.cache[index],
+            None => self.chunk.block(self.x, y, self.z),
+        })
     }
     fn set_block(&mut self, y: i32, state: BlockStateId) -> Result<(), SurfaceError> {
         if y >= self.min && y <= self.max {
             self.chunk.set_block_worldgen(self.x, y, self.z, state)?;
+            if let Some(index) = self.cache_index(y) {
+                self.cache[index] = state;
+            }
             if self.chunk.block_properties(state).has_fluid() {
                 self.chunk.mark_postprocessing(self.x, y, self.z);
             }
@@ -129,11 +177,6 @@ fn tick(remaining: &mut usize) -> Result<(), SurfaceError> {
     Ok(())
 }
 
-/// Evaluate the replacement surface under a carved block. Each call binds a
-/// fresh one-cell material context, without restricting possible biomes, and
-/// uses one stone block above/below. The caller applies the returned state.
-/// Required heightmaps may be primed; block values are not changed here.
-/// The caller's density context is retained on successful and failed evaluation.
 /// Apply a compiled top-material rule at one position with a worker the caller
 /// built once. Carvers restore many cells per pass, so the rule is compiled and
 /// the density bindings created once instead of per restored block.
@@ -169,6 +212,11 @@ pub(crate) fn top_material_cell<R: RandomSource, S: MaterialSurfaceQueries, B: T
     worker.try_apply(rule, position).map_err(SurfaceError::from)
 }
 
+/// Evaluate the replacement surface under a carved block. Each call binds a
+/// fresh one-cell material context, without restricting possible biomes, and
+/// uses one stone block above/below. The caller applies the returned state.
+/// Required heightmaps may be primed; block values are not changed here.
+/// The caller's density context is retained on successful and failed evaluation.
 pub fn top_material<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockStates>(
     chunk: &mut TerrainChunk<'_, B>,
     rule: MaterialRule,
@@ -265,6 +313,8 @@ where
     let variants = worker.surface_variants(rule)?;
     let cx = chunk.position().x.wrapping_shl(4);
     let cz = chunk.position().z.wrapping_shl(4);
+    // One block-id buffer, refilled per column and kept across columns.
+    let mut cache = Vec::new();
     for lx in 0..16 {
         for lz in 0..16 {
             let x = cx.wrapping_add(lx);
@@ -275,13 +325,15 @@ where
                 .ok_or(MaterialRuleError::MissingBiome)?;
             if biome.as_ref() == "minecraft:eroded_badlands" {
                 extensions.eroded_badlands(
-                    &mut Column {
+                    &mut Column::new(
                         chunk,
                         x,
                         z,
-                        min: write_min_y,
-                        max: write_max_y,
-                    },
+                        write_min_y,
+                        write_max_y,
+                        original_top,
+                        &mut cache,
+                    ),
                     x,
                     z,
                     original_top,
@@ -305,13 +357,15 @@ where
             let mut bottom = i32::MAX;
             let mut y = top;
             let mut budget = 1 << 20;
-            let mut column = Column {
+            let mut column = Column::new(
                 chunk,
                 x,
                 z,
-                min: write_min_y,
-                max: write_max_y,
-            };
+                write_min_y,
+                write_max_y,
+                top,
+                &mut cache,
+            );
             while y >= min {
                 tick(&mut budget)?;
                 let state = column.block(y)?;
