@@ -378,7 +378,12 @@ pub fn play_step(
         m.ai.steps.gallop += 1;
         let count = m.ai.steps.gallop;
         if count > 5 && count % 3 == 0 {
-            events.push(MobEvent::Sound("entity.horse.gallop", at, volume * 0.15, pitch));
+            events.push(MobEvent::Sound(
+                "entity.horse.gallop",
+                at,
+                volume * 0.15,
+                pitch,
+            ));
             // Horse.playGallopSound: now and then it breathes too.
             if m.species() == Species::Horse && m.random.next_int_bound(10).unwrap_or(1) == 0 {
                 let breathe = if baby {
@@ -389,10 +394,20 @@ pub fn play_step(
                 events.push(MobEvent::Sound(breathe, at, volume * 0.6, pitch));
             }
         } else if count <= 5 {
-            events.push(MobEvent::Sound("entity.horse.step_wood", at, volume * 0.15, pitch));
+            events.push(MobEvent::Sound(
+                "entity.horse.step_wood",
+                at,
+                volume * 0.15,
+                pitch,
+            ));
         }
     } else if is_wood_sound_type(sound_type) {
-        events.push(MobEvent::Sound("entity.horse.step_wood", at, volume * 0.15, pitch));
+        events.push(MobEvent::Sound(
+            "entity.horse.step_wood",
+            at,
+            volume * 0.15,
+            pitch,
+        ));
     } else {
         let step = if baby {
             "entity.baby_horse.step"
@@ -405,8 +420,14 @@ pub fn play_step(
 /// `AbstractHorse.isWoodSoundType`: WOOD, NETHER_WOOD, STEM, CHERRY_WOOD and
 /// BAMBOO_WOOD (not HARD_CROP, which only shares WOOD's step).
 fn is_wood_sound_type(sounds: &horizon_items::blocks::Sounds) -> bool {
-    let step = sounds.step.strip_prefix("minecraft:").unwrap_or(&sounds.step);
-    let place = sounds.place.strip_prefix("minecraft:").unwrap_or(&sounds.place);
+    let step = sounds
+        .step
+        .strip_prefix("minecraft:")
+        .unwrap_or(&sounds.step);
+    let place = sounds
+        .place
+        .strip_prefix("minecraft:")
+        .unwrap_or(&sounds.place);
     match step {
         "block.wood.step" => place == "block.wood.place",
         "block.nether_wood.step"
