@@ -930,6 +930,15 @@ impl Game<'_> {
             self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
         }
     }
+    /// Adds a projectile, giving it an id from the entity counter
+    /// (`Entity.id`, the same counter as the rest) when it has none.
+    pub(super) fn add_projectile(&mut self, mut p: horizon_client::projectiles::Projectile) {
+        if p.id == 0 {
+            self.next_entity += 1;
+            p.id = self.next_entity;
+        }
+        self.creatures.projectiles.push(p);
+    }
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
@@ -1007,6 +1016,21 @@ impl Game<'_> {
                         }
                     }
                 },
+                MobEvent::Shift { target, delta } => {
+                    let d = Vec3::new(delta[0], delta[1], delta[2]);
+                    match target {
+                        Who::Player => {
+                            if let Some(p) = self.player.as_mut() {
+                                p.position = p.position.add_vector(d);
+                            }
+                        }
+                        Who::Mob(id) => {
+                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                                m.position = m.position.add_vector(d);
+                            }
+                        }
+                    }
+                }
                 MobEvent::Wololo { mob } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         // DyeColor.RED.
@@ -1146,7 +1170,7 @@ impl Game<'_> {
                         let v = p.velocity;
                         self.particles.llama_spit_burst(at, [v.x, v.y, v.z]);
                     }
-                    self.creatures.projectiles.push(p);
+                    self.add_projectile(p);
                     self.projectile_event("minecraft:projectile_shoot", owner, at);
                 }
                 MobEvent::Spawn(mut m) => {
@@ -2286,7 +2310,7 @@ impl Game<'_> {
             }
         }
         if keep {
-            self.creatures.projectiles.push(arrow);
+            self.add_projectile(arrow);
         }
     }
     /// `TargetBlock.onProjectileHit`: a target block takes its power from
@@ -3336,7 +3360,7 @@ impl Game<'_> {
             velocity,
             on_ground,
         );
-        self.creatures.projectiles.push(proj);
+        self.add_projectile(proj);
         self.player_projectile_shot();
         // ItemStack.use's applyAfterUseComponentSideEffects: the pearl's
         // second is the `use_cooldown` component, as for any thrown item.
@@ -3433,7 +3457,7 @@ impl Game<'_> {
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        let scale = f64::from(self.settings.entity_distance);
+        let scale = self.view_scale();
         for mob in &self.mobs {
             let entity_start = out.len();
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws.
@@ -3442,9 +3466,16 @@ impl Game<'_> {
             }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
             // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's
-            // mean edge, scaled by the entity distance option.
+            // mean edge, scaled by the view scale. RemotePlayer's box counts
+            // ten times.
             let (w, h, _) = mob.dims();
-            let range = (w + h + w) / 3.0 * 64.0 * scale;
+            let edge = (w + h + w) / 3.0
+                * if &*mob.kind.id == "minecraft:player" {
+                    10.0
+                } else {
+                    1.0
+                };
+            let range = edge * 64.0 * scale;
             if d.length_squared() >= range * range {
                 continue;
             }
