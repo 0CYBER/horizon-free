@@ -980,6 +980,21 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::Shift { target, delta } => {
+                    let d = Vec3::new(delta[0], delta[1], delta[2]);
+                    match target {
+                        Who::Player => {
+                            if let Some(p) = self.player.as_mut() {
+                                p.position = p.position.add_vector(d);
+                            }
+                        }
+                        Who::Mob(id) => {
+                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                                m.position = m.position.add_vector(d);
+                            }
+                        }
+                    }
+                }
                 MobEvent::Wololo { mob } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         // DyeColor.RED.
@@ -1690,7 +1705,7 @@ impl Game<'_> {
         kind: &str,
         cause: Option<u32>,
     ) {
-        self.hit_player(amount, from, kind, Some(cause));
+        self.hurt_player_from(amount, Some(from), kind, Some(cause));
     }
     pub(super) fn mob_hits_player(
         &mut self,
@@ -1698,16 +1713,17 @@ impl Game<'_> {
         from: [f64; 3],
         damage_type: &str,
     ) -> bool {
-        self.hit_player(amount, from, damage_type, None)
+        self.hurt_player_from(amount, Some(from), damage_type, None)
     }
-    /// `known_cause` is the source's causing mob when the caller knows it
-    /// (`Some(None)`: none); `None` takes the mob nearest to `from`.
-    fn hit_player(
+    /// `hurtServer` on the player. `from` is the source's position (none: no
+    /// direction), `known`: the causing mob when it is given (`/damage`),
+    /// else the melee attacker is the mob nearest to `from`.
+    pub(super) fn hurt_player_from(
         &mut self,
         amount: f32,
-        from: [f64; 3],
+        from: Option<[f64; 3]>,
         damage_type: &str,
-        known_cause: Option<Option<u32>>,
+        known: Option<Option<u32>>,
     ) -> bool {
         // ServerPlayer.canHarmPlayer refused another player's projectile.
         if self.creative || self.combat.refuse_player_hit {
@@ -1720,12 +1736,14 @@ impl Game<'_> {
             .damage_tags
             .get("minecraft:is_projectile")
             .is_some_and(|t| t.contains(damage_type));
-        let blocking = self.player_blocking(Some(from), damage_type, false);
+        let blocking = self.player_blocking(from, damage_type, false);
         let raised = blocking.is_some();
         // Melee: the attacker stands at `from` (another player's hit has no mob behind it).
-        let attacker = known_cause.unwrap_or_else(|| {
-            (!projectile && damage_type != "minecraft:player_attack")
-                .then(|| {
+        let attacker = match known {
+            Some(known) => known,
+            None => from
+                .filter(|_| !projectile && damage_type != "minecraft:player_attack")
+                .and_then(|from| {
                     self.mobs
                         .iter()
                         .filter(|m| m.alive())
@@ -1736,9 +1754,8 @@ impl Game<'_> {
                             d(a).total_cmp(&d(b))
                         })
                         .map(|m| m.id)
-                })
-                .flatten()
-        });
+                }),
+        };
         // The causing entity for the death message.
         let owner = self.combat.projectile_owner.take();
         if let Some(a) = attacker.or(owner) {
@@ -1766,7 +1783,10 @@ impl Game<'_> {
             // LivingEntity.hurtServer's dealDefaultKnockback: not inside the
             // hurt cooldown (a stronger hit there only adds its difference).
             if o.knockback {
-                let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
+                // No source position: a random direction.
+                let (xd, zd) = from.map_or((0.0, 0.0), |from| {
+                    (from[0] - player.position.x, from[2] - player.position.z)
+                });
                 self.knock_back_player(f64::from(0.4_f32), xd, zd);
                 if let Some(p) = self.player.as_mut()
                     && let Some(r) = p.hurt_log.last_mut()
@@ -3401,7 +3421,7 @@ impl Game<'_> {
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        let scale = f64::from(self.settings.entity_distance);
+        let scale = self.view_scale();
         for mob in &self.mobs {
             let entity_start = out.len();
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws.
@@ -3410,9 +3430,16 @@ impl Game<'_> {
             }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
             // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's
-            // mean edge, scaled by the entity distance option.
+            // mean edge, scaled by the view scale. RemotePlayer's box counts
+            // ten times.
             let (w, h, _) = mob.dims();
-            let range = (w + h + w) / 3.0 * 64.0 * scale;
+            let edge = (w + h + w) / 3.0
+                * if &*mob.kind.id == "minecraft:player" {
+                    10.0
+                } else {
+                    1.0
+                };
+            let range = edge * 64.0 * scale;
             if d.length_squared() >= range * range {
                 continue;
             }

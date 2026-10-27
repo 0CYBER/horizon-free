@@ -511,10 +511,10 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
-    /// HDR output (Horizon setting): `Some` while the swapchain is scRGB.
+    /// HDR output (Horizon setting): `Some` while the swapchain is HDR.
     hdr: Option<hdr::Hdr>,
-    /// Whether the window's surface can present scRGB.
-    hdr_capable: bool,
+    /// The HDR output the window's surface can present.
+    hdr_output: Option<hdr::Output>,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
@@ -1071,7 +1071,7 @@ impl Renderer {
         let info = adapter.get_info();
         crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
-        let (config, present_modes, hdr_capable) = if let Some(surface) = &surface {
+        let (config, present_modes, hdr_output) = if let Some(surface) = &surface {
             let mut config = surface
                 .get_default_config(&adapter, size.width.max(1), size.height.max(1))
                 .ok_or("surface has no supported configuration")?;
@@ -1099,7 +1099,7 @@ impl Renderer {
                 ));
             }
             surface.configure(&device, &config);
-            (config, caps.present_modes.clone(), hdr::supported(&caps))
+            (config, caps.present_modes.clone(), hdr::output(&caps))
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
             let config = wgpu::SurfaceConfiguration {
@@ -1113,7 +1113,7 @@ impl Renderer {
                 view_formats: vec![format],
                 color_space: wgpu::SurfaceColorSpace::default(),
             };
-            (config, Vec::new(), false)
+            (config, Vec::new(), None)
         };
         let offscreen = surface
             .is_none()
@@ -1953,22 +1953,23 @@ impl Renderer {
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &entity_shader,
-                entry_point: Some("fs_celestial"),
+                entry_point: Some("fs_sky_celestial"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format.remove_srgb_suffix(),
-                    // RenderPipelines.CELESTIAL: additive (src alpha, one). The
-                    // alpha goes to 0: HDR output (hdr.wgsl) lets the sun and
-                    // moon shine; nothing else reads the frame's alpha.
+                    // RenderPipelines.CELESTIAL: additive (src alpha, one), with
+                    // the colour premultiplied in fs_sky_celestial. Its alpha is
+                    // how much a texel adds: HDR output (hdr.wgsl) lets the sun's
+                    // and moon's discs shine; nothing else reads the frame's alpha.
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            src_factor: wgpu::BlendFactor::One,
                             dst_factor: wgpu::BlendFactor::One,
                             operation: wgpu::BlendOperation::Add,
                         },
                         alpha: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                             operation: wgpu::BlendOperation::Add,
                         },
                     }),
@@ -2456,7 +2457,7 @@ impl Renderer {
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             hdr: None,
-            hdr_capable,
+            hdr_output,
             pack_post: None,
             native: None,
             pass_timing: pack_timing::PassTiming::logging(),
@@ -2990,24 +2991,24 @@ impl Renderer {
         }
     }
     /// The swapchain's configuration: `config` (what every pipeline draws in), or
-    /// scRGB while HDR output is on.
+    /// HDR10 or scRGB while HDR output is on.
     fn surface_config(&self) -> wgpu::SurfaceConfiguration {
         let mut config = self.config.clone();
-        if self.hdr.is_some() {
-            config.format = hdr::FORMAT;
-            config.view_formats = vec![hdr::FORMAT];
-            config.color_space = hdr::COLOR_SPACE;
+        if let Some(hdr) = &self.hdr {
+            config.format = hdr.output.format();
+            config.view_formats = vec![hdr.output.format()];
+            config.color_space = hdr.output.color_space();
             config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         }
         config
     }
-    /// HDR output (Horizon setting): scRGB at `paper_white` nits, the world's
+    /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
     pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32) {
-        let on = on && self.hdr_capable && self.surface.is_some();
-        if on != self.hdr.is_some() {
-            self.hdr =
-                on.then(|| hdr::Hdr::new(&self.device, self.config.format.remove_srgb_suffix()));
+        let output = self.hdr_output.filter(|_| on && self.surface.is_some());
+        if output.is_some() != self.hdr.is_some() {
+            let format = self.config.format.remove_srgb_suffix();
+            self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
         }
         if let Some(hdr) = &mut self.hdr

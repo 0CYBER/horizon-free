@@ -705,6 +705,9 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     // serverAiStep has no goals, so it only falls and is pushed.
     let immobile = (m.species() == Species::Ravager && super::ravager::immobile(m))
         || m.species() == Species::Mannequin;
+    if m.species() == Species::Piglin && m.alive() {
+        super::piglin::celebrate(m, w);
+    }
     if m.alive() && !immobile {
         server_ai_step(m, w, level_random, events);
     } else {
