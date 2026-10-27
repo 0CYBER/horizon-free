@@ -347,7 +347,17 @@ def bullet(pr):
 def known_issues(path=ROOT / "docs" / "known-issues.md"):
     if not path.exists():
         return []
-    return [line.rstrip() for line in path.read_text().splitlines() if line.startswith("- ")]
+    issues = []
+    in_bullet = False
+    for line in path.read_text().splitlines():
+        if line.startswith("- "):
+            issues.append(line.rstrip())
+            in_bullet = True
+        elif in_bullet and line.startswith((" ", "\t")) and line.strip():
+            issues[-1] += " " + line.strip()
+        else:
+            in_bullet = False
+    return issues
 
 
 def line_intro(kind, version, previous):

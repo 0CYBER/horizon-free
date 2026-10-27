@@ -48,6 +48,7 @@ fn maker(root: &Path) -> impl Fn(&str) -> Result<Instance, String> + '_ {
             version: None,
             played: Duration::ZERO,
             last_played: None,
+            launch: Default::default(),
         })
     }
 }

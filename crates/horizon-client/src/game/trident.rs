@@ -21,7 +21,7 @@ pub(super) struct ThrownTrident {
     pub id: u32,
     pub(super) stack: ItemStack,
     pub(super) position: Vec3,
-    previous: Vec3,
+    pub(super) previous: Vec3,
     pub(super) velocity: Vec3,
     pub(super) yaw: f32,
     pub(super) pitch: f32,
@@ -112,7 +112,7 @@ impl Game<'_> {
         }
         true
     }
-    fn in_water_or_rain(&self) -> bool {
+    fn in_water_or_rain(&mut self) -> bool {
         let Some(p) = &self.player else { return false };
         let (x, y, z) = (
             p.position.x.floor() as i32,
@@ -121,8 +121,8 @@ impl Game<'_> {
         );
         let water = self.res.facts().get(self.world.block(x, y, z)).fluid
             == horizon_client::blocks::Fluid::Water;
-        let sky = self.world.light(x, y + 1, z) >> 4 == 15;
-        water || (self.world.weather.raining && sky)
+        let (at, top) = (p.position, p.bounds().max_position().y);
+        water || self.in_rain(at, top)
     }
     /// The living entities a spinning player can touch this tick, for
     /// `LivingEntity.checkAutoSpinAttack` (none when not spinning).
@@ -495,7 +495,7 @@ impl Game<'_> {
         let range = 10.0
             * super::entity_culling::default_range(
                 glam::DVec3::splat(2.0 * HALF),
-                self.settings.entity_distance,
+                self.view_scale(),
             );
         for t in &self.tridents {
             // EntityRenderer.shouldRender; ThrownTridentRenderer grows the box by 1.5.

@@ -353,6 +353,7 @@ pub fn main() -> Result<()> {
                             horizon_world::food::Difficulty::Hard,
                         ][op["difficulty"].as_u64().unwrap() as usize],
                         natural_regeneration: op["regenerate"].as_bool().unwrap(),
+                        ..Default::default()
                     };
                 }
                 "food" => {
