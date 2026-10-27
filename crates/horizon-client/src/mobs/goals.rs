@@ -1778,7 +1778,7 @@ impl Goal for Tempt {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(p) = cx.w.player.clone() else { return };
-        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.kind.max_head_x_rot);
+        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.max_head_x_rot());
         m.look_at_speed(p.eye, y, x);
         if m.distance_sqr(p.position) < self.stop_distance * self.stop_distance {
             m.nav_stop();
@@ -1887,7 +1887,7 @@ impl Goal for Breed {
         let Some(p) = self.partner.and_then(|p| cx.w.seen(p)).cloned() else {
             return;
         };
-        let x = m.kind.max_head_x_rot;
+        let x = m.max_head_x_rot();
         m.look_at_speed([p.position.x, p.eye_y, p.position.z], 10.0, x);
         m.nav_move_to_entity(
             cx.w,
