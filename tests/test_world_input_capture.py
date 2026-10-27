@@ -55,7 +55,7 @@ class WorldInputCaptureTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_capture_lifecycle(self):
         source = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
-        mouse = (ROOT / "crates/horizon-client/src/mouse.rs").read_text(encoding="utf-8")
+        mouse = (ROOT / "crates/horizon-client-input/src/mouse.rs").read_text(encoding="utf-8")
         fixture = r'''
 use std::cell::Cell;
 #[derive(Clone, Copy, PartialEq)]
