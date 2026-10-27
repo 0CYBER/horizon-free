@@ -2067,6 +2067,10 @@ where
             self.router.get(RouterField::Erosion).as_ref(),
         );
         let mut biome_context = SamplerContext::cached();
+        // Void biomes are constant per End chunk (the source samples erosion at
+        // the chunk centre); cache them so a wide void view pays once per chunk
+        // rather than once per cell.
+        let mut void_biomes = std::collections::HashMap::new();
         for dz in 0..side {
             for dx in 0..side {
                 let (wx, wz) = (x + dx as i32 * width, z + dz as i32 * width);
@@ -2111,6 +2115,9 @@ where
                         }
                     }
                 }
+                // Void cells still need a biome: the End's small islands are
+                // features over the void, and their biome is 2D there.
+                let void_y = self.settings.noise_min_y + self.settings.noise_height / 2;
                 let biome = if let Some((height, _)) = top {
                     let name = resolver
                         .sample(
@@ -2121,8 +2128,21 @@ where
                     self.data
                         .biome_id(name)
                         .ok_or_else(|| resource("far biome"))?
+                } else if let Some(&biome) = void_biomes.get(&(wx >> 4, wz >> 4)) {
+                    biome
                 } else {
-                    BiomeId(0)
+                    let name = resolver
+                        .sample(
+                            &mut biome_context,
+                            self.zoom.quart_at_block(BlockPos::new(wx, void_y, wz)),
+                        )
+                        .map_err(stage("far biome"))?;
+                    let biome = self
+                        .data
+                        .biome_id(name)
+                        .ok_or_else(|| resource("far biome"))?;
+                    void_biomes.insert((wx >> 4, wz >> 4), biome);
+                    biome
                 };
                 geometry.push((top, water, below, spans, biome));
             }
@@ -2130,7 +2150,11 @@ where
         if geometry.iter().all(|column| column.0.is_none()) {
             return Ok(geometry
                 .into_iter()
-                .map(|(_, _, _, spans, _)| (None, spans))
+                .map(|(_, _, _, spans, biome)| LodColumn {
+                    surface: None,
+                    spans,
+                    biome,
+                })
                 .collect());
         }
         let volume =
@@ -2161,7 +2185,11 @@ where
                 z + (index / side) as i32 * width,
             );
             let Some((height, mut state)) = top else {
-                result.push((None, spans));
+                result.push(LodColumn {
+                    surface: None,
+                    spans,
+                    biome,
+                });
                 continue;
             };
             material.update_xz(wx, wz, 0, 0);
@@ -2198,15 +2226,16 @@ where
                 }
                 spans.splice(index..=index, replacement);
             }
-            result.push((
-                Some(SurfaceSample {
+            result.push(LodColumn {
+                surface: Some(SurfaceSample {
                     height,
                     state,
                     water,
                     biome,
                 }),
                 spans,
-            ));
+                biome,
+            });
         }
         Ok(result)
     }
@@ -2499,7 +2528,15 @@ pub struct SurfaceSample {
     pub biome: BiomeId,
 }
 
-pub type LodColumn = (Option<SurfaceSample>, Vec<(i32, i32, BlockStateId)>);
+/// A far column: its surface (if any) and material runs, with the biome at the
+/// sampled cell. Void cells carry their biome so far-terrain features that grow
+/// above nothing (the End's small islands) can be placed.
+#[derive(Clone, Debug)]
+pub struct LodColumn {
+    pub surface: Option<SurfaceSample>,
+    pub spans: Vec<(i32, i32, BlockStateId)>,
+    pub biome: BiomeId,
+}
 
 /// Per-thread generation state.
 pub struct GeneratorWorker {
@@ -2868,7 +2905,8 @@ mod tests {
             for x in 0..8 {
                 let wx = -1024 + x * 32;
                 let wz = z * 32;
-                let (surface, spans) = &direct[(z * 8 + x) as usize];
+                let column = &direct[(z * 8 + x) as usize];
+                let (surface, spans) = (&column.surface, &column.spans);
                 let expected = exact[(z * 8 + x) as usize].0;
                 if let (Some(surface), Some(expected)) = (surface, expected) {
                     assert!(
@@ -2898,9 +2936,9 @@ mod tests {
         let (surface, spans) = worker.surface_column(256, 0);
         assert!(surface.is_none());
         assert!(spans.is_empty());
-        let (surface, spans) = worker.lod_grid(256, 0, 32, 1).unwrap().pop().unwrap();
+        let column = worker.lod_grid(256, 0, 32, 1).unwrap().pop().unwrap();
         assert!(
-            surface.is_none() && spans.is_empty(),
+            column.surface.is_none() && column.spans.is_empty(),
             "direct sampling retains End void"
         );
     }

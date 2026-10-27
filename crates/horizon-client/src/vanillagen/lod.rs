@@ -20,7 +20,9 @@ use std::{
     thread,
 };
 
+mod islands;
 mod vegetation;
+use islands::EndIslands;
 use vegetation::Vegetation;
 const CACHE: usize = 1024;
 const REQUESTS: usize = 64;
@@ -297,6 +299,7 @@ pub(super) struct VanillaLodSampler {
     worker: GeneratorWorker,
     builder: Option<Builder>,
     vegetation: Arc<Vegetation>,
+    islands: EndIslands,
     cache: FxHashMap<(i32, i32), Arc<[Column; 256]>>,
     order: VecDeque<(i32, i32)>,
     details: Vec<LodDetail>,
@@ -310,11 +313,17 @@ impl VanillaLodSampler {
             &generator.biome_map,
             generator.seed,
         ));
+        let islands = EndIslands::new(
+            generator.generator.data(),
+            &generator.biome_map,
+            generator.seed,
+        );
         Self {
             generator,
             worker,
             builder,
             vegetation,
+            islands,
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
@@ -328,6 +337,7 @@ impl LodSampler for VanillaLodSampler {
             worker: self.generator.generator.worker(),
             builder: None,
             vegetation: self.vegetation.clone(),
+            islands: self.islands.fork(),
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
@@ -404,7 +414,7 @@ impl LodSampler for VanillaLodSampler {
         samples
             .into_iter()
             .enumerate()
-            .map(|(index, (surface, spans))| {
+            .map(|(index, column)| {
                 let (wx, wz) = (
                     x + (index % side) as i32 * width,
                     z + (index / side) as i32 * width,
@@ -419,22 +429,36 @@ impl LodSampler for VanillaLodSampler {
                         width as usize,
                     );
                 }
-                self.preview_column(wx + width / 2, wz + width / 2, width, surface, spans)
+                let biome = self
+                    .generator
+                    .biome_map
+                    .get(column.biome.0 as usize)
+                    .copied()
+                    .unwrap_or(0);
+                self.preview_column(
+                    wx + width / 2,
+                    wz + width / 2,
+                    width,
+                    column.surface,
+                    column.spans,
+                    biome,
+                )
             })
             .collect()
     }
 }
 impl VanillaLodSampler {
     fn preview_column(
-        &self,
+        &mut self,
         x: i32,
         z: i32,
         width: i32,
         surface: Option<SurfaceSample>,
         spans: Vec<(i32, i32, BlockStateId)>,
+        cell_biome: u16,
     ) -> Column {
         let surface = surface.map(|sample| self.generator.client_surface(sample));
-        let biome = surface.map_or(0, |surface| surface.biome);
+        let biome = surface.map_or(cell_biome, |surface| surface.biome);
         let registry = self.generator.generator.data().registry();
         let mut column = Column {
             surface,
@@ -466,6 +490,7 @@ impl VanillaLodSampler {
             240
         };
         self.vegetation.apply(&mut column, x, z, width, light);
+        self.islands.apply(&mut column, biome, x, z, width, light);
         column
     }
 }
@@ -696,5 +721,188 @@ mod tests {
             previous = Some(snapshot);
         }
         Ok(())
+    }
+    /// Small End islands are decoration over the void, so the direct sampler
+    /// has to estimate them from `end_island_decorated`.
+    #[test]
+    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    fn end_small_islands_are_estimated_over_the_void() -> crate::Result<()> {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
+        );
+        let assets = crate::assets::Assets::load(&root)?;
+        let biomes = crate::biome::Biomes::load(&root)?;
+        let terrain = Arc::new(VanillaTerrain::for_dimension(
+            &root.join("worldgen"),
+            assets.registry,
+            &biomes,
+            1234,
+            "minecraft:the_end",
+        )?);
+        let mut sampler = VanillaLodSampler::new(terrain.clone());
+        let small = biomes.id("minecraft:small_end_islands");
+        assert!(
+            sampler.islands.has_placement(small),
+            "the small end islands feature is parsed for its biome"
+        );
+        assert!(
+            !sampler
+                .islands
+                .has_placement(biomes.id("minecraft:end_highlands")),
+            "chorus highlands do not grow small islands"
+        );
+        // The direct sampler asks for the zoomed biome (BiomeManager), which
+        // can pick a different quart corner than the raw one.
+        use horizon_core::{
+            biome::{BiomeZoom, obfuscate_seed},
+            position::BlockPos,
+        };
+        let zoom = BiomeZoom::new(obfuscate_seed(1234));
+        let mut search = terrain.generator.worker();
+        let mut center = None;
+        'search: for x in (1024..=8192).step_by(512) {
+            for z in (-8192..=8192).step_by(512) {
+                let quart = zoom.quart_at_block(BlockPos::new(x, 64, z));
+                let biome = search.noise_biomes(&[quart]);
+                if biome.first().and_then(|name| name.as_deref())
+                    != Some("minecraft:small_end_islands")
+                {
+                    continue;
+                }
+                if search.surface_sample(x, z).is_some() {
+                    continue;
+                }
+                center = Some((x, z));
+                break 'search;
+            }
+        }
+        let (cx, cz) = center.expect("a small end islands region");
+        let end_stone = assets
+            .registry
+            .default_state("minecraft:end_stone")
+            .unwrap();
+        // The cell biome must reach the sampler even though there is no surface
+        // to take it from.
+        let column = sampler
+            .worker
+            .lod_grid(cx, cz, 1, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(column.surface.is_none());
+        assert_eq!(
+            sampler
+                .generator
+                .biome_map
+                .get(column.biome.0 as usize)
+                .copied(),
+            Some(small),
+            "a void cell carries the small end islands biome"
+        );
+        // The estimator itself, a wide void at one block per cell.
+        let mut islands = 0;
+        for z in cz - 128..cz + 128 {
+            for x in cx - 128..cx + 128 {
+                let mut column = Column::default();
+                sampler.islands.apply(&mut column, small, x, z, 1, 240);
+                let Some(surface) = column.surface else {
+                    continue;
+                };
+                assert!(
+                    (56..=71).contains(&surface.height),
+                    "island top at {}",
+                    surface.height
+                );
+                assert_eq!(surface.state, end_stone);
+                assert!(column.spans.iter().any(|span| {
+                    span.state == end_stone && i32::from(span.max) == surface.height
+                }));
+                assert!(
+                    column.spans.iter().all(|span| i32::from(span.min) >= 45),
+                    "an estimated island floats above the void"
+                );
+                islands += 1;
+            }
+        }
+        assert!(islands > 0, "no estimated small islands in a 256² void");
+        // And through the whole direct-sampling path with the real biome map.
+        let sampled = sampler.grid(cx - 32, cz - 32, 1, 64);
+        assert!(
+            sampled.iter().any(|column| column
+                .surface
+                .is_some_and(|surface| surface.state == end_stone)),
+            "direct sampling shows an island in the real small end islands biome"
+        );
+        Ok(())
+    }
+    /// The refined path must keep the real feature's end stone in its columns.
+    #[test]
+    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    fn end_small_islands_from_decoration_survive_far_columns() -> crate::Result<()> {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
+        );
+        let assets = crate::assets::Assets::load(&root)?;
+        let biomes = crate::biome::Biomes::load(&root)?;
+        let terrain = Arc::new(VanillaTerrain::for_dimension(
+            &root.join("worldgen"),
+            assets.registry,
+            &biomes,
+            1234,
+            "minecraft:the_end",
+        )?);
+        let mut worker = terrain.generator.worker();
+        let stop = AtomicBool::new(false);
+        let mut centers = Vec::new();
+        'search: for cx in (64..=512).step_by(4) {
+            for cz in (-512..=512).step_by(4) {
+                let (x, z) = (cx * 16 + 8, cz * 16 + 8);
+                let biome = worker.noise_biomes(&[[x >> 2, 16, z >> 2]]);
+                if biome.first().and_then(|name| name.as_deref())
+                    != Some("minecraft:small_end_islands")
+                {
+                    continue;
+                }
+                if worker.surface_sample(x, z).is_some() {
+                    continue;
+                }
+                centers.push((cx, cz));
+                if centers.len() >= 24 {
+                    break 'search;
+                }
+            }
+        }
+        for (cx, cz) in centers {
+            let Some(chunk) = decorated_region(&mut worker, (cx, cz), &stop)? else {
+                continue;
+            };
+            let min = chunk.terrain.min_y();
+            let max = min + chunk.terrain.height();
+            let mut raw = 0;
+            for y in min..max {
+                for z in 0..16 {
+                    for x in 0..16 {
+                        raw += usize::from(chunk.block_name(x, y, z) == "minecraft:end_stone");
+                    }
+                }
+            }
+            if raw == 0 {
+                continue;
+            }
+            let kept: usize = columns(&chunk, &terrain.biome_map, "minecraft:the_end")
+                .iter()
+                .flat_map(|column| &column.spans)
+                .filter(|span| {
+                    assets.registry.state(span.state).unwrap().name == "minecraft:end_stone"
+                })
+                .map(|span| (span.max - span.min) as usize)
+                .sum();
+            assert_eq!(
+                raw, kept,
+                "far columns keep the real small island in {cx} {cz}"
+            );
+            return Ok(());
+        }
+        panic!("no decorated small end island among {} candidates", 24);
     }
 }
