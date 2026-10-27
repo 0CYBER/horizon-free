@@ -17,16 +17,26 @@ const HOSTS: [&str; 4] = [
 /// Bigger than any pack these sources serve (Modrinth caps uploads at 500 MiB).
 const MAX: u64 = 1 << 30;
 
-/// The HTTP agent the sources share. Modrinth asks for a user agent that names the project.
-pub(super) fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .user_agent(&format!(
-            "ludovic111/horizon horizon-launcher/{} (github.com/ludovic111/horizon)",
-            crate::backend::VERSION
-        ))
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout_read(std::time::Duration::from_secs(60))
-        .build()
+/// The HTTP agent the sources share, reaching `url` through the player's proxy when one is set
+/// (`proxy`). Modrinth asks for a user agent that names the project.
+///
+/// It is kept between downloads: a fresh agent starts a new connection pool, so one per file would
+/// be a handshake per file, and a modpack brings hundreds.
+pub(super) fn agent(url: &str) -> ureq::Agent {
+    let spec = crate::proxy::spec_for(url);
+    horizon_port_pack::net::keep("browser", spec.as_deref(), |proxy| {
+        let builder = ureq::AgentBuilder::new()
+            .user_agent(&format!(
+                "ludovic111/horizon horizon-launcher/{} (github.com/ludovic111/horizon)",
+                crate::backend::VERSION
+            ))
+            .timeout_connect(std::time::Duration::from_secs(15))
+            .timeout_read(std::time::Duration::from_secs(60));
+        match proxy {
+            Some(proxy) => builder.proxy(proxy).build(),
+            None => builder.build(),
+        }
+    })
 }
 
 /// Why a file can't be downloaded at all, before any byte is read.
@@ -159,9 +169,12 @@ pub fn fetch(file: &FileRef, folder: &Path, progress: &dyn Fn(f32)) -> Result<Pa
     if let Some(why) = refuse(file) {
         return Err(why);
     }
-    let response = agent().get(&file.url).call().map_err(|e| match e {
-        ureq::Error::Status(code, _) => format!("{} answered {code}.", file.url),
-        ureq::Error::Transport(t) => format!("No connection: {t}"),
-    })?;
+    let response = agent(&file.url)
+        .get(&file.url)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(code, _) => format!("{} answered {code}.", file.url),
+            ureq::Error::Transport(t) => format!("No connection: {t}"),
+        })?;
     save(file, response.into_reader(), folder, progress)
 }

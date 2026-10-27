@@ -24,6 +24,58 @@ const Z_BODY_ROT: usize = 3;
 const TENTACLE_SPEED: usize = 4;
 const ROTATE_SPEED: usize = 5;
 
+/// `Squid.spawnInk`: the squirt sound and 30 ink particles shot from under
+/// the squid, turned by its body rotation.
+pub fn spawn_ink(m: &mut Mob) {
+    let sound = if m.species() == Species::GlowSquid {
+        "entity.glow_squid.squirt"
+    } else {
+        "entity.squid.squirt"
+    };
+    let kind = if m.species() == Species::GlowSquid {
+        "glow_squid_ink"
+    } else {
+        "squid_ink"
+    };
+    // makeSound draws the voice pitch even for a silent squid.
+    let pitch = m.voice_pitch();
+    if !m.silent {
+        let at = [m.position.x, m.position.y, m.position.z];
+        m.outbox.push(MobEvent::Sound(
+            sound,
+            at,
+            super::ai::sound_volume(m),
+            pitch,
+        ));
+    }
+    // rotateVector: xRot(xBodyRotO), then yRot(-yBodyRotO).
+    let to_radians = (std::f64::consts::PI / 180.0) as f32;
+    let (x_rot, y_rot) = (
+        m.anim.vo[X_BODY_ROT] * to_radians,
+        -m.previous_body_yaw * to_radians,
+    );
+    let rotate = |v: Vec3| v.rotate_x(x_rot).rotate_y(y_rot);
+    let pos = rotate(Vec3::new(0.0, -1.0, 0.0)).add_vector(m.position);
+    let offset_scale: f32 = if m.is_baby() { 0.1 } else { 0.3 };
+    for _ in 0..30 {
+        let x = f64::from(m.random.next_float()) * 0.6 - 0.3;
+        let z = f64::from(m.random.next_float()) * 0.6 - 0.3;
+        let dir = rotate(Vec3::new(x, -1.0, z));
+        let d = dir.scale(f64::from(offset_scale + m.random.next_float() * 2.0));
+        // ServerLevel.sendParticles with a count of 0 and speed 0.1: one
+        // particle moving at the float offset times the float speed.
+        let speed = f64::from(0.1f32);
+        m.outbox.push(MobEvent::ParticleAt {
+            kind,
+            at: [pos.x, pos.y + 0.5, pos.z],
+            velocity: [
+                speed * f64::from(d.x as f32),
+                speed * f64::from(d.y as f32),
+                speed * f64::from(d.z as f32),
+            ],
+        });
+    }
+}
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
@@ -36,6 +88,7 @@ pub fn register(m: &mut Mob) {
             m.anim.v[TENTACLE_SPEED] = speed;
         }
         S::Axolotl => {
+            m.air = super::axolotl::MAX_AIR;
             // Native controller scaling is essential: the base speed attribute is 1.0.
             m.ai.mov.kind = MoveKind::SmoothSwimming {
                 max_turn_x: 85.0,
@@ -234,12 +287,40 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// Squid.aiStep: tentacle cycle, propulsion and body rotation.
 fn squid_ai_step(m: &mut Mob) {
+    squid_step(m, false);
+}
+
+/// Squid.aiStep also runs on remote entities: animate from packet velocity,
+/// without running goals or replacing that velocity with the server's movement vector.
+pub fn squid_client_step(m: &mut Mob) {
+    if matches!(m.species(), Species::Squid | Species::GlowSquid) {
+        m.anim.vo = m.anim.v;
+        squid_step(m, true);
+    }
+}
+
+/// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
+pub fn squid_cycle_event(m: &mut Mob) {
+    if matches!(m.species(), Species::Squid | Species::GlowSquid) {
+        m.anim.v[TENTACLE_MOVEMENT] = 0.0;
+    }
+}
+
+fn squid_step(m: &mut Mob, client: bool) {
     let v = &mut m.anim.v;
     v[TENTACLE_MOVEMENT] += v[TENTACLE_SPEED];
-    if v[TENTACLE_MOVEMENT] > PI * 2.0 {
-        v[TENTACLE_MOVEMENT] -= PI * 2.0;
-        if m.random.next_int_bound(10).unwrap_or(1) == 0 {
-            m.anim.v[TENTACLE_SPEED] = 1.0 / (m.random.next_float() + 1.0) * 0.2;
+    if f64::from(v[TENTACLE_MOVEMENT]) > std::f64::consts::TAU {
+        if client {
+            v[TENTACLE_MOVEMENT] = PI * 2.0;
+        } else {
+            v[TENTACLE_MOVEMENT] -= PI * 2.0;
+            if m.random.next_int_bound(10).unwrap_or(1) == 0 {
+                m.anim.v[TENTACLE_SPEED] = 1.0 / (m.random.next_float() + 1.0) * 0.2;
+            }
+            m.outbox.push(MobEvent::SquidCycle {
+                mob: m.id,
+                at: [m.position.x, m.position.y, m.position.z],
+            });
         }
     }
     let v = &mut m.anim.v;
@@ -248,28 +329,39 @@ fn squid_ai_step(m: &mut Mob) {
             let scale = v[TENTACLE_MOVEMENT] / PI;
             v[TENTACLE_ANGLE] = (scale * scale * PI).msin() * PI * 0.25;
             if scale > 0.75 {
-                let mv = m.extra.vector;
-                m.velocity = Vec3::new(mv[0], mv[1], mv[2]);
+                if !client {
+                    let mv = m.extra.vector;
+                    m.velocity = Vec3::new(mv[0], mv[1], mv[2]);
+                }
                 m.anim.v[ROTATE_SPEED] = 1.0;
             } else {
                 m.anim.v[ROTATE_SPEED] *= 0.8;
             }
         } else {
             v[TENTACLE_ANGLE] = 0.0;
-            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+            if !client {
+                m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+            }
             m.anim.v[ROTATE_SPEED] *= 0.99;
         }
         let mv = m.velocity;
         let horizontal = (mv.x * mv.x + mv.z * mv.z).sqrt();
-        m.body_yaw += (-(mv.x.atan2(mv.z) as f32).to_degrees() - m.body_yaw) * 0.1;
+        m.body_yaw += (-(horizon_core::geometry::trig::atan2(mv.x, mv.z) as f32) * 57.295776
+            - m.body_yaw)
+            * 0.1;
         m.yaw = m.body_yaw;
         let v = &mut m.anim.v;
         v[Z_BODY_ROT] += PI * v[ROTATE_SPEED] * 1.5;
-        v[X_BODY_ROT] += (-(horizontal.atan2(mv.y) as f32).to_degrees() - v[X_BODY_ROT]) * 0.1;
+        v[X_BODY_ROT] += (-(horizon_core::geometry::trig::atan2(horizontal, mv.y) as f32)
+            * 57.295776
+            - v[X_BODY_ROT])
+            * 0.1;
     } else {
         v[TENTACLE_ANGLE] = v[TENTACLE_MOVEMENT].msin().abs() * PI * 0.25;
-        let yd = m.velocity.y - m.kind.gravity;
-        m.velocity = Vec3::new(0.0, yd * 0.98, 0.0);
+        if !client {
+            let yd = m.velocity.y - m.kind.gravity;
+            m.velocity = Vec3::new(0.0, yd * 0.98, 0.0);
+        }
         let v = &mut m.anim.v;
         v[X_BODY_ROT] += (-90.0 - v[X_BODY_ROT]) * 0.02;
     }
