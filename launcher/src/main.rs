@@ -12,6 +12,7 @@ mod collection;
 mod console;
 mod cull;
 mod datapacks_page;
+mod export_page;
 mod game_tools;
 mod instances_page;
 mod internet;
@@ -241,6 +242,7 @@ struct Launcher {
     screenshots: screenshots_page::Screenshots,
     game_packs: packs_page::Packs,
     world_packs: datapacks_page::WorldPacks,
+    export: Option<export_page::ExportPanel>,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -405,6 +407,7 @@ impl Launcher {
             screenshots: screenshots_page::Screenshots::default(),
             game_packs: packs_page::Packs::default(),
             world_packs: datapacks_page::WorldPacks::default(),
+            export: None,
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -2109,6 +2112,7 @@ impl Launcher {
             .flex_col()
             .child(section_title("Ready to play", "check", &t).mb(px(12.)))
             .children(self.instance_row(1, cx))
+            .children(self.export_panel(cx))
             .child(index_row(
                 2,
                 "Resources",
