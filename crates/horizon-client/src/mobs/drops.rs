@@ -244,7 +244,13 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         }
         _ => (None, None),
     };
-    let mut stack = loot_stack(item?, 1);
+    // A panda keeps the whole stack it picked up in its mouth.
+    let count = if slot == "mainhand" && m.species() == Species::Panda {
+        super::panda::held_count(m)
+    } else {
+        1
+    };
+    let mut stack = loot_stack(item?, count as i32);
     if let (Some(index), Some(g)) = (index, gear::gear(m)) {
         for (e, l) in &g.slots[index] {
             stack.enchantments.push((e.to_string(), *l as i32));
@@ -305,6 +311,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         exploration: None,
         ominous_amplifier: None,
         stew_effects: Vec::new(),
+        names: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the
@@ -403,6 +410,15 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         out.push(Drop::Item(stack));
         clear_slot(m, "mainhand");
     }
+    // Allay: what it carries (`ints[1]` of the held item) is its inventory.
+    let allay_load = (s == Species::Allay)
+        .then(|| {
+            m.extra
+                .main_hand
+                .clone()
+                .map(|item| (item, m.extra.ints[1]))
+        })
+        .flatten();
     let drops_loot = d.mob_drops && (is_monster(s) || !m.is_baby());
     if drops_loot {
         let table = format!(
@@ -459,6 +475,19 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
             out.push(Drop::Item(loot_stack("minecraft:nether_star", 1)));
         }
     }
+    // Allay.dropEquipment: its inventory, then the main-hand item unless it
+    // prevents equipment drops.
+    if let Some((item, carried)) = allay_load {
+        if carried > 0 {
+            out.push(Drop::Item(loot_stack(&item, carried)));
+        }
+        if let Some(stack) = slot_item(m, "mainhand")
+            && !d.loot.prevents_equipment_drop(&stack)
+        {
+            out.push(Drop::Item(stack));
+            clear_slot(m, "mainhand");
+        }
+    }
     // Piglin.dropCustomDeathLoot: everything in its inventory.
     if s == Species::Piglin {
         for stack in m.extra.inventory.drain(..) {
@@ -482,13 +511,7 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         }
     }
     // dropExperience.
-    let drops_experience = match s {
-        Species::Tadpole => false,
-        Species::Hoglin => true,
-        s if is_monster(s) => true,
-        _ => !m.is_baby(),
-    };
-    if killed_by_player && drops_experience && d.mob_drops {
+    if killed_by_player && drops_experience(m) && d.mob_drops {
         let mut amount = base_experience(m);
         while amount > 0 {
             let value = orb_value(amount);
@@ -510,6 +533,16 @@ fn roll(
             d.loot.roll_entity(table, random, params)
         }
         None => Vec::new(),
+    }
+}
+/// `LivingEntity.shouldDropExperience`: babies drop none, except monsters and
+/// hoglins; tadpoles never do.
+pub fn drops_experience(m: &Mob) -> bool {
+    match m.species() {
+        Species::Tadpole => false,
+        Species::Hoglin => true,
+        s if is_monster(s) => true,
+        _ => !m.is_baby(),
     }
 }
 /// `getBaseExperienceReward` (no vanilla enchantment changes mob experience).

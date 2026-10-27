@@ -35,10 +35,11 @@ fn entity_shader() -> String {
 #[cfg(test)]
 mod crumbling_tests;
 mod entity_batch;
+mod entity_outline;
 mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::{
-    SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
+    ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
     TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
 };
 
@@ -175,12 +176,13 @@ struct Globals {
     inverse_view: [[f32; 4]; 4],
     sunrise: [f32; 4],
     sun: [f32; 4],
-    /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon), w: unused.
+    /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon),
+    /// w: the glint strength (`GlintAlpha`).
     fog_ends: [f32; 4],
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: [[f32; 4]; 2],
     /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting; z: how many
-    /// `dynamic_lights` are set; w unused.
+    /// `dynamic_lights` are set; w: the glint scroll clock (`Glint::scroll_ticks`).
     time: [f32; 4],
     /// Atlas rect of a destroy stage (entity.wgsl takes only its size: every stage's is the same,
     /// and each crack carries its own stage's origin).
@@ -261,10 +263,19 @@ pub struct Frame<'a> {
     /// drawn after the hand at its projection, without the bob or fog.
     pub debug_crosshair: &'a [[f32; 8]],
     pub hud: &'a HudBatch,
+    /// `GlintAlpha` (accessibility Glint Strength); the entity shader uses it
+    /// for held/world items, independent of what the HUD batch last drew.
+    pub glint_alpha: f32,
+    /// The glint scroll clock (`Glint::scroll_ticks`): entity.wgsl's
+    /// `ARMOR_ENTITY_GLINT_TEXTURING` phase.
+    pub glint_ticks: f32,
     /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// The glowing entities' silhouettes in their team colours (`OutlineBufferSource`),
+    /// outlined through walls after the hand.
+    pub glowing: &'a [Vertex],
     /// Runs of `entities` by entity, while a shader pack draws them (`pack_draw::EntitySpan`).
     pub entity_spans: &'a [pack_draw::EntitySpan],
     pub weather: &'a [crate::weather::Vertex],
@@ -407,6 +418,8 @@ pub struct Renderer {
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    /// `RenderPipelines.ENERGY_SWIRL`: additive, unlit, the sprite repeated within itself.
+    energy_swirl_pipeline: wgpu::RenderPipeline,
     lightning_pipeline: wgpu::RenderPipeline,
     lightning: lightning::Renderer,
     see_through_pipeline: wgpu::RenderPipeline,
@@ -414,6 +427,8 @@ pub struct Renderer {
     celestial_buffer: wgpu::Buffer,
     end_sky: end_sky::EndSky,
     stars: stars::Stars,
+    /// The glowing entities' outline (`LevelRenderer.entityOutlineTarget`).
+    entity_outline: entity_outline::EntityOutline,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
@@ -1026,6 +1041,8 @@ impl Renderer {
         sprite_mips: &[crate::mipmap::Settings],
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
+        glint: (&[u8], u32, u32),
+        glint_armor: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
         prepared: Option<PreparedTextures>,
@@ -1585,7 +1602,68 @@ impl Renderer {
             atlas_pixels,
         );
         let atlas_view = atlas.create_view(&Default::default());
-        let mut hud = HudRenderer::new(&device, config.format.remove_srgb_suffix(), &atlas_view)?;
+        // vanilla's `GlintSampler`: enchanted_glint_item as its own texture,
+        // repeated per pixel (`clamp: false`), linear without mipmaps
+        // (`blur: true`).
+        let (glint_pixels, glint_width, glint_height) = glint;
+        let glint_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted glint"),
+                size: wgpu::Extent3d {
+                    width: glint_width,
+                    height: glint_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_pixels,
+        );
+        let glint_view = glint_texture.create_view(&Default::default());
+        let glint_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Glint"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        // ARMOR_ENTITY_GLINT_TEXTURING's sampler is vanilla's GlintSampler: the
+        // same repeat and linear filtering as the item glint.
+        let (glint_armor_pixels, glint_armor_width, glint_armor_height) = glint_armor;
+        let glint_armor_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted armor glint"),
+                size: wgpu::Extent3d {
+                    width: glint_armor_width,
+                    height: glint_armor_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_armor_pixels,
+        );
+        let glint_armor_view = glint_armor_texture.create_view(&Default::default());
+        let mut hud = HudRenderer::new(
+            &device,
+            config.format.remove_srgb_suffix(),
+            &atlas_view,
+            &glint_view,
+            &glint_sampler,
+        )?;
         hud.atlas_texture = Some(atlas.clone());
         let entity_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon entities"),
@@ -1631,6 +1709,29 @@ impl Renderer {
                     vf,
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 ),
+                entry(
+                    5,
+                    vf,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    6,
+                    vf,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+                entry(
+                    7,
+                    vf,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let weather = weather::Weather::new(
@@ -1667,6 +1768,18 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                },
             ],
         });
         let hand_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1692,6 +1805,18 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
                 },
             ],
         });
@@ -1737,7 +1862,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let entity_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4];
+        let entity_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
         let entity_vertex = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -1893,7 +2018,29 @@ impl Renderer {
             alpha_blend,
             false,
         );
-        let lightning_attributes = wgpu::vertex_attr_array![6=>Float32x3];
+        // RenderPipelines.ENERGY_SWIRL: BlendFunction.ADDITIVE (one, one), no culling; no depth
+        // writes either: vanilla sorts the quads far to near, so every face passes the test.
+        let one_one = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let energy_swirl_pipeline = entity_pipeline_with(
+            "Energy swirls",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            wgpu::BlendState {
+                color: one_one,
+                alpha: one_one,
+            },
+            false,
+            "fs_energy_swirl",
+            wgpu::ColorWrites::ALL,
+        );
+        // Attribute 7: 6 is the entity vertex buffer's glint UV.
+        let lightning_attributes = wgpu::vertex_attr_array![7=>Float32x3];
         let lightning_vertex = [
             entity_vertex[0].clone(),
             Some(wgpu::VertexBufferLayout {
@@ -2345,6 +2492,11 @@ impl Renderer {
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
+        let entity_outline = entity_outline::EntityOutline::new(
+            &device,
+            (&entity_shader, &entity_layout, &entity_vertex),
+            config.format.remove_srgb_suffix(),
+        );
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -2410,6 +2562,7 @@ impl Renderer {
             cloud_uniform,
             cloud_group,
             additive_pipeline,
+            energy_swirl_pipeline,
             lightning_pipeline,
             lightning: lightning::Renderer::new(),
             see_through_pipeline,
@@ -2417,6 +2570,7 @@ impl Renderer {
             celestial_buffer,
             end_sky: end_sky::EndSky::default(),
             stars,
+            entity_outline,
             panorama,
             border_pipeline,
             border_group,
@@ -3518,7 +3672,7 @@ impl Renderer {
                 frame.fog.map_or(frame.distance.min(512.0), |f| f.sky_end),
                 frame.fog.map_or(2048.0, |f| f.cloud_end),
                 if frame.dark_disc { 1.0 } else { 0.0 },
-                0.0,
+                frame.glint_alpha,
             ],
             end_portal_sprites: frame.end_portal_sprites,
             crumbling_sprite: frame.crumbling_sprite,
@@ -3526,7 +3680,7 @@ impl Renderer {
                 frame.shader_game_time,
                 f32::from(frame.nether_lighting),
                 frame.dynamic_lights.len().min(crate::dynamic_light::MAX) as f32,
-                0.0,
+                frame.glint_ticks,
             ],
             outline_params: outline_params(self.config.width, self.config.height),
             dynamic_lights: {
@@ -4041,6 +4195,7 @@ impl Renderer {
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
+            swirl_quads,
             shadow_quads,
             translucent_particle_quads,
             translucent_item_quads,
@@ -4052,6 +4207,7 @@ impl Renderer {
             + crumbling_quads
             + translucent_crumbling_quads
             + water_mask_quads
+            + swirl_quads
             + shadow_quads
             + translucent_particle_quads
             + translucent_item_quads;
@@ -4115,6 +4271,13 @@ impl Renderer {
                 bytemuck::cast_slice(all_entities),
             );
         }
+        self.entity_outline.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            frame.glowing,
+            [self.config.width, self.config.height],
+        );
         if let Some((rotation, brightness)) = frame.stars {
             self.stars.prepare(
                 &mut self.uploads,
@@ -4142,7 +4305,8 @@ impl Renderer {
             } else {
                 lightning::QUADS
             })
-            .max(weather_quads);
+            .max(weather_quads)
+            .max(frame.glowing.len() as u32 / 4);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -4633,6 +4797,21 @@ impl Renderer {
                 self.lightning.draw(&mut pass, &frame.lightning);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if swirl_quads > 0 {
+                pass.set_pipeline(&self.energy_swirl_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..swirl_quads * 6,
+                    ((entity_quads
+                        + crumbling_quads
+                        + translucent_crumbling_quads
+                        + water_mask_quads)
+                        * 4) as i32,
+                    0..1,
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if additive_quads > 0 {
                 pass.set_pipeline(&self.additive_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -4884,6 +5063,13 @@ impl Renderer {
                 0..1,
             );
         }
+        // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
+        self.entity_outline.draw(
+            &mut encoder,
+            &view_target,
+            &self.entity_group,
+            &self.indices,
+        );
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5298,6 +5484,7 @@ mod tests {
                 color: 0xffff_ffff,
                 light: id,
                 normal: [0; 4],
+                glint_uv: [0.0, 0.0],
             }; 4]
         };
         let entities: Vec<_> = [
@@ -5316,7 +5503,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 1, 1, 0]);
+        assert_eq!(counts, [4, 1, 1, 0, 0, 1, 1, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
