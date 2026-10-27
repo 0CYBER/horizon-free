@@ -1377,6 +1377,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
     start: &StructureStart,
     world: &mut W,
     resources: &StructureResources,
+    blocks: &dyn crate::worldgen::structure::legacy::SolidRender,
     random: &mut R,
     chunk_box: BoundingBox,
     place_feature: &mut PlaceFeature<'_, W, R>,
@@ -1404,6 +1405,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
                     let mut context = PieceContext {
                         world,
                         resources,
+                        blocks,
                         random,
                         chunk_box,
                         chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),
@@ -1419,6 +1421,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
         let mut context = PieceContext {
             world,
             resources,
+            blocks,
             random,
             chunk_box,
             chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),
