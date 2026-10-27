@@ -514,6 +514,7 @@ impl Game<'_> {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
             self.tick_cat_spawner();
+            self.tick_village_siege();
         }
         self.tick_raids();
         self.tick_creature_entities()
