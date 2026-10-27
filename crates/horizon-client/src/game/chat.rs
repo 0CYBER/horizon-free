@@ -81,6 +81,8 @@ pub struct UiState {
     pub chat_screen: Option<ChatScreen>,
     /// When the chat screen opened (its input took the focus: the cursor blink).
     pub chat_opened: Option<std::time::Instant>,
+    /// The chat screen is `InBedChatScreen`: the sleeper's, with a Leave Bed button.
+    pub in_bed_chat: bool,
     pub registries: Registries,
     pub rules: GameRules,
     pub clock: WorldClock,
@@ -440,12 +442,47 @@ impl Game<'_> {
         self.capture(false);
     }
     pub(super) fn close_chat(&mut self) {
+        // InBedChatScreen.onClose: leaving the screen means getting up; the
+        // screen goes once the player has woken (`tick_in_bed_chat`).
+        if self.ui.in_bed_chat && self.sleeping.is_some() {
+            self.wake_up();
+            return;
+        }
         self.ui.chat_screen = None;
         self.ui.chat.reset_scroll();
         if self.screen == Screen::Chat {
             self.screen = Screen::Playing;
             self.capture(true);
         }
+    }
+    /// `Gui.tick`: a sleeper gets `InBedChatScreen`; when the player has
+    /// woken (`onPlayerWokeUp`) it closes, or turns into the plain chat
+    /// screen if something was typed.
+    pub(super) fn tick_in_bed_chat(&mut self) {
+        if self.screen != Screen::Chat {
+            self.ui.in_bed_chat = false;
+        }
+        if self.ui.in_bed_chat {
+            if self.sleeping.is_none() {
+                self.ui.in_bed_chat = false;
+                let text = self
+                    .ui
+                    .chat_screen
+                    .as_ref()
+                    .map_or_else(String::new, |s| s.value().to_owned());
+                self.close_chat();
+                if !text.is_empty() {
+                    self.open_chat(&text);
+                }
+            }
+        } else if self.sleeping.is_some() && self.screen == Screen::Playing {
+            self.open_chat("");
+            self.ui.in_bed_chat = self.screen == Screen::Chat;
+        }
+    }
+    /// The Leave Bed button of `InBedChatScreen`: its bounds.
+    fn leave_bed_button(width: f32, height: f32) -> (i32, i32, i32, i32) {
+        (width as i32 / 2 - 100, height as i32 - 40, 200, 20)
     }
     /// `Minecraft.computeChatAbilities` from the Chat option.
     pub(super) fn chat_abilities(&self) -> ChatAbilities {
@@ -559,7 +596,15 @@ impl Game<'_> {
         match screen.key(&m, &c, &self.ui.chat.recent, key, shift, ctrl) {
             ChatAction::Close => self.close_chat(),
             ChatAction::Submit(message) => {
-                self.close_chat();
+                // InBedChatScreen sends without closing (`closeOnSubmit` is
+                // false): the box empties and the screen stays.
+                if self.ui.in_bed_chat && self.sleeping.is_some() {
+                    screen.suggest_command(&m, &c, "");
+                    self.ui.chat.reset_scroll();
+                    self.ui.chat_screen = Some(screen);
+                } else {
+                    self.close_chat();
+                }
                 if !message.is_empty() {
                     self.handle_chat_input(&message);
                 }
@@ -675,6 +720,16 @@ impl Game<'_> {
             dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
+        if self.ui.in_bed_chat && self.sleeping.is_some() {
+            let width = self.renderer.as_ref().map_or(1280.0, |r| {
+                HudBatch::new([r.config.width, r.config.height]).width
+            });
+            let (x, y, w, h) = Self::leave_bed_button(width, height);
+            if horizon_client::screen_draw::inside((cursor.0 as i32, cursor.1 as i32), x, y, w, h) {
+                self.wake_up();
+                return;
+            }
+        }
         if let Some(screen) = self.ui.chat_screen.as_mut() {
             if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64) {
                 return;
@@ -737,6 +792,26 @@ impl Game<'_> {
         let draws = screen.draw(&m, mouse, blink, background);
         horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
+        if self.ui.in_bed_chat && self.sleeping.is_some() {
+            let (x, y, w, h) = Self::leave_bed_button(batch.width, batch.height);
+            let label = Text::literal(horizon_client::lang::get_or(
+                "multiplayer.stopSleeping",
+                "Leave Bed",
+            ));
+            let mut button = Vec::new();
+            horizon_client::screen_draw::button(
+                &mut button,
+                &m,
+                &label,
+                x,
+                y,
+                w,
+                h,
+                true,
+                horizon_client::screen_draw::inside(mouse, x, y, w, h),
+            );
+            horizon_client::screen_draw::paint(batch, &self.gui.atlas, &button);
+        }
         // The hovered message part's tooltip, one row per line of its text.
         if let Some(hover) = self.ui.chat.hover_at(
             &self.gui.atlas.font,

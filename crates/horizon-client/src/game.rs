@@ -10333,7 +10333,9 @@ impl Game<'_> {
     fn tick_sleep(&mut self) {
         self.sleep_timer = tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         if let Some(head) = self.sleeping {
-            if self.keys.contains(&KeyCode::ShiftLeft)
+            // Vanilla has no Shift wake-up: the chat screen's capitals must
+            // not get the sleeper up.
+            if (self.screen != Screen::Chat && self.keys.contains(&KeyCode::ShiftLeft))
                 || self
                     .player
                     .as_ref()
