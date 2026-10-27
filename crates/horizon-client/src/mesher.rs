@@ -39,6 +39,8 @@ pub struct Vertex {
     /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour,
     /// [`CULL_BACK`] to keep it and also drop back-facing pixels.
     pub normal: [i8; 4],
+    /// The `GLINT_TEXTURING` atlas UV for a foil item quad; zero elsewhere.
+    pub glint_uv: [f32; 2],
 }
 /// `Vertex::normal` of a baked-colour quad of an `entitySolid` model: the render type culls
 /// back faces, which the entity pipelines here do not, so `entity.wgsl` discards them.

@@ -27,6 +27,8 @@ pub(super) const SPECIAL: u32 = u32::MAX - 4096;
 const CRYSTAL_IDS: u32 = SPECIAL + 16;
 const FIGHT_FILE: &str = "data/minecraft/ender_dragon_fight.dat";
 const MAX_HEALTH: f32 = 200.0;
+/// `Mob.getAmbientSoundInterval`.
+const AMBIENT_INTERVAL: i32 = 80;
 
 #[derive(Default)]
 pub(super) struct Fight {
@@ -270,6 +272,8 @@ pub(super) struct Dragon {
     flame_count: i32,
     sitting_damage: f32,
     growl: i32,
+    /// `Mob.ambientSoundTime`.
+    ambient_time: i32,
     ticks: i32,
     /// DragonFlightHistory: (y, yRot) samples, newest at `head`.
     history: [(f64, f32); 64],
@@ -397,6 +401,7 @@ impl Dragon {
             flame_count: 0,
             sitting_damage: 0.0,
             growl: 100,
+            ambient_time: 0,
             ticks: 0,
             history: [(position.y, yaw); 64],
             head: 0,
@@ -989,6 +994,8 @@ impl Game<'_> {
         };
         let hurt = d.hurt(part, damage, counts, arrow);
         if hurt == (Hurt::Landed { full: true }) {
+            // Mob.playHurtSound: the ambient sound clock starts again.
+            d.ambient_time = -AMBIENT_INTERVAL;
             let at = [d.position.x, d.position.y, d.position.z];
             let pitch = 0.8 + self.world.random.next_float() * 0.3;
             self.audio
@@ -1661,6 +1668,24 @@ impl Game<'_> {
             self.tick_dragon_death();
             return;
         }
+        // Mob.baseTick: the ambient sound, rarer right after one.
+        let roll = d.random.next_int_bound(1000).unwrap_or(999);
+        let waited = d.ambient_time;
+        d.ambient_time += 1;
+        if roll < waited {
+            d.ambient_time = -AMBIENT_INTERVAL;
+            let at = [d.position.x, d.position.y, d.position.z];
+            // LivingEntity.getVoicePitch, from the dragon's own random.
+            let r = &mut d.random;
+            let pitch = (r.next_float() - r.next_float()) * 0.2 + 1.0;
+            self.audio.play(
+                "minecraft:entity.ender_dragon.ambient",
+                Some(at),
+                5.0,
+                pitch,
+            );
+        }
+        let d = self.dragon.as_mut().expect("dragon");
         // Flapping, growls and the flap sound.
         let flap_was = (d.old_flap * std::f32::consts::TAU).cos();
         let v = d.velocity;
@@ -2140,10 +2165,12 @@ impl Game<'_> {
                     c.at[1],
                     c.at[2] + f64::from(a.sin() * d),
                 ];
-                self.particles.add(
+                self.particles.add_with(
                     &ParticleOptions::simple(ParticleType::DragonBreath),
                     at,
                     [0.0, 0.0, 0.0],
+                    false,
+                    true,
                 );
             }
             // AreaEffectCloud: after its 20-tick wait, every 20 ticks per entity.
@@ -2512,6 +2539,8 @@ impl Game<'_> {
                         layer: 2,
                         color: c,
                         light: 0,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -2577,6 +2606,8 @@ impl Game<'_> {
                     layer: 6,
                     color: c,
                     light: wrap_light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
             (last_sin, last_cos, last_u) = (sin, cos, uu);
@@ -2622,6 +2653,8 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light: 240 | 240 << 8,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }

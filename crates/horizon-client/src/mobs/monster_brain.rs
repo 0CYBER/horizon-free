@@ -359,11 +359,14 @@ fn can_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
 /// `Sensor.isEntityAttackable`: `TargetingConditions.forCombat()` within the
 /// follow range, in sight.
 fn attackable(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
+    // The current ATTACK_TARGET is tested with ignoreInvisibilityTesting.
+    let current = mem_ref(m).attack_target.value() == Some(who);
     let range = m.attrs.follow_range;
     if !can_attack(m, w, who) {
         return false;
     }
     match who {
+        Who::Player if current => m.can_keep_target_player(w, range),
         Who::Player => m.can_target_player(w, range, true),
         Who::Mob(id) => {
             let Some(s) = w.seen(id) else { return false };

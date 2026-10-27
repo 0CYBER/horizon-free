@@ -92,6 +92,33 @@ pub(super) struct LanHost {
     states: lan::entity::States,
 }
 
+impl LanHost {
+    /// `PlayerList.remove`: `player.awardStat(Stats.LEAVE_GAME)` before the
+    /// player is saved. Once per guest, however often they are saved.
+    pub(super) fn award_leave_game(&mut self, conn: u32) {
+        if let Some(play) = self.play.get_mut(&conn)
+            && !play.left_game
+        {
+            play.left_game = true;
+            play.stats.custom("leave_game", 1);
+        }
+    }
+
+    /// `PlayerList.removeAll`: every player who joined leaves with the world.
+    pub(super) fn award_leave_game_to_all(&mut self) {
+        let conns: Vec<u32> = self
+            .hub
+            .guests
+            .iter()
+            .filter(|g| g.placed)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.award_leave_game(conn);
+        }
+    }
+}
+
 /// The player who owns an integrated server's world: a guest whose state is
 /// the world's own player (`players/data/<singleplayer_uuid>.dat`), as in
 /// single player.
@@ -162,12 +189,22 @@ fn mob_meta(
     m: &Mob,
     hub: &Hub,
     player_entity: Option<i32>,
+    game_time: i64,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    if m.fire_ticks > 0 {
-        meta.push((0, serializer::BYTE, Value::Byte(1)));
+    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, glowing 0x40
+    // (LivingEntity.updateGlowingStatus).
+    let shared = i8::from(m.fire_ticks > 0) | i8::from(m.is_currently_glowing()) << 6;
+    if shared != 0 {
+        meta.push((0, serializer::BYTE, Value::Byte(shared)));
+    }
+    // Entity.DATA_POSE: the pose the species keeps in its own fields (a
+    // pose back at standing goes out by the entity's own default).
+    let pose = horizon_client::mobs::sync::pose_id(m);
+    if pose != 0 {
+        meta.push((6, serializer::POSE, Value::Id(i32::from(pose))));
     }
     if let Some(name) = &m.custom_name {
         meta.push((
@@ -398,6 +435,41 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BYTE, Value::Byte(0)));
         }
+        // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+        "minecraft:warden" => {
+            let anger = e.warden.as_ref().map_or(0, |w| w.client_anger);
+            if anger != 0 {
+                meta.push((16, serializer::INT, Value::Int(anger)));
+            }
+            defaults.push((16, serializer::INT, Value::Int(0)));
+        }
+        // Sniffer.DATA_STATE (after AgeableMob's two).
+        "minecraft:sniffer" => {
+            if e.variant != 0 {
+                meta.push((
+                    18,
+                    serializer::SNIFFER_STATE,
+                    Value::Id(i32::from(e.variant)),
+                ));
+            }
+            defaults.push((18, serializer::SNIFFER_STATE, Value::Id(0)));
+        }
+        // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID (16
+        // for none).
+        "minecraft:shulker" => {
+            if e.variant3 != 0 {
+                meta.push((16, serializer::DIRECTION, Value::Id(i32::from(e.variant3))));
+            }
+            defaults.push((16, serializer::DIRECTION, Value::Id(0)));
+            if e.counter != 0 {
+                meta.push((17, serializer::BYTE, Value::Byte(e.counter as i8)));
+            }
+            defaults.push((17, serializer::BYTE, Value::Byte(0)));
+            if e.color != 16 {
+                meta.push((18, serializer::BYTE, Value::Byte(e.color as i8)));
+            }
+            defaults.push((18, serializer::BYTE, Value::Byte(16)));
+        }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
@@ -409,6 +481,18 @@ fn mob_meta(
             }
         }
         _ => {}
+    }
+    // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's flags).
+    if horizon_client::mobs::camel::is_camel(m.species()) {
+        if e.flag2 {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        let tick = horizon_client::mobs::camel::synced_pose_tick(m, game_time);
+        if tick != 0 {
+            meta.push((20, serializer::LONG, Value::Long(tick)));
+        }
+        defaults.push((20, serializer::LONG, Value::Long(0)));
     }
 }
 
@@ -728,6 +812,7 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        host.award_leave_game_to_all();
         for g in &host.hub.guests {
             self.save_guest(&host, g);
         }
@@ -935,7 +1020,7 @@ impl Game<'_> {
         out.clear();
         for m in self.mobs.iter().filter(|m| !m.removed) {
             // The lead's holder: the player the mob sees (a guest, else the
-            // host) or another mob. A fence knot isn't an entity here.
+            // host), another mob or a fence knot (game/lan_entities.rs).
             let player_entity = mob_players
                 .get(&m.id)
                 .and_then(|conn| hub.guest(*conn))
@@ -944,7 +1029,7 @@ impl Game<'_> {
             let leash = m.extra.leash.and_then(|h| match h {
                 Holder::Player => player_entity,
                 Holder::Mob(id) => Some(id as i32),
-                Holder::Knot(_) => None,
+                Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
             });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());
             e.position = [m.position.x, m.position.y, m.position.z];
@@ -952,7 +1037,14 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
+            mob_meta(
+                m,
+                hub,
+                player_entity,
+                self.world.game_time,
+                &mut e.meta,
+                &mut e.defaults,
+            );
             mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
@@ -964,6 +1056,10 @@ impl Game<'_> {
             e.position = [d.position.x, d.position.y, d.position.z];
             e.on_ground = d.on_ground;
             e.velocity = [d.velocity.x, d.velocity.y, d.velocity.z];
+            // Entity.DATA_SHARED_FLAGS_ID: glowing 0x40 (the Glowing tag).
+            if self.entity_glowing(d.id) {
+                e.meta.push((0, serializer::BYTE, Value::Byte(0x40)));
+            }
             e.meta.push((8, serializer::ITEM_STACK, Value::Item(stack)));
         }
         for o in &self.orbs {
@@ -1143,6 +1239,9 @@ impl Game<'_> {
                             }
                         }
                         self.lan_crafting_left(&mut host, &mut guest);
+                        if guest.placed {
+                            host.award_leave_game(guest.conn);
+                        }
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         host.play.remove(&guest.conn);
@@ -1620,7 +1719,12 @@ impl Game<'_> {
                 out,
             );
             self.held_item_geometry(m, camera, alpha, packed, true, out);
-            if !m.glowing {
+            // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
+            let guest = host.hub.guest(*conn);
+            if m.glowing || guest.is_some_and(|g| g.effects.get("glowing").is_some()) {
+                let team = guest.and_then(|g| self.score.board.players_team(&g.name));
+                self.mark_outline(&out[entity_start..], super::glowing::team_color(team));
+            } else {
                 self.cull_entity_vertices(out, entity_start);
             }
         }
