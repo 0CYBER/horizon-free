@@ -2424,6 +2424,7 @@ impl Game<'_> {
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let (sneaking, sleeping) = (g.sneaking, g.sleeping);
+        let riding = g.vehicle.is_some();
         let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
@@ -2444,6 +2445,12 @@ impl Game<'_> {
             w.player.health.advance_clock();
             let _ = w.fluid_base_tick();
             w.player.ground.on_ground = from_ground;
+            // Player.aiStep: a flying player that isn't riding starts every tick
+            // with no fall distance, so flying down in creative and switching to
+            // survival lands without the flight's distance.
+            if w.player.flying && !riding {
+                w.player.fall_distance = 0.0;
+            }
             let travelled: Vec<[f64; 3]> = moves.iter().map(|m| m.0).collect();
             // Entity.move's movementThisTick: each move, from where the
             // tick's first one started.
