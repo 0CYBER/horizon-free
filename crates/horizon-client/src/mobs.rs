@@ -2085,6 +2085,18 @@ impl Mob {
         if epf > 0.0 {
             amount *= 1.0 - epf / 25.0;
         }
+        // Witch.getDamageAfterMagicAbsorb: none from its own doing, else
+        // 85% less from `#witch_resistant_to`.
+        if self.species() == Species::Witch {
+            if source.attacker == Some(Who::Mob(self.id)) {
+                amount = 0.0;
+            } else if matches!(
+                source.kind,
+                DamageKind::Magic | DamageKind::SonicBoom | DamageKind::Thorns
+            ) {
+                amount *= 0.15;
+            }
+        }
         // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
         let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
@@ -2166,6 +2178,15 @@ impl Mob {
             aquatic::spawn_ink(self);
         }
         true
+    }
+    /// A splash or cloud's harming effect on this mob: the potion's
+    /// `indirect_magic` is in `#witch_resistant_to`, so a witch takes 15%.
+    pub fn potion_harm(&self, amount: f32) -> f32 {
+        if self.species() == Species::Witch {
+            amount * 0.15
+        } else {
+            amount
+        }
     }
     /// `Wolf.canArmorAbsorb`: it wears wolf armor and the damage type is not
     /// in `#bypasses_wolf_armor` (drowning, magic, thorns, in a wall, out of
