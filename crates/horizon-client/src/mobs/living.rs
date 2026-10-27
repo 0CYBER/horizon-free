@@ -863,10 +863,13 @@ impl Mob {
         }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
-            let sound = if damage > 4.0 {
-                "entity.generic.big_fall"
-            } else {
-                "entity.generic.small_fall"
+            // Monster.getFallSounds: the hostile pair.
+            let monster = super::ai::is_monster(self.species());
+            let sound = match (monster, damage > 4.0) {
+                (true, true) => "entity.hostile.big_fall",
+                (true, false) => "entity.hostile.small_fall",
+                (false, true) => "entity.generic.big_fall",
+                (false, false) => "entity.generic.small_fall",
             };
             events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
             self.damage(damage as f32, super::Damage::fall());
