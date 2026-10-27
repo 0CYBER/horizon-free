@@ -570,6 +570,8 @@ struct GameLevel<'w> {
     player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
+    /// Each minecart's kind and comparator signal, in `cart_boxes` order.
+    cart_signals: Vec<(minecarts::CartKind, i32)>,
     /// Arrow and thrown trident boxes (wooden buttons).
     arrow_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The other entities that keep blocks from being placed into them.
@@ -648,6 +650,37 @@ impl EntityObstructionWorld for BuildingObstruction {
     }
 }
 impl GameLevel<'_> {
+    /// `DetectorRailBlock.getAnalogOutputSignal`: a powered rail reads the
+    /// minecart on it, a command block cart first (its success count, which
+    /// is 0 here), else the first container cart's fullness.
+    fn detector_rail_signal(&self, pos: BlockPos, powered: bool) -> i32 {
+        if !powered {
+            return 0;
+        }
+        let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
+        let area = Aabb::new(
+            Vec3::new(x + 0.2, y, z + 0.2),
+            Vec3::new(x + 0.8, y + 0.8, z + 0.8),
+        );
+        let mut container = None;
+        for ((lo, hi), &(kind, signal)) in self.cart_boxes.iter().zip(&self.cart_signals) {
+            let cart = Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            );
+            if !area.intersects(cart) {
+                continue;
+            }
+            match kind {
+                minecarts::CartKind::CommandBlock => return 0,
+                minecarts::CartKind::Chest | minecarts::CartKind::Hopper => {
+                    container = container.or(Some(signal));
+                }
+                _ => {}
+            }
+        }
+        container.unwrap_or(0)
+    }
     /// Every entity box that blocks building: the players who aren't
     /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
     /// armor stand, whose box is empty, doesn't).
@@ -708,6 +741,14 @@ impl LevelAccess for GameLevel<'_> {
         state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(s) = self.registry.state(state)
+            && s.name == "minecraft:detector_rail"
+        {
+            return self.detector_rail_signal(
+                pos,
+                s.properties.get("powered").is_some_and(|v| v == "true"),
+            );
+        }
         if let Some(signal) = command_blocks::analog_signal(self.world, (pos.x, pos.y, pos.z)) {
             return signal;
         }
@@ -2579,8 +2620,14 @@ impl Game<'_> {
                                 pickups::Taken::Item(Box::new(item.clone())),
                                 pickups::Collector::Player,
                             );
+                            // handleTakeItemEntity: the random pitch of a full pickup.
+                            let pitch = ((self.world.random.next_float()
+                                - self.world.random.next_float())
+                                * 0.7
+                                + 1.0)
+                                * 2.0;
                             self.audio
-                                .play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
+                                .play("minecraft:entity.item.pickup", Some(feet), 0.2, pitch);
                         }
                         item.stack = rest;
                     }
@@ -2637,6 +2684,7 @@ impl Game<'_> {
                 )
             })
             .collect();
+        let cart_signals = self.cart_signals();
         let arrow_boxes = self
             .creatures
             .projectiles
@@ -2679,6 +2727,7 @@ impl Game<'_> {
         };
         let mut level = GameLevel {
             cart_boxes,
+            cart_signals,
             arrow_boxes,
             blockers,
             world: &mut self.world,
@@ -3249,6 +3298,8 @@ impl Game<'_> {
                     // Popped as the behaviour emits it (GameLevel::emit).
                     PlayerEffect::DropItem(_) => {}
                     PlayerEffect::EatCake => {
+                        // CakeBlock.eat
+                        self.stats.custom("eat_cake_slice", 1);
                         if let Some(p) = self.player.as_mut() {
                             let food = &mut p.health.food;
                             food.food = (food.food + 2).min(20);
@@ -3392,6 +3443,8 @@ impl Game<'_> {
             self.craft_table = Some(pos);
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
+            // EnderChestBlock.useWithoutItem
+            self.stats.custom("open_enderchest", 1);
             self.container_opener_event(key, true);
             let at = [
                 f64::from(key.0) + 0.5,
@@ -3982,6 +4035,20 @@ impl Game<'_> {
                     )
                 });
                 self.process_level_events()?;
+                // NoteBlock.useWithoutItem (tuned) and BellBlock.onHit (rung).
+                if result == horizon_world::level::InteractionResult::Success {
+                    let name = self
+                        .res
+                        .facts()
+                        .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
+                        .name
+                        .clone();
+                    match &*name {
+                        "minecraft:note_block" => self.stats.custom("tune_noteblock", 1),
+                        "minecraft:bell" => self.stats.custom("bell_ring", 1),
+                        _ => {}
+                    }
+                }
                 if result.consumes_action() {
                     self.swing_arm();
                     return Ok(true);
@@ -9154,6 +9221,9 @@ impl Game<'_> {
         if result.outcome == Outcome::Pass {
             return Ok(false);
         }
+        if let Some(stat) = result.stat {
+            self.stats.custom(stat, 1);
+        }
         if let Some(block) = result.block
             && let Ok(new) = registry.resolve(&block)
         {
@@ -9263,6 +9333,8 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
+        // BlockTransformer.transformBlock: ITEM_USED_ON_BLOCK before the swap.
+        self.trigger_block("minecraft:item_used_on_block", pos, stack);
         self.level_set(pos, new)?;
         // BlockTransformer.TransformParticle.send.
         self.transform_particle(&particle, pos);
@@ -9535,6 +9607,8 @@ impl Game<'_> {
             if let Some(waxed) = old.and_then(|old| self.res.transformers().waxed(registry, &old))
                 && let Ok(state) = registry.resolve(&waxed)
             {
+                // HoneycombItem.useOn: ITEM_USED_ON_BLOCK before the swap.
+                self.trigger_block("minecraft:item_used_on_block", hit.pos, stack);
                 self.level_set(hit.pos, state)?;
                 self.level_event_at(3003, hit.pos, 0);
                 self.audio.play(
@@ -10985,6 +11059,21 @@ impl Game<'_> {
             }
             return Ok(false);
         }
+        // A server pack's reload covers the frame with its progress
+        // (`LoadingOverlay`) until `tick_server_packs` applies it.
+        if let Some(reload) = &self.server_packs.reload {
+            if let Some(renderer) = &mut self.renderer {
+                let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
+                horizon_client::level_loading::draw_progress(
+                    &mut hud,
+                    &self.gui.atlas,
+                    reload.progress.line(),
+                    reload.progress.fraction(),
+                );
+                return renderer.render(&loading_frame(&hud));
+            }
+            return Ok(false);
+        }
         let Some(size) = self
             .renderer
             .as_ref()
@@ -12066,6 +12155,19 @@ impl ApplicationHandler for Game<'_> {
             && !matches!(
                 &event,
                 WindowEvent::CloseRequested
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::RedrawRequested
+            )
+        {
+            return;
+        }
+        // The pack reload's progress overlay takes no input
+        // (`LoadingOverlay`): `start_pack_reload` released what was held.
+        if self.server_packs.reload.is_some()
+            && !matches!(
+                &event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::Focused(_)
                     | WindowEvent::Resized(_)
                     | WindowEvent::RedrawRequested
             )
@@ -13580,7 +13682,6 @@ const NUMERIC_KEYS: [KeyCode; 11] = [
     KeyCode::Numpad9,
 ];
 
-const STAGES: u32 = 10;
 const STAGE_LINES: [&str; 10] = [
     "Loading menu",
     "Loading assets",
@@ -13596,19 +13697,28 @@ const STAGE_LINES: [&str; 10] = [
 
 /// The background loader's checkpoint, read by the loading screen each frame.
 #[derive(Clone)]
-struct Progress(Arc<AtomicU32>);
+struct Progress {
+    value: Arc<AtomicU32>,
+    lines: &'static [&'static str],
+}
 impl Progress {
     fn new() -> Self {
-        Self(Arc::new(AtomicU32::new(0)))
+        Self::with(&STAGE_LINES)
+    }
+    fn with(lines: &'static [&'static str]) -> Self {
+        Self {
+            value: Arc::new(AtomicU32::new(0)),
+            lines,
+        }
     }
     fn set(&self, stage: u32) {
-        self.0.store(stage, Ordering::Relaxed);
+        self.value.store(stage, Ordering::Relaxed);
     }
     fn fraction(&self) -> f32 {
-        self.0.load(Ordering::Relaxed) as f32 / (STAGES - 1) as f32
+        self.value.load(Ordering::Relaxed) as f32 / (self.lines.len() - 1) as f32
     }
     fn line(&self) -> &'static str {
-        STAGE_LINES[(self.0.load(Ordering::Relaxed) as usize).min(STAGE_LINES.len() - 1)]
+        self.lines[(self.value.load(Ordering::Relaxed) as usize).min(self.lines.len() - 1)]
     }
 }
 

@@ -210,6 +210,7 @@ impl Game<'_> {
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
+            passenger: self.riding.is_some(),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -2967,6 +2968,16 @@ impl Game<'_> {
                 consume = true;
                 sound = Some("entity.cow.milk");
             }
+            // Goat.mobInteract: a bucket on an adult gives milk.
+            Species::Goat if item == "minecraft:bucket" && !m.is_baby() => {
+                give = Some("minecraft:milk_bucket");
+                consume = true;
+                sound = Some(if m.extra.screaming {
+                    "entity.goat.screaming.milk"
+                } else {
+                    "entity.goat.milk"
+                });
+            }
             Species::Mooshroom if item == "minecraft:bowl" && !m.is_baby() => {
                 give = Some("minecraft:mushroom_stew");
                 consume = true;
@@ -3226,6 +3237,19 @@ impl Game<'_> {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                 }
+            }
+            // Tadpole.feed: frog food ages it by a tenth of the time left to
+            // grow into a frog (it grows on its next tick once past 24000).
+            Species::Tadpole if is_food && !m.extra.age_locked => {
+                consume = true;
+                let left = 24_000 - m.extra.age;
+                m.extra.age += ((left / 20) as f32 * 0.1) as i32 * 20;
+                // One happy villager particle at rest about the body.
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    "happy_villager",
+                    horizon_client::particles::Burst::HORSE_EATING,
+                );
             }
             // HappyGhast.canFallInLove: never, so only a ghastling takes food.
             _ if is_food
