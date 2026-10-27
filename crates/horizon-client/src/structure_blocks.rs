@@ -9,7 +9,7 @@ use horizon_world::{
 };
 use std::{
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The `custom_data` key holding an exploration map's search until the game
@@ -114,11 +114,13 @@ pub fn has_pending_map(item: &ItemStack) -> bool {
     })
 }
 
-static LOOT: OnceLock<Option<Arc<LootData>>> = OnceLock::new();
+/// None until `loot_data` runs; `Some(None)` when the tables failed to load.
+static LOOT: Mutex<Option<Option<Arc<LootData>>>> = Mutex::new(None);
 
 /// Loot data of the resource root, loaded once per process.
 pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
-    LOOT.get_or_init(|| match LootData::load(root) {
+    let mut loot = LOOT.lock().unwrap_or_else(|e| e.into_inner());
+    loot.get_or_insert_with(|| match LootData::load(root) {
         Ok(data) => Some(Arc::new(data)),
         Err(e) => {
             log::warn!("Horizon: loot tables unavailable, structure containers stay empty: {e}");
@@ -130,7 +132,16 @@ pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
 
 /// The loot data `loot_data` loaded, if it ran.
 pub fn loaded_loot_data() -> Option<Arc<LootData>> {
-    LOOT.get().cloned().flatten()
+    LOOT.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .flatten()
+}
+
+/// Let go of the loot data: for a preload no world used
+/// (game/world_loading.rs). The next `loot_data` loads it again.
+pub fn forget_loot_data() {
+    *LOOT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// `RandomizableContainer.unpackLootTable` of a container at `pos`: `table`
@@ -185,26 +196,27 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
 
 /// The client block entity for one of a chunk's generated block entities,
 /// before a container's loot is unpacked: `StructureTemplate.placeInWorld`
-/// hands the template's block entity NBT to the level's block entity.
+/// hands the template's block entity NBT to `loadWithComponents`, which is
+/// what a chunk load does with a saved one.
 fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
-    let mut entity = BlockEntity::for_block(block)?;
-    match &mut entity {
-        // MonsterRoomFeature and the structures' setEntityId.
-        BlockEntity::Spawner(s) => {
-            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
-        }
-        BlockEntity::TrialSpawner(s) => {
-            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
-        }
-        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone())),
-        // BannerBlockEntity.loadAdditional: the End cities' black triangles.
-        BlockEntity::Banner(b) => *b = crate::save::decode_banner(&Tag::Compound(nbt.clone())),
-        BlockEntity::EndGateway(g) => {
-            *g = crate::save::decode_end_gateway(&Tag::Compound(nbt.clone()))
-        }
-        _ => {}
+    let fallback = BlockEntity::for_block(block)?;
+    let mut tag = nbt.clone();
+    // RandomizableContainer.tryLoadLootTable: with a table the items are not read.
+    if text(&tag, "LootTable").is_some() {
+        tag.remove(&JavaString::from("Items"));
     }
-    Some(entity)
+    // Programmatic block entities (and a template that saved none) carry no id.
+    if !tag.contains_key(&JavaString::from("id")) {
+        tag.insert("id".into(), Tag::String(fallback.id().into()));
+    }
+    for axis in ["x", "y", "z"] {
+        tag.insert(axis.into(), Tag::Int(0));
+    }
+    // A saved kind the client cannot decode keeps the block's own entity.
+    Some(
+        crate::save::decode_block_entity(&Tag::Compound(tag))
+            .map_or(fallback, |(_, entity)| entity),
+    )
 }
 
 /// Client block entities for the generated block entities of a chunk, and the

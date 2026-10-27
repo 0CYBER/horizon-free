@@ -25,7 +25,7 @@ impl Launcher {
     }
 
     /// Runs a pipeline step on a thread; its lines and its end arrive as messages.
-    fn pack_job(
+    pub(super) fn pack_job(
         &mut self,
         job: impl FnOnce(&dyn Fn(String)) -> Result<Imported, String> + Send + 'static,
     ) {
@@ -116,7 +116,13 @@ impl Launcher {
     }
 
     fn play_pack(&mut self, work: PathBuf) {
-        let Some(tag) = self.selected().cloned() else {
+        // The pack's instance plays its own version, if it has one.
+        let pack = self.instances.list.iter().find(|i| i.work == work);
+        let Some(tag) = pack
+            .and_then(|i| self.version_of(i))
+            .or_else(|| self.launcher_version())
+            .cloned()
+        else {
             return;
         };
         if self.client.is_some() || self.starting_client.is_some() {
@@ -132,6 +138,7 @@ impl Launcher {
             self.mods.report_list.reset();
             self.packs = modpacks::list();
             self.registry_packs = horizon_pack::list();
+            self.reload_instances();
             if self.pack_open.is_none() {
                 self.pack_open = self.packs.first().map(|p| p.slug.clone());
             }
