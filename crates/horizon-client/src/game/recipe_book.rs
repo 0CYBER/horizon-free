@@ -609,6 +609,7 @@ impl Game<'_> {
         if inside(cursor, bx, by, 20.0, 18.0) {
             let open = !self.book_open(book_type);
             self.level.recipe_book.open[book_type.index()] = open;
+            self.send_book_settings(book_type);
             if !open {
                 self.recipe_ui.overlay = None;
             }
@@ -694,6 +695,7 @@ impl Game<'_> {
         if inside(cursor, xo + 110.0, yo + 12.0, 26.0, 16.0) {
             let filtering = !self.book_filtering(book_type);
             self.level.recipe_book.filtering[book_type.index()] = filtering;
+            self.send_book_settings(book_type);
             self.recipe_ui.page = 0;
             self.audio
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
@@ -713,6 +715,22 @@ impl Game<'_> {
             }
         }
         false
+    }
+    /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
+    fn send_book_settings(&self, book_type: BookType) {
+        self.send(
+            horizon_protocol::packets::play::Serverbound::RecipeBookChangeSettings(
+                horizon_protocol::packets::recipes::RecipeBookChangeSettings {
+                    book_type: book_type.index() as i32,
+                    open: self.book_open(book_type),
+                    filtering: self.book_filtering(book_type),
+                },
+            ),
+        );
+    }
+    pub(super) fn recipe_book_flags(&self) -> Option<(bool, bool)> {
+        let book = self.active_book()?;
+        Some((self.book_open(book), self.book_filtering(book)))
     }
     /// How many displays the client's book holds.
     pub(super) fn recipe_book_known(&self) -> usize {
