@@ -451,6 +451,7 @@ impl Settings {
             chat_visibility: self.chat_visibility as i32,
             model_customisation: self.file.model_customisation(),
             main_hand: i32::from(!self.main_hand_left),
+            allows_listing: self.file.bool("allowServerListing"),
             ..ClientInformation::new(view_distance)
         }
     }
@@ -712,6 +713,10 @@ pub enum Opt {
     /// `options.modelPart.*`: one skin layer (index into `options_file::MODEL_PARTS`).
     ModelPart(usize),
     MainHand,
+    AllowServerListing,
+    RealmsNotifications,
+    InGameNotification,
+    SharePresence,
 }
 
 #[cfg(test)]

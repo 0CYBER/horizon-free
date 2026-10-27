@@ -100,6 +100,11 @@ impl Opt {
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 | Opt::HighContrastBlockOutlines
+                // Saved, but no Horizon system reads them yet: no Realms and
+                // no friends list.
+                | Opt::RealmsNotifications
+                | Opt::InGameNotification
+                | Opt::SharePresence
                 // Saved, but nothing in rendering reads them yet.
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
@@ -129,6 +134,10 @@ impl Opt {
             Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
             Opt::MusicFrequency => "musicFrequency",
             Opt::ModelPart(i) => MODEL_PART_KEYS[i],
+            Opt::AllowServerListing => "allowServerListing",
+            Opt::RealmsNotifications => "realmsNotifications",
+            Opt::InGameNotification => "inGameNotification",
+            Opt::SharePresence => "sharePresence",
             _ => return None,
         })
     }
@@ -234,6 +243,10 @@ impl Opt {
                 "options.modelPart.hat",
             ][i],
             Opt::MainHand => "options.mainHand",
+            Opt::AllowServerListing => "options.allowServerListing",
+            Opt::RealmsNotifications => "options.realmsNotifications.button",
+            Opt::InGameNotification => "options.inGameNotification",
+            Opt::SharePresence => "options.sharePresence",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -472,12 +485,20 @@ impl Opt {
             Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts
-            | Opt::ModelPart(_) => on_off(s.file.bool(self.file_key().unwrap())),
+            | Opt::ModelPart(_)
+            | Opt::AllowServerListing
+            | Opt::RealmsNotifications
+            | Opt::InGameNotification => on_off(s.file.bool(self.file_key().unwrap())),
             Opt::MainHand => tr(if s.main_hand_left {
                 "options.mainHand.left"
             } else {
                 "options.mainHand.right"
             }),
+            Opt::SharePresence => tr([
+                "options.sharePresence.none",
+                "options.sharePresence.limited",
+                "options.sharePresence.all",
+            ][s.file.int("sharePresence").clamp(0, 2) as usize]),
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
@@ -682,7 +703,10 @@ impl Opt {
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts
-            | Opt::ModelPart(_) => {
+            | Opt::ModelPart(_)
+            | Opt::AllowServerListing
+            | Opt::RealmsNotifications
+            | Opt::InGameNotification => {
                 let key = self.file_key().unwrap();
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
@@ -730,6 +754,11 @@ impl Opt {
                     .set("musicFrequency", crate::options_file::V::Int(i32::from(n)));
             }
             Opt::MainHand => s.main_hand_left = !s.main_hand_left,
+            Opt::SharePresence => {
+                let n = next(s.file.int("sharePresence").clamp(0, 2) as u8, 3);
+                s.file
+                    .set("sharePresence", crate::options_file::V::Int(i32::from(n)));
+            }
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
             Opt::PadEnabled => s.controller.enabled = !s.controller.enabled,
@@ -864,6 +893,8 @@ pub enum Page {
     Agent,
     /// SkinCustomizationScreen: the skin layers and Main Hand.
     Skin,
+    /// OnlineOptionsScreen: server listing, Realms and friends notifications.
+    Online,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -1173,6 +1204,7 @@ impl OptionsUi {
             Page::Video => "options.videoTitle",
             Page::Sound => "options.sounds.title",
             Page::Skin => "options.skinCustomisation.title",
+            Page::Online => "options.online.title",
             Page::Controls => "controls.title",
             Page::KeyBinds => "controls.keybinds.title",
             Page::Mouse => "options.mouse_settings.title",
@@ -1409,6 +1441,16 @@ impl OptionsUi {
                 opts.push(Opt::MainHand);
                 pairs(&opts)
             }
+            Page::Online => {
+                // OnlineOptionsScreen without the Xbox and friends-list parts.
+                let mut rows = vec![Row::Header("options.online.friends.header")];
+                rows.extend(pairs(&[Opt::InGameNotification, Opt::SharePresence]));
+                rows.push(Row::Header("options.online.servers.header"));
+                rows.push(Row::Big(Opt::AllowServerListing));
+                rows.push(Row::Header("options.online.realms.header"));
+                rows.push(Row::Big(Opt::RealmsNotifications));
+                rows
+            }
             Page::Controls => {
                 let mut rows = vec![Row::Buttons(
                     button(
@@ -1605,13 +1647,13 @@ impl OptionsUi {
                     list: false,
                 });
                 out.push(option_widget(s, Opt::Fov, cx - 154.0, 29.0, 150.0));
-                out.push(inactive(button(
+                out.push(button(
                     cx + 4.0,
                     29.0,
                     150.0,
                     tr("options.online"),
-                    Act::None,
-                )));
+                    Act::Push(Page::Online),
+                ));
                 let entries = [
                     ("options.skinCustomisation", Some(Page::Skin)),
                     ("options.sounds", Some(Page::Sound)),
