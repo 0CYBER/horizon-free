@@ -108,12 +108,12 @@ and its failures bisect and comment on merges.
 AMD EPYC threads, 30 GB, in Detroit; reachable only through the maintainer's tailnet). Nobody sits at it, so the
 watcher never pauses it except by hand. It gets half the machine: `RUNNER_MEMORY=24`, `CARGO_BUILD_JOBS` and the
 harness slots at 4, and a drop-in (`~/.config/systemd/user/horizon-runner.service.d/cpus.conf`) that starts it under
-`taskset -c 4-7`, so CPUs 0-3 stay free for benchmarks pinned there (the user slice can't set `AllowedCPUs`: systemd
-doesn't delegate the cpuset controller to it).
+`taskset -c 4-7` (the user slice can't set `AllowedCPUs`: systemd doesn't delegate the cpuset controller to it).
+Agents' `tools/remote.sh` runs and benchmarks share CPUs 0-3, so they never slow a pull request's job.
 Without Nix, `linux-runner.sh` takes the build libraries, the JDK, sccache, Xvfb and Mesa's software Vulkan
 (lavapipe; there is no GPU) from apt, and Python 3.13 from uv. The partner can reach the machine, so gh is not
 logged in there: the registration token comes from another machine (`RUNNER_TOKEN`), and no job with secrets may
-run there (parity has none). It is also a parity host (`playhorizon` in `tools/parity_hosts.json`, 6 jobs). Since
+run there (parity has none). It is also a parity host (`playhorizon` in `tools/parity_hosts.json`, 3 jobs on CPUs 0-3). Since
 2026-10-26 it has the `horizon-game` label: pull requests' parity jobs run there or on the Mac mini, and `full-parity`
 ones only there.
 
