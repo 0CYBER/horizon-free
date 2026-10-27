@@ -1259,7 +1259,16 @@ enum B {
         valid: Vec<[i32; 3]>,
         worked: i32,
     },
-    UseBonemeal(Timed),
+    UseBonemeal {
+        t: Timed,
+        next_work: i64,
+        last_session: i64,
+        worked: i32,
+        crop: Option<[i32; 3]>,
+        /// The next crop is picked on the next tick, when the level shows the
+        /// age the meal gave (vanilla grows the crop at once).
+        repick: bool,
+    },
     WalkToBlockMemory {
         running: bool,
         which: PoiMem,
@@ -1361,13 +1370,13 @@ impl B {
             | B::GoToPotentialJobSite(t)
             | B::DoNothing(t)
             | B::TradeWithVillager(t)
-            | B::UseBonemeal(t)
             | B::Celebrate(t) => t.running,
             B::MoveToTargetSink { t, .. }
             | B::GiveGiftToHero { t, .. }
             | B::ShowTrades { t, .. }
             | B::WorkAtPoi { t, .. }
             | B::HarvestFarmland { t, .. }
+            | B::UseBonemeal { t, .. }
             | B::JumpOnBed { t, .. }
             | B::MakeLove { t, .. }
             | B::SleepInBed { t, .. } => t.running,
@@ -1693,17 +1702,38 @@ impl B {
                 }
                 true
             }
-            B::UseBonemeal(t) => {
+            B::UseBonemeal {
+                t,
+                next_work,
+                last_session,
+                worked,
+                crop,
+                repick,
+            } => {
                 let mm = mem(m);
                 if mm.look_target.present() || mm.walk_target.present() {
                     return false;
                 }
-                // Bone meal in the inventory is needed; checked every 10 ticks.
-                let has = super::villager::ext(m)
-                    .is_some_and(|e| e.count_item("minecraft:bone_meal") > 0);
-                let _ = t;
-                let _ = has;
-                false
+                // Checked every 10 ticks, and not within 160 ticks of the last session.
+                let age = i64::from(m.age);
+                if age % 10 != 0 || (*last_session != 0 && *last_session + 160 > age) {
+                    return false;
+                }
+                if super::villager::ext(m).is_none_or(|e| e.count_item("minecraft:bone_meal") == 0)
+                {
+                    return false;
+                }
+                *crop = pick_bonemeal_crop(m, cx);
+                if crop.is_none() {
+                    return false;
+                }
+                t.begin(cx.lr, cx.now);
+                bonemeal_target(m, *crop);
+                m.extra.main_hand = Some("minecraft:bone_meal".into());
+                *next_work = cx.now;
+                *worked = 0;
+                *repick = false;
+                true
             }
             // -- OneShots.
             B::InteractWithDoor {
@@ -2979,7 +3009,45 @@ impl B {
                     });
                 }
             }
-            B::UseBonemeal(_) => self.do_stop(m, cx),
+            B::UseBonemeal {
+                t,
+                next_work,
+                worked,
+                crop,
+                repick,
+                ..
+            } => {
+                if *repick {
+                    *repick = false;
+                    *crop = pick_bonemeal_crop(m, cx);
+                    bonemeal_target(m, *crop);
+                }
+                // canStillUse: fewer than 80 work cycles and a crop to work on.
+                if now > t.end || *worked >= 80 || crop.is_none() {
+                    self.do_stop(m, cx);
+                    return;
+                }
+                let Some(p) = *crop else { return };
+                if now >= *next_work && closer_to_center(p, m.position, 1.0) {
+                    let e = super::villager::ext_mut(m);
+                    // BoneMealItem.growCrop: a CropBlock below max age takes the meal.
+                    if let Some(slot) = e
+                        .inventory
+                        .iter()
+                        .position(|s| s.count > 0 && &*s.item == "minecraft:bone_meal")
+                        && bonemeal_valid(cx.w, p)
+                    {
+                        e.inventory[slot].count -= 1;
+                        if e.inventory[slot].count == 0 {
+                            e.inventory.remove(slot);
+                        }
+                        cx.events.push(MobEvent::Bonemeal { pos: p });
+                        *repick = true;
+                        *next_work = now + 40;
+                    }
+                    *worked += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -3067,7 +3135,13 @@ impl B {
                 t.running = false;
                 mem(m).breed_target.clear();
             }
-            B::UseBonemeal(t) => t.running = false,
+            B::UseBonemeal {
+                t, last_session, ..
+            } => {
+                t.running = false;
+                m.extra.main_hand = None;
+                *last_session = i64::from(m.age);
+            }
             B::WorkAtPoi { t, .. } => t.running = false,
             B::HarvestFarmland {
                 t, next_ok, worked, ..
@@ -3333,6 +3407,39 @@ fn harvest_tick(
             mm.walk_target.set(WalkTarget::block(q, 0.5, 1));
             mm.look_target.set(Tracker::Block(q));
         }
+    }
+}
+/// `UseBonemeal.validPos`: a `CropBlock` below its max age.
+fn bonemeal_valid(w: &MobWorld, p: [i32; 3]) -> bool {
+    super::villager::crop(w, p) && !super::villager::ripe_crop(w, p)
+}
+/// `UseBonemeal.pickNextTarget`: one of the valid blocks around the villager,
+/// each equally likely (reservoir sampling with the level random).
+fn pick_bonemeal_crop(m: &Mob, cx: &mut Bx) -> Option<[i32; 3]> {
+    let c = block_of(m.position);
+    let mut result = None;
+    let mut count = 0;
+    for x in -1..=1 {
+        for y in -1..=1 {
+            for z in -1..=1 {
+                let p = [c[0] + x, c[1] + y, c[2] + z];
+                if bonemeal_valid(cx.w, p) {
+                    count += 1;
+                    if cx.lr.next_int_bound(count).unwrap_or(1) == 0 {
+                        result = Some(p);
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+/// `UseBonemeal.setCurrentCropAsTarget`.
+fn bonemeal_target(m: &mut Mob, crop: Option<[i32; 3]>) {
+    if let Some(p) = crop {
+        let mm = mem(m);
+        mm.look_target.set(Tracker::Block(p));
+        mm.walk_target.set(WalkTarget::block(p, 0.5, 1));
     }
 }
 /// The remembered POI positions a behaviour reads.
@@ -3830,7 +3937,17 @@ fn packages(baby: bool, seed: i64, farmer: bool) -> Vec<Entry> {
                         },
                         if farmer { 2 } else { 5 },
                     ),
-                    (B::UseBonemeal(timed(60, 60)), if farmer { 4 } else { 7 }),
+                    (
+                        B::UseBonemeal {
+                            t: timed(60, 60),
+                            next_work: 0,
+                            last_session: 0,
+                            worked: 0,
+                            crop: None,
+                            repick: false,
+                        },
+                        if farmer { 4 } else { 7 },
+                    ),
                 ],
             ),
         );
