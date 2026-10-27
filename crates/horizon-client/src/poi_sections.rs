@@ -79,6 +79,15 @@ impl<T: Copy> PoiSections<T> {
     }
 }
 
+/// The POI types villagers use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Poi {
+    /// A job site, by profession index.
+    Job(u8),
+    Home,
+    Meeting,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

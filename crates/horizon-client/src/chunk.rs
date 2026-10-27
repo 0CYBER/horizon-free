@@ -2,6 +2,7 @@
 //! threads can mesh and light immutable snapshots while the game thread edits
 //! (copy-on-write through `Arc::make_mut`).
 use horizon_core::paletted::{PalettedContainer, Strategy};
+use horizon_world::nbt::{Compound, Tag};
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, OnceLock};
 
@@ -155,7 +156,7 @@ pub struct Chunk {
     /// positions, applied once by LevelChunk.postProcessGeneration.
     pub postprocess: Vec<[i32; 3]>,
     /// Saved data Horizon keeps but does not simulate (save.rs).
-    pub saved: Option<Arc<crate::save::ChunkExtras>>,
+    pub saved: Option<Arc<ChunkExtras>>,
     /// Entities read from a save (vanilla entity NBT), spawned on arrival.
     pub entities: Vec<horizon_world::nbt::Tag>,
     /// Structure starts reaching into this chunk (`structures.References`):
@@ -307,6 +308,76 @@ impl Chunk {
             u32::from(biome),
         );
     }
+}
+
+/// A proto chunk saved before it became final. Decoration writes into a
+/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
+/// past the finished ones hold writes that generating them again would lose
+/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
+pub struct SavedProto {
+    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
+    pub column: Chunk,
+    /// Decorated itself (`features`), not only written to by its neighbours
+    /// (`terrain`).
+    pub decorated: bool,
+    /// Block entity data in placement order, with `x`, `y` and `z`.
+    pub block_entities: Vec<Tag>,
+    /// Entities placed by structures, with absolute `Pos`.
+    pub entities: Vec<Tag>,
+}
+
+/// A container's loot table and what Horizon rolled from it. Vanilla keeps
+/// `LootTable` and `LootTableSeed` until the container is first opened;
+/// Horizon rolls when it generates or loads the chunk, and saves the table
+/// again while the container still holds exactly the rolled items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RolledLoot {
+    pub pos: (i32, i32, i32),
+    pub table: String,
+    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
+    pub seed: Option<i64>,
+    /// The rolled `Items`.
+    pub items: Tag,
+}
+impl RolledLoot {
+    /// Puts the loot table back in place of `Items` while they are still the
+    /// roll; false once the container holds anything else.
+    pub fn restore(&self, map: &mut Compound) -> bool {
+        if map.get(&"Items".into()) != Some(&self.items) {
+            return false;
+        }
+        map.remove(&"Items".into());
+        map.insert("LootTable".into(), Tag::String(self.table.as_str().into()));
+        if let Some(seed) = self.seed.filter(|s| *s != 0) {
+            map.insert("LootTableSeed".into(), Tag::Long(seed));
+        }
+        true
+    }
+}
+
+/// Save data loaded with a chunk that Horizon keeps but does not simulate.
+#[derive(Clone, Debug, Default)]
+pub struct ChunkExtras {
+    /// Chunk root keys written back as loaded (structures, PostProcessing,
+    /// InhabitedTime, blending data, ...).
+    pub root: Compound,
+    /// Block entities Horizon does not model.
+    pub block_entities: Vec<Tag>,
+    /// The NBT of the modelled block entities as loaded, to restore the fields and
+    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
+    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
+    /// Every saved block entity's position in the order of the save's list,
+    /// the order `SerializableChunkData` puts them in the chunk's maps.
+    pub block_entity_order: Vec<(i32, i32, i32)>,
+    /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
+    /// save time. Registered with the level's tick scheduler on arrival and
+    /// replaced with the scheduler's pending ticks when saving.
+    pub block_ticks: Vec<horizon_core::ticks::SavedTick>,
+    pub fluid_ticks: Vec<horizon_core::ticks::SavedTick>,
+    /// Game time written as `LastUpdate`.
+    pub last_update: i64,
+    /// Containers still holding their loot table's roll.
+    pub rolled_loot: Vec<RolledLoot>,
 }
 
 #[cfg(test)]
