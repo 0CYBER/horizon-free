@@ -1975,9 +1975,9 @@ impl Game<'_> {
                         }
                     }
                 }
-                // Entity.DATA_SHARED_FLAGS_ID's crouching bit: another
-                // player's or a mannequin's crouch (their model and
-                // Entity.isDiscrete's name tag).
+                // Entity.DATA_SHARED_FLAGS_ID's crouching and sprinting bits:
+                // another player's or a mannequin's crouch (their model and
+                // Entity.isDiscrete's name tag), and the dust a runner raises.
                 if (mannequin
                     || self
                         .remote
@@ -1988,6 +1988,7 @@ impl Game<'_> {
                     for (index, _, value) in &p.values {
                         if let (0, Value::Byte(flags)) = (index, value) {
                             m.extra.crouching = flags & 2 != 0;
+                            m.extra.sprinting = flags & 8 != 0;
                         }
                     }
                 }
