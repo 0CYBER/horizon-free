@@ -37,9 +37,11 @@ pub enum Kind {
         columns: i32,
         button_width: i32,
     },
-    /// `DialogListDialog`: its dialogs as sent (ids, a tag or inline dialogs).
+    /// `DialogListDialog`: its dialogs as sent (ids, a tag or inline dialogs),
+    /// and one button per dialog they resolve to (`set_list`).
     DialogList {
         dialogs: Tag,
+        entries: Vec<Button>,
         exit: Option<Button>,
         columns: i32,
         button_width: i32,
@@ -395,6 +397,44 @@ impl Control {
             )),
         }
     }
+    /// The text on a cycle button or slider holding `value`
+    /// (`CycleButton.createFullName`, `NumberRangeInput.computeLabel`).
+    pub fn message(&self, value: &InputValue) -> Option<Text> {
+        match (self, value) {
+            (
+                Self::SingleOption {
+                    options,
+                    label,
+                    label_visible,
+                    ..
+                },
+                InputValue::Option(i),
+            ) => {
+                let (id, display, _) = options.get(*i)?;
+                let shown = display.clone().unwrap_or_else(|| Text::literal(id));
+                Some(if *label_visible {
+                    Text::translate("options.generic_value", &[label.clone(), shown])
+                } else {
+                    shown
+                })
+            }
+            (
+                Self::NumberRange {
+                    label,
+                    label_format,
+                    ..
+                },
+                InputValue::Slider(_),
+            ) => {
+                let shown = number_string(self.scaled(value)?);
+                Some(Text::translate(
+                    label_format,
+                    &[label.clone(), Text::literal(shown)],
+                ))
+            }
+            _ => None,
+        }
+    }
     /// `ValueGetter.asTemplateSubstitution`.
     pub fn substitution(&self, value: &InputValue) -> String {
         match (self, value) {
@@ -536,6 +576,7 @@ impl Dialog {
             },
             "dialog_list" => Kind::DialogList {
                 dialogs: t.get("dialogs")?.clone(),
+                entries: Vec::new(),
                 exit: button("exit_action"),
                 columns: int(t, "columns", 2),
                 button_width: int(t, "button_width", 150),
@@ -588,7 +629,51 @@ impl Dialog {
             Kind::Notice(b) => vec![b],
             Kind::Confirmation { yes, no } => vec![yes, no],
             Kind::MultiAction { actions, exit, .. } => actions.iter().chain(exit).collect(),
-            Kind::ServerLinks { exit, .. } | Kind::DialogList { exit, .. } => exit.iter().collect(),
+            Kind::ServerLinks { exit, .. } => exit.iter().collect(),
+            Kind::DialogList { entries, exit, .. } => entries.iter().chain(exit).collect(),
+        }
+    }
+    /// `DialogListDialogScreen.createListActions`: a button for each of `dialogs`
+    /// (what the list names), labelled by its external title, opening it.
+    pub fn set_list(&mut self, dialogs: &[Tag]) {
+        let Kind::DialogList {
+            entries,
+            button_width,
+            ..
+        } = &mut self.kind
+        else {
+            return;
+        };
+        *entries = dialogs
+            .iter()
+            .filter_map(|tag| {
+                let sub = Dialog::parse(tag)?;
+                Some(Button {
+                    label: sub.external_title.unwrap_or(sub.title),
+                    tooltip: None,
+                    width: *button_width,
+                    action: Some(Action::Static(Click::ShowDialog(tag.clone()))),
+                })
+            })
+            .collect();
+    }
+    /// The dialogs a `dialog_list`'s `dialogs` names: the entries of a `#tag`
+    /// (by `tag`), registry ids (by `registry`) and dialogs written inline.
+    pub fn list_entries(
+        dialogs: &Tag,
+        tag: &dyn Fn(&str) -> Vec<Tag>,
+        registry: &dyn Fn(&str) -> Option<Tag>,
+    ) -> Vec<Tag> {
+        let one = |t: &Tag| match t {
+            Tag::String(id) => registry(&id.to_string_lossy()),
+            inline => Some(inline.clone()),
+        };
+        match dialogs {
+            Tag::String(id) if id.to_string_lossy().starts_with('#') => {
+                tag(&id.to_string_lossy()[1..])
+            }
+            Tag::List(items) => items.iter().filter_map(one).collect(),
+            single => one(single).into_iter().collect(),
         }
     }
     /// What `status` reports of it.
