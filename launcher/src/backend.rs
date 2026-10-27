@@ -90,7 +90,7 @@ fn agent(url: &str) -> ureq::Agent {
     .build()
 }
 
-fn get(url: &str) -> Result<ureq::Response, String> {
+pub(crate) fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
     if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
@@ -239,7 +239,7 @@ fn release_list() -> Result<serde_json::Value, String> {
 }
 
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
-fn parse_releases(
+pub(crate) fn parse_releases(
     list: &serde_json::Value,
     asset: Option<&str>,
     keep: fn(&str) -> bool,
@@ -475,7 +475,7 @@ fn installed_in(versions: &Path) -> Vec<String> {
 }
 
 /// A small release file (its checksums or their signature), whole; None when it has none.
-fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
     let response = match get(url) {
         Ok(response) => response,
         Err(e) if e.ends_with("answered 404") => return Ok(None),
@@ -550,17 +550,28 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
     if !is_game_tag(tag) {
         return Err(format!("{tag} is not a Horizon release."));
     }
+    let sha256 = signed_digest(tag, ASSET.unwrap_or_default())?;
+    install_as(release, tag, &sha256, progress)
+}
+
+/// Downloads `release`'s archive for this platform, checks it against `sha256` (its signed
+/// checksum), and unpacks it as the installed version `tag`.
+pub(crate) fn install_as(
+    release: &Release,
+    tag: &str,
+    sha256: &str,
+    progress: impl Fn(f32),
+) -> Result<(), String> {
     let (url, size) = release
         .asset
         .clone()
         .ok_or_else(|| format!("{tag} has no build for this platform."))?;
-    let sha256 = signed_digest(tag, ASSET.unwrap_or_default())?;
     let root = versions_dir();
     let partial = root.join(format!(".{tag}.partial"));
     let _ = fs::remove_dir_all(&partial);
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
     let archive = partial.join("download");
-    download(&url, size, &sha256, &archive, &progress)?;
+    download(&url, size, sha256, &archive, &progress)?;
     let unpacked = partial.join("unpacked");
     unpack(&archive, &url, &unpacked)?;
     progress(0.97);
@@ -2439,6 +2450,10 @@ pub enum Msg {
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
     /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
     Playing(Option<u64>),
+    /// The nightly being installed, done this far (`nightly`).
+    NightlyProgress(f32),
+    /// A nightly check ended: the version installed (None: already up to date), or why not.
+    Nightly(Result<Option<String>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2617,6 +2632,10 @@ pub struct Settings {
     /// The window's language. Unset follows the system's (`i18n::Language::system`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<crate::i18n::Language>,
+    /// The player turned Nightly on (`nightly`): the nightly build installs and updates in its own
+    /// instance. Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nightly: bool,
 }
 
 impl Settings {
