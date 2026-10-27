@@ -705,6 +705,14 @@ impl PlayerMotion {
     /// Vehicle, item-use and effect bindings remain separate; hunger, flight,
     /// water and collision conditions use this actor's actual state.
     pub fn sprint_input_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
+        self.sprint_input_tick_with_window(keys, 7)
+    }
+    /// The same phase with Java's `Options.sprintWindow` value.
+    pub fn sprint_input_tick_with_window(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprint_window: i32,
+    ) -> Result<()> {
         let conditions = crate::sprint::Conditions {
             sprinting: self.sprinting,
             enough_food: self.health.food.has_enough_food(),
@@ -725,7 +733,9 @@ impl PlayerMotion {
         // The sprint setter edits attributes and flags, independent of local
         // keyboard history. Retain the input prefix even if that setter fails.
         let mut state = self.sprint_input;
-        let result = state.tick(keys, conditions, 7, |value| self.set_sprinting(value));
+        let result = state.tick(keys, conditions, sprint_window.clamp(0, 10), |value| {
+            self.set_sprinting(value)
+        });
         self.sprint_input = state;
         result
     }
@@ -992,6 +1002,14 @@ impl MotionWorld<'_, '_, '_> {
             .food_tick(&self.resources.health, self.scene.health_rules)
     }
     pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
+        self.controlled_simulation_tick_with_sprint_window(keys, 7)
+    }
+    /// Local simulation with the configured double-tap sprint window.
+    pub fn controlled_simulation_tick_with_sprint_window(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprint_window: i32,
+    ) -> Result<()> {
         // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
         self.player.health.advance_clock();
         self.fluid_base_tick()?;
@@ -1004,7 +1022,8 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
-        self.player.sprint_input_tick(keys)?;
+        self.player
+            .sprint_input_tick_with_window(keys, sprint_window)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
         self.player.move_vector = direction;
