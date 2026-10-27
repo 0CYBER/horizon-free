@@ -23,17 +23,17 @@
   "playhorizon": {
    "ssh": "ludovic@playhorizon",
    "root": ".actions-runners/horizon/parity-host",
-   "shell": "systemd-run --user --scope --quiet --slice=horizon-ci.slice --unit=horizon-parity-worker-$$ bash -c",
+   "shell": "systemd-run --user --scope --quiet --slice=horizon-ci.slice --unit=horizon-parity-worker-$$ taskset -c 0-3 bash -c",
    "setup": "test ! -e ~/.actions-runners/horizon/paused && set -a && . ~/.actions-runners/horizon/.env && set +a && export PATH=$(cat ~/.actions-runners/horizon/.path) && unset WAYLAND_DISPLAY && export DISPLAY=:$(cat ~/.actions-runners/horizon/display)",
    "python": "python3.13",
-   "jobs": 6,
+   "jobs": 3,
    "nice": 10,
    "exclude": {
     "mob_ai": "the vanilla oracle runs out of its 3 GB heap here (OutOfMemoryError in IO workers; passes on the desktop and the Mac) - 2026-10-26 trial",
     "lan_integration": "two clients rendered on the CPU (lavapipe): different timing subtests fail on each run (elytra, consume-release, barter, critical-hits) - 2026-10-26 trial",
     "world_reopen": "failed twice here (no Save and Quit button after reopening; the minecart-count flake), passes on the desktop - 2026-10-26 trial"
    },
-   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), used by nothing else: 6 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
+   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), its CI runner has CPUs 4-7, so workers get 0-3 (as tools/remote.sh runs do) and 3 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
   }
  },
  "local_only": {
@@ -44,7 +44,6 @@
   "lan_integration": "the whole lan_e2e suite: ~40 min a run on a loaded runner, and single checks flake under load; run it by name, or tools/lan_e2e.py"
  },
  "known_flaky": {
-  "remote_fireball": "samples the fireball on the wall clock, so a slow host sees it in too few samples (desktop runner, 3 times on 10-26)",
   "world_reopen": "counted 4 minecarts instead of 3 once on a loaded Mac mini runner, then passed at the same head (10-26)"
  }
 }

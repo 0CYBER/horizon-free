@@ -654,6 +654,9 @@ impl Game<'_> {
         // DedicatedServer.initServer ends with saveEverything(false, true, true).
         self.save_game()?;
         self.log_saved_levels();
+        if let Some(host) = self.lan.as_mut() {
+            host.hub.entity_range_percent = props.entity_broadcast_range_percentage;
+        }
         let mut state = ServerState {
             lists,
             console,
