@@ -37,7 +37,7 @@ pub fn list() -> Vec<Installed> {
     list_in(&packs_dir())
 }
 
-fn list_in(dir: &Path) -> Vec<Installed> {
+pub(crate) fn list_in(dir: &Path) -> Vec<Installed> {
     let mut packs: Vec<Installed> = fs::read_dir(dir)
         .into_iter()
         .flatten()

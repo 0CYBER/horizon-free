@@ -52,6 +52,8 @@ pub struct StackData {
     pub pot_decorations: Option<Box<[Option<ItemStack>; 4]>>,
     /// `minecraft:bundle_contents`.
     pub bundle_contents: Vec<ItemStack>,
+    /// `BundleContents.selectedItem`: runtime only, never saved or sent.
+    pub bundle_selected: BundleSelected,
     /// `minecraft:suspicious_stew_effects`: (effect id, duration).
     pub stew_effects: Vec<(Arc<str>, i32)>,
     /// `minecraft:map_post_processing`: 0 lock, 1 scale.
@@ -59,6 +61,20 @@ pub struct StackData {
     /// Components Horizon does not model (lore, custom data, item name,
     /// max stack size...), kept as their saved values in key order.
     pub other: Vec<(String, Tag)>,
+}
+/// A bundle's selected item index (-1: none). Like vanilla's
+/// `BundleContents.equals` it is left out when stacks are compared.
+#[derive(Clone, Copy, Debug)]
+pub struct BundleSelected(pub i32);
+impl Default for BundleSelected {
+    fn default() -> Self {
+        Self(-1)
+    }
+}
+impl PartialEq for BundleSelected {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 /// The components `components_tag` writes from modelled fields.
 const MODELLED: &[&str] = &[
@@ -305,7 +321,9 @@ fn read_text(t: &Tag) -> Option<String> {
         // A component's root `text` may be empty with the visible words in
         // `extra` (every legacy display name ViaVersion produces looks like
         // this), so flatten the whole component instead of reading one key.
-        Tag::Compound(_) => Some(crate::entity_nbt::name_text(t).plain()),
+        // ComponentSerialization.CODEC also takes a list (its first element
+        // styling the rest), as servers behind ViaVersion send book pages.
+        Tag::Compound(_) | Tag::List(_) => Some(crate::entity_nbt::name_text(t).plain()),
         _ => None,
     }
 }
@@ -791,6 +809,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 Arc::from(t.get("pattern").and_then(string)?.as_str()),
             ))
         }),
+        bundle_selected: BundleSelected::default(),
         other: Vec::new(),
     };
     let mut data = data;
@@ -896,6 +915,37 @@ mod tests {
         assert_eq!(
             extra.and_then(|d| d.custom_name.clone()).as_deref(),
             Some("Games Right click")
+        );
+    }
+
+    #[test]
+    fn written_book_pages_may_be_component_lists() {
+        // A page as Hypixel sends it through ViaVersion: a list, not a compound.
+        let page = Tag::List(vec![
+            Tag::compound([("text", Tag::String("".into()))]),
+            Tag::compound([("text", Tag::String("Please read ".into()))]),
+            Tag::compound([("text", Tag::String("the rules".into()))]),
+        ]);
+        let book = Tag::compound([
+            (
+                "title",
+                Tag::compound([("raw", Tag::String("Rules".into()))]),
+            ),
+            ("author", Tag::String("Server".into())),
+            (
+                "pages",
+                Tag::List(vec![
+                    page,
+                    Tag::compound([("raw", Tag::String("Two".into()))]),
+                ]),
+            ),
+        ]);
+        let components = Tag::compound([("minecraft:written_book_content", book)]);
+        let (_, extra) = decode_components(Some(&components));
+        let pages = extra.and_then(|d| d.written.clone()).map(|w| w.pages);
+        assert_eq!(
+            pages,
+            Some(vec!["Please read the rules".to_owned(), "Two".to_owned()])
         );
     }
 

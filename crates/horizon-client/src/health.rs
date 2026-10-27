@@ -111,6 +111,12 @@ pub enum HealthEvent {
         amount: f32,
     },
     Phase(&'static str),
+    /// `Player.hurtArmor`: a hit that doesn't bypass armor wears the worn
+    /// pieces (`LivingEntity.getDamageAfterArmorAbsorb`); the game applies it.
+    ArmorHurt {
+        source: DamageTypeId,
+        amount: f32,
+    },
     /// `ServerLevel.broadcastDamageEvent`: the client's
     /// `LivingEntity.handleDamageEvent` plays the source's hurt sound.
     DamageBroadcast {
@@ -139,6 +145,7 @@ impl HealthEvent {
                 format!("record-damage {:08x}", amount.to_bits())
             }
             Self::Phase(name) => name.into(),
+            Self::ArmorHurt { amount, .. } => format!("hurt-armor {:08x}", amount.to_bits()),
             Self::DamageBroadcast { .. } => "broadcast-damage".into(),
             Self::Criterion { .. } => "hurt-criterion".into(),
         }
@@ -534,9 +541,14 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
     fn bypasses(&mut self, kind: Bypass) -> io::Result<bool> {
         Ok(self.source.bypasses(kind))
     }
-    fn hurt_armor(&mut self, _: &mut Attributes, _: f32) -> io::Result<()> {
+    fn hurt_armor(&mut self, _: &mut Attributes, damage: f32) -> io::Result<()> {
+        // The worn armor lives in the game, which wears it from this event.
+        self.event(HealthEvent::ArmorHurt {
+            source: self.source.type_id(),
+            amount: damage,
+        });
         Ok(())
-    } // empty equipment
+    }
     fn has_resistance(&mut self) -> io::Result<bool> {
         Ok(self.status.resistance.is_some())
     }
@@ -846,6 +858,31 @@ mod tests {
         // A weaker one doesn't hurt at all.
         let third = hit(1.5);
         assert!(!third.hurt && !third.knockback);
+    }
+
+    /// #2141: an arrow that takes the last of the player's health must kill
+    /// them: `LivingEntity.hurt` leaves the health at zero and `Player.die`
+    /// follows.
+    #[test]
+    fn an_arrow_kills_a_player_at_one_health() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .unwrap();
+        player.set_health(1.0, false).unwrap();
+        let (health, rules) = (&resources.health, super::HealthRules::default());
+        let id = health.damage.id("minecraft:arrow").unwrap();
+        let hurt = player.hurt(health, rules, id, 5.0).unwrap();
+        assert!(hurt, "the arrow must hurt");
+        assert_eq!(player.health.health(), 0.0, "the health must be spent");
+        assert!(player.health.dead_or_dying(), "the player must be dead");
     }
 
     #[test]

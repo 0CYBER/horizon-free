@@ -5,14 +5,20 @@ use super::Vertex;
 /// ordinary entities, breaking cracks (11), translucent breaking cracks (12),
 /// the boat water mask (13, `RenderPipelines.WATER_MASK`), entity shadows
 /// (14, `RenderPipelines.ENTITY_SHADOW`) and translucent-layer particles (15,
-/// drawn after translucent terrain: `SubmitNodeCollection.submitQuadParticleGroup`).
-const MATERIALS: usize = 6;
+/// drawn after translucent terrain: `SubmitNodeCollection.submitQuadParticleGroup`)
+/// and translucent item quads (32, drawn without depth writes).
+const MATERIALS: usize = 7;
 /// The overlay of depth-only quads that hide water (`RenderTypes.waterMask`).
 pub const WATER_MASK_OVERLAY: u32 = 13;
 /// The overlay of entity shadow quads (`RenderTypes.entityShadow`).
 pub const SHADOW_OVERLAY: u32 = 14;
 /// The overlay of translucent-layer particles (`SingleQuadParticle.Layer.translucent`).
 pub const TRANSLUCENT_PARTICLE_OVERLAY: u32 = 15;
+/// The overlay of item quads with translucent pixels (`Sheets.translucentItemSheet`,
+/// `RenderPipelines.ITEM_TRANSLUCENT`); past the creeper swell range (16 to 31).
+pub const TRANSLUCENT_ITEM_OVERLAY: u32 = 32;
+/// A translucent item with an enchantment glint.
+pub const TRANSLUCENT_GLINT_ITEM_OVERLAY: u32 = 33;
 
 #[derive(Default)]
 pub(super) struct EntityBatch {
@@ -45,6 +51,7 @@ impl EntityBatch {
                 WATER_MASK_OVERLAY => 3,
                 SHADOW_OVERLAY => 4,
                 TRANSLUCENT_PARTICLE_OVERLAY => 5,
+                TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 6,
                 _ => 0,
             };
             self.buckets[material][counts[material]] = index;

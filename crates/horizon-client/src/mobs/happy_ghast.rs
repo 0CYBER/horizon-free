@@ -544,14 +544,15 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
             m.ai.home = Some((here, radius));
         }
     }
-    // continuousHeal: a point every 30 seconds, every second in rain.
+    // continuousHeal: a point every 30 seconds, every second in rain or snow
+    // (Level.precipitationAt).
     if m.alive() && m.death_time == 0 && m.health < m.attrs.max_health {
         let (x, y, z) = (
             m.position.x.floor() as i32,
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         );
-        let wet = w.raining && w.can_see_sky(x, y, z);
+        let wet = w.precipitation_at(x, y, z).is_some();
         let interval = if wet { 20 } else { 600 };
         if m.age.is_multiple_of(interval) {
             m.health = (m.health + 1.0).min(m.attrs.max_health);
