@@ -6321,9 +6321,13 @@ impl Game<'_> {
     /// The recipe id and result of the crafting grid.
     /// `RecipeCraftingHolder.awardUsedRecipes`: a crafted recipe becomes known
     /// (special ones never do).
-    fn award_crafted(&mut self, recipes: &[String]) {
+    fn award_crafted(&mut self, crafts: &[(String, Vec<Option<ItemStack>>)]) {
+        for (recipe, ingredients) in crafts {
+            self.trigger_recipe_crafted(recipe, ingredients);
+        }
+        let recipes: Vec<String> = crafts.iter().map(|(r, _)| r.clone()).collect();
         let index = &self.res.stations().recipe_index;
-        let (_, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
+        let (_, unlocked) = self.level.recipe_book.add_recipes(index, &recipes);
         self.recipe_unlocked(&unlocked);
     }
     fn craft_recipe(&self) -> Option<(String, ItemStack)> {
@@ -7694,6 +7698,7 @@ impl Game<'_> {
             while let Some((recipe, result)) = self.craft_recipe() {
                 let made = (result.item.clone(), result.count);
                 let cells = self.craft_size * self.craft_size;
+                let ingredients = self.craft_grid[..cells].to_vec();
                 let remainders = self.res.recipes().remainders(
                     &recipe,
                     &self.craft_grid[..cells],
@@ -7733,7 +7738,7 @@ impl Game<'_> {
                 }
                 crafted += 1;
                 self.stats.add("crafted", &made.0, made.1 as i32);
-                self.award_crafted(&[format!("minecraft:{recipe}")]);
+                self.award_crafted(&[(format!("minecraft:{recipe}"), ingredients)]);
                 if !shift || crafted >= 64 {
                     break;
                 }
