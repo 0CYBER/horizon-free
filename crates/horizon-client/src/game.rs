@@ -5602,7 +5602,14 @@ impl Game<'_> {
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
         batch.blur_at = batch.vertices.len() as u32;
-        match self.screen {
+        // PackConfirmScreen takes the open screen's place (it comes back once
+        // the prompt is answered): the screen under the prompt isn't drawn.
+        let screen = if self.server_packs.prompt.is_some() {
+            Screen::Playing
+        } else {
+            self.screen
+        };
+        match screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
             Screen::Paused => {
@@ -5641,9 +5648,11 @@ impl Game<'_> {
         self.draw_saving_indicator(&mut batch);
         self.draw_toasts(&mut batch);
         self.draw_pack_toasts(&mut batch);
-        self.remote_hud(&mut batch);
-        self.draw_sign_editor(&mut batch);
-        self.draw_book(&mut batch);
+        if self.server_packs.prompt.is_none() {
+            self.remote_hud(&mut batch);
+            self.draw_sign_editor(&mut batch);
+            self.draw_book(&mut batch);
+        }
         batch
     }
     fn creative_inventory_open(&self) -> bool {
