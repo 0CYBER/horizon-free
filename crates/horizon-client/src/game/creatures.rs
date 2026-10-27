@@ -1850,6 +1850,7 @@ impl Game<'_> {
         let mut hits = Vec::new();
         let mut deflections: Vec<[f64; 3]> = Vec::new();
         let mut arrow_events = Vec::new();
+        let mut trails = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
                 .mobs
@@ -1941,6 +1942,10 @@ impl Game<'_> {
                 if shooter.is_some() {
                     p.owner = Some(Who::Player);
                 }
+                // AbstractHurtingProjectile.tick ends with createParticleTrail.
+                if super::remote_projectiles::has_smoke_trail(&p.kind) {
+                    trails.push(p.position);
+                }
                 // ThrownEnderpearl.onAboveBubbleColumn / onInsideBubbleColumn.
                 if keep && hit == Hit::None && matches!(p.kind, ProjectileKind::EnderPearl) {
                     let (at, h) = (p.position, 0.125);
@@ -1998,6 +2003,7 @@ impl Game<'_> {
                 keep
             });
         }
+        self.smoke_trails(trails);
         for at in deflections {
             self.audio
                 .play("minecraft:entity.breeze.deflect", Some(at), 1.0, 1.0);
