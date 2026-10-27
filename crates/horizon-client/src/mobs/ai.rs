@@ -53,16 +53,61 @@ pub struct Ai {
     /// Swing animation progress (attackAnim) and ticks.
     pub swing_time: i32,
     pub swinging: bool,
+    /// The current swing's `SwingDescription.durationTicks`; 0 is the default 6.
+    pub swing_duration: i32,
     /// Walked distance and the next footstep.
     pub steps: super::living::Steps,
 }
 impl Mob {
+    /// `LivingEntity.getCurrentSwingDuration`: 6 ticks unless a swing set its own.
+    pub fn swing_duration(&self) -> i32 {
+        if self.ai.swing_duration > 0 {
+            self.ai.swing_duration
+        } else {
+            6
+        }
+    }
+    /// `SwingState.startIfAble`: a swing past the first half of the current
+    /// one restarts it.
+    fn start_swing(&mut self, duration: i32) -> bool {
+        let half = self.swing_duration() / 2;
+        if self.ai.swinging && self.ai.swing_time >= 0 && self.ai.swing_time < half {
+            return false;
+        }
+        self.ai.swing_time = -1;
+        self.ai.swinging = true;
+        self.ai.swing_duration = duration.max(1);
+        true
+    }
     /// LivingEntity.swing
     pub fn swing(&mut self) {
-        if !self.ai.swinging || self.ai.swing_time >= 3 || self.ai.swing_time < 0 {
-            self.ai.swing_time = -1;
-            self.ai.swinging = true;
+        if self.start_swing(6) {
+            self.extra.swing_right_arm = None;
         }
+    }
+    /// `LivingEntity.swing(hand, animation, false)` for a swing of `duration`
+    /// ticks (`getModifiedSwingDuration`): the arm is `hand.asArm(mainArm)`.
+    pub fn swing_hand(&mut self, off_hand: bool, duration: i32) {
+        if self.start_swing(duration) {
+            self.extra.swing_right_arm = Some(!off_hand != self.main_arm_left());
+        }
+    }
+    /// `swing_hand` for a swing of `base` ticks, lengthened or shortened by
+    /// this mob's haste, conduit power or mining fatigue
+    /// (`LivingEntity.getModifiedSwingDuration`).
+    pub fn swing_hand_modified(&mut self, off_hand: bool, base: i32) {
+        let amplifier = |id: &str| self.extra.effects.iter().find(|e| e.0 == id).map(|e| e.2);
+        let dig_speed = amplifier("minecraft:haste").max(amplifier("minecraft:conduit_power"));
+        let fatigue = amplifier("minecraft:mining_fatigue");
+        let duration = crate::first_person::swing_duration(
+            crate::first_person::SwingAnimation {
+                kind: 1,
+                duration: base,
+            },
+            dig_speed,
+            fatigue,
+        );
+        self.swing_hand(off_hand, duration);
     }
 }
 /// The module implementing a species' behaviour.
@@ -123,7 +168,7 @@ pub fn family(s: Species) -> Family {
         | S::Parched
         | S::WitherSkeleton
         | S::ZombifiedPiglin => Family::Undead,
-        S::Creeper | S::Spider | S::CaveSpider => Family::Hostile,
+        S::Creeper | S::Spider | S::CaveSpider | S::Silverfish => Family::Hostile,
         S::Squid
         | S::GlowSquid
         | S::Cod
@@ -182,9 +227,12 @@ pub fn register(m: &mut Mob) {
         Family::Undead => undead::register(m),
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
+        // Turtle.registerGoals has its own list, none of the generic goals.
+        Family::Generic if m.species() == Species::Turtle => super::turtle::register(m),
         Family::Generic if m.species() == Species::Armadillo => super::armadillo::register(m),
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic if m.species() == Species::Fox => super::fox::register(m),
+        Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
         Family::Generic => {
             generic(m);
             if m.species() == Species::Rabbit {
@@ -201,9 +249,6 @@ pub fn register(m: &mut Mob) {
                     outside: 0.1,
                     gravity: true,
                 };
-            }
-            if m.species() == Species::Turtle {
-                super::turtle::register(m);
             }
             if m.species() == Species::Goat {
                 super::goat::register(m);
@@ -540,18 +585,21 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
         }
     }
 }
-/// LivingEntity.updateSwingTime (6-tick swing duration).
+/// LivingEntity.updateSwingTime.
 pub fn tick_swing(m: &mut Mob) {
+    let duration = m.swing_duration();
     if m.ai.swinging {
         m.ai.swing_time += 1;
-        if m.ai.swing_time >= 6 {
+        if m.ai.swing_time >= duration {
             m.ai.swing_time = 0;
             m.ai.swinging = false;
+            m.ai.swing_duration = 0;
+            m.extra.swing_right_arm = None;
         }
     } else {
         m.ai.swing_time = 0;
     }
-    m.anim.attack_anim = m.ai.swing_time as f32 / 6.0;
+    m.anim.attack_anim = m.ai.swing_time as f32 / duration as f32;
 }
 /// `Entity.isInRain`: rain at the block position, or at the top of the box.
 pub(super) fn in_rain(m: &Mob, w: &MobWorld) -> bool {
@@ -587,6 +635,9 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.was_eye_in_water = m.fluids.eye_in_water;
     m.update_fluids(w, events);
+    if m.species() == Species::Drowned {
+        super::undead::drowned_update_swimming(m, w);
+    }
     let fire = crate::motion::environment::fire_contact(w.world, w.registry, m.bounds());
     if fire > 0.0 {
         m.ticks_frozen = 0;
@@ -785,6 +836,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 "entity.wolf.pant"
             }
         }
+        Species::Parrot => super::parrot::ambient(m, w),
         Species::Cat if m.extra.tame && m.extra.in_love > 0 => "entity.cat.purr",
         Species::Cat if !m.extra.tame => "entity.cat.stray_ambient",
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
@@ -836,6 +888,9 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Parrot {
+        super::parrot::ai_step(m, w, level_random, events);
+    }
     // Witch.aiStep runs before super.aiStep().
     if m.species() == Species::Witch {
         let far = m
@@ -897,8 +952,8 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     if m.kind.flags.climber {
         m.climbing = m.horizontal_collision;
     }
-    // AgeableMob.aiStep: a forced age-up's particles (positions drawn on the
-    // server too), then the age.
+    // AgeableMob.aiStep: a forced age-up's particles (`sendParticles`, so the
+    // players are sent them), then the age.
     if m.extra.forced_age_timer > 0 {
         if m.extra.forced_age_timer % 4 == 0 {
             let (w, h) = (f64::from(m.width()), f64::from(m.height()));
@@ -907,10 +962,12 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             let y = m.position.y + h * r.next_double() + 0.5;
             let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
             // sendParticles(HAPPY_VILLAGER, x, y, z, 1, 0, 0, 0, 0): exactly there, at rest.
-            events.push(MobEvent::Particles {
+            events.push(MobEvent::LevelParticles {
                 kind: "happy_villager",
                 at: [x, y, z],
-                count: 0,
+                spread: [0.0; 3],
+                speed: 0.0,
+                count: 1,
             });
         }
         m.extra.forced_age_timer -= 1;
@@ -1536,6 +1593,9 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     if m.species() == Species::Strider {
         return super::strider::walk_target_value(m, w, p);
     }
+    if m.species() == Species::Turtle {
+        return super::turtle::walk_target_value(m, w, p, light());
+    }
     // Hoglin.getWalkTargetValue: nowhere near a repellent, crimson nylium best.
     if m.species() == Species::Hoglin {
         let near = m.extra.repellent.is_some_and(|r| {
@@ -1603,6 +1663,10 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
         // Panda.hurtServer: up first, whatever the damage.
         Species::Panda => {
             super::panda::hurt(m);
+            true
+        }
+        Species::Silverfish => {
+            super::hostile::silverfish_hurt(m, source);
             true
         }
         Species::Enderman => super::enderman::on_damage(m, source),

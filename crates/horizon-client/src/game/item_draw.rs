@@ -165,11 +165,17 @@ pub(super) fn owner_at(position: [f64; 3], yaw: f32, entity_type: &str) -> Owner
         ..Default::default()
     }
 }
-/// `UseDuration` of a stack: 72000 for drawn items, the consume time for food.
+/// `UseDuration` of a stack (`Item.getUseDuration`): 72000 for drawn items
+/// and for `blocks_attacks` items (shields), the consume time for food.
 fn use_duration(components: &Components) -> i32 {
     if let Some(c) = components.get("minecraft:consumable") {
         let seconds = c["consume_seconds"].as_f64().unwrap_or(1.6);
         return (seconds * 20.0) as i32;
+    }
+    if components.get("minecraft:blocks_attacks").is_some()
+        || components.get("minecraft:kinetic_weapon").is_some()
+    {
+        return 72_000;
     }
     let item_model = components
         .get("minecraft:item_model")
@@ -250,6 +256,11 @@ impl Game<'_> {
         owner.main_arm_left = self.settings.main_hand_left;
         owner.is_local_player = true;
         owner.is_view_entity = true;
+        owner.last_death_location = self
+            .level
+            .last_death
+            .clone()
+            .map(|(dimension, pos)| GlobalPos { dimension, pos });
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
             && self.stack_in(slot) == Some(stack)
         {
