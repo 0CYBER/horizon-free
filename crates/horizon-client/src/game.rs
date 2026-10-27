@@ -3374,6 +3374,8 @@ impl Game<'_> {
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
                         1033 => Some(("minecraft:block.chorus_flower.grow", 1.0)),
                         1034 => Some(("minecraft:block.chorus_flower.death", 1.0)),
+                        1045 => Some(("minecraft:block.pointed_dripstone.land", 2.0)),
+                        1052 => Some(("minecraft:block.sulfur_spike.land", 2.0)),
                         1046 => Some((
                             "minecraft:block.pointed_dripstone.drip_lava_into_cauldron",
                             2.0,
@@ -3409,7 +3411,9 @@ impl Game<'_> {
                                 let r = self.particles.level_random();
                                 2.6 + (r.next_float() - r.next_float()) * 0.8
                             }
-                            1046 | 1047 => self.particles.level_random().next_float() * 0.1 + 0.9,
+                            1045 | 1046 | 1047 | 1052 => {
+                                self.particles.level_random().next_float() * 0.1 + 0.9
+                            }
                             1029 | 1030 | 1042 | 1043 | 1044 | 1053 | 1054 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
@@ -3420,7 +3424,7 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        if matches!(id, 1019 | 1021 | 1029 | 1030 | 1053 | 1054) {
+                        if matches!(id, 1019 | 1021 | 1029 | 1030 | 1045 | 1052 | 1053 | 1054) {
                             // Clients play the anvil sound from its level event;
                             // capturing it also sends a duplicate sound packet.
                             self.audio.play_unshared(name, c, volume, pitch);
@@ -3460,7 +3464,18 @@ impl Game<'_> {
                 LevelEvent::DropResources { pos, state } => {
                     self.with_level(|_, level, _| level.drop_resources_now(pos, state));
                 }
-                LevelEvent::FallingBlock { pos, state } => {
+                LevelEvent::FallingBlock {
+                    pos,
+                    state,
+                    hurt_per_distance,
+                } => {
+                    let mut damage = horizon_client::falling_block::Damage::falling(
+                        &self.res.facts().get(state).name,
+                    );
+                    if let Some(per_distance) = hurt_per_distance {
+                        damage.hurt_entities = true;
+                        damage.per_distance = per_distance;
+                    }
                     let p = Vec3::new(
                         f64::from(pos.x) + 0.5,
                         f64::from(pos.y),
@@ -3478,9 +3493,7 @@ impl Game<'_> {
                         drop_item: true,
                         fall_distance: 0.0,
                         stuck: Vec3::ZERO,
-                        damage: horizon_client::falling_block::Damage::falling(
-                            &self.res.facts().get(state).name,
-                        ),
+                        damage,
                         saved: None,
                     });
                 }
