@@ -2714,7 +2714,7 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
 }
 
 /// What the others see of a guest's body, from its server-side state.
-fn guest_body(g: &Guest) -> BodyFlags {
+pub fn guest_body(g: &Guest) -> BodyFlags {
     let m = g.motion.as_deref();
     BodyFlags {
         gliding: g.fall_flying,

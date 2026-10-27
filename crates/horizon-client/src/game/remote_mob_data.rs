@@ -15,6 +15,9 @@ use horizon_protocol::registry::Builtin;
 fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_entity: i32) {
     let species = m.species();
     let baby = super::lan::baby_index(&m.kind.id);
+    if &*m.kind.id == "minecraft:player" {
+        player_poses(m, values);
+    }
     for (index, _, value) in values {
         match (*index, value) {
             // Entity.DATA_SHARED_FLAGS_ID's FLAG_ONFIRE: Entity.isOnFire on a
@@ -110,6 +113,21 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Mannequin, 17, Value::Profile(profile)) => {
                 m.profile = Some(profile.clone());
             }
+            _ => {}
+        }
+    }
+}
+
+/// What another player's pose draws from: gliding (Entity.isFallFlying, flag
+/// 0x80 of the shared flags), the pose (swimming), Riptide's spin
+/// (LivingEntity.isAutoSpinAttack, flag 4) and a loaded crossbow in the
+/// hand (the held stack comes with SetEquipment).
+fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
+    for (index, _, value) in values {
+        match (*index, value) {
+            (0, Value::Byte(flags)) => m.extra.fall_flying = flags & -128 != 0,
+            (6, Value::Id(pose)) => m.extra.synced_pose = (*pose).clamp(0, 17) as u8,
+            (8, Value::Byte(flags)) => m.extra.auto_spin_attack = flags & 4 != 0,
             _ => {}
         }
     }

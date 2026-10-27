@@ -453,7 +453,14 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
-        self.player_elytra_geometry(m, camera, alpha as f32, packed, out);
+        self.player_elytra_geometry(
+            m,
+            self.armor[1].as_ref().map(|s| &*s.item),
+            camera,
+            alpha as f32,
+            packed,
+            out,
+        );
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
     }
@@ -509,7 +516,14 @@ impl Game<'_> {
             &self.player_armor_layers(),
             &mut verts,
         );
-        self.player_elytra_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
+        self.player_elytra_geometry(
+            &m,
+            self.armor[1].as_ref().map(|s| &*s.item),
+            camera,
+            1.0,
+            240 | 240 << 8,
+            &mut verts,
+        );
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
@@ -548,17 +562,18 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
-    fn player_elytra_geometry(
+    /// `WingsLayer` for a player wearing `chest`.
+    pub(super) fn player_elytra_geometry(
         &self,
         m: &Mob,
+        chest: Option<&str>,
         camera: glam::DVec3,
         partial: f32,
         light: u32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
-        let Some(asset) = self.armor[1]
-            .as_ref()
-            .and_then(|s| self.res.items().get(&s.item))
+        let Some(asset) = chest
+            .and_then(|item| self.res.items().get(item))
             .and_then(|i| i.equip_asset.as_ref())
         else {
             return;
@@ -598,7 +613,7 @@ impl Game<'_> {
     }
     /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
     /// player (`SpinAttackEffectModel.setupAnim`).
-    fn spin_attack_geometry(
+    pub(super) fn spin_attack_geometry(
         &self,
         m: &Mob,
         camera: glam::DVec3,

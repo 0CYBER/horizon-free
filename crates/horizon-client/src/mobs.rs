@@ -705,6 +705,8 @@ pub struct Extra {
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
+    /// `Entity.DATA_POSE` of another player, as the server sent it.
+    pub synced_pose: u8,
     /// `LivingEntity.isAutoSpinAttack` (Riptide).
     pub auto_spin_attack: bool,
     pub main_hand_left: bool,
@@ -2318,6 +2320,25 @@ impl SwimAnimation {
     /// `LivingEntity.getSwimAmount`.
     pub fn amount(&self, partial: f32) -> f32 {
         self.old + partial * (self.amount - self.old)
+    }
+}
+
+impl Mob {
+    /// The part of `LivingEntity.tick` and `aiStep` that animates another
+    /// player from its synched pose and flags: the glide count, the wings
+    /// (`elytraAnimationState`) and the swim amount (`updateSwimAmount`).
+    pub fn tick_avatar_pose(&mut self, in_water: bool) {
+        let e = &mut self.extra;
+        e.fall_fly_ticks = if e.fall_flying {
+            e.fall_fly_ticks + 1
+        } else {
+            0
+        };
+        // LivingEntity.isVisuallySwimming: the swimming pose, or the gliding
+        // pose after the glide ended.
+        let visually = e.synced_pose == 3 || (!e.fall_flying && e.synced_pose == 1);
+        e.elytra.tick(e.fall_flying, e.crouching, self.velocity);
+        e.swim.tick(visually, in_water);
     }
 }
 

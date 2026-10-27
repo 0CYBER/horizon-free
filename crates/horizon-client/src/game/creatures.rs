@@ -3471,6 +3471,18 @@ impl Game<'_> {
                 &armor,
                 out,
             );
+            if &*mob.kind.id == "minecraft:player" {
+                // PlayerRenderer's WingsLayer and SpinAttackEffectLayer.
+                self.player_elytra_geometry(
+                    mob,
+                    mob.extra.chest.as_deref(),
+                    camera,
+                    alpha as f32,
+                    packed,
+                    out,
+                );
+                self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+            }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             // Glowing outlines and a guardian's beam remain visible independently
             // of whether the body is hidden behind terrain.
