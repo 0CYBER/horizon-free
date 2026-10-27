@@ -4387,6 +4387,12 @@ impl Game<'_> {
                 // The world's spawn from the start, not only once saved: a bed set
                 // before the first save must not become it.
                 self.level.world_spawn.get_or_insert([x, y, z]);
+                // The "Bonus Chest" create-world option, placed once with the spawn.
+                if horizon_client::save::WorldGen::read(&self.world_root)
+                    .is_some_and(|g| g.bonus_chest)
+                {
+                    self.place_bonus_chest([x, y, z])?;
+                }
             }
             let s = self
                 .level
