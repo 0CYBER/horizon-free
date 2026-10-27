@@ -359,6 +359,8 @@ pub struct PlayerMotion {
     pub leather_boots: bool,
     /// An armor piece in `#freeze_immune_wearables` (`LivingEntity.canFreeze`).
     pub freeze_immune: bool,
+    /// A worn enchantment's `damage_immunity` to `#burn_from_stepping` (frost walker).
+    pub burn_from_stepping_immune: bool,
     /// `Entity.oldPosition`: where this tick started.
     pub old_position: Vec3,
     /// The server's copy of a player another client moves (a LAN guest), while
@@ -540,6 +542,7 @@ impl PlayerMotion {
             ticks_frozen: 0,
             leather_boots: false,
             freeze_immune: false,
+            burn_from_stepping_immune: false,
             old_position: position,
             server_copy: false,
             wall_hit_events: None,
