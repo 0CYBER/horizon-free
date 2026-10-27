@@ -782,21 +782,23 @@ fn mob_equipment(
     // slot's item (6) in `head`.
     let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
-        (0u8, &e.main_hand),
-        (1, &e.off_hand),
-        (2, &e.feet),
-        (3, &e.legs),
-        (4, &e.chest),
-        (if body { 6 } else { 5 }, &e.head),
+        (0u8, &e.main_hand, None),
+        (1, &e.off_hand, None),
+        (2, &e.feet, e.armor[3].as_ref()),
+        (3, &e.legs, e.armor[2].as_ref()),
+        (4, &e.chest, e.armor[1].as_ref()),
+        (if body { 6 } else { 5 }, &e.head, e.armor[0].as_ref()),
     ];
-    for (slot, item) in slots {
+    for (slot, item, worn) in slots {
         if let Some(item) = item {
-            let stack = ItemStack {
+            // The worn armour keeps its stack: a dyed leather piece keeps
+            // its colour.
+            let stack = worn.cloned().unwrap_or(ItemStack {
                 item: item.clone(),
                 count: 1,
                 damage: 0,
                 extra: None,
-            };
+            });
             out.push((slot, hub.stack(&Some(stack))));
         }
     }

@@ -138,7 +138,13 @@ impl Game<'_> {
     pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
         let e = &m.extra;
         self.armor_layers(
-            [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref().map(|i| (i, None))),
+            [
+                (e.head.as_deref(), e.armor[0].as_ref()),
+                (e.chest.as_deref(), e.armor[1].as_ref()),
+                (e.legs.as_deref(), e.armor[2].as_ref()),
+                (e.feet.as_deref(), e.armor[3].as_ref()),
+            ]
+            .map(|(item, stack)| item.map(|i| (i, stack))),
         )
     }
     /// The layers of the armour items `worn` (with their stacks when known,
@@ -179,9 +185,10 @@ impl Game<'_> {
             ) else {
                 continue;
             };
-            let color = undyed.map_or(0xFFFF_FFFF, |c| {
-                0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
-            });
+            // EquipmentLayerRenderer.getColorForLayer: a dyeable layer
+            // takes the stack's dye colour, the colour it has when undyed
+            // otherwise.
+            let color = horizon_client::mobs::render::armor_tint(*undyed, stack);
             out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
             // EquipmentLayerRenderer: the trim layer over the armour.
             if let Some(r) = stack
@@ -207,6 +214,7 @@ impl Game<'_> {
             .armor
             .iter()
             .chain(guests.flat_map(|g| g.armor.iter()))
+            .chain(self.mobs.iter().flat_map(|m| m.extra.armor.iter()))
             .zip(
                 ["helmet", "chestplate", "leggings", "boots"]
                     .into_iter()
