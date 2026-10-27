@@ -1861,6 +1861,23 @@ impl Game<'_> {
                 self.thorns(a);
             }
         }
+        // LivingEntity.hurtServer: ENTITY_HURT_PLAYER, unless it returned
+        // early (invulnerable, or inside the hurt cooldown).
+        if outcome.hurt || outcome.sound {
+            let source = attacker
+                .or(owner)
+                .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+                .map(|m| self.mob_entity(m));
+            self.trigger_entity_hurt_player(&horizon_client::advancements::DamageView {
+                kind: damage_type.to_owned(),
+                direct: source.clone().filter(|_| !projectile),
+                is_direct: !projectile,
+                source,
+                original: amount,
+                actual: amount - outcome.blocked,
+                blocked: outcome.blocked > 0.0,
+            });
+        }
         if raised {
             self.after_block(outcome, amount, attacker, projectile);
         }
@@ -2533,6 +2550,24 @@ impl Game<'_> {
                             .is_some_and(|m| m.damage(amount, source));
                         if p.owner == Some(Who::Player) {
                             self.last_hurt_by_player.insert(id, self.lan_acting);
+                            if hurt && let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+                                // LivingEntity.hurtServer: PLAYER_HURT_ENTITY.
+                                let victim = self.mob_entity(m);
+                                let spectral = p.arrow.as_ref().is_some_and(|a| {
+                                    &*a.pickup_item.item == "minecraft:spectral_arrow"
+                                });
+                                let direct = horizon_client::advancements::EntityView {
+                                    kind: if spectral {
+                                        "minecraft:spectral_arrow"
+                                    } else {
+                                        "minecraft:arrow"
+                                    }
+                                    .into(),
+                                    position: [p.position.x, p.position.y, p.position.z],
+                                    ..Default::default()
+                                };
+                                self.player_hit(&victim, "minecraft:arrow", Some(direct), amount);
+                            }
                         }
                         hurt
                     }

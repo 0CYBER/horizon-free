@@ -8293,6 +8293,15 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed {
+            let victim = self.mob_entity(&self.mobs[index]);
+            self.player_hit(
+                &victim,
+                creatures::damage_type(source.kind, true),
+                None,
+                amount,
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             if p.attack_log.len() >= 64 {
                 p.attack_log.remove(0);
