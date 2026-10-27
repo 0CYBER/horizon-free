@@ -76,7 +76,13 @@ public final class VanillaStructureStartOracle {
                 for(int qy=(floor-12)>>2;qy<=(floor+8)>>2;qy++)biomes.append(" "+qy+":"+resolver.getNoiseBiome(x>>2,qy,z>>2).unwrapKey().get().identifier().getPath());
                 w.println("height "+x+" "+z+" "+floor+" "+surface+biomes);
             }
-            for(int cx=x0;cx<=x1;cx++)for(int cz=z0;cz<=z1;cz++) {
+            // HORIZON_CHUNKS="cx,cz;cx,cz": only these chunks, instead of the rectangle.
+            List<int[]> chunks=new ArrayList<>();
+            String only=System.getenv("HORIZON_CHUNKS");
+            if(only!=null)for(String c:only.split(";")){String[] xz=c.split(",");chunks.add(new int[]{Integer.parseInt(xz[0]),Integer.parseInt(xz[1])});}
+            else for(int cx=x0;cx<=x1;cx++)for(int cz=z0;cz<=z1;cz++)chunks.add(new int[]{cx,cz});
+            for(int[] chunk:chunks) {
+                int cx=chunk[0],cz=chunk[1];
                 ChunkPos pos=new ChunkPos(cx,cz);
                 for(var set:state.possibleStructureSets()) {
                     var placement=set.value().placement();var entries=set.value().structures();
@@ -107,6 +113,8 @@ public final class VanillaStructureStartOracle {
                                 if(piece instanceof PoolElementStructurePiece pool)extra=" "+pool.getPosition().getX()+" "+pool.getPosition().getY()+" "+pool.getPosition().getZ()+" "+pool.getRotation()+" "+pool.getGroundLevelDelta()+" "+pool.getJunctions().size()+" "+pool.getElement();
                                 w.println("piece "+BuiltInRegistries.STRUCTURE_PIECE.getKey(piece.getType())+" "+pb.minX()+" "+pb.minY()+" "+pb.minZ()+" "+pb.maxX()+" "+pb.maxY()+" "+pb.maxZ()+extra);
                             }
+                            if(System.getenv("HORIZON_START_NBT")!=null)
+                                w.println("nbt "+cx+" "+cz+" "+canonical(start.createTag(new net.minecraft.world.level.levelgen.structure.pieces.StructurePieceSerializationContext(resources,access,templates),pos)));
                             break;
                         }
                         if(entries.size()==1)break;
@@ -117,5 +125,34 @@ public final class VanillaStructureStartOracle {
         }
         storage.close();
         System.exit(0);
+    }
+
+    /** A tag as text with sorted keys and every number's type, so equal tags print equally. */
+    static String canonical(net.minecraft.nbt.Tag tag) {
+        return switch (tag) {
+            case net.minecraft.nbt.CompoundTag c -> {
+                var keys = new ArrayList<>(c.keySet());
+                Collections.sort(keys);
+                var b = new StringBuilder("{");
+                for (int i = 0; i < keys.size(); i++) b.append(i == 0 ? "" : ",").append(keys.get(i)).append(':').append(canonical(c.get(keys.get(i))));
+                yield b.append('}').toString();
+            }
+            case net.minecraft.nbt.ListTag l -> {
+                var b = new StringBuilder("[");
+                for (int i = 0; i < l.size(); i++) b.append(i == 0 ? "" : ",").append(canonical(l.get(i)));
+                yield b.append(']').toString();
+            }
+            case net.minecraft.nbt.ByteTag v -> v.value() + "b";
+            case net.minecraft.nbt.ShortTag v -> v.value() + "s";
+            case net.minecraft.nbt.IntTag v -> String.valueOf(v.value());
+            case net.minecraft.nbt.LongTag v -> v.value() + "L";
+            case net.minecraft.nbt.FloatTag v -> Float.floatToRawIntBits(v.value()) + "f";
+            case net.minecraft.nbt.DoubleTag v -> Double.doubleToRawLongBits(v.value()) + "d";
+            case net.minecraft.nbt.StringTag v -> "\"" + v.value().replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+            case net.minecraft.nbt.IntArrayTag v -> "[I;" + String.join(",", Arrays.stream(v.getAsIntArray()).mapToObj(String::valueOf).toList()) + "]";
+            case net.minecraft.nbt.LongArrayTag v -> "[L;" + String.join(",", Arrays.stream(v.getAsLongArray()).mapToObj(String::valueOf).toList()) + "]";
+            case net.minecraft.nbt.ByteArrayTag v -> { var b = new StringBuilder("[B;"); byte[] a = v.getAsByteArray(); for (int i = 0; i < a.length; i++) b.append(i == 0 ? "" : ",").append(a[i]); yield b.append(']').toString(); }
+            default -> tag.toString();
+        };
     }
 }

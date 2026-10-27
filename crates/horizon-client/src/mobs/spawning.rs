@@ -35,6 +35,8 @@ pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> b
 #[derive(Clone, Copy, Debug)]
 pub struct LocalDifficulty {
     pub effective: f32,
+    /// The world difficulty is normal.
+    pub normal: bool,
     /// The world difficulty is hard.
     pub hard: bool,
 }
@@ -45,9 +47,11 @@ impl LocalDifficulty {
     /// the overworld clock, the chunk's inhabited time and the moon.
     pub fn new(base: u8, total: i64, inhabited: i64, moon: f32) -> Self {
         let hard = base == 3;
+        let normal = base == 2;
         if base == 0 {
             return Self {
                 effective: 0.0,
+                normal,
                 hard,
             };
         }
@@ -60,6 +64,7 @@ impl LocalDifficulty {
         }
         Self {
             effective: f32::from(base) * (0.75 + global + local),
+            normal,
             hard,
         }
     }
@@ -148,6 +153,14 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::Pig | S::Cow | S::Chicken => m.extra.variant = climate_index,
         S::Sheep => m.extra.color = super::farm::sheep_color(biome.climate, &mut m.random),
         S::Mooshroom => m.extra.variant = 0,
+        // Turtle.finalizeSpawn: home is where it spawned.
+        S::Turtle => {
+            m.extra.home = Some([
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            ])
+        }
         S::Frog => m.extra.variant = biome.frog,
         S::Wolf => m.extra.variant = biome.wolf,
         S::Cat => m.extra.variant = super::tame::cat_variant(m, biome.full_moon),
@@ -158,6 +171,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
             if m.random.next_float() < 0.05 {
                 m.extra.age = i32::MIN / 2;
             }
+            // setCanBreakDoors(nextFloat() < special * 0.1), before the gear.
+            let can_break_doors = m.random.next_float() < difficulty.special() * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if m.species() != S::Drowned {
                 populate_armor(m, difficulty);
             }
@@ -191,6 +207,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword, or
         // one time in 20 a golden spear.
         S::ZombifiedPiglin => {
+            // Zombie.finalizeSpawn's setCanBreakDoors.
+            let can_break_doors = m.random.next_float() < difficulty.special() * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             let spear = m.random.next_int_bound(20).unwrap_or(1) == 0;
             m.extra.main_hand = Some(
                 if spear {
@@ -263,6 +282,18 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::TropicalFish => super::aquatic::finalize(m),
         S::Slime | S::MagmaCube => super::cube::finalize(m),
         _ => {}
+    }
+    // Zombie.finalizeSpawn ends with handleAttributes: the reinforcement
+    // chance (and a leader's bonus) that `Zombie.hurtServer` reads.
+    if matches!(
+        m.species(),
+        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::ZombifiedPiglin
+    ) {
+        super::finalize::zombie_attributes(
+            m,
+            difficulty.special(),
+            super::finalize::Reason::Natural,
+        );
     }
 }
 /// VillagerType.byBiome
