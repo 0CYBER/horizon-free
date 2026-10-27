@@ -1478,6 +1478,16 @@ impl Game<'_> {
                                 "INFO",
                                 &format!("System chat: {} joined the game", g.name),
                             );
+                        } else if self.player.is_some()
+                            && let Some(g) = host.hub.guest(conn)
+                            && g.placed
+                        {
+                            // The host's chat hears of the newcomer as the guests do.
+                            let who = self.player_text(&g.name, g.uuid);
+                            self.system_message(
+                                Text::translate("multiplayer.player.joined", &[who])
+                                    .with_color(horizon_client::text::YELLOW),
+                            );
                         }
                     }
                     HostEvent::Left(mut guest) => {
@@ -1511,6 +1521,13 @@ impl Game<'_> {
                             super::dedicated::log(
                                 "INFO",
                                 &format!("System chat: {} left the game", guest.name),
+                            );
+                        } else if self.player.is_some() && guest.placed {
+                            // ServerGamePacketListenerImpl.removePlayerFromWorld.
+                            let who = self.player_text(&guest.name, guest.uuid);
+                            self.system_message(
+                                Text::translate("multiplayer.player.left", &[who])
+                                    .with_color(horizon_client::text::YELLOW),
                             );
                         }
                     }
