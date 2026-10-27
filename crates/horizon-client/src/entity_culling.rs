@@ -186,6 +186,8 @@ mod tests {
             color: u32::MAX,
             light: 0,
             normal: [0; 4],
+
+            glint_uv: [0.0, 0.0],
         };
         let prior = vertex([0.0; 3]);
         let body = [vertex([8.0, -1.0, -1.0]), vertex([10.0, 1.0, 1.0])];

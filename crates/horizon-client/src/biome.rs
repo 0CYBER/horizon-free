@@ -2,7 +2,6 @@
 //! (`Biome.getGrassColor`/`getFoliageColor`/..., `BlockTintSources`).
 use crate::Result;
 use horizon_core::{noise::SimplexNoise, position::BlockPos, random::LegacyRandom};
-use horizon_world::worldgen::biome_temperature::{BiomeTemperatureSettings, TemperatureModifier};
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
 
@@ -34,8 +33,8 @@ pub struct BiomeInfo {
     pub increased_fire_burnout: bool,
     pub name: String,
     pub temperature: f32,
-    /// `climateSettings.temperatureModifier` (frozen oceans).
-    pub temperature_modifier: TemperatureModifier,
+    /// `temperature_modifier: frozen` (the frozen oceans).
+    pub frozen: bool,
     pub downfall: f32,
     pub precipitation: bool,
     pub grass: u32,
@@ -49,19 +48,30 @@ pub struct BiomeInfo {
     pub water_fog: u32,
 }
 impl BiomeInfo {
+    /// `Biome.getHeightAdjustedTemperature`: the frozen modifier, then cooler
+    /// with height above `sea_level + 17`.
+    pub fn temperature_at(&self, pos: BlockPos, sea_level: i32) -> f32 {
+        use horizon_world::worldgen::biome_temperature::{
+            BiomeTemperatureSettings, TemperatureModifier,
+        };
+        BiomeTemperatureSettings {
+            base_temperature: self.temperature,
+            modifier: if self.frozen {
+                TemperatureModifier::Frozen
+            } else {
+                TemperatureModifier::None
+            },
+            has_precipitation: self.precipitation,
+            downfall: self.downfall,
+        }
+        .height_adjusted(pos, sea_level)
+    }
     /// `Biome.getPrecipitationAt` in the Overworld (sea level 63): None
     /// without precipitation, else whether it falls as snow
     /// (`getHeightAdjustedTemperature` below 0.15).
     pub fn snows_at(&self, x: i32, y: i32, z: i32) -> Option<bool> {
-        let settings = BiomeTemperatureSettings {
-            base_temperature: self.temperature,
-            modifier: self.temperature_modifier,
-            has_precipitation: self.precipitation,
-            downfall: self.downfall,
-        };
-        settings
-            .has_precipitation
-            .then(|| settings.height_adjusted(BlockPos::new(x, y, z), 63) < 0.15)
+        self.precipitation
+            .then(|| self.temperature_at(BlockPos::new(x, y, z), 63) < 0.15)
     }
 }
 pub struct Biomes {
@@ -124,10 +134,6 @@ impl Biomes {
             let attributes = &v["attributes"];
             let temperature = v["temperature"].as_f64().unwrap_or(0.5) as f32;
             let downfall = v["downfall"].as_f64().unwrap_or(0.5) as f32;
-            let temperature_modifier = match v["temperature_modifier"].as_str() {
-                Some("frozen") => TemperatureModifier::Frozen,
-                _ => TemperatureModifier::None,
-            };
             let modifier = match effects["grass_color_modifier"].as_str() {
                 Some("dark_forest") => GrassModifier::DarkForest,
                 Some("swamp") => GrassModifier::Swamp,
@@ -158,7 +164,7 @@ impl Biomes {
                     .as_bool()
                     .unwrap_or(false),
                 temperature,
-                temperature_modifier,
+                frozen: v["temperature_modifier"].as_str() == Some("frozen"),
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),
                 grass: color(&effects["grass_color"])

@@ -135,6 +135,8 @@ impl PackWeather {
                 color: v.color,
                 light: v.light,
                 normal: [0; 4],
+
+                glint_uv: [0.0, 0.0],
             }
         }));
         if self.scratch.len() > self.capacity {
