@@ -273,7 +273,7 @@ mods, scripted server events (#1837); the content template and the guides are me
 docs/api/stability.md). Left: templates for hud, server and machine mods, typed wrappers in the SDK, a \
 frozen 0.1 compatibility mod that every runtime must load, a CI check that fails when a stable reference \
 entry is removed without a new major version, and the SDK on crates.io once the API is stable."""
-links = ["#1816", "#1837", "docs/api/stability.md", "website/docs/test-a-mod.md"]
+links = ["#1816", "#1837", "docs/api/stability.md", "https://playhorizon.dev/docs/test-a-mod"]
 
 [[item]]
 id = "pregen"
@@ -391,7 +391,7 @@ dev = """Partly done: an opt-in 60 FPS cap with fewer workers on battery, Far De
 animated textures on the GPU (both shipped). Left: measured targets and fixes per class of machine (memory \
 use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported \
 on the Benchmarks page."""
-links = ["docs/benchmark.md", "website/docs/performance.md"]
+links = ["docs/benchmark.md", "https://playhorizon.dev/docs/performance"]
 
 [[item]]
 id = "upscaling"
@@ -661,9 +661,9 @@ plain = """You can port a mod to Horizon with your own AI agent on your own comp
 you the tools, but provides no hosted agents."""
 dev = """A player runs their own agent locally with `horizon-ctl` and the MCP servers (docs/agent-control.md), `cargo \
 horizon-mod`, `horizon-port-pack` and the parity harnesses as the check. Horizon writes the guide \
-(website/docs/agents.md, docs/modpacks.md) and runs no agents, accounts or keys for players. The No AI \
+(playhorizon.dev/docs/agents, docs/modpacks.md) and runs no agents, accounts or keys for players. The No AI \
 switch turns all of it off."""
-links = ["website/docs/agents.md", "docs/modpacks.md", "docs/agent-control.md"]
+links = ["https://playhorizon.dev/docs/agents", "docs/modpacks.md", "docs/agent-control.md"]
 
 [[item]]
 id = "x-account"
@@ -1011,9 +1011,9 @@ area = "performance"
 plain = """Run Horizon's built-in benchmark and share the report: every new computer makes the performance work \
 more accurate. No coding needed."""
 dev = """`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data \
-benchmark <report>` shows what would be sent and uploads it (website/docs/performance.md). Results from three \
+benchmark <report>` shows what would be sent and uploads it (playhorizon.dev/docs/performance). Results from three \
 installs with the same hardware appear on the Benchmarks page. Example: #1711."""
-links = ["website/docs/performance.md", "#1711"]
+links = ["https://playhorizon.dev/docs/performance", "#1711"]
 
 [[item]]
 id = "end-city-banners"
@@ -1039,54 +1039,54 @@ links = ["#1437", "#1660"]
 [[item]]
 id = "item-cooldowns"
 title = "Cooldowns drawn on items"
-status = "help-wanted"
+status = "now"
 area = "gameplay"
 plain = """After you throw an ender pearl, its slot should show the cooldown sweeping away, as in vanilla."""
 dev = """Vanilla draws `ItemCooldowns`' percent as a white overlay over the slot \
 (`GuiGraphicsExtractor.itemDecorations` and `itemCooldown`) in the hotbar and in inventories. Issue #1763."""
-links = ["#1763"]
+links = ["#1763", "#1933"]
 
 [[item]]
 id = "chat-settings"
 title = "Chat settings and team prefixes"
-status = "help-wanted"
+status = "now"
 area = "gameplay"
 plain = """The Hidden and Commands Only chat settings should hide chat, and team prefixes should appear before \
 names in chat."""
 dev = """Vanilla checks `ChatVisiblity` before it delivers chat and system messages (#1376), and chat uses the \
 team-formatted display name (#1378). Both issues have exact steps to reproduce."""
-links = ["#1376", "#1378"]
+links = ["#1376", "#1378", "#1932", "#1841"]
 
 [[item]]
 id = "pointer-hand"
 title = "A pointing hand over buttons"
-status = "help-wanted"
+status = "now"
 area = "gameplay"
 plain = """The mouse pointer should turn into a pointing hand over menu buttons, as in vanilla 26.3."""
 dev = """26.3's `AbstractWidget` asks for a cursor from `CursorTypes` when it is hovered; winit's \
 `CursorIcon::Pointer` gives the same shape. Issue #1347."""
-links = ["#1347"]
+links = ["#1347", "#1897"]
 
 [[item]]
 id = "text-field-keys"
 title = "Ctrl+Backspace and scroll bars in menus"
-status = "help-wanted"
+status = "now"
 area = "gameplay"
 plain = """Ctrl+Backspace should delete a whole word in the creative search, and every list's scroll bar should be \
 draggable."""
 dev = """`EditBox` deletes by word with Ctrl (#1764); the Game Rules and Statistics lists' scroll bars can't be \
 dragged (#1782, after #978)."""
-links = ["#1764", "#1782"]
+links = ["#1764", "#1782", "#1884", "#1931"]
 
 [[item]]
 id = "chicken-flap"
 title = "Chickens flap while they fall"
-status = "help-wanted"
+status = "now"
 area = "gameplay"
 plain = """Chickens should flap their wings while they fall, not stand still in the air."""
 dev = """Vanilla's `Chicken.aiStep` updates `flap` and `flapSpeed` when the chicken isn't on the ground, and the \
 model's wings follow them. Issue #1706."""
-links = ["#1706"]
+links = ["#1706", "#1892"]
 
 # ---------------------------------------------------------------------------------------------------- Shipped
 # Newest first: `tools/roadmap.py sync` adds each newly shipped item on top.

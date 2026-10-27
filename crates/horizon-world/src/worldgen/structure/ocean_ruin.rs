@@ -325,6 +325,8 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
         new_y = min_y + 1;
     }
     position[1] = new_y;
+    // OceanRuinPiece.postProcess keeps the height in templatePosition.
+    *piece.state.lock().unwrap() = Some(new_y);
     if let Some(markers) = piece.place_at(c, position, &[])? {
         for (marker, pos) in markers {
             if marker == "chest" {

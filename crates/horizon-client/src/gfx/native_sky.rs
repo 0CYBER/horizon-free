@@ -9,9 +9,9 @@
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
 use super::native_post::{NativeFrame, present_constants};
+use super::wgsl_prefix::{TERRAIN, prefixed, section};
 
 const PREFIX: &str = "horizon_sky_";
-const TERRAIN: &str = include_str!("../terrain.wgsl");
 
 /// The fragment entry that calls the pack: vanilla's colour in, an opaque colour out.
 const PACK_ENTRY: &str = "
@@ -26,62 +26,15 @@ pub struct NativeSky {
     pub label: String,
 }
 
-/// The text of `source` from the line starting with `start` up to (not including) the one
-/// starting with `end`.
-fn section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-    let from = source
-        .find(&format!("\n{start}"))
-        .expect("terrain.wgsl has the section")
-        + 1;
-    let to = from
-        + source[from..]
-            .find(&format!("\n{end}"))
-            .expect("terrain.wgsl ends the section")
-        + 1;
-    &source[from..to]
-}
-
 /// terrain.wgsl's sky with every name it declares (and `globals`) prefixed.
 fn vanilla_sky() -> String {
     let text = [
-        section(TERRAIN, "struct Globals {", "@group(0) @binding(0)"),
+        section(TERRAIN, "struct Globals {", "@group(0) @binding(1)"),
         section(TERRAIN, "fn linear_fog(", "fn apply_fog("),
         section(TERRAIN, "struct SkyOut {", "// rendertype_lines"),
     ]
     .concat();
-    let mut names = vec!["globals"];
-    for line in text.lines() {
-        let line = line
-            .trim_start_matches("@vertex ")
-            .trim_start_matches("@fragment ");
-        for keyword in ["fn ", "struct ", "const "] {
-            if let Some(rest) = line.strip_prefix(keyword) {
-                let end = rest
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                    .unwrap_or(rest.len());
-                names.push(&rest[..end]);
-            }
-        }
-    }
-    let mut out = String::with_capacity(text.len() * 2);
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String| {
-        if names.contains(&word.as_str()) {
-            out.push_str(PREFIX);
-        }
-        out.push_str(word);
-        word.clear();
-    };
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            word.push(c);
-        } else {
-            flush(&mut word, &mut out);
-            out.push(c);
-        }
-    }
-    flush(&mut word, &mut out);
-    out + &format!("@group(0) @binding(0) var<uniform> {PREFIX}globals: {PREFIX}Globals;\n")
+    prefixed(&text, PREFIX)
 }
 
 /// The sky shader for the pack's sky stage `source`.

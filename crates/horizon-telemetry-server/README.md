@@ -30,7 +30,7 @@ The totals are grouped per version, OS, GPU vendor and render distance. Each gro
 
 ## Benchmarks summary
 
-`src/summary.rs` makes it with the same rules as `website/scripts/benchmarks.mjs`, which bakes the page's fallback copy; both are tested against the same fixtures (`website/scripts/fixtures/benchmarks/`).
+`src/summary.rs` makes it with the same rules as the website's `scripts/benchmarks.mjs` (ludovic111/horizon-site), which bakes the page's fallback copy; both are tested against the same fixtures (`tests/fixtures/benchmarks/` here, copied in the site's repository).
 
 - Only reports that compare: a version 1 `horizon-benchmark-report` of the standard flight over the four scenes, VSync off, no frame cap, on screen, from Horizon or plain vanilla, naming its GPU and CPU.
 - A group (GPU, CPU, render distance, game) is published only with **at least 3 different installs**. Each install counts once: the median of its runs, then the median across installs.

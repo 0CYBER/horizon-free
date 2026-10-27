@@ -36,6 +36,30 @@ impl Hub {
 
     /// ClientboundSoundPacket for a sound event name (an inline event when
     /// the registry does not know it).
+    pub fn sound_packet(
+        &self,
+        name: &str,
+        at: [f64; 3],
+        volume: f32,
+        pitch: f32,
+        source: i32,
+        seed: i64,
+    ) -> C {
+        let sound = match self.sync.id("minecraft:sound_event", name) {
+            Some(id) => (id, None),
+            None => (-1, Some((name.to_owned(), None))),
+        };
+        C::Sound(play::Sound {
+            sound,
+            source,
+            x: (at[0] * 8.0) as i32,
+            y: (at[1] * 8.0) as i32,
+            z: (at[2] * 8.0) as i32,
+            volume,
+            pitch,
+            seed,
+        })
+    }
     pub fn sound(
         &self,
         name: &str,
@@ -45,20 +69,7 @@ impl Hub {
         source: i32,
         except: Option<u32>,
     ) {
-        let sound = match self.sync.id("minecraft:sound_event", name) {
-            Some(id) => (id, None),
-            None => (-1, Some((name.to_owned(), None))),
-        };
-        let packet = C::Sound(play::Sound {
-            sound,
-            source,
-            x: (at[0] * 8.0) as i32,
-            y: (at[1] * 8.0) as i32,
-            z: (at[2] * 8.0) as i32,
-            volume,
-            pitch,
-            seed: self.ticks as i64,
-        });
+        let packet = self.sound_packet(name, at, volume, pitch, source, self.ticks as i64);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
 
@@ -118,6 +129,22 @@ impl Hub {
             &C::EntityEvent(play::EntityEvent { id, event }),
             None,
         );
+    }
+
+    /// `ServerPlayer.crit` (`magicCrit` when `magic`): send the victim's
+    /// animation to the players tracking the attacker and the attacker
+    /// themselves (`sendToTrackingPlayersAndSelf`).
+    pub fn critical_hit(&self, attacker: i32, target: i32, magic: bool) {
+        let body = C::Animate(play::Animate {
+            id: target,
+            action: if magic { 2 } else { 1 },
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| {
+            self.here(g) && (g.entity_id == attacker || g.tracker.is_tracking(attacker))
+        }) {
+            g.sender.send(body.clone());
+        }
     }
 
     /// `ServerLevel.broadcastDamageEvent`: the clients around show the hurt
@@ -404,6 +431,42 @@ impl Hub {
         }
         self.answer_click(i, p, world, &changed);
         drops
+    }
+
+    /// `AbstractContainerMenu.setSelectedBundleItemIndex` on the guest's open
+    /// menu: a container's own slots, or the inventory's. A bundle's selection
+    /// lives on the server's stack until the click that takes from it.
+    pub fn select_bundle_item(&mut self, conn: u32, slot: usize, index: i32, world: &mut World) {
+        let Some(g) = self.guests.iter_mut().find(|g| g.conn == conn) else {
+            return;
+        };
+        let open = g.menu.as_ref().map(|m| (m.size, m.slots));
+        let mut items = match open {
+            Some((size, source)) if slot < size => source.read(world, g),
+            _ => None,
+        };
+        let stack = match open {
+            Some((size, _)) if slot < size => items
+                .as_mut()
+                .and_then(|items| items.get_mut(slot))
+                .and_then(Option::as_mut),
+            Some((size, _)) => g
+                .inventory
+                .get_mut(player_slot(slot - size))
+                .and_then(Option::as_mut),
+            None => match slot {
+                9..=35 => g.inventory.get_mut(slot).and_then(Option::as_mut),
+                36..=44 => g.inventory.get_mut(slot - 36).and_then(Option::as_mut),
+                45 => g.offhand.as_mut(),
+                _ => None,
+            },
+        };
+        if let Some(stack) = stack {
+            crate::bundle::toggle_selected(stack, index);
+        }
+        if let (Some((_, source)), Some(items)) = (open, items) {
+            source.write(world, g, items);
+        }
     }
 
     /// A click on the inventory menu (window 0) the game applied itself

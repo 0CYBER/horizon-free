@@ -9,7 +9,7 @@ use horizon_client::mesher::Vertex;
 use horizon_client::mobs::{
     Mob, MobData, MobTypes, Part, Species, allay,
     anim::{self, Poses, State},
-    aquatic, body_anim as b_anim, equine, guardian,
+    aquatic, bat, body_anim as b_anim, equine, guardian,
     keyframes::AnimationState,
     render, shulker, sniffer, species, tame,
 };
@@ -108,6 +108,22 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
     let flag = |k: &str| case[k].as_bool().unwrap_or(false);
     let num = |k: &str| case[k].as_f64().unwrap_or(0.0) as f32;
     match species {
+        Species::Bat => {
+            mob.extra.flag = flag("isResting");
+            mob.anim.states[0].started = case["flyAnimationState"].as_f64().map(|v| v as f32);
+            mob.anim.states[1].started = case["restAnimationState"].as_f64().map(|v| v as f32);
+            if let Some(ticks) = case["@batTicks"].as_array() {
+                for (i, flags) in ticks.iter().enumerate() {
+                    mob.age = i as u32 + 1;
+                    bat::set_resting(mob, flags.as_i64().unwrap_or(0) & 1 != 0);
+                    if flag("@batInFrame") {
+                        bat::tick(mob);
+                    } else {
+                        bat::setup_animation_states(mob);
+                    }
+                }
+            }
+        }
         Species::Sheep => mob.extra.anim_ticks = num("eatTick") as i32,
         Species::Guardian | Species::ElderGuardian => {
             mob.anim.v[guardian::TAIL] = num("tailAnimation");
@@ -377,7 +393,7 @@ pub fn main() -> horizon_client::Result<()> {
             mob.extra.age = -24000;
         }
         mob.age = f("ageInTicks") as u32;
-        let state = State {
+        let mut state = State {
             pos: f("walkAnimationPos"),
             speed: f("walkAnimationSpeed"),
             age: f("ageInTicks"),
@@ -389,6 +405,20 @@ pub fn main() -> horizon_client::Result<()> {
         };
         let mut poses = Poses::new(&model);
         entity_state(&mut mob, def.species, case);
+        if let Some(ticks) = case["@walkTicks"].as_array() {
+            for speed in ticks {
+                mob.previous_limb_speed = mob.limb_speed;
+                mob.limb_speed += (speed.as_f64().unwrap() as f32 - mob.limb_speed) * 0.4;
+                mob.limb_position += mob.limb_speed;
+            }
+            if !case["@alive"].as_bool().unwrap() {
+                mob.health = 0.0;
+            }
+            let extracted = anim::state(&mob, f("@partial"));
+            state.pos = extracted.pos;
+            state.speed = extracted.speed;
+        }
+
         let flag = |k: &str| case[k].as_bool().unwrap_or(false);
         let num = |k: &str| case[k].as_f64().unwrap_or(0.0) as f32;
         let started = |k: &str| AnimationState {
@@ -455,14 +485,6 @@ pub fn main() -> horizon_client::Result<()> {
                     angry: flag("isAngry"),
                     roll_amount: num("rollAmount"),
                 },
-            ),
-            Species::Bat => b_anim::bat(
-                p,
-                s,
-                flag("isResting"),
-                &started("flyAnimationState"),
-                &started("restAnimationState"),
-                &animations,
             ),
             Species::Armadillo => b_anim::armadillo(
                 p,
@@ -570,6 +592,7 @@ pub fn main() -> horizon_client::Result<()> {
                     pose,
                     num("maxCrossbowChageDuration"),
                     num("ticksUsingItem"),
+                    false,
                 );
             }
             Species::Evoker | Species::Illusioner | Species::Pillager | Species::Vindicator => {
@@ -590,7 +613,11 @@ pub fn main() -> horizon_client::Result<()> {
             }
             _ => anim::setup(&mob, s, p, &animations),
         }
-        out.push_str(&format!("{}\n", emit(&model, &mut poses, case, layer)));
+        let mut result = emit(&model, &mut poses, case, layer);
+        if case["@walkTicks"].is_array() {
+            result["walk"] = json!([state.pos, state.speed]);
+        }
+        out.push_str(&format!("{result}\n"));
     }
     fs::write(&args[2], out)?;
     Ok(())
