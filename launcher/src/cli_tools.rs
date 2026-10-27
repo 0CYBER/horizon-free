@@ -27,6 +27,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "account sign-out",
     "data delete",
     "worlds delete",
+    "multiplayer remove",
 ];
 
 /// Commands that send something or reach other people: only when the player asks.

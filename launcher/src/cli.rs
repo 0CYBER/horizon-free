@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use horizon_launcher::instances;
+use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -214,6 +215,32 @@ enum WorldsCmd {
 }
 
 #[derive(Subcommand)]
+enum MultiplayerCmd {
+    /// The servers of the game's Multiplayer screen (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Add a server to the list
+    Add {
+        /// Its address, as in the game's Add Server (host or host:port)
+        address: String,
+        /// Its name in the list (default: Minecraft Server)
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Remove a server from the list: its position from 1, name or address
+    Remove {
+        server: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ModsCmd {
     /// What the browser installed (the default)
     List,
@@ -331,6 +358,9 @@ enum Cmd {
         /// Join a friend's world with its invite code
         #[arg(long)]
         join: Option<String>,
+        /// Join this server at once: an address, or a server of the list by name or position
+        #[arg(long, conflicts_with_all = ["world", "join"])]
+        server: Option<String>,
         /// An extra argument for the game, passed through as-is (repeatable), for example
         /// --server-thread
         #[arg(long = "arg", value_name = "ARG", allow_hyphen_values = true)]
@@ -411,6 +441,11 @@ enum Cmd {
     Worlds {
         #[command(subcommand)]
         action: Option<WorldsCmd>,
+    },
+    /// The servers in an instance's Multiplayer list (servers.dat): list, add, remove
+    Multiplayer {
+        #[command(subcommand)]
+        action: Option<MultiplayerCmd>,
     },
     /// Modpacks: import a Java pack, see its coverage report, port what this computer can and
     /// play it as its own profile (docs/modpacks.md)
@@ -681,6 +716,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             world,
             creative,
             join,
+            server,
             arg,
         } => {
             let instance = match instance {
@@ -694,6 +730,11 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             if let Some(world) = world {
                 cmd.arg("--world").arg(world);
+            }
+            if let Some(server) = server {
+                let list = server_list::List::load(&instance.home);
+                let ip = server_list::find(&list, &server).map_or(server, |(_, s)| s.ip);
+                cmd.arg("--server").arg(ip);
             }
             if creative {
                 cmd.arg("--creative");
@@ -863,6 +904,10 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         }
         Cmd::Worlds { action } => worlds(
             action.unwrap_or(WorldsCmd::List { instance: None }),
+            as_json,
+        )?,
+        Cmd::Multiplayer { action } => multiplayer(
+            action.unwrap_or(MultiplayerCmd::List { instance: None }),
             as_json,
         )?,
         Cmd::Instance { action } => instance(action.unwrap_or(InstanceCmd::List), as_json)?,
@@ -1482,6 +1527,54 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+    }
+    Ok(())
+}
+
+fn multiplayer(action: MultiplayerCmd, as_json: bool) -> Result<(), String> {
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    match action {
+        MultiplayerCmd::List { instance } => {
+            let home = home(instance)?;
+            let servers = server_list::List::load(&home).servers();
+            if as_json {
+                json(
+                    servers
+                        .iter()
+                        .map(|s| serde_json::json!({ "name": s.name, "address": s.ip, "icon": s.icon.is_some() }))
+                        .collect(),
+                );
+            } else if servers.is_empty() {
+                println!("No servers in {}", home.join("servers.dat").display());
+            }
+            for (i, s) in servers.iter().enumerate().filter(|_| !as_json) {
+                println!("{}. {} ({})", i + 1, s.name, s.ip);
+            }
+        }
+        MultiplayerCmd::Add {
+            address,
+            name,
+            instance,
+        } => {
+            let home = home(instance)?;
+            let mut list = server_list::List::load(&home);
+            list.add(name.as_deref().unwrap_or(""), &address)?;
+            list.save(&home)?;
+            println!("Added {}.", address.trim());
+        }
+        MultiplayerCmd::Remove { server, instance } => {
+            let home = home(instance)?;
+            let mut list = server_list::List::load(&home);
+            let (i, _) = server_list::find(&list, &server)?;
+            let gone = list.remove(i)?;
+            list.save(&home)?;
+            println!("Removed {} ({}).", gone.name, gone.ip);
         }
     }
     Ok(())

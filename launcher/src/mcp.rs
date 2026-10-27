@@ -34,6 +34,7 @@ fn session_tools() -> Value {
             "world": { "type": "string", "description": "Open or create this world (a folder under saves) at once." },
             "creative": { "type": "boolean", "description": "Creative mode for a new world." },
             "join": { "type": "string", "description": "Join a friend's world with its invite code. Only when the player asks." },
+            "server": { "type": "string", "description": "Join this server at once: an address, or a server of the instance's list (multiplayer_list) by name or position. Only when the player asks." },
             "offscreen": { "type": "boolean", "description": "Render without showing a window (game_screenshot still works)." },
             "arg": { "type": "array", "items": { "type": "string" }, "description": "Extra game arguments, passed through as-is (for example \"--server-thread\")." } } } },
         { "name": "server", "description": "Start a Horizon dedicated server. It runs until server_stop or the end of this MCP session. Requires agreeing to the Minecraft EULA. CLI: horizon-launcher server",
@@ -86,6 +87,12 @@ impl Session {
                 }
                 if let Some(code) = arg_str(args, "join") {
                     backend::join_friend(&mut cmd, code)?;
+                }
+                if let Some(server) = arg_str(args, "server") {
+                    let list = horizon_launcher::server_list::List::load(&instance.home);
+                    let ip = horizon_launcher::server_list::find(&list, server)
+                        .map_or_else(|_| server.to_string(), |(_, s)| s.ip);
+                    cmd.arg("--server").arg(ip);
                 }
                 if let Some(extra) = args.get("arg").and_then(Value::as_array) {
                     cmd.args(extra.iter().filter_map(Value::as_str));
