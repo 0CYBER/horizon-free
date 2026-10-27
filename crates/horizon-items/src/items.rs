@@ -1154,6 +1154,8 @@ impl Items {
         ctx.evaluate(table, random)
     }
 }
+/// `DataComponents.BLOCK_STATE`.
+const BLOCK_STATE: &str = "minecraft:block_state";
 impl LootContext<'_> {
     fn evaluate<R: RandomSource>(&self, table: &Value, random: &mut R) -> Vec<ItemStack> {
         let ctx = self;
@@ -1559,6 +1561,30 @@ impl LootContext<'_> {
                         if let Some(limit) = f["limit"].as_i64().filter(|l| *l > 0) {
                             stack.count = stack.count.min(limit as u32);
                         }
+                    }
+                }
+                // CopyBlockState: the listed properties of the broken block
+                // become the item's `block_state` component.
+                "minecraft:copy_state" => {
+                    use horizon_world::nbt::Tag;
+                    let mut copied = match stack.data().and_then(|d| d.other(BLOCK_STATE)) {
+                        Some(Tag::Compound(c)) => c.clone(),
+                        _ => Default::default(),
+                    };
+                    for name in f["properties"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                    {
+                        if let Some(value) = self.properties.get(name) {
+                            copied.insert(name.into(), Tag::String(value.as_str().into()));
+                        }
+                    }
+                    if !copied.is_empty() {
+                        stack
+                            .data_mut()
+                            .set_other(BLOCK_STATE, Some(Tag::Compound(copied)));
                     }
                 }
                 // ApplyExplosionDecay: each item survives with 1 / radius.

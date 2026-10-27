@@ -119,3 +119,23 @@ pub fn load(path: &Path, known: &dyn Fn(&str) -> bool) -> Vec<Hotbar> {
         _ => (0..GROUPS).map(|_| empty()).collect(),
     }
 }
+
+/// `HotbarManager.save`: the nine rows with the current data version, each
+/// stack as `ItemStack.OPTIONAL_CODEC` writes it (an empty one is `{}`).
+pub fn save(path: &Path, rows: &[Hotbar]) -> crate::Result<()> {
+    let mut entries = vec![(
+        JavaString::from("DataVersion"),
+        Tag::Int(horizon_world::DATA_VERSION),
+    )];
+    for (i, row) in rows.iter().enumerate() {
+        let stacks = row.iter().map(|s| match s {
+            Some(s) => save::item_to_nbt(s),
+            None => Tag::compound(Vec::<(&str, Tag)>::new()),
+        });
+        entries.push((
+            JavaString::from(i.to_string().as_str()),
+            Tag::List(stacks.collect()),
+        ));
+    }
+    save::write_dat(path, Tag::compound(entries))
+}
