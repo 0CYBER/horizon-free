@@ -5014,8 +5014,10 @@ mod tests {
         assert_eq!(back.difficulty, "hard");
         assert_eq!(back.difficulty_id(), 3);
         // A world whose difficulty is not one of ours is normal.
-        let mut other = Level::default();
-        other.difficulty = "extreme".into();
+        let other = Level {
+            difficulty: "extreme".into(),
+            ..Level::default()
+        };
         assert_eq!(other.difficulty_id(), 2);
         let _ = fs::remove_dir_all(&dir);
     }
