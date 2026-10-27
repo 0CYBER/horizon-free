@@ -462,6 +462,16 @@ pub fn tick_swing(m: &mut Mob) {
     }
     m.anim.attack_anim = m.ai.swing_time as f32 / 6.0;
 }
+/// `Entity.isInRain`: rain at the block position, or at the top of the box.
+pub(super) fn in_rain(m: &Mob, w: &MobWorld) -> bool {
+    let (x, y, z) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    let top = (m.position.y + f64::from(m.height())).floor() as i32;
+    w.raining_at(x, y, z) || w.raining_at(x, top, z)
+}
 /// `LivingEntity.baseTick` refills a breather's air by 4, then
 /// `Axolotl.handleAirSupply` (unless the mob has no AI): water or rain fills
 /// it, anywhere else it runs down from the pre-tick value, and at -20 the
@@ -472,15 +482,7 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
     if m.no_ai {
         return;
     }
-    // Entity.isInRain: rain at the block, or at the top of the box.
-    let (x, y, z) = (
-        m.position.x.floor() as i32,
-        m.position.y.floor() as i32,
-        m.position.z.floor() as i32,
-    );
-    let top = (m.position.y + f64::from(m.height())).floor() as i32;
-    let in_rain = w.raining_at(x, y, z) || w.raining_at(x, top, z);
-    if m.fluids.in_water || in_rain {
+    if m.fluids.in_water || in_rain(m, w) {
         m.air = super::axolotl::MAX_AIR;
     } else {
         m.air = before - 1;
@@ -508,8 +510,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         );
         m.damage(fire, Damage::of(DamageKind::InFire));
     }
-    // Fire: water extinguishes, lava ignites, burning hurts every second.
-    if m.fluids.in_water && m.fire_ticks > 0 {
+    // Fire: water or rain (Entity.isInRain) extinguishes, lava ignites,
+    // burning hurts every second.
+    if m.fire_ticks > 0 && (m.fluids.in_water || in_rain(m, w)) {
         m.fire_ticks = 0;
         events.push(MobEvent::Sound(
             "entity.generic.extinguish_fire",
@@ -576,9 +579,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.air = (m.air + 4).min(300);
         }
 
-        if m.kind.flags.water_sensitive
-            && (m.fluids.in_water || w.raining && w.can_see_sky(ex, ey, ez))
-        {
+        if m.kind.flags.water_sensitive && (m.fluids.in_water || in_rain(m, w)) {
             m.damage(1.0, Damage::of(DamageKind::Drown));
         }
     }
@@ -914,7 +915,7 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
         m.position.z.floor() as i32,
     );
     let br = w.brightness(x, y, z);
-    let wet = m.fluids.in_water || w.raining && w.can_see_sky(x, y, z);
+    let wet = m.fluids.in_water || in_rain(m, w);
     br > 0.5 && m.random.next_float() * 30.0 < (br - 0.4) * 2.0 && !wet && w.can_see_sky(x, y, z)
 }
 /// Mob.serverAiStep
