@@ -547,6 +547,11 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // ChiseledBookShelfBlockEntity.saveAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("last_interacted_slot", Tag::Int(b.last_slot)));
+        }
         // CampfireBlockEntity.saveAdditional.
         BlockEntity::Campfire(c) => {
             entries.push(("Items", encode_items(&c.items)));
@@ -785,6 +790,13 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // ChiseledBookShelfBlockEntity.loadAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            for (slot, item) in decode_items(tag.get("Items"), 6).into_iter().enumerate() {
+                b.items[slot] = item;
+            }
+            b.last_slot = int("last_interacted_slot").unwrap_or(-1);
+        }
         // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
         BlockEntity::Campfire(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {

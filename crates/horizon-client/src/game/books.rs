@@ -1144,7 +1144,12 @@ impl Game<'_> {
                         BLACK,
                     );
                 }
-                let by = tr("book.byAuthor", "by %1$s").replace("%1$s", super::chat::PLAYER_NAME);
+                // BookSignScreen: `owner.getName()`, the account's name on a server.
+                let owner = self
+                    .remote
+                    .as_ref()
+                    .map_or(super::chat::PLAYER_NAME, |r| r.profile_name.as_str());
+                let by = tr("book.byAuthor", "by %1$s").replace("%1$s", owner);
                 let tw = HudBatch::text_width(atlas, &by);
                 batch.text(
                     atlas,

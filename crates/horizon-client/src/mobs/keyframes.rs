@@ -165,6 +165,12 @@ impl AnimationState {
     pub fn stop(&mut self) {
         self.started = None;
     }
+    /// `AnimationState.fastForward`: the animation is `ticks` further on.
+    pub fn fast_forward(&mut self, ticks: i32) {
+        if let Some(s) = &mut self.started {
+            *s -= ticks as f32;
+        }
+    }
     pub fn animate_when(&mut self, condition: bool, age: f32) {
         if condition {
             self.start_if_stopped(age)
