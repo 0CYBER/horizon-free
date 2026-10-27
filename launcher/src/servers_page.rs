@@ -2376,11 +2376,17 @@ impl Launcher {
         } else {
             "You’ll be asked to confirm before anything is moved."
         };
-        let mut section = div().flex().flex_col().gap(px(12.)).mt(px(24.))
-            .pt(px(24.)).border_t_1().border_color(t.rule)
+        let about = div().flex().flex_col().flex_1().min_w_0().gap(px(8.))
             .child(text(theme::HEADING).text_color(t.danger).child("Delete server"))
             .child(text(theme::UI).text_color(t.ink_soft)
                 .child("Remove this server from Horizon and move its worlds, settings and backups to the trash."));
+        let mut controls = div()
+            .flex()
+            .flex_col()
+            .items_end()
+            .flex_none()
+            .w(px(260.))
+            .gap(px(12.));
         if self.servers.confirm_delete {
             let matches = self.servers.value(Field::DeleteServer) == name && !name.is_empty();
             let field = self.field(Field::DeleteServer, "Server name", 260., cx);
@@ -2406,7 +2412,7 @@ impl Launcher {
             } else {
                 disabled(confirm)
             };
-            section = section
+            controls = controls
                 .child(text(theme::UI).text_color(t.ink).child(
                     gpui::StyledText::new(format!("Type {name} to confirm.")).with_highlights([(
                         5..5 + name.len(),
@@ -2445,9 +2451,26 @@ impl Launcher {
             } else {
                 disabled(delete)
             };
-            section = section.child(div().flex().child(delete));
+            controls = controls.child(delete);
         }
-        section.child(text(theme::CAPTION).text_color(t.muted).child(hint))
+        div()
+            .flex()
+            .items_start()
+            .gap(px(24.))
+            .mt(px(24.))
+            .pt(px(24.))
+            .border_t_1()
+            .border_color(t.rule)
+            .child(about)
+            .child(
+                controls.child(
+                    text(theme::CAPTION)
+                        .text_color(t.muted)
+                        .w(px(260.))
+                        .text_align(gpui::TextAlign::Right)
+                        .child(hint),
+                ),
+            )
     }
 
     fn background_row(&mut self, cx: &mut Context<Self>) -> Div {
