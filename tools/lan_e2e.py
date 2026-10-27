@@ -295,6 +295,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+          'bubble-column', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
@@ -3136,6 +3137,38 @@ def check_sidebar(host, guest, out):
     return result
 
 
+def check_bubble_column(host, guest, out):
+    """A mob in a bubble column is carried up with it (`BubbleColumnBlock.entityInside`)."""
+    hx, hy, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, int(hy), int(hz // 16) * 16 + 8)
+    host('command', command='gamemode survival')
+    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+6} {z+4} minecraft:air')
+    # Soul sand under a water source makes the water a bubble column that
+    # pushes up (`BubbleColumnBlock.getColumnState`).
+    host('command', command=f'setblock {x} {y-1} {z} minecraft:soul_sand')
+    host('command', command=f'setblock {x} {y} {z} minecraft:water')
+    # A plain water source, with no soul sand under it: no column there.
+    host('command', command=f'setblock {x+3} {y} {z} minecraft:water')
+    host.wait(20)
+    host('command', command=f'summon minecraft:pig {x+0.5} {y+0.5} {z+0.5}')
+    host('command', command=f'summon minecraft:pig {x+3.5} {y+0.5} {z+0.5}')
+    host.wait(20)
+
+    def rises(at_x):
+        samples = []
+        for _ in range(6):
+            host.wait(5)
+            samples += [p['pos'][1] for p in host('entities', radius=16, type='pig')['entities']
+                        if abs(p['pos'][0] - at_x) < 1.5 and abs(p['pos'][2] - (z + 0.5)) < 1.5]
+        return max(samples) if samples else y + 0.5
+
+    column = rises(x + 0.5)
+    plain = rises(x + 3.5)
+    assert column - plain > 0.2, f'the bubble column did not carry the pig up: {column} vs {plain}'
+    return {'column': round(column - (y + 0.5), 3), 'plain': round(plain - (y + 0.5), 3)}
+
+
 def check_border(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -4711,6 +4744,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
+             'bubble-column': check_bubble_column,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
              'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,

@@ -664,8 +664,51 @@ impl Mob {
             self.kind.gravity
         }
     }
+    /// `BubbleColumnBlock.entityInside`: a body in a bubble column is pushed
+    /// up (or dragged down), faster at the top of the column.
+    fn bubble_column(&mut self, w: &MobWorld) {
+        let bounds = self.bounds();
+        let (min, max) = (bounds.min_position(), bounds.max_position());
+        // The precise check: the body's own box is in the column's block.
+        let deflated = bounds.deflate(Vec3::new(0.001, 0.001, 0.001));
+        for x in min.x.floor() as i32..=max.x.floor() as i32 {
+            for y in min.y.floor() as i32..=max.y.floor() as i32 {
+                for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                    if w.block_name(x, y, z) != "minecraft:bubble_column" {
+                        continue;
+                    }
+                    let block = Aabb::new(
+                        Vec3::new(x as f64, y as f64, z as f64),
+                        Vec3::new(x as f64 + 1.0, y as f64 + 1.0, z as f64 + 1.0),
+                    );
+                    if !deflated.intersects(block) {
+                        continue;
+                    }
+                    let drag = w.prop(x, y, z, "drag") == Some("true");
+                    // The block above decides whether the body is at the top of
+                    // the column (`BubbleColumnBlock.entityInside`).
+                    let nothing_above = w.block_collision_boxes(x, y + 1, z).is_empty()
+                        && w.fluid(x, y + 1, z) == Fluid::None;
+                    let v = self.velocity;
+                    let vy = match (nothing_above, drag) {
+                        (true, true) => (-0.9_f64).max(v.y - 0.03),
+                        (true, false) => 1.8_f64.min(v.y + 0.1),
+                        (false, true) => (-0.3_f64).max(v.y - 0.03),
+                        (false, false) => 0.7_f64.min(v.y + 0.06),
+                    };
+                    self.velocity = Vec3::new(v.x, vy, v.z);
+                    if !nothing_above {
+                        // `Entity.resetFallDistance`.
+                        self.fall_distance = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
     /// LivingEntity.travel.
     pub fn travel(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
+        self.bubble_column(w);
         if super::ai::custom_travel(self, w, input, events) {
             return;
         }
