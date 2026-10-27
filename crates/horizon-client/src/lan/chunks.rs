@@ -66,6 +66,7 @@ pub fn block_entity_type(name: &str) -> Option<&'static str> {
         "sculk_catalyst" => "minecraft:sculk_catalyst",
         "sculk_shrieker" => "minecraft:sculk_shrieker",
         "crafter" => "minecraft:crafter",
+        "potent_sulfur" => "minecraft:potent_sulfur",
         "chiseled_bookshelf" => "minecraft:chiseled_bookshelf",
         "trial_spawner" => "minecraft:trial_spawner",
         "vault" => "minecraft:vault",
@@ -952,6 +953,11 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             Some(Tag::compound(entries))
         }
         BlockEntity::Jukebox(_) | BlockEntity::Lectern(_) => None,
+        // CampfireBlockEntity.getUpdateTag: the items alone.
+        BlockEntity::Campfire(c) => Some(Tag::compound([(
+            "Items",
+            crate::save::encode_items(&c.items),
+        )])),
         _ => None,
     }
 }

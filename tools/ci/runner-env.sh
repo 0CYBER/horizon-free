@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The tools the vanilla harnesses need, on a self-hosted runner (label horizon-game): the Mac mini's, whose service
-# starts with a bare PATH, and the Linux ones (tools/ci/linux-runner.sh, NixOS). Python 3.13 and the JDK pinned by
+# starts with a bare PATH, and the Linux ones (tools/ci/linux-runner.sh: NixOS, Ubuntu). Python 3.13 and the JDK pinned by
 # research-lock.json come from the machine, never from a download. Writes them to $GITHUB_PATH and $GITHUB_ENV for
 # the next steps.
 set -euo pipefail

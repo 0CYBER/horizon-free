@@ -95,7 +95,7 @@ fn fetch_index() -> Result<(Index, String), String> {
     use std::io::Read;
     let at = location();
     let text = if at.starts_with("https://") {
-        let response = download::agent().get(&at).call().map_err(|e| match e {
+        let response = download::agent(&at).get(&at).call().map_err(|e| match e {
             ureq::Error::Status(code, _) => format!("The mod registry answered {code}."),
             ureq::Error::Transport(t) => format!("The mod registry can't be reached: {t}"),
         })?;
@@ -160,7 +160,7 @@ fn refresh_ratings() {
     }
     let at = given.unwrap_or_else(|| RATINGS_URL.to_owned());
     let text = if at.starts_with("https://") {
-        download::agent().get(&at).call().ok().and_then(|r| {
+        download::agent(&at).get(&at).call().ok().and_then(|r| {
             use std::io::Read;
             let mut text = String::new();
             r.into_reader()
@@ -484,6 +484,7 @@ fn relative(kind: Kind, id: &str, file_name: &str) -> Result<String, String> {
         Kind::ResourcePack => Ok(format!("resourcepacks/{file_name}")),
         Kind::Shader => Ok(format!("shaderpacks/{file_name}")),
         Kind::Modpack => Err("A modpack installs as its own profile (pack::install).".into()),
+        Kind::DataPack => Err("Horizon's registry has no data packs.".into()),
     }
 }
 

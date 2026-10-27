@@ -19,7 +19,7 @@ use horizon_core::{
 use std::{collections::HashMap, sync::Arc};
 
 /// ServerLevel.END_SPAWN_POINT.
-const END_SPAWN: [i32; 3] = [100, 50, 0];
+pub(super) const END_SPAWN: [i32; 3] = [100, 50, 0];
 /// EnderDragonFight gateway ring radius and height.
 const GATEWAY_RADIUS: f64 = 96.0;
 const GATEWAY_Y: i32 = 75;
@@ -129,14 +129,31 @@ impl EndState {
             survive: false,
         });
     }
-    /// One tick of a server's client: `step` moves each toward where the
-    /// server put it.
-    pub(super) fn step_remote_eyes(&mut self, mut step: impl FnMut(u32, [f64; 3]) -> [f64; 3]) {
+    /// `EyeOfEnder.tick` on a server's client: it moves by its last known
+    /// motion; only the server steers it.
+    pub(super) fn step_remote_eyes(&mut self) {
         for e in &mut self.eyes {
             e.previous = e.position;
             e.life += 1;
-            e.position = glam::DVec3::from_array(step(e.id, e.position.to_array()));
+            e.position += e.velocity;
         }
+    }
+    /// A server's move: an eye has no interpolation handler, so
+    /// `moveOrInterpolateTo` puts it there at once. False when `id` isn't one.
+    pub(super) fn move_remote_eye(&mut self, id: u32, at: [f64; 3]) -> bool {
+        let Some(e) = self.eyes.iter_mut().find(|e| e.id == id) else {
+            return false;
+        };
+        e.position = glam::DVec3::from_array(at);
+        true
+    }
+    /// `handleSetEntityMotion` for an eye. False when `id` isn't one.
+    pub(super) fn remote_eye_motion(&mut self, id: u32, velocity: [f64; 3]) -> bool {
+        let Some(e) = self.eyes.iter_mut().find(|e| e.id == id) else {
+            return false;
+        };
+        e.velocity = glam::DVec3::from_array(velocity);
+        true
     }
     pub(super) fn remove_remote_eye(&mut self, id: u32) {
         self.eyes.retain(|e| e.id != id);
@@ -236,10 +253,17 @@ impl Game<'_> {
         out
     }
 
-    /// LightmapRenderStateExtractor: End flashes add to the sky light factor.
+    /// LightmapRenderStateExtractor: End flashes add to the sky light factor
+    /// unless Hide Lightning Flashes is on (the sky sprite is not gated), a
+    /// third of it under a boss bar's world fog.
     pub(super) fn end_flash_sky(&self, sky: &mut horizon_client::environment::Sky, partial: f64) {
-        if self.dim == Dim::End {
-            sky.sky_light_factor += self.end.flash.intensity(partial as f32);
+        if self.dim == Dim::End && !self.settings.file.bool("hideLightningFlashes") {
+            let intensity = self.end.flash.intensity(partial as f32);
+            sky.sky_light_factor += if self.boss_overlay.should_create_world_fog() {
+                intensity / 3.0
+            } else {
+                intensity
+            };
         }
     }
 
@@ -1099,6 +1123,7 @@ impl Game<'_> {
     /// EyeOfEnder.tick: fly, then drop (4 in 5) or shatter after 80 ticks.
     fn tick_eyes(&mut self) {
         let mut eyes = std::mem::take(&mut self.end.eyes);
+        let mut shattered = Vec::new();
         eyes.retain_mut(|eye| {
             eye.previous = eye.position;
             let next = eye.position + eye.velocity;
@@ -1122,10 +1147,44 @@ impl Game<'_> {
                     extra: None,
                 };
                 self.spawn_item(stack, at, [vx, 0.2, vz], 0);
+            } else {
+                shattered.push(at.map(|v| v.floor() as i32));
             }
             false
         });
         self.end.eyes = eyes;
+        for pos in shattered {
+            self.level_event_at(2003, pos, 0);
+        }
+    }
+
+    /// `LevelEventHandler` 2003: a shattered eye's item crumbs and two rings
+    /// of portal particles drawn in towards it.
+    pub(super) fn eye_break_particles(&mut self, pos: [i32; 3]) {
+        let (x, y, z) = (
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]),
+            f64::from(pos[2]) + 0.5,
+        );
+        let crumbs = self.item_particle(&ItemStack::new("minecraft:ender_eye", 1));
+        for _ in 0..8 {
+            let r = self.particles.random();
+            let v = [
+                r.next_gaussian() * 0.15,
+                r.next_double() * 0.2,
+                r.next_gaussian() * 0.15,
+            ];
+            self.particles.add(&crumbs, [x, y, z], v);
+        }
+        let portal = ParticleOptions::simple(ParticleType::Portal);
+        let mut angle = 0.0f64;
+        while angle < std::f64::consts::PI * 2.0 {
+            let (c, s) = (angle.cos(), angle.sin());
+            let at = [x + c * 5.0, y - 0.4, z + s * 5.0];
+            self.particles.add(&portal, at, [c * -5.0, 0.0, s * -5.0]);
+            self.particles.add(&portal, at, [c * -7.0, 0.0, s * -7.0]);
+            angle += std::f64::consts::PI / 20.0;
+        }
     }
 
     /// `EyeOfEnder.tick` on a client: behind each eye (a quarter of its last
