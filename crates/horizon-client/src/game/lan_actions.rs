@@ -973,6 +973,45 @@ impl Game<'_> {
         d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
     }
 
+    /// DedicatedServer.isUnderSpawnProtection: no operators, an operator or a
+    /// radius of 0 or less is never under it; else a block within the radius
+    /// of the world spawn (square, in the Overworld) is.
+    fn under_spawn_protection(&self, host: &LanHost, gi: usize, pos: [i32; 3]) -> bool {
+        let g = &host.hub.guests[gi];
+        let radius = host.hub.spawn_protection;
+        if self.options.dedicated.is_none() || radius <= 0 || g.dimension != "minecraft:overworld" {
+            return false;
+        }
+        let Some(spawn) = self.level.world_spawn else {
+            return false;
+        };
+        if host.hub.ops.is_empty() || host.hub.ops.contains_key(&g.uuid) {
+            return false;
+        }
+        let dx = pos[0].abs_diff(spawn[0]);
+        let dz = pos[2].abs_diff(spawn[2]);
+        dx.max(dz) <= radius as u32
+    }
+
+    /// ServerPlayer.sendSpawnProtectionMessage.
+    fn spawn_protection_message(&self, host: &LanHost, conn: u32, pos: [i32; 3]) {
+        let message = horizon_client::text::Text::translate(
+            "build.spawn_protection",
+            &[horizon_client::text::Text::literal(format!(
+                "{}, {}, {}",
+                pos[0], pos[1], pos[2]
+            ))],
+        )
+        .with_color(horizon_client::text::RED);
+        host.hub.send_to(
+            conn,
+            &C::SystemChat(play::SystemChat {
+                content: horizon_client::lan::data::component_nbt(&message.component()),
+                overlay: true,
+            }),
+        );
+    }
+
     /// A packet from a guest that the hub does not handle itself.
     pub(super) fn lan_guest_packet(&mut self, host: &mut LanHost, conn: u32, packet: S) {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
@@ -995,6 +1034,12 @@ impl Game<'_> {
                 0 => {
                     host.hub.ack(conn, a.sequence);
                     if spectator {
+                        return;
+                    }
+                    // ServerPlayerGameMode.handleBlockBreakAction: no dig starts
+                    // under spawn protection (the ack puts the block back).
+                    if self.under_spawn_protection(host, gi, a.pos) {
+                        self.spawn_protection_message(host, conn, a.pos);
                         return;
                     }
                     let face = direction(i32::from(a.direction));
@@ -1124,19 +1169,25 @@ impl Game<'_> {
                     ],
                 };
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
-                let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
-                let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
-                let swung = self.as_guest(host, conn, |g| {
-                    g.forced_hit = Some(hit);
-                    g.guest_use = Some(GuestUse::OnBlock(hand));
-                    let swings = g.swings_started;
-                    let _ = g.use_item();
-                    g.forced_hit = None;
-                    g.guest_use = None;
-                    g.swings_started != swings
-                });
-                self.lan_swing_back(host, conn, swung);
-                self.guest_use_sounds(host, conn, logged, heard);
+                // handleUseItemOn: under spawn protection nothing is used or
+                // placed; the player is told and the blocks below go back.
+                if self.under_spawn_protection(host, gi, p.pos) {
+                    self.spawn_protection_message(host, conn, p.pos);
+                } else {
+                    let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
+                    let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
+                    let swung = self.as_guest(host, conn, |g| {
+                        g.forced_hit = Some(hit);
+                        g.guest_use = Some(GuestUse::OnBlock(hand));
+                        let swings = g.swings_started;
+                        let _ = g.use_item();
+                        g.forced_hit = None;
+                        g.guest_use = None;
+                        g.swings_started != swings
+                    });
+                    self.lan_swing_back(host, conn, swung);
+                    self.guest_use_sounds(host, conn, logged, heard);
+                }
                 // The client predicted a result: correct it with what really is.
                 for pos in [
                     p.pos,

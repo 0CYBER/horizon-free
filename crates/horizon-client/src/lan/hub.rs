@@ -199,6 +199,9 @@ pub struct Hub {
     pub ops: std::collections::HashMap<u128, u8>,
     /// `entity-broadcast-range-percentage` (dedicated servers).
     pub entity_range_percent: i32,
+    /// `spawn-protection` (dedicated servers): the radius around the world
+    /// spawn that only operators may change.
+    pub spawn_protection: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -369,6 +372,7 @@ impl Hub {
             stepping: 0,
             ops: Default::default(),
             entity_range_percent: 100,
+            spawn_protection: 0,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
