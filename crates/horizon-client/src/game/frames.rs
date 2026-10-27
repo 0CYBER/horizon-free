@@ -239,12 +239,6 @@ impl Game<'_> {
         }
         let with_frame = self.item_frames[i].item.is_none();
         let at = center(&self.item_frames[i]);
-        // The frame's box, before the hit may remove it.
-        let (lo, hi) = self.item_frames[i].bounds();
-        let area = Aabb::new(
-            Vec3::new(lo[0], lo[1], lo[2]),
-            Vec3::new(hi[0], hi[1], hi[2]),
-        );
         let f = if with_frame {
             self.item_frames.remove(i)
         } else {
@@ -261,8 +255,6 @@ impl Game<'_> {
         }
         self.drop_frame_items(&f, with_frame, true);
         self.world.modified.insert((f.pos[0] >> 4, f.pos[2] >> 4));
-        self.attack_effects(area, None, super::mace::Spared::Nothing);
-        self.swing_arm();
         true
     }
     /// `ItemFrame.dropItem`: the frame (when breaking) and the held item.

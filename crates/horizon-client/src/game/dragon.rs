@@ -1031,22 +1031,8 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        let modifiers = self
-            .attack_item_info()
-            .map(|i| (i.attack_damage, i.attack_speed))
-            .unwrap_or((0.0, 0.0));
-        let speed = (4.0 + modifiers.1).max(0.1);
-        let scale = ((self.attack_ticks as f32 + 0.5) / (20.0 / speed)).clamp(0.0, 1.0);
-        let mut amount =
-            (1.0 + modifiers.0 + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
-        let falling = self
-            .player
-            .as_ref()
-            .is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
-        if scale > 0.9 && falling {
-            amount *= 1.5;
-        }
-        amount += self.enchant_damage_bonus("minecraft:ender_dragon") * scale;
+        // A dragon part is no LivingEntity: `canCriticalAttack` is false.
+        let (amount, _, _, magic) = self.melee_damage("minecraft:ender_dragon", false);
         self.swing_arm();
         // The part's box (a part is no living entity: no critical sound).
         let area = self
@@ -1057,7 +1043,7 @@ impl Game<'_> {
         let hurt = self.hit_special(id, amount, true, false);
         // The sweep and the sounds read the charge, which the hit then spends.
         if let (Some(area), Hurt::Landed { .. }) = (area, hurt) {
-            self.attack_effects(area, None, super::mace::Spared::Nothing);
+            self.attack_effects(area, None, super::mace::Spared::Nothing, magic > 0.0);
         }
         self.attack_ticks = 0;
         true

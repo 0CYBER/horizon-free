@@ -1596,7 +1596,7 @@ struct Game<'a> {
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
-    lan_critical_hits: Vec<(Option<u32>, i32)>,
+    lan_critical_hits: Vec<(Option<u32>, i32, u8)>,
     /// Particles `ServerLevel.sendParticles` sends the guests (the particle,
     /// where, its offset), queued while the hub is taken.
     lan_particles: Vec<(
@@ -7488,7 +7488,11 @@ impl Game<'_> {
     /// strength and whether it is a critical hit): the weapon and effects
     /// scaled by the attack strength, a mace's smash, the critical hit, then
     /// enchantments.
-    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
+    pub(super) fn melee_damage(
+        &mut self,
+        target_kind: &str,
+        living: bool,
+    ) -> (f32, f32, bool, f32) {
         let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
         // Riptide's spin replaces the attack damage attribute.
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
@@ -7498,16 +7502,19 @@ impl Game<'_> {
             hand_damage + self.effect_attack_bonus()
         };
         let scale = self.attack_strength_scale();
+        // getEnchantedDamage(target, damage, source) - damage, taken before the
+        // attack strength scales the base damage.
+        let enchant_bonus = self.enchanted_damage(target_kind, damage) - damage;
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
         amount += self.smash_damage_bonus(target_kind);
-        let crit = self.critical_attack(scale);
+        let crit = living && self.critical_attack(scale);
         if crit {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        amount += self.enchant_damage_bonus(target_kind) * scale;
-        (amount, scale, crit)
+        amount += enchant_bonus * scale;
+        (amount, scale, crit, enchant_bonus * scale)
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
@@ -7588,13 +7595,19 @@ impl Game<'_> {
     /// strength, then strong or weak, or the sweep around the vehicle's
     /// box `area`. Before `swing_arm` resets the charge.
     pub(super) fn vehicle_attack_sounds(&mut self, area: Aabb) {
-        self.attack_effects(area, None, mace::Spared::Nothing);
+        self.attack_effects(area, None, mace::Spared::Nothing, false);
     }
     /// `Player.attack` after a target that is not a mob took the hit:
     /// the sprint knockback sound, a living target's critical hit (`living`:
     /// its entity id, which makes the hit critical when the player falls),
     /// the sweep around the target's box `area` and the strong or weak sound.
-    pub(super) fn attack_effects(&mut self, area: Aabb, living: Option<i32>, spared: mace::Spared) {
+    pub(super) fn attack_effects(
+        &mut self,
+        area: Aabb,
+        living: Option<i32>,
+        spared: mace::Spared,
+        magic: bool,
+    ) {
         let scale = self.attack_strength_scale();
         let full = scale > 0.9;
         let player = self.player.as_ref();
@@ -7619,6 +7632,7 @@ impl Game<'_> {
                     [feet.x, feet.y, feet.z],
                     size.x,
                     size.y,
+                    1,
                 );
             }
         } else if sweep.is_none() {
@@ -7628,6 +7642,18 @@ impl Game<'_> {
                 "minecraft:entity.player.attack.weak"
             };
             self.audio.play(sound, from, 1.0, 1.0);
+        }
+        // Player.magicCrit: the enchantments added damage.
+        if magic && let Some(id) = living {
+            let (feet, size) = (area.bottom_center(), area.size());
+            self.critical_hit(
+                self.lan_acting,
+                id,
+                [feet.x, feet.y, feet.z],
+                size.x,
+                size.y,
+                2,
+            );
         }
     }
     /// `Player.canCriticalAttack` for a living target at attack strength
@@ -7706,7 +7732,7 @@ impl Game<'_> {
     pub(super) fn attack_mob(&mut self, index: usize) {
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        let (amount, scale, crit) = self.melee_damage(&target_kind);
+        let (amount, scale, crit, magic) = self.melee_damage(&target_kind, true);
         let sweep = self.sweep_attack_position(scale, crit);
         let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
@@ -7769,6 +7795,18 @@ impl Game<'_> {
                     feet,
                     width,
                     height,
+                    1,
+                );
+            }
+            // Player.magicCrit: the enchantments added damage.
+            if magic > 0.0 {
+                self.critical_hit(
+                    self.lan_acting,
+                    self.mobs[index].id as i32,
+                    feet,
+                    width,
+                    height,
+                    2,
                 );
             }
             if actual > 2.0 {

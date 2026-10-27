@@ -1180,8 +1180,9 @@ impl Game<'_> {
         let burning = self
             .held()
             .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
-        self.vehicle_attack_sounds(self.carts[i].bounds());
+        let area = self.carts[i].bounds();
         self.hurt_cart(i, damage, self.creative, burning);
+        self.vehicle_attack_sounds(area);
         self.swing_arm();
         true
     }

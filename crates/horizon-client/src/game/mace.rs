@@ -371,7 +371,30 @@ impl Game<'_> {
             }
         }
         for i in stands {
-            self.punch_armor_stand(i);
+            let id = self.armor_stands[i].id;
+            // knockback(0.4, ..) follows a hurtServer that landed, on a stand
+            // that is still there (LivingEntity.knockback).
+            if !self.punch_armor_stand(i) {
+                continue;
+            }
+            let (mut kx, mut kz) = (xd, zd);
+            while kx * kx + kz * kz < f64::from(1.0e-5_f32) {
+                let r = &mut self.world.random;
+                kx = (r.next_double() - r.next_double()) * 0.01;
+                kz = (r.next_double() - r.next_double()) * 0.01;
+            }
+            let len = (kx * kx + kz * kz).sqrt();
+            if let Some(s) = self.armor_stands.iter_mut().find(|s| s.id == id) {
+                s.velocity = Vec3::new(
+                    s.velocity.x / 2.0 - kx / len * 0.4,
+                    if s.on_ground {
+                        (s.velocity.y / 2.0 + 0.4).min(0.4)
+                    } else {
+                        s.velocity.y
+                    },
+                    s.velocity.z / 2.0 - kz / len * 0.4,
+                );
+            }
         }
         // The players among the victims need the hub, which is out while a
         // guest acts: queued for `sweep_players`.

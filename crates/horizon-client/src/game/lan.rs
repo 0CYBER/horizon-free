@@ -1216,16 +1216,19 @@ impl Game<'_> {
         feet: [f64; 3],
         width: f64,
         height: f64,
+        action: u8,
     ) {
         use horizon_client::particles::{ParticleOptions, ParticleType};
-        self.particles.tracking_emitter(
-            ParticleOptions::simple(ParticleType::Crit),
-            feet,
-            width,
-            height,
-        );
+        // Animate action 1 is `crit`, 2 is `magicCrit` (enchanted hit).
+        let particle = if action == 2 {
+            ParticleType::EnchantedHit
+        } else {
+            ParticleType::Crit
+        };
+        self.particles
+            .tracking_emitter(ParticleOptions::simple(particle), feet, width, height);
         if self.audio.capture.is_some() {
-            self.lan_critical_hits.push((attacker, id));
+            self.lan_critical_hits.push((attacker, id, action));
         }
     }
     /// Send the tick's level events, sounds and mob animations.
@@ -1309,13 +1312,13 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
-        for (attacker, target) in critical_hits {
+        for (attacker, target, action) in critical_hits {
             let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
                 host.hub.guest(conn).map(|g| g.entity_id)
             }) else {
                 continue;
             };
-            host.hub.critical_hit(attacker, target);
+            host.hub.critical_hit(attacker, target, action);
         }
     }
 

@@ -488,9 +488,15 @@ impl Game<'_> {
         }
         // The stand's box and id, before the hit may remove it.
         let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
         let hurt = self.punch_armor_stand(i);
         if hurt {
-            self.attack_effects(area, Some(id as i32), super::mace::Spared::Stand(id));
+            self.attack_effects(
+                area,
+                Some(id as i32),
+                super::mace::Spared::Stand(id),
+                magic > 0.0,
+            );
             self.swing_arm();
         }
         hurt
