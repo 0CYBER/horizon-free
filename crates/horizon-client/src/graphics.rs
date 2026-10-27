@@ -216,15 +216,19 @@ pub const INTEGRATED_LOD_DISTANCE: u32 = 128;
 pub fn lod_capped(info: &wgpu::AdapterInfo) -> bool {
     info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.starts_with("Apple")
 }
+/// A LOD distance as far terrain uses it on this adapter.
+pub fn lod_distance_capped(distance: u32, info: &wgpu::AdapterInfo) -> u32 {
+    let distance = distance.min(1024);
+    if lod_capped(info) {
+        distance.min(INTEGRATED_LOD_DISTANCE)
+    } else {
+        distance
+    }
+}
 impl Graphics {
     /// `lod_distance` as far terrain uses it on this adapter.
     pub fn lod_distance_on(&self, info: &wgpu::AdapterInfo) -> u32 {
-        let distance = self.lod_distance.min(1024);
-        if lod_capped(info) {
-            distance.min(INTEGRATED_LOD_DISTANCE)
-        } else {
-            distance
-        }
+        lod_distance_capped(self.lod_distance, info)
     }
 }
 #[derive(Clone, Debug, PartialEq)]
