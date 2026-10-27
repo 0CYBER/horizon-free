@@ -214,12 +214,9 @@ pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>
     }
     true
 }
-/// `Guardian.aiStep`: the client animations, air, flopping on land, the
-/// beam's clock, and the spikes' thorns.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    if !m.alive() {
-        return;
-    }
+/// `Guardian.aiStep`'s `clientSideTailAnimation` and
+/// `clientSideSpikesAnimation` (the server's and a client's).
+pub fn tail_and_spikes(m: &mut Mob) {
     let moving = m.extra.flag2;
     let in_water = m.fluids.in_water;
     // Tail and spikes (clientSideTailAnimation / clientSideSpikesAnimation).
@@ -244,6 +241,16 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     } else {
         a.v[SPIKES] += (1.0 - a.v[SPIKES]) * 0.06;
     }
+}
+/// `Guardian.aiStep`: the client animations, air, flopping on land, the
+/// beam's clock, and the spikes' thorns.
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if !m.alive() {
+        return;
+    }
+    let moving = m.extra.flag2;
+    let in_water = m.fluids.in_water;
+    tail_and_spikes(m);
     client_tick(m);
     if in_water {
         m.air = 300;
@@ -276,17 +283,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         None => w.player.as_ref().map(|p| p.eye),
     };
     if let Some(look) = look {
-        m.anim.v[EYE_Y] = if look[1] - m.eye_y() > 0.0 { 0.0 } else { 1.0 };
-        let yaw = m.head_yaw.to_radians();
-        let pitch = m.head_pitch.to_radians();
-        let view = [-yaw.msin() * pitch.mcos(), yaw.mcos() * pitch.mcos()];
-        let d = [m.position.x - look[0], m.position.z - look[2]];
-        let len = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
-        let (dx, dz) = ((d[0] / len) as f32, (d[1] / len) as f32);
-        // Vec3.yRot(pi / 2) of the direction from the target.
-        let side = [dz, -dx];
-        let dot = view[0] * side[0] + view[1] * side[1];
-        m.anim.v[EYE_X] = dot.abs().sqrt() * 2.0 * dot.signum();
+        look_at(m, look);
     }
     // Guardian.hurtServer: a still guardian's spikes hurt a melee attacker.
     if m.hurt_time == 10
@@ -316,6 +313,21 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             None => {}
         }
     }
+}
+/// `GuardianModel.setupAnim`'s eye: it follows `look` (the attack target's
+/// eye, else the camera's), from where the guardian faces.
+pub fn look_at(m: &mut Mob, look: [f64; 3]) {
+    m.anim.v[EYE_Y] = if look[1] - m.eye_y() > 0.0 { 0.0 } else { 1.0 };
+    let yaw = m.head_yaw.to_radians();
+    let pitch = m.head_pitch.to_radians();
+    let view = [-yaw.msin() * pitch.mcos(), yaw.mcos() * pitch.mcos()];
+    let d = [m.position.x - look[0], m.position.z - look[2]];
+    let len = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
+    let (dx, dz) = ((d[0] / len) as f32, (d[1] / len) as f32);
+    // Vec3.yRot(pi / 2) of the direction from the target.
+    let side = [dz, -dx];
+    let dot = view[0] * side[0] + view[1] * side[1];
+    m.anim.v[EYE_X] = dot.abs().sqrt() * 2.0 * dot.signum();
 }
 /// `ElderGuardian.customServerAiStep`: every minute, mining fatigue III for
 /// players within 50 blocks; a home within 16 blocks.
@@ -399,6 +411,8 @@ pub fn beam_geometry(
             layer: 0,
             color,
             light: 240 | 240 << 8,
+
+            glint_uv: [0.0, 0.0],
         });
     };
     // Sides: one quad per texture repeat.
