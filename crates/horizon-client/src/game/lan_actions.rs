@@ -74,11 +74,18 @@ pub(super) struct GuestPlay {
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
     pub(super) stats: super::stats::Stats,
+    /// `Stats.LEAVE_GAME` is counted: a guest is saved more than once on the
+    /// way out, the statistic is awarded once (`LanHost::award_leave_game`).
+    pub(super) left_game: bool,
     last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     levitation: Option<([f64; 3], u64)>,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
+    /// its client's PERFORM_RESPAWN (`respawn_requested`).
+    pub(super) won_game: bool,
+    pub(super) respawn_requested: bool,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
@@ -164,6 +171,8 @@ pub(super) struct GuestSwap {
     acting: (Option<u32>, Option<String>, Option<u128>),
     /// The packets queued for that guest.
     packets: Vec<play::Clientbound>,
+    /// The entity events queued for that guest.
+    entity_events: Vec<i8>,
     /// The host's count of swings started, kept while the guest acts.
     swings: u32,
     /// How many projectiles there were: those added since are the guest's.
@@ -264,8 +273,10 @@ impl Game<'_> {
         }
         let mut play = host.play.remove(&conn).unwrap_or_default();
         if fresh {
-            // A new body (joined, respawned, changed level): nothing on it yet.
+            // A new body (joined, respawned, changed level): nothing on it yet,
+            // its effects' modifiers and armor protection included.
             play.equipped = None;
+            play.potions = Default::default();
             play.sculk = Default::default();
         }
         let g = &mut host.hub.guests[i];
@@ -389,6 +400,7 @@ impl Game<'_> {
             self.lan_acting_uuid.replace(g.uuid),
         );
         let packets = std::mem::take(&mut self.guest_packets);
+        let entity_events = std::mem::take(&mut self.guest_entity_events);
         let swings = self.swings_started;
         let projectiles = self.creatures.projectiles.len();
         let modifiers = std::mem::replace(
@@ -401,6 +413,12 @@ impl Game<'_> {
         if play.equipped.as_ref() != Some(&equipped) {
             self.apply_equipment();
             play.equipped = Some(equipped);
+        }
+        // The player's effects are on the new body before anything it does
+        // (the movement that brought it, a landing): vanilla keeps the same
+        // entity through a level change, with its attributes and effects.
+        if fresh {
+            self.apply_effect_status();
         }
         self.update_totem_ready();
         Some(GuestSwap {
@@ -450,6 +468,7 @@ impl Game<'_> {
             death_cause,
             acting,
             packets,
+            entity_events,
             swings,
             projectiles,
             modifiers,
@@ -510,6 +529,7 @@ impl Game<'_> {
             combat,
             acting,
             packets,
+            entity_events,
             swings,
             projectiles,
             modifiers,
@@ -530,6 +550,17 @@ impl Game<'_> {
         self.swings_started = swings;
         for packet in std::mem::replace(&mut self.guest_packets, packets) {
             host.hub.send_to(conn, &packet);
+        }
+        // ServerPlayer.connection.send: the guest's own entity events.
+        let entity_id = host.hub.guests[i].entity_id;
+        for event in std::mem::replace(&mut self.guest_entity_events, entity_events) {
+            host.hub.send_to(
+                conn,
+                &C::EntityEvent(play::EntityEvent {
+                    id: entity_id,
+                    event,
+                }),
+            );
         }
         // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
         for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
@@ -660,6 +691,13 @@ impl Game<'_> {
                 g.sprinting = false;
             }
             m.sprinting = false;
+            // ServerPlayer.indicateDamage: the hit's direction to the player.
+            if let Some(yaw) = m.health.indicated_dir.take() {
+                g.send(&C::HurtAnimation(play::HurtAnimation {
+                    id: g.entity_id,
+                    yaw,
+                }));
+            }
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
@@ -882,7 +920,11 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g))
             .filter(|g| {
                 g.menu.as_ref().is_some_and(|m| {
-                    m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos)
+                    (m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos))
+                        || m.pos.is_some_and(|k| {
+                            k.1 == super::minecarts::CART_KEY_Y
+                                && !self.chest_vehicle_still_valid(k.2, g)
+                        })
                 })
             })
             .map(|g| g.conn)
@@ -894,6 +936,35 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
         }
+    }
+
+    /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest
+    /// boat is still there and within the guest's entity interaction range
+    /// plus 4 of its box.
+    fn chest_vehicle_still_valid(&self, id: i32, g: &horizon_client::lan::guest::Guest) -> bool {
+        let bounds = self
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+            .map(|c| c.bounds())
+            .or_else(|| {
+                self.boats
+                    .iter()
+                    .find(|b| b.id as i32 == id)
+                    .map(|b| b.bounds())
+            });
+        let Some(b) = bounds else {
+            return false;
+        };
+        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let d = [
+            eye[0] - eye[0].clamp(lo.x, hi.x),
+            eye[1] - eye[1].clamp(lo.y, hi.y),
+            eye[2] - eye[2].clamp(lo.z, hi.z),
+        ];
+        let range = if g.creative() { 5.0 } else { 3.0 } + 4.0;
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -928,6 +999,20 @@ impl Game<'_> {
                     // The pause between two blocks is the client's (MultiPlayerGameMode's
                     // destroyDelay); the server digs from the START it receives.
                     play.destroy_delay = 0;
+                    // ServerPlayerGameMode.handleBlockBreakAction: a survival START
+                    // attacks the block at once, so a tap released in the same tick
+                    // still plays a note. The dig is marked begun for tick_mining.
+                    let pos = a.pos;
+                    self.as_guest(host, conn, |g| {
+                        if g.may_build() && !g.creative {
+                            let _ = g.attack_block(pos);
+                            g.mining = Some(Mining {
+                                pos,
+                                progress: 0.0,
+                                ticks: 0,
+                            });
+                        }
+                    });
                 }
                 1 => {}
                 3 => {
@@ -1170,6 +1255,7 @@ impl Game<'_> {
             }
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
+            S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
             S::EditBook(p) => self.lan_edit_book(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
@@ -1185,6 +1271,12 @@ impl Game<'_> {
                     || self.lan_mount_closed(host, conn, Some(p.container)) =>
             {
                 self.guest_carried_back(host, gi);
+            }
+            S::SelectBundleItem(p) => {
+                if !spectator && let Ok(slot) = usize::try_from(p.slot) {
+                    host.hub
+                        .select_bundle_item(conn, slot, p.index, &mut self.world);
+                }
             }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
@@ -1321,6 +1413,13 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
+            // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
+            // (the next server tick sends the player on).
+            S::ClientCommand(c)
+                if c.action == 0 && host.play.get(&conn).is_some_and(|p| p.won_game) =>
+            {
+                host.play.entry(conn).or_default().respawn_requested = true;
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {
@@ -1481,9 +1580,13 @@ impl Game<'_> {
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
             if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
                 && self.pvp_land(host, victim, &strike)
-                && strike.stops_sprint()
             {
-                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
+                self.as_guest(host, conn, |g| {
+                    g.pvp_exhaustion();
+                    if strike.stops_sprint() {
+                        g.stop_sprint_after_extra_knockback();
+                    }
+                });
             }
             return;
         }
@@ -1544,6 +1647,10 @@ impl Game<'_> {
                     overlay: false,
                 }),
             );
+            return;
+        }
+        // A server mod's command, for every player whatever their level.
+        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
             return;
         }
         // An integrated server runs every player's commands at their own
@@ -1784,10 +1891,6 @@ impl Game<'_> {
         };
         xp.respawn(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
         (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
-        // A new body: nothing given to the old one carries over.
-        if let Some(play) = host.play.get_mut(&conn) {
-            play.potions = Default::default();
-        }
         let clock_rate = self.network_clock_rate();
         let ctx = TickCtx {
             world: &mut self.world,
@@ -1869,21 +1972,8 @@ impl Game<'_> {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
-            // Player.tick's ItemCooldowns.tick, once a tick for each player
-            // (the shield an axe disabled, a thrown pearl).
-            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerGamePacketListenerImpl.tick's dropSpamThrottler.
             play.creative_drops = play.creative_drops.saturating_sub(1);
-            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
-            // the guest (a duration of 0 removes it).
-            for group in play.cooldowns.tick() {
-                host.hub.send_to(
-                    conn,
-                    &C::Cooldown(play::Cooldown {
-                        group: group.to_string(),
-                        duration: 0,
-                    }),
-                );
-            }
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1919,6 +2009,24 @@ impl Game<'_> {
                 {
                     play.digging = None;
                 }
+            }
+            // Player.tick's ItemCooldowns.tick, once a tick for each player
+            // (the shield an axe disabled, a thrown pearl), after
+            // LivingEntity.tick's use: an entry a finished use starts has 20
+            // ticks left when the next tick's packets are handled, as the
+            // guest's own client counts.
+            let play = host.play.entry(conn).or_default();
+            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
+            // the guest (a duration of 0 removes it).
+            for group in play.cooldowns.tick() {
+                host.hub.send_to(
+                    conn,
+                    &C::Cooldown(play::Cooldown {
+                        group: group.to_string(),
+                        duration: 0,
+                    }),
+                );
             }
             // Player.tick: a different main-hand item resets the attack
             // strength, and detectEquipmentUpdates gives the guest its modifiers.
@@ -2141,7 +2249,8 @@ impl Game<'_> {
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
-        let sneaking = g.sneaking;
+        let (sneaking, sleeping) = (g.sneaking, g.sleeping);
+        let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -2209,8 +2318,10 @@ impl Game<'_> {
             // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
+            let _ = w.player.set_sleeping(sleeping);
             w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
+            let _ = w.update_soul_speed_block();
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
@@ -2224,6 +2335,8 @@ impl Game<'_> {
                     game.cauldron_extinguish(*pos);
                 }
             }
+            // Entity.baseTick: rain puts out a burning player.
+            game.rain_extinguish_player();
             // WitherRoseBlock.entityInside along those moves.
             for event in &events {
                 if matches!(event, MotionEvent::InsideWitherRose) {
@@ -2238,6 +2351,9 @@ impl Game<'_> {
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();
+            // Soul Speed's effects (LivingEntity.baseTick's location_changed
+            // and tick effects); its particle goes to the players around.
+            soul = game.tick_soul_speed();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2259,17 +2375,65 @@ impl Game<'_> {
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
+            // Player.causeFallDamage: a fall of 2 blocks or more counts.
+            for event in &events {
+                if let MotionEvent::Fall(horizon_client::landing::FallEvent::Statistic(cm)) = event
+                {
+                    game.stats.custom("fall_one_cm", *cm);
+                }
+            }
             game.record_combat(&events);
+            game.wear_armor(&events);
             (events, velocity)
         });
         let Some((events, marked)) = events else {
             return;
         };
+        if let Some((at, velocity)) = soul {
+            super::lan_particles::send_soul_particle(host, at, velocity);
+        }
         self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.checkFallDamage: the crumbs reach every player.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
+                    state,
+                    position,
+                    count,
+                    speed,
+                }) => self.landing_dust(Some(host), state, position, count, speed),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                // LivingEntity.baseTick's entity event 67, to every client
+                // around, the guest's own included; this window draws it too.
+                MotionEvent::Drown => {
+                    if let Some(g) = host.hub.guest(conn) {
+                        host.hub
+                            .entity_event(g.entity_id, super::combat::DROWN_EVENT, at);
+                    }
+                    self.drown_particles(at, [0.0; 3]);
+                }
+                // HoneyBlock.maybeDoSlideEffects: the sound reaches the
+                // others (Player.playSound excludes the player, whose client
+                // plays it), the entity event 53 everyone around.
+                MotionEvent::HoneySlide {
+                    sound, particles, ..
+                } => {
+                    let Some((id, at)) = host.hub.guest(conn).map(|g| (g.entity_id, g.position))
+                    else {
+                        continue;
+                    };
+                    if sound {
+                        let name = "minecraft:block.honey_block.slide";
+                        let source = horizon_client::settings::sound_source(name) as i32;
+                        self.audio.play_unshared(name, Some(at), 1.0, 1.0);
+                        host.hub.sound(name, at, 1.0, 1.0, source, Some(conn));
+                    }
+                    if particles {
+                        self.honey_slide_particles(at);
+                        host.hub.entity_event(id, 53, at);
+                    }
+                }
                 _ => {}
             }
         }
@@ -2353,9 +2517,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
@@ -2580,8 +2748,7 @@ impl Game<'_> {
     /// with Mending and gives the rest as points. Everyone near hears it.
     fn guest_orbs(&mut self, host: &mut LanHost, gi: usize) {
         let g = &host.hub.guests[gi];
-        // Player's standing and crouching boxes: 1.8 and 1.5 high.
-        let height = if g.sneaking { 1.5 } else { 1.8 };
+        let height = f64::from(g.dimensions().height);
         let (conn, id, at) = (g.conn, g.entity_id, g.position);
         let unable = g.spectator() || g.dead || g.health <= 0.0;
         let play = host.play.entry(conn).or_default();
@@ -2618,7 +2785,13 @@ impl Game<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let orb = self.orbs.remove(touching[pick]);
+        // A merged orb gives its value once per count and goes at zero.
+        let orb = self.orbs[touching[pick]].clone();
+        if orb.count <= 1 {
+            self.orbs.remove(touching[pick]);
+        } else {
+            self.orbs[touching[pick]].count -= 1;
+        }
         play.xp_delay = 2;
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.

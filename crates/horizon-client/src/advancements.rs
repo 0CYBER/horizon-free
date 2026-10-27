@@ -708,6 +708,52 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
     }
     true
 }
+/// A damage event as `DamagePredicate` sees it.
+#[derive(Clone, Debug, Default)]
+pub struct DamageView {
+    /// The damage type id (`minecraft:arrow`).
+    pub kind: String,
+    /// `DamageSource.getDirectEntity` and `getEntity`.
+    pub direct: Option<EntityView>,
+    pub source: Option<EntityView>,
+    /// `DamageSource.isDirect`: the direct entity is the causing one.
+    pub is_direct: bool,
+    /// The damage before and after the shield took its share.
+    pub original: f32,
+    pub actual: f32,
+    pub blocked: bool,
+}
+/// `DamagePredicate`, with its `DamageSourcePredicate` as `type`.
+pub fn damage(v: &Value, d: &DamageView, w: &dyn World, origin: [f64; 3]) -> bool {
+    if v.is_null() {
+        return true;
+    }
+    let by = |key: &str, e: &Option<EntityView>| {
+        v[key].is_null() || e.as_ref().is_some_and(|e| entity(&v[key], e, w, origin))
+    };
+    if !range_f(&v["dealt"], f64::from(d.original))
+        || !range_f(&v["taken"], f64::from(d.actual))
+        || !by("source_entity", &d.source)
+        || v["blocked"].as_bool().is_some_and(|b| b != d.blocked)
+    {
+        return false;
+    }
+    let ty = &v["type"];
+    let tags_ok = ty["tags"].as_array().into_iter().flatten().all(|t| {
+        let tag = t["id"].as_str().unwrap_or("");
+        let tag = tag.strip_prefix('#').unwrap_or(tag);
+        w.in_tag("damage_type", tag, &d.kind) == t["expected"].as_bool().unwrap_or(true)
+    });
+    let direct_ok = ty["direct_entity"].is_null()
+        || d.direct
+            .as_ref()
+            .is_some_and(|e| entity(&ty["direct_entity"], e, w, origin));
+    let source_ok = ty["source_entity"].is_null()
+        || d.source
+            .as_ref()
+            .is_some_and(|e| entity(&ty["source_entity"], e, w, origin));
+    tags_ok && direct_ok && source_ok && ty["is_direct"].as_bool().is_none_or(|b| b == d.is_direct)
+}
 /// The entities a loot-style condition list may refer to.
 pub struct Entities<'a> {
     pub this: Option<&'a EntityView>,

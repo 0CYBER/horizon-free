@@ -137,6 +137,7 @@ mod movement_support_fixture;
 mod object_open_map_fixture;
 mod object_open_set_fixture;
 mod piston_movement_fixture;
+mod piston_push_fixture;
 mod piston_shape_fixture;
 mod placement_fixture;
 mod player_equipment_fixture;
@@ -169,6 +170,7 @@ mod stored_effect_attributes_fixture;
 mod stored_effect_notifications_fixture;
 mod structure_density_fixture;
 mod structure_pieces;
+mod structure_start_nbt;
 mod suffocation_fixture;
 mod swimming_fixture;
 mod synced_bytes_fixture;
@@ -308,6 +310,7 @@ probes! {
     object_open_map_fixture,
     object_open_set_fixture,
     piston_movement_fixture,
+    piston_push_fixture,
     piston_shape_fixture,
     placement_fixture,
     player_equipment_fixture,
@@ -340,6 +343,7 @@ probes! {
     stored_effect_notifications_fixture,
     structure_density_fixture,
     structure_pieces,
+    structure_start_nbt,
     suffocation_fixture,
     swimming_fixture,
     synced_bytes_fixture,

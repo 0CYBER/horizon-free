@@ -25,6 +25,8 @@ pub struct TargetInfo {
     pub can_be_seen_as_enemy: bool,
     pub is_player: bool,
     pub creative: bool,
+    /// `isPassenger`.
+    pub passenger: bool,
 }
 impl MobWorld<'_> {
     /// The biome's base temperature at a position.
@@ -64,6 +66,35 @@ impl MobWorld<'_> {
     }
     pub fn has_tag(&self, tag: &str, block: &str) -> bool {
         self.block_tags.get(tag).is_some_and(|s| s.contains(block))
+    }
+    /// `findBlocksInBoxByManhattanDistance(at, range_xz, range_y).filterState(..).findFirst()`:
+    /// the first block `matches` accepts (given its position and name), going
+    /// out from `at` by Manhattan distance as `BlockPos.withinBoxByManhattanDistance` does.
+    pub fn nearest_block(
+        &self,
+        at: [i32; 3],
+        range_xz: i32,
+        range_y: i32,
+        matches: impl Fn([i32; 3], &str) -> bool,
+    ) -> Option<[i32; 3]> {
+        // Visiting order: distance, then x, then y, then +z before -z.
+        let mut best: Option<((i32, i32, i32, bool), [i32; 3])> = None;
+        for dx in -range_xz..=range_xz {
+            for dy in -range_y..=range_y {
+                for dz in -range_xz..=range_xz {
+                    let key = (dx.abs() + dy.abs() + dz.abs(), dx, dy, dz < 0);
+                    if best.is_some_and(|(k, _)| k <= key) {
+                        continue;
+                    }
+                    let p = [at[0] + dx, at[1] + dy, at[2] + dz];
+                    let state = self.world.block(p[0], p[1], p[2]);
+                    if !self.facts.is_air(state) && matches(p, &self.facts.get(state).name) {
+                        best = Some((key, p));
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| p)
     }
     /// Level.clip with COLLIDER shapes (optionally stopping at any fluid): true on a miss.
     pub fn clear_between(&self, from: Vec3, to: Vec3, fluids_block: bool) -> bool {
@@ -177,6 +208,25 @@ impl MobWorld<'_> {
         }
         self.world.light(x, y, z) >> 4 == 15
     }
+    /// Level.precipitationAt: raining, open to the sky, nothing motion
+    /// blocking above, then the biome's precipitation at the position:
+    /// `Some(true)` rain, `Some(false)` snow, `None` nothing.
+    pub fn precipitation_at(&self, x: i32, y: i32, z: i32) -> Option<bool> {
+        if !self.raining || !self.can_see_sky(x, y, z) || self.motion_blocking_height(x, z) > y {
+            return None;
+        }
+        let chunk = self.world.chunks.get(&(x >> 4, z >> 4))?;
+        let biome = self.biomes.get(chunk.biome(x, y, z));
+        if !biome.precipitation {
+            return None;
+        }
+        Some(biome.temperature_at(BlockPos::new(x, y, z), self.sea_level) >= 0.15)
+    }
+    /// Level.isRainingAt: the precipitation at the position is rain, not snow
+    /// or none.
+    pub fn raining_at(&self, x: i32, y: i32, z: i32) -> bool {
+        self.precipitation_at(x, y, z) == Some(true)
+    }
     /// Level.getLightLevelDependentMagicValue: the dimension's brightness curve
     /// at the raw (sky darkened) light level.
     pub fn brightness(&self, x: i32, y: i32, z: i32) -> f32 {
@@ -201,6 +251,7 @@ impl MobWorld<'_> {
                 can_be_seen_as_enemy: true,
                 is_player: true,
                 creative: p.creative,
+                passenger: p.passenger,
             }),
             Who::Mob(id) => self.seen(id).map(|s| TargetInfo {
                 position: s.position,
@@ -210,6 +261,7 @@ impl MobWorld<'_> {
                 can_be_seen_as_enemy: !s.playing_dead,
                 is_player: false,
                 creative: false,
+                passenger: s.passenger,
             }),
         }
     }

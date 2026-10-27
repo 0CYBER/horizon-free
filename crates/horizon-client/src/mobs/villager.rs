@@ -448,6 +448,24 @@ impl Ext {
         }
         (stack.count > 0).then_some(stack)
     }
+    /// `SimpleContainer.removeItemType`: take up to `count` of the item from
+    /// the first stacks that hold it.
+    pub fn remove_item(&mut self, item: &str, mut count: u32) {
+        let mut slot = 0;
+        while slot < self.inventory.len() && count > 0 {
+            let s = &mut self.inventory[slot];
+            if &*s.item == item {
+                let n = s.count.min(count);
+                s.count -= n;
+                count -= n;
+                if s.count == 0 {
+                    self.inventory.remove(slot);
+                    continue;
+                }
+            }
+            slot += 1;
+        }
+    }
     pub fn count_item(&self, item: &str) -> u32 {
         self.inventory
             .iter()
@@ -754,30 +772,6 @@ pub fn finalize_summoned_golem(m: &mut Mob, random: &mut impl RandomSource) {
     }
     m.extra.left_handed = random.next_float() < 0.05;
 }
-/// `PoiManager.take(HOME, ..., 48)`: the nearest bed head not `claimed`
-/// (`free_head`: a bed head that is not occupied).
-pub fn take_vacant_bed(
-    claimed: &[[i32; 3]],
-    from: [i32; 3],
-    mut free_head: impl FnMut(i32, i32, i32) -> bool,
-) -> Option<[i32; 3]> {
-    let mut best: Option<(i32, [i32; 3])> = None;
-    for y in from[1] - 8..=from[1] + 8 {
-        for z in from[2] - 48..=from[2] + 48 {
-            for x in from[0] - 48..=from[0] + 48 {
-                let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);
-                if d <= 48 * 48
-                    && best.is_none_or(|(b, _)| d < b)
-                    && free_head(x, y, z)
-                    && !claimed.contains(&[x, y, z])
-                {
-                    best = Some((d, [x, y, z]));
-                }
-            }
-        }
-    }
-    best.map(|(_, p)| p)
-}
 /// `Villager.canBreed`: enough food, awake and an adult.
 pub fn can_breed(m: &Mob) -> bool {
     m.species() == Species::Villager
@@ -910,6 +904,53 @@ mod tests {
         assert!(t.offers.is_empty());
         assert!(t.unset);
         assert_eq!(m.extra.variant2, 2);
+    }
+    /// The reported sequence: a villager works at a bench, the bench is
+    /// destroyed (its job site is gone, so `ResetProfession` makes it
+    /// unemployed) and it takes another bench's job. The new profession's
+    /// trades are offered again.
+    ///
+    /// `Villager.setVillagerData` drops the offers (`offers = null`) when the
+    /// profession changes, so `AbstractVillager.getOffers` rolls the new
+    /// profession's trade set the next time the offers are asked for. A
+    /// villager that keeps its old offers marked as made never trades again:
+    /// it shakes its head instead of opening the trading menu.
+    #[test]
+    fn a_villager_that_loses_its_job_site_offers_its_new_profession_trades() {
+        let mut m = villager();
+        // The composter's job: the villager is a farmer.
+        set_profession(&mut m, 5);
+        assert_eq!(m.extra.variant2, 5);
+        // Its trades were made, so the offers are there.
+        let trade = m.extra.trade.get_or_insert_default();
+        trade.unset = false;
+        trade.offers = vec![crate::merchant::MerchantOffer {
+            base_cost_a: crate::merchant::ItemCost {
+                stack: ItemStack::new("minecraft:wheat", 20),
+            },
+            cost_b: None,
+            result: ItemStack::new("minecraft:emerald", 1),
+            uses: 0,
+            max_uses: 16,
+            reward_exp: true,
+            special_price_diff: 0,
+            demand: 0,
+            price_multiplier: 0.0,
+            xp: 1,
+        }];
+        // The work bench is destroyed: the job site is gone, so the villager
+        // is unemployed and its offers are dropped (`offers = null`).
+        set_profession(&mut m, NONE);
+        let t = m.extra.trade.as_ref().unwrap();
+        assert!(t.offers.is_empty());
+        assert!(t.unset);
+        // It takes the smithing table's job. The new profession's trades are
+        // rolled by the next `getOffers` (ensure_offers).
+        set_profession(&mut m, 13);
+        let t = m.extra.trade.as_ref().unwrap();
+        assert!(t.offers.is_empty());
+        assert!(t.unset);
+        assert_eq!(m.extra.variant2, 13);
     }
 
     fn stack(item: &str, count: u32) -> ItemStack {

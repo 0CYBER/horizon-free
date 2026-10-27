@@ -114,7 +114,7 @@ impl Game<'_> {
             living: Some(HurtBob {
                 hurt_time: p.health.hurt_animation_time as f32 - partial,
                 hurt_duration: hurt.hurt_duration,
-                hurt_dir: 0.0,
+                hurt_dir: p.health.hurt_dir,
                 death_time: self.death_time().map(|t| t as f32 + partial),
             }),
             player: Some((

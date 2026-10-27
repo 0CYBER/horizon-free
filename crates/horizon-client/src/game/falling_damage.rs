@@ -64,6 +64,25 @@ impl Game<'_> {
                     pos: BlockPos::new(pos[0], pos[1], pos[2]),
                     data: 0,
                 });
+            } else if self
+                .res
+                .facts()
+                .get(block.state)
+                .name
+                .starts_with("minecraft:suspicious_")
+            {
+                // BrushableBlock.onBrokenAfterFall.
+                let at = BlockPos::new(pos[0], pos[1], pos[2]);
+                self.level_events.push(LevelEvent::LevelEvent {
+                    id: 2001,
+                    pos: at,
+                    data: block.state.0 as i32,
+                });
+                self.level_events.push(LevelEvent::GameEvent {
+                    pos: at,
+                    event: "minecraft:block_destroy",
+                    state: None,
+                });
             }
             return;
         }
@@ -108,16 +127,10 @@ impl Game<'_> {
         } else {
             amount
         };
-        let hurt = if let Some(p) = self.player.as_mut()
+        if let Some(p) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(kind)
         {
-            p.hurt(&self.motion.health, self.world.health_rules, id, amount)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        if hurt {
-            self.hurt_armor(amount);
+            let _ = p.hurt(&self.motion.health, self.world.health_rules, id, amount);
         }
     }
 }
