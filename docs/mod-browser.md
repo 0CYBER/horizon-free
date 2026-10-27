@@ -82,7 +82,8 @@ downloads, source and licence, how well it runs (and why), **Page** (the project
 **Install** (**Import** for a modpack). The Modpacks tab lists the imported packs first, with their coverage
 report, **Port** and **Play** ([modpacks.md](modpacks.md)). Installed packs are listed above the results with their version, source,
 file and the checksum they were checked against, with **Update to …** when a newer version runs and **Remove**
-(asked twice).
+(asked twice). **Update all (N)** above the list updates every pack a newer version was found for, of every kind,
+one after the other; one that fails is named and doesn't stop the others.
 
 ### Project pages, filters and icons
 
@@ -130,6 +131,7 @@ same name the player put there is never overwritten.
   pack still has to be turned on in the game's Resource Packs screen, as in vanilla, and a shader pack picked in
   the game's Shader Packs page.
 - **Update** installs the newer version and removes the old file.
+- **Update all** does the same for each pack with a newer version (`horizon-launcher mods update` with no pack name).
 - **Remove** deletes the file and its entry. Packs installed as dependencies stay.
 - **A modpack** is downloaded (checked the same way) into `ports/downloads/`, imported, and ported straight away
   for the selected version when it is prepared (`modpacks::import_and_port`): the jars of the mods Horizon can carry

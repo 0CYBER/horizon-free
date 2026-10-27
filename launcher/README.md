@@ -28,8 +28,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
   `resourcepacks/` only after its SHA-512 matches, and a
-  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
-  and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
+  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update,
+  **Update all** and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
   MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
