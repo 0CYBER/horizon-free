@@ -1,7 +1,16 @@
 //! The player's `CombatTracker`: the damage taken lately, who dealt it and
 //! where the player fell from, turned into the vanilla death message.
 use super::{Game, chat::PLAYER_NAME};
-use horizon_client::{health::HealthEvent, motion::MotionEvent, text::Text};
+use horizon_client::{
+    health::HealthEvent,
+    motion::MotionEvent,
+    particles::{ParticleOptions, ParticleType},
+    text::Text,
+};
+use horizon_core::random::RandomSource;
+
+/// `EntityEvent.DROWN_PARTICLES`: broadcast with the drowning damage.
+pub(super) const DROWN_EVENT: i8 = 67;
 
 struct Entry {
     damage_type: String,
@@ -45,6 +54,38 @@ pub(super) struct CombatTracker {
     fall_before: f64,
 }
 impl Game<'_> {
+    /// `LivingEntity.makeDrownParticles`: eight bubbles around the entity,
+    /// moving with it.
+    pub(super) fn drown_particles(&mut self, at: [f64; 3], velocity: [f64; 3]) {
+        let bubble = ParticleOptions::simple(ParticleType::Bubble);
+        for _ in 0..8 {
+            let mut triangle = || {
+                let r = self.particles.random();
+                r.next_double() - r.next_double()
+            };
+            let p = [at[0] + triangle(), at[1] + triangle(), at[2] + triangle()];
+            self.particles.add(&bubble, p, velocity);
+        }
+    }
+    /// Entity event 67 from a server, for this client's own player or an
+    /// entity it draws.
+    pub(super) fn remote_drown(&mut self, id: i32) {
+        let own = self.remote.as_ref().is_some_and(|r| r.entity_id == id);
+        let body = if own {
+            self.player.as_ref().map(|p| {
+                let (at, v) = (p.position, p.velocity);
+                ([at.x, at.y, at.z], [v.x, v.y, v.z])
+            })
+        } else {
+            self.mobs.iter().find(|m| m.id == id as u32).map(|m| {
+                let (at, v) = (m.position, m.velocity);
+                ([at.x, at.y, at.z], [v.x, v.y, v.z])
+            })
+        };
+        if let Some((at, v)) = body {
+            self.drown_particles(at, v);
+        }
+    }
     /// The display name of a mob: its custom name or its type's name.
     pub(super) fn mob_display_name(&self, id: u32) -> Option<Text> {
         let m = self.mobs.iter().find(|m| m.id == id)?;
@@ -82,8 +123,8 @@ impl Game<'_> {
     /// `LivingEntity.handleDamageEvent` for the player: the hurt sound of the
     /// source's `DamageEffects` (`Player.getHurtSound`).
     pub(super) fn player_hurt_sound(&mut self, sound: &str, at: [f64; 3]) {
-        let pitch = self.audio.hurt_pitch();
-        self.audio.play(sound, Some(at), 1.0, pitch);
+        // Player.getVoicePitch: always 1.0.
+        self.audio.play(sound, Some(at), 1.0, 1.0);
     }
     /// `CombatTracker.recordDamage` for the motion events of this tick.
     pub(super) fn record_combat(&mut self, events: &[MotionEvent]) {

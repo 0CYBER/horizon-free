@@ -527,6 +527,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `freeze`: a fully frozen mob in powder snow.
+    Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
 }
@@ -596,6 +598,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -620,6 +623,7 @@ impl Damage {
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -646,6 +650,9 @@ pub struct Attrs {
 pub struct Extra {
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
+    /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
+    /// sets its box (`Avatar.POSES`).
+    pub avatar_pose: crate::pose::Pose,
     /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
     pub sprinting: bool,
     pub passenger: bool,
@@ -781,8 +788,9 @@ pub struct Extra {
     pub drop_chances: Option<Box<[f32; 8]>>,
     /// `Mob.leftHanded`.
     pub left_handed: bool,
-    /// The sound variant: index in the species' `*_sound_variant` registry.
-    pub sound_variant: u8,
+    /// The sound variant: index in the species' `*_sound_variant` registry
+    /// (`finalize::sound_variants`); None is the default, `classic`.
+    pub sound_variant: Option<u8>,
     /// `Zombie.canBreakDoors`.
     pub can_break_doors: bool,
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
@@ -903,6 +911,12 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
+    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
+    /// clients' `makeDrownParticles`.
+    Drown {
+        mob: u32,
+        at: [f64; 3],
+    },
     Sound(&'static str, [f64; 3], f32, f32),
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
@@ -982,6 +996,12 @@ pub enum MobEvent {
     Push {
         target: Who,
         velocity: [f64; 3],
+    },
+    /// `Entity.move(MoverType.SHULKER, delta)`: shift a target's position
+    /// (an opening shulker lifts what stands on its shell).
+    Shift {
+        target: Who,
+        delta: [f64; 3],
     },
     /// `EvokerWololoSpellGoal`: a blue sheep turns red.
     Wololo {
@@ -1347,6 +1367,10 @@ impl Mob {
             .fire_ticks
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
+    }
+    /// `Entity.isFullyFrozen`.
+    pub fn is_fully_frozen(&self) -> bool {
+        self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
     }
 
     /// What other mobs see of this one this tick (`player`: the player's
@@ -1826,6 +1850,15 @@ impl Mob {
         {
             amount *= 0.75;
         }
+        // LivingEntity.hurtServer: `#freeze_hurts_extra_types` take five times.
+        if source.kind == DamageKind::Freeze
+            && matches!(
+                self.species(),
+                Species::Strider | Species::Blaze | Species::MagmaCube
+            )
+        {
+            amount *= 5.0;
+        }
         let (worn, worn_toughness) = self.worn_armor();
         if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
             // CombatRules.getDamageAfterAbsorb
@@ -1999,8 +2032,18 @@ impl Mob {
     }
     /// LivingEntity.getVoicePitch.
     pub fn voice_pitch(&mut self) -> f32 {
+        // HappyGhast.getVoicePitch: always 1.0, babies and all.
+        if self.species() == Species::HappyGhast {
+            return 1.0;
+        }
+        // ZombieVillager.getVoicePitch: babies are 2.0, not 1.5.
+        let baby = if self.species() == Species::ZombieVillager {
+            2.0
+        } else {
+            1.5
+        };
         let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
-            + if self.is_baby() { 1.5 } else { 1.0 };
+            + if self.is_baby() { baby } else { 1.0 };
         // Bat.getVoicePitch: a little lower.
         if self.species() == Species::Bat {
             pitch * 0.95

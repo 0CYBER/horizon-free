@@ -582,17 +582,21 @@ impl Experience {
             7 + level * 2
         }
     }
-    /// Returns true when a level was gained.
-    pub fn give(&mut self, points: i32) -> bool {
-        let start = self.level;
+    /// Returns the first multiple of 5 the player reached, where each level
+    /// gained would play the level-up sound (`Player.giveExperienceLevels`).
+    pub fn give(&mut self, points: i32) -> Option<i32> {
+        let mut sound_level = None;
         self.progress += points as f32 / Self::needed(self.level) as f32;
         self.total = self.total.saturating_add(points).max(0);
         while self.progress >= 1.0 {
             self.progress = (self.progress - 1.0) * Self::needed(self.level) as f32;
             self.level += 1;
+            if self.level % 5 == 0 {
+                sound_level.get_or_insert(self.level);
+            }
             self.progress /= Self::needed(self.level) as f32;
         }
-        self.level > start
+        sound_level
     }
 }
 /// A painting (`Painting`, a `HangingEntity`): the block it hangs in, the

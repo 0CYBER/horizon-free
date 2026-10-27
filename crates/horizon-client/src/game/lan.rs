@@ -21,6 +21,7 @@ use horizon_core::geometry::Vec3;
 use horizon_protocol::{
     crypto::offline_uuid,
     entity_data::{Value, serializer},
+    packets::play::{self, Clientbound as C},
 };
 use std::{
     collections::HashMap,
@@ -411,6 +412,26 @@ fn mob_meta(
     }
 }
 
+/// What a client shakes a mob by: Entity.DATA_TICKS_FROZEN (7), whose full
+/// count is `isFullyFrozen`, and Strider.DATA_SUFFOCATING (19, after
+/// AgeableMob's two and DATA_BOOST_TIME).
+fn mob_freeze_meta(
+    m: &Mob,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if m.ticks_frozen > 0 {
+        meta.push((7, serializer::INT, Value::Int(m.ticks_frozen)));
+    }
+    defaults.push((7, serializer::INT, Value::Int(0)));
+    if m.kind.id == "minecraft:strider" {
+        if m.extra.flag {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+    }
+}
+
 /// The equipment a mob shows (ClientboundSetEquipmentPacket slots: main hand,
 /// off hand, feet, legs, chest, head, body, saddle).
 fn mob_equipment(
@@ -419,13 +440,16 @@ fn mob_equipment(
     out: &mut Vec<(u8, Option<horizon_protocol::item::Stack>)>,
 ) {
     let e = &m.extra;
+    // A horse's armour, a llama's carpet, a harness: Horizon keeps the body
+    // slot's item (6) in `head`.
+    let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
         (0u8, &e.main_hand),
         (1, &e.off_hand),
         (2, &e.feet),
         (3, &e.legs),
         (4, &e.chest),
-        (5, &e.head),
+        (if body { 6 } else { 5 }, &e.head),
     ];
     for (slot, item) in slots {
         if let Some(item) = item {
@@ -715,6 +739,7 @@ impl Game<'_> {
         self.audio.capture = None;
         self.lan_events.clear();
         self.lan_critical_hits.clear();
+        self.lan_cushion_breaks.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -928,6 +953,7 @@ impl Game<'_> {
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
             mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
+            mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
@@ -1267,8 +1293,9 @@ impl Game<'_> {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, or anvil result sounds
-                    // (these levelEvent calls name no excluded player).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                    // (these levelEvent calls name no excluded player), nor
+                    // the digger's own crack and hit sound (2019, 2020).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020) {
                         None
                     } else {
                         self.lan_acting
@@ -1330,6 +1357,33 @@ impl Game<'_> {
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         let critical_hits = std::mem::take(&mut self.lan_critical_hits);
+        for (state, at) in std::mem::take(&mut self.lan_cushion_breaks) {
+            if let Some(id) = host
+                .hub
+                .registry_id("minecraft:particle_type", "minecraft:block")
+            {
+                host.hub.broadcast_near(
+                    at,
+                    32.0,
+                    &C::LevelParticles(play::LevelParticles {
+                        particle: horizon_protocol::entity_data::Particle {
+                            id,
+                            data: Some(horizon_protocol::entity_data::ParticleData::State(
+                                state.0 as i32,
+                            )),
+                        },
+                        override_limiter: false,
+                        always_show: false,
+                        pos: at,
+                        dist: [0.25, 0.0625, 0.25],
+                        max_speed: [0.05; 3],
+                        count: 10,
+                        randomization: 0,
+                    }),
+                    None,
+                );
+            }
+        }
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1491,6 +1545,7 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            m.extra.avatar_pose = g.pose();
             m.extra.sprinting = g.sprinting;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);

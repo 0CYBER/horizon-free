@@ -651,14 +651,17 @@ fn sounds_in(resources: &Path) -> bool {
 
 /// What the Play page says of a version's resources.
 pub fn resources_summary(prepared: bool, sounds: bool, version: &str) -> String {
+    use crate::i18n::trf;
     match (prepared, sounds) {
-        (false, _) => {
-            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
-        }
-        (true, true) => format!("Prepared for Minecraft {version}"),
-        (true, false) => format!(
+        (false, _) => trf(
+            "Not prepared. Horizon needs the files of your own Minecraft {version}.",
+            &[("version", version)],
+        ),
+        (true, true) => trf("Prepared for Minecraft {version}", &[("version", version)]),
+        (true, false) => trf(
             "Prepared for Minecraft {version}, without its sounds: the game will be silent. \
-             Prepare again to copy them from your Minecraft install."
+             Prepare again to copy them from your Minecraft install.",
+            &[("version", version)],
         ),
     }
 }
@@ -2515,6 +2518,51 @@ pub enum Appearance {
     System,
 }
 
+/// What the launcher's window does while the game runs, as the player picks it in Settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhilePlaying {
+    /// The window stays where it is.
+    #[default]
+    Stay,
+    /// The window goes to the Dock or the taskbar, and comes back when the game closes.
+    Minimize,
+    /// The launcher hides (macOS only: elsewhere it minimises), and comes back when the game
+    /// closes.
+    Hide,
+}
+
+impl WhilePlaying {
+    pub const ALL: [WhilePlaying; 3] = [Self::Stay, Self::Minimize, Self::Hide];
+
+    /// Its name in `settings.json` and on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Stay => "stay",
+            Self::Minimize => "minimize",
+            Self::Hide => "hide",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        let name = name.trim().to_ascii_lowercase();
+        let name = match name.as_str() {
+            "minimise" => "minimize",
+            "keep" | "open" | "off" => "stay",
+            n => n,
+        };
+        Self::ALL.into_iter().find(|w| w.name() == name)
+    }
+
+    /// What this computer does for it: only macOS can hide a whole app.
+    pub fn here(self) -> Self {
+        match self {
+            Self::Hide if !cfg!(target_os = "macos") => Self::Minimize,
+            w => w,
+        }
+    }
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
@@ -2556,6 +2604,19 @@ pub struct Settings {
     /// The player hid the sidebar's partner banner. The Servers page keeps its own.
     #[serde(default)]
     pub partner_hidden: bool,
+    /// What the window does while the game runs. Stays by default.
+    #[serde(default)]
+    pub while_playing: WhilePlaying,
+    /// The accent colour on top of the appearance (`themes::Accent`). Horizon's violet by default.
+    #[serde(default)]
+    pub accent: crate::themes::Accent,
+    /// Home's background: a picture the player picked, kept in the data folder under this name
+    /// (`themes::keep_background`). Unset shows Horizon's landscape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// The window's language. Unset follows the system's (`i18n::Language::system`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<crate::i18n::Language>,
 }
 
 impl Settings {
@@ -2574,12 +2635,33 @@ impl Settings {
             {
                 fields.remove("appearance");
             }
+            if fields
+                .get("while_playing")
+                .is_some_and(|w| serde_json::from_value::<WhilePlaying>(w.clone()).is_err())
+            {
+                fields.remove("while_playing");
+            }
+            if fields.get("accent").is_some_and(|a| {
+                serde_json::from_value::<crate::themes::Accent>(a.clone()).is_err()
+            }) {
+                fields.remove("accent");
+            }
+            // A language this launcher doesn't have yet follows the system's.
+            if fields.get("language").is_some_and(|l| {
+                serde_json::from_value::<Option<crate::i18n::Language>>(l.clone()).is_err()
+            }) {
+                fields.remove("language");
+            }
         }
         serde_json::from_value(value).unwrap_or_default()
     }
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {
         self.desktop_entry.unwrap_or(true)
+    }
+    /// The window's language: the one picked, else the system's.
+    pub fn language(&self) -> crate::i18n::Language {
+        self.language.unwrap_or_else(crate::i18n::Language::system)
     }
     /// Whether new Horizon versions are installed automatically.
     pub fn auto_install(&self) -> bool {
@@ -2885,6 +2967,59 @@ mod tests {
         assert_eq!(offered(before, &["v0.2.0"]), None);
         assert_eq!(offered(before, &["v0.2.12", "v0.2.0"]), None);
         assert_eq!(CHECK_EVERY.as_secs(), 30 * 60);
+    }
+
+    #[test]
+    fn the_window_stays_while_playing_unless_picked() {
+        assert_eq!(Settings::parse("{}").while_playing, WhilePlaying::Stay);
+        let hide = Settings::parse(r#"{"while_playing": "hide", "game_args": "--x"}"#);
+        assert_eq!(hide.while_playing, WhilePlaying::Hide);
+        let future = Settings::parse(r#"{"while_playing": "fade", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.while_playing, future.game_args.as_str()),
+            (WhilePlaying::Stay, "--x")
+        );
+        assert_eq!(
+            WhilePlaying::parse("Minimise"),
+            Some(WhilePlaying::Minimize)
+        );
+        assert_eq!(WhilePlaying::parse("off"), Some(WhilePlaying::Stay));
+        assert_eq!(WhilePlaying::parse("close"), None);
+        for w in WhilePlaying::ALL {
+            let text = serde_json::to_string(&w).unwrap();
+            assert_eq!(text, format!("\"{}\"", w.name()));
+        }
+        let here = WhilePlaying::Hide.here();
+        assert_eq!(here == WhilePlaying::Hide, cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn the_language_follows_the_system_unless_picked() {
+        use crate::i18n::Language;
+        assert_eq!(Settings::parse("{}").language, None);
+        let fr = Settings::parse(r#"{"language": "fr"}"#);
+        assert_eq!(fr.language(), Language::French);
+        let future = Settings::parse(r#"{"language": "eo", "game_args": "--x"}"#);
+        assert_eq!((future.language, future.game_args.as_str()), (None, "--x"));
+        let saved = serde_json::to_value(Settings::default()).unwrap();
+        assert!(saved.get("language").is_none(), "unset is left out");
+    }
+
+    #[test]
+    fn the_accent_is_violet_unless_picked_and_an_unknown_one_keeps_the_rest() {
+        use crate::themes::Accent;
+        assert_eq!(Settings::parse("{}").accent, Accent::Violet);
+        let teal =
+            Settings::parse(r#"{"accent": "teal", "background": "background-0123456789ab.png"}"#);
+        assert_eq!(
+            (teal.accent, teal.background.as_deref()),
+            (Accent::Teal, Some("background-0123456789ab.png"))
+        );
+        let future = Settings::parse(r#"{"accent": "plaid", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.accent, future.game_args.as_str()),
+            (Accent::Violet, "--x")
+        );
     }
 
     #[test]
