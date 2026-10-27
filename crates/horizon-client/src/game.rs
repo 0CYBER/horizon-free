@@ -4749,25 +4749,12 @@ impl Game<'_> {
                     );
                 }
                 MotionEvent::Drown => {
-                    // LivingEntity.makeDrownParticles: eight bubbles moving
-                    // with the player.
-                    use horizon_client::particles::{ParticleOptions, ParticleType};
-                    for _ in 0..8 {
-                        let mut triangle = || {
-                            let r = self.particles.random();
-                            r.next_double() - r.next_double()
-                        };
-                        let p = [
-                            feet[0] + triangle(),
-                            feet[1] + triangle(),
-                            feet[2] + triangle(),
-                        ];
-                        self.particles.add(
-                            &ParticleOptions::simple(ParticleType::Bubble),
-                            p,
-                            player_velocity,
-                        );
+                    // The guests see the entity event 67 too.
+                    if let Some(host) = &self.lan {
+                        host.hub
+                            .entity_event(host.host_entity, combat::DROWN_EVENT, feet);
                     }
+                    self.drown_particles(feet, player_velocity);
                 }
                 MotionEvent::BubbleColumnParticle { bubble, position } => {
                     // ServerLevel.sendParticles: SPLASH (speed 1) or BUBBLE
