@@ -9,6 +9,7 @@ use horizon_client::{
     text::{self, Style, Text},
     toasts::Slide,
 };
+use horizon_core::geometry::Vec3;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -82,6 +83,8 @@ pub(super) struct AdvState {
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
     pub(super) last_inventory: u64,
+    /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
+    pub(super) levitation: Option<([f64; 3], u64)>,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
     /// unlocked and the announcements, for their client and everyone's.
@@ -180,6 +183,14 @@ impl adv::World for View<'_, '_> {
             "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
             "entity_type" => self.0.res.mob_data().entity_has(tag, id),
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
+            "damage_type" => self
+                .0
+                .res
+                .stations()
+                .enchantments
+                .damage_tags
+                .get(tag)
+                .is_some_and(|t| t.contains(id)),
             _ => false,
         }
     }
@@ -647,6 +658,28 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &ctx, w)
         });
+        // ServerPlayer.onEffectAdded and onEffectsRemoved keep the start of a
+        // levitation; tick fires LEVITATION while there is one.
+        let levitating = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .any(|e| e.id == "levitation");
+        match (levitating, self.adv.levitation) {
+            (true, None) => {
+                let at = self
+                    .player
+                    .as_ref()
+                    .map(|p| [p.position.x, p.position.y, p.position.z]);
+                self.adv.levitation = at.map(|at| (at, self.ticks));
+            }
+            (false, Some(_)) => self.adv.levitation = None,
+            _ => {}
+        }
+        if let Some((start, since)) = self.adv.levitation {
+            self.trigger_levitation(start, (self.ticks - since) as i64);
+        }
         if self.ticks.is_multiple_of(20) {
             let me = self.player_entity();
             self.trigger("minecraft:location", |c, w| {
@@ -681,6 +714,123 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
     }
+    /// `LevitationTrigger`: how far the player rose from where it started
+    /// levitating, and for how long.
+    fn trigger_levitation(&mut self, start: [f64; 3], duration: i64) {
+        let me = self.player_entity();
+        self.trigger("minecraft:levitation", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
+                && adv::range_i(&c["duration"], duration)
+        });
+    }
+    /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
+    /// what the player looks at (`PlayerPredicate.lookingAt`).
+    pub(super) fn trigger_using_item(&mut self, stack: &ItemStack) {
+        if self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        let mut me = self.player_entity();
+        me.looking_at = self.looking_at_entity().map(Box::new);
+        let it = item_view(stack);
+        self.trigger("minecraft:using_item", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// The mob a 100 block ray from the eyes meets first, if no block is in
+    /// the way (`ProjectileUtil.getEntityHitResult` and `hasLineOfSight`).
+    fn looking_at_entity(&self) -> Option<EntityView> {
+        let eye = self.eye_position()?;
+        let dir = super::view_vector(self.yaw, self.pitch);
+        let (m, _) = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive())
+            .filter_map(|m| Some((m, super::ray_box(eye, dir, 100.0, m.bounds())?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        // `LivingEntity.hasLineOfSight`: eye to the target's eye height,
+        // `ClipContext.Block.COLLIDER`, no fluids, within 128 blocks.
+        let from = Vec3::new(eye[0], eye[1], eye[2]);
+        let to = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let world = self.mob_world_base(&[]);
+        let clear = to.distance(from) <= 128.0 && world.clear_between(from, to, false);
+        clear.then(|| self.mob_entity(m))
+    }
+    /// `PlayerHurtEntityTrigger`: the player, the damage and the victim.
+    pub(super) fn trigger_player_hurt_entity(
+        &mut self,
+        victim: &EntityView,
+        damage: &adv::DamageView,
+    ) {
+        let me = self.player_entity();
+        let (victim, damage) = (victim.clone(), damage.clone());
+        self.trigger("minecraft:player_hurt_entity", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let vctx = adv::Entities {
+                this: Some(&victim),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::damage(&c["damage"], &damage, w, me.position)
+                && adv::conditions(&c["entity"], &vctx, w)
+        });
+    }
+    /// The player's hit on `victim` as `LivingEntity.hurtServer` reports it:
+    /// `kind` damage of `amount` from `direct` (the player's own hand when
+    /// `None`), nothing blocked.
+    pub(super) fn player_hit(
+        &mut self,
+        victim: &EntityView,
+        kind: &str,
+        direct: Option<EntityView>,
+        amount: f32,
+    ) {
+        let me = self.player_entity();
+        self.trigger_player_hurt_entity(
+            victim,
+            &adv::DamageView {
+                kind: kind.to_owned(),
+                is_direct: direct.is_none(),
+                direct: direct.or_else(|| Some(me.clone())),
+                source: Some(me),
+                original: amount,
+                actual: amount,
+                blocked: false,
+            },
+        );
+    }
+    /// `EntityHurtPlayerTrigger`: the player and the damage it took.
+    pub(super) fn trigger_entity_hurt_player(&mut self, damage: &adv::DamageView) {
+        let me = self.player_entity();
+        let damage = damage.clone();
+        self.trigger("minecraft:entity_hurt_player", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::damage(&c["damage"], &damage, w, me.position)
+        });
+    }
     /// A player condition plus one item (`item` key).
     pub(super) fn trigger_item(&mut self, name: &str, stack: &ItemStack) {
         let me = self.player_entity();
@@ -707,6 +857,72 @@ impl Game<'_> {
         let me = self.player_entity();
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
+    }
+    /// `BrewedPotionTrigger`: the potion contents of a stack taken from a
+    /// brewing stand.
+    pub(super) fn trigger_brewed_potion(&mut self, stack: &ItemStack) {
+        let me = self.player_entity();
+        let potion = stack.potion().map(str::to_owned);
+        self.trigger("minecraft:brewed_potion", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::potions(&c["potion"], potion.as_deref(), w)
+        });
+    }
+    /// `TradeTrigger`: the villager and the item the trade gave.
+    pub(super) fn trigger_trade(&mut self, villager: &EntityView, stack: &ItemStack) {
+        let me = self.player_entity();
+        let villager = villager.clone();
+        let it = item_view(stack);
+        self.trigger("minecraft:villager_trade", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let vctx = adv::Entities {
+                this: Some(&villager),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["villager"], &vctx, w)
+                && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// `FishingRodHookedTrigger`: the rod, what the hook is in (or the hook)
+    /// and the items it caught.
+    pub(super) fn trigger_fishing_rod_hooked(
+        &mut self,
+        rod: &ItemStack,
+        hooked: &EntityView,
+        items: &[ItemStack],
+    ) {
+        let me = self.player_entity();
+        let rod = item_view(rod);
+        let hooked = hooked.clone();
+        let items: Vec<ItemView> = items.iter().map(item_view).collect();
+        self.trigger("minecraft:fishing_rod_hooked", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let ectx = adv::Entities {
+                this: Some(&hooked),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::item(&c["rod"], &rod, w)
+                && adv::conditions(&c["entity"], &ectx, w)
+                && (c["item"].is_null() || items.iter().any(|i| adv::item(&c["item"], i, w)))
+        });
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {

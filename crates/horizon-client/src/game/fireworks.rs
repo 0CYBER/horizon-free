@@ -23,7 +23,7 @@ pub(super) struct Rocket {
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
     pub(super) position: Vec3,
-    previous: Vec3,
+    pub(super) previous: Vec3,
     pub(super) velocity: Vec3,
     life: i32,
     lifetime: i32,
@@ -62,11 +62,56 @@ impl Rocket {
             item,
         }
     }
-    /// One tick of a server's client: the previous position, then `step`.
-    pub(super) fn remote_step(&mut self, step: impl FnOnce(Vec3) -> Vec3) {
+    /// One tick of a server's client: the rocket flies on by itself between
+    /// the server's updates (a rocket that follows an entity is placed by the
+    /// caller).
+    pub(super) fn remote_step(&mut self, scene: &mut SceneCollisions) {
         self.previous = self.position;
+        if self.attached_to.is_none() {
+            self.free_flight(scene);
+        }
         self.life += 1;
-        self.position = step(self.position);
+    }
+    /// `FireworkRocketEntity.tick` for a rocket attached to no entity: speed
+    /// up (an angled one keeps its motion) and rise, then move. True when a
+    /// block stopped it.
+    fn free_flight(&mut self, scene: &mut SceneCollisions) -> bool {
+        let h = 0.125;
+        let bounds = Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + 2.0 * h,
+                self.position.z + h,
+            ),
+        );
+        let wanted = if self.angled {
+            self.velocity
+        } else {
+            Vec3::new(
+                self.velocity.x * 1.15,
+                self.velocity.y + 0.04,
+                self.velocity.z * 1.15,
+            )
+        };
+        let Ok(moved) = scene.resolve(bounds, wanted, 0.0, false) else {
+            return false;
+        };
+        let blocked = (moved.x - wanted.x).abs() > 1e-7
+            || (moved.y - wanted.y).abs() > 1e-7
+            || (moved.z - wanted.z).abs() > 1e-7;
+        let horizontal = (moved.x - wanted.x).abs() > 1e-7 || (moved.z - wanted.z).abs() > 1e-7;
+        self.position = Vec3::new(
+            self.position.x + moved.x,
+            self.position.y + moved.y,
+            self.position.z + moved.z,
+        );
+        self.velocity = if horizontal {
+            Vec3::new(self.velocity.x, wanted.y, self.velocity.z)
+        } else {
+            wanted
+        };
+        blocked
     }
     /// Position and motion (the dispenser parity fixture).
     pub(super) fn motion(&self) -> (Vec3, Vec3) {
@@ -191,46 +236,14 @@ impl Game<'_> {
                     r.velocity = p.velocity;
                 }
             } else {
-                // Not shot at an angle: accelerate (unless blocked sideways) and rise.
                 let mut scene = SceneCollisions {
                     world: &self.world,
                     binding: self.collision,
                     subject: None,
                 };
-                let h = 0.125;
-                let bounds = Aabb::new(
-                    Vec3::new(r.position.x - h, r.position.y, r.position.z - h),
-                    Vec3::new(r.position.x + h, r.position.y + 2.0 * h, r.position.z + h),
-                );
-                let wanted = if r.angled {
-                    r.velocity
-                } else {
-                    Vec3::new(
-                        r.velocity.x * 1.15,
-                        r.velocity.y + 0.04,
-                        r.velocity.z * 1.15,
-                    )
-                };
-                if let Ok(moved) = scene.resolve(bounds, wanted, 0.0, false) {
-                    let blocked = (moved.x - wanted.x).abs() > 1e-7
-                        || (moved.y - wanted.y).abs() > 1e-7
-                        || (moved.z - wanted.z).abs() > 1e-7;
-                    if r.angled && blocked {
-                        // hitTargetOrDeflectSelf: explode on the block.
-                        r.life = r.lifetime;
-                    }
-                    let horizontal =
-                        (moved.x - wanted.x).abs() > 1e-7 || (moved.z - wanted.z).abs() > 1e-7;
-                    r.position = Vec3::new(
-                        r.position.x + moved.x,
-                        r.position.y + moved.y,
-                        r.position.z + moved.z,
-                    );
-                    r.velocity = if horizontal {
-                        Vec3::new(r.velocity.x, wanted.y, r.velocity.z)
-                    } else {
-                        wanted
-                    };
+                if r.free_flight(&mut scene) && r.angled {
+                    // hitTargetOrDeflectSelf: explode on the block.
+                    r.life = r.lifetime;
                 }
             }
             let at = [r.position.x, r.position.y, r.position.z];
@@ -372,24 +385,23 @@ impl Game<'_> {
         if self.creative || self.spectator() {
             return;
         }
-        let hurt = if let Some(p) = self.player.as_mut()
+        if let Some(p) = self.player.as_mut()
             && !p.health.dead_or_dying()
             && let Some(id) = self.motion.health.damage.id("minecraft:fireworks")
         {
-            p.hurt(&self.motion.health, self.world.health_rules, id, amount)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        if hurt {
-            self.hurt_armor(amount);
+            let _ = p.hurt(&self.motion.health, self.world.health_rules, id, amount);
         }
     }
     /// `FireworkEntityRenderer.submit`: the item (GROUND) facing the camera,
     /// lit at the rocket's light probe.
     pub(super) fn rocket_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let orientation = glam::Mat4::from_quat(self.camera_orientation());
-        for r in self.rockets.iter().filter(|r| !r.attached) {
+        // shouldRender: not while attached to an entity (`isAttachedToEntity`).
+        for r in self
+            .rockets
+            .iter()
+            .filter(|r| !r.attached && r.attached_to.is_none())
+        {
             // FireworkRocketEntity.shouldRenderAtSqrDistance: within 64 blocks;
             // EntityRenderer.shouldRender: its 0.25 box in the view.
             if !self.standing_entity_in_view(
