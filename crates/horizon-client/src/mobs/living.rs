@@ -997,8 +997,14 @@ impl Mob {
             movement.y = 0.2;
         }
         let mut y = movement.y;
-        if self.extra.levitation > 0 {
-            y += (0.05 * 1.0 - movement.y) * 0.2;
+        // LivingEntity.travelInAir: levitation lifts by its amplifier.
+        if let Some(&(_, _, amp)) = self
+            .extra
+            .effects
+            .iter()
+            .find(|e| e.0 == "minecraft:levitation")
+        {
+            y += (0.05 * f64::from(amp + 1) - movement.y) * 0.2;
         } else {
             y -= self.gravity();
         }

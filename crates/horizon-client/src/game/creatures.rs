@@ -3040,7 +3040,7 @@ impl Game<'_> {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
                         && m.damage(4.0, source)
                     {
-                        m.extra.levitation = 200;
+                        m.add_effect("minecraft:levitation", 200, 0);
                         // Shulker.hurtServer: a shulker hit by a bullet.
                         horizon_client::mobs::shulker::hit_by_bullet(m);
                     }
