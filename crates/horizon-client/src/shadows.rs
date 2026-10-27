@@ -119,6 +119,8 @@ pub fn shadow(
                         layer: crate::gfx::SHADOW_OVERLAY,
                         color,
                         light: 240 | 240 << 8,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

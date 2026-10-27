@@ -3,8 +3,11 @@
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
-use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
+use horizon_client::{
+    collisions::SceneCollisions,
+    particles::{ParticleOptions, ParticleType},
+};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_protocol::entity_data::Value;
 use horizon_world::registry::BlockStateId;
@@ -21,6 +24,59 @@ pub(super) struct RemoteCloud {
 /// `AreaEffectCloud.DEFAULT_PARTICLE`: a white entity effect.
 fn default_cloud_particle() -> ParticleOptions {
     ParticleOptions::colored(ParticleType::EntityEffect, [1.0; 4])
+}
+
+/// `AreaEffectCloud.clientTick`: while waiting, now and then two particles
+/// near the middle; then about one per square block of the disc, drifting
+/// (an entity effect stays still).
+pub(super) fn cloud_client_tick(
+    particles: &mut horizon_client::particles::ParticleEngine,
+    at: [f64; 3],
+    radius: f32,
+    waiting: bool,
+    particle: &ParticleOptions,
+) {
+    if waiting && particles.random().next_boolean() {
+        return;
+    }
+    let (count, spread) = if waiting {
+        (2, 0.2)
+    } else {
+        (
+            (std::f32::consts::PI * radius * radius).ceil() as i32,
+            radius,
+        )
+    };
+    for _ in 0..count {
+        let r = particles.random();
+        let angle = r.next_float() * std::f32::consts::TAU;
+        let distance = r.next_float().sqrt() * spread;
+        let at = [
+            at[0] + f64::from(angle.cos() * distance),
+            at[1],
+            at[2] + f64::from(angle.sin() * distance),
+        ];
+        let (options, velocity) = if particle.ty == ParticleType::EntityEffect {
+            let default = waiting && r.next_boolean();
+            let options = if default {
+                default_cloud_particle()
+            } else {
+                particle.clone()
+            };
+            (options, [0.0; 3])
+        } else if waiting {
+            (particle.clone(), [0.0; 3])
+        } else {
+            let v = [
+                (0.5 - r.next_double()) * 0.15,
+                f64::from(0.01f32),
+                (0.5 - r.next_double()) * 0.15,
+            ];
+            (particle.clone(), v)
+        };
+        // `addAlwaysVisibleParticle`.
+        particles.add_with(&options, at, velocity, false, true);
+    }
 }
 
 /// The projectile a type id names, as Horizon models it.
@@ -77,8 +133,36 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     }
     p.velocity.y -= 0.05;
 }
+/// A server's client ticks a projectile itself: it flies on between the
+/// tracker's updates (10 to 20 ticks apart) with its own gravity and drag,
+/// and a block stops it there; only the server decides what it hits.
+pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
+    if !matches!(p.tick(w).1, Hit::None) {
+        p.velocity = Vec3::ZERO;
+    }
+}
+
+/// `AbstractHurtingProjectile.getTrailParticle`: smoke for every one of them
+/// but the wind charges (no trail) and the dragon's fireball (its own).
+pub(super) fn has_smoke_trail(kind: &ProjectileKind) -> bool {
+    matches!(
+        kind,
+        ProjectileKind::SmallFireball
+            | ProjectileKind::LargeFireball { .. }
+            | ProjectileKind::WitherSkull { .. }
+    )
+}
 
 impl Game<'_> {
+    /// `AbstractHurtingProjectile.createParticleTrail`: one smoke puff half a
+    /// block above each position.
+    pub(super) fn smoke_trails(&mut self, at: impl IntoIterator<Item = Vec3>) {
+        let smoke = ParticleOptions::simple(ParticleType::Smoke);
+        for p in at {
+            self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
+        }
+    }
+
     /// `handleAddEntity` for these types; false when `kind` isn't one.
     pub(super) fn spawn_remote_projectile(
         &mut self,
@@ -95,6 +179,7 @@ impl Game<'_> {
         let (yaw, pitch) = rotation;
         self.remove_remote_projectile(id);
         match kind {
+            "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
                 id,
                 position: at,
@@ -161,12 +246,16 @@ impl Game<'_> {
                 let Some(k) = projectile_kind(kind) else {
                     return false;
                 };
+                if k == ProjectileKind::LlamaSpit {
+                    self.particles
+                        .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
+                }
                 let mut p = Projectile::new(k, at, None);
                 p.id = id;
                 p.velocity = velocity;
                 p.yaw = yaw;
                 p.pitch = pitch;
-                self.creatures.projectiles.push(p);
+                self.add_projectile(p);
             }
         }
         true
@@ -296,6 +385,7 @@ impl Game<'_> {
 
     /// One tick of interpolation, as `tick_remote_objects`.
     pub(super) fn tick_remote_projectiles(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
+        self.tick_remote_fangs();
         // PrimedTnt.tick runs on a client too: it falls, bounces and burns its
         // fuse down (the swell and flash follow it) between the server's
         // updates (every 10 ticks), and a client discards it when the fuse
@@ -341,44 +431,75 @@ impl Game<'_> {
                         p.age += 1;
                         p.position = p.position.add_vector(p.velocity);
                     }
-                    _ => {
-                        if !matches!(p.tick(&world).1, Hit::None) {
-                            p.velocity = Vec3::ZERO;
-                        }
-                    }
+                    _ => remote_projectile_tick(p, &world),
                 }
             }
         }
         self.creatures.projectiles = projectiles;
+        let trails: Vec<Vec3> = self
+            .creatures
+            .projectiles
+            .iter()
+            .filter(|p| has_smoke_trail(&p.kind))
+            .map(|p| p.position)
+            .collect();
+        self.smoke_trails(trails);
         for t in &mut self.tridents {
             let id = t.id;
             t.remote_step(|at| step(id, at));
         }
-        // FireworkRocketEntity.tick: a rocket attached to the gliding local
-        // player boosts it client-side too (attachedToEntity.isFallFlying).
+        // FireworkRocketEntity.tick: a rocket attached to an entity follows it
+        // and boosts it client-side too (attachedToEntity.isFallFlying), and
+        // every rocket leaves its spark trail on a client.
         let me = self
             .remote
             .as_ref()
             .and_then(|r| u32::try_from(r.entity_id).ok());
-        for r in &mut self.rockets {
-            let id = r.id;
-            r.remote_step(|at| step(id, at));
-            if me.is_some()
-                && r.attached_to == me
-                && let Some(p) = self.player.as_mut()
-                && p.fall_flying
-            {
-                let look = view_vector(self.yaw, self.pitch);
-                let m = p.velocity;
-                p.velocity = Vec3::new(
-                    m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
-                    m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
-                    m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
-                );
-                r.position = p.position;
-                r.velocity = p.velocity;
+        let mut rockets = std::mem::take(&mut self.rockets);
+        for r in &mut rockets {
+            r.remote_step(&mut SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            });
+            if let Some(target) = r.attached_to {
+                if me == Some(target) {
+                    if let Some(p) = self.player.as_mut() {
+                        if p.fall_flying {
+                            let look = view_vector(self.yaw, self.pitch);
+                            let m = p.velocity;
+                            p.velocity = Vec3::new(
+                                m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
+                                m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
+                                m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
+                            );
+                        }
+                        r.position = p.position;
+                        r.velocity = p.velocity;
+                    }
+                } else if let Some(m) = self.mobs.iter().find(|m| m.id == target) {
+                    // Another player's motion is not known here: its step.
+                    r.velocity = Vec3::new(
+                        m.position.x - r.previous.x,
+                        m.position.y - r.previous.y,
+                        m.position.z - r.previous.z,
+                    );
+                    r.position = m.position;
+                }
             }
+            let g = |g: &mut horizon_core::random::LegacyRandom| g.next_gaussian() * 0.05;
+            let v = [
+                g(&mut self.world.random),
+                -r.velocity.y * 0.5,
+                g(&mut self.world.random),
+            ];
+            self.particles.add(
+                &ParticleOptions::simple(ParticleType::Firework),
+                [r.position.x, r.position.y, r.position.z],
+                v,
+            );
         }
+        self.rockets = rockets;
         for c in &mut self.crystals {
             c.time += 1;
             c.position = step(c.id, c.position);
@@ -408,56 +529,15 @@ impl Game<'_> {
         }
     }
 
-    /// `AreaEffectCloud.clientTick`: while waiting, now and then two
-    /// particles near the middle; then about one per square block of the
-    /// disc, drifting (an entity effect stays still).
+    /// `AreaEffectCloud.clientTick` for each cloud a server tracks.
     fn tick_remote_clouds(&mut self) {
         for c in &self.potions.clouds {
-            let r = self.particles.random();
-            if c.waiting && r.next_boolean() {
-                continue;
-            }
-            let (count, spread) = if c.waiting {
-                (2, 0.2)
-            } else {
-                (
-                    (std::f32::consts::PI * c.radius * c.radius).ceil() as i32,
-                    c.radius,
-                )
-            };
-            for _ in 0..count {
-                let r = self.particles.random();
-                let angle = r.next_float() * std::f32::consts::TAU;
-                let distance = r.next_float().sqrt() * spread;
-                let at = [
-                    c.at[0] + f64::from(angle.cos() * distance),
-                    c.at[1],
-                    c.at[2] + f64::from(angle.sin() * distance),
-                ];
-                let (options, velocity) = if c.particle.ty == ParticleType::EntityEffect {
-                    let default = c.waiting && r.next_boolean();
-                    let options = if default {
-                        default_cloud_particle()
-                    } else {
-                        c.particle.clone()
-                    };
-                    (options, [0.0; 3])
-                } else if c.waiting {
-                    (c.particle.clone(), [0.0; 3])
-                } else {
-                    let v = [
-                        (0.5 - r.next_double()) * 0.15,
-                        f64::from(0.01f32),
-                        (0.5 - r.next_double()) * 0.15,
-                    ];
-                    (c.particle.clone(), v)
-                };
-                self.particles.add(&options, at, velocity);
-            }
+            cloud_client_tick(&mut self.particles, c.at, c.radius, c.waiting, &c.particle);
         }
     }
 
     pub(super) fn remove_remote_projectile(&mut self, id: u32) {
+        self.fangs.list.retain(|f| f.id != id);
         self.tnts.retain(|t| t.id != id);
         self.falling.retain(|f| f.id != id);
         self.creatures.projectiles.retain(|p| p.id != id);
@@ -473,6 +553,7 @@ impl Game<'_> {
 
     /// Every one a server sent (a new connection, level or dimension).
     pub(super) fn clear_remote_projectiles(&mut self) {
+        self.fangs.list.clear();
         self.tnts.clear();
         self.falling.clear();
         self.creatures.projectiles.clear();
@@ -493,6 +574,12 @@ impl Game<'_> {
         use serde_json::json;
         let at = |p: Vec3| [p.x, p.y, p.z];
         let mut out = Vec::new();
+        for f in &self.fangs.list {
+            out.push(
+                json!({"id": f.id, "kind": "minecraft:evoker_fangs", "position": f.pos,
+                "yaw": f.yaw, "started": f.started, "life": f.life}),
+            );
+        }
         for t in &self.tnts {
             out.push(json!({"id": t.id, "kind": "minecraft:tnt", "position": at(t.position), "fuse": t.fuse}));
         }
@@ -517,5 +604,70 @@ impl Game<'_> {
         }
         out.extend(self.hooks_status());
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::mobs::Who;
+    use horizon_core::geometry::Aabb;
+
+    /// A world with nothing in it: the client tick of a projectile only
+    /// needs the blocks around it.
+    struct Empty;
+    impl ProjectileWorld for Empty {
+        fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            None
+        }
+        fn in_water(&self, _: Vec3) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &[]
+        }
+    }
+
+    /// A thrown item, as a server's client tracks it: the spawn position and
+    /// the motion the server gave it.
+    fn thrown(kind: ProjectileKind) -> Projectile {
+        let mut p = Projectile::new(kind, Vec3::new(0.0, 100.0, 0.0), None);
+        p.velocity = Vec3::new(1.5, 0.0, 0.0);
+        p
+    }
+
+    #[test]
+    fn a_thrown_item_flies_on_between_the_server_updates() {
+        // A thrown egg, an ender pearl and a wind charge (#1762): the server
+        // sends their position every 10 ticks, and the client ticks them
+        // itself in between, as vanilla's no-op interpolation handler does.
+        for kind in [
+            ProjectileKind::Egg,
+            ProjectileKind::EnderPearl,
+            ProjectileKind::WindCharge,
+        ] {
+            let mut p = thrown(kind);
+            remote_projectile_tick(&mut p, &Empty);
+            assert!(p.position.x > 1.0, "the projectile did not fly on: {p:?}");
+            // A second tick moves it further: it keeps flying, not a hop.
+            let first = p.position.x;
+            remote_projectile_tick(&mut p, &Empty);
+            assert!(p.position.x > first, "the projectile stopped: {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_thrown_item_falls_and_drags_like_a_throwable_projectile() {
+        // ThrowableProjectile.tick: gravity 0.03, then the air drag 0.99.
+        let mut p = thrown(ProjectileKind::Egg);
+        remote_projectile_tick(&mut p, &Empty);
+        assert!((p.velocity.x - 1.5 * 0.99).abs() < 1e-9, "{p:?}");
+        assert!((p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9, "{p:?}");
+        // A wind charge keeps its speed: no gravity and no drag
+        // (AbstractWindCharge: acceleration 0, inertia 1).
+        let mut p = thrown(ProjectileKind::WindCharge);
+        remote_projectile_tick(&mut p, &Empty);
+        assert!((p.velocity.x - 1.5).abs() < 1e-9, "{p:?}");
+        assert!((p.velocity.y - 0.0).abs() < 1e-9, "{p:?}");
     }
 }

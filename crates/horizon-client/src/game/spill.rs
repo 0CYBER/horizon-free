@@ -171,8 +171,8 @@ pub(super) struct Spawn {
 pub(super) struct Spill {
     pub(super) spawns: Vec<Spawn>,
     /// Experience orbs (`ExperienceOrb.award`): where and how much, each
-    /// having drawn its merge id from the level random.
-    pub(super) orbs: Vec<([f64; 3], u32)>,
+    /// and the merge id it drew from the level random.
+    pub(super) orbs: Vec<([f64; 3], u32, i32)>,
     /// Block entities the behaviour removed, for the game's own follow-ups
     /// (open screens, playing songs).
     pub(super) removed: Vec<([i32; 3], BlockEntity)>,
@@ -342,8 +342,8 @@ impl GameLevel<'_> {
         while amount > 0 {
             let value = removal::orb_value(amount);
             amount -= value;
-            let _merge_id = self.world.random.next_int_bound(40);
-            self.spill.orbs.push((at, value));
+            let merge_id = self.world.random.next_int_bound(40).unwrap_or(0);
+            self.spill.orbs.push((at, value, merge_id));
         }
     }
     /// `BlockEntity.preRemoveSideEffects` and `removeBlockEntity` for the block
@@ -583,8 +583,8 @@ impl Game<'_> {
             let motion = s.motion.unwrap_or_else(new_item_motion);
             self.spawn_item(s.stack, s.pos, motion, s.delay);
         }
-        for (at, value) in spill.orbs {
-            self.add_orb(at, value);
+        for (at, value, merge_id) in spill.orbs {
+            self.award_orb(at, value, merge_id);
         }
         for (pos, entity) in spill.removed {
             let key = (pos[0], pos[1], pos[2]);

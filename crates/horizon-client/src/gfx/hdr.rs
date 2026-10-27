@@ -1,17 +1,50 @@
 //! HDR output (Horizon setting, off by default): the frame renders exactly as
 //! without it, into an 8-bit target in vanilla's gamma space, and one pass
-//! (`hdr.wgsl`) writes it to an scRGB swapchain at the player's paper white,
-//! expanding the world's highlights towards their peak brightness. The world
-//! is copied aside before the hand and HUD so only it is expanded.
+//! (`hdr.wgsl`) writes it to an HDR10 or scRGB swapchain at the player's paper
+//! white, expanding the world's highlights towards their peak brightness. The
+//! world is copied aside before the hand and HUD so only it is expanded.
 
-/// The swapchain format and colour space HDR output presents in.
-pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-pub const COLOR_SPACE: wgpu::SurfaceColorSpace = wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
+/// The swapchain HDR output presents to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Output {
+    /// HDR10: 10-bit BT.2020 with the PQ curve, the display's own signal.
+    Pq,
+    /// scRGB: linear 16-bit float, BT.709 primaries, 1.0 = 80 nits.
+    ScRgb,
+}
 
-/// Whether `caps` can present scRGB.
-pub fn supported(caps: &wgpu::SurfaceCapabilities) -> bool {
-    caps.color_spaces(FORMAT)
-        .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+impl Output {
+    pub fn format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Pq => wgpu::TextureFormat::Rgb10a2Unorm,
+            Self::ScRgb => wgpu::TextureFormat::Rgba16Float,
+        }
+    }
+    pub fn color_space(self) -> wgpu::SurfaceColorSpace {
+        match self {
+            Self::Pq => wgpu::SurfaceColorSpace::Bt2100Pq,
+            Self::ScRgb => wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+        }
+    }
+    fn space(self) -> wgpu::SurfaceColorSpaces {
+        match self {
+            Self::Pq => wgpu::SurfaceColorSpaces::BT2100_PQ,
+            Self::ScRgb => wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+        }
+    }
+}
+
+/// The HDR output `caps` can present: HDR10 where offered, else scRGB.
+/// `HORIZON_HDR_OUTPUT=pq` or `scrgb` allows only that one.
+pub fn output(caps: &wgpu::SurfaceCapabilities) -> Option<Output> {
+    pick(caps, std::env::var("HORIZON_HDR_OUTPUT").ok().as_deref())
+}
+fn pick(caps: &wgpu::SurfaceCapabilities, only: Option<&str>) -> Option<Output> {
+    [(Output::Pq, "pq"), (Output::ScRgb, "scrgb")]
+        .into_iter()
+        .filter(|(_, name)| only.is_none_or(|o| o == *name))
+        .map(|(output, _)| output)
+        .find(|o| caps.color_spaces(o.format()).contains(o.space()))
 }
 
 struct Targets {
@@ -25,6 +58,7 @@ pub struct Hdr {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     params: wgpu::Buffer,
+    pub output: Output,
     /// The frame's format: what every other pipeline draws in.
     format: wgpu::TextureFormat,
     targets: Option<Targets>,
@@ -36,7 +70,7 @@ pub struct Hdr {
 }
 
 impl Hdr {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, output: Output) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon HDR"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../hdr.wgsl").into()),
@@ -90,7 +124,7 @@ impl Hdr {
                 entry_point: Some("fs_hdr"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
+                    format: output.format(),
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -100,7 +134,7 @@ impl Hdr {
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Horizon HDR parameters"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -108,6 +142,7 @@ impl Hdr {
             layout,
             pipeline,
             params,
+            output,
             format,
             targets: None,
             debug: std::env::var_os("HORIZON_HDR_DEBUG").is_some_and(|v| v == "1"),
@@ -198,6 +233,10 @@ impl Hdr {
             (self.peak / paper).max(1.0),
             f32::from(u8::from(world)),
             f32::from(u8::from(self.debug)),
+            f32::from(u8::from(self.output == Output::Pq)),
+            0.0,
+            0.0,
+            0.0,
         ];
         queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
         let view = target.create_view(&Default::default());
@@ -218,5 +257,39 @@ impl Hdr {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &t.group, &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Output, pick};
+    use wgpu::{SurfaceColorSpaces as S, TextureFormat as F};
+
+    fn caps(offered: &[(F, S)]) -> wgpu::SurfaceCapabilities {
+        wgpu::SurfaceCapabilities {
+            format_capabilities: offered
+                .iter()
+                .map(|&(format, color_spaces)| wgpu::SurfaceFormatCapabilities {
+                    format,
+                    color_spaces,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hdr10_first_then_scrgb() {
+        let both = caps(&[
+            (F::Bgra8UnormSrgb, S::SRGB),
+            (F::Rgb10a2Unorm, S::BT2100_PQ | S::BT2100_HLG),
+            (F::Rgba16Float, S::EXTENDED_SRGB_LINEAR),
+        ]);
+        assert_eq!(pick(&both, None), Some(Output::Pq));
+        assert_eq!(pick(&both, Some("scrgb")), Some(Output::ScRgb));
+        let scrgb = caps(&[(F::Rgba16Float, S::EXTENDED_SRGB_LINEAR)]);
+        assert_eq!(pick(&scrgb, None), Some(Output::ScRgb));
+        assert_eq!(pick(&scrgb, Some("pq")), None);
+        assert_eq!(pick(&caps(&[(F::Bgra8UnormSrgb, S::SRGB)]), None), None);
     }
 }

@@ -359,11 +359,14 @@ fn can_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
 /// `Sensor.isEntityAttackable`: `TargetingConditions.forCombat()` within the
 /// follow range, in sight.
 fn attackable(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
+    // The current ATTACK_TARGET is tested with ignoreInvisibilityTesting.
+    let current = mem_ref(m).attack_target.value() == Some(who);
     let range = m.attrs.follow_range;
     if !can_attack(m, w, who) {
         return false;
     }
     match who {
+        Who::Player if current => m.can_keep_target_player(w, range),
         Who::Player => m.can_target_player(w, range, true),
         Who::Mob(id) => {
             let Some(s) = w.seen(id) else { return false };
@@ -1137,6 +1140,7 @@ struct Quarry {
     position: Vec3,
     head_yaw: f32,
     height: f64,
+    passenger: bool,
 }
 fn quarry(w: &MobWorld, who: Who) -> Option<Quarry> {
     let t = w.target_info(who)?;
@@ -1148,6 +1152,7 @@ fn quarry(w: &MobWorld, who: Who) -> Option<Quarry> {
         position: t.position,
         head_yaw,
         height: t.bounds.max_position().y - t.bounds.min_position().y,
+        passenger: t.passenger,
     })
 }
 /// `BreezeUtil.randomPointBehindTarget`.
@@ -1233,7 +1238,8 @@ fn shoot_tick(m: &mut Mob, cx: &mut Bx) {
     let firing = super::breeze::firing_y(m);
     let (xd, yd, zd) = (
         q.position.x - m.position.x,
-        q.position.y + q.height * 0.3 - firing,
+        // target.getY(target.isPassenger() ? 0.8 : 0.3).
+        q.position.y + q.height * if q.passenger { 0.8 } else { 0.3 } - firing,
         q.position.z - m.position.z,
     );
     let start = Vec3::new(m.position.x, firing, m.position.z);
@@ -1242,14 +1248,19 @@ fn shoot_tick(m: &mut Mob, cx: &mut Bx) {
         start,
         Some(Who::Mob(m.id)),
     );
-    // The new entity's own random spreads the shot (5 - difficulty * 4 at
-    // normal): not the breeze's.
+    // The new entity's own random spreads the shot (5 - difficulty id * 4):
+    // not the breeze's.
     let mut own = LegacyRandom::new(
         cx.now
             .wrapping_mul(0x5DEE_CE66)
             .wrapping_add(i64::from(m.id)),
     );
-    p.shoot(&mut own, [xd, yd, zd], 0.7, -3.0);
+    p.shoot(
+        &mut own,
+        [xd, yd, zd],
+        0.7,
+        5.0 - f32::from(cx.w.difficulty.id) * 4.0,
+    );
     cx.events.push(MobEvent::Projectile(p));
     breeze_sound(m, cx, "entity.breeze.shoot", 1.5);
 }

@@ -63,6 +63,14 @@ pub(super) struct ModsState {
     /// What players did this tick, for server mods at its end.
     #[cfg(feature = "mods")]
     pub(super) events: Vec<ModEvent>,
+    /// A running server mod has capability `world`: its calls get the
+    /// levels' chunks to read.
+    #[cfg(feature = "mods")]
+    pub(super) world: bool,
+    /// Blocks server mods set, by dimension, made before that level's next
+    /// tick.
+    #[cfg(feature = "mods")]
+    pub(super) block_writes: Vec<(String, horizon_mods::BlockChange)>,
     /// `command.run` lines for this window's own world, run on the next tick:
     /// run at once, their chat lines would reach the mods while their output
     /// is still being shown, and a mod answering its own lines would recurse.
@@ -81,6 +89,15 @@ pub(super) struct ModsState {
     /// The HUD font's advances for `render.text-width`, made once.
     #[cfg(feature = "mods")]
     font_widths: std::sync::Arc<[f32]>,
+    /// Capability `recipes`'s tables, made once a mod reads them.
+    #[cfg(feature = "mods")]
+    pub(super) recipes: Option<std::sync::Arc<horizon_mods::Recipes>>,
+    /// The recipe book's known displays, and the book's version they are of.
+    #[cfg(feature = "mods")]
+    pub(super) known_recipes: (Option<u64>, std::sync::Arc<[i32]>),
+    /// Capability `ui`'s item panel beside container screens.
+    #[cfg(feature = "mods")]
+    pub(super) browser: super::mod_browser::Browser,
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
@@ -293,6 +310,8 @@ impl Game<'_> {
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
         // Entries were replaced wholesale: a screen's owner index is stale.
         self.mods.screen = None;
+        // Content mods may have changed the items: remade on the next read.
+        self.mods.recipes = None;
         self.list_mods();
         self.sync_mod_commands();
         self.show_mod_output();
@@ -309,6 +328,7 @@ impl Game<'_> {
     /// The Mods page's rows, from what loaded.
     fn list_mods(&mut self) {
         self.mods.server = self.mods.mods.runs_server();
+        self.mods.world = self.mods.mods.wants_world();
         let dev = &self.mods.dev;
         self.settings.mods.installed = self
             .mods
@@ -351,7 +371,10 @@ impl Game<'_> {
     }
     /// The chat's tree after the running mods changed.
     fn sync_mod_commands(&mut self) {
-        let mut names = self.mods.mods.commands().peekable();
+        // In-frame, the window runs server mods too: their names, free text
+        // here (the server parses their arguments).
+        let server = self.mods.mods.server_commands().map(|c| c.name.as_str());
+        let mut names = self.mods.mods.commands().chain(server).peekable();
         self.mods.tree = names
             .peek()
             .is_some()
@@ -440,6 +463,7 @@ impl Game<'_> {
                 .map(|c| char::from_u32(c).map_or(6.0, |c| atlas.glyph_cell(c).1))
                 .collect();
         }
+        let (recipes, known_recipes) = self.mod_recipes();
         Snapshot {
             player,
             clock,
@@ -451,6 +475,10 @@ impl Game<'_> {
             font_widths: self.mods.font_widths.clone(),
             players,
             view_hit: self.mod_view_hit(),
+            recipes,
+            known_recipes,
+            placing: self.mod_recipe_screen(),
+            creative: self.creative,
         }
     }
     /// The first block along the player's view within
@@ -673,8 +701,10 @@ impl Game<'_> {
                     }
                     Text::literal(line).with_color(text::RED)
                 }
-                server
-                @ (Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. }) => {
+                server @ (Output::Tell { .. }
+                | Output::Broadcast { .. }
+                | Output::Reply { .. }
+                | Output::SetBlocks { .. }) => {
                     self.route_server_output(host.as_deref_mut(), server);
                     continue;
                 }
@@ -684,6 +714,18 @@ impl Game<'_> {
                 }
                 Output::Shake { strength, seconds } => {
                     self.mods.shake.add(strength, seconds);
+                    continue;
+                }
+                Output::PlaceRecipe { book_id, all } => {
+                    self.mod_place_recipe(book_id, all);
+                    continue;
+                }
+                Output::Give {
+                    item,
+                    count,
+                    components,
+                } => {
+                    self.mod_give(&item, count, &components);
                     continue;
                 }
                 Output::CloseScreen { owner } => {

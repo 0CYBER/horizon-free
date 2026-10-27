@@ -45,15 +45,19 @@ use std::{
 
 pub(crate) mod environment;
 mod fluids;
-pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER};
+pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER, bubble_column_push};
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
+    /// `BlockTags.SOUL_SPEED_BLOCKS`: what Soul Speed's effects look for.
+    pub soul_speed_blocks: BTreeSet<String>,
     /// `LivingEntity.onClimbable` tags plus open trapdoors above a ladder.
     pub climbing: ClimbingRegistry<'static>,
     pub fall_reset: BTreeSet<String>,
+    /// `BlockTags.CRYSTAL_SOUND_BLOCKS`: blocks that chime under footsteps.
+    pub crystal_sound: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
     pub health: crate::health::HealthResources,
     pub fluids: FluidResources,
@@ -117,10 +121,29 @@ impl MotionResources {
                 suppresses_bounce: tag("minecraft:suppresses_bounce")?,
             })?,
             climbable: tag("minecraft:climbable")?,
+            soul_speed_blocks: tag("minecraft:soul_speed_blocks")?,
             climbing,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
+            crystal_sound: tag("minecraft:crystal_sound_blocks")?,
         })
     }
+}
+
+/// What the `location_changed` enchantment effects (Soul Speed) need to know
+/// between ticks.
+#[derive(Clone, Debug, Default)]
+pub struct LocationEffects {
+    /// `MovementAffectedByPredicate`: the block under the player
+    /// (`getBlockPosBelowThatAffectsMyMovement`) is in `#minecraft:soul_speed_blocks`.
+    pub on_soul_speed_block: bool,
+    /// `LivingEntity.lastPos`: the block the player was in last tick.
+    pub block: Option<BlockPos>,
+    /// A landing ran `onChangedBlock` (`LivingEntity.checkFallDamage`).
+    pub landed: bool,
+    /// The Soul Speed level of the boots seen last tick (0: none).
+    pub boots_level: u32,
+    /// The Soul Speed level whose attribute modifiers are on the player (0: none).
+    pub applied_level: u32,
 }
 
 /// Ordered requests and phase records for world/audio/network consumers. Landing
@@ -151,6 +174,11 @@ pub enum MotionEvent {
         position: BlockPos,
         state: BlockStateId,
         in_water: bool,
+    },
+    /// `Entity.playAmethystStepSound`: `block.amethyst_block.chime`.
+    Chime {
+        volume: f32,
+        pitch: f32,
     },
     /// `Entity.waterSwimSound`: `entity.player.swim`.
     Swim {
@@ -213,6 +241,14 @@ pub enum MotionEvent {
         bubble: bool,
         position: Vec3,
     },
+    /// `HoneyBlock.maybeDoSlideEffects` for a player sliding down the side of
+    /// the honey block at `pos`: its slide sound, and the server's entity
+    /// event 53 (the five block particles at the player).
+    HoneySlide {
+        pos: BlockPos,
+        sound: bool,
+        particles: bool,
+    },
     /// Entity event 67 (`LivingEntity.makeDrownParticles`): eight bubbles
     /// around a drowning player.
     Drown,
@@ -230,6 +266,9 @@ pub struct PlayerMotion {
     pub history: MovementHistory,
     pub fall_distance: f64,
     pub stuck_multiplier: Vec3,
+    /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
+    /// block has pushed this entity this tick (0.51 at most on any axis).
+    pub piston: horizon_world::piston_movement::PistonMovement,
     pub yaw: f32,
     pub head_yaw: f32,
     pub jumping: bool,
@@ -259,12 +298,16 @@ pub struct PlayerMotion {
     pub pitch: f32,
     /// Gliding (shared flag 7) and LivingEntity.fallFlyTicks.
     pub fall_flying: bool,
+    /// Asleep in a bed (`LivingEntity.isSleeping`): the sleeping pose.
+    pub sleeping: bool,
     pub fall_fly_ticks: i32,
     /// The server saw the glide end last tick (`updateFallFlying`'s `canGlide`
     /// failed): the cleared flag reaches the client at its next tick.
     pub glide_ending: bool,
     /// Glider durability to take this tick (updateFallFlying).
     pub glider_wear: u32,
+    /// Soul Speed's `location_changed` bookkeeping.
+    pub location_effects: LocationEffects,
     /// `LivingEntity.autoSpinAttackTicks` and `autoSpinAttackDmg`: Riptide's
     /// spin. The damage stays until the game has dealt the hit.
     pub auto_spin_attack_ticks: i32,
@@ -286,6 +329,10 @@ pub struct PlayerMotion {
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
     pub steps: MovementDistances,
+    /// `Entity.crystalSoundIntensity` and `lastCrystalSoundPlayTick`: the
+    /// amethyst chime grows with steps taken close together.
+    pub crystal_sound_intensity: f32,
+    pub last_crystal_sound_play_tick: i32,
     pub needs_sync: bool,
     pub sync_position: bool,
     /// Moved by an ender pearl (`ServerPlayer.teleport`): a server sends the
@@ -318,6 +365,9 @@ pub struct PlayerMotion {
     /// it travels on the server: `isLocalInstanceAuthoritative` is false, so
     /// its moves check no fall damage.
     pub server_copy: bool,
+    /// The span of `events` a wall hit on the server's copy pushed (sound and
+    /// damage): `server_travel` keeps them while it drops the simulated moves.
+    pub wall_hit_events: Option<std::ops::Range<usize>>,
     /// A client's copy of its own player (`Level.isClientSide`): only the
     /// server hurts it (`Entity.hurt` does nothing on a client) and ticks its
     /// food (`ServerPlayer.tick`). Its hurt animation comes from the server.
@@ -432,6 +482,7 @@ impl PlayerMotion {
             history: MovementHistory::default(),
             fall_distance: 0.0,
             stuck_multiplier: Vec3::ZERO,
+            piston: Default::default(),
             yaw: 0.0,
             head_yaw: 0.0,
             jumping: false,
@@ -450,9 +501,11 @@ impl PlayerMotion {
             glider: false,
             pitch: 0.0,
             fall_flying: false,
+            sleeping: false,
             fall_fly_ticks: 0,
             glide_ending: false,
             glider_wear: 0,
+            location_effects: LocationEffects::default(),
             auto_spin_attack_ticks: 0,
             auto_spin_attack_dmg: 0.0,
             spin_targets: Vec::new(),
@@ -474,6 +527,8 @@ impl PlayerMotion {
                 next_step: 1.0,
                 ..MovementDistances::default()
             },
+            crystal_sound_intensity: 0.0,
+            last_crystal_sound_play_tick: 0,
             needs_sync: false,
             sync_position: false,
             teleported: false,
@@ -487,6 +542,7 @@ impl PlayerMotion {
             freeze_immune: false,
             old_position: position,
             server_copy: false,
+            wall_hit_events: None,
             client_side: false,
             block_effects: true,
             powder_snow_entered: Vec::new(),
@@ -836,9 +892,17 @@ impl MotionWorld<'_, '_, '_> {
         let can_glide = self.player.glider
             && !self.player.ground.on_ground
             && !self.player.flying
+            && self.player.status.levitation.is_none()
             && !self.player.fluids.was_touching_water
             && !self.player.is_in_lava();
-        if jumping && !toggled && !was_jumping && !self.player.fall_flying && can_glide {
+        // LocalPlayer.aiStep: `!onClimbable()` before tryToStartFallFlying.
+        if jumping
+            && !toggled
+            && !was_jumping
+            && !self.climbable()?
+            && !self.player.fall_flying
+            && can_glide
+        {
             self.player.fall_flying = true;
         }
         // LivingEntity.tick fallFlyTicks, then updateFallFlying.
@@ -850,8 +914,11 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.fall_distance = 1.0;
             }
             self.player.fall_fly_ticks += 1;
-            // canGlide alone: water and lava don't end a glide.
-            let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+            // canGlide alone: water and lava don't end a glide, levitation does.
+            let still = self.player.glider
+                && !self.player.ground.on_ground
+                && !self.player.flying
+                && self.player.status.levitation.is_none();
             if !still {
                 self.player.glide_ending = true;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
@@ -986,6 +1053,7 @@ impl MotionWorld<'_, '_, '_> {
             )
         });
         self.player.try_add_frost(on_air)?;
+        self.update_soul_speed_block()?;
         if self.player.health.tick_count % 40 == 0
             && self.player.is_fully_frozen()
             && self.player.can_freeze()
@@ -997,6 +1065,22 @@ impl MotionWorld<'_, '_, '_> {
             self.check_auto_spin_attack(before_travel);
         }
         Ok(())
+    }
+    /// Refresh whether the player stands on a soul speed block, for the
+    /// `location_changed` enchantment effects (a server's player too, whose
+    /// client does the walking).
+    pub fn update_soul_speed_block(&mut self) -> Result<()> {
+        self.player.location_effects.on_soul_speed_block = self.on_soul_speed_block()?;
+        Ok(())
+    }
+    /// `MovementAffectedByPredicate` for `#minecraft:soul_speed_blocks`.
+    fn on_soul_speed_block(&mut self) -> Result<bool> {
+        let on = self.support(movement_support::MOVEMENT_SUPPORT_OFFSET)?;
+        Ok(self
+            .assets
+            .registry
+            .state(self.block(on))
+            .is_some_and(|s| self.resources.soul_speed_blocks.contains(&s.name)))
     }
     /// Player.travel: swim steering, then LivingEntity.travel (fluids first,
     /// then gliding, then air), keeping 0.6 of the vertical speed while flying.
@@ -1023,7 +1107,14 @@ impl MotionWorld<'_, '_, '_> {
         {
             horizon_world::living_fluid::travel_in_fluid(self, input)?;
         } else if self.player.fall_flying {
-            self.travel_fall_flying()?;
+            // LivingEntity.travelFallFlying: on a climbable the glide ends and
+            // the player moves like in the air.
+            if self.climbable()? {
+                self.travel_in_air(input)?;
+                self.player.fall_flying = false;
+            } else {
+                self.travel_fall_flying()?;
+            }
         } else {
             self.travel_in_air(input)?;
         }
@@ -1050,7 +1141,14 @@ impl MotionWorld<'_, '_, '_> {
         p.server_copy = false;
         (p.position, p.ground, p.collision) = (position, ground, collision);
         (p.history, p.fall_distance, p.steps) = (history, fall_distance, steps);
+        // The wall hit is the server's own: its sound and damage events stay.
+        let kept: Vec<_> = p
+            .wall_hit_events
+            .take()
+            .map(|span| p.events.drain(span).collect())
+            .unwrap_or_default();
         p.events.truncate(events);
+        p.events.extend(kept);
         travelled
     }
     /// `LivingEntity.checkAutoSpinAttack`: the first living entity in the
@@ -1375,6 +1473,9 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // HoneyBlock.entityInside: a server's player slides too, so
+                    // its fall distance resets (its client moves it).
+                    "minecraft:honey_block" => self.honey_block_inside(p)?,
                     // PowderSnowBlock.entityInside's FREEZE.
                     "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
@@ -1404,6 +1505,50 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         Ok(iterations + 1)
+    }
+    /// `HoneyBlock.entityInside`: a falling player touching a side of the block
+    /// slides down it (`isSlidingDown`, `doSlideMovement`, `maybeDoSlideEffects`).
+    fn honey_block_inside(&mut self, pos: BlockPos) -> Result<()> {
+        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+        let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+        let position = self.player.position;
+        let velocity = self.player.velocity;
+        if self.player.ground.on_ground
+            || position.y > f64::from(pos.y) + 0.9375 - 1.0e-7
+            || old_delta_y(velocity.y) >= -0.08
+        {
+            return Ok(());
+        }
+        let dx = (f64::from(pos.x) + 0.5 - position.x).abs();
+        let dz = (f64::from(pos.z) + 0.5 - position.z).abs();
+        let overlap = 0.4375 + f64::from(self.player.dimensions.width / 2.0);
+        if !(dx + 1.0e-7 > overlap || dz + 1.0e-7 > overlap) {
+            return Ok(());
+        }
+        // doSlideMovement
+        let old = old_delta_y(velocity.y);
+        if old < -0.13 {
+            let factor = -0.05 / old;
+            self.player.velocity =
+                Vec3::new(velocity.x * factor, new_delta_y(-0.05), velocity.z * factor);
+        } else {
+            self.player.velocity = Vec3::new(velocity.x, new_delta_y(-0.05), velocity.z);
+        }
+        self.player.fall_distance = 0.0;
+        // maybeDoSlideEffects: the sound, then the server's event 53.
+        let random = &mut self.scene.random;
+        let sound = random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        // Only the server broadcasts event 53 (`!level.isClientSide()`).
+        let particles = !self.player.client_side
+            && random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        if sound || particles {
+            self.player.events.push(MotionEvent::HoneySlide {
+                pos,
+                sound,
+                particles,
+            });
+        }
+        Ok(())
     }
     /// `Player.makeStuckInBlock`: the next move is scaled by `multiplier`
     /// (and the fall forgotten) unless flying; the impulse context resets
@@ -1538,7 +1683,7 @@ impl MotionWorld<'_, '_, '_> {
         let lean = pitch;
         let look_h = (look.x * look.x + look.z * look.z).sqrt();
         let move_h = (v.x * v.x + v.z * v.z).sqrt();
-        let gravity = 0.08;
+        let gravity = living_motion::effective_gravity(self)?;
         let lift = f64::from(lean.cos()).powi(2);
         let mut m = Vec3::new(v.x, v.y + gravity * (-1.0 + lift * 0.75), v.z);
         if m.y < 0.0 && look_h > 0.0 {
@@ -1566,7 +1711,44 @@ impl MotionWorld<'_, '_, '_> {
         }
         self.player.velocity = Vec3::new(m.x * 0.99, m.y * 0.98, m.z * 0.99);
         let movement = self.player.velocity;
-        self.move_self(movement)
+        self.move_self(movement)?;
+        // LivingEntity.handleFallFlyingCollisions: only the server hurts.
+        if !self.player.client_side && self.player.collision.horizontal {
+            let new_h = {
+                let v = self.player.velocity;
+                (v.x * v.x + v.z * v.z).sqrt()
+            };
+            let dmg = ((move_h - new_h) * 10.0 - 3.0) as f32;
+            if dmg > 0.0 {
+                let first = self.player.events.len();
+                // getFallDamageSound((int) dmg)
+                let sound = if dmg as i32 > 4 {
+                    crate::landing::SceneSound::BigFall
+                } else {
+                    crate::landing::SceneSound::SmallFall
+                };
+                self.player
+                    .events
+                    .push(MotionEvent::Fall(crate::landing::FallEvent::Sound {
+                        sound,
+                        position: None,
+                        volume: 1.0,
+                        pitch: 1.0,
+                    }));
+                let id = self
+                    .resources
+                    .health
+                    .damage
+                    .id("minecraft:fly_into_wall")
+                    .ok_or("missing fly_into_wall damage type")?;
+                let rules = self.scene.health_rules;
+                self.player.hurt(&self.resources.health, rules, id, dmg)?;
+                if self.player.server_copy {
+                    self.player.wall_hit_events = Some(first..self.player.events.len());
+                }
+            }
+        }
+        Ok(())
     }
     /// `LocalPlayer.move`: the move, then `updateAutoJump` with the float
     /// horizontal displacement.
@@ -1748,8 +1930,14 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     fn set_collision_flags(&mut self, value: CollisionFlags) {
         self.player.collision = value;
     }
-    fn limit_piston_movement(&mut self, _: Vec3) -> Result<Vec3> {
-        Err("piston movement requires a ticking entity runtime".into())
+    /// `Entity.limitPistonMovement`: the per-tick 0.51-block budget shared by
+    /// every move on an axis. A failed game-time read leaves the accumulator
+    /// as it was, as native does.
+    fn limit_piston_movement(&mut self, movement: Vec3) -> Result<Vec3> {
+        let time = self.scene.game_time;
+        self.player
+            .piston
+            .limit(movement, || Ok::<i64, Box<dyn std::error::Error>>(time))
     }
     fn stuck_multiplier(&self) -> Vec3 {
         self.player.stuck_multiplier
@@ -1867,6 +2055,10 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         // distance every tick, so landing under either does not hurt.
         if self.player.status.slow_falling || self.player.status.levitation.is_some() {
             self.player.fall_distance = 0.0;
+        }
+        // LivingEntity.checkFallDamage: a landing runs onChangedBlock.
+        if grounded && self.player.fall_distance > 0.0 {
+            self.player.location_effects.landed = true;
         }
         if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
         {
@@ -2018,6 +2210,30 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
             state,
             in_water,
         });
+        // Entity.walkingStepSound: the amethyst chime after the step.
+        let name = &self
+            .assets
+            .registry
+            .state(state)
+            .ok_or("missing scene state")?
+            .name;
+        let tick = self.player.health.tick_count;
+        if self.resources.crystal_sound.contains(name)
+            && tick >= self.player.last_crystal_sound_play_tick + 20
+        {
+            // Entity.playAmethystStepSound (the level random stands in for
+            // the entity's).
+            let elapsed = f64::from(tick - self.player.last_crystal_sound_play_tick);
+            let decayed = self.player.crystal_sound_intensity * 0.997_f64.powf(elapsed) as f32;
+            let intensity = 1.0_f32.min(decayed + 0.07);
+            self.player.crystal_sound_intensity = intensity;
+            let pitch = 0.5 + intensity * self.scene.random.next_float() * 1.2;
+            let volume = 0.1 + intensity * 1.2;
+            self.player
+                .events
+                .push(MotionEvent::Chime { volume, pitch });
+            self.player.last_crystal_sound_play_tick = tick;
+        }
         Ok(())
     }
     fn step_event(&mut self, _: BlockStateId) -> Result<()> {
@@ -3895,6 +4111,192 @@ mod tests {
         assert!(
             (walked as f64 - metres).abs() <= 1.5,
             "{walked} steps over {metres} step-metres"
+        );
+    }
+    /// Vanilla sprint is a state, not a held key: `LocalPlayer.aiStep` starts
+    /// it with the sprint key and stops it only on a vanilla stop condition.
+    /// Releasing the key while swimming keeps the sprint and its swim speed.
+    #[test]
+    fn a_sprint_survives_the_sprint_key_coming_up_while_swimming() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprinting = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        // The same swim with the sprint key held, and with the key released
+        // once the sprint has started: the speed must not change.
+        let mut swims = Vec::new();
+        for release in [false, true] {
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+            for x in 19..=21 {
+                for y in 4..=8 {
+                    for z in 19..=31 {
+                        scene.set(x, y, z, water).unwrap();
+                    }
+                }
+            }
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            let mut speed = Vec::new();
+            for tick in 0..12 {
+                // The key comes up on the fourth tick, after the sprint has
+                // started and the player swims.
+                let keys = if release && tick >= 4 {
+                    forward
+                } else {
+                    sprinting
+                };
+                w.controlled_simulation_tick(keys).unwrap();
+                speed.push(w.player.velocity.z);
+            }
+            assert!(
+                w.player.sprinting,
+                "the sprint state survives the sprint key in water"
+            );
+            assert!(w.player.swimming, "a sprinting player in water swims");
+            swims.push(speed);
+        }
+        assert_eq!(
+            swims[0], swims[1],
+            "the swim speed must not drop when the sprint key comes up"
+        );
+    }
+
+    /// Vanilla: `LivingEntity.jumpFromGround` adds its 0.2 forward impulse
+    /// while the sprint state holds, so a jump taken after the sprint key
+    /// comes up is still a sprint jump.
+    #[test]
+    fn a_sprint_jump_keeps_its_impulse_when_the_sprint_key_comes_up() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprinting = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        for _ in 0..20 {
+            w.controlled_simulation_tick(sprinting).unwrap();
+        }
+        assert!(w.player.ground.on_ground, "the player settles on the floor");
+        assert!(w.player.sprinting, "the sprint key starts the sprint");
+        let running = w.player.velocity.z;
+        // The sprint key comes up and the player jumps.
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            jump: true,
+            ..forward
+        })
+        .unwrap();
+        assert!(
+            w.player.sprinting,
+            "the sprint state survives the sprint key in the air"
+        );
+        assert!(
+            w.player.velocity.z > running + 0.05,
+            "the sprint jump keeps its forward impulse: {:?} vs {running}",
+            w.player.velocity
+        );
+    }
+
+    /// Vanilla `Player.getFlyingSpeed`: a flying player moves at the ability
+    /// speed, doubled while the sprint state holds. The sprint key starts the
+    /// state; releasing it does not change the speed.
+    #[test]
+    fn the_flight_speed_follows_the_sprint_state_not_the_sprint_key() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.player.may_fly = true;
+        w.player.flying = true;
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprinting = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        assert_eq!(
+            w.flying_speed().unwrap(),
+            0.05,
+            "a flying player without a sprint moves at the ability speed"
+        );
+        // The sprint key starts the sprint, and the state doubles the speed.
+        w.controlled_simulation_tick(sprinting).unwrap();
+        assert!(w.player.sprinting, "the sprint key starts the sprint");
+        assert_eq!(
+            w.flying_speed().unwrap(),
+            0.1,
+            "a sprinting player flies at twice the ability speed"
+        );
+        // Releasing the sprint key keeps the state, so the speed stays.
+        w.controlled_simulation_tick(forward).unwrap();
+        assert!(
+            w.player.sprinting,
+            "the sprint state survives the sprint key in the air"
+        );
+        assert_eq!(
+            w.flying_speed().unwrap(),
+            0.1,
+            "the flight speed follows the sprint state, not the sprint key"
         );
     }
 }

@@ -364,8 +364,7 @@ impl Goal for GhastTempt {
         let Some(p) = &cx.w.player else { return false };
         // getNearestPlayer(TargetingConditions.forNonCombat()
         // .ignoreLineOfSight().range(TEMPT_RANGE 16)): creative players too.
-        let visibility = if p.sneaking { 0.8 } else { 1.0 };
-        let range = (16.0_f64 * visibility).max(2.0);
+        let range = (16.0_f64 * p.visibility_percent()).max(2.0);
         p.alive
             && !p.spectator
             && (Self::wants(m, &p.main_hand) || Self::wants(m, &p.off_hand))
@@ -544,14 +543,15 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
             m.ai.home = Some((here, radius));
         }
     }
-    // continuousHeal: a point every 30 seconds, every second in rain.
+    // continuousHeal: a point every 30 seconds, every second in rain or snow
+    // (Level.precipitationAt).
     if m.alive() && m.death_time == 0 && m.health < m.attrs.max_health {
         let (x, y, z) = (
             m.position.x.floor() as i32,
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         );
-        let wet = w.raining && w.can_see_sky(x, y, z);
+        let wet = w.precipitation_at(x, y, z).is_some();
         let interval = if wet { 20 } else { 600 };
         if m.age.is_multiple_of(interval) {
             m.health = (m.health + 1.0).min(m.attrs.max_health);
