@@ -134,6 +134,7 @@ mod pandas;
 mod passengers;
 mod persist;
 mod perspective;
+mod pick_entity;
 mod pickups;
 mod piglins;
 mod piston_push;
@@ -11883,7 +11884,18 @@ impl Game<'_> {
                 // Minecraft.pickBlockOrEntity -> the server's handlePickItemFromBlock:
                 // the block's clone item, with its block entity's data on Ctrl in
                 // creative, picked from the inventory (`pick_item`).
-                if let Some(hit) = self.pick() {
+                if let Some(entity) = self.pick_entity_hit() {
+                    // handlePickItemFromEntity: the entity's pick result.
+                    if let Some(stack) = entity.and_then(|id| self.entity_pick_result(id)) {
+                        let infinite = self.creative;
+                        horizon_client::pick_item::pick(
+                            &mut self.inventory[..36],
+                            &mut self.selected,
+                            &stack,
+                            infinite,
+                        );
+                    }
+                } else if let Some(hit) = self.pick() {
                     let include_data = self.creative && self.has_control_down();
                     if let Some(stack) = self.picked_stack(hit.pos, include_data) {
                         let infinite = self.creative;
