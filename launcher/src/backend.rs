@@ -2604,6 +2604,9 @@ pub struct Settings {
     /// What the window does while the game runs. Stays by default.
     #[serde(default)]
     pub while_playing: WhilePlaying,
+    /// The window's language. Unset follows the system's (`i18n::Language::system`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<crate::i18n::Language>,
 }
 
 impl Settings {
@@ -2628,12 +2631,22 @@ impl Settings {
             {
                 fields.remove("while_playing");
             }
+            // A language this launcher doesn't have yet follows the system's.
+            if fields.get("language").is_some_and(|l| {
+                serde_json::from_value::<Option<crate::i18n::Language>>(l.clone()).is_err()
+            }) {
+                fields.remove("language");
+            }
         }
         serde_json::from_value(value).unwrap_or_default()
     }
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {
         self.desktop_entry.unwrap_or(true)
+    }
+    /// The window's language: the one picked, else the system's.
+    pub fn language(&self) -> crate::i18n::Language {
+        self.language.unwrap_or_else(crate::i18n::Language::system)
     }
     /// Whether new Horizon versions are installed automatically.
     pub fn auto_install(&self) -> bool {
@@ -2963,6 +2976,18 @@ mod tests {
         }
         let here = WhilePlaying::Hide.here();
         assert_eq!(here == WhilePlaying::Hide, cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn the_language_follows_the_system_unless_picked() {
+        use crate::i18n::Language;
+        assert_eq!(Settings::parse("{}").language, None);
+        let fr = Settings::parse(r#"{"language": "fr"}"#);
+        assert_eq!(fr.language(), Language::French);
+        let future = Settings::parse(r#"{"language": "eo", "game_args": "--x"}"#);
+        assert_eq!((future.language, future.game_args.as_str()), (None, "--x"));
+        let saved = serde_json::to_value(Settings::default()).unwrap();
+        assert!(saved.get("language").is_none(), "unset is left out");
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod game_tools;
 mod import_page;
 mod instances_page;
 mod internet;
+mod language_page;
 mod launch_page;
 mod markdown;
 mod mcp;
@@ -47,6 +48,7 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
@@ -314,6 +316,7 @@ impl Launcher {
         })
         .detach();
         let mut settings = Settings::load();
+        i18n::set(settings.language());
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
         }
@@ -1191,6 +1194,8 @@ fn button(
     t: &Theme,
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
+    let label: SharedString = label.into();
+    let label = SharedString::from(tr(&label).to_string());
     let t = *t;
     let hover = match kind {
         Kind::Primary => t.on_face.opacity(0.10),
@@ -1234,7 +1239,7 @@ fn button(
             .items_center()
             .gap(px(8.))
             .pb(px(if kind == Kind::Ghost { 0. } else { 2. }))
-            .child(label.into()),
+            .child(label),
     );
     keyboard(track_hover(base, id), &t).active(|s| s.opacity(theme::PRESSED).top(px(1.)))
 }
@@ -1302,7 +1307,7 @@ fn section_title(label: &'static str, icon: &'static str, t: &Theme) -> Div {
         .child(
             blocks::pixel(18., FontWeight::SEMIBOLD)
                 .text_color(t.ink)
-                .child(label),
+                .child(tr(label)),
         )
 }
 
@@ -1348,7 +1353,7 @@ fn segments<T: Copy + PartialEq + 'static>(
                 .when(!active, |d| {
                     d.text_color(t.muted).hover(move |s| s.text_color(t.ink))
                 })
-                .child(div().relative().child(label))
+                .child(div().relative().child(tr(label)))
                 .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx))
         }))
 }
@@ -1374,13 +1379,13 @@ fn page_header(title: &str, description: &str, t: &Theme) -> Div {
         .child(
             blocks::pixel(36., FontWeight::SEMIBOLD)
                 .text_color(t.ink)
-                .child(title.to_string()),
+                .child(tr(title).to_string()),
         )
         .child(
             text(theme::UI)
                 .max_w(px(520.))
                 .text_color(t.muted)
-                .child(description.to_string()),
+                .child(tr(description).to_string()),
         )
 }
 
@@ -1563,7 +1568,7 @@ impl Launcher {
                     blocks::pixel(16., FontWeight::MEDIUM)
                         .relative()
                         .text_color(if active { t.ink } else { t.muted })
-                        .child(label),
+                        .child(tr(label)),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.go(page);
@@ -2581,10 +2586,10 @@ impl Launcher {
             }),
         );
         let horizon = match (&self.updates.horizon, &self.update_error) {
-            (Some(r), _) => format!("{} available", r.tag),
+            (Some(r), _) => trf("{version} available", &[("version", &r.tag)]),
             (None, Some(e)) => e.clone(),
-            (None, None) if self.checked.is_some() => "Up to date".to_string(),
-            _ => "Checking…".to_string(),
+            (None, None) if self.checked.is_some() => tr("Up to date").to_string(),
+            _ => tr("Checking…").to_string(),
         };
         let horizon_action = self
             .updates
@@ -2601,18 +2606,36 @@ impl Launcher {
             });
         let launcher = match &self.self_update {
             SelfUpdate::Downloading(v, p) => {
-                format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
+                let done = format!("{:.0}", p * 100.);
+                let said = trf(
+                    "downloading {version}, {percent}%",
+                    &[("version", v), ("percent", &done)],
+                );
+                format!("{}  ·  {said}", backend::VERSION)
             }
-            SelfUpdate::Ready(v) => format!("Updated to {v}. Restart the launcher to use it."),
-            SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
+            SelfUpdate::Ready(v) => trf(
+                "Updated to {version}. Restart the launcher to use it.",
+                &[("version", v)],
+            ),
+            SelfUpdate::Failed(e) => format!(
+                "{}  ·  {}",
+                backend::VERSION,
+                trf("the update failed: {error}", &[("error", e)])
+            ),
             SelfUpdate::Idle => match &self.updates.launcher {
                 Some(r) => format!(
-                    "{}  ·  {} available",
+                    "{}  ·  {}",
                     backend::VERSION,
-                    backend::launcher_version(&r.tag).unwrap_or_default()
+                    trf(
+                        "{version} available",
+                        &[(
+                            "version",
+                            backend::launcher_version(&r.tag).unwrap_or_default()
+                        )]
+                    )
                 ),
                 None if self.checked.is_some() && self.update_error.is_none() => {
-                    format!("{}  ·  up to date", backend::VERSION)
+                    format!("{}  ·  {}", backend::VERSION, tr("up to date"))
                 }
                 None => backend::VERSION.to_string(),
             },
@@ -2637,7 +2660,7 @@ impl Launcher {
             ),
         };
         let mono = |s: String| div().font_family(theme::MONO).child(s).into_any_element();
-        let plain = |s: &str| div().child(s.to_string()).into_any_element();
+        let plain = |s: &str| div().child(tr(s).to_string()).into_any_element();
         let (accounts, n) = self.account_rows(cx);
         let (offline, n) = self.offline_rows(n, cx);
         let appearance = segments(
@@ -2684,7 +2707,7 @@ impl Launcher {
                     .child(group("Updates", "reload"))
                     .child(index_row(
                         n + 1,
-                        "Install new versions automatically",
+                        tr("Install new versions automatically"),
                         Some(plain(
                             "Your selected version only changes if you were playing the newest one.",
                         )),
@@ -2694,15 +2717,16 @@ impl Launcher {
                     .child(group("Launcher", "monitor"))
                     .child(index_row(
                         n + 3,
-                        "Appearance",
+                        tr("Appearance"),
                         Some(plain("Dark by default. System follows your computer's light or dark.")),
                         Some(appearance.into_any_element()),
                         &t,
                     ))
+                    .child(self.language_row(cx))
                     .child(self.while_playing_row(n + 3, cx))
                     .child(index_row(
                         n + 3,
-                        "Show the opening",
+                        tr("Show the opening"),
                         Some(plain("The wordmark, while the release list loads.")),
                         Some(opening.into_any_element()),
                         &t,
@@ -2717,24 +2741,25 @@ impl Launcher {
                     .child(index_row(n + 7, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
                         n + 8,
-                        "Launcher",
+                        tr("Launcher"),
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
                         n + 9,
-                        "Data folder",
+                        tr("Data folder"),
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
                         n + 10,
-                        "Logs",
+                        tr("Logs"),
                         Some(mono(format!(
-                            "{}  ·  crash reports beside it",
-                            short(&backend::logs_dir())
+                            "{}  ·  {}",
+                            short(&backend::logs_dir()),
+                            tr("crash reports beside it")
                         ))),
                         Some(
                             button("open-logs", "Open", Kind::Secondary, &t)
@@ -2750,7 +2775,7 @@ impl Launcher {
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
                             n + 11,
-                            "Applications menu",
+                            tr("Applications menu"),
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
                             } else {
@@ -2976,11 +3001,11 @@ impl Launcher {
                 a.name.clone(),
                 Some(
                     div()
-                        .child(if plays {
+                        .child(tr(if plays {
                             "Microsoft account · plays"
                         } else {
                             "Microsoft account · signed in"
-                        })
+                        }))
                         .into_any_element(),
                 ),
                 Some(actions.into_any_element()),
@@ -2993,8 +3018,8 @@ impl Launcher {
             Some(SignInState::Starting | SignInState::Code(_))
         );
         let detail = match &self.sign_in_state {
-            _ if !configured => div().child(account::NOT_CONFIGURED),
-            Some(SignInState::Starting) => div().child("Asking Microsoft…"),
+            _ if !configured => div().child(tr(account::NOT_CONFIGURED)),
+            Some(SignInState::Starting) => div().child(tr("Asking Microsoft…")),
             Some(SignInState::Code(code)) => div()
                 .flex()
                 .flex_col()
@@ -3014,7 +3039,7 @@ impl Launcher {
             None if self.accounts.accounts.is_empty() => div().child(
                 "Sign in to play on online servers with your name and skin. Without an account the game plays offline.",
             ),
-            None => div().child("Add another account."),
+            None => div().child(tr("Add another account.")),
         };
         let detail = if self.keychain || self.accounts.accounts.is_empty() {
             detail
@@ -3085,7 +3110,7 @@ impl Launcher {
         };
         rows = rows.child(index_row(
             n,
-            title,
+            tr(title),
             Some(detail.into_any_element()),
             action,
             &t,

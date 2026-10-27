@@ -129,6 +129,12 @@ The opening, then Play ([clip](docs/opening.webm)):
   the Console's Share log takes them out of the log too. `horizon-launcher account offline
   [NAME]`, `account select <name>` (an account or an offline name), `account forget-offline
   <name>`.
+- **Language**: English, French and Russian (the languages Horizon's own game menus have).
+  The window follows the system's language unless the player picks one in Settings > Launcher
+  (each named in itself); a string a table lacks shows in English. The tables are
+  `launcher/lang/<code>.json`, English text to its translation, Horizon's own; a test fails when
+  the code asks `tr("…")` for a string a table lacks, or a table keeps one the code dropped.
+  `horizon-launcher settings language system|en|fr|ru`.
 - **Skin and cape**: each offline name's **Skin…** in Settings > Account shows the front of its
   skin and cape, takes a skin PNG (64×64, or the older 64×32) and a cape PNG (64×32), and picks
   classic or slim arms. The launcher keeps copies in its `skins/` folder and gives the game
