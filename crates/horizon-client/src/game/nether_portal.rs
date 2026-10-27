@@ -125,6 +125,19 @@ fn touches_end_portal(from: Vec3, to: Vec3, width: f32, height: f32, pos: BlockP
     );
     start.collided_along_vector(to.subtract(from), &[shape])
 }
+/// `PositionMoveRotation.calculateAbsolute` for an End portal's transition
+/// of an entity facing `[yaw, pitch]`: into the End it faces west and keeps
+/// its pitch (`Relative.X_ROT`); out of it both turn by the world spawn's
+/// angles (`Relative.ROTATION`). The pitch stays within ±90.
+fn end_portal_rotation(into_end: bool, [yaw, pitch]: [f32; 2], spawn: [f32; 2]) -> [f32; 2] {
+    let (yaw, pitch) = if into_end {
+        // Direction.WEST.toYRot().
+        (90.0, pitch)
+    } else {
+        (yaw + spawn[0], pitch + spawn[1])
+    };
+    [yaw, pitch.clamp(-90.0, 90.0)]
+}
 /// A waiting entity as `horizon_portal_arrivals.dat` keeps it.
 fn arrival_tag(a: &Arrival) -> Tag {
     let p = &a.plan;
@@ -276,21 +289,21 @@ impl Game<'_> {
         &*self.res.facts().get(state).name == "minecraft:end_portal"
     }
     /// Where an item or mob through an End portal lands once `plan`'s level
-    /// has loaded around it, and the yaw it faces there: the bottom centre
-    /// of the End's spawn point, above the platform built below it
-    /// (`EndPlatformFeature.createEndPlatform`), facing west; out of the End,
-    /// the top of the shared spawn's column (`Entity.adjustSpawnLocation`).
-    fn end_portal_exit(&mut self, plan: &Plan) -> (Vec3, Option<f32>) {
+    /// has loaded around it: the bottom centre of the End's spawn point,
+    /// above the platform built below it (`EndPlatformFeature.createEndPlatform`);
+    /// out of the End, the top of the shared spawn's column
+    /// (`Entity.adjustSpawnLocation`).
+    fn end_portal_exit(&mut self, plan: &Plan) -> Vec3 {
         let p = plan.approximate;
         let centre = Vec3::new(f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5);
         if plan.dim == Dim::End {
-            return self.end_arrival(centre).unwrap_or_else(|e| {
+            if let Err(e) = self.end_arrival(centre) {
                 log::error!("End platform: {e}");
-                (centre, Some(90.0))
-            });
+            }
+            return centre;
         }
         let y = self.motion_top(p.x, p.z);
-        (Vec3::new(centre.x, f64::from(y), centre.z), None)
+        Vec3::new(centre.x, f64::from(y), centre.z)
     }
     /// The nether portal blocks of the chunks within `radius` of `center`
     /// (the points of interest `PortalForcer` searches): loaded chunks as
@@ -916,17 +929,19 @@ impl Game<'_> {
             self.portals.dirty = true;
             let motion = horizon_client::entity_nbt::motion(&tag);
             let [yaw, pitch] = horizon_client::entity_nbt::rotation(&tag);
-            let (at, motion, yaw) = if plan.end {
-                // Relative.DELTA and X_ROT: the motion and pitch are kept;
-                // the yaw faces west into the End, and is kept out of it.
-                let (at, west) = self.end_portal_exit(&plan);
-                (at, motion, west.unwrap_or(yaw))
+            let (at, motion, [yaw, pitch]) = if plan.end {
+                // Relative.DELTA: the motion is kept.
+                let at = self.end_portal_exit(&plan);
+                let into_end = plan.dim == Dim::End;
+                let turn =
+                    end_portal_rotation(into_end, [yaw, pitch], self.level.world_spawn_angle);
+                (at, motion, turn)
             } else {
                 let Some(exit) = self.nether_exit_portal(&plan) else {
                     continue;
                 };
                 let (at, rotation) = self.arrival(&plan, exit);
-                (at, rotate_y(motion, -rotation), yaw + rotation)
+                (at, rotate_y(motion, -rotation), [yaw + rotation, pitch])
             };
             if let Tag::Compound(c) = &mut tag {
                 c.insert("Pos".into(), doubles([at.x, at.y, at.z]));
@@ -1039,6 +1054,24 @@ mod tests {
         // Beside it.
         let beside = Vec3::new(2.0, 100.0, 3.5);
         assert!(!touches_end_portal(beside, beside, 0.9, 1.4, portal));
+    }
+
+    #[test]
+    fn end_portals_turn_entities_like_their_teleport_transition() {
+        // Into the End: facing west, pitch kept.
+        assert_eq!(
+            end_portal_rotation(true, [-30.0, 20.0], [45.0, 10.0]),
+            [90.0, 20.0]
+        );
+        // Out of it: turned by the world spawn's yaw and pitch, pitch clamped.
+        assert_eq!(
+            end_portal_rotation(false, [-30.0, 20.0], [45.0, 10.0]),
+            [15.0, 30.0]
+        );
+        assert_eq!(
+            end_portal_rotation(false, [0.0, 80.0], [0.0, 30.0]),
+            [0.0, 90.0]
+        );
     }
 
     #[test]
