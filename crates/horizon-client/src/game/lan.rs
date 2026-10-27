@@ -92,6 +92,33 @@ pub(super) struct LanHost {
     states: lan::entity::States,
 }
 
+impl LanHost {
+    /// `PlayerList.remove`: `player.awardStat(Stats.LEAVE_GAME)` before the
+    /// player is saved. Once per guest, however often they are saved.
+    pub(super) fn award_leave_game(&mut self, conn: u32) {
+        if let Some(play) = self.play.get_mut(&conn)
+            && !play.left_game
+        {
+            play.left_game = true;
+            play.stats.custom("leave_game", 1);
+        }
+    }
+
+    /// `PlayerList.removeAll`: every player who joined leaves with the world.
+    pub(super) fn award_leave_game_to_all(&mut self) {
+        let conns: Vec<u32> = self
+            .hub
+            .guests
+            .iter()
+            .filter(|g| g.placed)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.award_leave_game(conn);
+        }
+    }
+}
+
 /// The player who owns an integrated server's world: a guest whose state is
 /// the world's own player (`players/data/<singleplayer_uuid>.dat`), as in
 /// single player.
@@ -297,8 +324,11 @@ fn mob_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    if m.fire_ticks > 0 {
-        meta.push((0, serializer::BYTE, Value::Byte(1)));
+    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, glowing 0x40
+    // (LivingEntity.updateGlowingStatus).
+    let shared = i8::from(m.fire_ticks > 0) | i8::from(m.is_currently_glowing()) << 6;
+    if shared != 0 {
+        meta.push((0, serializer::BYTE, Value::Byte(shared)));
     }
     // Entity.DATA_POSE: the pose the species keeps in its own fields (a
     // pose back at standing goes out by the entity's own default).
@@ -748,13 +778,16 @@ fn mob_equipment(
     out: &mut Vec<(u8, Option<horizon_protocol::item::Stack>)>,
 ) {
     let e = &m.extra;
+    // A horse's armour, a llama's carpet, a harness: Horizon keeps the body
+    // slot's item (6) in `head`.
+    let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
         (0u8, &e.main_hand),
         (1, &e.off_hand),
         (2, &e.feet),
         (3, &e.legs),
         (4, &e.chest),
-        (5, &e.head),
+        (if body { 6 } else { 5 }, &e.head),
     ];
     for (slot, item) in slots {
         if let Some(item) = item {
@@ -1033,6 +1066,7 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        host.award_leave_game_to_all();
         for g in &host.hub.guests {
             self.save_guest(&host, g);
         }
@@ -1240,7 +1274,7 @@ impl Game<'_> {
         out.clear();
         for m in self.mobs.iter().filter(|m| !m.removed) {
             // The lead's holder: the player the mob sees (a guest, else the
-            // host) or another mob. A fence knot isn't an entity here.
+            // host), another mob or a fence knot (game/lan_entities.rs).
             let player_entity = mob_players
                 .get(&m.id)
                 .and_then(|conn| hub.guest(*conn))
@@ -1249,7 +1283,7 @@ impl Game<'_> {
             let leash = m.extra.leash.and_then(|h| match h {
                 Holder::Player => player_entity,
                 Holder::Mob(id) => Some(id as i32),
-                Holder::Knot(_) => None,
+                Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
             });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());
             e.position = [m.position.x, m.position.y, m.position.z];
@@ -1276,6 +1310,10 @@ impl Game<'_> {
             e.position = [d.position.x, d.position.y, d.position.z];
             e.on_ground = d.on_ground;
             e.velocity = [d.velocity.x, d.velocity.y, d.velocity.z];
+            // Entity.DATA_SHARED_FLAGS_ID: glowing 0x40 (the Glowing tag).
+            if self.entity_glowing(d.id) {
+                e.meta.push((0, serializer::BYTE, Value::Byte(0x40)));
+            }
             e.meta.push((8, serializer::ITEM_STACK, Value::Item(stack)));
         }
         for o in &self.orbs {
@@ -1341,6 +1379,9 @@ impl Game<'_> {
             // ServerEntity.sendChanges clears needsSync once it has looked.
             for m in &mut self.mobs {
                 m.needs_sync = false;
+            }
+            for p in &mut self.creatures.projectiles {
+                p.needs_sync = false;
             }
             // `runBlockEvents`' broadcast precedes the tick's block changes
             // (`ChunkHolder.broadcastChanges` in `tick_level` below): the
@@ -1452,6 +1493,9 @@ impl Game<'_> {
                             }
                         }
                         self.lan_crafting_left(&mut host, &mut guest);
+                        if guest.placed {
+                            host.award_leave_game(guest.conn);
+                        }
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         host.play.remove(&guest.conn);
@@ -1502,8 +1546,11 @@ impl Game<'_> {
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
-        // A mace's wind burst from a guest's attack.
+        // A blast from a guest's attack, and a mace's wind burst.
+        self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
+        // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
+        self.flush_lan_particles();
     }
 
     fn lan_guest_joined(
@@ -1857,6 +1904,7 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            m.extra.avatar_pose = g.pose();
             m.extra.sprinting = g.sprinting;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
@@ -1925,7 +1973,12 @@ impl Game<'_> {
                 out,
             );
             self.held_item_geometry(m, camera, alpha, packed, true, out);
-            if !m.glowing {
+            // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
+            let guest = host.hub.guest(*conn);
+            if m.glowing || guest.is_some_and(|g| g.effects.get("glowing").is_some()) {
+                let team = guest.and_then(|g| self.score.board.players_team(&g.name));
+                self.mark_outline(&out[entity_start..], super::glowing::team_color(team));
+            } else {
                 self.cull_entity_vertices(out, entity_start);
             }
         }

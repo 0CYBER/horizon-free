@@ -409,6 +409,15 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         out.push(Drop::Item(stack));
         clear_slot(m, "mainhand");
     }
+    // Allay: what it carries (`ints[1]` of the held item) is its inventory.
+    let allay_load = (s == Species::Allay)
+        .then(|| {
+            m.extra
+                .main_hand
+                .clone()
+                .map(|item| (item, m.extra.ints[1]))
+        })
+        .flatten();
     let drops_loot = d.mob_drops && (is_monster(s) || !m.is_baby());
     if drops_loot {
         let table = format!(
@@ -463,6 +472,19 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         // WitherBoss.dropCustomDeathLoot.
         if s == Species::Wither {
             out.push(Drop::Item(loot_stack("minecraft:nether_star", 1)));
+        }
+    }
+    // Allay.dropEquipment: its inventory, then the main-hand item unless it
+    // prevents equipment drops.
+    if let Some((item, carried)) = allay_load {
+        if carried > 0 {
+            out.push(Drop::Item(loot_stack(&item, carried)));
+        }
+        if let Some(stack) = slot_item(m, "mainhand")
+            && !d.loot.prevents_equipment_drop(&stack)
+        {
+            out.push(Drop::Item(stack));
+            clear_slot(m, "mainhand");
         }
     }
     // Piglin.dropCustomDeathLoot: everything in its inventory.

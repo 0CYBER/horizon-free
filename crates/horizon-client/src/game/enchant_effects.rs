@@ -157,8 +157,10 @@ impl Game<'_> {
             items: Some(self.res.items()),
             ..Default::default()
         };
-        // minecraft:post_attack ignite effects of the attacker's weapon (fire aspect).
+        // minecraft:post_attack effects of the attacker's weapon on the victim:
+        // ignite (fire aspect) and apply_mob_effect (bane of arthropods).
         let mut ignite = 0.0f32;
+        let mut mob_effects = Vec::new();
         for (id, level) in held.enchantments() {
             let Some(def) = self.res.stations().enchantments.get(id) else {
                 continue;
@@ -168,24 +170,33 @@ impl Game<'_> {
                 .into_iter()
                 .flatten()
             {
-                if effect["enchanted"] == "attacker"
-                    && effect["affected"] == "victim"
-                    && effect["effect"]["type"] == "minecraft:ignite"
+                let e = &effect["effect"];
+                let kind_of = e["type"].as_str();
+                if effect["enchanted"] != "attacker"
+                    || effect["affected"] != "victim"
+                    || !matches!(
+                        kind_of,
+                        Some("minecraft:ignite" | "minecraft:apply_mob_effect")
+                    )
                 {
-                    let mut random = self.world.random.clone();
-                    let ok = effect.get("requirements").is_none_or(|r| {
-                        self.res
-                            .stations()
-                            .enchantments
-                            .condition(r, *level, &ctx, &mut random)
-                    });
-                    self.world.random = random;
-                    if ok {
-                        ignite = ignite.max(horizon_client::enchant::level_value(
-                            &effect["effect"]["duration"],
-                            *level,
-                        ));
-                    }
+                    continue;
+                }
+                let mut random = self.world.random.clone();
+                let ok = effect.get("requirements").is_none_or(|r| {
+                    self.res
+                        .stations()
+                        .enchantments
+                        .condition(r, *level, &ctx, &mut random)
+                });
+                self.world.random = random;
+                if !ok {
+                    continue;
+                }
+                if kind_of == Some("minecraft:ignite") {
+                    ignite =
+                        ignite.max(horizon_client::enchant::level_value(&e["duration"], *level));
+                } else {
+                    mob_effects.push((e.clone(), *level));
                 }
             }
         }
@@ -195,7 +206,40 @@ impl Game<'_> {
         {
             m.ignite_for_ticks((ignite * 20.0) as i32);
         }
+        for (effect, level) in mob_effects {
+            self.apply_mob_effect(mob, &effect, level);
+        }
         self.post_attack_bursts(&held, &kind);
+    }
+    /// `ApplyMobEffect.apply`: one of `to_apply` (a single id or a list) for a
+    /// random duration and amplifier between the level-based bounds.
+    fn apply_mob_effect(&mut self, mob: usize, effect: &serde_json::Value, level: u32) {
+        use horizon_client::enchant::level_value;
+        let Some(m) = self.mobs.get_mut(mob) else {
+            return;
+        };
+        let ids: Vec<&str> = match &effect["to_apply"] {
+            serde_json::Value::String(id) => vec![id.as_str()],
+            serde_json::Value::Array(list) => list.iter().filter_map(|v| v.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        if ids.is_empty() {
+            return;
+        }
+        // HolderSet.getRandomElement, then Mth.randomBetween for both values.
+        let pick = m.random.next_int_bound(ids.len() as i32).unwrap_or(0) as usize;
+        let mut between = |min: &str, max: &str| {
+            let (lo, hi) = (
+                level_value(&effect[min], level),
+                level_value(&effect[max], level),
+            );
+            m.random.next_float() * (hi - lo) + lo
+        };
+        let ticks = (between("min_duration", "max_duration") * 20.0).round() as i32;
+        let amplifier = (between("min_amplifier", "max_amplifier").round() as i32).max(0);
+        if let Some(id) = super::potions::mob_effect_id(ids[pick]) {
+            m.add_effect(id, ticks, amplifier);
+        }
     }
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):
     /// a burst at the player's feet that only knocks back and triggers

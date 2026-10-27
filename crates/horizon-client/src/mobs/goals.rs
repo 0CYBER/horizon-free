@@ -588,24 +588,38 @@ impl Mob {
         if p.creative || p.allies.contains(&self.id) {
             return false;
         }
-        self.player_in_range(w, range, check_sight)
+        self.player_in_range(w, range, check_sight, true)
+    }
+    /// forCombat().ignoreInvisibilityTesting() for the player: the check for
+    /// a target the mob already has, which ignores the visibility scaling.
+    pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
+        let Some(p) = &w.player else { return false };
+        if p.creative || p.allies.contains(&self.id) {
+            return false;
+        }
+        self.player_in_range(w, range, true, false)
     }
     /// TargetingConditions.forNonCombat().range(range).test for the player
     /// (seen by anyone, within range scaled by visibility, in sight).
     pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
-        self.player_in_range(w, range, true)
+        self.player_in_range(w, range, true, true)
     }
-    fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+    /// `scale` is `TargetingConditions.testInvisible`: scale the range by
+    /// the player's visibility.
+    fn player_in_range(
+        &mut self,
+        w: &MobWorld,
+        range: f64,
+        check_sight: bool,
+        scale: bool,
+    ) -> bool {
         let Some(p) = &w.player else { return false };
         if !p.alive || p.spectator {
             return false;
         }
         // LivingEntity.getVisibilityPercent
-        let mut visibility = 1.0;
-        if p.sneaking {
-            visibility *= 0.8;
-        }
-        if let Some(head) = &p.head {
+        let mut visibility = if scale { p.visibility_percent() } else { 1.0 };
+        if let Some(head) = p.head.as_ref().filter(|_| scale) {
             let skull = match self.species() {
                 Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {
                     "minecraft:zombie_head"
@@ -1814,7 +1828,7 @@ impl Goal for Tempt {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(p) = cx.w.player.clone() else { return };
-        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.kind.max_head_x_rot);
+        let (y, x) = (m.kind.max_head_y_rot + 20.0, m.max_head_x_rot());
         m.look_at_speed(p.eye, y, x);
         if m.distance_sqr(p.position) < self.stop_distance * self.stop_distance {
             m.nav_stop();
@@ -1923,7 +1937,7 @@ impl Goal for Breed {
         let Some(p) = self.partner.and_then(|p| cx.w.seen(p)).cloned() else {
             return;
         };
-        let x = m.kind.max_head_x_rot;
+        let x = m.max_head_x_rot();
         m.look_at_speed([p.position.x, p.eye_y, p.position.z], 10.0, x);
         m.nav_move_to_entity(
             cx.w,

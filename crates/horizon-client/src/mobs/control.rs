@@ -1,6 +1,6 @@
 //! Mob controls: `MoveControl` (with the flying and smooth-swimming
 //! variants), `LookControl`, `JumpControl` and `BodyRotationControl`.
-use super::{Mob, MobWorld, living::wrap};
+use super::{Mob, MobWorld, Species, living::wrap};
 use horizon_core::geometry::trig;
 
 /// `2.5000003E-7F` widened: the squared distance controls treat as arrived.
@@ -116,8 +116,16 @@ pub struct BodyRotation {
     last_stable_head: f32,
 }
 impl Mob {
+    /// `Mob.getMaxHeadXRot`, with `Wolf`'s 20 degrees while sitting.
+    pub fn max_head_x_rot(&self) -> f32 {
+        if self.species() == Species::Wolf && self.extra.sitting {
+            20.0
+        } else {
+            self.kind.max_head_x_rot
+        }
+    }
     pub fn look_at(&mut self, at: [f64; 3]) {
-        let (y, x) = (self.kind.head_rot_speed, self.kind.max_head_x_rot);
+        let (y, x) = (self.kind.head_rot_speed, self.max_head_x_rot());
         self.ai.look.set_look_at(at, y, x);
     }
     pub fn look_at_speed(&mut self, at: [f64; 3], y_speed: f32, x_max: f32) {
@@ -425,6 +433,13 @@ impl Mob {
     }
     /// BodyRotationControl.clientTick (Mob.tickHeadTurn).
     pub fn body_rotation_tick(&mut self) {
+        // Shulker.ShulkerBodyRotationControl.clientTick is empty: the body
+        // stays at 0 (recreateFromPacket), only the head turns.
+        if self.species() == super::Species::Shulker {
+            self.body_yaw = 0.0;
+            self.previous_body_yaw = 0.0;
+            return;
+        }
         let dx = self.position.x - self.previous.x;
         let dz = self.position.z - self.previous.z;
         let max = self.kind.max_head_y_rot;

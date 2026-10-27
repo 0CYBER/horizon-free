@@ -187,6 +187,31 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.remove(&horizon_world::nbt::JavaString::from(key));
         }
     }
+    // LivingEntity.addAdditionalSaveData: `active_effects` only when there are
+    // any (MobEffectInstance.CODEC; a mob's effects are never ambient, and one
+    // given with `hideParticles` shows neither particles nor its icon).
+    if m.extra.effects.is_empty() {
+        map.remove(&horizon_world::nbt::JavaString::from("active_effects"));
+    } else {
+        let effects = m
+            .extra
+            .effects
+            .iter()
+            .map(|&(effect, duration, amplifier)| {
+                let shown = !m.extra.hidden_effects.contains(&effect);
+                let mut e = vec![
+                    ("id", string(crate::brewing::namespaced(effect))),
+                    ("amplifier", Tag::Byte(amplifier.clamp(0, 255) as u8 as i8)),
+                    ("duration", Tag::Int(duration)),
+                ];
+                if !shown {
+                    e.push(("show_particles", Tag::Byte(0)));
+                }
+                e.push(("show_icon", Tag::Byte(i8::from(shown))));
+                Tag::compound(e)
+            });
+        map.insert("active_effects".into(), Tag::List(effects.collect()));
+    }
     map.insert(
         "Invulnerable".into(),
         Tag::Byte(i8::from(m.invulnerable_flag)),
@@ -478,7 +503,32 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             crate::mobs::villager::write_nbt(m, map);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
-        "minecraft:axolotl" => write_axolotl_memories(m, map),
+        "minecraft:axolotl" => {
+            write_axolotl_memories(m, map);
+            map.insert(
+                "Variant".into(),
+                Tag::Int(i32::from(m.extra.variant.min(4))),
+            );
+        }
+        "minecraft:parrot" => {
+            map.insert(
+                "Variant".into(),
+                Tag::Int(i32::from(m.extra.variant.min(4))),
+            );
+        }
+        "minecraft:salmon" => {
+            let size = SALMON_SIZES[usize::from(m.extra.variant).min(2)];
+            map.insert("type".into(), string(size));
+        }
+        // TropicalFish.addAdditionalSaveData: the packed variant.
+        "minecraft:tropical_fish" => {
+            let pattern = m.extra.variant.min(11);
+            let packed = i32::from(pattern >= 6)
+                | i32::from(pattern % 6) << 8
+                | i32::from(m.extra.variant2 & 15) << 16
+                | i32::from(m.extra.variant3 & 15) << 24;
+            map.insert("Variant".into(), Tag::Int(packed));
+        }
         "minecraft:allay" => {
             // InventoryCarrier: the fetched stack; the liked player memory.
             let mut inv = Vec::new();
@@ -538,6 +588,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.insert("listener".into(), st.vibration.to_nbt());
                 map.insert("anger".into(), Tag::compound(Vec::<(&str, Tag)>::new()));
             }
+        }
+        // Armadillo.addAdditionalSaveData: the time left to the next scute.
+        "minecraft:armadillo" => {
+            map.insert("scute_time".into(), Tag::Int(m.extra.egg_time));
         }
         "minecraft:ravager" => {
             map.insert("AttackTick".into(), Tag::Int(m.extra.counter));
@@ -912,6 +966,25 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.no_gravity = flag(tag, "NoGravity");
     m.glowing = flag(tag, "Glowing");
     m.ticks_frozen = number(tag.get("TicksFrozen")).unwrap_or(0) as i32;
+    // LivingEntity.readAdditionalSaveData: the saved `active_effects`, the last
+    // entry of an effect winning.
+    if let Some(Tag::List(effects)) = tag.get("active_effects") {
+        for e in effects {
+            let Some(def) = text(e.get("id")).and_then(|id| crate::brewing::effect(&id)) else {
+                continue;
+            };
+            let effect = crate::brewing::namespaced(def.id);
+            let duration = number(e.get("duration")).unwrap_or(0) as i32;
+            let amplifier = number(e.get("amplifier")).unwrap_or(0) as i32;
+            m.extra.effects.retain(|x| x.0 != effect);
+            m.extra.effects.push((effect, duration, amplifier));
+            // Details.CODEC: `show_particles` defaults to true.
+            m.extra.hidden_effects.retain(|h| *h != effect);
+            if number(e.get("show_particles")) == Some(0) {
+                m.extra.hidden_effects.push(effect);
+            }
+        }
+    }
     m.silent = flag(tag, "Silent");
     m.invulnerable_flag = flag(tag, "Invulnerable");
     if m.species() == crate::mobs::Species::Bat {
@@ -1065,6 +1138,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Axolotl {
         restore_axolotl_memories(&mut m, tag);
     }
+    read_variant(&mut m, tag);
     m.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
     m.air = number(tag.get("Air")).unwrap_or(300) as i32;
     if m.species() == crate::mobs::Species::Allay {
@@ -1144,6 +1218,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         if let (Some(st), Some(listener)) = (m.extra.warden.as_mut(), tag.get("listener")) {
             st.vibration = crate::sculk::Data::from_nbt(listener);
         }
+    }
+    // Armadillo.readAdditionalSaveData: keeps the constructor's time when absent.
+    if m.species() == crate::mobs::Species::Armadillo
+        && let Some(t) = number(tag.get("scute_time"))
+    {
+        m.extra.egg_time = t as i32;
     }
     if m.species() == crate::mobs::Species::Ravager {
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;
@@ -2244,6 +2324,41 @@ fn write_axolotl_memories(m: &Mob, map: &mut Compound) {
         } else {
             memories.remove(&key.into());
         }
+    }
+}
+/// The variant tags `Axolotl`, `Rabbit`, `Parrot`, `Salmon` and
+/// `TropicalFish` read; a missing tag is the default variant (a medium
+/// salmon, otherwise index 0).
+fn read_variant(m: &mut Mob, tag: &Tag) {
+    use crate::mobs::Species as S;
+    let int = |key| number(tag.get(key)).unwrap_or(0) as i32;
+    match m.species() {
+        S::Axolotl | S::Parrot => m.extra.variant = int("Variant").clamp(0, 4) as u8,
+        // Rabbit.Variant.LEGACY_CODEC: an unknown id is brown.
+        S::Rabbit => {
+            m.extra.variant = match int("RabbitType") {
+                v @ (0..=5 | 99) => v as u8,
+                _ => 0,
+            }
+        }
+        S::Salmon => {
+            m.extra.variant = text(tag.get("type"))
+                .and_then(|t| SALMON_SIZES.iter().position(|v| *v == t))
+                .unwrap_or(1) as u8;
+        }
+        S::TropicalFish => {
+            let packed = int("Variant");
+            let (size, index) = (packed & 0xFF, (packed >> 8) & 0xFF);
+            // TropicalFish.Pattern.byId: an unknown id is a kob.
+            m.extra.variant = if size <= 1 && index < 6 {
+                (size * 6 + index) as u8
+            } else {
+                0
+            };
+            m.extra.variant2 = ((packed >> 16) & 15) as u8;
+            m.extra.variant3 = ((packed >> 24) & 15) as u8;
+        }
+        _ => {}
     }
 }
 fn restore_axolotl_memories(m: &mut Mob, tag: &Tag) {

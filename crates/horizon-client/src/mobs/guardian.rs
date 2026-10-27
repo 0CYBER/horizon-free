@@ -411,6 +411,8 @@ pub fn beam_geometry(
             layer: 0,
             color,
             light: 240 | 240 << 8,
+
+            glint_uv: [0.0, 0.0],
         });
     };
     // Sides: one quad per texture repeat.

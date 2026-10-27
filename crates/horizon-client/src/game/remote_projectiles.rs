@@ -3,8 +3,11 @@
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
-use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
+use horizon_client::{
+    collisions::SceneCollisions,
+    particles::{ParticleOptions, ParticleType},
+};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_protocol::entity_data::Value;
 use horizon_world::registry::BlockStateId;
@@ -21,6 +24,59 @@ pub(super) struct RemoteCloud {
 /// `AreaEffectCloud.DEFAULT_PARTICLE`: a white entity effect.
 fn default_cloud_particle() -> ParticleOptions {
     ParticleOptions::colored(ParticleType::EntityEffect, [1.0; 4])
+}
+
+/// `AreaEffectCloud.clientTick`: while waiting, now and then two particles
+/// near the middle; then about one per square block of the disc, drifting
+/// (an entity effect stays still).
+pub(super) fn cloud_client_tick(
+    particles: &mut horizon_client::particles::ParticleEngine,
+    at: [f64; 3],
+    radius: f32,
+    waiting: bool,
+    particle: &ParticleOptions,
+) {
+    if waiting && particles.random().next_boolean() {
+        return;
+    }
+    let (count, spread) = if waiting {
+        (2, 0.2)
+    } else {
+        (
+            (std::f32::consts::PI * radius * radius).ceil() as i32,
+            radius,
+        )
+    };
+    for _ in 0..count {
+        let r = particles.random();
+        let angle = r.next_float() * std::f32::consts::TAU;
+        let distance = r.next_float().sqrt() * spread;
+        let at = [
+            at[0] + f64::from(angle.cos() * distance),
+            at[1],
+            at[2] + f64::from(angle.sin() * distance),
+        ];
+        let (options, velocity) = if particle.ty == ParticleType::EntityEffect {
+            let default = waiting && r.next_boolean();
+            let options = if default {
+                default_cloud_particle()
+            } else {
+                particle.clone()
+            };
+            (options, [0.0; 3])
+        } else if waiting {
+            (particle.clone(), [0.0; 3])
+        } else {
+            let v = [
+                (0.5 - r.next_double()) * 0.15,
+                f64::from(0.01f32),
+                (0.5 - r.next_double()) * 0.15,
+            ];
+            (particle.clone(), v)
+        };
+        // `addAlwaysVisibleParticle`.
+        particles.add_with(&options, at, velocity, false, true);
+    }
 }
 
 /// The projectile a type id names, as Horizon models it.
@@ -86,7 +142,27 @@ pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorl
     }
 }
 
+/// `AbstractHurtingProjectile.getTrailParticle`: smoke for every one of them
+/// but the wind charges (no trail) and the dragon's fireball (its own).
+pub(super) fn has_smoke_trail(kind: &ProjectileKind) -> bool {
+    matches!(
+        kind,
+        ProjectileKind::SmallFireball
+            | ProjectileKind::LargeFireball { .. }
+            | ProjectileKind::WitherSkull { .. }
+    )
+}
+
 impl Game<'_> {
+    /// `AbstractHurtingProjectile.createParticleTrail`: one smoke puff half a
+    /// block above each position.
+    pub(super) fn smoke_trails(&mut self, at: impl IntoIterator<Item = Vec3>) {
+        let smoke = ParticleOptions::simple(ParticleType::Smoke);
+        for p in at {
+            self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
+        }
+    }
+
     /// `handleAddEntity` for these types; false when `kind` isn't one.
     pub(super) fn spawn_remote_projectile(
         &mut self,
@@ -360,35 +436,70 @@ impl Game<'_> {
             }
         }
         self.creatures.projectiles = projectiles;
+        let trails: Vec<Vec3> = self
+            .creatures
+            .projectiles
+            .iter()
+            .filter(|p| has_smoke_trail(&p.kind))
+            .map(|p| p.position)
+            .collect();
+        self.smoke_trails(trails);
         for t in &mut self.tridents {
             let id = t.id;
             t.remote_step(|at| step(id, at));
         }
-        // FireworkRocketEntity.tick: a rocket attached to the gliding local
-        // player boosts it client-side too (attachedToEntity.isFallFlying).
+        // FireworkRocketEntity.tick: a rocket attached to an entity follows it
+        // and boosts it client-side too (attachedToEntity.isFallFlying), and
+        // every rocket leaves its spark trail on a client.
         let me = self
             .remote
             .as_ref()
             .and_then(|r| u32::try_from(r.entity_id).ok());
-        for r in &mut self.rockets {
-            let id = r.id;
-            r.remote_step(|at| step(id, at));
-            if me.is_some()
-                && r.attached_to == me
-                && let Some(p) = self.player.as_mut()
-                && p.fall_flying
-            {
-                let look = view_vector(self.yaw, self.pitch);
-                let m = p.velocity;
-                p.velocity = Vec3::new(
-                    m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
-                    m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
-                    m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
-                );
-                r.position = p.position;
-                r.velocity = p.velocity;
+        let mut rockets = std::mem::take(&mut self.rockets);
+        for r in &mut rockets {
+            r.remote_step(&mut SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            });
+            if let Some(target) = r.attached_to {
+                if me == Some(target) {
+                    if let Some(p) = self.player.as_mut() {
+                        if p.fall_flying {
+                            let look = view_vector(self.yaw, self.pitch);
+                            let m = p.velocity;
+                            p.velocity = Vec3::new(
+                                m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
+                                m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
+                                m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
+                            );
+                        }
+                        r.position = p.position;
+                        r.velocity = p.velocity;
+                    }
+                } else if let Some(m) = self.mobs.iter().find(|m| m.id == target) {
+                    // Another player's motion is not known here: its step.
+                    r.velocity = Vec3::new(
+                        m.position.x - r.previous.x,
+                        m.position.y - r.previous.y,
+                        m.position.z - r.previous.z,
+                    );
+                    r.position = m.position;
+                }
             }
+            let g = |g: &mut horizon_core::random::LegacyRandom| g.next_gaussian() * 0.05;
+            let v = [
+                g(&mut self.world.random),
+                -r.velocity.y * 0.5,
+                g(&mut self.world.random),
+            ];
+            self.particles.add(
+                &ParticleOptions::simple(ParticleType::Firework),
+                [r.position.x, r.position.y, r.position.z],
+                v,
+            );
         }
+        self.rockets = rockets;
         for c in &mut self.crystals {
             c.time += 1;
             c.position = step(c.id, c.position);
@@ -418,52 +529,10 @@ impl Game<'_> {
         }
     }
 
-    /// `AreaEffectCloud.clientTick`: while waiting, now and then two
-    /// particles near the middle; then about one per square block of the
-    /// disc, drifting (an entity effect stays still).
+    /// `AreaEffectCloud.clientTick` for each cloud a server tracks.
     fn tick_remote_clouds(&mut self) {
         for c in &self.potions.clouds {
-            let r = self.particles.random();
-            if c.waiting && r.next_boolean() {
-                continue;
-            }
-            let (count, spread) = if c.waiting {
-                (2, 0.2)
-            } else {
-                (
-                    (std::f32::consts::PI * c.radius * c.radius).ceil() as i32,
-                    c.radius,
-                )
-            };
-            for _ in 0..count {
-                let r = self.particles.random();
-                let angle = r.next_float() * std::f32::consts::TAU;
-                let distance = r.next_float().sqrt() * spread;
-                let at = [
-                    c.at[0] + f64::from(angle.cos() * distance),
-                    c.at[1],
-                    c.at[2] + f64::from(angle.sin() * distance),
-                ];
-                let (options, velocity) = if c.particle.ty == ParticleType::EntityEffect {
-                    let default = c.waiting && r.next_boolean();
-                    let options = if default {
-                        default_cloud_particle()
-                    } else {
-                        c.particle.clone()
-                    };
-                    (options, [0.0; 3])
-                } else if c.waiting {
-                    (c.particle.clone(), [0.0; 3])
-                } else {
-                    let v = [
-                        (0.5 - r.next_double()) * 0.15,
-                        f64::from(0.01f32),
-                        (0.5 - r.next_double()) * 0.15,
-                    ];
-                    (c.particle.clone(), v)
-                };
-                self.particles.add(&options, at, velocity);
-            }
+            cloud_client_tick(&mut self.particles, c.at, c.radius, c.waiting, &c.particle);
         }
     }
 

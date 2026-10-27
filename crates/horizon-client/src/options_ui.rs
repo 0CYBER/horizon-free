@@ -4,6 +4,8 @@
 //! OptionsList screens and drawn with the shared widgets.
 use std::time::Instant;
 
+pub use crate::settings::Opt;
+
 use crate::{
     gamepad::{self, GlyphStyle},
     hud::{HudAtlas, HudBatch, rgba},
@@ -14,95 +16,6 @@ use crate::{
     ui,
 };
 
-/// One option instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Opt {
-    Fov,
-    RenderDistance,
-    SimulationDistance,
-    Sensitivity,
-    WheelSensitivity,
-    InvertY,
-    DiscreteScroll,
-    Volume(usize),
-    GuiScale,
-    ViewBobbing,
-    Gamma,
-    MaxFps,
-    Vsync,
-    Fullscreen,
-    SmoothLighting,
-    Clouds,
-    CloudRange,
-    Particles,
-    EntityDistance,
-    EntityShadows,
-    BiomeBlend,
-    Preset,
-    Mipmaps,
-    WeatherRadius,
-    ChunkFade,
-    Vignette,
-    Autosave,
-    CutoutLeaves,
-    ImprovedTransparency,
-    AttackIndicator,
-    InactivityFps,
-    ChunkBuilder,
-    MenuBlur,
-    ToggleCrouch,
-    ToggleSprint,
-    AutoJump,
-    ChatVisibility,
-    ChatColors,
-    ChatLinks,
-    ChatLinksPrompt,
-    ChatOpacity,
-    TextBackgroundOpacity,
-    ChatScale,
-    ChatWidth,
-    ChatHeightFocused,
-    ChatHeightUnfocused,
-    ChatLineSpacing,
-    AutoSuggestions,
-    ReducedDebugInfo,
-    HighContrast,
-    ShowSubtitles,
-    MusicFrequency,
-    NotificationDisplayTime,
-    Narrator,
-    TextBackground,
-    ChatDelay,
-    DistortionEffects,
-    FovEffects,
-    DarknessPulsing,
-    DamageTilt,
-    GlintSpeed,
-    GlintStrength,
-    HideLightningFlashes,
-    MonochromeLogo,
-    PanoramaSpeed,
-    HideSplashTexts,
-    NarratorHotkey,
-    RotateWithMinecarts,
-    HighContrastBlockOutlines,
-    ForceUnicode,
-    JapaneseGlyphs,
-    /// Horizon's controller settings (`horizon-controller.txt`).
-    PadEnabled,
-    PadVibration,
-    PadAdaptiveTriggers,
-    PadLightbar,
-    PadLookSensitivity,
-    PadInvertX,
-    PadInvertY,
-    PadToggleSneak,
-    PadMoveDeadzone,
-    PadLookDeadzone,
-    PadGlyphs,
-    PadMenuNav,
-    PadKeyboard,
-}
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
 }
@@ -169,8 +82,6 @@ impl Opt {
                 | Opt::NarratorHotkey
                 | Opt::ChatDelay
                 | Opt::DistortionEffects
-                | Opt::GlintSpeed
-                | Opt::GlintStrength
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 | Opt::HighContrastBlockOutlines
@@ -640,10 +551,12 @@ impl Opt {
                 self.file_key().unwrap(),
                 crate::options_file::V::Double(f64::from(v).powi(2)),
             ),
-            Opt::DamageTilt | Opt::PanoramaSpeed => s.file.set(
-                self.file_key().unwrap(),
-                crate::options_file::V::Double(f64::from(v)),
-            ),
+            Opt::DamageTilt | Opt::PanoramaSpeed | Opt::GlintSpeed | Opt::GlintStrength => {
+                s.file.set(
+                    self.file_key().unwrap(),
+                    crate::options_file::V::Double(f64::from(v)),
+                )
+            }
             Opt::Fov => s.fov = step(30.0, 110.0),
             Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
@@ -695,6 +608,7 @@ impl Opt {
                 | Opt::CutoutLeaves
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
+                | Opt::ChunkBuilder
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
