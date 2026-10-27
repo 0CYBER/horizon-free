@@ -77,6 +77,14 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     }
     p.velocity.y -= 0.05;
 }
+/// A server's client ticks a projectile itself: it flies on between the
+/// tracker's updates (10 to 20 ticks apart) with its own gravity and drag,
+/// and a block stops it there; only the server decides what it hits.
+pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
+    if !matches!(p.tick(w).1, Hit::None) {
+        p.velocity = Vec3::ZERO;
+    }
+}
 
 impl Game<'_> {
     /// `handleAddEntity` for these types; false when `kind` isn't one.
@@ -341,11 +349,7 @@ impl Game<'_> {
                         p.age += 1;
                         p.position = p.position.add_vector(p.velocity);
                     }
-                    _ => {
-                        if !matches!(p.tick(&world).1, Hit::None) {
-                            p.velocity = Vec3::ZERO;
-                        }
-                    }
+                    _ => remote_projectile_tick(p, &world),
                 }
             }
         }
@@ -517,5 +521,70 @@ impl Game<'_> {
         }
         out.extend(self.hooks_status());
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::mobs::Who;
+    use horizon_core::geometry::Aabb;
+
+    /// A world with nothing in it: the client tick of a projectile only
+    /// needs the blocks around it.
+    struct Empty;
+    impl ProjectileWorld for Empty {
+        fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            None
+        }
+        fn in_water(&self, _: Vec3) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &[]
+        }
+    }
+
+    /// A thrown item, as a server's client tracks it: the spawn position and
+    /// the motion the server gave it.
+    fn thrown(kind: ProjectileKind) -> Projectile {
+        let mut p = Projectile::new(kind, Vec3::new(0.0, 100.0, 0.0), None);
+        p.velocity = Vec3::new(1.5, 0.0, 0.0);
+        p
+    }
+
+    #[test]
+    fn a_thrown_item_flies_on_between_the_server_updates() {
+        // A thrown egg, an ender pearl and a wind charge (#1762): the server
+        // sends their position every 10 ticks, and the client ticks them
+        // itself in between, as vanilla's no-op interpolation handler does.
+        for kind in [
+            ProjectileKind::Egg,
+            ProjectileKind::EnderPearl,
+            ProjectileKind::WindCharge,
+        ] {
+            let mut p = thrown(kind);
+            remote_projectile_tick(&mut p, &Empty);
+            assert!(p.position.x > 1.0, "the projectile did not fly on: {p:?}");
+            // A second tick moves it further: it keeps flying, not a hop.
+            let first = p.position.x;
+            remote_projectile_tick(&mut p, &Empty);
+            assert!(p.position.x > first, "the projectile stopped: {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_thrown_item_falls_and_drags_like_a_throwable_projectile() {
+        // ThrowableProjectile.tick: gravity 0.03, then the air drag 0.99.
+        let mut p = thrown(ProjectileKind::Egg);
+        remote_projectile_tick(&mut p, &Empty);
+        assert!((p.velocity.x - 1.5 * 0.99).abs() < 1e-9, "{p:?}");
+        assert!((p.velocity.y - (-0.03 * 0.99)).abs() < 1e-9, "{p:?}");
+        // A wind charge keeps its speed: no gravity and no drag
+        // (AbstractWindCharge: acceleration 0, inertia 1).
+        let mut p = thrown(ProjectileKind::WindCharge);
+        remote_projectile_tick(&mut p, &Empty);
+        assert!((p.velocity.x - 1.5).abs() < 1e-9, "{p:?}");
+        assert!((p.velocity.y - 0.0).abs() < 1e-9, "{p:?}");
     }
 }

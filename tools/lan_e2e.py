@@ -4746,12 +4746,11 @@ def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
     # Either way explicitly: the game's default is the server thread.
     host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
-    # The games render offscreen on macOS (a locked session gets no redraws) and, in a
-    # headless run (HORIZON_E2E_HEADLESS), on any machine with no focused window: they
-    # never pause on the focus loss there either, or the world would stand still.
+    # A headless run (HORIZON_E2E_HEADLESS) has no focused window to draw in: the games render
+    # offscreen and never pause on the focus loss, or the world would stand still.
     headless = bool(os.environ.get('HORIZON_E2E_HEADLESS'))
     launch = ['launch']
-    if sys.platform == 'darwin' or headless:
+    if headless or sys.platform == 'darwin':
         launch.append('--offscreen')
     if headless:
         launch.append('--no-pause')
