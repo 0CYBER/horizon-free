@@ -154,37 +154,54 @@ impl Game<'_> {
         let mut damage = 0;
         if let State::Hooked(id) = hook.state {
             // pullEntity: 0.1 of the way to the owner.
+            let d = Vec3::new(
+                owner.x - hook.position.x,
+                owner.y - hook.position.y,
+                owner.z - hook.position.z,
+            );
+            let pulled = |v: Vec3| Vec3::new(v.x + d.x * 0.1, v.y + d.y * 0.1, v.z + d.z * 0.1);
+            let mut hooked_item = false;
             if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                let d = Vec3::new(
-                    owner.x - hook.position.x,
-                    owner.y - hook.position.y,
-                    owner.z - hook.position.z,
-                );
-                m.velocity = Vec3::new(
-                    m.velocity.x + d.x * 0.1,
-                    m.velocity.y + d.y * 0.1,
-                    m.velocity.z + d.z * 0.1,
-                );
+                m.velocity = pulled(m.velocity);
+            } else if let Some(item) = self.dropped.iter_mut().find(|i| i.id == id) {
+                item.velocity = pulled(item.velocity);
+                hooked_item = true;
             }
-            damage = 5;
+            // `hookedIn instanceof ItemEntity ? 3 : 5`.
+            damage = if hooked_item { 3 } else { 5 };
         } else if hook.nibble > 0 {
             let biome = self.biome_name_at(hook.position);
             let Some(loot) = horizon_client::structure_blocks::loot_data(&self.options.resources)
             else {
                 return damage;
             };
+            // `withLuck(this.luck + owner.getLuck())`: the rod's Luck of the Sea
+            // plus the owner's luck attribute (the Luck and Bad Luck effects).
+            let owner_luck = self
+                .player
+                .as_mut()
+                .and_then(|p| p.attribute("minecraft:luck").ok())
+                .unwrap_or(0.0) as f32;
             let mut random = self.world.random.clone();
             let items = loot.roll(
                 "minecraft:gameplay/fishing",
                 &mut random,
-                hook.luck as f32,
+                hook.luck as f32 + owner_luck,
                 biome.as_deref(),
                 Some(hook.open_water),
             );
             self.world.random = random;
-            // FishingHook.retrieve: fish_caught for a catch.
-            self.stats.custom("fish_caught", 1);
             for stack in items {
+                // FishingHook.retrieve: fish_caught for each catch in #minecraft:fishes.
+                if self
+                    .res
+                    .items()
+                    .item_tags
+                    .get("minecraft:fishes")
+                    .is_some_and(|t| t.contains(stack.item.as_str()))
+                {
+                    self.stats.custom("fish_caught", 1);
+                }
                 let mut item = ItemStack {
                     item: Arc::from(stack.item.as_str()),
                     count: stack.count.max(1) as u32,
@@ -457,35 +474,47 @@ impl Game<'_> {
                     self.hook = Some(h);
                     return;
                 }
-                // checkCollision: hook the first living mob it touches.
+                // checkCollision: hook the first living mob it touches, or (via
+                // `canHitEntity`) a dropped item.
                 let bb = bounds(h.position);
                 let (lo, hi) = (bb.min_position(), bb.max_position());
-                if let Some(m) = self.mobs.iter().find(|m| {
-                    let mb = m.bounds();
-                    let (a, z) = (mb.min_position(), mb.max_position());
-                    m.alive()
-                        && a.x < hi.x
-                        && lo.x < z.x
-                        && a.y < hi.y
-                        && lo.y < z.y
-                        && a.z < hi.z
-                        && lo.z < z.z
-                }) {
-                    h.state = State::Hooked(m.id);
+                let touches = |b: Aabb| {
+                    let (a, z) = (b.min_position(), b.max_position());
+                    a.x < hi.x && lo.x < z.x && a.y < hi.y && lo.y < z.y && a.z < hi.z && lo.z < z.z
+                };
+                let hit = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.alive() && touches(m.bounds()))
+                    .map(|m| m.id)
+                    .or_else(|| {
+                        self.dropped
+                            .iter()
+                            .find(|i| touches(i.bounds()))
+                            .map(|i| i.id)
+                    });
+                if let Some(id) = hit {
+                    h.state = State::Hooked(id);
                     h.velocity = Vec3::ZERO;
                     self.hook = Some(h);
                     return;
                 }
             }
             State::Hooked(id) => {
-                match self.mobs.iter().find(|m| m.id == id && m.alive()) {
-                    Some(m) => {
-                        h.position = Vec3::new(
-                            m.position.x,
-                            m.position.y + f64::from(m.height()) * 0.8,
-                            m.position.z,
-                        )
-                    }
+                // updateHookedEntity: ride the hooked mob or item at 0.8 of its height.
+                let hooked = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && m.alive())
+                    .map(|m| (m.position, f64::from(m.height())))
+                    .or_else(|| {
+                        self.dropped
+                            .iter()
+                            .find(|i| i.id == id)
+                            .map(|i| (i.position, horizon_client::entities::ItemEntity::WIDTH))
+                    });
+                match hooked {
+                    Some((at, height)) => h.position = Vec3::new(at.x, at.y + height * 0.8, at.z),
                     None => h.state = State::Flying,
                 }
                 self.hook = Some(h);

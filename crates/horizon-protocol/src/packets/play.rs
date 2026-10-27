@@ -2249,6 +2249,11 @@ packet!(
     /// Input flags: forward 1, backward 2, left 4, right 8, jump 16, shift 32, sprint 64.
     PlayerInput { flags: u8 => UByte }
 );
+packet!(
+    /// ServerboundSelectBundleItemPacket: the menu slot of a bundle and the
+    /// index of its selected item (-1: none).
+    SelectBundleItem { slot: i32 => VarInt, index: i32 => VarInt }
+);
 packet!(SetCarriedItem { slot: i16 => Short });
 packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => Slot });
 packet!(UseItem { hand: i32 => VarInt, sequence: i32 => VarInt, yaw: f32 => Float, pitch: f32 => Float });
@@ -2317,6 +2322,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
+    SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
