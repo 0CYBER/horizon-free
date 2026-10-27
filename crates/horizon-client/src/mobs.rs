@@ -1138,6 +1138,14 @@ pub enum MobEvent {
         pos: [i32; 3],
         data: i32,
     },
+    /// `InfestedBlock.infestedStateByHost` (`infested`) or `hostStateByInfested`
+    /// for the block there, keeping its axis; `poof` is the silverfish that
+    /// hid in it (`spawnAnim`).
+    Infest {
+        pos: [i32; 3],
+        infested: bool,
+        poof: Option<u32>,
+    },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
     BreakBlock {
         pos: [i32; 3],

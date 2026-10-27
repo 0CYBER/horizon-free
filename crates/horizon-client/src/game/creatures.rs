@@ -1356,8 +1356,50 @@ impl Game<'_> {
                         self.world.set(pos[0], pos[1], pos[2], state)?;
                     }
                 }
+                MobEvent::Infest {
+                    pos,
+                    infested,
+                    poof,
+                } => {
+                    let registry = &self.pack.assets.registry;
+                    let old = self.world.block(pos[0], pos[1], pos[2]);
+                    if let Some(mut state) = registry.state(old).cloned() {
+                        let (from, to) = if infested {
+                            ("minecraft:", "minecraft:infested_")
+                        } else {
+                            ("minecraft:infested_", "minecraft:")
+                        };
+                        state.name = state.name.replacen(from, to, 1);
+                        if let Ok(id) = registry.resolve(&state) {
+                            self.world.set(pos[0], pos[1], pos[2], id)?;
+                        }
+                    }
+                    if let Some(mob) = poof {
+                        self.mob_poof(mob);
+                    }
+                }
                 MobEvent::BreakBlock { pos, drop } => {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
+                    // InfestedBlock.spawnAfterBreak: its silverfish comes out
+                    // when blocks drop.
+                    if drop
+                        && self
+                            .res
+                            .facts()
+                            .get(old)
+                            .name
+                            .starts_with("minecraft:infested_")
+                        && self.ui.rules.bool("block_drops")
+                    {
+                        let at = [
+                            f64::from(pos[0]) + 0.5,
+                            f64::from(pos[1]),
+                            f64::from(pos[2]) + 0.5,
+                        ];
+                        if let Some(id) = self.spawn_mob("minecraft:silverfish", at, false) {
+                            self.mob_poof(id);
+                        }
+                    }
                     // Block.spawnDestroyParticles: fire breaks leave nothing.
                     if !self.res.facts().get(old).has_class("BaseFireBlock") {
                         self.destroy_particles(pos, old);
