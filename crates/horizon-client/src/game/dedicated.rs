@@ -575,6 +575,14 @@ impl Game<'_> {
         // DedicatedServer.initServer: worldData.setGameType; forceDifficulty.
         self.set_default_game_mode(game_mode);
         self.ui.difficulty = props.difficulty as u8;
+        // DedicatedServer.initServer: a legacy `announce-player-achievements`
+        // sets the show_advancement_messages rule once, as the file is read.
+        if let Some(announce) = props.announce_player_achievements {
+            self.ui.rules.set(
+                "show_advancement_messages",
+                horizon_client::gamerules::Value::Bool(announce),
+            );
+        }
         self.settings.render_distance = props.view_distance.clamp(2, 32);
         self.settings.simulation_distance = props.simulation_distance.clamp(2, 32);
         self.streaming.radius = self.settings.render_distance;
