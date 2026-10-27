@@ -941,6 +941,55 @@ impl Game<'_> {
             }
         }
     }
+    /// Melee or ranged damage to another mob; whether the hit landed.
+    fn mob_hits_mob(&mut self, target: u32, amount: f32, source: Damage) -> bool {
+        let mut killed = false;
+        let mut hurt = false;
+        let mut infested = false;
+        if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
+            let hit = t.damage(amount, source);
+            hurt = hit;
+            if hit {
+                killed = !t.alive();
+                // The hurt or death sound the mob raised.
+                let center = t.center();
+                for event in std::mem::take(&mut t.outbox) {
+                    match event {
+                        MobEvent::Sound(s, _, volume, pitch) => {
+                            self.audio
+                                .play(&format!("minecraft:{s}"), Some(center), volume, pitch);
+                        }
+                        MobEvent::Infested { .. } => infested = true,
+                        other => {
+                            // Left for the end of the tick.
+                            t.outbox.push(other);
+                        }
+                    }
+                }
+            }
+        }
+        if infested {
+            self.mob_infested(target);
+        }
+        if hurt
+            && let Some(Who::Mob(attacker)) = source.attacker
+            && let Some(m) = self
+                .mobs
+                .iter()
+                .find(|m| m.id == attacker && m.species() == Species::Axolotl)
+        {
+            self.audio.play(
+                "minecraft:entity.axolotl.attack",
+                Some([m.position.x, m.position.y, m.position.z]),
+                1.0,
+                1.0,
+            );
+        }
+        if killed && let Some(Who::Mob(killer)) = source.attacker {
+            self.zombie_killed(killer, target);
+        }
+        hurt
+    }
     /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
     pub(super) fn mob_infested(&mut self, mob: u32) {
         if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
@@ -1158,54 +1207,48 @@ impl Game<'_> {
                     amount,
                     source,
                 } => {
-                    let mut killed = false;
-                    let mut hurt = false;
-                    let mut infested = false;
-                    if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
-                        let hit = t.damage(amount, source);
-                        hurt = hit;
-                        if hit {
-                            killed = !t.alive();
-                            // The hurt or death sound the mob raised.
-                            let center = t.center();
-                            for event in std::mem::take(&mut t.outbox) {
-                                match event {
-                                    MobEvent::Sound(s, _, volume, pitch) => {
-                                        self.audio.play(
-                                            &format!("minecraft:{s}"),
-                                            Some(center),
-                                            volume,
-                                            pitch,
-                                        );
-                                    }
-                                    MobEvent::Infested { .. } => infested = true,
-                                    other => {
-                                        // Left for the end of the tick.
-                                        t.outbox.push(other);
-                                    }
-                                }
-                            }
+                    self.mob_hits_mob(target, amount, source);
+                }
+                MobEvent::SonicBoom {
+                    target,
+                    attacker,
+                    from,
+                    direction,
+                } => {
+                    // SonicBoom: the push only follows a hit that landed, scaled
+                    // by the target's KNOCKBACK_RESISTANCE.
+                    let (hurt, resistance) = match target {
+                        Who::Player => {
+                            let hurt = self.mob_hits_player(10.0, from, "minecraft:sonic_boom");
+                            let resistance = self.player.as_mut().map_or(0.0, |p| {
+                                p.attribute("minecraft:knockback_resistance").unwrap_or(0.0)
+                            });
+                            (hurt, resistance)
                         }
-                    }
-                    if infested {
-                        self.mob_infested(target);
-                    }
-                    if hurt
-                        && let Some(Who::Mob(attacker)) = source.attacker
-                        && let Some(m) = self
-                            .mobs
-                            .iter()
-                            .find(|m| m.id == attacker && m.species() == Species::Axolotl)
-                    {
-                        self.audio.play(
-                            "minecraft:entity.axolotl.attack",
-                            Some([m.position.x, m.position.y, m.position.z]),
-                            1.0,
-                            1.0,
-                        );
-                    }
-                    if killed && let Some(Who::Mob(killer)) = source.attacker {
-                        self.zombie_killed(killer, target);
+                        Who::Mob(id) => {
+                            let source = Damage {
+                                kind: DamageKind::SonicBoom,
+                                attacker: Some(Who::Mob(attacker)),
+                                from: Some(from),
+                            };
+                            let hurt = self.mob_hits_mob(id, 10.0, source);
+                            let resistance = self
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == id)
+                                .map_or(0.0, |m| self.mob_knockback_resistance(m));
+                            (hurt, resistance)
+                        }
+                    };
+                    if hurt {
+                        let horizontal = 2.5 * (1.0 - resistance);
+                        let vertical = 0.5 * (1.0 - resistance);
+                        let velocity = [
+                            direction[0] * horizontal,
+                            direction[1] * vertical,
+                            direction[2] * horizontal,
+                        ];
+                        self.handle_mob_events(vec![MobEvent::Push { target, velocity }])?;
                     }
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),

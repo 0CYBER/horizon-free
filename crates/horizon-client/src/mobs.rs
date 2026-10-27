@@ -1052,6 +1052,15 @@ pub enum MobEvent {
         target: Who,
         velocity: [f64; 3],
     },
+    /// `SonicBoom`: 10 damage to the target, then a push along `direction`
+    /// (the unit vector from the warden's chest to the target's eyes) only
+    /// if the hit landed, less the target's knockback resistance.
+    SonicBoom {
+        target: Who,
+        attacker: u32,
+        from: [f64; 3],
+        direction: [f64; 3],
+    },
     /// `Entity.move(MoverType.SHULKER, delta)`: shift a target's position
     /// (an opening shulker lifts what stands on its shell).
     Shift {
