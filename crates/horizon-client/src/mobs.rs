@@ -706,6 +706,8 @@ pub struct Extra {
     pub body_damage: i32,
     /// The components (dye, name...) of that armor stack.
     pub body_extra: Option<Box<crate::item_data::StackData>>,
+    /// `Cat.RELAX_STATE_ONE`: watching a sleeping owner before lying down.
+    pub relax_one: bool,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,
@@ -1155,6 +1157,11 @@ pub enum MobEvent {
         count: u32,
         at: [f64; 3],
     },
+    /// `Mob.dropFromGiftLootTable`: a gift loot table's items dropped at `at`.
+    DropGift {
+        table: &'static str,
+        at: [f64; 3],
+    },
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
@@ -1483,6 +1490,8 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isSilent`.
     pub silent: bool,
+    /// `Cat.isLying` or `isRelaxStateOne`.
+    pub lying: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
     /// `Attributes.KNOCKBACK_RESISTANCE`.
@@ -1578,6 +1587,7 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             silent: m.silent,
+            lying: m.species() == Species::Cat && (m.extra.flag || m.extra.relax_one),
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
@@ -1748,6 +1758,10 @@ pub struct PlayerView {
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
+    /// `isSleeping` and `getSleepTimer` (100 once slept through, then the
+    /// ticks fading out after waking up).
+    pub sleeping: bool,
+    pub sleep_timer: u32,
     /// `isPassenger`.
     pub passenger: bool,
 }

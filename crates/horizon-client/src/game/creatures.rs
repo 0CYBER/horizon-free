@@ -226,6 +226,8 @@ impl Game<'_> {
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
+            sleeping: self.sleeping.is_some(),
+            sleep_timer: self.sleep_timer,
             passenger: self.riding.is_some(),
         })
     }
@@ -1356,6 +1358,22 @@ impl Game<'_> {
                     [0.0, 0.2, 0.0],
                     10,
                 ),
+                MobEvent::DropGift { table, at } => {
+                    let stacks =
+                        self.res
+                            .items()
+                            .loot_table(table, false, None, &mut self.world.random);
+                    for stack in stacks {
+                        // The ItemEntity constructor's random motion.
+                        let r = &mut self.world.random;
+                        let v = [
+                            r.next_double() * 0.2 - 0.1,
+                            0.2,
+                            r.next_double() * 0.2 - 0.1,
+                        ];
+                        self.spawn_item(stack, at, v, 10);
+                    }
+                }
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
                 // above trampled farmland breaks and drops.
                 MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,
