@@ -763,8 +763,14 @@ impl SelectionModel {
     /// `available` in any order; `selected` as options.txt lists them,
     /// bottom first.
     pub fn new(mut available: Vec<Selectable>, selected: &[String]) -> Self {
-        // PackRepository.available is a TreeMap by id (String.compareTo).
-        available.sort_by(|a, b| a.id.encode_utf16().cmp(b.id.encode_utf16()));
+        // PackRepository.discoverAvailable: the built-in packs first, then the
+        // `file/` packs of the folder source, each a TreeMap by id (String.compareTo).
+        available.sort_by_cached_key(|p| {
+            (
+                p.id.starts_with("file/"),
+                p.id.encode_utf16().collect::<Vec<u16>>(),
+            )
+        });
         available.dedup_by(|a, b| a.id == b.id);
         let mut m = Self {
             available,
