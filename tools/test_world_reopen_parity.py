@@ -68,8 +68,16 @@ def main():
         return json.loads(result.stdout) if result.stdout.strip().startswith('{') else result.stdout
 
     def carts():
-        found = ctl('status')['carts']
-        return sorted((c['kind'], *(round(v, 1) for v in c['position'])) for c in found)
+        """The loaded minecarts once their list stops changing: on a loaded runner the mineshaft's chunks and their
+        entities keep arriving after the world counts as loaded, so one reading can be short of a cart."""
+        last = None
+        for _ in range(30):
+            found = sorted((c['kind'], *(round(v, 1) for v in c['position'])) for c in ctl('status')['carts'])
+            if found == last:
+                return found
+            last = found
+            ctl('wait', '40')
+        return last
 
     ctl('launch', '--resources', str(RESOURCES), '--world', 'reopen', '--seed', '7', '--creative',
         '--render-distance', '4', *extra)
