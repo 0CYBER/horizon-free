@@ -606,6 +606,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.insert("life_ticks".into(), Tag::Int(m.extra.egg_time));
             }
         }
+        "minecraft:endermite" => {
+            map.insert("Lifetime".into(), Tag::Int(m.extra.counter));
+        }
         "minecraft:shulker" => {
             map.insert("AttachFace".into(), Tag::Byte(m.extra.variant3 as i8));
             map.insert("Peek".into(), Tag::Byte(m.extra.counter as i8));
@@ -1229,6 +1232,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.counter = number(tag.get("AttackTick")).unwrap_or(0) as i32;
         m.extra.counter2 = number(tag.get("StunTick")).unwrap_or(0) as i32;
         m.extra.anim_ticks = number(tag.get("RoarTick")).unwrap_or(0) as i32;
+    }
+    if m.species() == crate::mobs::Species::Endermite {
+        m.extra.counter = number(tag.get("Lifetime")).unwrap_or(0) as i32;
     }
     if m.species() == crate::mobs::Species::Vex {
         if let Some(Tag::IntArray(v)) = tag.get("bound_pos")

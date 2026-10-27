@@ -442,7 +442,13 @@ pub fn tick(
         }
         return false;
     }
-    if !m.no_ai {
+    if m.no_ai {
+        // Mob.aiStep still runs without AI (only serverAiStep is skipped),
+        // so the endermite's life keeps counting.
+        if m.species() == Species::Endermite {
+            endermite_lifetime(m);
+        }
+    } else {
         ai_step(m, w, level_random, events);
     }
     effects_from_blocks(m, w);
@@ -1195,6 +1201,16 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         _ => {}
     }
 }
+/// Endermite.aiStep: `counter` is the life; an endermite not required to
+/// persist is discarded at 2400.
+fn endermite_lifetime(m: &mut Mob) {
+    if !m.persistent {
+        m.extra.counter += 1;
+    }
+    if m.extra.counter >= 2400 {
+        m.removed = true;
+    }
+}
 fn species_ai_step(
     m: &mut Mob,
     w: &MobWorld,
@@ -1206,6 +1222,9 @@ fn species_ai_step(
     }
     match m.species() {
         Species::Enderman => super::enderman::ai_step(m, w, events),
+        // Endermite.aiStep: `counter` is the life; an endermite not required
+        // to persist is discarded at 2400.
+        Species::Endermite => endermite_lifetime(m),
         Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Cat => super::tame::cat_ai_step(m, events),
         Species::Blaze => super::nether::blaze_ai_step(m, events),
