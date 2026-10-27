@@ -549,7 +549,8 @@ enum Cmd {
     },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
-    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it)
+    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
+    /// while-playing stay|minimize|hide (what the window does while the game runs)
     Settings {
         #[arg(value_parser = SETTING_KEYS)]
         key: Option<String>,
@@ -686,13 +687,14 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 6] = [
+const SETTING_KEYS: [&str; 7] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
     "opening-animation",
     "proxy",
+    "while-playing",
 ];
 
 fn on_off(value: &str) -> Result<bool, String> {
@@ -711,6 +713,10 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
         "opening-animation" => s.skip_opening = !on_off(value)?,
+        "while-playing" => {
+            s.while_playing = backend::WhilePlaying::parse(value)
+                .ok_or_else(|| format!("{value}: say stay, minimize or hide"))?
+        }
         "proxy" => {
             if value == "default" || value.is_empty() {
                 s.proxy = None;
@@ -736,6 +742,7 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "game_args": s.game_args,
         "proxy": s.proxy,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
+        "while_playing": s.while_playing.name(),
         "no_ai": backend::no_ai(),
     })
 }
