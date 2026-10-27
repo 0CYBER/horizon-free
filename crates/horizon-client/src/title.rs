@@ -14,10 +14,12 @@ use std::{
 };
 
 mod create_world;
+mod flat;
 #[cfg(test)]
 mod tests;
 pub mod world_management;
 pub use create_world::{DIFFICULTIES, WorldOptions};
+pub use flat::{FlatLayer, FlatSettings, State as FlatEditor};
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
 const LIST_TOP: f32 = 49.0;
@@ -102,6 +104,16 @@ pub enum Mode {
         return_to: Box<Mode>,
     },
     Multiplayer(crate::multiplayer::Screen),
+    /// CreateFlatWorldScreen over Create New World: the fields that screen
+    /// keeps and the superflat editor on top of them.
+    CreateFlat {
+        name: String,
+        seed: String,
+        creative: bool,
+        focus: u8,
+        options: WorldOptions,
+        flat: flat::State,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -129,6 +141,8 @@ pub struct Title {
     /// Direct Connection's address, synchronized with `options.txt`'s `lastServer`.
     pub last_server: String,
     pub saves: PathBuf,
+    /// The prepared resource root: the flat preset list and block registry.
+    resources: PathBuf,
     pub started: std::time::Instant,
     search: String,
     search_focused: bool,
@@ -234,6 +248,7 @@ impl Title {
             mode,
             last_server: String::new(),
             saves,
+            resources: resources.to_owned(),
             started: now,
             search: String::new(),
             search_focused: false,
@@ -320,6 +335,64 @@ impl Title {
             self.return_to_list(None);
         }
     }
+    /// A press on the superflat screens: their list, share box or buttons.
+    fn flat_click(&mut self, x: f32, y: f32, size: (f32, f32), hit: Option<u8>) {
+        match hit {
+            Some(70) => {
+                if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+                    flat.remove_selected();
+                }
+            }
+            Some(71) => {
+                if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+                    flat.open_presets();
+                }
+            }
+            Some(72) => self.close_flat(true),
+            Some(73) => self.close_flat(false),
+            Some(74) => {
+                if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+                    flat.apply_share();
+                }
+            }
+            Some(75) => {
+                if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+                    flat.back_to_layers();
+                }
+            }
+            None => {
+                if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+                    flat::click(flat, (x, y), size);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// Return to Create New World, keeping (`apply`) or dropping the layers.
+    fn close_flat(&mut self, apply: bool) {
+        let mode = std::mem::replace(&mut self.mode, Mode::Main);
+        if let Mode::CreateFlat {
+            name,
+            seed,
+            creative,
+            focus,
+            mut options,
+            flat,
+        } = mode
+        {
+            if apply {
+                options.world_type = crate::save::WorldPreset::Flat;
+                options.flat_settings = Some(flat.settings);
+            }
+            self.mode = Mode::Create {
+                name,
+                seed,
+                creative,
+                focus,
+                options,
+            };
+        }
+    }
     fn matches_search(&self, world: &WorldEntry) -> bool {
         let filter = self.search.to_lowercase();
         world.name.to_lowercase().contains(&filter) || world.folder.to_lowercase().contains(&filter)
@@ -370,6 +443,10 @@ impl Title {
         if let Mode::Multiplayer(screen) = &mut self.mode {
             return screen.drag(cursor.1, size);
         }
+        if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+            flat::drag(flat, cursor, size);
+            return;
+        }
         if let Mode::Select { worlds, .. } = &self.mode {
             let (top, bottom, _, content) = self.world_list(worlds, size);
             let mut scroll = self.scroll.get();
@@ -385,6 +462,9 @@ impl Title {
         if let Mode::Multiplayer(screen) = &mut self.mode {
             screen.release();
         }
+        if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+            flat::release(flat);
+        }
         self.scroll.get_mut().release();
     }
     /// Mouse wheel over the classic world and server lists.
@@ -394,6 +474,10 @@ impl Title {
         }
         if let Mode::Multiplayer(screen) = &mut self.mode {
             screen.wheel(delta, cursor, size);
+            return;
+        }
+        if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+            flat::wheel(flat, delta, cursor, size);
             return;
         }
         let Mode::Select { worlds, .. } = &self.mode else {
@@ -720,6 +804,7 @@ impl Title {
             Mode::Create {
                 creative, options, ..
             } => create_world::buttons(w, h, *creative, options),
+            Mode::CreateFlat { flat, .. } => flat::buttons(w, h, flat),
             Mode::Edit { world, name, .. } => {
                 let x = (w / 2.0).floor() - 100.0;
                 let top = edit_top(h);
@@ -1042,6 +1127,7 @@ impl Title {
                 options,
                 ..
             } => self.draw_create(atlas, batch, cursor, name, seed, *focus, options),
+            Mode::CreateFlat { flat, .. } => flat::draw(self, atlas, batch, cursor, flat),
             Mode::Edit { name, focused, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
@@ -1248,6 +1334,10 @@ impl Title {
             .into_iter()
             .find(|b| b.enabled && x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + 20.0)
             .map(|b| b.id);
+        if matches!(self.mode, Mode::CreateFlat { .. }) {
+            self.flat_click(x, y, (w, h), hit);
+            return (Action::None, hit.is_some());
+        }
         let action = self.click_action(x, y, (w, h), hit);
         // World list selection is silent; launching its selected entry sounds.
         let sound = hit.is_some() || matches!(action, Action::Play { .. });
@@ -1414,6 +1504,27 @@ impl Title {
             // CreateWorldScreen.openGameRulesScreen over a copy of the rules.
             (Mode::Create { options, .. }, Some(29)) => {
                 *self.rules.get_mut() = Some(RulesScreen::for_creation(&options.rules));
+                Action::None
+            }
+            (
+                Mode::Create {
+                    name,
+                    seed,
+                    creative,
+                    focus,
+                    options,
+                },
+                Some(26),
+            ) => {
+                let flat = flat::State::new(&self.resources, options.flat_settings.clone());
+                self.mode = Mode::CreateFlat {
+                    name: name.clone(),
+                    seed: seed.clone(),
+                    creative: *creative,
+                    focus: *focus,
+                    options: options.clone(),
+                    flat,
+                };
                 Action::None
             }
             (
@@ -1669,6 +1780,16 @@ impl Title {
                 self.return_to_list(Some(&folder));
             }
             Mode::Error { return_to, .. } => self.mode = *return_to.clone(),
+            Mode::CreateFlat { .. } => {
+                if matches!(&self.mode, Mode::CreateFlat { flat, .. } if flat.page == flat::Page::Presets)
+                {
+                    if let Mode::CreateFlat { flat, .. } = &mut self.mode {
+                        flat.back_to_layers();
+                    }
+                } else {
+                    self.close_flat(false);
+                }
+            }
             Mode::Create { .. } => self.cancel_create(),
             _ => self.mode = Mode::Main,
         }
@@ -1697,6 +1818,7 @@ const SEARCH: crate::clipboard::FieldId = ("world.search", 0);
 const EDIT_NAME: crate::clipboard::FieldId = ("world.edit-name", 0);
 const WORLD_NAME: crate::clipboard::FieldId = ("world.name", 0);
 const WORLD_SEED: crate::clipboard::FieldId = ("world.seed", 0);
+const FLAT_SHARE: crate::clipboard::FieldId = ("world.flat-share", 0);
 /// The focused field of the world screens and the server screens: the list's
 /// search, a world name or seed, or Add Server, Direct Connection and Join a
 /// Friend.
@@ -1720,6 +1842,9 @@ fn caret_field<'a>(
             _ => None,
         },
         Mode::Multiplayer(screen) => screen.focused_text(),
+        Mode::CreateFlat { flat, .. } if flat.page == flat::Page::Presets && flat.share_focused => {
+            Some((FLAT_SHARE, &mut flat.share, 1230))
+        }
         _ => None,
     }
 }

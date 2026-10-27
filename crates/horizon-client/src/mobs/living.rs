@@ -563,6 +563,17 @@ impl Mob {
         // Entity.checkSupportingBlock
         self.supporting = self.supporting_block(w, moved);
         self.movement_emission(w, moved, events);
+        // Entity.applyEffectsFromBlocks: bubble columns push the mob.
+        if crate::motion::bubble_column_push(
+            w.world,
+            w.registry,
+            w.facts,
+            w.collision,
+            self.bounds(),
+            &mut self.velocity,
+        ) {
+            self.fall_distance = 0.0;
+        }
     }
     /// LivingEntity.checkFallDamage: the fluid state refreshed out of water
     /// (touching water resets the fall), then Entity.checkFallDamage.
