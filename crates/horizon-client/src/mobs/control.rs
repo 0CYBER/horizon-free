@@ -6,7 +6,7 @@ use horizon_core::geometry::trig;
 /// `2.5000003E-7F` widened: the squared distance controls treat as arrived.
 const ARRIVED: f64 = 2.500_000_3e-7_f32 as f64;
 /// `1.0E-5F` widened.
-const EPSILON: f64 = 1.0e-5_f32 as f64;
+pub(super) const EPSILON: f64 = 1.0e-5_f32 as f64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Operation {
@@ -134,6 +134,9 @@ impl Mob {
     pub fn move_control_tick(&mut self, w: &MobWorld, events: &mut Vec<super::MobEvent>) {
         if self.species() == super::Species::Rabbit {
             return super::rabbit::move_control(self, w);
+        }
+        if self.species() == super::Species::Turtle {
+            return super::turtle::move_control(self);
         }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
