@@ -13,6 +13,7 @@ use horizon_world::{
     attributes::{Modifier, Operation, entity::Catalog, live::LiveAttributes},
     block_collision::BlockCollisionRegistry,
     block_landing::BlockLandingRegistry,
+    climbing::{self, ClimbingRegistry, ClimbingWorld},
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     edge_backoff::{self, EdgeBackoffInput, EdgeBackoffWorld},
     entity_move::{self, CollisionFlags, EntityMoveWorld, MovementHistory, MoverType},
@@ -50,10 +51,10 @@ pub struct MotionResources {
     pub attributes: Arc<Catalog>,
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
-    /// `BlockTags.CAN_GLIDE_THROUGH`: climbable blocks a gliding player passes.
-    pub glide_through: BTreeSet<String>,
     /// `BlockTags.SOUL_SPEED_BLOCKS`: what Soul Speed's effects look for.
     pub soul_speed_blocks: BTreeSet<String>,
+    /// `LivingEntity.onClimbable` tags plus open trapdoors above a ladder.
+    pub climbing: ClimbingRegistry<'static>,
     pub fall_reset: BTreeSet<String>,
     /// `BlockTags.INSIDE_STEP_SOUND_BLOCKS`.
     pub inside_step_sound: BTreeSet<String>,
@@ -107,6 +108,12 @@ impl MotionResources {
                 .cloned()
                 .collect())
         };
+        let climbing = ClimbingRegistry::new(
+            assets.registry,
+            &tag("minecraft:trapdoors")?,
+            &tag("minecraft:climbable")?,
+            &tag("minecraft:can_glide_through")?,
+        )?;
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
@@ -118,8 +125,8 @@ impl MotionResources {
                 suppresses_bounce: tag("minecraft:suppresses_bounce")?,
             })?,
             climbable: tag("minecraft:climbable")?,
-            glide_through: tag("minecraft:can_glide_through")?,
             soul_speed_blocks: tag("minecraft:soul_speed_blocks")?,
+            climbing,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
             inside_step_sound: tag("minecraft:inside_step_sound_blocks")?,
             combination_step_sound: tag("minecraft:combination_step_sound_blocks")?,
@@ -822,27 +829,15 @@ impl MotionWorld<'_, '_, '_> {
             supporting_block: self.player.ground.supporting_block,
         }
     }
-    /// `LivingEntity.onClimbable` at the player's feet (it remembers the block).
+    /// `Player.onClimbable` (never while flying) over `LivingEntity.onClimbable`
+    /// at the player's feet: the climbable tag or an open trapdoor above a
+    /// matching ladder. It remembers the block.
     pub fn climbable(&mut self) -> Result<bool> {
-        if self.player.spectator {
+        if self.player.flying {
             return Ok(false);
         }
-        let p = BlockPos::containing(self.player.position);
-        let name = &self
-            .assets
-            .registry
-            .state(self.block(p))
-            .ok_or("missing scene state")?
-            .name;
-        // A gliding player passes through vines (`CAN_GLIDE_THROUGH`).
-        if self.player.fall_flying && self.resources.glide_through.contains(name) {
-            return Ok(false);
-        }
-        let climbable = self.resources.climbable.contains(name);
-        if climbable {
-            self.player.last_climbable = Some(p);
-        }
-        Ok(climbable)
+        let resources = self.resources;
+        climbing::on_climbable(self, &resources.climbing).map_err(|e| e.to_string().into())
     }
     pub fn travel_in_air(&mut self, input: Vec3) -> Result<()> {
         living_air::travel_in_air(self, input)
@@ -1808,6 +1803,30 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time = 1;
         }
         Ok(())
+    }
+}
+impl ClimbingWorld for MotionWorld<'_, '_, '_> {
+    type Error = std::convert::Infallible;
+    fn is_spectator(&mut self) -> std::result::Result<bool, Self::Error> {
+        Ok(self.player.spectator)
+    }
+    fn block_position(&mut self) -> std::result::Result<BlockPos, Self::Error> {
+        Ok(BlockPos::containing(self.player.position))
+    }
+    fn in_block_state(&mut self) -> std::result::Result<BlockStateId, Self::Error> {
+        Ok(self.block(BlockPos::containing(self.player.position)))
+    }
+    fn is_fall_flying(&mut self) -> std::result::Result<bool, Self::Error> {
+        Ok(self.player.fall_flying)
+    }
+    fn block_state(
+        &mut self,
+        position: BlockPos,
+    ) -> std::result::Result<BlockStateId, Self::Error> {
+        Ok(self.block(position))
+    }
+    fn set_last_climbable_position(&mut self, position: BlockPos) {
+        self.player.last_climbable = Some(position);
     }
 }
 impl crate::auto_jump::AutoJumpWorld for MotionWorld<'_, '_, '_> {
