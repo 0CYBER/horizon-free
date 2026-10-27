@@ -845,6 +845,9 @@ pub struct Mob {
     pub previous_swell: i32,
     pub ambient_timer: i32,
     pub fall_distance: f64,
+    /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
+    /// block has pushed this mob this tick (0.51 at most on any axis).
+    pub piston: horizon_world::piston_movement::PistonMovement,
     pub persistent: bool,
     /// `CustomName` (plain text) and `CustomNameVisible`.
     pub custom_name: Option<String>,
@@ -1701,6 +1704,7 @@ impl Mob {
             // Mob.ambientSoundTime starts at 0.
             ambient_timer: 0,
             fall_distance: 0.0,
+            piston: Default::default(),
             persistent: false,
             random,
             ai: Box::default(),
@@ -2014,6 +2018,11 @@ impl Mob {
     }
     pub fn has_effect(&self, effect: &str) -> bool {
         self.extra.effects.iter().any(|e| e.0 == effect)
+    }
+    /// `LivingEntity.isCurrentlyGlowing`: the Glowing effect or the `Glowing` tag (on a
+    /// server's client, `glowing` holds shared flag 6 instead).
+    pub fn is_currently_glowing(&self) -> bool {
+        self.glowing || self.has_effect("minecraft:glowing")
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
