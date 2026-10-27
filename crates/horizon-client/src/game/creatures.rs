@@ -46,6 +46,10 @@ pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
+    /// The players a fishing hook can catch, taken as the hooks tick, and
+    /// the pulls on them waiting for the hub (game/fishing.rs).
+    pub hook_targets: Vec<super::fishing::HookTarget>,
+    pub hook_pulls: Vec<(u32, horizon_core::geometry::Vec3)>,
     /// Mace smash knockback on the other players from a guest's turn, waiting
     /// for it to end (game/mace.rs).
     pub smash_pushes: Vec<super::mace::SmashPush>,
@@ -226,6 +230,8 @@ impl Game<'_> {
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
+            sleeping: self.sleeping.is_some(),
+            sleep_timer: self.sleep_timer,
             passenger: self.riding.is_some(),
         })
     }
@@ -514,6 +520,7 @@ impl Game<'_> {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
             self.tick_cat_spawner();
+            self.tick_village_siege();
         }
         self.tick_raids();
         self.tick_creature_entities()
@@ -1355,6 +1362,22 @@ impl Game<'_> {
                     [0.0, 0.2, 0.0],
                     10,
                 ),
+                MobEvent::DropGift { table, at } => {
+                    let stacks =
+                        self.res
+                            .items()
+                            .loot_table(table, false, None, &mut self.world.random);
+                    for stack in stacks {
+                        // The ItemEntity constructor's random motion.
+                        let r = &mut self.world.random;
+                        let v = [
+                            r.next_double() * 0.2 - 0.1,
+                            0.2,
+                            r.next_double() * 0.2 - 0.1,
+                        ];
+                        self.spawn_item(stack, at, v, 10);
+                    }
+                }
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
                 // above trampled farmland breaks and drops.
                 MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,
@@ -3355,6 +3378,7 @@ impl Game<'_> {
             .item_tags
             .get("minecraft:parrot_poisonous_food")
             .is_some_and(|t| t.contains(&*item));
+        let player_at = self.eye_position();
         let acting = self.acting_player_uuid();
         let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
             || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
@@ -3634,7 +3658,12 @@ impl Game<'_> {
             }
             // Parrot.mobInteract: the owner makes a tame parrot on the ground
             // sit or stand (poisonous food is handled apart).
-            Species::Parrot if m.extra.tame && m.on_ground && !parrot_poisonous => {
+            Species::Parrot
+                if m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && m.on_ground
+                    && !parrot_poisonous =>
+            {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
                     m.position.x.floor() as i32 >> 4,
@@ -3685,6 +3714,29 @@ impl Game<'_> {
                     self.damage_held_tool();
                 } else {
                     consume = true;
+                }
+            }
+            // Parrot.mobInteract: #parrot_poisonous_food (a cookie) poisons the
+            // parrot for 45 s and then hurts it with a player attack of
+            // Float.MAX_VALUE, which an invulnerable one shrugs off.
+            Species::Parrot
+                if self
+                    .res
+                    .items()
+                    .item_tags
+                    .get("minecraft:parrot_poisonous_food")
+                    .is_some_and(|t| t.contains(&*item)) =>
+            {
+                consume = true;
+                m.add_effect("minecraft:poison", 900, 0);
+                let id = m.id;
+                let hurt = m.damage(
+                    f32::MAX,
+                    horizon_client::mobs::Damage::player(player_at.unwrap_or(center)),
+                );
+                // The feeder gets the kill, as for a normal player attack.
+                if hurt {
+                    self.last_hurt_by_player.insert(id, self.lan_acting);
                 }
             }
             // Parrot.mobInteract: parrot food may tame a wild one (one time in
@@ -4224,6 +4276,18 @@ impl Game<'_> {
                 &armor,
                 out,
             );
+            if &*mob.kind.id == "minecraft:player" {
+                // PlayerRenderer's WingsLayer and SpinAttackEffectLayer.
+                self.player_elytra_geometry(
+                    mob,
+                    mob.extra.chest.as_deref(),
+                    camera,
+                    alpha as f32,
+                    packed,
+                    out,
+                );
+                self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+            }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
                 self.mark_outline(&out[entity_start..], rgb);

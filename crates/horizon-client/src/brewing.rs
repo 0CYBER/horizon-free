@@ -2,12 +2,13 @@
 //! in vanilla, ported as tables), data-driven `minecraft:brewing` recipes from
 //! `data/minecraft/recipe/brewing`, potion colours and tooltips, and
 //! `BrewingStandBlockEntity.serverTick`.
+pub use crate::chunk::block_entity::BrewingStand;
 use crate::{
     containers::Providers,
     items::{ItemStack, Items},
 };
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, sync::Arc};
+use std::{collections::HashSet, fs, path::Path};
 
 pub use horizon_client_core::potions::{
     BASE_POTION_COLOR, Category, EFFECTS, EffectDef, POTIONS, PotionDef, effect, namespaced,
@@ -190,18 +191,6 @@ impl Brewing {
     }
 }
 
-/// `BrewingStandBlockEntity` state. Slots: 0-2 bottles, 3 ingredient, 4 fuel.
-#[derive(Clone, Debug, Default)]
-pub struct BrewingStand {
-    pub items: [Option<ItemStack>; 5],
-    pub brew_time: i32,
-    pub total_brew_time: i32,
-    pub fuel: i32,
-    pub total_fuel: i32,
-    pub speed: f32,
-    pub ingredient: Option<Arc<str>>,
-    pub last_bottles: Option<[bool; 3]>,
-}
 /// What a brewing tick asks the world to do.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BrewTick {

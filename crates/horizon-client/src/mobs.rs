@@ -504,12 +504,7 @@ impl MobTypes {
         Ok(Self { types: out })
     }
 }
-/// Who caused damage or is being targeted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Who {
-    Player,
-    Mob(u32),
-}
+pub use horizon_client_core::who::Who;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DamageKind {
     PlayerAttack,
@@ -706,6 +701,8 @@ pub struct Extra {
     pub body_damage: i32,
     /// The components (dye, name...) of that armor stack.
     pub body_extra: Option<Box<crate::item_data::StackData>>,
+    /// `Cat.RELAX_STATE_ONE`: watching a sleeping owner before lying down.
+    pub relax_one: bool,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,
@@ -741,6 +738,8 @@ pub struct Extra {
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
+    /// `Entity.DATA_POSE` of another player, as the server sent it.
+    pub synced_pose: u8,
     /// `LivingEntity.isAutoSpinAttack` (Riptide).
     pub auto_spin_attack: bool,
     pub main_hand_left: bool,
@@ -961,7 +960,8 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
-    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    /// `Level.broadcastEntityEvent` for a mob: guests run its
+    /// `handleEntityEvent`.
     EntityEvent {
         mob: u32,
         event: i8,
@@ -1151,6 +1151,11 @@ pub enum MobEvent {
     DropItem {
         item: Arc<str>,
         count: u32,
+        at: [f64; 3],
+    },
+    /// `Mob.dropFromGiftLootTable`: a gift loot table's items dropped at `at`.
+    DropGift {
+        table: &'static str,
         at: [f64; 3],
     },
     SetBlock {
@@ -1481,6 +1486,8 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isSilent`.
     pub silent: bool,
+    /// `Cat.isLying` or `isRelaxStateOne`.
+    pub lying: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
     /// `Attributes.KNOCKBACK_RESISTANCE`.
@@ -1576,6 +1583,7 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             silent: m.silent,
+            lying: m.species() == Species::Cat && (m.extra.flag || m.extra.relax_one),
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
@@ -1746,6 +1754,10 @@ pub struct PlayerView {
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
+    /// `isSleeping` and `getSleepTimer` (100 once slept through, then the
+    /// ticks fading out after waking up).
+    pub sleeping: bool,
+    pub sleep_timer: u32,
     /// `isPassenger`.
     pub passenger: bool,
 }
@@ -2635,6 +2647,25 @@ impl SwimAnimation {
     /// `LivingEntity.getSwimAmount`.
     pub fn amount(&self, partial: f32) -> f32 {
         self.old + partial * (self.amount - self.old)
+    }
+}
+
+impl Mob {
+    /// The part of `LivingEntity.tick` and `aiStep` that animates another
+    /// player from its synched pose and flags: the glide count, the wings
+    /// (`elytraAnimationState`) and the swim amount (`updateSwimAmount`).
+    pub fn tick_avatar_pose(&mut self, in_water: bool) {
+        let e = &mut self.extra;
+        e.fall_fly_ticks = if e.fall_flying {
+            e.fall_fly_ticks + 1
+        } else {
+            0
+        };
+        // LivingEntity.isVisuallySwimming: the swimming pose, or the gliding
+        // pose after the glide ended.
+        let visually = e.synced_pose == 3 || (!e.fall_flying && e.synced_pose == 1);
+        e.elytra.tick(e.fall_flying, e.crouching, self.velocity);
+        e.swim.tick(visually, in_water);
     }
 }
 

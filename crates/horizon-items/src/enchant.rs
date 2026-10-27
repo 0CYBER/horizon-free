@@ -334,14 +334,14 @@ impl Enchantments {
     }
     /// `Enchantment.getFullname` as plain text and whether it is a curse (red).
     pub fn full_name(&self, id: &str, level: u32) -> (String, bool) {
-        let language = crate::lang::current();
+        let language = horizon_client_core::lang::current();
         self.full_name_in(language.as_deref(), id, level)
     }
     /// `full_name` against `language`; `None` (no language loaded: a
     /// dedicated server, the probes) keeps the English names loaded above.
     pub fn full_name_in(
         &self,
-        language: Option<&crate::lang::Language>,
+        language: Option<&horizon_client_core::lang::Language>,
         id: &str,
         level: u32,
     ) -> (String, bool) {
@@ -802,8 +802,8 @@ pub fn apply_value_effect(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
     use super::*;
     use serde_json::json;
 
@@ -1136,7 +1136,7 @@ pub(crate) mod tests {
     #[test]
     fn names_follow_the_language() {
         struct Mem(HashMap<String, Vec<u8>>);
-        impl crate::lang::ResourceSource for Mem {
+        impl horizon_client_core::lang::ResourceSource for Mem {
             fn read(&self, path: &str) -> Option<Vec<u8>> {
                 self.0.get(path).cloned()
             }
@@ -1147,7 +1147,7 @@ pub(crate) mod tests {
                 .as_bytes()
                 .to_vec(),
         )]));
-        let ru = crate::lang::Language::load(&[&ru], "ru_ru");
+        let ru = horizon_client_core::lang::Language::load(&[&ru], "ru_ru");
         let e = sample();
         assert_eq!(
             e.full_name_in(Some(&ru), "minecraft:sharpness", 5).0,

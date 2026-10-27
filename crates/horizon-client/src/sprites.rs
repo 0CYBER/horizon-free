@@ -115,6 +115,29 @@ impl Sprites {
     pub fn count(&self) -> usize {
         self.native.len()
     }
+    /// `SpriteContents.computeTransparency(u0, v0, u1, v1)` is NONE: every texel under
+    /// the quad's UV box is fully opaque in every frame, so the quad needs no alpha test.
+    pub fn region_opaque(&self, layer: u32, uv: &[[f32; 2]; 4]) -> bool {
+        if self.opaque[layer as usize] {
+            return true;
+        }
+        let (side, frames, _) = &self.native[layer as usize];
+        let side = *side as usize;
+        let range = |axis: usize| {
+            let lo = uv.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
+            let hi = uv.iter().map(|p| p[axis]).fold(f32::NEG_INFINITY, f32::max);
+            let clamp = |v: f32| (v.max(0.0) as usize).min(side);
+            clamp((lo * side as f32).floor())..clamp((hi * side as f32).ceil())
+        };
+        let (columns, rows) = (range(0), range(1));
+        frames.iter().all(|frame| {
+            rows.clone().all(|y| {
+                columns
+                    .clone()
+                    .all(|x| frame[(y * side + x) * 4 + 3] == 255)
+            })
+        })
+    }
     /// Lay every layer out at one size: the largest texture's (resource packs
     /// may ship 32x, 64x... textures, like vanilla's stitched atlas), rounded
     /// up to a power of two and limited to [`MAX_ARRAY_BYTES`]. Smaller

@@ -352,12 +352,21 @@ impl Game<'_> {
             _ => name.ends_with("shulker_box"),
         }
     }
-    /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier.
+    /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier and the
+    /// Haste and Mining Fatigue modifiers (`ADD_MULTIPLIED_TOTAL`), clamped to
+    /// the attribute's range.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
-        horizon_client::attack_strength::BASE_ATTACK_SPEED
+        let value = horizon_client::attack_strength::BASE_ATTACK_SPEED
             + self
                 .attack_item_info()
-                .map_or(0.0, |i| f64::from(i.attack_speed))
+                .map_or(0.0, |i| f64::from(i.attack_speed));
+        self.potions
+            .effects
+            .modifiers()
+            .into_iter()
+            .filter(|m| m.0 == "minecraft:attack_speed")
+            .fold(value, |v, m| v * (1.0 + m.2))
+            .clamp(0.0, 1024.0)
     }
     /// The item whose attack damage and speed modifiers the player has (`attack_item`).
     pub(super) fn attack_item_info(&self) -> Option<&horizon_client::items::ItemInfo> {
@@ -394,6 +403,12 @@ struct GameHands<'g, 'a> {
     error: Option<Box<dyn std::error::Error>>,
 }
 impl GameHands<'_, '_> {
+    /// The main-hand item's `kinetic_weapon` and `piercing_weapon`, a spear's.
+    fn attack_kinetic(&self) -> Option<horizon_client::spear::Kinetic> {
+        self.game
+            .held()
+            .and_then(|s| horizon_client::spear::Kinetic::of(&s.item))
+    }
     fn keep(&mut self, r: Result<()>) {
         if let Err(e) = r
             && self.error.is_none()
@@ -461,18 +476,27 @@ impl HandWorld for GameHands<'_, '_> {
         self.game.creative
     }
     fn cannot_attack(&mut self) -> bool {
-        false
+        let ticker = self.game.hand_strength.ticker;
+        self.game.cannot_attack_with_item(ticker, 0)
     }
     fn piercing_weapon(&mut self) -> bool {
-        false
+        self.attack_kinetic().is_some()
     }
     fn attack_animation(&mut self) -> SwingAnimation {
-        SwingAnimation::DEFAULT
+        self.attack_kinetic()
+            .map_or(SwingAnimation::DEFAULT, |k| k.attack_animation())
     }
     fn interact_animation(&mut self, _: Hand) -> SwingAnimation {
         SwingAnimation::DEFAULT
     }
-    fn piercing_attack(&mut self, _: SwingAnimation) {}
+    fn piercing_attack(&mut self, _: SwingAnimation) {
+        // The server's part (`PiercingWeapon.attack`), then the client's:
+        // the sound `MultiPlayerGameMode.piercingAttack` plays.
+        if let Some(sound) = self.game.jab() {
+            self.game.play_at_feet(sound);
+        }
+        self.game.hand_strength.reset_attack();
+    }
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }
