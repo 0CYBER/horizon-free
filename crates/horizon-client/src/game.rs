@@ -10461,11 +10461,29 @@ impl Game<'_> {
         rain.extend(snow_vertices);
         rain
     }
+    /// A translated message for the player the game acts for: `overlay` is
+    /// `sendOverlayMessage` (the action bar), else `sendSystemMessage` (chat).
+    /// A guest gets a packet, so its own client translates it.
+    fn tell_sleeper(&mut self, key: &str, fallback: &str, overlay: bool) {
+        if self.lan_acting.is_some() {
+            self.guest_packets
+                .push(horizon_protocol::packets::play::Clientbound::SystemChat(
+                    horizon_protocol::packets::play::SystemChat {
+                        content: horizon_protocol::text::translatable(key, &[]),
+                        overlay,
+                    },
+                ));
+        } else if overlay {
+            self.message = Some((self.translate(key, fallback), Instant::now()));
+        } else {
+            self.system_message(horizon_client::text::Text::translate(key, &[]));
+        }
+    }
     /// ServerPlayer.startSleepInBed: in reach, not obstructed, night or thunder,
     /// and (outside creative) no monsters within 8 blocks; the bed becomes the
     /// respawn point either way.
     fn try_sleep(&mut self, pos: [i32; 3]) {
-        let Some(p) = self.player.as_ref() else {
+        let Some((position, yaw)) = self.player.as_ref().map(|p| (p.position, p.yaw)) else {
             return;
         };
         let time = self.world.day_time.rem_euclid(24000);
@@ -10488,15 +10506,16 @@ impl Game<'_> {
         // ServerPlayer.bedInRange / isReachableBedBlock: within 3 blocks
         // sideways and 2 vertically of the head or the foot.
         let reachable = |bed: [i32; 3]| {
-            (p.position.x - f64::from(bed[0]) - 0.5).abs() <= 3.0
-                && (p.position.y - f64::from(bed[1])).abs() <= 2.0
-                && (p.position.z - f64::from(bed[2]) - 0.5).abs() <= 3.0
+            (position.x - f64::from(bed[0]) - 0.5).abs() <= 3.0
+                && (position.y - f64::from(bed[1])).abs() <= 2.0
+                && (position.z - f64::from(bed[2]) - 0.5).abs() <= 3.0
         };
         if !reachable(head) && !reachable(foot) {
-            self.message = Some((
-                "You may not rest now; the bed is too far away".into(),
-                Instant::now(),
-            ));
+            self.tell_sleeper(
+                "block.minecraft.bed.too_far_away",
+                "You may not rest now; the bed is too far away",
+                true,
+            );
             return;
         }
         // ServerPlayer.bedBlocked: Player.freeAt (not suffocating) for the
@@ -10509,7 +10528,11 @@ impl Game<'_> {
             f.full_collision && f.solid_render
         });
         if blocked {
-            self.message = Some(("This bed is obstructed".into(), Instant::now()));
+            self.tell_sleeper(
+                "block.minecraft.bed.obstructed",
+                "This bed is obstructed",
+                true,
+            );
             return;
         }
         // In reach (bedInRange), day or night: setRespawnPosition(
@@ -10518,9 +10541,16 @@ impl Game<'_> {
         // and finds where to stand up (findRespawnAndUseSpawnBlock).
         // Straw beds never set it (`straw_bed_rule`).
         if self.bed_sets_spawn(state) {
-            self.respawn_config = Some(respawn_anchor::RespawnConfig::wrapped(
-                self.dim, head, p.yaw, false,
-            ));
+            let config = respawn_anchor::RespawnConfig::wrapped(self.dim, head, yaw, false);
+            // ServerPlayer.setRespawnPosition: the chat message only when the
+            // point moved (`isSamePosition`).
+            let moved = self
+                .respawn_config
+                .is_none_or(|c| (c.dim, c.pos) != (config.dim, config.pos));
+            self.respawn_config = Some(config);
+            if moved {
+                self.tell_sleeper("block.minecraft.set_spawn", "Respawn point set", false);
+            }
             // The fallback becomes the world spawn: a guest's is none of its
             // own, so it follows `setworldspawn`.
             self.spawn = if self.lan_acting.is_some() {
@@ -10535,10 +10565,11 @@ impl Game<'_> {
             };
         }
         if !night {
-            self.message = Some((
-                "You can sleep only at night or during thunderstorms".into(),
-                Instant::now(),
-            ));
+            self.tell_sleeper(
+                "block.minecraft.bed.no_sleep",
+                "You can sleep only at night or during thunderstorms",
+                true,
+            );
             return;
         }
         // Creative players skip the monster check (`!this.isCreative()`).
@@ -10546,18 +10577,26 @@ impl Game<'_> {
             && self.mobs.iter().any(|m| {
                 m.hostile()
                     && m.alive()
-                    && (m.position.x - p.position.x).abs() < 8.0
-                    && (m.position.y - p.position.y).abs() < 5.0
-                    && (m.position.z - p.position.z).abs() < 8.0
+                    && (m.position.x - position.x).abs() < 8.0
+                    && (m.position.y - position.y).abs() < 5.0
+                    && (m.position.z - position.z).abs() < 8.0
             });
         if monsters {
-            self.message = Some((
-                "You may not rest now; there are monsters nearby".into(),
-                Instant::now(),
-            ));
+            self.tell_sleeper(
+                "block.minecraft.bed.not_safe",
+                "You may not rest now; there are monsters nearby",
+                true,
+            );
             return;
         }
-        self.message = Some(("Respawn point set".into(), Instant::now()));
+        // ServerPlayer.startSleepInBed: a percentage above 100 cannot skip the night.
+        if self.ui.rules.int("players_sleeping_percentage") > 100 {
+            self.tell_sleeper(
+                "sleep.not_possible",
+                "No amount of rest can pass this night",
+                true,
+            );
+        }
         self.stop_mining();
         self.left = false;
         self.right = false;
