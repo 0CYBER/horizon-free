@@ -4861,6 +4861,10 @@ impl Game<'_> {
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
+                // Player.causeFallDamage: a fall of 2 blocks or more counts.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Statistic(cm)) => {
+                    self.stats.custom("fall_one_cm", cm)
+                }
                 // LivingEntity.checkFallDamage: the block's crumbs where the fall landed.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,
