@@ -125,6 +125,7 @@ impl Game<'_> {
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
             "cramming" => DamageKind::Cramming,
+            "lightning_bolt" => DamageKind::LightningBolt,
             _ => DamageKind::Generic,
         }
     }

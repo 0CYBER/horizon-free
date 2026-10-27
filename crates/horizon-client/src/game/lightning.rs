@@ -364,11 +364,8 @@ impl Game<'_> {
                 && p[1] >= at[1] - 3.0
                 && p[1] <= at[1] + 9.0
         };
-        let damage = Damage {
-            kind: DamageKind::Generic,
-            attacker: None,
-            from: Some(b.at),
-        };
+        // DamageSources.lightningBolt: its own type, with no position.
+        let damage = Damage::of(DamageKind::LightningBolt);
         let mut events = Vec::new();
         let peaceful = self.ui.difficulty == 0;
         for m in self.mobs.iter_mut().filter(|m| m.alive()) {

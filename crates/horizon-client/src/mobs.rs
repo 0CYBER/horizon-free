@@ -540,6 +540,8 @@ pub enum DamageKind {
     OutOfWorld,
     /// `cramming`: too many entities in one block (`maxEntityCramming`).
     Cramming,
+    /// `lightning_bolt`: a strike (`Entity.thunderHit`).
+    LightningBolt,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -647,6 +649,7 @@ impl Damage {
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
                 | DamageKind::Cramming
+                | DamageKind::LightningBolt
         )
     }
     pub fn is_projectile(&self) -> bool {

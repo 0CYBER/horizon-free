@@ -158,7 +158,11 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
 pub fn environmental(kind: DamageKind) -> bool {
     matches!(
         kind,
-        DamageKind::Cactus | DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava
+        DamageKind::Cactus
+            | DamageKind::OnFire
+            | DamageKind::InFire
+            | DamageKind::Lava
+            | DamageKind::LightningBolt
     )
 }
 /// The hurt sound: a ball's is muffled, and it has no ambient sound
