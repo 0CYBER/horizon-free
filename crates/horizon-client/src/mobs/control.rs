@@ -146,6 +146,16 @@ impl Mob {
         if self.species() == super::Species::Rabbit {
             return super::rabbit::move_control(self, w);
         }
+        // Fox.FoxMoveControl.tick: still while asleep, sitting or faceplanted.
+        if self.species() == super::Species::Fox && !super::fox::can_move(self) {
+            return;
+        }
+        // Panda.PandaMoveControl: only while it can act.
+        if self.species() == super::Species::Panda
+            && !super::panda::can_perform_action(self, w.thundering)
+        {
+            return;
+        }
         if self.species() == super::Species::Turtle {
             return super::turtle::move_control(self);
         }
@@ -328,6 +338,11 @@ impl Mob {
     /// LookControl.tick (and SmoothSwimmingLookControl).
     pub fn look_control_tick(&mut self) {
         let look = self.ai.look.clone();
+        let fox = self.species() == super::Species::Fox;
+        // Fox.FoxLookControl: no turning in sleep.
+        if fox && super::fox::flag(self, super::fox::SLEEPING) {
+            return;
+        }
         if look.kind == LookKind::HappyGhast {
             return super::happy_ghast::look_control(self);
         }
@@ -374,7 +389,8 @@ impl Mob {
                 // clampHeadRotationToBody does nothing for a shulker.
             }
             LookKind::Default | LookKind::Fixed => {
-                if look.kind == LookKind::Default {
+                // FoxLookControl.resetXRotOnTick keeps a stalking or pouncing pitch.
+                if look.kind == LookKind::Default && (!fox || super::fox::resets_x_rot(self)) {
                     self.head_pitch = 0.0;
                 }
                 if look.cooldown > 0 {
@@ -417,6 +433,13 @@ impl Mob {
     }
     /// BodyRotationControl.clientTick (Mob.tickHeadTurn).
     pub fn body_rotation_tick(&mut self) {
+        // Shulker.ShulkerBodyRotationControl.clientTick is empty: the body
+        // stays at 0 (recreateFromPacket), only the head turns.
+        if self.species() == super::Species::Shulker {
+            self.body_yaw = 0.0;
+            self.previous_body_yaw = 0.0;
+            return;
+        }
         let dx = self.position.x - self.previous.x;
         let dz = self.position.z - self.previous.z;
         let max = self.kind.max_head_y_rot;

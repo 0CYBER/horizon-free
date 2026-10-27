@@ -3,13 +3,18 @@ use super::Vertex;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
 /// ordinary entities, breaking cracks (11), translucent breaking cracks (12),
-/// the boat water mask (13, `RenderPipelines.WATER_MASK`), entity shadows
-/// (14, `RenderPipelines.ENTITY_SHADOW`) and translucent-layer particles (15,
-/// drawn after translucent terrain: `SubmitNodeCollection.submitQuadParticleGroup`)
+/// the boat water mask (13, `RenderPipelines.WATER_MASK`), energy swirls
+/// (34, `RenderPipelines.ENERGY_SWIRL`), entity shadows (14,
+/// `RenderPipelines.ENTITY_SHADOW`), translucent-layer particles (15, drawn
+/// after translucent terrain: `SubmitNodeCollection.submitQuadParticleGroup`)
 /// and translucent item quads (32, drawn without depth writes).
-const MATERIALS: usize = 7;
+const MATERIALS: usize = 8;
 /// The overlay of depth-only quads that hide water (`RenderTypes.waterMask`).
 pub const WATER_MASK_OVERLAY: u32 = 13;
+/// The overlay of energy swirl quads (`RenderTypes.energySwirl`: the charged creeper's and the
+/// powered wither's armour). The light bytes carry the sprite's origin and the colour bytes its
+/// size (`breaking::stage_light`), the UV the scrolled position in the sprite.
+pub const ENERGY_SWIRL_OVERLAY: u32 = 34;
 /// The overlay of entity shadow quads (`RenderTypes.entityShadow`).
 pub const SHADOW_OVERLAY: u32 = 14;
 /// The overlay of translucent-layer particles (`SingleQuadParticle.Layer.translucent`).
@@ -49,9 +54,10 @@ impl EntityBatch {
                 11 => 1,
                 12 => 2,
                 WATER_MASK_OVERLAY => 3,
-                SHADOW_OVERLAY => 4,
-                TRANSLUCENT_PARTICLE_OVERLAY => 5,
-                TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 6,
+                ENERGY_SWIRL_OVERLAY => 4,
+                SHADOW_OVERLAY => 5,
+                TRANSLUCENT_PARTICLE_OVERLAY => 6,
+                TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 7,
                 _ => 0,
             };
             self.buckets[material][counts[material]] = index;
@@ -103,12 +109,13 @@ mod tests {
     ) -> (Vec<Vertex>, [u32; MATERIALS]) {
         let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
         let mut counts = [0; MATERIALS];
-        for (i, layer) in [0, 11, 12, 13, 14, 15].into_iter().enumerate() {
+        for (i, layer) in [0, 11, 12, 13, 34, 14, 15].into_iter().enumerate() {
             for quad in entities.as_chunks::<4>().0 {
                 let material = match quad[0].layer {
                     11 => 11,
                     12 => 12,
                     13 => 13,
+                    34 => 34,
                     14 => 14,
                     15 => 15,
                     _ => 0,
@@ -137,6 +144,8 @@ mod tests {
                 color: index as u32,
                 light: (index * 3) as u32,
                 normal: [1, 2, 3, 4],
+
+                glint_uv: [0.0, 0.0],
             })
             .collect()
     }

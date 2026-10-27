@@ -41,6 +41,11 @@ pub struct State {
     pub in_village: bool,
     /// A dropped ominous banner this raider may fetch.
     pub banner_at: Option<[f64; 3]>,
+    /// The item entity of `banner_at`.
+    pub banner_item: u32,
+    /// Banners with no path to them, and until when (game time):
+    /// `unreachableBannerCache`.
+    pub unreachable_banners: Vec<(u32, i64)>,
     /// Beds around the raid's centre.
     pub homes: Option<std::sync::Arc<Vec<[i32; 3]>>>,
     /// A ravager carrying a raider, set every tick from `Extra::rider`.
@@ -116,7 +121,7 @@ pub fn register(m: &mut Mob) {
     }
     m.extra.raider = Some(Box::default());
     m.ai.goals.add(4, LongDistancePatrol::new(0.7, 0.595));
-    m.ai.goals.add(1, ObtainBanner);
+    m.ai.goals.add(1, ObtainBanner::default());
     m.ai.goals.add(3, PathfindToRaid);
     m.ai.goals.add(4, MoveThroughVillage::new(1.05, 1.0));
     m.ai.goals.add(5, Celebration);
@@ -339,23 +344,37 @@ fn close_to_center(p: [i32; 3], at: Vec3, distance: f64) -> bool {
 
 /// `Raider.ObtainRaidLeaderBannerGoal`: walk to a fallen ominous banner when
 /// the wave has no living leader (the game finds the banner and picks it up).
-#[derive(Clone, Debug)]
-pub struct ObtainBanner;
+#[derive(Clone, Debug, Default)]
+pub struct ObtainBanner {
+    path_to_banner: Option<super::path::Path>,
+}
 impl Goal for ObtainBanner {
     goal_clone!();
     fn flags(&self) -> u8 {
         MOVE
     }
-    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
-        state(m).is_some_and(|s| s.banner_at.is_some())
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some((at, item)) = state(m).and_then(|s| s.banner_at.map(|at| (at, s.banner_item)))
+        else {
+            return false;
+        };
+        // A banner with no path to it is skipped for 600 ticks.
+        let path = m.create_path_to_entity(cx.w, at, 1);
+        if path.as_ref().is_some_and(|p| p.reached) {
+            self.path_to_banner = path;
+            return true;
+        }
+        let now = cx.w.game_time;
+        let s = state_mut(m);
+        s.unreachable_banners.retain(|&(_, until)| now < until);
+        s.unreachable_banners.push((item, now + 600));
+        false
     }
     fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
         !m.ai.nav.is_done() && state(m).is_some_and(|s| s.banner_at.is_some())
     }
-    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some(at) = state(m).and_then(|s| s.banner_at) {
-            m.nav_move_to(cx.w, at, 1.15);
-        }
+    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.nav_move_to_path(self.path_to_banner.take(), 1.15);
     }
 }
 

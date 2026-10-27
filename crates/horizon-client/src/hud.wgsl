@@ -7,28 +7,35 @@ struct Hud {
 @group(0) @binding(0) var<uniform> hud: Hud;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
+// enchanted_glint_item on its own repeating texture (vanilla's GlintSampler).
+@group(0) @binding(3) var glint_tex: texture_2d<f32>;
+@group(0) @binding(4) var glint_sampler: sampler;
 struct Out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     // projection_from_position(gl_Position): the End portal's texProj0.
     @location(2) proj: vec4<f32>,
+    @location(3) glint_uv: vec2<f32>,
 }
-@vertex fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) depth: f32) -> Out {
+@vertex fn vs_main(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) depth: f32, @location(4) glint_uv: vec2<f32>) -> Out {
     let pixels = pos * hud.size.z;
     var out: Out;
     out.clip = vec4(pixels.x / hud.size.x * 2.0 - 1.0, 1.0 - pixels.y / hud.size.y * 2.0, depth, 1.0);
     out.uv = uv;
     out.color = color;
     out.proj = vec4(out.clip.xy * 0.5 + 0.5, out.clip.zw);
+    out.glint_uv = glint_uv;
     return out;
 }
 @fragment fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    // u >= 2: flat vertex colour masked by the texture's alpha (enchantment glint).
+    // u >= 2: the GLINT_TEXTURING sample over the item, masked by the item's
+    // texture alpha (item.fsh's ALPHA_CUTOUT and GLINT path).
     if in.uv.x >= 2.0 {
-        let m = textureSample(atlas, atlas_sampler, in.uv - vec2(2.0, 0.0)).a * in.color.a;
-        if m < 0.004 { discard; }
-        return vec4(in.color.rgb, m);
+        let mask = textureSample(atlas, atlas_sampler, in.uv - vec2(2.0, 0.0)).a;
+        if mask < 0.1 { discard; }
+        let glint = hud.size.w * textureSample(glint_tex, glint_sampler, in.glint_uv);
+        return vec4(glint.rgb * glint.rgb, mask);
     }
     let c = textureSample(atlas, atlas_sampler, in.uv) * in.color;
     if c.a < 0.004 { discard; }

@@ -115,6 +115,7 @@ fn draw(
                     sprite.v0 + (sprite.v1 - sprite.v0) * v[4],
                 ]
             }),
+            foil_uv: poly.map(|v| [v[3], v[4]]),
             normal,
             color,
             foil,
@@ -499,7 +500,7 @@ pub(super) fn submit(
             let skin = (!argument.is_null())
                 .then(|| host.player_skin(argument))
                 .flatten()
-                .unwrap_or_else(|| "entity/player/wide/steve".to_owned());
+                .unwrap_or_else(|| "entity/player/slim/steve".to_owned());
             part("player", &none, &skin, white, Foil::None);
         }
         SpecialKind::Trident => {
