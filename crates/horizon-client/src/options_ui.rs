@@ -173,6 +173,10 @@ impl Opt {
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 | Opt::HighContrastBlockOutlines
+                // Saved, but nothing in rendering reads them yet.
+                | Opt::ChunkFade
+                | Opt::ImprovedTransparency
+                | Opt::ChunkBuilder
         )
     }
     fn file_key(self) -> Option<&'static str> {
