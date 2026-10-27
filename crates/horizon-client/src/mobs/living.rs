@@ -1118,17 +1118,24 @@ impl Mob {
                         self.ai.no_jump_delay = 10;
                     }
                 } else {
-                    self.jump_in_liquid();
+                    self.jump_in_liquid(true);
                 }
             } else {
-                self.jump_in_liquid();
+                self.jump_in_liquid(false);
             }
         } else {
             self.ai.no_jump_delay = 0;
         }
     }
     /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3; bees 0.01.
-    fn jump_in_liquid(&mut self) {
+    /// A magma cube in lava rises to `0.22 + size * 0.05` instead
+    /// (`MagmaCube.jumpInLiquid`).
+    fn jump_in_liquid(&mut self, lava: bool) {
+        if lava && self.species() == super::Species::MagmaCube {
+            self.velocity.y = f64::from(0.22_f32 + self.extra.size as f32 * 0.05);
+            self.needs_sync = true;
+            return;
+        }
         self.velocity.y += if self.species() == super::Species::Bee {
             0.01
         } else if self.ai.nav.can_float {
