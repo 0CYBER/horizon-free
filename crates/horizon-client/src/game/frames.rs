@@ -311,8 +311,9 @@ impl Game<'_> {
         let sprites = &self.gui.atlas.sprites;
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
-        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at 100%.
-        let range = 16.0 * 64.0 * f64::from(self.settings.entity_distance);
+        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at a view scale
+        // of 1.
+        let range = 16.0 * 64.0 * self.view_scale();
         for f in &self.item_frames {
             let entity_start = out.len();
             let map = f.item.as_ref().and_then(super::maps::map_id);
@@ -355,12 +356,23 @@ impl Game<'_> {
                 * glam::DMat4::from_rotation_y(y_rot.to_radians());
             let light = self.world.light(f.pos[0], f.pos[1], f.pos[2]);
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            // ItemFrameRenderer.getBlockLightLevel: a glow frame's model is at least 5 bright.
+            let frame_light = if f.glow {
+                (light & 0xF0) | (light & 15).max(5)
+            } else {
+                light
+            };
+            let frame_packed =
+                (u32::from(frame_light >> 4) * 16) | ((u32::from(frame_light & 15) * 16) << 8);
             let mut quad =
                 |m: &glam::DMat4, corners: [[f64; 3]; 4], uv: [[f32; 2]; 4], light: u32| {
-                    for (c, uv) in corners.iter().zip(uv) {
-                        let p = m.transform_point3(glam::DVec3::from_array(*c));
+                    // The frame model is drawn with the entity shader, lit by its face normal.
+                    let at = corners.map(|c| m.transform_point3(glam::DVec3::from_array(c)));
+                    let n = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
+                    let normal = [0, 1, 2].map(|k| (n[k].clamp(-1.0, 1.0) * 127.0) as i8);
+                    for (p, uv) in at.into_iter().zip(uv) {
                         out.push(Vertex {
-                            normal: [0; 4],
+                            normal: [normal[0], normal[1], normal[2], -127],
                             pos: p.as_vec3().to_array(),
                             uv,
                             layer: 0,
@@ -393,7 +405,7 @@ impl Game<'_> {
                             ]
                         }),
                         map_uv(r, *uv),
-                        packed,
+                        frame_packed,
                     );
                 }
             }
@@ -445,7 +457,7 @@ impl Game<'_> {
         }
         for (id, m, light) in maps {
             let entity_start = out.len();
-            self.map_vertices(id, m, light, out);
+            self.map_vertices(id, true, m, light, out);
             self.cull_entity_vertices(out, entity_start);
         }
     }

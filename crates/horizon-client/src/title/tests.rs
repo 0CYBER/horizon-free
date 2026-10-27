@@ -770,9 +770,12 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
             bonus_chest: true
         }
     );
-    // The More tab's screens don't exist yet.
+    // The More tab's Experiments and Data Packs screens don't exist yet.
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
-    assert!(labels(&f)[..3].iter().all(|b| !b.3));
+    assert_eq!(
+        labels(&f)[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
+        [true, false, false]
+    );
 }
 
 #[test]
@@ -823,4 +826,51 @@ fn world_fields_edit_at_their_cursor() {
     f.title.field_key(KeyCode::ArrowRight, false, false);
     f.title.field_key(KeyCode::Backspace, false, false);
     assert_eq!(f.title.search, "world");
+}
+
+#[test]
+fn server_fields_edit_at_their_cursor() {
+    use winit::keyboard::KeyCode;
+    let mut f = Fixture::new();
+    f.title.mode = Mode::Multiplayer(crate::multiplayer::Screen::Edit {
+        index: None,
+        name: "Minecraft Server".into(),
+        address: String::new(),
+        focus: 1,
+        packs: None,
+    });
+    f.title.type_text("localhost");
+    for _ in 0..4 {
+        assert!(f.title.field_key(KeyCode::ArrowLeft, false, false));
+    }
+    f.title.type_text("X");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { address, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(address, "localXhost");
+    // Shift+Home selects back to the start; typing replaces the selection.
+    f.title.field_key(KeyCode::Home, false, true);
+    f.title.type_text("Y");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { address, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(address, "Yhost");
+    // Tab moves to the name, which edits at its own cursor.
+    f.title.tab();
+    f.title.field_key(KeyCode::ArrowLeft, false, false);
+    f.title.type_text("X");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { name, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(name, "Minecraft ServeXr");
+    f.title.mode = Mode::Multiplayer(crate::multiplayer::Screen::Direct {
+        address: String::new(),
+    });
+    f.title.type_text("one two");
+    // Ctrl+Backspace deletes the word before the caret.
+    f.title.field_key(KeyCode::Backspace, true, false);
+    let Mode::Multiplayer(crate::multiplayer::Screen::Direct { address }) = &f.title.mode else {
+        panic!("direct");
+    };
+    assert_eq!(address, "one ");
 }

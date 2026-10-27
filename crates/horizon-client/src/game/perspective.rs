@@ -218,11 +218,20 @@ impl Game<'_> {
                 _ => None,
             })
         });
-        // A living mount at the default scale and camera distance.
+        // Camera.setup: the living mount's scale and camera distance
+        // attributes (the happy ghast's is 8, the default 4).
         let mount = self
             .riding
             .and_then(|id| self.mobs.iter().find(|m| m.id == id))
-            .map(|_| (1.0, 4.0));
+            .map(|m| {
+                let attribute = |name: &str, default: f64| {
+                    m.kind.attributes.get(name).copied().unwrap_or(default)
+                };
+                (
+                    attribute("minecraft:scale", 1.0) as f32,
+                    attribute("minecraft:camera_distance", 4.0),
+                )
+            });
         // AbstractBoat.positionRider turns a passenger by the boat's
         // deltaRotation after its yRotO was saved, and LocalPlayer.getViewYRot
         // interpolates a passenger's yaw: the boat's turn is spread over the

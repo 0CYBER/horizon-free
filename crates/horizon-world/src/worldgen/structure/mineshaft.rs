@@ -616,6 +616,9 @@ impl MineshaftPiece {
             // A chest minecart with the mineshaft loot table.
             let seed = c.random.long();
             let mut nbt = super::legacy::spawn_nbt("minecraft:chest_minecart", pos, false, false);
+            // As the proto chunk saves the new cart: not ticked, not burning.
+            nbt.insert("HasTicked".into(), Tag::Byte(1));
+            nbt.insert("Fire".into(), Tag::Short(0));
             let p = [
                 f64::from(pos[0]) + 0.5,
                 f64::from(pos[1]) + 0.5,
@@ -731,6 +734,57 @@ impl MineshaftPiece {
 impl LegacyPiece for MineshaftPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        use crate::nbt::Tag;
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        let mut tag = super::legacy::piece_tag(
+            self.type_name(),
+            self.frame.bounding_box,
+            self.frame.orientation,
+            self.depth,
+        );
+        // MineshaftStructure.Type's ordinal: NORMAL, MESA.
+        let mesa = self.wood.log == MESA.log;
+        let mut entries = vec![("MST", Tag::Int(i32::from(mesa)))];
+        match &self.kind {
+            Kind::Room(entrances) => entries.push((
+                "Entrances",
+                Tag::List(
+                    entrances
+                        .iter()
+                        .map(|b| {
+                            Tag::IntArray(vec![
+                                b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2],
+                            ])
+                        })
+                        .collect(),
+                ),
+            )),
+            Kind::Corridor {
+                rails,
+                spider,
+                sections,
+                placed_spider,
+            } => entries.extend([
+                ("hr", flag(*rails)),
+                ("sc", flag(*spider)),
+                ("hps", flag(*placed_spider.lock().unwrap())),
+                ("Num", Tag::Int(*sections)),
+            ]),
+            Kind::Crossing {
+                direction,
+                two_floored,
+            } => {
+                let d = crate::level::data_2d(*direction) as i8;
+                entries.extend([("tf", flag(*two_floored)), ("D", Tag::Byte(d))]);
+            }
+            Kind::Stairs => {}
+        }
+        for (key, value) in entries {
+            tag.insert(key.into(), value);
+        }
+        Some(tag)
     }
     fn type_name(&self) -> &'static str {
         match self.kind {
