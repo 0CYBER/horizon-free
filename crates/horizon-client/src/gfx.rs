@@ -3237,7 +3237,7 @@ impl Renderer {
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
-        let levels = sprite_mipmap_limit(
+        let levels = crate::sprites::sprite_mipmap_limit(
             levels,
             self.sprite_textures[0].width(),
             self.sprite_minimum_size,
@@ -5552,11 +5552,6 @@ mod tests {
     }
 }
 
-pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, available: u32) -> u32 {
-    // Only the atlas native minimum determines how many resampling-only mips to skip.
-    let upscale = (size / minimum.max(1)).max(1).ilog2();
-    requested.saturating_add(upscale).min(available - 1)
-}
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
@@ -5614,13 +5609,6 @@ mod sprite_upload_tests {
                 1,
             );
             assert_eq!(&actual[32 * 32 * 4..], expected, "rail layer {layer}");
-        }
-    }
-    #[test]
-    fn mipmap_option_keeps_real_16px_reductions() {
-        for levels in 0..=4 {
-            assert_eq!(sprite_mipmap_limit(levels, 32, 16, 6), levels + 1);
-            assert_eq!(sprite_mipmap_limit(levels, 16, 16, 5), levels);
         }
     }
     #[test]
