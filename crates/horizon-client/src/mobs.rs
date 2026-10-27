@@ -1324,6 +1324,8 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
+    /// `Attributes.KNOCKBACK_RESISTANCE`.
+    pub knockback_resistance: f64,
     /// The active effects, without namespace (`slowness`, `poison`...).
     pub effects: Vec<&'static str>,
 }
@@ -1406,6 +1408,7 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
+            knockback_resistance: m.attrs.knockback_resistance,
             effects: m
                 .extra
                 .effects

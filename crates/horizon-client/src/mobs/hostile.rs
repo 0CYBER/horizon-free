@@ -77,7 +77,8 @@ impl Goal for SpiderAttack {
         self.0.flags()
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_use(m, cx)
+        // SpiderAttackGoal.canUse: not while it carries a rider.
+        self.0.can_use(m, cx) && m.extra.rider.is_none()
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if mob_brightness(m, cx.w) >= 0.5 && m.random.next_int_bound(100).unwrap_or(1) == 0 {
