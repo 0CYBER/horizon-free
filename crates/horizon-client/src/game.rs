@@ -2922,6 +2922,11 @@ impl Game<'_> {
                     data,
                 } => self.dragon_egg_particles([pos.x, pos.y, pos.z], data),
                 LevelEvent::LevelEvent {
+                    id: 2016,
+                    pos,
+                    data,
+                } => self.shulker_teleport_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent {
                     id: 2017,
                     pos,
                     data,

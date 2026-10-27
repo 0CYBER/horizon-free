@@ -944,6 +944,21 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::Shift { target, delta } => {
+                    let d = Vec3::new(delta[0], delta[1], delta[2]);
+                    match target {
+                        Who::Player => {
+                            if let Some(p) = self.player.as_mut() {
+                                p.position = p.position.add_vector(d);
+                            }
+                        }
+                        Who::Mob(id) => {
+                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                                m.position = m.position.add_vector(d);
+                            }
+                        }
+                    }
+                }
                 MobEvent::Wololo { mob } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         // DyeColor.RED.

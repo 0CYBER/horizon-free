@@ -90,6 +90,9 @@ pub enum LookKind {
     Fixed,
     /// `HappyGhast.HappyGhastLookControl`.
     HappyGhast,
+    /// `Shulker.ShulkerLookControl`: the yaw turns in the attach face's
+    /// plane and the head is never clamped to the body.
+    Shulker,
 }
 #[derive(Clone, Debug, Default)]
 pub struct LookControl {
@@ -344,6 +347,20 @@ impl Mob {
                 } else if diff > max {
                     self.body_yaw += 4.0;
                 }
+            }
+            LookKind::Shulker => {
+                // ShulkerLookControl: resetXRotOnTick, getXRotD 0, and the
+                // yaw worked out in the attach face's plane (getYRotD).
+                self.head_pitch = 0.0;
+                if look.cooldown > 0 {
+                    self.ai.look.cooldown -= 1;
+                    if let Some(y) = super::shulker::look_yaw(self, look.wanted) {
+                        self.head_yaw = rotate_towards(self.head_yaw, y, look.y_max_rot_speed);
+                    }
+                } else {
+                    self.head_yaw = rotate_towards(self.head_yaw, self.body_yaw, 10.0);
+                }
+                // clampHeadRotationToBody does nothing for a shulker.
             }
             LookKind::Default | LookKind::Fixed => {
                 if look.kind == LookKind::Default {
