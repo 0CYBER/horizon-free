@@ -1194,14 +1194,14 @@ impl Game<'_> {
 
     /// `LightmapRenderStateExtractor`: the night vision effect's intensity
     /// (`GameRenderer.nightVisionScale`), or conduit power's water vision.
-    pub(super) fn night_vision_intensity(&self) -> f32 {
+    pub(super) fn night_vision_intensity(&self, partial: f32) -> f32 {
         use horizon_client::fog::FogType;
         if let Some(e) = self.potions.effects.get("night_vision") {
             // MobEffectInstance.endsWithin(200); -1 is infinite.
             return if e.duration < 0 || e.duration > 200 {
                 1.0
             } else {
-                0.7 + (e.duration as f32 * std::f32::consts::PI * 0.2).sin() * 0.3
+                0.7 + ((e.duration as f32 - partial) * std::f32::consts::PI * 0.2).sin() * 0.3
             };
         }
         if self.potions.effects.get("conduit_power").is_some()

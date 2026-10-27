@@ -50,6 +50,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod polar_bear;
 pub mod rabbit;
 pub mod raider;
 pub mod ravager;
@@ -517,6 +518,8 @@ pub enum DamageKind {
     InFire,
     Lava,
     Drown,
+    /// `dry_out`: an axolotl out of water for too long.
+    DryOut,
     Magic,
     Sting,
     Cactus,
@@ -524,6 +527,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `freeze`: a fully frozen mob in powder snow.
+    Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
 }
@@ -575,7 +580,11 @@ impl Damage {
     pub fn causes_panic(&self) -> bool {
         !matches!(
             self.kind,
-            DamageKind::Fall | DamageKind::Drown | DamageKind::Generic | DamageKind::InWall
+            DamageKind::Fall
+                | DamageKind::Drown
+                | DamageKind::DryOut
+                | DamageKind::Generic
+                | DamageKind::InWall
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -589,6 +598,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -608,10 +618,12 @@ impl Damage {
                 | DamageKind::InFire
                 | DamageKind::Lava
                 | DamageKind::Drown
+                | DamageKind::DryOut
                 | DamageKind::Magic
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -638,6 +650,11 @@ pub struct Attrs {
 pub struct Extra {
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
+    /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
+    /// sets its box (`Avatar.POSES`).
+    pub avatar_pose: crate::pose::Pose,
+    /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
+    pub sprinting: bool,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
     pub age: i32,
@@ -719,6 +736,12 @@ pub struct Extra {
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
+    /// The effects above given with `hideParticles`: no swirls for them.
+    pub hidden_effects: Vec<&'static str>,
+    /// `LivingEntity.DATA_EFFECT_PARTICLES` and `DATA_EFFECT_AMBIENCE_ID` as a
+    /// server gave them: the swirls around it, and whether they are all faint.
+    pub effect_particles: Vec<crate::particles::ParticleOptions>,
+    pub effect_ambient: bool,
     /// An invisible illusioner's mirror images.
     pub illusions: Option<illusioner::Illusions>,
     /// A villager's claimed bed head and meeting bell.
@@ -730,6 +753,8 @@ pub struct Extra {
     /// the spin the rope's torque gives it.
     pub leash: Option<leash::Holder>,
     pub leash_pending: Option<leash::Pending>,
+    /// The UUID of the player behind `Holder::Player` (host or guest).
+    pub leash_player: Option<[i32; 4]>,
     pub leash_spin: f64,
     /// More species scratch values.
     pub scratch: [i32; 4],
@@ -763,8 +788,9 @@ pub struct Extra {
     pub drop_chances: Option<Box<[f32; 8]>>,
     /// `Mob.leftHanded`.
     pub left_handed: bool,
-    /// The sound variant: index in the species' `*_sound_variant` registry.
-    pub sound_variant: u8,
+    /// The sound variant: index in the species' `*_sound_variant` registry
+    /// (`finalize::sound_variants`); None is the default, `classic`.
+    pub sound_variant: Option<u8>,
     /// `Zombie.canBreakDoors`.
     pub can_break_doors: bool,
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
@@ -885,6 +911,12 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
+    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
+    /// clients' `makeDrownParticles`.
+    Drown {
+        mob: u32,
+        at: [f64; 3],
+    },
     Sound(&'static str, [f64; 3], f32, f32),
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
@@ -964,6 +996,12 @@ pub enum MobEvent {
     Push {
         target: Who,
         velocity: [f64; 3],
+    },
+    /// `Entity.move(MoverType.SHULKER, delta)`: shift a target's position
+    /// (an opening shulker lifts what stands on its shell).
+    Shift {
+        target: Who,
+        delta: [f64; 3],
     },
     /// `EvokerWololoSpellGoal`: a blue sheep turns red.
     Wololo {
@@ -1329,6 +1367,10 @@ impl Mob {
             .fire_ticks
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
+    }
+    /// `Entity.isFullyFrozen`.
+    pub fn is_fully_frozen(&self) -> bool {
+        self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
     }
 
     /// What other mobs see of this one this tick (`player`: the player's
@@ -1808,6 +1850,15 @@ impl Mob {
         {
             amount *= 0.75;
         }
+        // LivingEntity.hurtServer: `#freeze_hurts_extra_types` take five times.
+        if source.kind == DamageKind::Freeze
+            && matches!(
+                self.species(),
+                Species::Strider | Species::Blaze | Species::MagmaCube
+            )
+        {
+            amount *= 5.0;
+        }
         let (worn, worn_toughness) = self.worn_armor();
         if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
             // CombatRules.getDamageAfterAbsorb
@@ -1880,6 +1931,12 @@ impl Mob {
                 }
             }
         }
+        // Squid.hurtServer: a squid hurt after a living entity hit it squirts ink.
+        if matches!(self.species(), Species::Squid | Species::GlowSquid)
+            && self.ai.last_hurt_by.is_some()
+        {
+            aquatic::spawn_ink(self);
+        }
         true
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
@@ -1946,8 +2003,15 @@ impl Mob {
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
-            e.1 = e.1.max(ticks);
-            e.2 = e.2.max(amplifier);
+            // MobEffectInstance.update: a stronger effect replaces the old one
+            // with its own duration, an equal one keeps the longer duration,
+            // and a weaker one never changes the active effect.
+            if amplifier > e.2 {
+                e.1 = ticks;
+                e.2 = amplifier;
+            } else if amplifier == e.2 {
+                e.1 = e.1.max(ticks);
+            }
         } else {
             self.extra.effects.push((effect, ticks, amplifier));
         }
@@ -1968,8 +2032,18 @@ impl Mob {
     }
     /// LivingEntity.getVoicePitch.
     pub fn voice_pitch(&mut self) -> f32 {
+        // HappyGhast.getVoicePitch: always 1.0, babies and all.
+        if self.species() == Species::HappyGhast {
+            return 1.0;
+        }
+        // ZombieVillager.getVoicePitch: babies are 2.0, not 1.5.
+        let baby = if self.species() == Species::ZombieVillager {
+            2.0
+        } else {
+            1.5
+        };
         let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
-            + if self.is_baby() { 1.5 } else { 1.0 };
+            + if self.is_baby() { baby } else { 1.0 };
         // Bat.getVoicePitch: a little lower.
         if self.species() == Species::Bat {
             pitch * 0.95

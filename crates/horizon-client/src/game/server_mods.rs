@@ -59,9 +59,12 @@ mod run {
         lan::data::component_nbt,
         text::{self, Text},
     };
-    use horizon_mods::{BlockPos, GameMode, Output, ServerPlayer, WorldView};
+    use horizon_mods::{
+        ArgumentKind, BlockPos, GameMode, Output, ServerCommand, ServerPlayer, WorldView,
+    };
     use horizon_protocol::packets::play::{self, Clientbound as C};
     use horizon_world::registry::{BlockRegistry, BlockStateId};
+    use serde_json::{Value, json};
 
     /// Blocks queued for levels that don't tick (another dimension, in-frame)
     /// are kept up to this many; the oldest go first.
@@ -96,6 +99,60 @@ mod run {
                 .map(drop)
                 .map_err(|e| format!("{state}: {e}"))
         }
+    }
+
+    /// Server mods' commands as a root of the commands report
+    /// (`lan::commands`): a literal per command, then its arguments in a
+    /// chain, each node runnable where only optional arguments follow.
+    fn command_tree<'a>(commands: impl Iterator<Item = &'a ServerCommand>) -> Value {
+        let mut root = serde_json::Map::new();
+        for c in commands {
+            let mut next: Option<(String, Value)> = None;
+            for (i, a) in c.arguments.iter().enumerate().rev() {
+                let executable = c.arguments.get(i + 1).is_none_or(|b| b.optional);
+                let (parser, properties) = match a.kind {
+                    ArgumentKind::Word => ("brigadier:string", json!({"type": "word"})),
+                    ArgumentKind::Text => ("brigadier:string", json!({"type": "greedy"})),
+                    ArgumentKind::Integer((min, max)) => {
+                        let mut p = serde_json::Map::new();
+                        if let Some(min) = min {
+                            p.insert("min".into(), min.into());
+                        }
+                        if let Some(max) = max {
+                            p.insert("max".into(), max.into());
+                        }
+                        ("brigadier:integer", Value::Object(p))
+                    }
+                    ArgumentKind::Number => ("brigadier:double", Value::Null),
+                    ArgumentKind::Boolean => ("brigadier:bool", Value::Null),
+                    ArgumentKind::Player => (
+                        "minecraft:entity",
+                        json!({"amount": "single", "type": "players"}),
+                    ),
+                    ArgumentKind::BlockPos => ("minecraft:block_pos", Value::Null),
+                };
+                let mut node = json!({
+                    "type": "argument",
+                    "parser": parser,
+                    "properties": properties,
+                    "executable": executable,
+                });
+                if let Some((name, child)) = next.take() {
+                    node["children"] = json!({ name: child });
+                }
+                next = Some((a.name.clone(), node));
+            }
+            let executable = c.arguments.first().is_none_or(|a| a.optional);
+            let mut literal = json!({"type": "literal", "executable": executable});
+            if let Some((name, child)) = next {
+                literal["children"] = json!({ name: child });
+            }
+            root.insert(c.name.clone(), literal);
+        }
+        if root.is_empty() {
+            return Value::Null;
+        }
+        json!({"type": "root", "children": root})
     }
 
     /// `minecraft:oak_log[axis=y]`.
@@ -191,6 +248,7 @@ mod run {
                 // A server has no frames to check its dev mods in.
                 self.reload_dev_mods();
             }
+            self.send_server_mod_commands();
             if !self.mods.server {
                 return;
             }
@@ -255,6 +313,20 @@ mod run {
             self.mods.players = players;
             self.show_mod_output();
             self.apply_mod_block_writes();
+        }
+
+        /// Players' command trees list the running server mods' commands
+        /// after vanilla's, whenever they change (or a hub opens).
+        fn send_server_mod_commands(&mut self) {
+            let key = self.mods.mods.generation();
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
+            if host.hub.mod_commands_key() == Some(key) {
+                return;
+            }
+            let tree = command_tree(self.mods.mods.server_commands());
+            host.hub.set_mod_commands(key, tree);
         }
 
         /// Lends the levels' chunks to capability `world` for the calls up to

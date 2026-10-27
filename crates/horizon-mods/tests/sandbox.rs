@@ -26,8 +26,8 @@ id = "test_ui_guest"
 name = "Test UI Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["game-read", "chat", "command", "ui", "render", "input"]
-experimental = ["ui", "render", "input"]
+capabilities = ["game-read", "chat", "command", "ui", "render", "input", "recipes"]
+experimental = ["ui", "render", "input", "recipes"]
 "#;
 
 /// Builds the mods once and writes their `.hmod` files; returns the folder.
@@ -205,7 +205,7 @@ fn undeclared_capabilities_are_refused() {
 /// from the functions they import.
 #[test]
 fn a_mod_for_a_newer_horizon_is_refused() {
-    use horizon_mods::api_level::{imports, needed};
+    use horizon_mods::api_level::{LEVEL, imports, needed};
     use wit_parser::{ManglingAndAbi, Resolve};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
@@ -241,8 +241,8 @@ id = "too_new"
 name = "Too New"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input"]
-experimental = ["ui", "render", "input"]
+capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input", "recipes"]
+experimental = ["ui", "render", "input", "recipes"]
 "#;
     std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
     std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
@@ -255,8 +255,8 @@ experimental = ["ui", "render", "input"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest runs quiet commands (`command.run-quiet`, level 3).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 3);
+    // The UI guest draws far terrain (`render.set-far-terrain`).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
 }
 
 #[test]
@@ -725,6 +725,21 @@ fn render_minimap_is_clamped_and_hidden() {
     assert_eq!(map(&mut mods, "off"), None);
 }
 
+#[test]
+fn render_far_terrain_is_clamped_and_ended() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let far = |mods: &mut Mods, args: &str| {
+        assert!(mods.command(&format!("far_terrain {args}")));
+        mods.far_terrain().map(|f| (f.distance, f.reduced))
+    };
+    assert!(mods.far_terrain().is_none());
+    assert_eq!(far(&mut mods, "256 1"), Some((256, true)));
+    // The distance is clamped to LOD Distance's 64 to 1024 chunks.
+    assert_eq!(far(&mut mods, "8 0"), Some((64, false)));
+    assert_eq!(far(&mut mods, "99999 0"), Some((1024, false)));
+    assert_eq!(far(&mut mods, "off"), None);
+}
+
 /// `game.raycast`: the view's hit the game worked out, up to the distance
 /// asked for; the game works it out only while a mod imports the call.
 #[test]
@@ -900,7 +915,7 @@ fn a_server_mod_without_a_world_reads_nothing() {
     assert!(
         out.iter()
             .any(|o| matches!(o, Output::Reply { text, error: true, .. }
-            if text == "The ground under you isn't loaded")),
+            if text == "That block isn't loaded")),
         "{out:?}"
     );
 }
@@ -999,10 +1014,12 @@ fn a_server_mod_runs_only_where_the_world_does() {
 
     let mut mods = Mods::load_for(Runs::Server, paths, |_| true, |c| c == "give");
     assert!(mods.runs_server());
-    assert_eq!(
-        mods.server_commands().collect::<Vec<_>>(),
-        ["online", "mined"]
-    );
+    let commands: Vec<_> = mods.server_commands().map(|c| c.name.as_str()).collect();
+    assert_eq!(commands, ["online", "mined"]);
+    // `/mined [player]`: its argument travels with it, for the command tree.
+    let mined = mods.server_commands().nth(1).unwrap();
+    assert_eq!(mined.arguments[0].kind, horizon_mods::ArgumentKind::Player);
+    assert!(mined.arguments[0].optional);
     assert_eq!(mods.commands().count(), 0, "not the window's chat commands");
     let alex = alex();
     mods.set_snapshot(Snapshot {
@@ -1040,4 +1057,248 @@ fn a_server_mod_runs_only_where_the_world_does() {
         !mods.command("online"),
         "a server command isn't the window's"
     );
+}
+
+/// Capability `recipes`: the guest reads tables as big as vanilla's (1,500
+/// items, 1,600 recipes of nine five-item slots) within one command's fuel.
+#[test]
+fn recipes_reads_the_tables() {
+    use horizon_mods::{Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let stack = |item| RecipeStack {
+        item,
+        count: 1,
+        components: String::new(),
+    };
+    let items = (0..1500)
+        .map(|i| RecipeItem {
+            id: format!("minecraft:item_{i}"),
+            name: format!("Item {i}"),
+            tags: vec!["planks".into(), "logs".into()],
+        })
+        .collect();
+    let mut recipes: Vec<Recipe> = (0..1600)
+        .map(|i| Recipe {
+            id: format!("minecraft:recipe_{i}"),
+            kind: RecipeKind::CraftingShaped,
+            category: "crafting_misc".into(),
+            group: String::new(),
+            width: 3,
+            height: 3,
+            slots: (0..9)
+                .map(|k| (0..5).map(|j| stack((i + k + j) % 1500)).collect())
+                .collect(),
+            results: vec![RecipeStack {
+                item: 7,
+                count: 4,
+                components: String::new(),
+            }],
+            cooking_time: 0,
+            experience: 0.0,
+            book_id: i as i32,
+        })
+        .collect();
+    recipes[1].kind = RecipeKind::Brewing;
+    recipes[1].results[0].components =
+        "[minecraft:potion_contents={potion:\"minecraft:swiftness\"}]".into();
+    let mods_recipes = Some(std::sync::Arc::new(Recipes { items, recipes }));
+    mods.set_snapshot(Snapshot {
+        recipes: mods_recipes.clone(),
+        known_recipes: vec![1, 5, 9].into(),
+        ..Snapshot::default()
+    });
+    let said = |mods: &mut Mods, command: &str| {
+        assert!(mods.command(command));
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        said(&mut mods, "recipes"),
+        ["1500 items, 1600 recipes, 3 known, 1 brewing"]
+    );
+    assert_eq!(
+        said(&mut mods, "recipes minecraft:recipe_1"),
+        [
+            "minecraft:recipe_1 Kind::Brewing 3x3 0t slots 9, the first 1 minecraft:item_1 -> \
+          4 minecraft:item_7[minecraft:potion_contents={potion:\"minecraft:swiftness\"}] known true"
+        ]
+    );
+    assert!(
+        mods.entries()
+            .iter()
+            .all(|e| e.status == horizon_mods::Status::Running),
+        "it ran out of fuel"
+    );
+    // Actions: refused without a crafting screen, for an unknown recipe,
+    // and outside creative mode.
+    assert_eq!(
+        said(&mut mods, "recipe_place minecraft:recipe_5"),
+        ["place minecraft:recipe_5: no screen that takes recipes is open"]
+    );
+    let mut snap = Snapshot {
+        recipes: mods_recipes.clone(),
+        known_recipes: vec![1, 5, 9].into(),
+        placing: true,
+        ..Snapshot::default()
+    };
+    mods.set_snapshot(snap.clone());
+    assert_eq!(
+        said(&mut mods, "recipe_place minecraft:recipe_6"),
+        ["place minecraft:recipe_6: recipe 6 is not in the player's recipe book"]
+    );
+    assert!(mods.command("recipe_place minecraft:recipe_5 all"));
+    assert_eq!(
+        mods.drain()[0],
+        Output::PlaceRecipe {
+            book_id: 5,
+            all: true
+        }
+    );
+    assert_eq!(
+        said(&mut mods, "recipe_give minecraft:item_7 3"),
+        ["give minecraft:item_7: only in creative mode"]
+    );
+    snap.creative = true;
+    mods.set_snapshot(snap);
+    assert!(mods.command("recipe_give minecraft:item_7 3"));
+    assert_eq!(
+        mods.drain()[0],
+        Output::Give {
+            item: "minecraft:item_7".into(),
+            count: 3,
+            components: String::new()
+        }
+    );
+    // Without the game's tables (no mod read them yet): empty, not a trap.
+    mods.set_snapshot(Snapshot::default());
+    assert_eq!(
+        said(&mut mods, "recipes"),
+        ["0 items, 0 recipes, 0 known, 0 brewing"]
+    );
+}
+
+#[test]
+fn browser_lists_items_and_hears_the_player() {
+    use horizon_mods::{BrowserClick, BrowserEvent, BrowserStack};
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let said = |mods: &mut Mods, command: &str| {
+        assert!(mods.command(command));
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(mods.browser_items().is_none());
+    let potion = "[minecraft:potion_contents={potion:\"minecraft:swiftness\"}]";
+    assert_eq!(
+        said(
+            &mut mods,
+            &format!("browser minecraft:stone minecraft:potion{potion}")
+        ),
+        ["panel of 2"]
+    );
+    let (owner, version, items) = mods.browser_items().unwrap();
+    assert_eq!(
+        (items[0].item.as_str(), items[1].components.as_str()),
+        ("minecraft:stone", potion)
+    );
+    mods.browser_event(
+        owner,
+        BrowserEvent::Clicked(BrowserClick {
+            index: 1,
+            right: true,
+        }),
+    );
+    mods.browser_event(owner, BrowserEvent::Search("oak".into()));
+    let log = BrowserStack {
+        item: "minecraft:oak_log".into(),
+        count: 3,
+        components: String::new(),
+    };
+    // R is the guest's `recipe`; X is none of its keys.
+    mods.browser_key("key.keyboard.r", &log);
+    mods.browser_key("key.keyboard.x", &log);
+    assert_eq!(
+        said(&mut mods, "browser_poll"),
+        [
+            "3 events",
+            "clicked 1 right",
+            "search \"oak\"",
+            "key recipe on minecraft:oak_log x3"
+        ]
+    );
+    // Each `set-items` is a new version; an empty list hides the panel.
+    said(&mut mods, "browser minecraft:dirt");
+    assert_ne!(mods.browser_items().unwrap().1, version);
+    assert_eq!(said(&mut mods, "browser"), ["panel of 0"]);
+    assert!(mods.browser_items().is_none());
+    // Recipes in the panel's place: the guest shows those making planks.
+    use horizon_mods::{BrowserLayout, Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
+    let item = |id: &str| RecipeItem {
+        id: id.into(),
+        name: id.into(),
+        tags: Vec::new(),
+    };
+    let stack = |item| RecipeStack {
+        item,
+        count: 1,
+        components: String::new(),
+    };
+    mods.set_snapshot(Snapshot {
+        recipes: Some(std::sync::Arc::new(Recipes {
+            items: vec![item("minecraft:oak_log"), item("minecraft:oak_planks")],
+            recipes: vec![Recipe {
+                id: "minecraft:oak_planks".into(),
+                kind: RecipeKind::CraftingShapeless,
+                category: "building".into(),
+                group: "planks".into(),
+                width: 0,
+                height: 0,
+                slots: vec![vec![stack(0)]],
+                results: vec![RecipeStack {
+                    count: 4,
+                    ..stack(1)
+                }],
+                cooking_time: 0,
+                experience: 0.0,
+                book_id: 1,
+            }],
+        })),
+        ..Snapshot::default()
+    });
+    said(&mut mods, "browser minecraft:dirt");
+    assert_eq!(
+        said(&mut mods, "browser_recipes minecraft:oak_planks"),
+        ["recipes shown: 1"]
+    );
+    let page = mods.browser_recipes(owner).unwrap();
+    assert_eq!(page.title, "Recipes for minecraft:oak_planks");
+    assert_eq!(
+        (page.tabs[0].item.as_str(), page.tab),
+        ("minecraft:crafting_table", 0)
+    );
+    let r = &page.recipes[0];
+    assert_eq!(
+        (r.layout, r.width, r.height, r.action),
+        (BrowserLayout::Grid, 1, 1, Some(false))
+    );
+    assert_eq!(
+        (r.slots[0][0].item.as_str(), r.results[0].count),
+        ("minecraft:oak_log", 4)
+    );
+    assert_eq!(said(&mut mods, "browser_recipes"), ["recipes shown: 0"]);
+    assert!(mods.browser_recipes(owner).is_none());
+    // At most 256 events wait for a poll: the oldest go.
+    for _ in 0..300 {
+        mods.browser_event(owner, BrowserEvent::Page(1));
+    }
+    assert_eq!(said(&mut mods, "browser_poll")[0], "256 events");
 }
