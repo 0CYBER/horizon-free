@@ -13,7 +13,6 @@ use crate::{
         doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
         uuid_from_tag,
     },
-    text::Text,
 };
 use horizon_core::geometry::Vec3;
 use horizon_world::nbt::{Compound, Tag};
@@ -874,14 +873,7 @@ fn custom_name(tag: &Tag) -> Option<String> {
         _ => None,
     }
 }
-/// `CustomName` as text: a string keeps its legacy formatting codes, anything
-/// else is a component (`ComponentSerialization`).
-pub fn name_text(tag: &Tag) -> Text {
-    match tag {
-        Tag::String(s) => Text::legacy(&s.to_string_lossy()),
-        t => crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
-    }
-}
+pub use horizon_client_core::component::name_text;
 /// Mob.finalizeSpawn's follow range bonus in the saved attributes.
 pub(crate) fn spawn_bonus(tag: &Tag) -> Option<f64> {
     let Some(Tag::List(attrs)) = tag.get("attributes") else {

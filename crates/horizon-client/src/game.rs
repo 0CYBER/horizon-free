@@ -107,6 +107,7 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mob_sounds;
 mod mod_browser;
 #[cfg(feature = "mods")]
 mod mod_browser_recipes;
@@ -176,6 +177,7 @@ mod sign_edit;
 mod sniffers;
 mod spawner;
 mod spear;
+mod spectator;
 mod spill;
 mod startup_menu;
 mod station_control;
@@ -1490,6 +1492,8 @@ struct Game<'a> {
     /// The shader pack's entity and block entity ids, while one draws entities.
     pack_ids: Option<shader_packs::PackIds>,
     started: Instant,
+    /// `SpectatorGui`: the menu a spectator opens with the hotbar keys.
+    spectator_gui: horizon_client::spectator_menu::SpectatorGui,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
     last_input: Instant,
@@ -1525,6 +1529,10 @@ struct Game<'a> {
     cart_sounds: HashSet<u32>,
     /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
     riding_cart_sounds: Option<u32>,
+    /// Bees whose buzz is playing, and whether it is the aggressive one.
+    bee_sounds: HashMap<u32, bool>,
+    /// Guardians whose attack hum is playing.
+    guardian_sounds: HashSet<u32>,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -5860,7 +5868,9 @@ impl Game<'_> {
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
-            if !spectator {
+            if spectator {
+                self.draw_spectator_hotbar(&mut batch);
+            } else {
                 let partial = self.clock.fraction() as f32;
                 let inputs = hud_layout::HotbarInputs {
                     selected: self.selected as i32,
@@ -7774,7 +7784,9 @@ impl Game<'_> {
             self.yaw
         };
         for m in &self.mobs {
-            if m.fire_ticks > 0 && !m.removed {
+            // Blaze.isOnFire: a charged blaze burns.
+            let blazing = m.species() == horizon_client::mobs::Species::Blaze && m.extra.flag;
+            if (m.fire_ticks > 0 || blazing) && !m.removed {
                 let at = m.previous.lerp(m.position, alpha);
                 horizon_client::fire_render::flames(
                     [at.x, at.y, at.z],
@@ -12062,11 +12074,16 @@ impl Game<'_> {
                     KeyCode::Digit8 => 7,
                     _ => 8,
                 };
-                // Minecraft.handleKeybinds: a creative player holding the load
-                // or save toolbar key loads or saves a toolbar instead (load
-                // first when both are held).
+                // Minecraft.handleKeybinds: a spectator's number keys drive
+                // the spectator menu, not the hotbar; a creative player
+                // holding the load or save toolbar key loads or saves a
+                // toolbar instead (load first when both are held).
                 let load = self.mapped_key_down("key.loadToolbarActivator");
-                if self.creative && (load || self.mapped_key_down("key.saveToolbarActivator")) {
+                if self.spectator() {
+                    self.spectator_hotbar_key(slot as i32);
+                } else if self.creative
+                    && (load || self.mapped_key_down("key.saveToolbarActivator"))
+                {
                     self.hotbar_load_or_save(slot, load);
                 } else {
                     self.selected = slot;
@@ -12083,6 +12100,14 @@ impl Game<'_> {
             return Ok(());
         }
         if self.sleeping.is_some() {
+            return Ok(());
+        }
+        // key.spectatorHotbar (the middle button) opens the spectator menu
+        // and uses its selected item.
+        if button == MouseButton::Middle && self.spectator() {
+            if pressed {
+                self.spectator_action_key();
+            }
             return Ok(());
         }
         if self.remote.is_some() {
@@ -12649,7 +12674,9 @@ impl ApplicationHandler for Game<'_> {
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
                     {
-                        if self.spectator() {
+                        if self.spectator() && self.spectator_gui.is_menu_active() {
+                            self.spectator_scroll(-wheel);
+                        } else if self.spectator() {
                             if let Some(player) = &mut self.player {
                                 player.flying_speed = horizon_client::mouse::spectator_flying_speed(
                                     player.flying_speed,
@@ -13566,6 +13593,7 @@ impl<'a> Game<'a> {
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             started: now,
+            spectator_gui: Default::default(),
             previous: now,
             last_input: now,
             pad: Default::default(),
@@ -13594,6 +13622,8 @@ impl<'a> Game<'a> {
             sound_paused: false,
             cart_sounds: HashSet::new(),
             riding_cart_sounds: None,
+            bee_sounds: HashMap::new(),
+            guardian_sounds: HashSet::new(),
             dropped: Vec::new(),
             next_entity: 0,
             particles,

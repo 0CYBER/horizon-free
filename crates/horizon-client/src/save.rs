@@ -104,27 +104,8 @@ pub fn chunks_with_block_entities<'a>(
         .collect()
 }
 
-fn string(s: &str) -> Tag {
-    Tag::String(s.into())
-}
-pub fn text(tag: Option<&Tag>) -> Option<String> {
-    match tag {
-        Some(Tag::String(s)) => Some(s.to_string_lossy()),
-        _ => None,
-    }
-}
-/// Any numeric tag as i64 (vanilla's `getIntOr` etc. accept every number type).
-pub fn number(tag: Option<&Tag>) -> Option<i64> {
-    Some(match tag? {
-        Tag::Byte(v) => i64::from(*v),
-        Tag::Short(v) => i64::from(*v),
-        Tag::Int(v) => i64::from(*v),
-        Tag::Long(v) => *v,
-        Tag::Float(b) => f32::from_bits(*b) as i64,
-        Tag::Double(b) => f64::from_bits(*b) as i64,
-        _ => return None,
-    })
-}
+use horizon_client_core::nbt_value::string;
+pub use horizon_client_core::nbt_value::{number, text};
 pub(crate) fn float(tag: Option<&Tag>) -> Option<f64> {
     Some(match tag? {
         Tag::Float(b) => f64::from(f32::from_bits(*b)),
@@ -412,62 +393,9 @@ fn fluid_id(name: &str) -> Option<u32> {
     } as u32)
 }
 
-fn encode_item(stack: &crate::items::ItemStack) -> Vec<(&'static str, Tag)> {
-    let mut entries = vec![
-        ("id", string(&stack.item)),
-        ("count", Tag::Int(stack.count as i32)),
-    ];
-    if let Some(components) = crate::item_data::encode_components(stack) {
-        entries.push(("components", components));
-    }
-    entries
-}
-/// ItemStack.CODEC (id, count, components).
-pub fn item_to_nbt(stack: &crate::items::ItemStack) -> Tag {
-    Tag::compound(encode_item(stack))
-}
-pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
-    let id = text(tag.get("id"))?;
-    if id == "minecraft:air" {
-        return None;
-    }
-    let count = number(tag.get("count"))
-        .or_else(|| number(tag.get("Count")))
-        .unwrap_or(1)
-        .max(1) as u32;
-    let (damage, extra) = crate::item_data::decode_components(tag.get("components"));
-    Some(crate::items::ItemStack {
-        item: Arc::from(id.as_str()),
-        count,
-        damage,
-        extra,
-    })
-}
-pub fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
-    Tag::List(
-        slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let mut entries = vec![("Slot", Tag::Byte(i as i8))];
-                entries.extend(encode_item(s.as_ref()?));
-                Some(Tag::compound(entries))
-            })
-            .collect(),
-    )
-}
-pub fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::ItemStack>> {
-    let mut slots = vec![None; size];
-    if let Some(Tag::List(items)) = tag {
-        for it in items {
-            let slot = number(it.get("Slot")).unwrap_or(0) as u8 as usize;
-            if let Some(cell) = slots.get_mut(slot) {
-                *cell = item_from_nbt(it);
-            }
-        }
-    }
-    slots
-}
+pub use horizon_items::item_nbt::{
+    decode_items, encode_item, encode_items, item_from_nbt, item_to_nbt,
+};
 /// The block entity type ID for the block it sits in (a chest-like container
 /// is a chest, trapped chest or barrel).
 fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
