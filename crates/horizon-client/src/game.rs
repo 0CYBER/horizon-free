@@ -1609,6 +1609,9 @@ struct Game<'a> {
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
+    /// `ProfileResolver.Cached`: `Dynamic` profiles (name- or id-only heads
+    /// and mannequins) resolve through the services in the background.
+    skin_profiles: RefCell<horizon_client::skins::Resolver>,
     skin_slots: Vec<(String, usize)>,
     /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
     trim_slots: Vec<(String, usize)>,
@@ -13333,6 +13336,7 @@ impl<'a> Game<'a> {
                     .unwrap_or_default()
                     .join("assets/skins"),
             )),
+            skin_profiles: RefCell::new(horizon_client::skins::Resolver::new()),
             skin_slots: Vec::new(),
             trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
