@@ -1520,8 +1520,11 @@ pub fn encode_proto(
     shape: LevelShape,
 ) -> NamedTag {
     let mut root = encode_with(&proto.column, registry, biomes, tables, shape);
+    // A decorated proto chunk has its features but no light, which is
+    // vanilla's INITIALIZE_LIGHT status (the FEATURES step is done, the light
+    // is not computed yet); vanilla never saves one as `minecraft:features`.
     let status = if proto.decorated {
-        ChunkStatus::Features
+        ChunkStatus::InitializeLight
     } else {
         ChunkStatus::Terrain
     };
