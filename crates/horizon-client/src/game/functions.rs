@@ -36,6 +36,8 @@ pub(super) struct FnState {
     load_pending: bool,
     pub schedule: Vec<Scheduled>,
     next_seq: u64,
+    /// A dedicated server's `function-permission-level`.
+    pub permission: Option<u8>,
 }
 /// What a function reported through `return`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +45,16 @@ pub(super) enum Outcome {
     NoReturn,
     Value(i32),
     Fail,
+}
+
+impl FnState {
+    /// The level function files compile at (`ServerFunctionLibrary`'s
+    /// `functionCompilationPermissions`): `function-permission-level` on a
+    /// dedicated server, game master (2) otherwise. Whoever runs a function,
+    /// its commands need no more than this.
+    fn command_level(&self) -> u8 {
+        self.permission.unwrap_or(2)
+    }
 }
 
 impl Game<'_> {
@@ -278,6 +290,7 @@ impl Game<'_> {
         }
         self.exec.function_depth += 1;
         let outer = self.exec.returned.take();
+        let level = std::mem::replace(&mut self.ui.registries.permission, self.fns.command_level());
         let inner = Source {
             silent: true,
             store: None,
@@ -292,6 +305,7 @@ impl Game<'_> {
                 break;
             }
         }
+        self.ui.registries.permission = level;
         let returned = std::mem::replace(&mut self.exec.returned, outer);
         self.exec.function_depth -= 1;
         Ok(match returned {

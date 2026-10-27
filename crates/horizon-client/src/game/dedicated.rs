@@ -796,6 +796,7 @@ impl Game<'_> {
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
         let mut next = Instant::now();
+        self.fns.permission = Some(props.function_permission_level.clamp(0, 4) as u8);
         let watchdog = Watchdog::start(props.max_tick_time);
         while !state.stop {
             let tick_start = Instant::now();
