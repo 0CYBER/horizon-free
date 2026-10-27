@@ -94,6 +94,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
+            // and raised head of an angry enderman.
+            (Species::Enderman, 17, Value::Bool(creepy)) => m.extra.flag = *creepy,
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).
             (Species::Pillager, 17, Value::Bool(charging)) => m.extra.flag = *charging,

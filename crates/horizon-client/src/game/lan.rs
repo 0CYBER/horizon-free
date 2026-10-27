@@ -397,7 +397,7 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BYTE, Value::Byte(0)));
         }
-        // Enderman.DATA_CARRY_STATE.
+        // Enderman.DATA_CARRY_STATE and DATA_CREEPY (angry: the open mouth).
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
                 meta.push((
@@ -406,6 +406,10 @@ fn mob_meta(
                     Value::Id(state.0 as i32),
                 ));
             }
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
         _ => {}
     }
