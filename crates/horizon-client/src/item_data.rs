@@ -296,6 +296,21 @@ fn read_levels(t: Option<&Tag>) -> Levels {
 }
 /// A text component as stored by vanilla: a plain string or `{"text": ...}`.
 /// A `Filterable<String/Component>`: the value itself or `{raw: value}`.
+/// `ComponentSerialization.CODEC`'s short form: a plain text component with
+/// no style and no siblings is written as its string.
+fn plain_component(t: &Tag) -> Tag {
+    if let Tag::Compound(c) = t
+        && let Some(text @ Tag::String(_)) = c.get(&"text".into())
+        && c.iter().all(|(k, v)| {
+            k.to_string_lossy() == "text"
+                || (k.to_string_lossy() == "type"
+                    && matches!(v, Tag::String(s) if s.to_string_lossy() == "text"))
+        })
+    {
+        return text.clone();
+    }
+    t.clone()
+}
 fn filterable_text(t: &Tag) -> Option<String> {
     match t.get("raw") {
         Some(raw) => read_text(raw),
@@ -716,7 +731,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 page_tags: match b.get("pages") {
                     Some(Tag::List(pages)) => pages
                         .iter()
-                        .map(|p| p.get("raw").unwrap_or(p).clone())
+                        .map(|p| plain_component(p.get("raw").unwrap_or(p)))
                         .collect(),
                     _ => Vec::new(),
                 },
