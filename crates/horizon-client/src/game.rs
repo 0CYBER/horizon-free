@@ -4651,6 +4651,7 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
+        let entering = self.restore_player_state;
         player.load_saved_state_once(&mut self.restore_player_state, &self.level)?;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
@@ -4674,6 +4675,11 @@ impl Game<'_> {
             self.capture(false);
         }
         self.previous_position = feet;
+        if entering {
+            // The world's first player: a server's client gets it with its
+            // level (Minecraft.setLevel), which stops every sound.
+            self.stop_sounds_for_new_level();
+        }
         self.player = Some(player);
         self.pad.player_replaced();
         self.sway = Default::default();
