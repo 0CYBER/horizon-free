@@ -2,7 +2,12 @@
 //! player state (inventory, health, game mode) that the host's gameplay code
 //! operates on when it acts for them.
 use super::{Joined, PlayerSender, entity::Tracker};
-use crate::{items::ItemStack, motion::PlayerMotion};
+use crate::{
+    items::ItemStack,
+    motion::PlayerMotion,
+    pose::{Dimensions, Pose},
+};
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::{
     item::Stack,
     packets::{configuration::ClientInformation, play},
@@ -407,8 +412,41 @@ impl Guest {
         }
         f
     }
+    /// `Player.getDesiredPose`: sleeping, gliding, then the body's own pose
+    /// (swimming, crawling, crouching) once its server tick has run.
+    pub fn pose(&self) -> Pose {
+        if self.sleeping {
+            Pose::Sleeping
+        } else if self.fall_flying {
+            Pose::FallFlying
+        } else if let Some(m) = &self.motion {
+            m.pose
+        } else if self.sneaking && !self.flying {
+            Pose::Crouching
+        } else {
+            Pose::Standing
+        }
+    }
+    /// `Avatar.POSES` for the guest's pose, with its scale attribute.
+    pub fn dimensions(&self) -> Dimensions {
+        let pose = self.pose();
+        match &self.motion {
+            Some(m) if m.pose == pose => m.dimensions,
+            _ => pose.dimensions(1.0),
+        }
+    }
+    /// `Entity.getBoundingBox`.
+    pub fn bounds(&self) -> Aabb {
+        let [x, y, z] = self.position;
+        let d = self.dimensions();
+        let half = f64::from(d.width) / 2.0;
+        Aabb::new(
+            Vec3::new(x - half, y, z - half),
+            Vec3::new(x + half, y + f64::from(d.height), z + half),
+        )
+    }
     pub fn eye_height(&self) -> f64 {
-        if self.sneaking { 1.27 } else { 1.62 }
+        f64::from(self.dimensions().eye_height)
     }
     /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest:
     /// its block interaction range is 4.5, 5 in creative.
@@ -631,11 +669,14 @@ fn network_stack(
                         title: w.title.clone(),
                         author: w.author.clone(),
                         generation: i32::from(w.generation),
-                        pages: w
-                            .pages
-                            .iter()
-                            .map(|p| horizon_protocol::text::literal(p))
-                            .collect(),
+                        pages: if w.page_tags.len() == w.pages.len() {
+                            w.page_tags.clone()
+                        } else {
+                            w.pages
+                                .iter()
+                                .map(|p| horizon_protocol::text::literal(p))
+                                .collect()
+                        },
                         resolved: true,
                     },
                 ),

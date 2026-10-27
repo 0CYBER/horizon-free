@@ -120,6 +120,9 @@ impl Game<'_> {
                         tracker.track(&holder(chunk_text(x, z)), i32::from(changed));
                     }
                 }
+                if add {
+                    self.streaming.rank_forced(cx0, cz0, cx1, cz1);
+                }
                 let (lo, hi) = (chunk_text(cx0, cz0), chunk_text(cx1, cz1));
                 let verb = if add { "added" } else { "removed" };
                 let (message, total) = tracker.message(

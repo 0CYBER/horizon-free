@@ -695,12 +695,78 @@ impl Game<'_> {
             Some(ClickEvent::OpenFile(path)) => {
                 super::packs::open_folder(std::path::Path::new(&path));
             }
+            Some(ClickEvent::OpenUrl(url)) => self.click_url(url),
             Some(ClickEvent::SuggestCommand(command)) => {
                 if let Some(screen) = self.ui.chat_screen.as_mut() {
                     screen.suggest_command(&m, &c, &command);
                 }
             }
-            None => {}
+            // Screen.defaultHandleClickEvent: a page link means nothing in chat.
+            Some(ClickEvent::ChangePage(_)) | None => {}
+        }
+    }
+    /// `Screen.clickUrlAction`: nothing with Web Links off, else the link
+    /// opens, after the confirmation unless Prompt on Links is off.
+    pub(super) fn click_url(&mut self, url: String) {
+        if !self.settings.chat_links {
+            return;
+        }
+        if self.settings.file.bool("chatLinksPrompt") {
+            self.link_prompt = Some(url);
+        } else {
+            super::packs::open_uri(&url);
+        }
+    }
+    /// `ConfirmLinkScreen` (untrusted): the link and its warning over the
+    /// chat, answered yes to open it.
+    fn link_prompt_layout(
+        &self,
+        url: &str,
+        size: (f32, f32),
+    ) -> horizon_client::confirm_screen::Confirm {
+        let warning = Text::translate("chat.link.warning", &[]).with_color(0xFF_CCCC);
+        let message = Text::literal(url)
+            .append(Text::literal("\n"))
+            .append(warning);
+        horizon_client::confirm_screen::Confirm::new(
+            &self.gui.atlas.font,
+            size,
+            &Text::translate("chat.link.confirm", &[]),
+            &message,
+        )
+    }
+    pub(super) fn draw_link_prompt(&self, batch: &mut HudBatch) {
+        let Some(url) = &self.link_prompt else {
+            return;
+        };
+        let atlas = &self.gui.atlas;
+        let (w, h) = (batch.width, batch.height);
+        horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        let (yes, no) = (
+            Text::translate("gui.yes", &[]),
+            Text::translate("gui.no", &[]),
+        );
+        self.link_prompt_layout(url, (w, h))
+            .draw(batch, atlas, self.cursor, [&yes, &no]);
+    }
+    /// The prompt's answer: the link opens on yes; either way the chat is back.
+    pub(super) fn answer_link_prompt(&mut self, yes: bool) {
+        if let Some(url) = self.link_prompt.take()
+            && yes
+        {
+            super::packs::open_uri(&url);
+        }
+    }
+    pub(super) fn link_prompt_click(&mut self) {
+        let Some(url) = &self.link_prompt else {
+            return;
+        };
+        let answer = self
+            .link_prompt_layout(url, self.gui_size())
+            .answer_at(self.cursor);
+        if let Some(yes) = answer {
+            self.audio.play_button_click();
+            self.answer_link_prompt(yes);
         }
     }
     /// Chat lines over the HUD (focused while the chat screen is open).
@@ -789,6 +855,11 @@ impl Game<'_> {
     pub(super) fn sync_rules(&mut self) {
         self.world.health_rules.natural_regeneration =
             self.ui.rules.bool("natural_health_regeneration");
+        // Player.isInvulnerableTo: the damage-type rules.
+        self.world.health_rules.drowning_damage = self.ui.rules.bool("drowning_damage");
+        self.world.health_rules.fall_damage = self.ui.rules.bool("fall_damage");
+        self.world.health_rules.fire_damage = self.ui.rules.bool("fire_damage");
+        self.world.health_rules.freeze_damage = self.ui.rules.bool("freeze_damage");
         use horizon_world::food::Difficulty;
         self.world.health_rules.difficulty = match self.ui.difficulty {
             0 => Difficulty::Peaceful,
@@ -801,7 +872,11 @@ impl Game<'_> {
     pub(super) fn load_world_state(&mut self) {
         self.ui.rules = GameRules::load(&self.world_root);
         self.ui.clock = WorldClock::default();
-        self.ui.difficulty = read_difficulty(&self.world_root).unwrap_or(2);
+        // PrimaryLevelData: the difficulty comes back from level.dat's difficulty_settings.
+        self.ui.difficulty = horizon_client::title::DIFFICULTIES
+            .iter()
+            .position(|d| *d == self.level.difficulty)
+            .map_or(2, |i| i as u8);
         if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
             && let Ok((root, _)) =
@@ -826,9 +901,9 @@ impl Game<'_> {
         self.build_registries();
         self.sync_rules();
     }
-    /// Save the clock and the difficulty beside level.dat (Level.write saves
-    /// the game rules: a second writer of game_rules.dat could leave it with
-    /// the rules loaded when the world opened).
+    /// Save the clock beside level.dat (Level.write saves the game rules: a
+    /// second writer of game_rules.dat could leave it with the rules loaded
+    /// when the world opened).
     pub(super) fn save_world_state(&mut self) {
         if self.world_root.as_os_str().is_empty() {
             return;
@@ -875,9 +950,6 @@ impl Game<'_> {
         ]);
         if let Err(e) = horizon_client::save::write_dat(&path, root) {
             log::warn!("the world clocks were not written: {e}");
-        }
-        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
-            log::warn!("the difficulty was not written: {e}");
         }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
@@ -987,34 +1059,6 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
         }
         n += 1;
     }
-}
-fn read_difficulty(world: &std::path::Path) -> Option<u8> {
-    let bytes = std::fs::read(world.join("level.dat")).ok()?;
-    let raw = horizon_world::compression::Compression::Gzip
-        .decode(&bytes, 64 << 20)
-        .ok()?;
-    let (root, _) =
-        horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default()).ok()?;
-    match root.tag.get("Data")?.get("Difficulty")? {
-        horizon_world::nbt::Tag::Byte(b) => Some((*b).clamp(0, 3) as u8),
-        _ => None,
-    }
-}
-/// Patch `Data.Difficulty` in level.dat (Level::write stores the default).
-fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::Result<()> {
-    use horizon_world::{compression::Compression, nbt};
-    let path = world.join("level.dat");
-    let bytes = std::fs::read(&path)?;
-    let raw = Compression::Gzip.decode(&bytes, 64 << 20)?;
-    let (mut root, _) = nbt::read_named(&raw, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    if let Some(data) = root.tag.get_mut("Data")
-        && let Some(d) = data.get_mut("Difficulty")
-    {
-        *d = nbt::Tag::Byte(difficulty as i8);
-    }
-    let out = nbt::write_named(&root, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, Compression::Gzip.encode(&out)?)?;
-    Ok(())
 }
 
 /// `IntegratedServer.getProfilePermissions` for the owner: `OWNER` (4) when
