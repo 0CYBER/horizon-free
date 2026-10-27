@@ -148,9 +148,9 @@ def main():
         print(f'{len(vanilla)} oracle lines')
         return
     halloween = vanilla[0].split()[1]
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples/client_probe'
+    binary = Path(metadata['target_directory']) / 'fast/examples/client_probe'
     run([binary, 'finalize_spawn_fixture', resources, inputs, build / 'rust.txt', halloween], 'rust')
     rust = (build / 'rust.txt').read_text().splitlines()
     bad = [(a, b) for a, b in zip(vanilla, rust) if a != b]
