@@ -780,7 +780,6 @@ impl Game<'_> {
                 super::packs::open_folder(std::path::Path::new(&path));
             }
             Some(ClickEvent::OpenUrl(url)) => self.click_url(url),
-            Some(ClickEvent::RunCommand(command)) => self.click_command(&command),
             Some(ClickEvent::SuggestCommand(command)) => {
                 if let Some(screen) = self.ui.chat_screen.as_mut() {
                     screen.suggest_command(&m, &c, &command);
@@ -789,20 +788,6 @@ impl Game<'_> {
             Some(ClickEvent::RunCommand(command)) => self.click_command(&command),
             // Screen.defaultHandleClickEvent: a page link means nothing in chat.
             Some(ClickEvent::ChangePage(_)) | None => {}
-        }
-    }
-    /// `Screen.clickCommandAction`: a client mod's command first, then the
-    /// server (unsigned) or the local one runs it, without the chat history
-    /// a typed line would get.
-    pub(super) fn click_command(&mut self, command: &str) {
-        let command = command.strip_prefix('/').unwrap_or(command);
-        if command.is_empty() || self.mod_command(command) {
-            return;
-        }
-        if self.remote.is_some() {
-            self.send_chat(&format!("/{command}"));
-        } else if !self.local_server_mod_command(command) {
-            self.run_command(command);
         }
     }
     /// `Screen.clickUrlAction`: nothing with Web Links off, else the link
@@ -874,7 +859,7 @@ impl Game<'_> {
     /// first, as `ClientPacketListener.sendUnattendedCommand` lets client
     /// commands take it. (Vanilla asks first when the command fails to
     /// parse; here the server answers it.)
-    fn click_command(&mut self, command: &str) {
+    pub(super) fn click_command(&mut self, command: &str) {
         let command = command.strip_prefix('/').unwrap_or(command);
         if self.mod_command(command) {
             return;
