@@ -24,7 +24,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, or on one
              team without friendly fire, nothing;
 - kills:     a pig the guest kills counts in the guest's killed statistic, not the host's (#484);
-
+- leave:     a guest who leaves has leave_game in their saved statistics, and again after the next leave;
 
 - arrows:    the guest and the host shoot each other with a bow; with the pvp game rule off, nothing (#484);
 - looks:     mobs look on both sides as the server has them (their synched data): a calf is a
@@ -301,7 +301,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
-          'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
+          'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
@@ -1194,6 +1194,35 @@ def check_pvp(host, guest, out):
     for name in ('guest hits teammate', 'host hits teammate'):
         assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
     return hits
+
+
+def leave_game_total(host):
+    """The leave_game statistic summed over the stats files the host's world holds."""
+    total = 0
+    for path in (host.work / 'saves' / 'Lan' / 'players' / 'stats').glob('*.json'):
+        custom = json.loads(path.read_text()).get('stats', {}).get('minecraft:custom', {})
+        total += custom.get('minecraft:leave_game', 0)
+    return total
+
+
+def check_leave(host, guest, out):
+    # PlayerList.remove awards Stats.LEAVE_GAME before it saves the player: a guest who leaves has it in
+    # their saved statistics, and it counts again the next time they leave.
+    port = host.raw('lan', 'status')['port']
+    before = leave_game_total(host)
+    counts = []
+    for _ in range(2):
+        guest.raw('disconnect')
+        for _ in range(20):
+            time.sleep(0.5)
+            if leave_game_total(host) > (counts[-1] if counts else before):
+                break
+        counts.append(leave_game_total(host))
+        guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+        guest.raw('wait-for', 'loaded', '--timeout', 300)
+        guest.wait(20)
+    assert counts == [before + 1, before + 2], f'leave_game was {before}, then {counts} after two leaves'
+    return {'leave_game': counts}
 
 
 def check_kills(host, guest, out):
@@ -4938,7 +4967,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
              'cracks': check_cracks, 'time': check_time, 'growth': check_growth, 'doors': check_doors,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
-             'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
+             'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'leave': check_leave,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
              'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
              'lightning': check_lightning, 'riding': check_riding, 'occupied_horse': check_occupied_horse, 'mounts': check_mounts,

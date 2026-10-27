@@ -20,6 +20,7 @@ mod instances_page;
 mod internet;
 mod language_page;
 mod launch_page;
+mod line_edit;
 mod markdown;
 mod mcp;
 mod modpacks_page;
@@ -212,7 +213,7 @@ struct Launcher {
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
-    args_input: String,
+    args_input: line_edit::LineEdit,
     args_focused: bool,
     args_focus: FocusHandle,
     /// Settings' Proxy field, the same way (`proxy`).
@@ -377,7 +378,7 @@ impl Launcher {
             account_menu: false,
             skin: None,
             background_error: None,
-            args_input: settings.game_args.clone(),
+            args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
             proxy_input: settings.proxy.clone().unwrap_or_default(),
@@ -1702,7 +1703,7 @@ impl Launcher {
 
     /// The sidebar: Horizon and the imported modpacks, the player's servers, then the
     /// launcher's own update, the community links and its version.
-    fn sidebar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         self.load_packs();
         let heading = |label: String| {
@@ -1751,12 +1752,14 @@ impl Launcher {
                 this.open_instance_dialog(None);
                 cx.notify();
             }));
+        let items = self.instance_items(heading, cx);
+        let mut rows = items.len();
         let list = div()
             .flex()
             .flex_col()
             .gap(px(4.))
             .child(heading(tr("INSTANCES").into()).child(add))
-            .children(self.instance_items(heading, cx));
+            .children(items);
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
@@ -1766,6 +1769,8 @@ impl Launcher {
         if !servers.is_empty() {
             list = list.child(heading(tr("SERVERS").into()));
         }
+        rows += servers.len();
+        let headings = 1 + usize::from(!servers.is_empty());
         for e in servers {
             let up = self.servers.is_up(&e.dir);
             let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
@@ -1855,12 +1860,20 @@ impl Launcher {
             }
             _ => {}
         }
-        // Sculk's banner, small, above the links: seen without scrolling, on every page but Servers, which
-        // shows it large. After a while on screen a "Hide" beside its label puts it away for good.
+        // Sculk's card above the links: seen without scrolling, on every page but Servers, which shows
+        // its wide banner. Tall where the sidebar has the height for it besides its rows (about 60
+        // high each, under headings of about 40) and the links, compact otherwise. After a while on
+        // screen a "Hide" beside its label puts it away for good.
         if self.page != Page::Servers && !self.settings.partner_hidden {
-            let mut side = div().relative().mb(px(8.)).child(partner::banner(
+            let free = f32::from(window.viewport_size().height)
+                - theme::TOPBAR
+                - 40. * headings as f32
+                - 60. * rows as f32
+                - 110.;
+            let mut side = div().relative().mb(px(8.)).child(partner::card(
                 "partner-side",
                 theme::SIDEBAR - 20.,
+                free < partner::TALL_HEIGHT,
                 &t,
             ));
             if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
@@ -2828,46 +2841,32 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.args_input.is_empty() && !focused {
-                div()
-                    .text_color(t.muted)
-                    .child("For example --server-thread")
-            } else {
-                // The end of a long line stays in view while typing.
-                let chars: Vec<char> = self.args_input.chars().collect();
-                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.args_input,
+                &t,
+                focused,
+                false,
+                false,
+                "For example --server-thread",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.args_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "backspace" => {
-                        this.args_input.pop();
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.args_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited => {
+                        this.settings.game_args = this.args_input.text().to_string();
+                        this.settings.save();
                     }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.args_input.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.args_input.push_str(ch);
-                        }
-                    }
-                    _ => return,
+                    _ => {}
                 }
-                this.args_input.truncate(1024);
-                this.settings.game_args = this.args_input.clone();
-                this.settings.save();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.args_input);
         index_row(
             n,
             "Game arguments",
@@ -3659,7 +3658,7 @@ impl Render for Launcher {
         }
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(window, cx);
-        let sidebar = self.sidebar(cx);
+        let sidebar = self.sidebar(window, cx);
         let mut root = div()
             .id("root")
             .track_focus(&self.root_focus)

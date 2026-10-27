@@ -379,6 +379,7 @@ impl Game<'_> {
                         layer,
                         color,
                         light,
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             };

@@ -98,9 +98,18 @@ pub enum BlockEntity {
     Campfire(Box<Campfire>),
     /// `SkullBlockEntity` of every skull and head block.
     Skull(Skull),
+    /// `TheEndGatewayBlockEntity`: its age and configured destination.
+    EndGateway(EndGateway),
     /// `DaylightDetectorBlockEntity`: no data, only the ticker
     /// (`DaylightDetectorBlock.tickEntity`).
     DaylightDetector,
+}
+/// `TheEndGatewayBlockEntity`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndGateway {
+    pub age: i64,
+    pub exit_portal: Option<[i32; 3]>,
+    pub exact_teleport: bool,
 }
 /// `CampfireBlockEntity`: four cooking slots, each with its
 /// `cookingProgress` and `cookingTime` (the recipe's).
@@ -380,6 +389,9 @@ impl BlockEntity {
         if is_skull(name) {
             return Some(Self::Skull(Skull::default()));
         }
+        if name == "minecraft:end_gateway" {
+            return Some(Self::EndGateway(EndGateway::default()));
+        }
         if name == "minecraft:daylight_detector" {
             return Some(Self::DaylightDetector);
         }
@@ -432,6 +444,7 @@ impl BlockEntity {
             Self::Beehive(_) => "minecraft:beehive",
             Self::CommandBlock(_) => "minecraft:command_block",
             Self::Skull(_) => "minecraft:skull",
+            Self::EndGateway(_) => "minecraft:end_gateway",
             Self::DaylightDetector => "minecraft:daylight_detector",
             Self::Campfire(_) => "minecraft:campfire",
         }
@@ -450,6 +463,7 @@ impl BlockEntity {
             | Self::Vault(_)
             | Self::Beehive(_)
             | Self::CommandBlock(_)
+            | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
@@ -470,6 +484,7 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
+            | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector => &[],
             Self::Crafter(c) => &c.items,
@@ -494,6 +509,7 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
+            | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector => &mut [],
             Self::Crafter(c) => &mut c.items,
