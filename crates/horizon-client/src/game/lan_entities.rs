@@ -258,6 +258,16 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        // DATA_ITEM, `ItemStack.EMPTY` by default.
+        for o in self.ominous_spawners.iter().filter(|o| o.id != 0) {
+            let mut e = state(o.id, "minecraft:ominous_item_spawner", o.position, 0.0, false);
+            e.meta.push((
+                8,
+                serializer::ITEM_STACK,
+                Value::Item(hub.stack(&Some(o.item.clone()))),
+            ));
+            out.push(e);
+        }
         self.lan_projectile_states(host_entity, hub, out);
         for o in &self.others {
             let p = o.position;
@@ -308,6 +318,7 @@ impl Game<'_> {
         self.rockets.iter_mut().for_each(|r| give(&mut r.id));
         self.crystals.iter_mut().for_each(|c| give(&mut c.id));
         self.bolts.iter_mut().for_each(|b| give(&mut b.id));
+        self.ominous_spawners.iter_mut().for_each(|o| give(&mut o.id));
         self.potions.thrown_ids().for_each(&mut give);
         self.end.eye_ids().for_each(&mut give);
         self.breath_clouds.iter_mut().for_each(|b| give(&mut b.id));
