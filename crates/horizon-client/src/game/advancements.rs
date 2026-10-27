@@ -74,15 +74,17 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
-/// Where the player's fall began and the blast that last hit the player
-/// (`ServerPlayer`'s fields of the same names). A guest keeps their own, as
-/// `levitation` does.
+/// Where the player's fall and lava ride began and the blast that last hit the
+/// player (`ServerPlayer`'s fields of the same names). A guest keeps their own,
+/// as `levitation` does.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
     pub(super) fall: Option<[f64; 3]>,
     /// `currentExplosionImpactPos`, and whether a wind charge made the blast.
     pub(super) blast: Option<([f64; 3], bool)>,
+    /// `enteredLavaOnVehiclePosition`.
+    pub(super) lava_ride: Option<[f64; 3]>,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -99,7 +101,7 @@ pub(super) struct AdvState {
     pub(super) last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
-    /// The fall and blast `tick_marks` follows.
+    /// The fall, lava ride and blast `tick_marks` follows.
     pub(super) marks: TravelMarks,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
@@ -762,7 +764,8 @@ impl Game<'_> {
         });
     }
     /// `ServerPlayer.tick`: `trackStartFallingPosition` and the end of a fall
-    /// (`resetFallDistance`), and the wind charge blast a fall follows.
+    /// (`resetFallDistance`), `trackEnteredOrExitedLavaOnVehicle` and the wind
+    /// charge blast a fall follows.
     fn tick_marks(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
@@ -770,6 +773,10 @@ impl Game<'_> {
         let at = [p.position.x, p.position.y, p.position.z];
         let falling = p.fall_distance > 0.0;
         let dead = p.health.dead_or_dying();
+        let lava = self
+            .riding
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+            .is_some_and(|m| m.fluids.in_lava);
         match (falling, self.adv.marks.fall) {
             (true, None) => {
                 self.adv.marks.fall = Some(at);
@@ -790,6 +797,12 @@ impl Game<'_> {
                 }
             }
             _ => {}
+        }
+        match (lava, self.adv.marks.lava_ride) {
+            (true, None) => self.adv.marks.lava_ride = Some(at),
+            (true, Some(start)) => self.trigger_distance("minecraft:ride_entity_in_lava", start),
+            (false, Some(_)) => self.adv.marks.lava_ride = None,
+            (false, None) => {}
         }
     }
     /// `DistanceTrigger`: the player's `player` condition, `start_position`
