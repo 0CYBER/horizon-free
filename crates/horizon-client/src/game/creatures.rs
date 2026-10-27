@@ -53,6 +53,15 @@ pub(super) struct Creatures {
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// Particles from a guest's turn, waiting for it to end
+    /// (`lan_send_particles`: options, centre, spread, speed, count).
+    pub lan_particles: Vec<(
+        horizon_client::particles::ParticleOptions,
+        [f64; 3],
+        [f64; 3],
+        f64,
+        u32,
+    )>,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,

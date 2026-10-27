@@ -7988,13 +7988,15 @@ impl Game<'_> {
     }
     /// The visual and sound part of `Player.doSweepAttack` after a successful hit.
     pub(super) fn sweep_attack(&mut self, at: [f64; 3], from: Option<[f64; 3]>) {
-        self.particles.add(
-            &horizon_client::particles::ParticleOptions::simple(
-                horizon_client::particles::ParticleType::SweepAttack,
-            ),
-            at,
-            [0.0; 3],
+        let sweep = horizon_client::particles::ParticleOptions::simple(
+            horizon_client::particles::ParticleType::SweepAttack,
         );
+        self.particles.add(&sweep, at, [0.0; 3]);
+        // Player.sweepAttack's `sendParticles(SWEEP_ATTACK, ..., 0, dx, 0, dz, 0)`:
+        // the offset is the one from the player to the particle.
+        let origin = from.unwrap_or(at);
+        let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
+        self.lan_send_particles(&sweep, at, spread, 0.0, 0);
         self.audio
             .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
@@ -8222,6 +8224,14 @@ impl Game<'_> {
                     horizon_client::particles::ParticleType::DamageIndicator,
                 );
                 self.particles.send_particles(
+                    &indicator,
+                    [feet[0], feet[1] + height * 0.5, feet[2]],
+                    [0.1, 0.0, 0.1],
+                    0.2,
+                    (actual * 0.5) as u32,
+                );
+                // The players a server serves are sent them too.
+                self.lan_send_particles(
                     &indicator,
                     [feet[0], feet[1] + height * 0.5, feet[2]],
                     [0.1, 0.0, 0.1],
