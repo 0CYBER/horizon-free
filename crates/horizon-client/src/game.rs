@@ -2944,6 +2944,17 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.smash_dust(pos, data),
+                // LevelEventHandler 2002 and 2007: a potion's splash.
+                LevelEvent::LevelEvent {
+                    id: 2002,
+                    pos,
+                    data,
+                } => self.potion_splash_particles(pos, data, false),
+                LevelEvent::LevelEvent {
+                    id: 2007,
+                    pos,
+                    data,
+                } => self.potion_splash_particles(pos, data, true),
                 LevelEvent::LevelEvent {
                     id: id @ 3002..=3005,
                     pos,
@@ -2979,6 +2990,8 @@ impl Game<'_> {
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
                         1043 => Some(("minecraft:item.book.page_turn", 1.0)),
+                        // LevelEvent.SOUND_SPLASH_POTION and its instant twin.
+                        1053 | 1054 => Some(("minecraft:entity.splash_potion.break", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
@@ -2988,7 +3001,7 @@ impl Game<'_> {
                                     - self.world.random.next_float())
                                     * 0.8
                             }
-                            1029 | 1030 | 1042 | 1043 | 1044 => {
+                            1029 | 1030 | 1042 | 1043 | 1044 | 1053 | 1054 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
                             1019 | 1021 => {
@@ -2998,7 +3011,7 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        if matches!(id, 1019 | 1021 | 1029 | 1030) {
+                        if matches!(id, 1019 | 1021 | 1029 | 1030 | 1053 | 1054) {
                             // Clients play the anvil sound from its level event;
                             // capturing it also sends a duplicate sound packet.
                             self.audio.play_unshared(name, c, volume, pitch);

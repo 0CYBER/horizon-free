@@ -695,62 +695,31 @@ impl Game<'_> {
     }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
     fn splash(&mut self, stack: &ItemStack, at: Vec3) {
+        let block = [at.x, at.y, at.z].map(|v| v.floor() as i32);
         if &*stack.item == "minecraft:experience_bottle" {
             // ThrownExperienceBottle.onHit: the water-coloured splash (level
-            // event 2002) and 3 to 11 experience.
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio.play(
-                "minecraft:entity.splash_potion.break",
-                Some([at.x, at.y, at.z]),
-                1.0,
-                pitch,
-            );
-            for _ in 0..8 {
-                let v = [
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                    0.2,
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                ];
-                let p = horizon_client::particles::Particle::terrain(
-                    &mut self.world.random,
-                    [at.x, at.y, at.z],
-                    v,
-                    "item/splash_potion".into(),
-                    0x38_5DC6,
-                );
-                self.particles.push(p);
-            }
+            // event 2002, its sound 1053) and 3 to 11 experience.
+            self.level_event_at(2002, block, 0xFF38_5DC6u32 as i32);
+            self.level_event_at(1053, block, 0);
             let r = &mut self.world.random;
             let value = 3 + r.next_int_bound(5).unwrap_or(0) + r.next_int_bound(5).unwrap_or(0);
             self.spawn_orbs([at.x, at.y, at.z], value as u32);
             return;
         }
         let lingering = &*stack.item == "minecraft:lingering_potion";
-        let event = if lingering {
-            "minecraft:entity.lingering_potion.break"
-        } else {
-            "minecraft:entity.splash_potion.break"
-        };
-        let pitch = self.world.random.next_float() * 0.1 + 0.9;
-        self.audio.play(event, Some([at.x, at.y, at.z]), 1.0, pitch);
+        // AbstractThrownPotion.onHit: level event 2007 and sound 1054 for a
+        // potion with instant effects, 2002 and 1053 otherwise.
+        let potion = stack.potion().and_then(brewing::potion);
+        let instant = potion.is_some_and(|d| {
+            d.effects
+                .iter()
+                .any(|(id, ..)| brewing::effect(id).is_some_and(|e| e.instant))
+        });
         let color = brewing::potion_color(stack.potion());
-        for _ in 0..8 {
-            let v = [
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                0.2,
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-            ];
-            let p = horizon_client::particles::Particle::terrain(
-                &mut self.world.random,
-                [at.x, at.y, at.z],
-                v,
-                "item/splash_potion".into(),
-                color,
-            );
-            self.particles.push(p);
-        }
+        self.level_event_at(if instant { 2007 } else { 2002 }, block, color as i32);
+        self.level_event_at(if instant { 1054 } else { 1053 }, block, 0);
         let scale = if lingering { 0.25 } else { 1.0 };
-        let Some(def) = stack.potion().and_then(brewing::potion) else {
+        let Some(def) = potion else {
             return;
         };
         // Every player in range (`ThrownSplashPotion.applySplash` over
