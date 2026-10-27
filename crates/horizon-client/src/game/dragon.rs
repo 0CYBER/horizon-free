@@ -50,6 +50,9 @@ pub(super) struct Fight {
     respawn: Option<(Respawn, i32)>,
     /// The four crystals on the exit portal driving the respawn.
     respawn_crystals: Vec<Vec3>,
+    /// The player behind the crystal blast under way, whose `explosion`
+    /// damage source names them (`EndCrystal.hurtServer`).
+    blast_by: Option<FightWho>,
     dirty: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -264,6 +267,9 @@ pub(super) struct Dragon {
     /// only damage above the last hit lands, and only the excess.
     invulnerable: i32,
     last_hurt: f32,
+    /// `lastHurtByPlayer` with its 100 tick memory: the player credited with
+    /// the kill, and the dragon tick of their last hit.
+    hurt_by_player: Option<(FightWho, i32)>,
     pub death_time: i32,
     pub flap: f32,
     pub old_flap: f32,
@@ -389,6 +395,7 @@ impl Dragon {
             hurt_time: 0,
             invulnerable: 0,
             last_hurt: 0.0,
+            hurt_by_player: None,
             death_time: 0,
             flap: 0.0,
             old_flap: 0.0,
@@ -430,6 +437,10 @@ impl Dragon {
     }
     pub fn alive(&self) -> bool {
         self.health > 0.0
+    }
+    /// `isDeadOrDying` for the killing blow: the dying flight, or no health.
+    fn down(&self) -> bool {
+        matches!(self.phase, Phase::Dying { .. }) || !self.alive()
     }
     fn part_box(&self, i: usize) -> Aabb {
         let (w, h) = PART_SIZES[i];
@@ -898,8 +909,12 @@ impl Game<'_> {
                 .any(|p| p.distance_squared(c.position) < 0.01);
         if damage == CrystalDamage::Direct {
             let at = [c.position.x, c.position.y, c.position.z];
+            // The blast's damage source carries the player, so the dragon
+            // remembers them before the blast can kill it.
+            self.fight.blast_by = by;
             let _ =
                 self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
+            self.fight.blast_by = None;
         }
         if respawn_crystal {
             self.abort_respawn();
@@ -910,7 +925,7 @@ impl Game<'_> {
         if let Some(d) = self.dragon.as_mut() {
             if d.nearest_crystal == Some(index) {
                 d.nearest_crystal = None;
-                self.hurt_dragon(0, 10.0, true, false);
+                self.hurt_dragon(0, 10.0, true, by, false);
             } else if let Some(n) = d.nearest_crystal.as_mut()
                 && *n > index
             {
@@ -982,17 +997,43 @@ impl Game<'_> {
             self.destroy_crystal(index, by, CrystalDamage::Direct);
             Hurt::Landed { full: true }
         } else if id >= SPECIAL {
-            self.hurt_dragon((id - SPECIAL) as usize, amount, by_player, arrow)
+            let by = by_player.then(|| self.acting_player());
+            self.hurt_dragon((id - SPECIAL) as usize, amount, by_player, by, arrow)
         } else {
             Hurt::Refused
         }
     }
     /// `EnderDragon.hurt(part, source, damage)` on the dragon in the level.
-    fn hurt_dragon(&mut self, part: usize, damage: f32, counts: bool, arrow: bool) -> Hurt {
+    /// `by` is the player behind the hit, remembered for the kill credit.
+    fn hurt_dragon(
+        &mut self,
+        part: usize,
+        damage: f32,
+        counts: bool,
+        by: Option<FightWho>,
+        arrow: bool,
+    ) -> Hurt {
         let Some(d) = self.dragon.as_mut() else {
             return Hurt::Refused;
         };
+        let was_down = d.down();
+        let (cooldown, last_hurt) = (d.invulnerable, d.last_hurt);
         let hurt = d.hurt(part, damage, counts, arrow);
+        // LivingEntity.hurtServer: damage that is applied sets lastHurtByPlayer
+        // (100 ticks); a hit the damage cooldown absorbs returns before that.
+        if counts
+            && matches!(hurt, Hurt::Landed { .. })
+            && (d.invulnerable != cooldown || d.last_hurt != last_hurt)
+            && let Some(who) = by
+        {
+            d.hurt_by_player = Some((who, d.ticks));
+        }
+        if !was_down && d.down() {
+            self.credit_dragon_kill();
+        }
+        let Some(d) = self.dragon.as_mut() else {
+            return hurt;
+        };
         if hurt == (Hurt::Landed { full: true }) {
             // Mob.playHurtSound: the ambient sound clock starts again.
             d.ambient_time = -AMBIENT_INTERVAL;
@@ -1002,6 +1043,47 @@ impl Game<'_> {
                 .play("minecraft:entity.ender_dragon.hurt", Some(at), 5.0, pitch);
         }
         hurt
+    }
+    /// `LivingEntity.die`: `getKillCredit().awardKillScore`, for the player
+    /// who hurt the dragon within the last 100 ticks. A guest's kill is
+    /// theirs: their statistics, scores and advancements.
+    fn credit_dragon_kill(&mut self) {
+        let Some(d) = self.dragon.as_ref() else {
+            return;
+        };
+        let Some((who, _)) = d.hurt_by_player.filter(|(_, hit)| d.ticks - hit <= 100) else {
+            return;
+        };
+        let view = horizon_client::advancements::EntityView {
+            kind: "minecraft:ender_dragon".to_owned(),
+            position: [d.position.x, d.position.y, d.position.z],
+            ..Default::default()
+        };
+        let id = d.id;
+        let guest = match who {
+            FightWho::Guest(conn) if self.lan_acting.is_none() => Some(conn),
+            _ => None,
+        };
+        let credited = guest.is_some_and(|conn| {
+            let Some(mut host) = self.lan.take() else {
+                return false;
+            };
+            let done = self
+                .as_guest(&mut host, conn, |g| g.award_dragon_kill(id, &view))
+                .is_some();
+            self.lan = Some(host);
+            done
+        });
+        if !credited {
+            self.award_dragon_kill(id, &view);
+        }
+    }
+    /// `ServerPlayer.awardKillScore` for the dragon, on the killer's state.
+    fn award_dragon_kill(&mut self, id: u32, view: &horizon_client::advancements::EntityView) {
+        self.stats.add("killed", "minecraft:ender_dragon", 1);
+        self.stats.custom("mob_kills", 1);
+        self.score_player_killed(super::commands::Target::Mob(id));
+        self.trigger_entity("minecraft:player_killed_entity", "entity", view);
     }
     /// Player melee on the dragon's parts or a crystal under the crosshair.
     /// The dragon part under the crosshair within reach: its id and distance.
@@ -2780,8 +2862,9 @@ impl Game<'_> {
             let (lo, hi) = (b.min_position(), b.max_position());
             self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
         });
+        let by = self.fight.blast_by;
         for (part, amount) in hits {
-            self.hurt_dragon(part, amount, true, false);
+            self.hurt_dragon(part, amount, true, by, false);
         }
     }
 }
