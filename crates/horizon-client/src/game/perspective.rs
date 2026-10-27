@@ -452,6 +452,7 @@ impl Game<'_> {
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let start = out.len();
         horizon_client::mobs::render::render_with(
             m,
             alpha as f32,
@@ -465,6 +466,15 @@ impl Game<'_> {
         self.player_elytra_geometry(m, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
+        // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
+        // in its team by its profile name.
+        if self.potions.effects.get("glowing").is_some() {
+            let team = match &self.remote {
+                Some(r) => self.score.board.players_team(&r.profile_name),
+                None => self.player_team(),
+            };
+            self.mark_outline(&out[start..], super::glowing::team_color(team));
+        }
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
     /// `[x0, x1) x [y0, y1)`, `size` pixels per block, turned toward the

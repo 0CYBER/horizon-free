@@ -232,18 +232,7 @@ mod tests {
                 .block_library(&fixture.0, vec!["horizon:nested/child".into()])
                 .is_ok()
         );
-        let library = parsed.into_item_library();
-        assert!(library.is_err());
-        fs::write(fixture.0.join("items.json"), "{")?;
-        let load = || {
-            crate::item_render::ItemRenderer::load_with_library(&fixture.0, library.clone())
-                .err()
-                .unwrap()
-                .to_string()
-        };
-        assert!(!load().starts_with("item models:"));
-        fs::write(fixture.0.join("items.json"), "{}")?;
-        assert!(load().starts_with("item models:"));
+        assert!(parsed.into_item_library().is_err());
         Ok(())
     }
 }

@@ -44,7 +44,7 @@ use std::{
 
 pub(crate) mod environment;
 mod fluids;
-pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER};
+pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER, bubble_column_push};
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
@@ -259,6 +259,9 @@ pub struct PlayerMotion {
     pub history: MovementHistory,
     pub fall_distance: f64,
     pub stuck_multiplier: Vec3,
+    /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
+    /// block has pushed this entity this tick (0.51 at most on any axis).
+    pub piston: horizon_world::piston_movement::PistonMovement,
     pub yaw: f32,
     pub head_yaw: f32,
     pub jumping: bool,
@@ -472,6 +475,7 @@ impl PlayerMotion {
             history: MovementHistory::default(),
             fall_distance: 0.0,
             stuck_multiplier: Vec3::ZERO,
+            piston: Default::default(),
             yaw: 0.0,
             head_yaw: 0.0,
             jumping: false,
@@ -1907,8 +1911,14 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     fn set_collision_flags(&mut self, value: CollisionFlags) {
         self.player.collision = value;
     }
-    fn limit_piston_movement(&mut self, _: Vec3) -> Result<Vec3> {
-        Err("piston movement requires a ticking entity runtime".into())
+    /// `Entity.limitPistonMovement`: the per-tick 0.51-block budget shared by
+    /// every move on an axis. A failed game-time read leaves the accumulator
+    /// as it was, as native does.
+    fn limit_piston_movement(&mut self, movement: Vec3) -> Result<Vec3> {
+        let time = self.scene.game_time;
+        self.player
+            .piston
+            .limit(movement, || Ok::<i64, Box<dyn std::error::Error>>(time))
     }
     fn stuck_multiplier(&self) -> Vec3 {
         self.player.stuck_multiplier

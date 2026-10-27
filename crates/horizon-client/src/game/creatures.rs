@@ -415,6 +415,7 @@ impl Game<'_> {
             world: &self.world,
             registry: self.pack.assets.registry,
             facts: self.res.facts(),
+            fluid_tables: &self.motion.fluids,
             movement: &self.motion.blocks,
             collision: self.collision,
             data: self.res.mob_data(),
@@ -2063,6 +2064,21 @@ impl Game<'_> {
                 if super::remote_projectiles::has_smoke_trail(&p.kind) {
                     trails.push(p.position);
                 }
+                // ThrownEnderpearl.onAboveBubbleColumn / onInsideBubbleColumn.
+                if keep && hit == Hit::None && matches!(p.kind, ProjectileKind::EnderPearl) {
+                    let (at, h) = (p.position, 0.125);
+                    horizon_client::motion::bubble_column_push(
+                        w.world,
+                        w.registry,
+                        w.facts,
+                        w.collision,
+                        Aabb::new(
+                            Vec3::new(at.x - h, at.y, at.z - h),
+                            Vec3::new(at.x + h, at.y + 2.0 * h, at.z + h),
+                        ),
+                        &mut p.velocity,
+                    );
+                }
                 if let Some(a) = p.arrow.as_mut() {
                     arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                 }
@@ -3590,8 +3606,10 @@ impl Game<'_> {
         let scale = self.view_scale();
         for mob in &self.mobs {
             let entity_start = out.len();
-            // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws.
-            if mob.invisible {
+            let outline = self.mob_outline(mob);
+            // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws (and
+            // the outline of a glowing mob, LivingEntityRenderer.getRenderType).
+            if mob.invisible && outline.is_none() {
                 continue;
             }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
@@ -3660,9 +3678,18 @@ impl Game<'_> {
                 out,
             );
             self.mob_block_geometry(mob, camera, alpha, packed, out);
+            if let Some(rgb) = outline {
+                self.mark_outline(&out[entity_start..], rgb);
+                if mob.invisible {
+                    out.truncate(entity_start);
+                    continue;
+                }
+            }
             // Glowing outlines and a guardian's beam remain visible independently
             // of whether the body is hidden behind terrain.
-            if !mob.glowing && horizon_client::mobs::guardian::beam(mob, alpha as f32).is_none() {
+            if outline.is_none()
+                && horizon_client::mobs::guardian::beam(mob, alpha as f32).is_none()
+            {
                 self.cull_entity_vertices(out, entity_start);
             }
             // GuardianRenderer: the laser to the locked target.
@@ -3710,7 +3737,15 @@ impl Game<'_> {
             super::pickups::Taken::Arrow(a) => Some((&**a, super::pickups::position(p, alpha))),
             _ => None,
         });
+        // A glowing projectile's outline: what it drew up to the next one.
+        let mut glowing = None;
         for (a, at) in live.chain(taken) {
+            if let Some((start, rgb)) = glowing.take() {
+                self.mark_outline(&out[start..], rgb);
+            }
+            if a.id != 0 && self.entity_glowing(a.id) {
+                glowing = Some((out.len(), super::glowing::team_color(self.mob_team(a.id))));
+            }
             let p = glam::DVec3::from_array(at) - camera;
             let c = p.as_vec3();
             let light = self.world.light(
@@ -3841,6 +3876,9 @@ impl Game<'_> {
                     light: packed,
                 });
             }
+        }
+        if let Some((start, rgb)) = glowing {
+            self.mark_outline(&out[start..], rgb);
         }
     }
 }
