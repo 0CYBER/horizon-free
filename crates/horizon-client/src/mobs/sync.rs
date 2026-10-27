@@ -15,10 +15,13 @@
 //!   them in `entity_event`;
 //! - run its client side animation in `client_tick`, sharing the function
 //!   with the server's `ai_step` where the server computes the same.
-use super::{Mob, Species, breeze, camel, shulker, sniffer, warden};
+use super::{
+    Mob, Species, breeze, camel, equine, illusioner, shulker, sniffer, undead, villager, warden,
+};
 
 // `Pose.id` of the poses mobs take.
 pub const STANDING: u8 = 0;
+pub const SLEEPING: u8 = 2;
 pub const LONG_JUMPING: u8 = 6;
 pub const SITTING: u8 = 10;
 pub const ROARING: u8 = 11;
@@ -36,6 +39,8 @@ pub fn pose_id(m: &Mob) -> u8 {
         Species::Warden => warden::pose_id(m),
         Species::Breeze => breeze::pose_id(m),
         Species::Camel | Species::CamelHusk if camel::sitting(m) => SITTING,
+        // LivingEntity.startSleeping: the pose, with the bed in index 14.
+        Species::Villager if villager::sleeping(m) => SLEEPING,
         _ => STANDING,
     }
 }
@@ -60,6 +65,10 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
         Species::Breeze => breeze::ai_step(m),
         Species::Camel | Species::CamelHusk => camel::client_tick(m, game_time),
         Species::Shulker => shulker::client_tick(m),
+        s if equine::grazes(s) => equine::client_tick(m),
+        Species::Drowned => undead::drowned_client_tick(m),
+        // Illusioner.aiStep runs on a client: the mirror images move there.
+        Species::Illusioner => illusioner::tick(m, &mut Vec::new()),
         _ => {}
     }
 }

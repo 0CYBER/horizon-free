@@ -3489,6 +3489,34 @@ impl Game<'_> {
             }
         }
         let game_time = self.world.game_time;
+        // `AbstractPiglin.isConverting`: the dimension is not piglin safe.
+        let nether = self.dim == super::Dim::Nether;
+        // What a wither's side heads can look at, by network entity id: the
+        // mobs and the player (position and eye height).
+        let wither_targets: Vec<(i32, [f64; 3], f64)> = if self
+            .mobs
+            .iter()
+            .any(|m| m.species() == horizon_client::mobs::Species::Wither)
+        {
+            let own = self
+                .remote
+                .as_ref()
+                .zip(self.eye_position())
+                .map(|(r, eye)| (r.entity_id, eye, eye[1]));
+            self.mobs
+                .iter()
+                .map(|m| {
+                    (
+                        m.id as i32,
+                        [m.position.x, m.position.y, m.position.z],
+                        m.eye_y(),
+                    )
+                })
+                .chain(own)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3596,6 +3624,24 @@ impl Game<'_> {
             }
             // The animation states a server computes in its own `ai_step`.
             horizon_client::mobs::sync::client_tick(m, game_time);
+            match m.species() {
+                // WitherBoss.aiStep: the side heads turn toward their targets.
+                horizon_client::mobs::Species::Wither => {
+                    horizon_client::mobs::wither::client_tick(m, |id| {
+                        wither_targets
+                            .iter()
+                            .find(|t| t.0 == id)
+                            .map(|t| (t.1, t.2))
+                    });
+                }
+                // Hoglin and piglin `isConverting` outside the Nether.
+                horizon_client::mobs::Species::Hoglin
+                | horizon_client::mobs::Species::Piglin
+                | horizon_client::mobs::Species::PiglinBrute => {
+                    horizon_client::mobs::piglin::client_converting(m, nether);
+                }
+                _ => {}
+            }
         }
         for o in self.orbs.iter_mut().filter(|_| running) {
             o.previous = o.position;

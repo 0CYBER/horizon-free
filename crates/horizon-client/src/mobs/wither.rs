@@ -169,13 +169,12 @@ fn target_pos(w: &MobWorld, id: i32) -> Option<([f64; 3], f64, bool)> {
             .map(|s| ([s.position.x, s.position.y, s.position.z], s.eye_y, false)),
     }
 }
-/// `WitherBoss.aiStep` after `super.aiStep()`: the side heads turn, smoke
-/// rises from the heads (the particle offsets are drawn on the server too).
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    // Side heads turn toward their targets, else back to the body.
+/// The side heads turn toward their targets, else back to the body. `find`
+/// gives the position and eye height of the entity a head's target id names.
+fn turn_heads(m: &mut Mob, find: impl Fn(i32) -> Option<([f64; 3], f64)>) {
     for i in 0..2 {
-        match target_pos(w, m.extra.ints[i]) {
-            Some((p, eye, _)) => {
+        match find(m.extra.ints[i]) {
+            Some((p, eye)) => {
                 let h = head_pos(m, i + 1);
                 let (xd, yd, zd) = (p[0] - h[0], eye - h[1], p[2] - h[2]);
                 let sd = (xd * xd + zd * zd).sqrt();
@@ -187,6 +186,18 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             None => m.anim.v[i] = rotlerp(m.anim.v[i], m.body_yaw, 10.0),
         }
     }
+}
+/// `WitherBoss.aiStep` on a client that is not the server: the side heads
+/// turn toward the targets of the synched data (`DATA_TARGET_B` and `_C`,
+/// kept in `ints[0]` and `ints[1]` as network entity ids).
+pub fn client_tick(m: &mut Mob, find: impl Fn(i32) -> Option<([f64; 3], f64)>) {
+    m.anim.vo = m.anim.v;
+    turn_heads(m, find);
+}
+/// `WitherBoss.aiStep` after `super.aiStep()`: the side heads turn, smoke
+/// rises from the heads (the particle offsets are drawn on the server too).
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    turn_heads(m, |id| target_pos(w, id).map(|(p, eye, _)| (p, eye)));
     let powered = powered(m);
     for i in 0..3 {
         let h = head_pos(m, i);
@@ -263,11 +274,20 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
         let id = m.extra.ints[k];
         if id != 0 {
             match target_pos(w, id) {
+                // `hasLineOfSight` too: no volley through a wall.
                 Some((p, eye, _))
                     if (p[0] - m.position.x).powi(2)
                         + (p[1] - m.position.y).powi(2)
                         + (p[2] - m.position.z).powi(2)
-                        <= 900.0 =>
+                        <= 900.0
+                        && m.sees(
+                            w,
+                            if id == -1 {
+                                Who::Player
+                            } else {
+                                Who::Mob(id as u32)
+                            },
+                        ) =>
                 {
                     let at = [p[0], p[1] + (eye - p[1]) * 0.5, p[2]];
                     shoot(m, i + 1, at, false, events);

@@ -813,6 +813,17 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
                 (sign * horizon_core::jmath::acos(dot.abs().min(1.0))) as f32,
             );
         }
+    } else if m.species() == Species::Drowned {
+        // DrownedRenderer.setupRotations: tip toward the look pitch about
+        // the middle of the box while swimming.
+        let amount = m.extra.swim.amount(alpha);
+        if amount > 0.0 {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            let middle = glam::Vec3::new(0.0, m.height() / 2.0, 0.0);
+            base *= glam::Mat4::from_translation(middle)
+                * glam::Mat4::from_rotation_x((amount * (-10.0 - pitch)).to_radians())
+                * glam::Mat4::from_translation(-middle);
+        }
     } else if m.extra.swim.amount(alpha) > 0.0 {
         // AvatarRenderer.setupRotations: tip forward with the swim amount,
         // following the pitch in water, then lie along the swimming box.
