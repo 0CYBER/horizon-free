@@ -16,7 +16,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3},
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 
 /// A thrown splash or lingering potion in flight.
@@ -54,13 +54,16 @@ fn mob_effect_id(id: &str) -> Option<&'static str> {
 impl Game<'_> {
     /// `LivingEntity.triggerOnDeathMobEffects` (`onMobRemoved` with the reason
     /// KILLED) for what Oozing, Weaving and Wind Charged do when their bearer
-    /// dies. `bearer` is the dying mob's id, `player` whether it is a player.
+    /// dies. `bearer` is the dying mob's id, `player` whether it is a player,
+    /// `random` the dying mob's own (`mob.getRandom()`; the world's for the
+    /// player).
     pub(super) fn effects_on_death(
         &mut self,
         effects: &[&str],
         bounds: Aabb,
         player: bool,
         bearer: Option<u32>,
+        mut random: Option<&mut LegacyRandom>,
     ) {
         let feet = bounds.bottom_center();
         if effects.contains(&"oozing") {
@@ -96,27 +99,32 @@ impl Game<'_> {
             }
         }
         if effects.contains(&"weaving") && (player || self.ui.rules.bool("mob_griefing")) {
-            self.spawn_cobwebs_around([
-                feet.x.floor() as i32,
-                feet.y.floor() as i32,
-                feet.z.floor() as i32,
-            ]);
+            self.spawn_cobwebs_around(
+                [
+                    feet.x.floor() as i32,
+                    feet.y.floor() as i32,
+                    feet.z.floor() as i32,
+                ],
+                random.as_deref_mut(),
+            );
         }
         if effects.contains(&"wind_charged") {
             // A burst centred at half the height, radius 3 to 5.
             let center = [feet.x, feet.y + bounds.size().y / 2.0, feet.z];
-            let radius = 3.0 + self.world.random.next_float() * 2.0;
+            let r = random.unwrap_or(&mut self.world.random);
+            let radius = 3.0 + r.next_float() * 2.0;
             let _ = self.wind_burst(center, radius, 1.0, false, false);
         }
     }
     /// `WeavingMobEffect.spawnCobwebsRandomlyAround`: two or three cobwebs in
     /// free spaces with a solid floor, picked among 15 random blocks within one
     /// block of `pos`.
-    fn spawn_cobwebs_around(&mut self, pos: [i32; 3]) {
-        let wanted = 2 + self.world.random.next_int_bound(2).unwrap_or(0) as usize;
+    fn spawn_cobwebs_around(&mut self, pos: [i32; 3], mut random: Option<&mut LegacyRandom>) {
+        let r = random.as_deref_mut().unwrap_or(&mut self.world.random);
+        let wanted = 2 + r.next_int_bound(2).unwrap_or(0) as usize;
         let mut chosen: Vec<[i32; 3]> = Vec::new();
         for _ in 0..15 {
-            let r = &mut self.world.random;
+            let r = random.as_deref_mut().unwrap_or(&mut self.world.random);
             let at = [
                 pos[0] - 1 + r.next_int_bound(3).unwrap_or(0),
                 pos[1] - 1 + r.next_int_bound(3).unwrap_or(0),
@@ -151,21 +159,30 @@ impl Game<'_> {
                 p.position.z,
             ];
             let look = super::view_vector(self.yaw, self.pitch);
-            self.infested_hurt(at, look);
+            self.infested_hurt(at, look, None);
+        }
+    }
+    /// A living mob's own random (`Entity.random`), else the world's.
+    fn bearer_random(&mut self, bearer: Option<u32>) -> &mut LegacyRandom {
+        match bearer.and_then(|id| self.mobs.iter().position(|m| m.id == id)) {
+            Some(i) => &mut self.mobs[i].random,
+            None => &mut self.world.random,
         }
     }
     /// `InfestedMobEffect.onMobHurt`: a 10% chance of one or two silverfish at
     /// `at` (half the bearer's height up), thrown along its look direction.
-    pub(super) fn infested_hurt(&mut self, at: [f64; 3], look: [f64; 3]) {
-        if self.world.random.next_float() > 0.1 {
+    /// The draws are the bearer's (`mob.getRandom()`): `bearer` is the mob,
+    /// none for the player (the world's random).
+    pub(super) fn infested_hurt(&mut self, at: [f64; 3], look: [f64; 3], bearer: Option<u32>) {
+        if self.bearer_random(bearer).next_float() > 0.1 {
             return;
         }
-        let count = 1 + self.world.random.next_int_bound(2).unwrap_or(0);
+        let count = 1 + self.bearer_random(bearer).next_int_bound(2).unwrap_or(0);
         for _ in 0..count {
             // Mth.randomBetween(-PI / 2, PI / 2), then the look direction
             // scaled by (0.3, 0.45, 0.3) and turned about the y axis.
             let half = std::f32::consts::FRAC_PI_2;
-            let angle = self.world.random.next_float() * (2.0 * half) - half;
+            let angle = self.bearer_random(bearer).next_float() * (2.0 * half) - half;
             let (sin, cos) = angle.sin_cos();
             let (x, z) = (look[0] * 0.3, look[2] * 0.3);
             let velocity = Vec3::new(
@@ -552,7 +569,7 @@ impl Game<'_> {
             let ids: Vec<&'static str> = self.potions.effects.list.iter().map(|e| e.id).collect();
             self.potions.effects.clear();
             if !ids.is_empty() {
-                self.effects_on_death(&ids, bounds, true, None);
+                self.effects_on_death(&ids, bounds, true, None, None);
             }
         }
         // The omens act from inside the effect tick (BadOmenMobEffect,

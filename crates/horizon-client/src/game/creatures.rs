@@ -691,14 +691,15 @@ impl Game<'_> {
         for m in dead {
             self.mob_died(&m);
         }
-        for m in corpses {
+        for mut m in corpses {
             let names: Vec<&'static str> = m
                 .extra
                 .effects
                 .iter()
                 .map(|e| e.0.trim_start_matches("minecraft:"))
                 .collect();
-            self.effects_on_death(&names, m.bounds(), false, Some(m.id));
+            let bounds = m.bounds();
+            self.effects_on_death(&names, bounds, false, Some(m.id), Some(&mut m.random));
         }
         self.handle_mob_events(events)?;
         self.lan_guest_mob_events(guest_events);
@@ -911,7 +912,7 @@ impl Game<'_> {
                 m.position.z,
             ];
             let look = m.view_vector();
-            self.infested_hurt(at, look);
+            self.infested_hurt(at, look, Some(mob));
         }
     }
     /// `LivingEntity.dropFromGiftLootTable`: the gift table from its random
