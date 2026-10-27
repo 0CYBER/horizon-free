@@ -3782,6 +3782,8 @@ impl ParticleEngine {
                         },
                         color,
                         light,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

@@ -149,6 +149,8 @@ pub fn draw_part(
                 layer: 0,
                 color,
                 light,
+
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -650,6 +652,8 @@ fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
                         layer: 0,
                         color: c,
                         light: call.light,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -1717,6 +1721,8 @@ impl BeamPart {
                     layer: 6,
                     color,
                     light: self.wrap,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -1787,6 +1793,7 @@ fn portal_cube(m: Mat4, faces: &[Direction], layer: u32, out: &mut Vec<Vertex>) 
                 layer,
                 color: 0,
                 light: 0,
+                glint_uv: [0.0, 0.0],
             });
         }
     }
