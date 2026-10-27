@@ -4382,8 +4382,24 @@ impl Game<'_> {
         if self.use_ender_eye(&stack, block_hit.is_some())? {
             return Ok(true);
         }
-        let Some(hit) = block_hit else {
-            return Ok(false);
+        // PlaceOnWaterBlockItem.use: the lily pad and frogspawn aim at the block
+        // or water source the SOURCE_ONLY ray meets and are placed on the
+        // position above it.
+        let water_hit;
+        let hit = if matches!(&*stack.item, "minecraft:lily_pad" | "minecraft:frogspawn") {
+            let Some(h) = self.pick_fluid() else {
+                return Ok(false);
+            };
+            water_hit = Hit {
+                pos: [h.pos[0], h.pos[1] + 1, h.pos[2]],
+                ..h
+            };
+            &water_hit
+        } else {
+            let Some(hit) = block_hit else {
+                return Ok(false);
+            };
+            hit
         };
         if info.block.is_none() {
             return Ok(false);
