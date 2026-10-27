@@ -2924,6 +2924,10 @@ impl Game<'_> {
         if self.name_mob(index) {
             return Ok(true);
         }
+        if self.spawn_egg_offspring(index) {
+            self.swing_arm();
+            return Ok(true);
+        }
         {
             let item = self.held().map(|h| h.item.to_string()).unwrap_or_default();
             if self.interact_leash(index, &item) {
@@ -3538,6 +3542,45 @@ impl Game<'_> {
             }
         }
         Ok(true)
+    }
+    /// `Mob.checkAndHandleImportantInteractions` with a spawn egg of mob
+    /// `index`'s own kind (`SpawnEggItem.spawnOffspringFromSpawnEgg`): a baby
+    /// at the mob's feet, taking the parent's variant as `getBreedOffspring`
+    /// does, and one egg used. False (PASS) when the mob has no baby form.
+    fn spawn_egg_offspring(&mut self, index: usize) -> bool {
+        let Some(stack) = self.held().cloned() else {
+            return false;
+        };
+        let parent = &self.mobs[index];
+        if !parent.alive()
+            || stack.item.strip_suffix("_spawn_egg") != Some(parent.kind.id.as_str())
+            || !horizon_client::mobs::drops::can_be_baby(parent.species())
+            // WanderingTrader.getBreedOffspring returns null: no offspring, the
+            // click carries on to trading.
+            || parent.species() == Species::WanderingTrader
+        {
+            return false;
+        }
+        let (kind, at) = (
+            parent.kind.id.clone(),
+            [parent.position.x, parent.position.y, parent.position.z],
+        );
+        let (species, variant, color) =
+            (parent.species(), parent.extra.variant, parent.extra.color);
+        let target = self.mob_entity(&self.mobs[index]);
+        let Some(id) = self.spawn_mob(&kind, at, true) else {
+            return false;
+        };
+        if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
+            horizon_client::mobs::finalize::set_baby(child, true);
+            child.extra.variant = variant;
+            if species == Species::Sheep {
+                child.extra.color = color;
+            }
+        }
+        self.trigger_item_entity("minecraft:player_interacted_with_entity", &stack, &target);
+        self.consume_held();
+        true
     }
     fn use_spawn_egg(&mut self, stack: &ItemStack) -> Result<bool> {
         let Some(hit) = self.pick() else {
