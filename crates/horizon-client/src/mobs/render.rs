@@ -833,10 +833,15 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
 }
-/// `LivingEntityRenderer.isShaking`: converting zombies, piglins and
-/// hoglins, and a zombie villager being cured.
+/// `LivingEntityRenderer.isShaking`: a fully frozen mob (the skeleton's own
+/// `isShaking` is its stray conversion only), converting zombies, piglins
+/// and hoglins, a zombie villager being cured and a cold strider.
 fn shaking(m: &Mob) -> bool {
+    if m.is_fully_frozen() && m.species() != Species::Skeleton {
+        return true;
+    }
     match m.species() {
+        Species::Strider => super::strider::suffocating(m),
         Species::ZombieVillager => super::zombie_villager::is_converting(m),
         Species::Zombie | Species::Husk => m.extra.counter2 > 0,
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
