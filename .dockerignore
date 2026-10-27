@@ -2,7 +2,6 @@
 target/
 .local/
 **/node_modules/
-website/
 benchmarks/
 packs/
 mods/

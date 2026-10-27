@@ -44,7 +44,7 @@ A tag is a 0.2 tag when it is `v` or `launcher@` followed by exactly three numbe
 major below 1000; a date's first number is a year, so `v2026.10.21` never is. The rule is written once per
 language, with the same tests: `crates/horizon-server/src/update.rs` (`newer`), `launcher/src/backend.rs`
 (`release_order`), `tools/release_train.py` (`tag_key`) and
-`website/src/versions.js`.
+the website's `src/versions.js` (ludovic111/horizon-site).
 
 ## The workflows
 
