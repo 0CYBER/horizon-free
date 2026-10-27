@@ -529,15 +529,14 @@ struct Beg {
     ticks: i32,
 }
 impl Beg {
-    fn interesting(&self, m: &Mob, w: &MobWorld) -> bool {
+    fn interesting(&self, w: &MobWorld) -> bool {
         let Some(p) = &w.player else {
             return false;
         };
         let held = |i: &Option<std::sync::Arc<str>>| {
-            i.as_deref().is_some_and(|i| {
-                (!m.extra.tame && i == "minecraft:bone")
-                    || (m.extra.tame && self.food.iter().any(|f| f == i))
-            })
+            // `BegGoal.playerHoldingInteresting`: a bone or food, tame or not.
+            i.as_deref()
+                .is_some_and(|i| i == "minecraft:bone" || self.food.iter().any(|f| f == i))
         };
         p.alive && !p.spectator && (held(&p.main_hand) || held(&p.off_hand))
     }
@@ -551,14 +550,14 @@ impl Goal for Beg {
         cx.w.player
             .as_ref()
             .is_some_and(|p| m.distance_sqr(p.position) <= 64.0)
-            && self.interesting(m, cx.w)
+            && self.interesting(cx.w)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         cx.w.player
             .as_ref()
             .is_some_and(|p| p.alive && m.distance_sqr(p.position) <= 64.0)
             && self.ticks > 0
-            && self.interesting(m, cx.w)
+            && self.interesting(cx.w)
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         m.extra.flag = true;
