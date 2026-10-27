@@ -60,6 +60,8 @@ fn reference(seed: i64, at: [f64; 3], camera: DVec3, uv: [f32; 2]) -> Vec<Vertex
                                 layer: 2,
                                 color,
                                 light: 240 | 240 << 8,
+
+                                glint_uv: [0.0, 0.0],
                             });
                         }
                     }
@@ -225,8 +227,9 @@ fn retained_gpu_draw_matches_transient_additive_draw() {
         label: Some("Lightning differential shader"),
         source: wgpu::ShaderSource::Wgsl(crate::gfx::entity_shader().into()),
     });
-    let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4];
-    let offsets = wgpu::vertex_attr_array![6=>Float32x3];
+    let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
+    // Attribute 7: 6 is the entity vertex buffer's glint UV.
+    let offsets = wgpu::vertex_attr_array![7=>Float32x3];
     let vertices = [Some(wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<Vertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
