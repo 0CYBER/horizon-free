@@ -892,6 +892,8 @@ impl<R: RandomSource> Context<'_, R> {
             _ => false,
         })
     }
+    /// A number provider. An unknown type gives 0, as in items.rs `number`
+    /// (a data pack's typo yields nothing rather than a full roll).
     fn int(&mut self, v: &Value) -> i32 {
         match v {
             Value::Number(_) => int_value(v).unwrap_or(0) as i32,
@@ -1027,6 +1029,7 @@ impl<R: RandomSource> Context<'_, R> {
                         _ => false,
                     }
                 }
+                // An unknown type fails, as in items.rs `condition`.
                 _ => false,
             },
             _ => false,
