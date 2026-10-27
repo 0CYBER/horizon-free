@@ -419,6 +419,9 @@ impl Game<'_> {
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
             Screen::Friends => "friends",
+            Screen::ServerLinks => "server-links",
+            Screen::ConfirmLink => "confirm-link",
+            Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
             Screen::Mod => "mod",
@@ -565,6 +568,22 @@ impl Game<'_> {
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
             }),
+            Mode::CreateFlat {
+                name,
+                seed,
+                options,
+                flat,
+                ..
+            } => json!({
+                "mode": "customize-flat",
+                "fields": { "name": name, "seed": seed },
+                "superflat": options.flat,
+                "biome": flat.settings().biome,
+                "layers": flat.settings().layers.iter().map(|layer| json!({
+                    "block": layer.block,
+                    "height": layer.height,
+                })).collect::<Vec<_>>(),
+            }),
             Mode::Edit {
                 world,
                 name,
@@ -707,9 +726,12 @@ impl Game<'_> {
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
             if !book.is_empty() {
+                let (open, filtering) = self.recipe_book_flags().unwrap_or_default();
                 v["recipe_book"] = json!({
                     "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
                     "known": self.recipe_book_known(),
+                    "open": open,
+                    "filtering": filtering,
                 });
             }
             v["slot_ids"] = json!(
