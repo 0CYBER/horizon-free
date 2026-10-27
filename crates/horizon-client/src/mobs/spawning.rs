@@ -168,6 +168,12 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         Climate::Warm => 1,
         Climate::Cold => 2,
     };
+    // `Registry.getRandom` of the `*_sound_variant` registry (pig, cow,
+    // chicken, cat and wolf), drawn by their finalizeSpawn.
+    let sounds = super::finalize::sound_variants(m.species()).len();
+    if sounds > 0 {
+        m.extra.sound_variant = Some(m.random.next_int_bound(sounds as i32).unwrap_or(0) as u8);
+    }
     match m.species() {
         // Warden.finalizeSpawn: a minute before it digs back down.
         S::Warden => super::warden::finalize(m, false, &mut Vec::new()),

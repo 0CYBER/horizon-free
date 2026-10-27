@@ -1279,8 +1279,10 @@ impl Game<'_> {
                 MobEvent::Hiss { mob } => {
                     if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
                         let at = m.center();
+                        let sound = horizon_client::mobs::finalize::variant_sound(m, "hiss")
+                            .unwrap_or("entity.cat.hiss");
                         self.audio
-                            .play("minecraft:entity.cat.hiss", Some(at), 1.0, 1.0);
+                            .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
                     }
                 }
                 MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
