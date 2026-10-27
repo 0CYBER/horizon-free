@@ -11634,7 +11634,8 @@ impl Game<'_> {
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
-            || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
+            || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other)
+            || self.remote_loading();
         let (yaw, pitch) = if title {
             // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
             (
@@ -11927,7 +11928,8 @@ impl Game<'_> {
     /// `Screen.extractBlurredBackground` over the panorama or the world and
     /// HUD, when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
-        let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
+        let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other)
+            || self.remote_loading();
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
                 matches!(self.screen, Screen::Options | Screen::Win)
@@ -12798,6 +12800,12 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::MouseInput { state, button, .. } if self.dialog_open() => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         self.dialog_click()?;
+                    }
+                }
+                // ConnectScreen's Cancel, under the prompts and dialogs above.
+                WindowEvent::MouseInput { state, button, .. } if self.remote_loading() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.connect_screen_click()?;
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
