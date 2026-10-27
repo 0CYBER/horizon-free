@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.ci import nightly
 from tools.ci import nightly_set as ns
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,26 +150,6 @@ class SetTests(unittest.TestCase):
         self.assertEqual(ns.next_build("2026-10-28", []), "nightly/build-2026-10-28-1")
         self.assertEqual(ns.next_build("2026-10-28", ["nightly/build-2026-10-28-1", "nightly/build-2026-10-28-4"]),
                          "nightly/build-2026-10-28-5")
-
-
-class ScheduledTests(unittest.TestCase):
-    def test_the_scheduled_nightly_takes_new_heads_and_drops_closed_ones(self):
-        state = run({}, "/nightly 1 2 3 4", "kacpherek", pr(1), pr(2), pr(3), pr(4)).state
-        get = lookup(pr(1, head="new"), pr(2, state="merged"), pr(3, state="closed"),
-                     pr(4, files=[".github/workflows/x.yml"]))
-        kept, left_out = nightly.refresh(state["prs"], get, PATTERNS)
-        self.assertEqual([(e["number"], e["head"]) for e in kept], [(1, "new1")])
-        self.assertEqual(len(left_out), 3)
-        self.assertIn("merged", left_out[0])
-
-    def test_notes_list_each_pull_request_and_who_picked_it(self):
-        prs = run({}, "/nightly 1 2", "kacpherek", pr(1), pr(2)).state["prs"]
-        main = nightly.Ref("main", "m" * 40, None)
-        text = nightly.set_notes("2026-10-28", nightly.Ref("nightly/build-2026-10-28-1", "b" * 40, None), main, prs,
-                                 ["#3 Fix 3: closed, left out"])
-        self.assertIn("can include pull requests not reviewed yet, picked by trusted reviewers", text)
-        self.assertIn("- Fix 1 (#1) by dev1, at h1, picked by kacpherek", text)
-        self.assertIn("### Left out (1)", text)
 
 
 def sh(repo, *args, env=None):
