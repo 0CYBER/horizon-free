@@ -209,6 +209,9 @@ pub enum EntityQuery {
     Mobs,
     /// Minecarts only (detector rails).
     Minecart,
+    /// Arrows only (`AbstractArrow`, thrown tridents included): the entities
+    /// a wooden button senses.
+    Arrows,
 }
 
 /// Side effects reported to the caller, in vanilla call order.
@@ -814,6 +817,22 @@ impl Behaviours {
         pos: BlockPos,
     ) -> i32 {
         self.sim(level, ticks).best_neighbor_signal(pos)
+    }
+    /// `BlockState.onProjectileHit` of a target block (`TargetBlock`) hit by
+    /// a projectile at `location` on the face with normal `face`; `arrow`
+    /// for an `AbstractArrow`. Returns the output strength, or None when the
+    /// block at `pos` is not a target block.
+    pub fn target_projectile_hit<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        location: [f64; 3],
+        face: [i32; 3],
+        arrow: bool,
+    ) -> Option<i32> {
+        self.sim(level, ticks)
+            .target_projectile_hit(pos, location, face, arrow)
     }
 }
 

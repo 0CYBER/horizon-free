@@ -179,7 +179,7 @@ fn agent() -> ureq::Agent {
 }
 
 /// The discovery document, fetched once per game (a failure is retried next time).
-fn discovery() -> Result<Arc<serde_json::Value>, JoinError> {
+pub(crate) fn discovery() -> Result<Arc<serde_json::Value>, JoinError> {
     static CACHE: Mutex<Option<Arc<serde_json::Value>>> = Mutex::new(None);
     if let Some(d) = CACHE.lock().unwrap().clone() {
         return Ok(d);
