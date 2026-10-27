@@ -1921,9 +1921,9 @@ impl Game<'_> {
                         match (index, value) {
                             // Entity.DATA_TICKS_FROZEN: isFullyFrozen shakes it.
                             (7, Value::Int(ticks)) => m.ticks_frozen = *ticks,
-                            // Strider.DATA_SUFFOCATING (after AgeableMob's baby
-                            // flag and DATA_BOOST_TIME): a cold strider shakes.
-                            (18, Value::Bool(cold))
+                            // Strider.DATA_SUFFOCATING (after AgeableMob's two
+                            // and DATA_BOOST_TIME): a cold strider shakes.
+                            (19, Value::Bool(cold))
                                 if m.species() == horizon_client::mobs::Species::Strider =>
                             {
                                 m.extra.flag = *cold;
