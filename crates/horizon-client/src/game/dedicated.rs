@@ -618,6 +618,22 @@ impl Game<'_> {
                 log_ips: props.log_ips,
             }),
             resource_pack: props.resource_pack.clone(),
+            // DedicatedServer.serverLinks: `bug-report-link` as the only link
+            // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
+            server_links: if props.bug_report_link.is_empty() {
+                Vec::new()
+            } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {
+                vec![horizon_protocol::packets::configuration::ServerLink {
+                    kind: horizon_protocol::packets::configuration::ServerLinkKind::Known(0),
+                    link: props.bug_report_link.clone(),
+                }]
+            } else {
+                log(
+                    "WARN",
+                    &format!("Failed to parse bug link {}", props.bug_report_link),
+                );
+                Vec::new()
+            },
         };
         let config = HubConfig {
             default_game_mode: game_mode,

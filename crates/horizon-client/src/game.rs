@@ -157,6 +157,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_links;
 mod server_mods;
 mod server_packs;
 mod server_travel;
@@ -508,6 +509,12 @@ enum Screen {
     Friends,
     /// CommandBlockEditScreen (game/command_blocks.rs).
     CommandBlock,
+    /// ServerLinksDialogScreen: a server's links (game/server_links.rs).
+    ServerLinks,
+    /// ConfirmLinkScreen for a server link (game/server_links.rs).
+    ConfirmLink,
+    /// DialogScreen.WarningScreen: the note about custom screens.
+    DialogWarning,
     /// WinScreen: the end poem and the credits (game/win.rs).
     Win,
     /// A `ui` mod's own screen, or its settings page from Options > Mods
@@ -1733,6 +1740,8 @@ struct Game<'a> {
     restore_player_state: bool,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
+    /// The Server Links screens' state (game/server_links.rs).
+    links_ui: server_links::LinksUi,
     camera_type: perspective::CameraType,
     fangs: fangs::FangState,
     /// The local player as a model (third person, the inventory).
@@ -5114,6 +5123,9 @@ impl Game<'_> {
                     | Screen::Advancements
                     | Screen::WorldOptions
                     | Screen::Friends
+                    | Screen::ServerLinks
+                    | Screen::ConfirmLink
+                    | Screen::DialogWarning
                     | Screen::CommandBlock
             ) || self.book.is_some()
                 || self.win_screen_pauses())
@@ -5597,6 +5609,9 @@ impl Game<'_> {
             Screen::Advancements => self.draw_advancements(&mut batch),
             Screen::WorldOptions => self.draw_world_options(&mut batch),
             Screen::Friends => self.draw_friends_screen(&mut batch),
+            Screen::ServerLinks => self.draw_server_links(&mut batch),
+            Screen::ConfirmLink => self.draw_confirm_link(&mut batch),
+            Screen::DialogWarning => self.draw_dialog_warning(&mut batch),
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
@@ -11391,6 +11406,10 @@ impl Game<'_> {
                 Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {}
                 Screen::Stats | Screen::Friends => self.screen = Screen::Paused,
+                Screen::ServerLinks => self.screen = Screen::Paused,
+                // ConfirmScreen.keyPressed: Escape answers no; both return to
+                // the Server Links screen they came from.
+                Screen::ConfirmLink | Screen::DialogWarning => self.screen = Screen::ServerLinks,
                 Screen::Advancements => self.close_advancements(),
                 Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
@@ -12071,6 +12090,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::WorldOptions && d != 0.0 {
                         self.world_options_scroll(d);
                     }
+                    if self.screen == Screen::ServerLinks && d != 0.0 {
+                        self.server_links_scroll(d);
+                    }
                     if self.screen == Screen::Advancements {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
@@ -12261,6 +12283,15 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
+                        }
+                        Screen::ServerLinks if pressed && button == MouseButton::Left => {
+                            self.server_links_click()?
+                        }
+                        Screen::ConfirmLink if pressed && button == MouseButton::Left => {
+                            self.confirm_link_click()
+                        }
+                        Screen::DialogWarning if pressed && button == MouseButton::Left => {
+                            self.dialog_warning_click()?
                         }
                         Screen::WorldOptions if button == MouseButton::Left => {
                             self.world_options_release()
@@ -13144,6 +13175,7 @@ impl<'a> Game<'a> {
             restore_player_state: true,
             stats_ui: Default::default(),
             adv_ui: Default::default(),
+            links_ui: Default::default(),
             camera_type: Default::default(),
             fangs: Default::default(),
             player_model: None,

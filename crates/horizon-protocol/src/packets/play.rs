@@ -15,7 +15,7 @@ use crate::{
         configuration::{
             ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
             Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
-            StoreCookie, Transfer, UpdateTags,
+            ServerLinks, StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -1903,6 +1903,9 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     StopSound(StopSound) = STOP_SOUND,
     StartConfiguration(Empty) = START_CONFIGURATION,
     StoreCookie(StoreCookie) = STORE_COOKIE,
+    // A common packet: the same `configuration::ServerLinks` the
+    // configuration phase sends.
+    ServerLinks(ServerLinks) = SERVER_LINKS,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
