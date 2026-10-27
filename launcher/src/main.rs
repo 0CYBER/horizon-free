@@ -32,6 +32,7 @@ mod scrollbar;
 mod servers_page;
 mod theme;
 mod titlebar;
+mod while_playing;
 mod worlds_page;
 
 use gpui::{
@@ -247,6 +248,8 @@ struct Launcher {
     export: Option<export_page::ExportPanel>,
     importing: import_page::Importing,
     console: console_page::Console,
+    /// What the window did when the game started (`while_playing.rs`).
+    aside: while_playing::Aside,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -414,6 +417,7 @@ impl Launcher {
             export: None,
             importing: Default::default(),
             console: Default::default(),
+            aside: while_playing::Aside::new(window.window_handle()),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -606,6 +610,7 @@ impl Launcher {
                             Ok(r) => {
                                 self.client = Some(r);
                                 self.client_run = run.map(|id| (id, Instant::now()));
+                                self.step_aside(cx);
                             }
                             Err(e) => self.client_error = Some(e),
                         }
@@ -723,6 +728,7 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            self.come_back(cx);
                             // The game saved: last played, sizes and pictures changed.
                             self.worlds.stale();
                             self.multiplayer.stale();
@@ -2662,6 +2668,7 @@ impl Launcher {
                         Some(appearance.into_any_element()),
                         &t,
                     ))
+                    .child(self.while_playing_row(n + 3, cx))
                     .child(index_row(
                         n + 3,
                         "Show the opening",

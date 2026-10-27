@@ -147,8 +147,10 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), the opening animation,
-  the game's extra command-line arguments, an HTTP proxy for downloads, and the launcher's own
-  version and update state.
+  what the window does while you play (stays by default; Minimise, or Hide on macOS, puts it away
+  when the game starts and brings it back to the front when the game closes; `settings
+  while-playing stay|minimize|hide`), the game's extra command-line arguments, an HTTP proxy for
+  downloads, and the launcher's own version and update state.
 - **Updates**: there is one channel. Every release is published as the release, GitHub's latest,
   once its smoke test passed (docs/release-flow.md), and the launcher installs it. The game
   pre-releases of the old Alpha channel (v0.2.1 on) stay on the Versions page to install
