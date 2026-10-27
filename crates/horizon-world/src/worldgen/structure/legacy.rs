@@ -31,13 +31,18 @@ pub type Markers = Vec<(String, [i32; 3])>;
 pub trait PieceRandom: ProcessorRandom {
     fn boolean(&mut self) -> bool;
     fn double(&mut self) -> f64;
+    /// The concrete random, for callers that need all of `RandomSource`.
+    fn as_any(&mut self) -> &mut dyn std::any::Any;
 }
-impl<R: RandomSource> PieceRandom for R {
+impl<R: RandomSource + 'static> PieceRandom for R {
     fn boolean(&mut self) -> bool {
         self.next_boolean()
     }
     fn double(&mut self) -> f64 {
         self.next_double()
+    }
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

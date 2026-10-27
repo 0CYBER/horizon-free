@@ -3,7 +3,7 @@
 use super::Game;
 use horizon_client::{
     blocks::Fluid,
-    music::{BackgroundMusic, Music, Situation},
+    music::{BackgroundMusic, Music, MusicFrequency, Situation},
     sound_engine::TickContext,
 };
 
@@ -11,6 +11,11 @@ impl Game<'_> {
     /// `Minecraft.tick` -> `MusicManager.tick`, once per client tick.
     pub(super) fn tick_music(&mut self) {
         let (music, volume) = self.situational_music();
+        // Options.musicFrequency's listener: MusicManager.setMinutesBetweenSongs.
+        let frequency = MusicFrequency::parse(&self.settings.file.name("musicFrequency"));
+        if frequency != self.music.frequency {
+            self.music.set_frequency(frequency, music.as_ref());
+        }
         // LevelLoadingScreen: no new track before the player is in the world.
         let loading = self.title.is_none() && self.player.is_none() && self.win.is_none();
         self.music
