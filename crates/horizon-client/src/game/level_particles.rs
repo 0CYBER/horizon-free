@@ -1,8 +1,9 @@
 //! Level events whose client handler (`LevelEventHandler`) spawns particles
 //! on a block: bone meal's growth (1505), dragon egg teleportation (2015), a
-//! consumable's teleport (2017), electric sparks (3002), waxing (3003), wax
-//! off (3004) and scraping (3005), plus the smoke, drips, egg and dragon
-//! fireball particles of 1501, 1502, 1504, 2006, 2009, 2012 and 3009.
+//! consumable's teleport (2017), an enderman's (2018), electric sparks (3002),
+//! waxing (3003), wax off (3004) and scraping (3005), plus the smoke, drips,
+//! egg and dragon fireball particles of 1501, 1502, 1504, 2006, 2009, 2012
+//! and 3009.
 use super::Game;
 use horizon_client::items::ItemStack;
 use horizon_client::particles::{self, ParticleOptions, ParticleType};
@@ -24,6 +25,11 @@ impl Game<'_> {
         self.particles
             .block_teleportation(pos, data, [127, 127, 127]);
     }
+    /// Event 2018: an enderman's portal trail.
+    pub(super) fn enderman_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
+        self.particles
+            .enderman_teleportation(pos, data, self.settings.particles);
+    }
     /// `LevelEventHandler.levelEvent` 3002 to 3005, drawing from the client
     /// level's random.
     pub(super) fn block_particle_event(&mut self, id: i32, pos: BlockPos, data: i32) {
@@ -40,7 +46,7 @@ impl Game<'_> {
         // 3002 with an axis: a lightning rod; otherwise copper cleaned by lightning.
         match usize::try_from(data) {
             Ok(axis) if id == 3002 && axis < 3 => {
-                particles::along_axis(random, axis, p, |p, v| spawned.push((p, v)));
+                particles::along_axis(random, axis, p, (10, 19), |p, v| spawned.push((p, v)));
             }
             _ => particles::on_block_faces(random, p, |p, v| spawned.push((p, v))),
         }

@@ -498,15 +498,77 @@ fn zombified_piglin_step(m: &mut Mob, cx: &mut Cx) {
         }
     }
 }
+/// `Entity.isInPowderSnow`: the mob's box, shrunk by `1.0E-5` as in
+/// `checkInsideBlocks`, touches powder snow.
+fn in_powder_snow(m: &Mob, w: &super::MobWorld) -> bool {
+    let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    let (min, max) = (b.min_position(), b.max_position());
+    for x in min.x.floor() as i32..=max.x.floor() as i32 {
+        for y in min.y.floor() as i32..=max.y.floor() as i32 {
+            for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:powder_snow" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+/// `Skeleton.freezingTracker` (`ConversionTracker.tick`): 140 ticks in
+/// powder snow start a conversion into a stray that takes 300 more; leaving
+/// the snow stops it. `counter` is the affliction time (-1 outside the snow)
+/// and `counter2` the conversion time plus one while converting, so that
+/// reaching 0 is vanilla's `conversionTime < 0`.
+fn skeleton_freezing(m: &mut Mob, cx: &mut Cx) {
+    if !in_powder_snow(m, cx.w) {
+        m.extra.counter = -1;
+        m.extra.counter2 = 0;
+    } else if m.extra.counter2 > 0 {
+        m.extra.counter2 -= 1;
+        if m.extra.counter2 == 0 {
+            // levelEvent 1048: the conversion sound at the stray.
+            let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+            cx.events.push(MobEvent::Sound(
+                "entity.skeleton.converted_to_stray",
+                m.center(),
+                2.0,
+                pitch,
+            ));
+            cx.events.push(MobEvent::SpawnKind {
+                kind: "minecraft:stray".into(),
+                at: [m.position.x, m.position.y, m.position.z],
+                setup: super::SpawnSetup {
+                    yaw: m.yaw,
+                    persistent: m.persistent,
+                    ..Default::default()
+                },
+            });
+            m.removed = true;
+        }
+    } else {
+        m.extra.counter += 1;
+        if m.extra.counter >= 140 {
+            m.extra.counter2 = 301;
+        }
+    }
+}
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     if m.species() == Species::ZombieVillager {
         super::zombie_villager::step(m, cx);
+    }
+    if m.species() == Species::Skeleton && m.alive() && !m.no_ai {
+        skeleton_freezing(m, cx);
     }
     if m.species() == Species::ZombifiedPiglin {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {
