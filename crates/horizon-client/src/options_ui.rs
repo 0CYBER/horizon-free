@@ -4,6 +4,8 @@
 //! OptionsList screens and drawn with the shared widgets.
 use std::time::Instant;
 
+pub use crate::settings::Opt;
+
 use crate::{
     gamepad::{self, GlyphStyle},
     hud::{HudAtlas, HudBatch, rgba},
@@ -14,93 +16,6 @@ use crate::{
     ui,
 };
 
-/// One option instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Opt {
-    Fov,
-    RenderDistance,
-    SimulationDistance,
-    Sensitivity,
-    WheelSensitivity,
-    InvertY,
-    DiscreteScroll,
-    Volume(usize),
-    GuiScale,
-    ViewBobbing,
-    Gamma,
-    MaxFps,
-    Vsync,
-    Fullscreen,
-    SmoothLighting,
-    Clouds,
-    CloudRange,
-    Particles,
-    EntityDistance,
-    EntityShadows,
-    BiomeBlend,
-    Preset,
-    Mipmaps,
-    WeatherRadius,
-    ChunkFade,
-    Vignette,
-    Autosave,
-    CutoutLeaves,
-    ImprovedTransparency,
-    AttackIndicator,
-    InactivityFps,
-    ChunkBuilder,
-    MenuBlur,
-    ToggleCrouch,
-    ToggleSprint,
-    AutoJump,
-    ChatVisibility,
-    ChatColors,
-    ChatLinks,
-    ChatOpacity,
-    TextBackgroundOpacity,
-    ChatScale,
-    ChatWidth,
-    ChatHeightFocused,
-    ChatHeightUnfocused,
-    ChatLineSpacing,
-    AutoSuggestions,
-    ReducedDebugInfo,
-    HighContrast,
-    ShowSubtitles,
-    NotificationDisplayTime,
-    Narrator,
-    TextBackground,
-    ChatDelay,
-    DistortionEffects,
-    FovEffects,
-    DarknessPulsing,
-    DamageTilt,
-    GlintSpeed,
-    GlintStrength,
-    HideLightningFlashes,
-    MonochromeLogo,
-    PanoramaSpeed,
-    HideSplashTexts,
-    NarratorHotkey,
-    RotateWithMinecarts,
-    HighContrastBlockOutlines,
-    ForceUnicode,
-    JapaneseGlyphs,
-    /// Horizon's controller settings (`horizon-controller.txt`).
-    PadEnabled,
-    PadVibration,
-    PadAdaptiveTriggers,
-    PadLightbar,
-    PadLookSensitivity,
-    PadInvertX,
-    PadInvertY,
-    PadToggleSneak,
-    PadMoveDeadzone,
-    PadLookDeadzone,
-    PadGlyphs,
-    PadMenuNav,
-    PadKeyboard,
-}
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
 }
@@ -167,11 +82,13 @@ impl Opt {
                 | Opt::NarratorHotkey
                 | Opt::ChatDelay
                 | Opt::DistortionEffects
-                | Opt::GlintSpeed
-                | Opt::GlintStrength
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 | Opt::HighContrastBlockOutlines
+                // Saved, but nothing in rendering reads them yet.
+                | Opt::ChunkFade
+                | Opt::ImprovedTransparency
+                | Opt::ChunkBuilder
         )
     }
     fn file_key(self) -> Option<&'static str> {
@@ -192,6 +109,7 @@ impl Opt {
             Opt::NarratorHotkey => "narratorHotkey",
             Opt::RotateWithMinecarts => "rotateWithMinecart",
             Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
+            Opt::MusicFrequency => "musicFrequency",
             _ => return None,
         })
     }
@@ -237,6 +155,7 @@ impl Opt {
             Opt::ChatVisibility => "options.chat.visibility",
             Opt::ChatColors => "options.chat.color",
             Opt::ChatLinks => "options.chat.links",
+            Opt::ChatLinksPrompt => "options.chat.links.prompt",
             Opt::ChatOpacity => "options.chat.opacity",
             Opt::TextBackgroundOpacity => "options.accessibility.text_background_opacity",
             Opt::ChatScale => "options.chat.scale",
@@ -248,6 +167,7 @@ impl Opt {
             Opt::ReducedDebugInfo => "options.reducedDebugInfo",
             Opt::HighContrast => "options.accessibility.high_contrast",
             Opt::ShowSubtitles => "options.showSubtitles",
+            Opt::MusicFrequency => "options.music_frequency",
             Opt::NotificationDisplayTime => "options.notifications.display_time",
             Opt::Narrator => "options.narrator",
             Opt::TextBackground => "options.accessibility.text_background",
@@ -574,10 +494,16 @@ impl Opt {
             ][usize::from(s.chat_visibility.min(2))]),
             Opt::ChatColors => on_off(s.chat_colors),
             Opt::ChatLinks => on_off(s.chat_links),
+            Opt::ChatLinksPrompt => on_off(s.chat_links_prompt),
             Opt::AutoSuggestions => on_off(s.auto_suggestions),
             Opt::ReducedDebugInfo => on_off(s.reduced_debug_info),
             Opt::HighContrast => on_off(s.high_contrast),
             Opt::ShowSubtitles => on_off(s.show_subtitles),
+            Opt::MusicFrequency => tr([
+                "options.music_frequency.default",
+                "options.music_frequency.frequent",
+                "options.music_frequency.constant",
+            ][s.file.int("musicFrequency").clamp(0, 2) as usize]),
             Opt::ForceUnicode => on_off(s.force_unicode),
             Opt::JapaneseGlyphs => on_off(s.japanese_glyphs),
             Opt::PadEnabled => on_off(s.controller.enabled),
@@ -625,10 +551,12 @@ impl Opt {
                 self.file_key().unwrap(),
                 crate::options_file::V::Double(f64::from(v).powi(2)),
             ),
-            Opt::DamageTilt | Opt::PanoramaSpeed => s.file.set(
-                self.file_key().unwrap(),
-                crate::options_file::V::Double(f64::from(v)),
-            ),
+            Opt::DamageTilt | Opt::PanoramaSpeed | Opt::GlintSpeed | Opt::GlintStrength => {
+                s.file.set(
+                    self.file_key().unwrap(),
+                    crate::options_file::V::Double(f64::from(v)),
+                )
+            }
             Opt::Fov => s.fov = step(30.0, 110.0),
             Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
@@ -680,6 +608,7 @@ impl Opt {
                 | Opt::CutoutLeaves
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
+                | Opt::ChunkBuilder
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
@@ -743,10 +672,16 @@ impl Opt {
             Opt::ChatVisibility => s.chat_visibility = next(s.chat_visibility, 3),
             Opt::ChatColors => s.chat_colors = !s.chat_colors,
             Opt::ChatLinks => s.chat_links = !s.chat_links,
+            Opt::ChatLinksPrompt => s.chat_links_prompt = !s.chat_links_prompt,
             Opt::AutoSuggestions => s.auto_suggestions = !s.auto_suggestions,
             Opt::ReducedDebugInfo => s.reduced_debug_info = !s.reduced_debug_info,
             Opt::HighContrast => s.high_contrast = !s.high_contrast,
             Opt::ShowSubtitles => s.show_subtitles = !s.show_subtitles,
+            Opt::MusicFrequency => {
+                let n = next(s.file.int("musicFrequency").clamp(0, 2) as u8, 3);
+                s.file
+                    .set("musicFrequency", crate::options_file::V::Int(i32::from(n)));
+            }
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
             Opt::PadEnabled => s.controller.enabled = !s.controller.enabled,
@@ -1412,6 +1347,9 @@ impl OptionsUi {
                 let others: Vec<Opt> = (1..SOUND_SOURCES.len()).map(Opt::Volume).collect();
                 rows.extend(pairs(&others));
                 rows.extend(pairs(&[Opt::ShowSubtitles]));
+                // SoundOptionsScreen: Music Frequency starts the next row (with
+                // Music Toast, not in Horizon yet).
+                rows.extend(pairs(&[Opt::MusicFrequency]));
                 rows
             }
             Page::Controls => {
@@ -1487,6 +1425,7 @@ impl OptionsUi {
                 Opt::ChatVisibility,
                 Opt::ChatColors,
                 Opt::ChatLinks,
+                Opt::ChatLinksPrompt,
                 Opt::ChatOpacity,
                 Opt::TextBackgroundOpacity,
                 Opt::ChatScale,
@@ -2533,6 +2472,21 @@ impl OptionsUi {
                             if opt == Opt::Preset {
                                 apply_preset(s);
                             }
+                            if opt == Opt::HighContrast {
+                                // Options.highContrast: the built-in pack follows the option.
+                                let on = s.resource_packs.iter().any(|id| id == "high_contrast");
+                                if on != s.high_contrast {
+                                    s.resource_packs.retain(|id| id != "high_contrast");
+                                    if s.high_contrast {
+                                        s.resource_packs.push("high_contrast".into());
+                                    }
+                                    // PackSelectionScreen reads the repository each time it
+                                    // opens: the next one starts from this selection.
+                                    self.pack_selection = s.resource_packs.clone();
+                                    self.pack_screen = None;
+                                    events.push(Event::Packs(s.resource_packs.clone()));
+                                }
+                            }
                             events.push(Event::Changed);
                         }
                         Act::Extra(item) => {
@@ -2701,6 +2655,7 @@ impl OptionsUi {
                 {
                     let ids = p.commit();
                     s.resource_packs = ids.clone();
+                    self.pack_selection = ids.clone();
                     events.push(Event::Packs(ids));
                 }
             }

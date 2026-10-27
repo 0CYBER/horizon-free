@@ -72,6 +72,8 @@ fn vertices(uv: [f32; 4]) -> Vec<Vertex> {
                         layer: 2,
                         color: 0xFF28_2828,
                         light: 0,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

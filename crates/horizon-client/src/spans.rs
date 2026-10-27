@@ -52,8 +52,9 @@ pub fn thread_cpu() -> Option<Duration> {
         Some(Duration::new(t.tv_sec as u64, t.tv_nsec as u32))
     }
     #[cfg(not(unix))]
-    None
+    horizon_threads::thread_cpu()
 }
+
 /// The frame's spans, summed by name, slowest first; clears them.
 pub fn take() -> Vec<Span> {
     let spans = SPANS.with(|s| std::mem::take(&mut *s.borrow_mut()));
@@ -135,7 +136,7 @@ mod tests {
 
     /// The thread's CPU clock moves with work done on it, not with time
     /// spent asleep.
-    #[cfg(unix)]
+    #[cfg(any(unix, all(windows, target_arch = "x86_64")))]
     #[test]
     fn thread_cpu_counts_work_not_sleep() {
         let start = super::thread_cpu().unwrap();
