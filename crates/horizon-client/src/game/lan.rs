@@ -1587,6 +1587,14 @@ impl Game<'_> {
             .iter()
             .filter(|g| host.hub.here(g))
             .map(|g| (g.chunk(), radius))
+            .chain(
+                self.arrival_chunks(self.dim)
+                    .into_iter()
+                    // An arrival keeps only its landing spot lit enough to
+                    // resolve (the 3x3 `resolve_arrivals` checks), where it
+                    // then ticks without a player.
+                    .map(|chunk| (chunk, 1)),
+            )
             .collect();
     }
 

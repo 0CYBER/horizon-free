@@ -442,6 +442,9 @@ impl Game<'_> {
                 guests.iter().any(|g| g.dimension == d.id())
                     || forced
                     || self.pregen_level() == Some(*d)
+                    // A pending portal arrival keeps its destination level
+                    // running so it can land and tick (`TicketType.ENTITY`).
+                    || !self.arrival_chunks(*d).is_empty()
             })
             .collect();
         if dims.is_empty() {
