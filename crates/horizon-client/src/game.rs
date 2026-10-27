@@ -8291,18 +8291,9 @@ impl Game<'_> {
         self.audio
             .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
-    /// The damage and knockback part of `Player.doSweepAttack` after a sweep
-    /// hit on the mob at `target`: every other living mob in its box grown by
-    /// (1, 0.25, 1) and closer than 3 blocks (`distanceToSqr < 9`, in creative
-    /// too), but the player's allies
-    /// (`isAlliedTo`), takes `1 + sweeping_damage_ratio * baseDamage` with the
-    /// weapon's enchantments, scaled by the attack strength, and is pushed 0.4
-    /// along the player's yaw.
-    pub(super) fn sweep_damage(&mut self, target: usize, scale: f32) {
-        let Some(p) = self.player.as_ref() else {
-            return;
-        };
-        let from = [p.position.x, p.position.y, p.position.z];
+    /// What `Player.doSweepAttack` deals before the target's enchantment
+    /// bonus and the attack strength: `1 + sweeping_damage_ratio * baseDamage`.
+    pub(super) fn sweep_base_damage(&self, scale: f32) -> f32 {
         // `baseDamage` of `Player.attack` before a critical hit (a sweep has
         // none) and the enchantments: the attack damage attribute with the
         // strength and weakness effects, scaled by the attack strength.
@@ -8318,7 +8309,21 @@ impl Game<'_> {
                 "minecraft:sweeping_damage_ratio",
             )
             .clamp(0.0, 1.0) as f32;
-        let sweep_damage = 1.0 + ratio * base_damage;
+        1.0 + ratio * base_damage
+    }
+    /// The damage and knockback part of `Player.doSweepAttack` after a sweep
+    /// hit on the mob at `target`: every other living mob in its box grown by
+    /// (1, 0.25, 1) and closer than 3 blocks (`distanceToSqr < 9`, in creative
+    /// too), but the player's allies
+    /// (`isAlliedTo`), takes `1 + sweeping_damage_ratio * baseDamage` with the
+    /// weapon's enchantments, scaled by the attack strength, and is pushed 0.4
+    /// along the player's yaw.
+    pub(super) fn sweep_damage(&mut self, target: usize, scale: f32) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let from = [p.position.x, p.position.y, p.position.z];
+        let sweep_damage = self.sweep_base_damage(scale);
         let hit_box = self.mobs[target]
             .bounds()
             .inflate(horizon_core::geometry::Vec3::new(1.0, 0.25, 1.0));
@@ -8353,6 +8358,10 @@ impl Game<'_> {
                     .insert(self.mobs[i].id, self.lan_acting);
             }
         }
+        // `getEntitiesOfClass(LivingEntity.class)` takes the other players too.
+        let mut sweep = self.player_sweep(sweep_damage, scale);
+        sweep.hit_box = hit_box;
+        self.sweep_other_players(sweep);
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full

@@ -49,6 +49,9 @@ pub(super) struct Creatures {
     /// Mace smash knockback on the other players from a guest's turn, waiting
     /// for it to end (game/mace.rs).
     pub smash_pushes: Vec<super::mace::SmashPush>,
+    /// Sweep attacks from a guest's turn, waiting for it to end
+    /// (game/lan_pvp.rs).
+    pub sweeps: Vec<super::lan_pvp::Sweep>,
     /// Explosion packets from a guest's turn, waiting for it to end
     /// (centre, small, radius, blocks hit; game/lan_particles.rs).
     pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
