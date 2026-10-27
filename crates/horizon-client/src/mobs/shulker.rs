@@ -49,7 +49,7 @@ pub fn register(m: &mut Mob) {
     // attach axis.
     m.ai.targets.add(
         2,
-        NearestTarget::player(true).when(|m, w| {
+        NearestTarget::player(true).gate(peaceful_off).when(|m, w| {
             let Some(p) = &w.player else { return false };
             let d = p.position.subtract(m.position);
             let axis = match m.extra.variant3 {
@@ -426,6 +426,11 @@ impl ProjectileWorld for Probe<'_, '_> {
             .full_collision
     }
 }
+/// `level().getDifficulty() != Difficulty.PEACEFUL`, which the shulker's
+/// attack goal and target goal check.
+fn peaceful_off(_m: &Mob, w: &MobWorld) -> bool {
+    w.difficulty.effective != 0.0
+}
 /// `ShulkerAttackGoal`: open up and fire a bullet every one to five and a
 /// half seconds at a target within 20 blocks.
 #[derive(Clone, Debug)]
@@ -441,7 +446,7 @@ impl Goal for ShulkerAttack {
         true
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        m.target_info(cx.w).is_some_and(|t| t.alive)
+        m.target_info(cx.w).is_some_and(|t| t.alive) && peaceful_off(m, cx.w)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.attack_time = 20;
@@ -451,6 +456,9 @@ impl Goal for ShulkerAttack {
         set_peek(m, 0, cx.events);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if !peaceful_off(m, cx.w) {
+            return;
+        }
         self.attack_time -= 1;
         let (Some(who), Some(t)) = (m.ai.target, m.target_info(cx.w)) else {
             return;

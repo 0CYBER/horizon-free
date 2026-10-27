@@ -128,9 +128,12 @@ pub fn register(m: &mut Mob) {
             let g = &mut m.ai.goals;
             g.add(0, BreathAir);
             g.add(0, TryFindWater::default());
+            g.add(1, super::dolphin::SwimToTreasure::default());
+            g.add(2, super::dolphin::SwimWithPlayer::new(4.0));
             g.add(4, Stroll::swimming(1.0, 10));
             g.add(4, RandomLookAround::default());
             g.add(5, LookAtPlayer::new(6.0));
+            g.add(5, super::dolphin::Jump::new(10));
             g.add(6, MeleeAttack::new(1.2, true));
             m.ai.targets.add(1, HurtByTarget::new().alert());
             m.ai.mov.kind = MoveKind::SmoothSwimming {
@@ -244,11 +247,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     && m.ai.no_action_time % 10 == 0
                 {
                     let amount = 1.0 + m.extra.size as f32;
-                    events.push(MobEvent::AttackPlayer(
+                    // Only when the sting hurt the player.
+                    events.push(MobEvent::AttackPlayerWithEffect {
                         amount,
-                        [m.position.x, m.position.y, m.position.z],
-                    ));
-                    events.push(MobEvent::EffectPlayer {
+                        from: [m.position.x, m.position.y, m.position.z],
                         effect: "minecraft:poison",
                         ticks: 60 * m.extra.size,
                         amplifier: 0,
