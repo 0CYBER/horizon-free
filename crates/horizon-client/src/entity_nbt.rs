@@ -301,6 +301,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.entry(key.into()).or_insert(value);
             }
         }
+        // Rabbit.addAdditionalSaveData (the legacy id; 99 is the killer bunny).
         "minecraft:rabbit" => {
             map.insert("RabbitType".into(), Tag::Int(i32::from(m.extra.variant)));
             map.entry("MoreCarrotTicks".into()).or_insert(Tag::Int(0));
@@ -497,10 +498,6 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 "Variant".into(),
                 Tag::Int(i32::from(m.extra.variant.min(4))),
             );
-        }
-        // Rabbit.addAdditionalSaveData (the legacy id; 99 is the killer bunny).
-        "minecraft:rabbit" => {
-            map.insert("RabbitType".into(), Tag::Int(i32::from(m.extra.variant)));
         }
         "minecraft:parrot" => {
             map.insert(
