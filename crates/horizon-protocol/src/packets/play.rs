@@ -2164,6 +2164,12 @@ packet!(
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
 packet!(
+    /// ServerboundSetCommandBlockPacket: the command block's command, its
+    /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
+    /// conditional (2) and automatic (4) flags.
+    SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
+);
+packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
     /// the off hand), its pages and, to sign it, its title.
     EditBook {
@@ -2330,6 +2336,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
+    SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
