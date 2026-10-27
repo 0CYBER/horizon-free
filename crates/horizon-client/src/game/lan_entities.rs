@@ -304,6 +304,9 @@ impl Game<'_> {
             None => 0,
         };
         let at = |p: horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        for f in &self.fangs.list {
+            out.push(state(f.id, "minecraft:evoker_fangs", f.pos, f.yaw, false));
+        }
         // LightningBolt: each client draws and flashes its own.
         for b in self.bolts.iter().filter(|b| b.id != 0) {
             out.push(state(b.id, "minecraft:lightning_bolt", b.at, 0.0, false));
@@ -339,6 +342,7 @@ impl Game<'_> {
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
+            e.needs_sync = p.needs_sync;
             // Projectile.getAddEntityPacket: the owner's id.
             e.data = match p.guest.and_then(|conn| hub.guest(conn)) {
                 Some(g) => g.entity_id,
@@ -353,6 +357,20 @@ impl Game<'_> {
                         a.map_or(0, |a| a.pierce),
                         a.is_some_and(|a| a.in_ground) || p.stuck,
                     ));
+                }
+                // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
+                // AbstractArrow's flags.
+                K::Trident => {
+                    let a = p.arrow.as_deref();
+                    e.meta.extend(arrow_meta(
+                        false,
+                        a.is_some_and(|a| a.no_physics),
+                        0,
+                        a.is_some_and(|a| a.in_ground) || p.stuck,
+                    ));
+                    if a.is_some_and(|a| a.pickup_item.has_any_enchantments()) {
+                        e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
+                    }
                 }
                 // WitherSkull.DATA_DANGEROUS.
                 K::WitherSkull { dangerous: true } => {
@@ -449,7 +467,7 @@ impl Game<'_> {
             }
             out.push(e);
         }
-        // The dragon's breath clouds (AreaEffectCloud's DATA_RADIUS,
+        // The dragon's breath and lingering potion clouds (AreaEffectCloud's DATA_RADIUS,
         // DATA_WAITING for its 20-tick wait, and DATA_PARTICLE): the
         // client draws them from these (`tick_remote_clouds`).
         let breath = self.network_particle(
@@ -467,10 +485,14 @@ impl Game<'_> {
         for b in self.breath_clouds.iter().filter(|b| b.id != 0) {
             let mut e = state(b.id, "minecraft:area_effect_cloud", b.at, 0.0, false);
             e.meta.push((8, serializer::FLOAT, Value::Float(b.radius)));
-            if b.age < 20 {
+            if b.waiting() {
                 e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
             }
-            if let Some(p) = &breath {
+            let particle = match &b.potion {
+                Some(p) => self.network_particle(&p.particle(), None),
+                None => breath.clone(),
+            };
+            if let Some(p) = &particle {
                 e.meta
                     .push((10, serializer::PARTICLE, Value::Particle(p.clone())));
             }

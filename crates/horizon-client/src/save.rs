@@ -339,59 +339,7 @@ impl SaveTables {
     }
 }
 
-/// A container's loot table and what Horizon rolled from it. Vanilla keeps
-/// `LootTable` and `LootTableSeed` until the container is first opened;
-/// Horizon rolls when it generates or loads the chunk, and saves the table
-/// again while the container still holds exactly the rolled items.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RolledLoot {
-    pub pos: (i32, i32, i32),
-    pub table: String,
-    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
-    pub seed: Option<i64>,
-    /// The rolled `Items`.
-    pub items: Tag,
-}
-impl RolledLoot {
-    /// Puts the loot table back in place of `Items` while they are still the
-    /// roll; false once the container holds anything else.
-    pub fn restore(&self, map: &mut Compound) -> bool {
-        if map.get(&"Items".into()) != Some(&self.items) {
-            return false;
-        }
-        map.remove(&"Items".into());
-        map.insert("LootTable".into(), string(&self.table));
-        if let Some(seed) = self.seed.filter(|s| *s != 0) {
-            map.insert("LootTableSeed".into(), Tag::Long(seed));
-        }
-        true
-    }
-}
-
-/// Save data loaded with a chunk that Horizon keeps but does not simulate.
-#[derive(Clone, Debug, Default)]
-pub struct ChunkExtras {
-    /// Chunk root keys written back as loaded (structures, PostProcessing,
-    /// InhabitedTime, blending data, ...).
-    pub root: Compound,
-    /// Block entities Horizon does not model.
-    pub block_entities: Vec<Tag>,
-    /// The NBT of the modelled block entities as loaded, to restore the fields and
-    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
-    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
-    /// Every saved block entity's position in the order of the save's list,
-    /// the order `SerializableChunkData` puts them in the chunk's maps.
-    pub block_entity_order: Vec<(i32, i32, i32)>,
-    /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
-    /// save time. Registered with the level's tick scheduler on arrival and
-    /// replaced with the scheduler's pending ticks when saving.
-    pub block_ticks: Vec<SavedTick>,
-    pub fluid_ticks: Vec<SavedTick>,
-    /// Game time written as `LastUpdate`.
-    pub last_update: i64,
-    /// Containers still holding their loot table's roll.
-    pub rolled_loot: Vec<RolledLoot>,
-}
+pub use crate::chunk::{ChunkExtras, RolledLoot};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -648,6 +596,7 @@ pub fn encode_block_entity(
         BlockEntity::Vault(v) => entries.extend(v.save()),
         BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
         BlockEntity::CommandBlock(c) => entries.extend(c.save()),
+        BlockEntity::DaylightDetector => {}
     }
     Tag::compound(entries)
 }
@@ -845,7 +794,8 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_)
-        | BlockEntity::Skull(_) => {}
+        | BlockEntity::Skull(_)
+        | BlockEntity::DaylightDetector => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
@@ -2433,28 +2383,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-pub fn uuid_text(u: [i32; 4]) -> String {
-    let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
-}
-pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
-    let mut out = [0i32; 4];
-    for (i, v) in out.iter_mut().enumerate() {
-        *v = u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16).ok()? as i32;
-    }
-    Some(out)
-}
+pub use horizon_client_core::uuid::{uuid_from_text, uuid_text};
 /// A random (version 4) UUID as vanilla's four-int form.
 pub fn random_uuid() -> [i32; 4] {
     let t = std::time::SystemTime::now()
@@ -2761,7 +2690,7 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
-    /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
+    /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
@@ -3041,7 +2970,7 @@ impl Level {
                         get("duration").unwrap_or(0) as i32,
                         get("amplifier").unwrap_or(0) as i32,
                         get("ambient").unwrap_or(0) != 0,
-                        get("show_icon").is_none_or(|v| v != 0),
+                        get("show_particles").is_none_or(|v| v != 0),
                     ))
                 })
                 .collect(),
@@ -3143,14 +3072,14 @@ impl Level {
                 Tag::List(
                     self.active_effects
                         .iter()
-                        .map(|(id, duration, amplifier, ambient, icon)| {
+                        .map(|(id, duration, amplifier, ambient, particles)| {
                             Tag::compound([
                                 ("id", string(id)),
                                 ("duration", Tag::Int(*duration)),
                                 ("amplifier", Tag::Byte(*amplifier as i8)),
                                 ("ambient", Tag::Byte(i8::from(*ambient))),
-                                ("show_particles", Tag::Byte(1)),
-                                ("show_icon", Tag::Byte(i8::from(*icon))),
+                                ("show_particles", Tag::Byte(i8::from(*particles))),
+                                ("show_icon", Tag::Byte(i8::from(*particles))),
                             ])
                         })
                         .collect(),
@@ -3838,6 +3767,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn is_decorated(&self, proto: &crate::streaming::Proto) -> bool {
         self.inner.is_decorated(proto)
+    }
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        self.inner.light_view(proto)
     }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save
@@ -5122,6 +5054,30 @@ mod tests {
             panic!("a furnace back");
         };
         assert_eq!(back.recipes_used.get("minecraft:cooked_porkchop"), Some(&3));
+    }
+    /// The world's save (Level.write) writes the rules as they are now, and a
+    /// world opened again reads them back (#74).
+    #[test]
+    fn level_save_keeps_changed_rules() {
+        use crate::gamerules::{GameRules, Value};
+        let dir =
+            std::env::temp_dir().join(format!("horizon-gamerules-level-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut level = super::Level::default();
+        level.write(&dir).unwrap();
+        // Rules changed while playing, then saved and loaded again.
+        let mut rules = GameRules::load(&dir);
+        assert_eq!(rules, GameRules::default());
+        assert!(rules.set("advance_time", Value::Bool(false)));
+        assert!(rules.set("advance_weather", Value::Bool(false)));
+        assert!(rules.set("random_tick_speed", Value::Int(0)));
+        level.game_rules = rules.by_name();
+        level.write(&dir).unwrap();
+        assert_eq!(GameRules::load(&dir), rules);
+        let read = super::Level::read(&dir).unwrap();
+        assert_eq!(read.game_rules, rules.by_name());
+        assert_eq!(read.game_rule("advance_time"), 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A save written before the key was namespaced holds an id twice, once bare: vanilla

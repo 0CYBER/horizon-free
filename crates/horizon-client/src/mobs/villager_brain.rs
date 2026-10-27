@@ -1242,6 +1242,8 @@ enum B {
     WorkAtPoi {
         t: Timed,
         last_check: i64,
+        /// `WorkAtComposter` (a farmer's package) rather than `WorkAtPoi`.
+        composter: bool,
     },
     StrollAroundPoi {
         running: bool,
@@ -1635,7 +1637,11 @@ impl B {
                 *birth = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
                 true
             }
-            B::WorkAtPoi { t, last_check } => {
+            B::WorkAtPoi {
+                t,
+                last_check,
+                composter,
+            } => {
                 let mm = mem(m);
                 let Some(site) = mm.job_site.value() else {
                     return false;
@@ -1656,6 +1662,13 @@ impl B {
                 mm.last_worked_at_poi.set(now);
                 mm.look_target.set(Tracker::Block(site));
                 play_work_sound(m, cx);
+                // WorkAtComposter.useWorkstation, before the restock.
+                if *composter {
+                    cx.events.push(MobEvent::WorkAtComposter {
+                        mob: m.id,
+                        pos: site,
+                    });
+                }
                 restock_if_due(m, cx.w);
                 true
             }
@@ -3396,8 +3409,10 @@ fn breeding_possible(m: &mut Mob, w: &MobWorld) -> bool {
         && super::villager::can_breed(m)
         && w.seen(id).is_some_and(|s| s.in_love)
 }
-/// `VillagerMakeLove.takeVacantBed`: a bed head no villager has claimed.
-fn take_bed_for_child(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+/// `VillagerMakeLove.takeVacantBed`: `PoiManager.take(HOME, ..., 48)` over a
+/// sphere of 48 blocks, the nearest bed head no villager has claimed that the
+/// villager can walk to (`canReach`: a path that gets there).
+fn take_bed_for_child(m: &mut Mob, w: &MobWorld) -> Option<[i32; 3]> {
     let claimed: Vec<[i32; 3]> = w
         .others
         .iter()
@@ -3405,10 +3420,20 @@ fn take_bed_for_child(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
         .filter_map(|s| s.bed)
         .chain(m.extra.bed)
         .collect();
-    let p = m.position;
-    let from = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
-    super::villager::take_vacant_bed(&claimed, from, |x, y, z| {
-        w.prop(x, y, z, "part") == Some("head") && w.prop(x, y, z, "occupied") != Some("true")
+    let from = block_of(m.position);
+    let mut beds: Vec<[i32; 3]> = homes_in_range(m, w, 48)
+        .into_iter()
+        .filter(|p| {
+            w.prop(p[0], p[1], p[2], "part") == Some("head")
+                && w.prop(p[0], p[1], p[2], "occupied") != Some("true")
+                && !claimed.contains(p)
+        })
+        .collect();
+    // Nearest first; equally near beds stay in scan order.
+    beds.sort_by_key(|p| dist_sqr(*p, from));
+    beds.into_iter().find(|&p| {
+        m.create_path_to(w, p, Poi::Home.valid_range())
+            .is_some_and(|path| path.reached)
     })
 }
 /// `BehaviorUtils.lockGazeAndWalkToEachOther`: this villager's half, and
@@ -3775,6 +3800,7 @@ fn packages(baby: bool, seed: i64, farmer: bool) -> Vec<Entry> {
                         B::WorkAtPoi {
                             t: timed(60, 60),
                             last_check: 0,
+                            composter: farmer,
                         },
                         7,
                     ),

@@ -2,7 +2,6 @@
 //! defaults, `key_<name>:key.keyboard.x` persistence, display names, and the
 //! translation of rebound physical keys back to the default keys the game
 //! logic listens for.
-use crate::text::Text;
 use std::collections::BTreeMap;
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -225,40 +224,7 @@ pub fn mouse_button(name: &str) -> Option<MouseButton> {
         _ => return None,
     })
 }
-/// InputConstants.Key.getDisplayName: one-character keys as the upper-case
-/// character, others by translation.
-pub fn display_name(key: &str) -> Text {
-    if let Some(rest) = key.strip_prefix("key.keyboard.")
-        && rest.chars().count() == 1
-    {
-        let c = rest.to_uppercase();
-        return Text::literal(c);
-    }
-    let symbol = match key {
-        "key.keyboard.minus" => Some("-"),
-        "key.keyboard.equal" => Some("="),
-        "key.keyboard.left.bracket" => Some("["),
-        "key.keyboard.right.bracket" => Some("]"),
-        "key.keyboard.backslash" => Some("\\"),
-        "key.keyboard.semicolon" => Some(";"),
-        "key.keyboard.apostrophe" => Some("'"),
-        "key.keyboard.grave.accent" => Some("`"),
-        "key.keyboard.comma" => Some(","),
-        "key.keyboard.period" => Some("."),
-        "key.keyboard.slash" => Some("/"),
-        _ => None,
-    };
-    if let Some(s) = symbol {
-        return Text::literal(s);
-    }
-    if let Some(n) = key.strip_prefix("key.mouse.")
-        && n.parse::<u32>().is_ok()
-        && !crate::lang::has(key)
-    {
-        return Text::translate("key.mouse", &[Text::literal(n)]);
-    }
-    Text::translate(key, &[])
-}
+pub use horizon_client_core::key_display::display_name;
 
 /// Current bindings by mapping name.
 #[derive(Clone, Debug, PartialEq, Eq)]

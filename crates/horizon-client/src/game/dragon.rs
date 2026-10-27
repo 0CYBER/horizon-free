@@ -27,6 +27,8 @@ pub(super) const SPECIAL: u32 = u32::MAX - 4096;
 const CRYSTAL_IDS: u32 = SPECIAL + 16;
 const FIGHT_FILE: &str = "data/minecraft/ender_dragon_fight.dat";
 const MAX_HEALTH: f32 = 200.0;
+/// `Mob.getAmbientSoundInterval`.
+const AMBIENT_INTERVAL: i32 = 80;
 
 #[derive(Default)]
 pub(super) struct Fight {
@@ -276,6 +278,8 @@ pub(super) struct Dragon {
     flame_count: i32,
     sitting_damage: f32,
     growl: i32,
+    /// `Mob.ambientSoundTime`.
+    ambient_time: i32,
     ticks: i32,
     /// DragonFlightHistory: (y, yRot) samples, newest at `head`.
     history: [(f64, f32); 64],
@@ -297,11 +301,11 @@ pub(super) enum FightWho {
 }
 /// A player in the End as the dragon sees it.
 #[derive(Clone, Copy, Debug)]
-struct FightPlayer {
-    who: FightWho,
-    position: Vec3,
-    bounds: Aabb,
-    alive: bool,
+pub(super) struct FightPlayer {
+    pub(super) who: FightWho,
+    pub(super) position: Vec3,
+    pub(super) bounds: Aabb,
+    pub(super) alive: bool,
     creative: bool,
     spectator: bool,
 }
@@ -404,6 +408,7 @@ impl Dragon {
             flame_count: 0,
             sitting_damage: 0.0,
             growl: 100,
+            ambient_time: 0,
             ticks: 0,
             history: [(position.y, yaw); 64],
             head: 0,
@@ -704,7 +709,7 @@ impl Game<'_> {
     }
     /// The players in the level the dragon sees (`level.players()`): the
     /// window's own, then every guest in the level.
-    fn fight_players(&self) -> Vec<FightPlayer> {
+    pub(super) fn fight_players(&self) -> Vec<FightPlayer> {
         let mut out = Vec::new();
         if let Some(p) = self.player.as_ref() {
             out.push(FightPlayer {
@@ -733,7 +738,7 @@ impl Game<'_> {
     }
     /// Run `f` as the fight's player `who` (a guest's turn, its knockback
     /// sent to its client).
-    fn as_fight_player(&mut self, who: FightWho, f: impl FnOnce(&mut Self)) {
+    pub(super) fn as_fight_player(&mut self, who: FightWho, f: impl FnOnce(&mut Self)) {
         match who {
             FightWho::Host => f(self),
             FightWho::Guest(conn) => {
@@ -839,8 +844,10 @@ impl Game<'_> {
                 continue;
             }
             let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+            // EndCrystal's constructor takes an id from the entity counter.
+            self.next_entity += 1;
             self.crystals.push(Crystal {
-                id: 0,
+                id: self.next_entity,
                 position: at,
                 show_bottom: true,
                 time,
@@ -1024,10 +1031,12 @@ impl Game<'_> {
         if !was_down && d.down() {
             self.credit_dragon_kill();
         }
-        let Some(d) = self.dragon.as_ref() else {
+        let Some(d) = self.dragon.as_mut() else {
             return hurt;
         };
         if hurt == (Hurt::Landed { full: true }) {
+            // Mob.playHurtSound: the ambient sound clock starts again.
+            d.ambient_time = -AMBIENT_INTERVAL;
             let at = [d.position.x, d.position.y, d.position.z];
             let pitch = 0.8 + self.world.random.next_float() * 0.3;
             self.audio
@@ -1648,6 +1657,7 @@ impl Game<'_> {
                         age: 0,
                         duration: 200,
                         from_dragon: true,
+                        potion: None,
                     });
                 }
             }
@@ -1740,6 +1750,24 @@ impl Game<'_> {
             self.tick_dragon_death();
             return;
         }
+        // Mob.baseTick: the ambient sound, rarer right after one.
+        let roll = d.random.next_int_bound(1000).unwrap_or(999);
+        let waited = d.ambient_time;
+        d.ambient_time += 1;
+        if roll < waited {
+            d.ambient_time = -AMBIENT_INTERVAL;
+            let at = [d.position.x, d.position.y, d.position.z];
+            // LivingEntity.getVoicePitch, from the dragon's own random.
+            let r = &mut d.random;
+            let pitch = (r.next_float() - r.next_float()) * 0.2 + 1.0;
+            self.audio.play(
+                "minecraft:entity.ender_dragon.ambient",
+                Some(at),
+                5.0,
+                pitch,
+            );
+        }
+        let d = self.dragon.as_mut().expect("dragon");
         // Flapping, growls and the flap sound.
         let flap_was = (d.old_flap * std::f32::consts::TAU).cos();
         let v = d.velocity;
@@ -2160,12 +2188,18 @@ impl Game<'_> {
                     age: 0,
                     duration: 600,
                     from_dragon: false,
+                    potion: None,
                 });
-                self.audio.play(
-                    "minecraft:entity.dragon_fireball.explode",
-                    Some([next.x, next.y, next.z]),
-                    1.0,
-                    1.0,
+                // DragonFireball.onHit: level event 2006 (the burst of dragon
+                // breath and the explosion sound) at its block position.
+                self.level_event_at(
+                    2006,
+                    [
+                        next.x.floor() as i32,
+                        next.y.floor() as i32,
+                        next.z.floor() as i32,
+                    ],
+                    1,
                 );
                 return false;
             }
@@ -2192,6 +2226,10 @@ impl Game<'_> {
         let mut harmed: Vec<(FightWho, f32)> = Vec::new();
         let mut clouds = std::mem::take(&mut self.breath_clouds);
         clouds.retain_mut(|c| {
+            // Lingering potions' clouds tick with the potions.
+            if c.potion.is_some() {
+                return true;
+            }
             c.age += 1;
             if c.age >= c.duration {
                 return false;
@@ -2239,11 +2277,14 @@ impl Game<'_> {
     }
     /// Damage from the dragon, which is its causing entity
     /// (`DamageSources.mobAttack(dragon)`, `indirectMagic(cloud, dragon)`): the
-    /// death message names it.
+    /// death message names it, or the cloud once the dragon is gone.
     fn dragon_hurts_player(&mut self, damage_type: &str, amount: f32) {
         if let Some(id) = self.dragon.as_ref().map(|d| d.id) {
             let name = Text::translate("entity.minecraft.ender_dragon", &[]);
             self.note_named_attacker(damage_type, id, name);
+        } else if damage_type == "minecraft:indirect_magic" {
+            let name = Text::translate("entity.minecraft.area_effect_cloud", &[]);
+            self.note_direct_entity(damage_type, name);
         }
         self.hurt_player_by(damage_type, amount);
     }
@@ -2336,8 +2377,22 @@ pub(super) struct Breath {
     pub(super) at: [f64; 3],
     pub(super) radius: f32,
     pub(super) age: i32,
-    duration: i32,
-    from_dragon: bool,
+    pub(super) duration: i32,
+    pub(super) from_dragon: bool,
+    /// A lingering potion's cloud (`ThrownLingeringPotion`): what it applies.
+    pub(super) potion: Option<super::potions::PotionCloud>,
+}
+impl Breath {
+    /// `AreaEffectCloud.isWaiting`: before its wait time (20 ticks, 10 for a
+    /// lingering potion's).
+    pub(super) fn waiting(&self) -> bool {
+        self.age
+            < if self.potion.is_some() {
+                super::potions::LINGERING_WAIT
+            } else {
+                20
+            }
+    }
 }
 impl Game<'_> {
     /// `EnderDragonRenderer` and `EnderDragonModel.setupAnim`.
@@ -2680,7 +2735,9 @@ impl Game<'_> {
     }
     pub(super) fn fight_ready(&mut self) -> bool {
         self.load_fight();
-        self.fight.loaded
+        // spawnExitPortal runs from scanState and the dragon's death, both
+        // only with players in the fight.
+        self.fight.loaded && self.fight.players
     }
     pub(super) fn exit_portal(&self) -> Option<[i32; 3]> {
         self.fight.exit_portal
@@ -2913,8 +2970,11 @@ impl Game<'_> {
             return false;
         }
         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
+        // EndCrystal's constructor takes an id from the entity counter, so
+        // the crystal is an entity a command can name (`@e[type=end_crystal]`).
+        self.next_entity += 1;
         self.crystals.push(Crystal {
-            id: 0,
+            id: self.next_entity,
             position: Vec3::new(x + 0.5, y, z + 0.5),
             show_bottom: false,
             time,
@@ -2930,6 +2990,21 @@ impl Game<'_> {
         }
         self.swing_arm();
         true
+    }
+    /// `EndCrystal.kill` (`/kill`): the crystal is removed, without a blast
+    /// (`Entity.kill` does not hurt it).
+    pub(super) fn kill_crystal(&mut self, id: u32) {
+        if let Some(i) = self.crystals.iter().position(|c| c.id == id) {
+            self.destroy_crystal(i, None, CrystalDamage::Explosion);
+        }
+    }
+    /// `EnderDragon.kill` (`/kill`): `Entity.kill` removes the entity, it
+    /// does not hurt it (the dragon flies its death flight when its health
+    /// runs out).
+    pub(super) fn kill_dragon(&mut self, id: u32) {
+        if self.dragon.as_ref().is_some_and(|d| d.id == id) {
+            self.dragon = None;
+        }
     }
     /// Any entity touching `room` (`Level.getEntities(null, box)`).
     fn entity_in(&self, room: Aabb) -> bool {
