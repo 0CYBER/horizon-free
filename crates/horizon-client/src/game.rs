@@ -1604,6 +1604,8 @@ struct Game<'a> {
         [f64; 3],
         [f32; 3],
     )>,
+    /// Sweeps that may reach other players, queued while the hub is taken.
+    lan_sweeps: Vec<lan_pvp::SweepStrike>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -7499,17 +7501,7 @@ impl Game<'_> {
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
         amount += self.smash_damage_bonus(target_kind);
-        let player = self.player.as_ref();
-        // Player.canCriticalAttack: falling, off the ground, not in water,
-        // not blind (isMobilityRestricted), not riding, not sprinting.
-        let falling = player.is_some_and(|p| {
-            !p.ground.on_ground
-                && p.fall_distance > 0.0
-                && !p.fluids.was_touching_water
-                && !p.sprinting
-        });
-        let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
-        let crit = scale > 0.9 && falling && !restricted;
+        let crit = self.critical_attack(scale);
         if crit {
             amount *= 1.5;
         }
@@ -7559,7 +7551,7 @@ impl Game<'_> {
         &mut self,
         at: [f64; 3],
         from: Option<[f64; 3]>,
-        target: Option<(Aabb, Option<u32>)>,
+        target: Option<(Aabb, mace::Spared)>,
         scale: f32,
     ) {
         self.audio
@@ -7596,24 +7588,61 @@ impl Game<'_> {
     /// strength, then strong or weak, or the sweep around the vehicle's
     /// box `area`. Before `swing_arm` resets the charge.
     pub(super) fn vehicle_attack_sounds(&mut self, area: Aabb) {
-        let full = self.attack_strength_scale() > 0.9;
+        self.attack_effects(area, None, mace::Spared::Nothing);
+    }
+    /// `Player.attack` after a target that is not a mob took the hit:
+    /// the sprint knockback sound, a living target's critical hit (`living`:
+    /// its entity id, which makes the hit critical when the player falls),
+    /// the sweep around the target's box `area` and the strong or weak sound.
+    pub(super) fn attack_effects(&mut self, area: Aabb, living: Option<i32>, spared: mace::Spared) {
+        let scale = self.attack_strength_scale();
+        let full = scale > 0.9;
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         if full && player.is_some_and(|p| p.sprinting) {
             self.audio
                 .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
         }
-        let sound = if full {
-            "minecraft:entity.player.attack.strong"
-        } else {
-            "minecraft:entity.player.attack.weak"
-        };
-        let scale = self.attack_strength_scale();
-        if let Some(at) = self.sweep_attack_position(scale, false) {
-            self.sweep_attack(at, from, Some((area, None)), scale);
-        } else {
+        let crit = living.is_some() && self.critical_attack(scale);
+        let sweep = self.sweep_attack_position(scale, crit);
+        if let Some(at) = sweep {
+            self.sweep_attack(at, from, Some((area, spared)), scale);
+        }
+        if crit {
+            self.audio
+                .play("minecraft:entity.player.attack.crit", from, 1.0, 1.0);
+            if let Some(id) = living {
+                let (feet, size) = (area.bottom_center(), area.size());
+                self.critical_hit(
+                    self.lan_acting,
+                    id,
+                    [feet.x, feet.y, feet.z],
+                    size.x,
+                    size.y,
+                );
+            }
+        } else if sweep.is_none() {
+            let sound = if full {
+                "minecraft:entity.player.attack.strong"
+            } else {
+                "minecraft:entity.player.attack.weak"
+            };
             self.audio.play(sound, from, 1.0, 1.0);
         }
+    }
+    /// `Player.canCriticalAttack` for a living target at attack strength
+    /// `scale`: falling, off the ground, not in water, not blind (mobility
+    /// restricted), not riding, not sprinting.
+    pub(super) fn critical_attack(&self, scale: f32) -> bool {
+        let player = self.player.as_ref();
+        let falling = player.is_some_and(|p| {
+            !p.ground.on_ground
+                && p.fall_distance > 0.0
+                && !p.fluids.was_touching_water
+                && !p.sprinting
+        });
+        let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
+        scale > 0.9 && falling && !restricted
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
@@ -7765,7 +7794,10 @@ impl Game<'_> {
             };
             // Player.playServerSideSound: at the player.
             if let Some(at) = sweep {
-                let target = (self.mobs[index].bounds(), Some(self.mobs[index].id));
+                let target = (
+                    self.mobs[index].bounds(),
+                    mace::Spared::Mob(self.mobs[index].id),
+                );
                 self.sweep_attack(at, from, Some(target), scale);
             } else {
                 self.audio.play(sound, from, 1.0, 1.0);
@@ -12536,6 +12568,7 @@ impl<'a> Game<'a> {
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
             lan_particles: Vec::new(),
+            lan_sweeps: Vec::new(),
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,

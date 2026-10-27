@@ -81,6 +81,7 @@ pub(super) struct Parked {
         [f64; 3],
         [f32; 3],
     )>,
+    lan_sweeps: Vec<super::lan_pvp::SweepStrike>,
     /// Only the per-level parts of these are used (`swap_level`).
     anims: BlockEntityAnims,
     raiding: Raiding,
@@ -169,6 +170,7 @@ impl Game<'_> {
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
             lan_particles: Vec::new(),
+            lan_sweeps: Vec::new(),
             anims: Default::default(),
             raiding: Default::default(),
             sculk: Default::default(),
@@ -222,6 +224,7 @@ impl Game<'_> {
         swap(&mut self.lan_entity_events, &mut p.lan_entity_events);
         swap(&mut self.lan_critical_hits, &mut p.lan_critical_hits);
         swap(&mut self.lan_particles, &mut p.lan_particles);
+        swap(&mut self.lan_sweeps, &mut p.lan_sweeps);
         let (a, b) = (&mut self.be_anims, &mut p.anims);
         swap(&mut a.chests, &mut b.chests);
         swap(&mut a.books, &mut b.books);

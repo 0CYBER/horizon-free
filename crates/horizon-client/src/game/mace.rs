@@ -41,6 +41,17 @@ fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
         || m.species() == Species::Allay && m.extra.tame
 }
 
+/// The entity a sweep leaves out: the one the attack hit (`target` of
+/// `Player.doSweepAttack`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Spared {
+    Nothing,
+    Mob(u32),
+    Stand(u32),
+    /// A player of the open world, by entity id.
+    Player(i32),
+}
+
 /// `SweepingEdgeEnchantment.getSweepingDamageRatio` (the enchantment's
 /// `fraction` attribute): level / (level + 1), none without the enchantment.
 fn sweeping_ratio(level: u32) -> f32 {
@@ -283,13 +294,13 @@ impl Game<'_> {
     /// (1, 0.25, 1) and under three blocks from the player takes
     /// `getEnchantedDamage(1 + sweeping ratio * attack damage) * strength`,
     /// knocked back 0.4 along the player's yaw. The player's allies and the
-    /// target (`exclude_mob`) are spared.
-    pub(super) fn sweep_damage(&mut self, target: Aabb, exclude_mob: Option<u32>, scale: f32) {
+    /// target (`spared`) are spared.
+    pub(super) fn sweep_damage(&mut self, target: Aabb, spared: Spared, scale: f32) {
         let Some(player) = self.player.as_ref() else {
             return;
         };
         let from = [player.position.x, player.position.y, player.position.z];
-        let (target_id, area) = (exclude_mob, target.inflate(Vec3::new(1.0, 0.25, 1.0)));
+        let area = target.inflate(Vec3::new(1.0, 0.25, 1.0));
         let near = |at: Vec3| {
             (0..3)
                 .map(|a| [at.x, at.y, at.z][a] - from[a])
@@ -322,7 +333,7 @@ impl Game<'_> {
             .iter()
             .enumerate()
             .filter(|(_, m)| {
-                Some(m.id) != target_id
+                spared != Spared::Mob(m.id)
                     && m.alive()
                     && !m.removed
                     && !ally_of_player(m, uuid)
@@ -336,7 +347,12 @@ impl Game<'_> {
             .armor_stands
             .iter()
             .enumerate()
-            .filter(|(_, s)| !s.marker && s.bounds().intersects(area) && near(s.position))
+            .filter(|(_, s)| {
+                !s.marker
+                    && spared != Spared::Stand(s.id)
+                    && s.bounds().intersects(area)
+                    && near(s.position)
+            })
             .map(|(i, _)| i)
             .rev()
             .collect();
@@ -356,6 +372,21 @@ impl Game<'_> {
         }
         for i in stands {
             self.punch_armor_stand(i);
+        }
+        // The players among the victims need the hub, which is out while a
+        // guest acts: queued for `sweep_players`.
+        if self.audio.capture.is_some() {
+            let amount = self.enchanted_damage("minecraft:player", base) * scale;
+            let team = self.player_team().cloned();
+            self.lan_sweeps.push(super::lan_pvp::SweepStrike {
+                attacker: self.lan_acting,
+                from,
+                area,
+                spared,
+                amount,
+                knockback: (xd, zd),
+                team,
+            });
         }
     }
     /// `ServerPlayer.checkFallDamage` after a smash on a grounded target:

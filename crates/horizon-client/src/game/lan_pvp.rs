@@ -5,13 +5,15 @@
 //! attack (blocking, armour, knockback), when the `pvp` game rule allows it
 //! (`ServerPlayer.canHarmPlayer`, `isPvpAllowed`). A player's arrow on
 //! another player lands the same way.
-use super::{Game, lan::LanHost, lan_mobs::guest_bounds, ray_box, view_vector};
+use super::{Game, lan::LanHost, lan_mobs::guest_bounds, mace::Spared, ray_box, view_vector};
 
 use horizon_client::{
     Result,
     mobs::Who,
     projectiles::{Hit, Projectile, ProjectileKind},
+    scoreboard::{teams_allied, teams_allow_damage},
 };
+use horizon_core::geometry::Aabb;
 
 /// The player projectiles that meet other players: arrows (their hurt), and
 /// snowballs and eggs, which break on them (`Player.hurtServer` takes no 0
@@ -45,6 +47,22 @@ pub(super) struct Strike {
     knockback_attack: bool,
     /// The attacker's team, for the victim's `Player.canHarmPlayer`.
     team: Option<horizon_client::scoreboard::Team>,
+}
+
+/// A sweep that may reach other players (`Player.doSweepAttack`), queued
+/// by the attacker's side until the hub is back in place.
+pub(super) struct SweepStrike {
+    pub(super) attacker: Option<u32>,
+    pub(super) from: [f64; 3],
+    /// The target's box inflated by (1, 0.25, 1).
+    pub(super) area: Aabb,
+    /// The player the attack hit, when it hit one.
+    pub(super) spared: Spared,
+    /// `getEnchantedDamage(...) * strength` against a player.
+    pub(super) amount: f32,
+    /// The knockback direction, along the attacker's yaw.
+    pub(super) knockback: (f64, f64),
+    pub(super) team: Option<horizon_client::scoreboard::Team>,
 }
 
 impl Strike {
@@ -131,6 +149,61 @@ impl Game<'_> {
             knockback_attack,
             team: self.player_team().cloned(),
         })
+    }
+
+    /// `Player.doSweepAttack`'s victims among the players: every other
+    /// player in the sweep box and under three blocks from the attacker, but
+    /// the attacker's team mates (`isAlliedTo`) and spectators, is hurt like
+    /// any player attack (the `pvp` rule, blocking, armour) and, when that
+    /// lands, knocked back 0.4 along the attacker's yaw.
+    pub(super) fn sweep_players(&mut self, host: &mut LanHost, s: &SweepStrike) {
+        let near = |at: [f64; 3]| (0..3).map(|k| (at[k] - s.from[k]).powi(2)).sum::<f64>() < 9.0;
+        let mut victims: Vec<(Victim, i32, Option<horizon_client::scoreboard::Team>)> = Vec::new();
+        // A guest's sweep reaches the host; the host's own never does.
+        if s.attacker.is_some()
+            && !self.spectator()
+            && let Some(p) = self.player.as_ref()
+            && p.bounds().intersects(s.area)
+            && near([p.position.x, p.position.y, p.position.z])
+        {
+            victims.push((Victim::Host, host.host_entity, self.player_team().cloned()));
+        }
+        for g in host.hub.guests.iter().filter(|g| {
+            Some(g.conn) != s.attacker
+                && host.hub.here(g)
+                && g.loaded
+                && !g.dead
+                && !g.spectator()
+                && guest_bounds(g).intersects(s.area)
+                && near(g.position)
+        }) {
+            let team = self.score.board.players_team(&g.name).cloned();
+            victims.push((Victim::Guest(g.conn), g.entity_id, team));
+        }
+        let (xd, zd) = s.knockback;
+        for (victim, id, team) in victims {
+            if s.spared == Spared::Player(id) || teams_allied(team.as_ref(), s.team.as_ref()) {
+                continue;
+            }
+            if !self.ui.rules.bool("pvp") || !teams_allow_damage(team.as_ref(), s.team.as_ref()) {
+                continue;
+            }
+            let land = |g: &mut Self| {
+                let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
+                if hurt {
+                    g.knock_back_player(0.4, xd, zd);
+                }
+                hurt
+            };
+            match victim {
+                Victim::Host => {
+                    land(self);
+                }
+                Victim::Guest(conn) => {
+                    self.guest_struck_by(host, conn, land);
+                }
+            }
+        }
     }
 
     /// The guests by connection, with their entity ids.
@@ -279,7 +352,23 @@ impl Game<'_> {
             (true, false, false) => "minecraft:entity.player.attack.weak",
         };
         if let Some(at) = s.sweep.filter(|_| hurt) {
-            self.sweep_attack(at, Some(s.from), None, s.scale);
+            // The sweep around the player that was hit, as its attacker.
+            let (area, id) = match victim {
+                Victim::Host => (self.player.as_ref().map(|p| p.bounds()), host.host_entity),
+                Victim::Guest(conn) => {
+                    let g = host.hub.guest(conn);
+                    (g.map(guest_bounds), g.map_or(-1, |g| g.entity_id))
+                }
+            };
+            let target = area.map(|area| (area, Spared::Player(id)));
+            match s.attacker {
+                None => self.sweep_attack(at, Some(s.from), target, s.scale),
+                Some(conn) => {
+                    self.as_guest(host, conn, |g| {
+                        g.sweep_attack(at, Some(s.from), target, s.scale)
+                    });
+                }
+            }
         } else {
             self.audio.play(sound, Some(s.from), 1.0, 1.0);
         }

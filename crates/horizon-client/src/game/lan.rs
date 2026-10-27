@@ -666,6 +666,7 @@ impl Game<'_> {
         self.lan_events.clear();
         self.lan_critical_hits.clear();
         self.lan_particles.clear();
+        self.lan_sweeps.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -1248,6 +1249,9 @@ impl Game<'_> {
         }
         for (options, at, dist) in std::mem::take(&mut self.lan_particles) {
             self.send_level_particle(host, &options, at, dist);
+        }
+        for strike in std::mem::take(&mut self.lan_sweeps) {
+            self.sweep_players(host, &strike);
         }
         self.lan_broadcast_effects(host);
         if host.hub.guests.is_empty() {
