@@ -32,6 +32,8 @@ pub const DESTRUCTIVE: &[&str] = &[
     "packs remove",
     "worlds datapack-remove",
     "unshare-log",
+    // It sets shell commands the next Play runs: the player says yes first.
+    "instance launch",
 ];
 
 /// Commands that send something or reach other people: only when the player asks.
