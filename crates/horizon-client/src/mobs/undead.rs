@@ -978,16 +978,21 @@ impl Goal for AttackTurtleEgg {
                 pos: eat,
                 drop: false,
             });
+            // `sendParticles(POOF, ..., 1, xa, ya, za, 0.15)`, twenty times.
             for _ in 0..20 {
-                m.random.next_gaussian();
-                m.random.next_gaussian();
-                m.random.next_gaussian();
+                let spread = [
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                ];
+                cx.events.push(MobEvent::LevelParticles {
+                    kind: "poof",
+                    at: [center[0], f64::from(eat[1]), center[2]],
+                    spread,
+                    speed: 0.15,
+                    count: 1,
+                });
             }
-            cx.events.push(MobEvent::Particles {
-                kind: "poof",
-                at: [center[0], f64::from(eat[1]), center[2]],
-                count: 20,
-            });
             // The break sound's pitch draws from the level random.
             cx.events.push(MobEvent::Sound(
                 "block.turtle_egg.break",

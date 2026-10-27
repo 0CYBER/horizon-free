@@ -903,6 +903,23 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
+    /// `Level.broadcastEntityEvent` for a mob: guests run its
+    /// `handleEntityEvent`.
+    EntityEvent {
+        mob: u32,
+        event: i8,
+        at: [f64; 3],
+    },
+    /// `ServerLevel.sendParticles`: drawn here and sent to the players within
+    /// 32 blocks, which spread and speed the way the client does for a count
+    /// (a count of 0 is one particle moving by speed times spread).
+    LevelParticles {
+        kind: &'static str,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    },
     Sound(&'static str, [f64; 3], f32, f32),
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
