@@ -2278,11 +2278,10 @@ impl Game<'_> {
         }
     }
 
-    /// `SleepStatus.areEnoughSleeping` and `areEnoughDeepSleeping` over the
-    /// host's player and the guests: of the players not in spectator mode,
-    /// players_sleeping_percentage of them (at least one) are in bed, and as
-    /// many have slept 100 ticks.
-    pub(super) fn enough_slept(&self) -> bool {
+    /// `SleepStatus.update`'s counts over the host's player and the guests:
+    /// the players not in spectator mode, how many are in bed, and how many
+    /// of those have slept 100 ticks.
+    fn sleep_counts(&self) -> (i64, i64, i64) {
         let (mut active, mut sleeping, mut deep) = (0i64, 0i64, 0i64);
         let mut count = |in_bed: bool, timer: u32| {
             active += 1;
@@ -2306,9 +2305,62 @@ impl Game<'_> {
                 count(g.bed.is_some(), g.sleep_timer);
             }
         }
+        (active, sleeping, deep)
+    }
+
+    /// `SleepStatus.sleepersNeeded`.
+    fn sleepers_needed(&self, active: i64) -> i64 {
         let percent = i64::from(self.ui.rules.int("players_sleeping_percentage").max(0));
-        let needed = ((active * percent + 99) / 100).max(1);
+        ((active * percent + 99) / 100).max(1)
+    }
+
+    /// `SleepStatus.areEnoughSleeping` and `areEnoughDeepSleeping` over the
+    /// host's player and the guests: of the players not in spectator mode,
+    /// players_sleeping_percentage of them (at least one) are in bed, and as
+    /// many have slept 100 ticks.
+    pub(super) fn enough_slept(&self) -> bool {
+        let (active, sleeping, deep) = self.sleep_counts();
+        let needed = self.sleepers_needed(active);
         sleeping >= needed && deep >= needed
+    }
+
+    /// `ServerLevel.updateSleepingPlayerList` and `announceSleepStatus`: when
+    /// the players or the sleepers change, a published or dedicated world
+    /// shows everyone "n/m players sleeping", or "Sleeping through this
+    /// night" once enough are in bed, on the action bar.
+    pub(super) fn announce_sleep_status(&mut self) {
+        let (active, sleeping, _) = self.sleep_counts();
+        let (old_active, old_sleeping) = self.sleep_seen;
+        self.sleep_seen = (active, sleeping);
+        let changed = (old_sleeping > 0 || sleeping > 0)
+            && (old_active != active || old_sleeping != sleeping);
+        let published = self.lan.is_some() || self.options.dedicated.is_some();
+        if !changed || !published {
+            return;
+        }
+        // ServerLevel.canSleepThroughNights.
+        if self.ui.rules.int("players_sleeping_percentage") > 100 {
+            return;
+        }
+        let needed = self.sleepers_needed(active);
+        let text = if sleeping >= needed {
+            horizon_client::text::Text::translate("sleep.skipping_night", &[])
+        } else {
+            horizon_client::text::Text::translate(
+                "sleep.players_sleeping",
+                &[
+                    horizon_client::text::Text::literal(sleeping.to_string()),
+                    horizon_client::text::Text::literal(needed.to_string()),
+                ],
+            )
+        };
+        if let Some(host) = self.lan.as_ref() {
+            host.hub
+                .overlay_message(horizon_client::lan::data::component_nbt(&text.component()));
+        }
+        if self.options.dedicated.is_none() {
+            self.titles.set_overlay(text, false);
+        }
     }
 
     /// `ServerLevel.wakeUpAllPlayers` for the guests.
