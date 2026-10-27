@@ -1017,7 +1017,10 @@ impl Streaming {
                         .iter()
                         // The terrain ring around a forced chunk is kept: the
                         // features ring inside it is decorated from it.
-                        .any(|f| (x - f.0).abs() <= 4 && (z - f.1).abs() <= 4)
+                        .any(|f| {
+                            (x - f.0).abs() <= FORCED_TERRAIN_RING
+                                && (z - f.1).abs() <= FORCED_TERRAIN_RING
+                        })
             })
             .map(|(k, _)| *k)
             .collect();
