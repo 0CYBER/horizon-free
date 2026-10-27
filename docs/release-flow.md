@@ -423,7 +423,7 @@ before the gate.
 ### Trusted reviewers pick the pull requests
 
 The Nightly is where contributors test pull requests before the gate. The trusted reviewers listed in
-`.github/nightly-reviewers.txt` (kacpherek, rdbtCVS and levzzz5154 since 2026-10-27) and Ludovic pick them with a
+`.github/nightly-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27) and Ludovic pick them with a
 comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `tools/ci/nightly_set.py`):
 
 ```text
