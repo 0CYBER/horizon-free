@@ -708,6 +708,27 @@ impl Game<'_> {
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
+    /// `TradeTrigger`: the villager and the item the trade gave.
+    pub(super) fn trigger_trade(&mut self, villager: &EntityView, stack: &ItemStack) {
+        let me = self.player_entity();
+        let villager = villager.clone();
+        let it = item_view(stack);
+        self.trigger("minecraft:villager_trade", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let vctx = adv::Entities {
+                this: Some(&villager),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["villager"], &vctx, w)
+                && adv::item(&c["item"], &it, w)
+        });
+    }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
         let Some(definition) = self.pack.assets.registry.state(state).cloned() else {

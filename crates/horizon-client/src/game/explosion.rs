@@ -307,6 +307,12 @@ impl Game<'_> {
                 )
             {
                 outcome = o;
+                // dealDefaultKnockback's `indicateDamage` points at the blast
+                // (the source position), not the no-direction fallback.
+                if o.knockback && o.blocked <= 0.0 {
+                    p.health
+                        .indicate_damage(center[0] - feet[0], center[2] - feet[2], p.yaw);
+                }
             }
             if !spectator && !(creative && flying) {
                 p.velocity = Vec3::new(

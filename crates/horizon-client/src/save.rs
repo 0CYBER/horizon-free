@@ -339,59 +339,7 @@ impl SaveTables {
     }
 }
 
-/// A container's loot table and what Horizon rolled from it. Vanilla keeps
-/// `LootTable` and `LootTableSeed` until the container is first opened;
-/// Horizon rolls when it generates or loads the chunk, and saves the table
-/// again while the container still holds exactly the rolled items.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RolledLoot {
-    pub pos: (i32, i32, i32),
-    pub table: String,
-    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
-    pub seed: Option<i64>,
-    /// The rolled `Items`.
-    pub items: Tag,
-}
-impl RolledLoot {
-    /// Puts the loot table back in place of `Items` while they are still the
-    /// roll; false once the container holds anything else.
-    pub fn restore(&self, map: &mut Compound) -> bool {
-        if map.get(&"Items".into()) != Some(&self.items) {
-            return false;
-        }
-        map.remove(&"Items".into());
-        map.insert("LootTable".into(), string(&self.table));
-        if let Some(seed) = self.seed.filter(|s| *s != 0) {
-            map.insert("LootTableSeed".into(), Tag::Long(seed));
-        }
-        true
-    }
-}
-
-/// Save data loaded with a chunk that Horizon keeps but does not simulate.
-#[derive(Clone, Debug, Default)]
-pub struct ChunkExtras {
-    /// Chunk root keys written back as loaded (structures, PostProcessing,
-    /// InhabitedTime, blending data, ...).
-    pub root: Compound,
-    /// Block entities Horizon does not model.
-    pub block_entities: Vec<Tag>,
-    /// The NBT of the modelled block entities as loaded, to restore the fields and
-    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
-    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
-    /// Every saved block entity's position in the order of the save's list,
-    /// the order `SerializableChunkData` puts them in the chunk's maps.
-    pub block_entity_order: Vec<(i32, i32, i32)>,
-    /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
-    /// save time. Registered with the level's tick scheduler on arrival and
-    /// replaced with the scheduler's pending ticks when saving.
-    pub block_ticks: Vec<SavedTick>,
-    pub fluid_ticks: Vec<SavedTick>,
-    /// Game time written as `LastUpdate`.
-    pub last_update: i64,
-    /// Containers still holding their loot table's roll.
-    pub rolled_loot: Vec<RolledLoot>,
-}
+pub use crate::chunk::{ChunkExtras, RolledLoot};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -643,6 +591,16 @@ pub fn encode_block_entity(
                 entries.push(("custom_name", name.clone()));
             }
         }
+        // TheEndGatewayBlockEntity.saveAdditional.
+        BlockEntity::EndGateway(g) => {
+            entries.push(("Age", Tag::Long(g.age)));
+            if let Some(exit) = g.exit_portal {
+                entries.push(("exit_portal", Tag::IntArray(exit.to_vec())));
+            }
+            if g.exact_teleport {
+                entries.push(("ExactTeleport", Tag::Byte(1)));
+            }
+        }
         BlockEntity::Spawner(s) => entries.extend(s.save()),
         BlockEntity::TrialSpawner(s) => entries.extend(s.save()),
         BlockEntity::Vault(v) => entries.extend(v.save()),
@@ -702,11 +660,24 @@ fn roll_loaded_loot(
         biome,
     ))
 }
+/// `TheEndGatewayBlockEntity.loadAdditional`.
+pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
+    crate::containers::EndGateway {
+        age: number(tag.get("Age")).unwrap_or(0),
+        exit_portal: tag
+            .get("exit_portal")
+            .and_then(crate::block_entity_nbt::gateway_exit),
+        exact_teleport: number(tag.get("ExactTeleport")).unwrap_or(0) != 0,
+    }
+}
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id == "minecraft:end_gateway" {
+        return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
+    }
     if id == "minecraft:jukebox" {
         let record = tag.get("RecordItem").and_then(item_from_nbt);
         let ticks = number(tag.get("ticks_since_song_started")).unwrap_or(0);
@@ -846,6 +817,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_)
+        | BlockEntity::EndGateway(_)
         | BlockEntity::Skull(_)
         | BlockEntity::DaylightDetector => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
@@ -2742,7 +2714,7 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
-    /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
+    /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
@@ -2781,6 +2753,21 @@ pub struct Level {
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// `PrimaryLevelData.setDifficulty`: the level data holds the world's
+    /// difficulty, so the game and the file follow each other and a world
+    /// that was set to hard is hard when it is opened again.
+    pub fn set_difficulty(&mut self, difficulty: u8) {
+        self.difficulty = crate::title::DIFFICULTIES[difficulty as usize % 4].to_owned();
+    }
+
+    /// `PrimaryLevelData.getDifficulty`: the id of the level data's
+    /// difficulty (peaceful 0 .. hard 3), normal when it is not one of them.
+    pub fn difficulty_id(&self) -> u8 {
+        crate::title::DIFFICULTIES
+            .iter()
+            .position(|d| *d == self.difficulty)
+            .map_or(2, |i| i as u8)
+    }
     /// Initialize the offline single-player identity before saving or dropping items.
     pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
         *self.player_uuid.get_or_insert_with(|| {
@@ -3022,7 +3009,7 @@ impl Level {
                         get("duration").unwrap_or(0) as i32,
                         get("amplifier").unwrap_or(0) as i32,
                         get("ambient").unwrap_or(0) != 0,
-                        get("show_icon").is_none_or(|v| v != 0),
+                        get("show_particles").is_none_or(|v| v != 0),
                     ))
                 })
                 .collect(),
@@ -3124,14 +3111,14 @@ impl Level {
                 Tag::List(
                     self.active_effects
                         .iter()
-                        .map(|(id, duration, amplifier, ambient, icon)| {
+                        .map(|(id, duration, amplifier, ambient, particles)| {
                             Tag::compound([
                                 ("id", string(id)),
                                 ("duration", Tag::Int(*duration)),
                                 ("amplifier", Tag::Byte(*amplifier as i8)),
                                 ("ambient", Tag::Byte(i8::from(*ambient))),
-                                ("show_particles", Tag::Byte(1)),
-                                ("show_icon", Tag::Byte(i8::from(*icon))),
+                                ("show_particles", Tag::Byte(i8::from(*particles))),
+                                ("show_icon", Tag::Byte(i8::from(*particles))),
                             ])
                         })
                         .collect(),
@@ -3819,6 +3806,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn is_decorated(&self, proto: &crate::streaming::Proto) -> bool {
         self.inner.is_decorated(proto)
+    }
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        self.inner.light_view(proto)
     }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save
@@ -4640,6 +4630,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn end_gateway_block_entity_round_trips() {
+        use crate::containers::{BlockEntity, EndGateway};
+        let plain = BlockEntity::for_block("minecraft:end_gateway").expect("gateway");
+        assert!(matches!(&plain, BlockEntity::EndGateway(g) if *g == EndGateway::default()));
+        for exit in [None, Some([8, 100, 0])] {
+            for exact in [false, true] {
+                let gateway = EndGateway {
+                    age: 201,
+                    exit_portal: exit,
+                    exact_teleport: exact,
+                };
+                let tag = encode_block_entity(
+                    (702, 100, 0),
+                    &BlockEntity::EndGateway(gateway.clone()),
+                    "minecraft:end_gateway",
+                );
+                assert_eq!(
+                    text(tag.get("id")).as_deref(),
+                    Some("minecraft:end_gateway")
+                );
+                assert_eq!(tag.get("Age"), Some(&Tag::Long(201)));
+                assert_eq!(
+                    tag.get("exit_portal"),
+                    exit.map(|p| Tag::IntArray(p.to_vec())).as_ref()
+                );
+                assert_eq!(
+                    tag.get("ExactTeleport"),
+                    exact.then_some(Tag::Byte(1)).as_ref()
+                );
+                let (pos, back) = decode_block_entity(&tag).expect("gateway");
+                assert_eq!(pos, (702, 100, 0));
+                assert!(matches!(back, BlockEntity::EndGateway(g) if g == gateway));
+            }
+        }
+    }
+
+    #[test]
+    fn end_gateway_exit_requires_spawnable_bounds() {
+        for (exit, valid) in [
+            (vec![-30_000_000, -20_000_000, -30_000_000], true),
+            (vec![29_999_999, 19_999_999, 29_999_999], true),
+            (vec![30_000_000, 0, 0], false),
+            (vec![0, 0, 30_000_000], false),
+            (vec![-30_000_001, 0, 0], false),
+            (vec![0, 0, -30_000_001], false),
+            (vec![0, 20_000_000, 0], false),
+            (vec![0, -20_000_001, 0], false),
+            (vec![i32::MIN, 0, 0], false),
+            (vec![0, 100], false),
+        ] {
+            let tag = Tag::compound([
+                ("id", string("minecraft:end_gateway")),
+                ("x", Tag::Int(702)),
+                ("y", Tag::Int(100)),
+                ("z", Tag::Int(0)),
+                ("exit_portal", Tag::IntArray(exit)),
+            ]);
+            let (_, crate::containers::BlockEntity::EndGateway(g)) =
+                decode_block_entity(&tag).unwrap()
+            else {
+                panic!("gateway");
+            };
+            assert_eq!(g.exit_portal.is_some(), valid);
+            let canonical = crate::block_entity_nbt::canonical(&tag).expect("gateway NBT");
+            assert_eq!(canonical.get("exit_portal").is_some(), valid);
+        }
+        assert_eq!(
+            decode_end_gateway(&Tag::Compound(Compound::new())),
+            crate::containers::EndGateway::default()
+        );
+    }
+
+    #[test]
     fn skull_block_entity_keeps_its_profile() {
         // A placed `player_head` as vanilla saves it: the owning player's
         // `profile` survives load, encode and `canonical`.
@@ -4929,6 +4992,34 @@ mod tests {
             section(Tag::Byte(0), None, Some(Tag::ByteArray(varied))),
         ]));
     }
+    /// #2571: the difficulty is a property of the world: the level data
+    /// holds it, so a world that was set to hard is hard when it is opened
+    /// again, and a world that was downloaded keeps the difficulty it was
+    /// made with.
+    #[test]
+    fn the_level_data_holds_the_difficulty() {
+        let dir = std::env::temp_dir().join(format!("horizon-difficulty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut level = Level {
+            name: "Test".into(),
+            ..Level::default()
+        };
+        // The world's difficulty is the level data's.
+        level.set_difficulty(3);
+        assert_eq!(level.difficulty, "hard");
+        assert_eq!(level.difficulty_id(), 3);
+        // It survives the save, so the world comes back with it.
+        level.write(&dir).unwrap();
+        let back = Level::read(&dir).unwrap();
+        assert_eq!(back.difficulty, "hard");
+        assert_eq!(back.difficulty_id(), 3);
+        // A world whose difficulty is not one of ours is normal.
+        let mut other = Level::default();
+        other.difficulty = "extreme".into();
+        assert_eq!(other.difficulty_id(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn level_round_trips_through_the_vanilla_files() {
         let dir = std::env::temp_dir().join(format!("horizon-level-{}", std::process::id()));

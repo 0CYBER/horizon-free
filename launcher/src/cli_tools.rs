@@ -31,6 +31,9 @@ pub const DESTRUCTIVE: &[&str] = &[
     "screenshots delete",
     "packs remove",
     "worlds datapack-remove",
+    "unshare-log",
+    // It sets shell commands the next Play runs: the player says yes first.
+    "instance launch",
 ];
 
 /// Commands that send something or reach other people: only when the player asks.
@@ -40,6 +43,7 @@ pub const OPEN_WORLD: &[&str] = &[
     "data bug",
     "data benchmark",
     "servers create",
+    "share-log",
 ];
 
 /// A generated tool: its name, the CLI words it runs and the clap command behind them.

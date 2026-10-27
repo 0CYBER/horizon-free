@@ -789,6 +789,11 @@ impl Game<'_> {
     pub(super) fn sync_rules(&mut self) {
         self.world.health_rules.natural_regeneration =
             self.ui.rules.bool("natural_health_regeneration");
+        // Player.isInvulnerableTo: the damage-type rules.
+        self.world.health_rules.drowning_damage = self.ui.rules.bool("drowning_damage");
+        self.world.health_rules.fall_damage = self.ui.rules.bool("fall_damage");
+        self.world.health_rules.fire_damage = self.ui.rules.bool("fire_damage");
+        self.world.health_rules.freeze_damage = self.ui.rules.bool("freeze_damage");
         use horizon_world::food::Difficulty;
         self.world.health_rules.difficulty = match self.ui.difficulty {
             0 => Difficulty::Peaceful,
@@ -801,7 +806,8 @@ impl Game<'_> {
     pub(super) fn load_world_state(&mut self) {
         self.ui.rules = GameRules::load(&self.world_root);
         self.ui.clock = WorldClock::default();
-        self.ui.difficulty = read_difficulty(&self.world_root).unwrap_or(2);
+        // PrimaryLevelData: the difficulty comes back from level.dat's difficulty_settings.
+        self.ui.difficulty = self.level.difficulty_id();
         if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
             && let Ok((root, _)) =
@@ -826,9 +832,9 @@ impl Game<'_> {
         self.build_registries();
         self.sync_rules();
     }
-    /// Save the clock and the difficulty beside level.dat (Level.write saves
-    /// the game rules: a second writer of game_rules.dat could leave it with
-    /// the rules loaded when the world opened).
+    /// Save the clock beside level.dat (Level.write saves the game rules: a
+    /// second writer of game_rules.dat could leave it with the rules loaded
+    /// when the world opened).
     pub(super) fn save_world_state(&mut self) {
         if self.world_root.as_os_str().is_empty() {
             return;
@@ -875,12 +881,6 @@ impl Game<'_> {
         ]);
         if let Err(e) = horizon_client::save::write_dat(&path, root) {
             log::warn!("the world clocks were not written: {e}");
-        }
-        // The level data writes the difficulty too: it must be the world's.
-        self.level.difficulty =
-            horizon_client::title::DIFFICULTIES[self.ui.difficulty as usize % 4].to_owned();
-        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
-            log::warn!("the difficulty was not written: {e}");
         }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
@@ -991,58 +991,6 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
         n += 1;
     }
 }
-/// The world's difficulty: `Data.difficulty_settings.difficulty`, the name
-/// of the difficulty, as vanilla's `LevelSettings.DifficultySettings.CODEC`
-/// writes it. A world from before the difficulty settings keeps its
-/// `Data.Difficulty` byte.
-fn read_difficulty(world: &std::path::Path) -> Option<u8> {
-    let bytes = std::fs::read(world.join("level.dat")).ok()?;
-    let raw = horizon_world::compression::Compression::Gzip
-        .decode(&bytes, 64 << 20)
-        .ok()?;
-    let (root, _) =
-        horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default()).ok()?;
-    let data = root.tag.get("Data")?;
-    if let Some(horizon_world::nbt::Tag::String(name)) = data
-        .get("difficulty_settings")
-        .and_then(|d| d.get("difficulty"))
-    {
-        let name = name.to_string_lossy();
-        return horizon_client::title::DIFFICULTIES
-            .iter()
-            .position(|d| *d == name)
-            .map(|i| i as u8);
-    }
-    match data.get("Difficulty")? {
-        horizon_world::nbt::Tag::Byte(b) => Some((*b).clamp(0, 3) as u8),
-        _ => None,
-    }
-}
-/// Patch `Data.difficulty_settings.difficulty` in level.dat (the level
-/// data stores the default; `Level::write` writes the game's difficulty).
-fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::Result<()> {
-    use horizon_world::{compression::Compression, nbt};
-    let path = world.join("level.dat");
-    let bytes = std::fs::read(&path)?;
-    let raw = Compression::Gzip.decode(&bytes, 64 << 20)?;
-    let (mut root, _) = nbt::read_named(&raw, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    if let Some(data) = root.tag.get_mut("Data") {
-        let mut settings = match data.get("difficulty_settings") {
-            Some(nbt::Tag::Compound(s)) => s.clone(),
-            _ => Default::default(),
-        };
-        settings.insert(
-            "difficulty".into(),
-            nbt::Tag::String(horizon_client::title::DIFFICULTIES[difficulty as usize % 4].into()),
-        );
-        if let nbt::Tag::Compound(map) = data {
-            map.insert("difficulty_settings".into(), nbt::Tag::Compound(settings));
-        }
-    }
-    let out = nbt::write_named(&root, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, Compression::Gzip.encode(&out)?)?;
-    Ok(())
-}
 
 /// `IntegratedServer.getProfilePermissions` for the owner: `OWNER` (4) when
 /// commands are allowed, else `ALL` (0).
@@ -1071,41 +1019,4 @@ fn hover_rows(hover: &horizon_client::text::Text) -> Vec<(String, u32)> {
             (text, horizon_client::hud::rgba(r, g, b, 255))
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// #2571: the difficulty is a property of the world: it lives in
-    /// `Data.difficulty_settings.difficulty` (vanilla's
-    /// `LevelSettings.DifficultySettings`), so a world that was set to hard
-    /// is hard when it is opened again, and a world that was downloaded keeps
-    /// the difficulty it was made with.
-    #[test]
-    fn the_difficulty_survives_the_world() {
-        let dir = std::env::temp_dir().join(format!("horizon-difficulty-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut level = horizon_client::save::Level {
-            name: "Test".into(),
-            difficulty: "hard".into(),
-            ..Default::default()
-        };
-        level.write(&dir).unwrap();
-        // The level data holds the world's difficulty...
-        assert_eq!(
-            horizon_client::save::Level::read(&dir).unwrap().difficulty,
-            "hard"
-        );
-        // ... and the world reads it back.
-        assert_eq!(read_difficulty(&dir), Some(3));
-        // The game's difficulty is written back where it belongs.
-        write_difficulty(&dir, 1).unwrap();
-        assert_eq!(read_difficulty(&dir), Some(1));
-        assert_eq!(
-            horizon_client::save::Level::read(&dir).unwrap().difficulty,
-            "easy"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

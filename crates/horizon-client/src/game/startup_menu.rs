@@ -546,6 +546,11 @@ impl Loading {
                             (batch.width, batch.height),
                             self.menu.modifiers.shift_key(),
                         );
+                        title.press_rules(
+                            &gui.atlas,
+                            self.menu.cursor,
+                            (batch.width, batch.height),
+                        );
                         self.menu_action(event_loop, action);
                     }
                 }
