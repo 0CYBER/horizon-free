@@ -4,7 +4,9 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, Who, bat, camel, sniffer, sync, tame};
+use horizon_client::mobs::{
+    Mob, Species, Who, armadillo, bat, camel, creaking, sniffer, sync, tame,
+};
 use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_protocol::entity_data::{Particle, ParticleData, Value};
 use horizon_protocol::registry::Builtin;
@@ -107,6 +109,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Sniffer, 18, Value::Id(state)) => {
                 sniffer::set_state(m, (*state).clamp(0, 6) as u8);
             }
+            // Armadillo.ARMADILLO_STATE (after AgeableMob's two): the shell and
+            // its animations follow it in `sync::client_tick`.
+            (Species::Armadillo, 18, Value::Id(state)) => {
+                armadillo::set_state(m, (*state).clamp(0, 3) as u8);
+            }
             // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID.
             (Species::Shulker, 16, Value::Id(face)) => m.extra.variant3 = (*face).clamp(0, 5) as u8,
             (Species::Shulker, 17, Value::Byte(peek)) => m.extra.counter = i32::from(*peek),
@@ -118,6 +125,23 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             (Species::Camel | Species::CamelHusk, 20, Value::Long(tick)) => {
                 camel::set_synced_pose_tick(m, *tick);
+            }
+            // Vex.DATA_FLAGS_ID: charging in bit 0.
+            (Species::Vex, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
+            (Species::Creaking, 16, Value::Bool(can_move)) => m.extra.flag2 = !*can_move,
+            (Species::Creaking, 17, Value::Bool(active)) => m.extra.flag = *active,
+            (Species::Creaking, 18, Value::Bool(true)) => creaking::set_tearing_down(m),
+            // Allay.DATA_DANCING and DATA_CAN_DUPLICATE (a cooldown running
+            // is any non-zero `egg_time`).
+            (Species::Allay, 16, Value::Bool(dancing)) => m.extra.flag = *dancing,
+            (Species::Allay, 17, Value::Bool(can)) => m.extra.egg_time = i32::from(!*can),
+            // Axolotl.DATA_PLAYING_DEAD (after DATA_VARIANT): the factors
+            // ease in `sync::client_tick`.
+            (Species::Axolotl, 19, Value::Bool(dead)) => m.extra.axolotl.playing_dead = *dead,
+            // CopperGolem.COPPER_GOLEM_STATE (after DATA_WEATHER_STATE).
+            (Species::CopperGolem, 17, Value::Id(state)) => {
+                m.extra.variant3 = (*state).clamp(0, 4) as u8;
             }
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).

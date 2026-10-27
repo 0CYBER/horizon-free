@@ -180,6 +180,7 @@ pub fn register(m: &mut Mob) {
         Family::Undead => undead::register(m),
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
+        Family::Generic if m.species() == Species::Armadillo => super::armadillo::register(m),
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic => {
             generic(m);
@@ -412,7 +413,10 @@ pub fn tick(
     }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen
     // creaking's waits).
-    if m.alive() && (!super::creaking::is_creaking(m) || super::creaking::can_move(m)) {
+    if m.alive()
+        && (!super::creaking::is_creaking(m) || super::creaking::can_move(m))
+        && !super::armadillo::scared(m)
+    {
         m.body_rotation_tick();
     }
     events.append(&mut m.outbox);
@@ -552,6 +556,10 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.air -= 1;
             if m.air == -20 {
                 m.air = 0;
+                events.push(MobEvent::Drown {
+                    mob: m.id,
+                    at: [m.position.x, m.position.y, m.position.z],
+                });
                 m.damage(2.0, Damage::of(DamageKind::Drown));
             }
         } else if m.air < 300 {
@@ -563,6 +571,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         {
             m.damage(1.0, Damage::of(DamageKind::Drown));
         }
+        freeze_tick(m, w);
     }
     tick_effects(m);
     if m.species() == Species::Illusioner {
@@ -591,6 +600,57 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     // Entity.baseTick ends with Leashable.tickLeash.
     super::leash::tick(m, w, events);
+}
+/// `LivingEntity.aiStep`'s "freezing" with `InsideBlockEffectType.FREEZE`:
+/// powder snow builds `ticks_frozen` up, anywhere else it melts twice as
+/// fast, and a fully frozen mob takes one freeze damage every 40 ticks.
+fn freeze_tick(m: &mut Mob, w: &MobWorld) {
+    let in_snow = in_powder_snow(m, w);
+    if !in_snow && m.ticks_frozen == 0 {
+        return;
+    }
+    let can_freeze = can_freeze(m, w);
+    if in_snow && can_freeze {
+        m.ticks_frozen =
+            (m.ticks_frozen + 1).min(crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE);
+    } else {
+        m.ticks_frozen = (m.ticks_frozen - 2).max(0);
+    }
+    if m.age.is_multiple_of(40) && m.is_fully_frozen() && can_freeze {
+        m.damage(1.0, Damage::of(DamageKind::Freeze));
+    }
+}
+/// Whether the mob's box (shrunk by `1.0E-5`, as in `Entity.checkInsideBlocks`)
+/// touches powder snow.
+fn in_powder_snow(m: &Mob, w: &MobWorld) -> bool {
+    let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    let (min, max) = (b.min_position(), b.max_position());
+    for x in min.x.floor() as i32..=max.x.floor() as i32 {
+        for y in min.y.floor() as i32..=max.y.floor() as i32 {
+            for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:powder_snow" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+/// `LivingEntity.canFreeze`: not a `#freeze_immune_entity_types` mob and no
+/// worn piece in `#freeze_immune_wearables`.
+fn can_freeze(m: &Mob, w: &MobWorld) -> bool {
+    if w.data
+        .entity_has("minecraft:freeze_immune_entity_types", &m.kind.id)
+    {
+        return false;
+    }
+    let immune = w
+        .items
+        .and_then(|i| i.item_tags.get("minecraft:freeze_immune_wearables"));
+    ![&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
+        .into_iter()
+        .flatten()
+        .any(|item| immune.is_some_and(|t| t.contains(&**item)))
 }
 /// `Mob.playAmbientSound` on demand: a spawn egg or a mob bucket just placed `m`.
 pub fn ambient_sound(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -1002,6 +1062,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         Species::Bat => super::bat::server_ai_step(m, cx.w, cx.events),
         Species::Bee => super::bee::server_ai_step(m, cx),
+        Species::Armadillo => super::armadillo::server_ai_step(m, cx),
         Species::Frog => super::frog::server_ai_step(m, cx.w),
         _ => {}
     }
@@ -1056,6 +1117,7 @@ fn species_ai_step(
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Armadillo => super::armadillo::tick(m),
         Species::Frog => super::frog::tick(m),
         Species::Turtle => super::turtle::ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
@@ -1167,6 +1229,7 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
     match m.species() {
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::sounds(m),
         Species::SulfurCube => super::sulfur_cube::sounds(m),
+        Species::Armadillo => super::armadillo::sounds(m),
         // The sound variant's baby_sounds (classic sets, like the rest here).
         Species::Pig if m.is_baby() => [
             "entity.baby_pig.ambient",
@@ -1189,6 +1252,10 @@ pub fn feed_animal(
     m: &mut Mob,
     level: &mut impl RandomSource,
 ) -> Option<Option<(&'static str, f32, f32)>> {
+    // Armadillo.mobInteract: a ball takes no food.
+    if super::armadillo::scared(m) {
+        return None;
+    }
     if m.extra.age == 0 && m.extra.in_love <= 0 {
         m.extra.in_love = 600;
         m.extra.love_player = true;
@@ -1379,6 +1446,7 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
     m.ai.no_action_time = 0;
     match m.species() {
         Species::Enderman => super::enderman::after_hurt(m, source),
+        Species::Armadillo => super::armadillo::after_hurt(m, source),
         Species::Shulker => super::shulker::after_hurt(m),
         Species::Warden => super::warden::hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),

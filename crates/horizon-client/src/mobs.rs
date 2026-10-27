@@ -11,6 +11,7 @@ pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
+pub mod armadillo;
 pub mod axolotl;
 pub mod bat;
 pub mod bee;
@@ -529,6 +530,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `freeze`: a fully frozen mob in powder snow.
+    Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
 }
@@ -598,6 +601,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -622,6 +626,7 @@ impl Damage {
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -805,6 +810,8 @@ pub struct Extra {
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
     pub bee: Option<Box<bee::Bee>>,
+    /// An armadillo's state and scare brain.
+    pub armadillo: armadillo::State,
     /// A frog's brain memories and tongue target.
     pub frog: frog::State,
 }
@@ -906,6 +913,12 @@ pub enum MobEvent {
     },
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
+        mob: u32,
+        at: [f64; 3],
+    },
+    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
+    /// clients' `makeDrownParticles`.
+    Drown {
         mob: u32,
         at: [f64; 3],
     },
@@ -1362,6 +1375,10 @@ impl Mob {
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
     }
+    /// `Entity.isFullyFrozen`.
+    pub fn is_fully_frozen(&self) -> bool {
+        self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
+    }
 
     /// What other mobs see of this one this tick (`player`: the player's
     /// UUID, which villagers' reputation is keyed by).
@@ -1569,6 +1586,9 @@ pub struct PlayerView {
     pub last_hurt: Option<(Who, i64)>,
     pub velocity: Vec3,
     pub yaw: f32,
+    /// `Player.isSprinting` and `isPassenger` (what scares an armadillo).
+    pub sprinting: bool,
+    pub riding: bool,
     /// The Hero of the Village effect.
     pub hero: bool,
     /// The active effects, without namespace (`slowness`, `poison`...).
@@ -1835,11 +1855,23 @@ impl Mob {
             return false;
         }
         let mut amount = if reflected { 1000.0 } else { amount };
+        if self.species() == Species::Armadillo {
+            amount = armadillo::reduce_damage(self, amount);
+        }
         if source.kind == DamageKind::FallingBlock
             && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;
+        }
+        // LivingEntity.hurtServer: `#freeze_hurts_extra_types` take five times.
+        if source.kind == DamageKind::Freeze
+            && matches!(
+                self.species(),
+                Species::Strider | Species::Blaze | Species::MagmaCube
+            )
+        {
+            amount *= 5.0;
         }
         let (worn, worn_toughness) = self.worn_armor();
         if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {

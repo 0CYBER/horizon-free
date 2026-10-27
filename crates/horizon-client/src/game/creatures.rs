@@ -193,6 +193,8 @@ impl Game<'_> {
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
             velocity: p.velocity,
             yaw: self.yaw,
+            sprinting: p.sprinting,
+            riding: self.riding.is_some(),
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             effects: self.potions.effects.list.iter().map(|e| e.id).collect(),
             uuid: self.level.player_uuid.unwrap_or_default(),
@@ -933,6 +935,15 @@ impl Game<'_> {
             match e {
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
+                MobEvent::Drown { mob, at } => {
+                    self.lan_entity_event(mob as i32, super::combat::DROWN_EVENT, at);
+                    let v = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == mob)
+                        .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
+                    self.drown_particles(at, v);
+                }
                 MobEvent::EntityEvent { mob, event, at } => {
                     self.lan_entity_event(mob as i32, event, at)
                 }
@@ -3706,6 +3717,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
         K::SonicBoom => "minecraft:sonic_boom",
+        K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
     }
 }
