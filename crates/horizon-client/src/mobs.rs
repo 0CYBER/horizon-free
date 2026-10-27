@@ -1320,6 +1320,8 @@ pub struct Seen {
     pub active_raid: bool,
     /// A copper golem's `openedChestPos` (`ContainerUser.hasContainerOpen`).
     pub opened_chest: Option<[i32; 3]>,
+    /// `isPassenger`.
+    pub passenger: bool,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
@@ -1411,6 +1413,7 @@ impl Mob {
             hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
             active_raid: raider::has_active_raid(m),
             opened_chest: m.extra.opened_chest,
+            passenger: m.extra.mount.is_some(),
             player_rep: match (villager, player) {
                 (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
                 _ => 0,
@@ -1590,6 +1593,8 @@ pub struct PlayerView {
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
+    /// `isPassenger`.
+    pub passenger: bool,
 }
 impl PlayerView {
     /// `LivingEntity.hasEffect`, by id without namespace.

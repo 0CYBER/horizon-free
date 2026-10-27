@@ -210,6 +210,7 @@ impl Game<'_> {
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
+            passenger: self.riding.is_some(),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
