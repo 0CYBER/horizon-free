@@ -504,12 +504,7 @@ impl MobTypes {
         Ok(Self { types: out })
     }
 }
-/// Who caused damage or is being targeted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Who {
-    Player,
-    Mob(u32),
-}
+pub use horizon_client_core::who::Who;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DamageKind {
     PlayerAttack,

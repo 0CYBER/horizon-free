@@ -1,6 +1,7 @@
 //! Game events and the vibration system (`GameEvent`, `VibrationSystem`,
 //! `VibrationSelector`) shared by sculk sensors, shriekers and wardens, the
 //! sculk block entities and the per-player warden spawn tracker.
+pub use crate::chunk::block_entity::{Data, Info, SculkEntity, SculkKind, Selector};
 use crate::mobs::Who;
 use horizon_core::{
     geometry::{Direction, Vec3, traverse_blocks},
@@ -185,20 +186,6 @@ pub fn valid_vibration(listens: bool, event: &str, ctx: &Context) -> bool {
     !ctx.dampening_state
 }
 
-/// `VibrationInfo`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Info {
-    pub event: &'static str,
-    pub distance: f32,
-    pub pos: [f64; 3],
-    pub source: Option<Who>,
-    pub owner: Option<Who>,
-}
-/// `VibrationSelector`: the closest, then highest-frequency candidate of a tick.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Selector {
-    current: Option<(Info, i64)>,
-}
 impl Selector {
     pub fn add_candidate(&mut self, new: Info, tick: i64) {
         if self.should_replace(&new, tick) {
@@ -232,13 +219,6 @@ impl Selector {
     pub fn current(&self) -> Option<(Info, i64)> {
         self.current
     }
-}
-/// `VibrationSystem.Data`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Data {
-    pub current: Option<Info>,
-    pub travel: i32,
-    pub selector: Selector,
 }
 /// What one `VibrationSystem.Ticker.tick` did.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -382,27 +362,6 @@ pub fn is_occluded(
     true
 }
 
-/// Which sculk block entity this is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SculkKind {
-    Sensor,
-    Calibrated,
-    Shrieker,
-    Catalyst,
-}
-/// `SculkSensorBlockEntity`, `CalibratedSculkSensorBlockEntity`,
-/// `SculkShriekerBlockEntity` and `SculkCatalystBlockEntity`.
-#[derive(Clone, Debug)]
-pub struct SculkEntity {
-    pub kind: SculkKind,
-    pub vibration: Data,
-    /// `last_vibration_frequency` (sensors).
-    pub last_frequency: i32,
-    /// `warning_level` (shriekers).
-    pub warning_level: i32,
-    /// The catalyst's charge cursors.
-    pub spreader: SculkSpreader,
-}
 impl SculkEntity {
     pub fn new(kind: SculkKind) -> Self {
         Self {

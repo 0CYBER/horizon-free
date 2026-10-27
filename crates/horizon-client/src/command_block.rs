@@ -1,6 +1,7 @@
 //! `CommandBlockEntity` with its `BaseCommandBlock`: the command, the success
 //! count comparators read, the output it keeps, and the powered, automatic
 //! and condition flags `CommandBlock.tick` runs on.
+pub use crate::chunk::block_entity::CommandBlock;
 use crate::{
     save::{number, text},
     text::Text,
@@ -74,22 +75,6 @@ impl Mode {
 /// are always active when placed.
 pub fn automatic_block(name: &str) -> bool {
     name == "minecraft:chain_command_block"
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommandBlock {
-    pub command: String,
-    pub success_count: i32,
-    /// `CustomName` as saved (a text component).
-    pub custom_name: Option<Tag>,
-    pub track_output: bool,
-    pub last_output: Option<Text>,
-    pub update_last_execution: bool,
-    /// The game time of the last run, -1 for none.
-    pub last_execution: i64,
-    pub powered: bool,
-    pub auto: bool,
-    pub condition_met: bool,
 }
 
 impl Default for CommandBlock {

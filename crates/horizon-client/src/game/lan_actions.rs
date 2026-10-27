@@ -5,7 +5,9 @@
 //! blocks, attacking and the commands all behave exactly as they do for the
 //! host, and every world change they cause reaches all players through the
 //! block log, the level events and the entity tracker.
-use super::{Game, GuestUse, Hit, Mining, Screen, lan::LanHost, respawn_anchor::RespawnConfig};
+use super::{
+    Dim, Game, GuestUse, Hit, Mining, Screen, lan::LanHost, respawn_anchor::RespawnConfig,
+};
 use horizon_client::{
     command::vanilla,
     containers::BlockEntity,
@@ -1450,6 +1452,9 @@ impl Game<'_> {
                 }
                 self.sync_rules();
             }
+            // handleTeleportToEntityPacket: a spectator goes to the player,
+            // in whichever level they are.
+            S::TeleportToEntity(p) if spectator => self.guest_spectate_teleport(host, gi, p.uuid),
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
@@ -1577,6 +1582,51 @@ impl Game<'_> {
     /// and `Player.remove`'s `inventoryMenu.removed` drops what the cursor
     /// held (`dropOrPlaceInInventory` for a removed player). Respawning
     /// sooner removes it too.
+    /// `ServerGamePacketListenerImpl.handleTeleportToEntityPacket` for a
+    /// player: the host's own, or a guest in the world.
+    fn guest_spectate_teleport(&mut self, host: &mut LanHost, gi: usize, uuid: u128) {
+        let own = host.hub.guests[gi].conn;
+        let host_player = self
+            .player
+            .as_ref()
+            .filter(|_| self.options.dedicated.is_none() && uuid == host.host_uuid)
+            .map(|p| {
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    self.yaw,
+                    self.pitch,
+                    self.dim,
+                )
+            });
+        let target = host_player.or_else(|| {
+            host.hub
+                .guests
+                .iter()
+                .find(|g| g.placed && g.conn != own && g.uuid == uuid)
+                .map(|g| (g.position, g.yaw, g.pitch, Dim::from_id(&g.dimension)))
+        });
+        let Some((at, yaw, pitch, dim)) = target else {
+            return;
+        };
+        if Dim::from_id(&host.hub.guests[gi].dimension) != dim {
+            // Only a dedicated server keeps its players in different levels.
+            if self.options.dedicated.is_some() {
+                self.level_teleports
+                    .push(super::server_travel::LevelTeleport {
+                        conn: own,
+                        dim,
+                        at,
+                        rotation: Some([yaw, pitch]),
+                    });
+            }
+            return;
+        }
+        let g = &mut host.hub.guests[gi];
+        (g.yaw, g.pitch) = (yaw, pitch);
+        // A new body there: no fall distance or motion carried over.
+        g.motion = None;
+        host.hub.teleport(gi, Some(at));
+    }
     fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
         let g = &mut host.hub.guests[gi];
         g.death_time += 1;

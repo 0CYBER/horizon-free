@@ -4617,6 +4617,11 @@ impl Game<'_> {
             if reacts {
                 self.predict_use(&changes, seq);
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
+            } else if self.predict_campfire_douse(hit.pos, held.as_ref(), seq) {
+                // CampfireBlock.useItemOn succeeded: this hand swings and the
+                // click ends, so a shield in the other hand is not raised.
+                self.with_hand(hand, Game::swing_arm);
+                return true;
             } else if held.as_ref().is_some_and(|s| &*s.item == "minecraft:brush") {
                 // BrushItem.useOn: brushing starts here (CONSUME, no swing); the
                 // server brushes and the dust is this client's own.
@@ -4803,7 +4808,7 @@ impl Game<'_> {
     /// predicted under the use's sequence until the server acknowledges it
     /// (`BlockStatePredictionHandler.retainKnownServerState`): a use the
     /// server refused goes back.
-    fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
+    pub(super) fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
         for &(p, state) in changes {
             let pos = [p.x, p.y, p.z];
             let before = self.world.block(p.x, p.y, p.z);
@@ -4905,7 +4910,10 @@ impl Game<'_> {
         if self.using.is_some() {
             return;
         }
+        let bundle = self.res.items().get(&held.item).is_some_and(|i| i.bundle);
         let start = match &*held.item {
+            // BundleItem.use: always starts; the server drops the contents.
+            _ if bundle => true,
             // BowItem.use: with an arrow, or in creative.
             "minecraft:bow" => self.creative || self.projectile_slot("minecraft:bow").is_some(),
             // CrossbowItem.use: charging when not charged and with ammunition;
@@ -5033,6 +5041,14 @@ impl Game<'_> {
                 }));
             }
             self.using = hit.and(Some((slot, elapsed))).filter(|_| elapsed < 200);
+            return;
+        }
+        // BundleItem.getUseDuration: 200 ticks, the server drops the contents.
+        if stack
+            .as_ref()
+            .is_some_and(|s| self.res.items().get(&s.item).is_some_and(|i| i.bundle))
+        {
+            self.using = (in_hand && ticks + 1 < 200).then_some((slot, ticks + 1));
             return;
         }
         // A drawn bow, a charging crossbow, a raised shield...: held until

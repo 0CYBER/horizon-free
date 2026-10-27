@@ -7,6 +7,7 @@
 //! the next one. The level's random draws the display item and throws the
 //! rewards; the loot tables go through the caller, so the game and a
 //! differential test world roll them the same way.
+pub use crate::chunk::block_entity::{Vault, VaultConfig};
 use crate::items::ItemStack;
 use horizon_core::random::RandomSource;
 use horizon_world::nbt::{Compound, Tag};
@@ -25,17 +26,6 @@ const MAX_REWARD_PLAYERS: usize = 128;
 const UNLOCKING_DELAY: i64 = 14;
 const INSERT_FAIL_SOUND_BUFFER: i64 = 15;
 const STATE_DELAY: i64 = 20;
-
-/// `VaultConfig`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct VaultConfig {
-    pub loot_table: String,
-    pub activation_range: f64,
-    pub deactivation_range: f64,
-    /// None when the config has no key (`ItemStack.EMPTY`): the vault never opens.
-    pub key_item: Option<ItemStack>,
-    pub override_loot_table_to_display: Option<String>,
-}
 
 impl Default for VaultConfig {
     /// `VaultConfig.DEFAULT`: the trial key and the trial chambers' reward.
@@ -168,28 +158,6 @@ pub trait VaultLevel {
 /// level random, or with the table's random sequence when the flag is set and
 /// the table has one.
 pub type Roll<'a, R> = dyn FnMut(&str, &mut R, bool) -> Vec<ItemStack> + 'a;
-
-/// `VaultBlockEntity`: its config, server data and shared data.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Vault {
-    pub config: VaultConfig,
-    /// `VaultServerData`, oldest rewarded player first.
-    pub rewarded_players: Vec<Uuid>,
-    pub state_updating_resumes_at: i64,
-    /// Popped from the end.
-    pub items_to_eject: Vec<ItemStack>,
-    pub total_ejections_needed: i32,
-    pub last_insert_fail_timestamp: i64,
-    /// `VaultSharedData`.
-    pub display_item: Option<ItemStack>,
-    pub connected_players: Vec<Uuid>,
-    pub connected_particles_range: f64,
-    /// The shared data changed since the last tick sent it.
-    pub shared_dirty: bool,
-    /// `VaultClientData`: the display item's spin and the previous tick's, in degrees.
-    pub spin: f32,
-    pub o_spin: f32,
-}
 
 impl Default for Vault {
     fn default() -> Self {
