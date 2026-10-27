@@ -1,11 +1,9 @@
 //! `BlockBehaviour.useWithoutItem` (right-click with an empty hand or an item
 //! that does not handle the block itself).
-use super::{
-    Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, query::axis_of, update::below,
-};
+use super::{Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, update::below};
 use crate::registry::BlockStateId;
 use horizon_core::{
-    geometry::{Axis, Direction, Vec3},
+    geometry::{Direction, Vec3},
     position::BlockPos,
     random::RandomSource,
 };
@@ -386,18 +384,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 }
                 Class::Bell => {
-                    let click_y = hit.y - f64::from(pos.y);
-                    let proper = axis_of(face) != Axis::Y && click_y <= 0.8124 && {
-                        let facing_axis = axis_of(b.facing(state));
-                        match table.text(state, p.attachment) {
-                            "floor" => facing_axis == axis_of(face),
-                            "single_wall" | "double_wall" => facing_axis != axis_of(face),
-                            "ceiling" => true,
-                            _ => false,
-                        }
-                    };
-                    if proper {
-                        self.bell_ring(pos, state, face);
+                    if self.bell_hit(pos, state, face, hit.y - f64::from(pos.y)) {
                         Success
                     } else {
                         Pass

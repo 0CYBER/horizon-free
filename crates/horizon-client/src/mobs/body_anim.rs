@@ -981,7 +981,9 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             let flap = m.anim.flap_o + (m.anim.flap - m.anim.flap_o) * s.partial;
             let speed = m.anim.flap_speed_o + (m.anim.flap_speed - m.anim.flap_speed_o) * s.partial;
             // `Parrot.isFlying` is `!onGround`, in water too.
-            let pose = if m.extra.sitting {
+            let pose = if m.extra.party_jukebox.is_some() {
+                ParrotPose::Party
+            } else if m.extra.sitting {
                 ParrotPose::Sitting
             } else if !m.on_ground {
                 ParrotPose::Flying

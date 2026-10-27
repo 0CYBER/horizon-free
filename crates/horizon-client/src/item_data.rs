@@ -439,6 +439,11 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
         }
     }
 }
+/// The stack a `show_item` hover event holds (`HoverEvent.ShowItem`): its
+/// `{id, count?, components?}` object.
+pub fn stack_from_hover(event: &serde_json::Value) -> Option<ItemStack> {
+    template_from(&crate::scoreboard::json_to_tag(event))
+}
 /// Sorted-key, type-annotated text of a tag (the differential harnesses
 /// print the same form from the vanilla side).
 pub fn canon_tag(tag: &Tag) -> String {
