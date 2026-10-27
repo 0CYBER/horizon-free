@@ -291,6 +291,12 @@ fn mob_meta(
     if m.fire_ticks > 0 {
         meta.push((0, serializer::BYTE, Value::Byte(1)));
     }
+    // Entity.DATA_POSE: the pose the species keeps in its own fields (a
+    // pose back at standing goes out by the entity's own default).
+    let pose = horizon_client::mobs::sync::pose_id(m);
+    if pose != 0 {
+        meta.push((6, serializer::POSE, Value::Id(i32::from(pose))));
+    }
     if let Some(name) = &m.custom_name {
         meta.push((
             2,
@@ -399,6 +405,18 @@ fn mob_meta(
                 meta.push((18, serializer::BYTE, Value::Byte(value as i8)));
             }
             defaults.push((18, serializer::BYTE, Value::Byte(0)));
+        }
+        // Fox.DATA_TYPE_ID and DATA_FLAGS_ID (after AgeableMob's two; sleeping 32, ...).
+        "minecraft:fox" => {
+            if e.variant != 0 {
+                meta.push((18, serializer::INT, Value::Int(i32::from(e.variant))));
+            }
+            defaults.push((18, serializer::INT, Value::Int(0)));
+            let flags = (e.ints[0] & 0xff) as u8 as i8;
+            if flags != 0 {
+                meta.push((19, serializer::BYTE, Value::Byte(flags)));
+            }
+            defaults.push((19, serializer::BYTE, Value::Byte(0)));
         }
         "minecraft:cat" | "minecraft:wolf" => {
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
@@ -514,6 +532,29 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // Panda: UNHAPPY_COUNTER, SNEEZE_COUNTER and EAT_COUNTER (after
+        // AgeableMob's two), MAIN_GENE_ID, HIDDEN_GENE_ID and DATA_ID_FLAGS;
+        // the client animates the states from them.
+        "minecraft:panda" => {
+            let (flags, counters) = horizon_client::mobs::panda::get(m)
+                .map_or((0, [0; 3]), |s| (s.flags, [s.unhappy, s.sneeze, s.eat]));
+            for (index, value) in (18..).zip(counters) {
+                if value != 0 {
+                    meta.push((index, serializer::INT, Value::Int(value)));
+                }
+                defaults.push((index, serializer::INT, Value::Int(0)));
+            }
+            for (index, gene) in [(21, e.variant), (22, e.variant2)] {
+                if gene != 0 {
+                    meta.push((index, serializer::BYTE, Value::Byte(gene as i8)));
+                }
+                defaults.push((index, serializer::BYTE, Value::Byte(0)));
+            }
+            if flags != 0 {
+                meta.push((23, serializer::BYTE, Value::Byte(flags as i8)));
+            }
+            defaults.push((23, serializer::BYTE, Value::Byte(0)));
+        }
         // PolarBear.DATA_STANDING_ID (after AgeableMob's two): the bear
         // rears up; the client animates it.
         "minecraft:polar_bear" => {
@@ -529,6 +570,121 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BYTE, Value::Byte(0)));
         }
+        // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+        "minecraft:warden" => {
+            let anger = e.warden.as_ref().map_or(0, |w| w.client_anger);
+            if anger != 0 {
+                meta.push((16, serializer::INT, Value::Int(anger)));
+            }
+            defaults.push((16, serializer::INT, Value::Int(0)));
+        }
+        // Sniffer.DATA_STATE (after AgeableMob's two).
+        "minecraft:sniffer" => {
+            if e.variant != 0 {
+                meta.push((
+                    18,
+                    serializer::SNIFFER_STATE,
+                    Value::Id(i32::from(e.variant)),
+                ));
+            }
+            defaults.push((18, serializer::SNIFFER_STATE, Value::Id(0)));
+        }
+        // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID (16
+        // for none).
+        "minecraft:shulker" => {
+            if e.variant3 != 0 {
+                meta.push((16, serializer::DIRECTION, Value::Id(i32::from(e.variant3))));
+            }
+            defaults.push((16, serializer::DIRECTION, Value::Id(0)));
+            if e.counter != 0 {
+                meta.push((17, serializer::BYTE, Value::Byte(e.counter as i8)));
+            }
+            defaults.push((17, serializer::BYTE, Value::Byte(0)));
+            if e.color != 16 {
+                meta.push((18, serializer::BYTE, Value::Byte(e.color as i8)));
+            }
+            defaults.push((18, serializer::BYTE, Value::Byte(16)));
+        }
+        // Vex.DATA_FLAGS_ID: charging in bit 0 (the arms and the glowing
+        // texture).
+        "minecraft:vex" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
+        "minecraft:creaking" => {
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            if horizon_client::mobs::creaking::tearing_down(m) {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Allay.DATA_DANCING and DATA_CAN_DUPLICATE (the held item is its
+        // main hand equipment).
+        "minecraft:allay" => {
+            if e.flag {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            if e.egg_time > 0 {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        // Axolotl.DATA_PLAYING_DEAD (after DATA_VARIANT).
+        "minecraft:axolotl" => {
+            if horizon_client::mobs::axolotl::is_playing_dead(m) {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // CopperGolem.COPPER_GOLEM_STATE (after DATA_WEATHER_STATE).
+        "minecraft:copper_golem" => {
+            if e.variant3 != 0 {
+                meta.push((
+                    17,
+                    serializer::COPPER_GOLEM_STATE,
+                    Value::Id(i32::from(e.variant3)),
+                ));
+            }
+            defaults.push((17, serializer::COPPER_GOLEM_STATE, Value::Id(0)));
+        }
+        // Armadillo.ARMADILLO_STATE (after AgeableMob's two).
+        "minecraft:armadillo" => {
+            let state = horizon_client::mobs::armadillo::state(m);
+            if state != 0 {
+                meta.push((18, serializer::ARMADILLO_STATE, Value::Id(i32::from(state))));
+            }
+            defaults.push((18, serializer::ARMADILLO_STATE, Value::Id(0)));
+        }
+        // Frog.DATA_TONGUE_TARGET_ID (after the variant): the entity id plus
+        // one, 0 for none.
+        "minecraft:frog" => {
+            if let Some(target) = e.frog.tongue_target {
+                let id = i32::try_from(target).map_or(0, |t| t + 1);
+                meta.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(id)));
+            }
+            defaults.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(0)));
+        }
+        // Goat.DATA_HAS_LEFT_HORN and DATA_HAS_RIGHT_HORN (after
+        // DATA_IS_SCREAMING_GOAT): both true by default.
+        "minecraft:goat" => {
+            for (index, lost) in [(19, e.lost_horns[0]), (20, e.lost_horns[1])] {
+                if lost {
+                    meta.push((index, serializer::BOOLEAN, Value::Bool(false)));
+                }
+                defaults.push((index, serializer::BOOLEAN, Value::Bool(true)));
+            }
+        }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
@@ -540,6 +696,38 @@ fn mob_meta(
             }
         }
         _ => {}
+    }
+    // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's flags).
+    if horizon_client::mobs::camel::is_camel(m.species()) {
+        if e.flag2 {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        let tick = horizon_client::mobs::camel::synced_pose_tick(m, game_time);
+        if tick != 0 {
+            meta.push((20, serializer::LONG, Value::Long(tick)));
+        }
+        defaults.push((20, serializer::LONG, Value::Long(0)));
+    }
+}
+
+/// What a client shakes a mob by: Entity.DATA_TICKS_FROZEN (7), whose full
+/// count is `isFullyFrozen`, and Strider.DATA_SUFFOCATING (19, after
+/// AgeableMob's two and DATA_BOOST_TIME).
+fn mob_freeze_meta(
+    m: &Mob,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if m.ticks_frozen > 0 {
+        meta.push((7, serializer::INT, Value::Int(m.ticks_frozen)));
+    }
+    defaults.push((7, serializer::INT, Value::Int(0)));
+    if m.kind.id == "minecraft:strider" {
+        if m.extra.flag {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
     }
 }
 
@@ -1067,6 +1255,7 @@ impl Game<'_> {
                 &mut e.meta,
                 &mut e.defaults,
             );
+            mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;

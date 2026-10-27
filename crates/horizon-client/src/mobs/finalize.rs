@@ -1677,7 +1677,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let jump = self.uniform(600, 1200);
                 set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
                 let ram = self.uniform(600, 6000);
-                set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+                m.extra.goat.ram_cooldown = ram;
                 m.extra.screaming = self.random.next_double() < 0.02;
                 age_boundary_reached(m);
                 if !m.is_baby() && self.float() < 0.1 {
@@ -1691,13 +1691,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let hidden = panda_gene(self.int(16));
                 m.extra.variant = main;
                 m.extra.variant2 = hidden;
-                let shown = panda_variant(main, hidden);
-                if shown == 5 {
-                    set_base(m, Attr::MaxHealth, 10.0);
-                }
-                if shown == 1 {
-                    set_base(m, Attr::MovementSpeed, f64::from(0.07f32));
-                }
+                super::panda::set_attributes(m);
                 self.ageable(m, g.or(Some(Group::Ageable(Ageable::chance(0.2)))))
             }
             S::PolarBear | S::Ocelot => {
@@ -1950,7 +1944,7 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
-fn panda_gene(roll: i32) -> u8 {
+pub fn panda_gene(roll: i32) -> u8 {
     match roll {
         0 => 1,
         1 => 2,

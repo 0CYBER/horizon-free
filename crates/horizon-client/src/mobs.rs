@@ -11,6 +11,7 @@ pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
+pub mod armadillo;
 pub mod axolotl;
 pub mod bat;
 pub mod bee;
@@ -31,8 +32,11 @@ pub mod enderman;
 pub mod equine;
 pub mod farm;
 pub mod finalize;
+pub mod fox;
+pub mod frog;
 pub mod gear;
 pub mod goals;
+pub mod goat;
 pub mod golem;
 pub mod guardian;
 pub mod happy_ghast;
@@ -47,6 +51,7 @@ pub mod monster_brain;
 pub mod nautilus;
 pub mod nav;
 pub mod nether;
+pub mod panda;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
@@ -66,6 +71,7 @@ pub mod spawning;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
+pub mod sync;
 pub mod tame;
 pub mod trader;
 pub mod transport_items;
@@ -527,6 +533,8 @@ pub enum DamageKind {
     InWall,
     Thorns,
     SonicBoom,
+    /// `freeze`: a fully frozen mob in powder snow.
+    Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
 }
@@ -596,6 +604,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -620,6 +629,7 @@ impl Damage {
                 | DamageKind::Cactus
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::Freeze
                 | DamageKind::OutOfWorld
         )
     }
@@ -788,12 +798,16 @@ pub struct Extra {
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
     pub screaming: bool,
     pub lost_horns: [bool; 2],
+    /// A goat's lowered head and ram behaviours.
+    pub goat: goat::State,
     /// Attribute bases and permanent modifiers set by `finalizeSpawn`.
     pub attributes: Option<Box<finalize::Attributes>>,
     /// Brain memories `finalizeSpawn` sets: (memory, value, ticks to expiry).
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
+    pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
@@ -801,6 +815,12 @@ pub struct Extra {
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
     pub bee: Option<Box<bee::Bee>>,
+    /// An armadillo's state and scare brain.
+    pub armadillo: armadillo::State,
+    /// A frog's brain memories and tongue target.
+    pub frog: frog::State,
+    /// A panda's flags, counters and amounts.
+    pub panda: Option<Box<panda::State>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -901,6 +921,18 @@ pub enum MobEvent {
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
         mob: u32,
+        at: [f64; 3],
+    },
+    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
+    /// clients' `makeDrownParticles`.
+    Drown {
+        mob: u32,
+        at: [f64; 3],
+    },
+    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    EntityEvent {
+        mob: u32,
+        event: i8,
         at: [f64; 3],
     },
     Sound(&'static str, [f64; 3], f32, f32),
@@ -1009,6 +1041,13 @@ pub enum MobEvent {
         target: u32,
         amount: f32,
         source: Damage,
+    },
+    /// `LivingEntity.knockback(power, x, z)`: pushed away from the direction.
+    Knockback {
+        target: Who,
+        power: f64,
+        x: f64,
+        z: f64,
     },
     /// Set another mob's attack target (HurtByTargetGoal alerts).
     SetTarget {
@@ -1244,6 +1283,10 @@ pub enum MobEvent {
         center: [f64; 3],
         spread: [f64; 3],
     },
+    /// `Panda.afterSneeze`: the grown pandas within 10 blocks start.
+    PandaSneezed {
+        mob: u32,
+    },
 }
 /// How a spawned-by-kind mob should be set up.
 #[derive(Clone, Debug, Default)]
@@ -1281,6 +1324,8 @@ pub struct Seen {
     pub target: Option<Who>,
     pub health: f32,
     pub variant: u8,
+    /// A slime's or magma cube's size.
+    pub size: i32,
     /// Dye colour (sheep).
     pub color: u8,
     /// A villager's claimed job site and bed.
@@ -1348,6 +1393,10 @@ impl Mob {
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
     }
+    /// `Entity.isFullyFrozen`.
+    pub fn is_fully_frozen(&self) -> bool {
+        self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
+    }
 
     /// What other mobs see of this one this tick (`player`: the player's
     /// UUID, which villagers' reputation is keyed by).
@@ -1376,6 +1425,7 @@ impl Mob {
             target: m.ai.target,
             health: m.health,
             variant: m.extra.variant,
+            size: m.extra.size,
             color: m.extra.color,
             job: villager.then_some(m.extra.home).flatten(),
             bed: villager.then_some(m.extra.bed).flatten(),
@@ -1554,6 +1604,9 @@ pub struct PlayerView {
     pub last_hurt: Option<(Who, i64)>,
     pub velocity: Vec3,
     pub yaw: f32,
+    /// `Player.isSprinting` and `isPassenger` (what scares an armadillo).
+    pub sprinting: bool,
+    pub riding: bool,
     /// The Hero of the Village effect.
     pub hero: bool,
     /// The active effects, without namespace (`slowness`, `poison`...).
@@ -1820,11 +1873,23 @@ impl Mob {
             return false;
         }
         let mut amount = if reflected { 1000.0 } else { amount };
+        if self.species() == Species::Armadillo {
+            amount = armadillo::reduce_damage(self, amount);
+        }
         if source.kind == DamageKind::FallingBlock
             && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;
+        }
+        // LivingEntity.hurtServer: `#freeze_hurts_extra_types` take five times.
+        if source.kind == DamageKind::Freeze
+            && matches!(
+                self.species(),
+                Species::Strider | Species::Blaze | Species::MagmaCube
+            )
+        {
+            amount *= 5.0;
         }
         let (worn, worn_toughness) = self.worn_armor();
         if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {

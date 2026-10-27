@@ -37,6 +37,7 @@ impl Game<'_> {
             }
         }
         self.eye_particles();
+        self.panda_effects();
         self.sprint_dust();
         self.effect_swirls();
     }

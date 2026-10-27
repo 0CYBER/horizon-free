@@ -135,6 +135,16 @@ impl Mob {
         if self.species() == super::Species::Rabbit {
             return super::rabbit::move_control(self, w);
         }
+        // Fox.FoxMoveControl.tick: still while asleep, sitting or faceplanted.
+        if self.species() == super::Species::Fox && !super::fox::can_move(self) {
+            return;
+        }
+        // Panda.PandaMoveControl: only while it can act.
+        if self.species() == super::Species::Panda
+            && !super::panda::can_perform_action(self, w.thundering)
+        {
+            return;
+        }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
             MoveKind::Custom => super::ai::custom_move_control(self, w, events),
@@ -314,6 +324,11 @@ impl Mob {
     /// LookControl.tick (and SmoothSwimmingLookControl).
     pub fn look_control_tick(&mut self) {
         let look = self.ai.look.clone();
+        let fox = self.species() == super::Species::Fox;
+        // Fox.FoxLookControl: no turning in sleep.
+        if fox && super::fox::flag(self, super::fox::SLEEPING) {
+            return;
+        }
         if look.kind == LookKind::HappyGhast {
             return super::happy_ghast::look_control(self);
         }
@@ -346,7 +361,8 @@ impl Mob {
                 }
             }
             LookKind::Default | LookKind::Fixed => {
-                if look.kind == LookKind::Default {
+                // FoxLookControl.resetXRotOnTick keeps a stalking or pouncing pitch.
+                if look.kind == LookKind::Default && (!fox || super::fox::resets_x_rot(self)) {
                     self.head_pitch = 0.0;
                 }
                 if look.cooldown > 0 {

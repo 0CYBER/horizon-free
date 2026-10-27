@@ -193,6 +193,8 @@ impl Game<'_> {
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
             velocity: p.velocity,
             yaw: self.yaw,
+            sprinting: p.sprinting,
+            riding: self.riding.is_some(),
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             effects: self.potions.effects.list.iter().map(|e| e.id).collect(),
             uuid: self.level.player_uuid.unwrap_or_default(),
@@ -690,6 +692,7 @@ impl Game<'_> {
         self.tick_projectiles()?;
         self.tick_fangs();
         self.tick_allays();
+        self.tick_pandas();
         self.tick_breeze_effects();
         self.tick_sniffer_effects();
         self.piglin_pickups();
@@ -933,6 +936,18 @@ impl Game<'_> {
             match e {
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
+                MobEvent::Drown { mob, at } => {
+                    self.lan_entity_event(mob as i32, super::combat::DROWN_EVENT, at);
+                    let v = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == mob)
+                        .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
+                    self.drown_particles(at, v);
+                }
+                MobEvent::EntityEvent { mob, event, at } => {
+                    self.lan_entity_event(mob as i32, event, at)
+                }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
@@ -980,6 +995,19 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::Knockback {
+                    target,
+                    power,
+                    x,
+                    z,
+                } => match target {
+                    Who::Player => self.knock_back_player(power, x, z),
+                    Who::Mob(id) => {
+                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            m.knockback(power, x, z);
+                        }
+                    }
+                },
                 MobEvent::Wololo { mob } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         // DyeColor.RED.
@@ -1372,9 +1400,14 @@ impl Game<'_> {
                         m.ai.aggressive |= aggressive;
                     }
                 }
+                MobEvent::PandaSneezed { mob } => self.panda_sneezed(mob),
                 MobEvent::GiftLoot { mob, table, at } => {
-                    // Turtle.ageBoundaryReached: only with mob loot on.
-                    if table == "minecraft:gameplay/turtle_grow" && !self.ui.rules.bool("mob_drops")
+                    // Turtle.ageBoundaryReached and Panda.afterSneeze: only
+                    // with mob loot on.
+                    if matches!(
+                        table,
+                        "minecraft:gameplay/turtle_grow" | "minecraft:gameplay/panda_sneeze"
+                    ) && !self.ui.rules.bool("mob_drops")
                     {
                         continue;
                     }
@@ -1611,6 +1644,13 @@ impl Game<'_> {
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
+            // Panda.getBreedOffspring: genes from both parents.
+            if p.species() == Species::Panda {
+                horizon_client::mobs::panda::inherit(child, &p, q.as_ref().unwrap_or(&p));
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
             // Nautilus.getBreedOffspring: a tame parent's baby is tame too.
             if p.species() == Species::Nautilus && p.extra.tame {
                 child.extra.tame = true;
@@ -1619,6 +1659,10 @@ impl Game<'_> {
             }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
+            // Fox.getBreedOffspring: either parent's variant.
+            if p.species() == Species::Fox && !coin {
+                child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            }
             if p.species() == Species::Sheep {
                 child.extra.color = p.extra.color;
             }
@@ -2834,6 +2878,14 @@ impl Game<'_> {
         let creative = self.creative;
         // The hand's slot (Player.interactOn passes the hand).
         let selected = self.held_slot();
+        // Panda.mobInteract: bamboo, or a click on a panda lying on its back.
+        if self.mobs[index].species() == Species::Panda && self.mobs[index].alive() {
+            let taken = self.interact_panda(index, &item);
+            if taken {
+                self.swing_arm();
+            }
+            return Ok(taken);
+        }
         if self.interact_zombie_villager(index, &item) {
             return Ok(true);
         }
@@ -3703,6 +3755,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
         K::SonicBoom => "minecraft:sonic_boom",
+        K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
     }
 }
