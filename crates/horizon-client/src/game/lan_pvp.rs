@@ -40,6 +40,8 @@ pub(super) struct Strike {
     /// `Player.attack`'s `magicBoost > 0`: the enchantments added damage.
     magic: bool,
     from: [f64; 3],
+    /// `getSecondsToDisableBlocking` of the attacker's weapon.
+    disable_blocking: f32,
     sweep: Option<[f64; 3]>,
     /// `causeExtraKnockback`: its strength and direction (the attacker's
     /// yaw), and whether the hit is a sprinting knockback attack.
@@ -122,6 +124,14 @@ impl Game<'_> {
             p.cause_food_exhaustion(0.1);
         }
         self.swing_arm();
+        // LivingEntity.getSecondsToDisableBlocking: the held weapon's value,
+        // none while another item is in use.
+        let disable_blocking = if self.using.is_some() {
+            0.0
+        } else {
+            self.attack_item_info()
+                .map_or(0.0, |i| i.disable_blocking_seconds)
+        };
         Some(Strike {
             attacker: self.lan_acting,
             amount,
@@ -129,6 +139,7 @@ impl Game<'_> {
             crit,
             magic,
             from,
+            disable_blocking,
             sweep,
             knockback: (strength, xd, zd),
             knockback_attack,
@@ -243,7 +254,9 @@ impl Game<'_> {
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
         let land = |g: &mut Self| {
+            g.combat.player_attacker = Some((s.from, s.disable_blocking));
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
+            g.combat.player_attacker = None;
             let (strength, xd, zd) = s.knockback;
             if hurt && strength > 0.0 {
                 g.knock_back_player(f64::from(strength), xd, zd);
