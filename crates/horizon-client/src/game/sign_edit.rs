@@ -5,10 +5,11 @@ use super::{Game, lan::LanHost};
 use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
-    signs::wood_type,
+    items::ItemStack,
+    signs::{DYE_TEXT, wood_type},
+    ui::EditBox,
 };
 use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
-use std::time::Instant;
 use winit::{
     event::{ElementState, KeyEvent},
     keyboard::{KeyCode, PhysicalKey},
@@ -18,18 +19,179 @@ pub(super) struct SignEditor {
     pub pos: (i32, i32, i32),
     pub front: bool,
     pub line: usize,
-    pub opened: Instant,
+    /// The line being edited (`AbstractSignEditScreen`'s text field).
+    edit: EditBox,
+}
+
+fn sign_box() -> EditBox {
+    let mut edit = EditBox::new(0.0, 0.0, 90.0, 9.0);
+    edit.bordered = false;
+    edit.max_length = 384;
+    edit.focused = true;
+    edit
 }
 
 impl Game<'_> {
+    /// `SignBlockEntity.getSlotPlayerIsFacing`: whether the player stands in
+    /// front of the sign's text (within 90 degrees of its facing).
+    fn facing_sign_front(&self, pos: (i32, i32, i32)) -> bool {
+        let Some(player) = self.player.as_ref() else {
+            return true;
+        };
+        let state = self.world.block(pos.0, pos.1, pos.2);
+        let Some(state) = self.pack.assets.registry.state(state) else {
+            return true;
+        };
+        let prop = |key: &str| state.properties.get(key).map(String::as_str);
+        // getYRotationDegrees: a wall sign's `Direction.toYRot`, a standing or
+        // ceiling sign's rotation segment.
+        let y_rot = if state.name.contains("_wall_") {
+            match prop("facing") {
+                Some("west") => 90.0,
+                Some("north") => 180.0,
+                Some("east") => 270.0,
+                _ => 0.0,
+            }
+        } else {
+            prop("rotation")
+                .and_then(|r| r.parse::<f32>().ok())
+                .unwrap_or(0.0)
+                * 22.5
+        };
+        // getSignHitboxCenterPosition: only a wall sign's board is off-centre,
+        // against the wall it hangs on.
+        let centre = if state.name.ends_with("_wall_sign") {
+            match y_rot as i32 {
+                90 => (0.9375, 0.5),
+                180 => (0.5, 0.9375),
+                270 => (0.0625, 0.5),
+                _ => (0.5, 0.0625),
+            }
+        } else {
+            (0.5, 0.5)
+        };
+        let xd = player.position.x - (f64::from(pos.0) + centre.0);
+        let zd = player.position.z - (f64::from(pos.2) + centre.1);
+        let player_y_rot = (zd.atan2(xd).to_degrees() - 90.0) as f32;
+        // Mth.degreesDifferenceAbs.
+        let diff = (player_y_rot - y_rot).rem_euclid(360.0);
+        let diff = if diff >= 180.0 { 360.0 - diff } else { diff };
+        diff <= 90.0
+    }
+    /// `SignBlock.useWithoutItem` (the block's `OpenMenu` effect): a waxed
+    /// sign plays the failed-interaction sound; otherwise a player who may
+    /// build edits the side they face.
+    pub(super) fn use_sign_empty_hand(&mut self, pos: [i32; 3]) {
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
+            return;
+        };
+        if sign.waxed {
+            // `getSignInteractionFailedSoundEvent`: a hanging sign has its own.
+            let sound = if sign.hanging {
+                "minecraft:block.hanging_sign.waxed_interact_fail"
+            } else {
+                "minecraft:block.sign.waxed_interact_fail"
+            };
+            self.audio
+                .play(sound, Some(pos.map(|v| f64::from(v) + 0.5)), 1.0, 1.0);
+        } else if self.may_build() {
+            let front = self.facing_sign_front(key);
+            self.open_sign_editor(key, front);
+        }
+    }
+    /// `SignBlock.useItemOn` with a `SignApplicator` in hand (dyes, ink sacs,
+    /// honeycomb): the item changes the side the player faces and is used up.
+    /// Whether it did; a sign it does not apply to goes on to the empty hand.
+    pub(super) fn use_sign_applicator(&mut self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
+        let Some(stack) = held else {
+            return false;
+        };
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
+            return false;
+        };
+        if sign.waxed || !self.may_build() {
+            return false;
+        }
+        let item = &*stack.item;
+        let dye = if item.ends_with("_dye") {
+            self.res
+                .items()
+                .get(&stack.item)
+                .and_then(|i| i.dye.clone())
+        } else {
+            None
+        };
+        let colour = dye.and_then(|d| DYE_TEXT.iter().position(|(n, _)| *n == d));
+        if !matches!(
+            item,
+            "minecraft:honeycomb" | "minecraft:glow_ink_sac" | "minecraft:ink_sac"
+        ) && colour.is_none()
+        {
+            return false;
+        }
+        let front = self.facing_sign_front(key);
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) else {
+            return false;
+        };
+        let centre = pos.map(|v| f64::from(v) + 0.5);
+        let sound = if item == "minecraft:honeycomb" {
+            // HoneycombItem.tryApplyToSign: waxes any sign, empty or not.
+            sign.waxed = true;
+            "minecraft:item.honeycomb.wax_on"
+        } else {
+            let side = if front {
+                &mut sign.front
+            } else {
+                &mut sign.back
+            };
+            // SignApplicator.canApplyToSign: the side must have text.
+            if side.is_empty() {
+                return false;
+            }
+            match colour {
+                Some(c) if side.color != c as u8 => {
+                    side.color = c as u8;
+                    "minecraft:item.dye.use"
+                }
+                None if item == "minecraft:glow_ink_sac" && !side.glowing => {
+                    side.glowing = true;
+                    "minecraft:item.glow_ink_sac.use"
+                }
+                None if item == "minecraft:ink_sac" && side.glowing => {
+                    side.glowing = false;
+                    "minecraft:item.ink_sac.use"
+                }
+                _ => return false,
+            }
+        };
+        if item == "minecraft:honeycomb" {
+            self.level_event_at(3003, pos, 0);
+        }
+        self.audio.play(sound, Some(centre), 1.0, 1.0);
+        self.mark_block_entity_updated(key);
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.post_block_game_event(
+            "minecraft:block_change",
+            pos,
+            self.sculk_actor(),
+            Some(state),
+        );
+        self.stats.add("used", &stack.item, 1);
+        self.consume_held();
+        self.trigger_block("minecraft:item_used_on_block", pos, stack);
+        true
+    }
     /// `SignBlock.openTextEdit` for the front side after placement.
     pub(super) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
         self.sign_edit = Some(SignEditor {
             pos,
             front,
             line: 0,
-            opened: Instant::now(),
+            edit: sign_box(),
         });
+        self.sign_load();
         self.keys.clear();
         self.right = false;
         self.capture(false);
@@ -140,97 +302,154 @@ impl Game<'_> {
     /// A key and the text it typed on the sign being edited (the keyboard,
     /// or a controller's on-screen keyboard).
     pub(super) fn sign_input(&mut self, key: Option<KeyCode>, typed: Option<&str>) {
-        let Some(edit) = self.sign_edit.as_mut() else {
+        if self.sign_edit.is_none() {
             return;
-        };
-        let front = edit.front;
-        let id = sign_line_id(front, edit.line);
+        }
         match key {
             Some(KeyCode::Escape) => self.close_sign_editor(),
-            Some(KeyCode::ArrowUp) => edit.line = (edit.line + 3) & 3,
+            Some(KeyCode::ArrowUp) => self.sign_move_line(3),
             Some(KeyCode::ArrowDown | KeyCode::Enter | KeyCode::NumpadEnter) => {
-                edit.line = (edit.line + 1) & 3
+                self.sign_move_line(1)
             }
-            Some(KeyCode::Backspace) => {
-                let (line, key) = (edit.line, edit.pos);
-                if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) {
-                    let text = if front {
-                        &mut sign.front
-                    } else {
-                        &mut sign.back
-                    };
-                    let value = &mut text.lines[line];
-                    if !self.text_selection.take(id, value) {
-                        value.pop();
-                    }
-                }
+            Some(
+                key @ (KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Backspace
+                | KeyCode::Delete),
+            ) => {
+                let (ctrl, shift) = (self.has_control_down(), self.has_shift_down());
+                self.sign_change(|edit| {
+                    edit.key(key, ctrl, shift);
+                });
             }
             _ => {
                 let Some(typed) = typed else {
                     return;
                 };
-                let line = edit.line;
-                let atlas = &self.gui.atlas;
-                let width = |s: &str| HudBatch::text_width(atlas, s);
-                let Some(key) = self.sign_edit.as_ref().map(|e| e.pos) else {
-                    return;
-                };
-                if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) {
-                    let max = sign.max_line_width();
-                    let text = if front {
-                        &mut sign.front
-                    } else {
-                        &mut sign.back
-                    };
-                    self.text_selection.take(id, &mut text.lines[line]);
-                    for ch in typed.chars().filter(|c| !c.is_control()) {
-                        let mut next = text.lines[line].clone();
-                        next.push(ch);
-                        // TextFieldHelper filter: font.width(s) <= maxTextLineWidth.
-                        if width(&next) <= max {
-                            text.lines[line] = next;
-                        }
-                    }
-                }
+                self.sign_change(|edit| edit.insert_text(typed));
             }
         }
     }
-    /// `TextFieldHelper.keyPressed`'s shortcuts on the edited line: a paste
-    /// (formatting and carriage returns removed) is taken whole or not at
-    /// all, as the line must stay within the sign's width.
-    fn sign_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+    /// Up or down a line: the box writes the line it leaves and loads the next.
+    fn sign_move_line(&mut self, by: usize) {
+        self.sign_write();
+        if let Some(edit) = self.sign_edit.as_mut() {
+            edit.line = (edit.line + by) & 3;
+        }
+        self.sign_load();
+    }
+    /// The edited line's text.
+    fn sign_current(&self) -> Option<String> {
+        let edit = self.sign_edit.as_ref()?;
+        let BlockEntity::Sign(sign) = self.world.block_entities.get(&edit.pos)? else {
+            return None;
+        };
+        let side = if edit.front { &sign.front } else { &sign.back };
+        Some(side.lines[edit.line].clone())
+    }
+    /// `EditBox.setValue` from the line now being edited.
+    fn sign_load(&mut self) {
+        let Some(text) = self.sign_current() else {
+            return;
+        };
+        if let Some(edit) = self.sign_edit.as_mut() {
+            edit.edit.set_value(&text);
+        }
+    }
+    /// The box's text onto the sign, when it still fits the line.
+    fn sign_write(&mut self) {
         let Some(edit) = self.sign_edit.as_ref() else {
             return;
         };
-        let (key, front, line) = (edit.pos, edit.front, edit.line);
-        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) else {
+        let (pos, front, line, value) = (edit.pos, edit.front, edit.line, edit.edit.value.clone());
+        if !self.sign_fits(&value) {
+            return;
+        }
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&pos) else {
             return;
         };
-        let max = sign.max_line_width();
-        let text = if front {
+        let side = if front {
             &mut sign.front
         } else {
             &mut sign.back
         };
-        let atlas = &self.gui.atlas;
-        self.text_selection.apply(
-            sign_line_id(front, line),
-            &mut text.lines[line],
-            shortcut,
-            &mut self.clipboard,
-            |value, pasted| {
-                let next = format!(
-                    "{value}{}",
-                    horizon_client::clipboard::helper_clipboard_contents(pasted)
-                );
-                HudBatch::text_width(atlas, &next) <= max && {
-                    *value = next;
-                    true
-                }
-            },
-        );
+        side.lines[line] = value;
     }
-    /// Done button (`this.width / 2 - 100, this.height / 4 + 144`, 200x20).
+    /// TextFieldHelper: `font.width(s) <= maxTextLineWidth`.
+    fn sign_fits(&self, value: &str) -> bool {
+        let Some(edit) = self.sign_edit.as_ref() else {
+            return false;
+        };
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&edit.pos) else {
+            return false;
+        };
+        HudBatch::text_width(&self.gui.atlas, value) <= sign.max_line_width()
+    }
+    /// Edit the line, then keep the result only when it still fits.
+    fn sign_change(&mut self, f: impl FnOnce(&mut EditBox)) {
+        let before = self
+            .sign_edit
+            .as_ref()
+            .map(|e| (e.edit.value.clone(), e.edit.cursor, e.edit.highlight));
+        if let Some(edit) = self.sign_edit.as_mut() {
+            f(&mut edit.edit);
+            let clean = horizon_client::clipboard::strip_formatting(&edit.edit.value);
+            if clean != edit.edit.value {
+                let n = horizon_client::ui::char_len(&clean);
+                edit.edit.value = clean;
+                edit.edit.cursor = edit.edit.cursor.min(n);
+                edit.edit.highlight = edit.edit.highlight.min(n);
+            }
+        }
+        self.sign_keep(before);
+    }
+    /// Write the box when the line still fits; otherwise put the old text back.
+    fn sign_keep(&mut self, before: Option<(String, usize, usize)>) {
+        let value = self
+            .sign_edit
+            .as_ref()
+            .map(|e| e.edit.value.clone())
+            .unwrap_or_default();
+        if self.sign_fits(&value) {
+            self.sign_write();
+        } else if let (Some(edit), Some((value, cursor, highlight))) =
+            (self.sign_edit.as_mut(), before)
+        {
+            edit.edit.value = value;
+            edit.edit.cursor = cursor;
+            edit.edit.highlight = highlight;
+        }
+    }
+    /// `TextFieldHelper.keyPressed`'s shortcuts on the edited line. Paste
+    /// reads `getClipboardContents` before `insertText`. A paste that would
+    /// pass the sign's width is refused whole.
+    fn sign_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+        if shortcut == horizon_client::clipboard::EditShortcut::Paste {
+            let raw = horizon_client::clipboard::Clipboard::get(&mut self.clipboard);
+            let text = horizon_client::clipboard::helper_clipboard_contents(&raw);
+            self.sign_change(|edit| edit.insert_text(&text));
+            return;
+        }
+        let before = self
+            .sign_edit
+            .as_ref()
+            .map(|e| (e.edit.value.clone(), e.edit.cursor, e.edit.highlight));
+        if let Some(edit) = self.sign_edit.as_mut() {
+            edit.edit.shortcut(shortcut, &mut self.clipboard);
+            let clean = horizon_client::clipboard::strip_formatting(&edit.edit.value);
+            if clean != edit.edit.value {
+                let n = horizon_client::ui::char_len(&clean);
+                edit.edit.value = clean;
+                edit.edit.cursor = edit.edit.cursor.min(n);
+                edit.edit.highlight = edit.edit.highlight.min(n);
+            }
+        }
+        self.sign_keep(before);
+    }
+    /// Done button (`this.width / 2 - 100, this.height / 4 + 144`, 200x20),
+    /// or a click on a line (`EditBox.onClick`).
     pub(super) fn sign_edit_click(&mut self, size: [u32; 2]) {
         let b = HudBatch::new(size);
         let (x, y) = (b.width / 2.0 - 100.0, b.height / 4.0 + 144.0);
@@ -238,7 +457,56 @@ impl Game<'_> {
         if mx >= x && mx < x + 200.0 && my >= y && my < y + 20.0 {
             self.audio.play_button_click();
             self.close_sign_editor();
+            return;
         }
+        let Some((cx, top, line_height, max_width, lines)) = self.sign_lines(b.width) else {
+            return;
+        };
+        let shift = self.has_shift_down();
+        for i in 0..lines.len() {
+            let ly = top + i as f32 * line_height;
+            let left = cx - max_width / 2.0;
+            if mx < left || mx >= left + max_width || my < ly || my >= ly + line_height {
+                continue;
+            }
+            let current = self.sign_edit.as_ref().map(|e| e.line);
+            if current != Some(i) {
+                self.sign_move_line((i + 4 - current.unwrap_or(0)) & 3);
+            }
+            let value = self
+                .sign_edit
+                .as_ref()
+                .map(|e| e.edit.value.clone())
+                .unwrap_or_default();
+            let lw = HudBatch::text_width(&self.gui.atlas, &value);
+            let text_x = cx - (lw as i32 / 2) as f32;
+            if let Some(edit) = self.sign_edit.as_mut() {
+                edit.edit.x = text_x;
+                edit.edit.y = ly;
+                edit.edit.width = max_width;
+                edit.edit.click(&self.gui.atlas, mx, shift, false);
+            }
+            self.sign_write();
+            return;
+        }
+    }
+    /// Centre x, the first line's y, the line height, the width limit and the four lines.
+    fn sign_lines(&self, width: f32) -> Option<(f32, f32, f32, f32, Vec<String>)> {
+        let edit = self.sign_edit.as_ref()?;
+        let BlockEntity::Sign(sign) = self.world.block_entities.get(&edit.pos)? else {
+            return None;
+        };
+        let text = if edit.front { &sign.front } else { &sign.back };
+        let line_height = sign.line_height();
+        let y = if sign.hanging { 125.0 } else { 90.0 };
+        let top = y - (4.0 * line_height / 2.0).floor();
+        Some((
+            width / 2.0,
+            top,
+            line_height,
+            sign.max_line_width(),
+            text.lines.to_vec(),
+        ))
     }
     pub(super) fn draw_sign_editor(&self, batch: &mut HudBatch) {
         let Some(edit) = &self.sign_edit else { return };
@@ -304,23 +572,48 @@ impl Game<'_> {
         let color = rgba((color >> 16) as u8, (color >> 8) as u8, color as u8, 255);
         let line_height = sign.line_height();
         let midpoint = (4.0 * line_height / 2.0).floor();
-        let blink = (edit.opened.elapsed().as_millis() / 300) % 2 == 0;
         for (i, line) in text.lines.iter().enumerate() {
-            let lw = HudBatch::text_width(atlas, line);
+            let shown = if i == edit.line {
+                edit.edit.value.as_str()
+            } else {
+                line.as_str()
+            };
+            let lw = HudBatch::text_width(atlas, shown);
             let x = cx - (lw as i32 / 2) as f32;
             let ly = y + i as f32 * line_height - midpoint;
-            batch.text(atlas, line, x, ly, color, false);
-            if i == edit.line
-                && self
-                    .text_selection
-                    .covers(sign_line_id(edit.front, i), line)
-            {
-                // AbstractSignEditScreen: the selection from its start to its end.
-                batch.text_highlight(atlas, (x, ly, lw, line_height), true);
+            batch.text(atlas, shown, x, ly, color, false);
+            if i != edit.line {
+                continue;
             }
-            if i == edit.line && blink {
-                // TextCursorUtils.extractAppendCursor: an underscore after the text.
-                batch.text(atlas, "_", x + lw, ly, color, false);
+            let value = &edit.edit.value;
+            if edit.edit.cursor != edit.edit.highlight {
+                let (a, b) = (
+                    edit.edit.cursor.min(edit.edit.highlight),
+                    edit.edit.cursor.max(edit.edit.highlight),
+                );
+                let pre: String = value.chars().take(a).collect();
+                let sel: String = value.chars().skip(a).take(b - a).collect();
+                batch.text_highlight(
+                    atlas,
+                    (
+                        x + HudBatch::text_width(atlas, &pre),
+                        ly,
+                        HudBatch::text_width(atlas, &sel),
+                        line_height,
+                    ),
+                    true,
+                );
+            }
+            if edit.edit.cursor_visible() {
+                let pre: String = value.chars().take(edit.edit.cursor).collect();
+                batch.fill(
+                    atlas,
+                    x + HudBatch::text_width(atlas, &pre),
+                    ly,
+                    1.0,
+                    line_height,
+                    color,
+                );
             }
         }
         let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 144.0);
@@ -343,9 +636,4 @@ impl Game<'_> {
             true,
         );
     }
-}
-
-/// The sign line being edited, for Select All.
-fn sign_line_id(front: bool, line: usize) -> horizon_client::clipboard::FieldId {
-    (if front { "sign.front" } else { "sign.back" }, line)
 }

@@ -70,8 +70,7 @@ impl Game<'_> {
     /// One ordinary click on a game slot. False when nothing took it.
     pub(super) fn tweak_click(&mut self, slot: usize, button: i32, input: Input) -> bool {
         if self.remote.is_some() {
-            let ordinal = super::remote::input_ordinal(input);
-            return self.remote_slot_click(slot, button as i8, ordinal);
+            return self.remote_menu_ops(&[(Some(slot), button, input)]);
         }
         if !self.menu_click(Some(slot), button, input) {
             return false;
