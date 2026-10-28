@@ -24,6 +24,16 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum RustCmd {
+    /// Whether it is installed, its version and whether this computer can link with it
+    Status,
+    /// Download the pinned toolchain from static.rust-lang.org (once), checked by SHA-256
+    Install,
+    /// Delete the toolchain and the native builds' Cargo home
+    Remove,
+}
+
+#[derive(Subcommand)]
 enum ServersCmd {
     /// The servers, their folder and whether they run
     List,
@@ -79,7 +89,8 @@ enum ServersCmd {
 enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
-    /// Sign in with a Microsoft account in your browser (device code)
+    /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
+    /// Minecraft: Java Edition
     SignIn,
     /// Sign out: the account's tokens leave the keychain
     SignOut {
@@ -88,10 +99,11 @@ enum AccountCmd {
     },
     /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters,
-    /// digits or _), or as the name the game made up
+    /// Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game:
+    /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
+    /// made up
     Offline { name: Option<String> },
-    /// Forget one of your offline names
+    /// Forget one of your offline names; its skin and cape go with it
     ForgetOffline { name: String },
     /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
     /// PNG, the model. Kept by the launcher and given to the game when that name plays
@@ -546,17 +558,21 @@ enum Cmd {
     Install { tag: String },
     /// Remove an installed version
     Remove { tag: String },
-    /// Prepare a version's resources from your own Minecraft install
+    /// Prepare a version's resources from your own Minecraft install, or from Mojang
     Prepare {
         /// The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App,
         /// ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "download")]
         minecraft: Option<PathBuf>,
+        /// Download Minecraft from Mojang for the signed-in account that owns it, instead of
+        /// using an install
+        #[arg(long)]
+        download: bool,
         /// The installed version (default: the selected one)
         #[arg(long)]
         version: Option<String>,
     },
-    /// Start the client
+    /// Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition)
     Play {
         #[arg(long)]
         version: Option<String>,
@@ -590,6 +606,25 @@ enum Cmd {
         /// Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)
         #[arg(long)]
         accept_eula: bool,
+    },
+    /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
+    /// revision they pin, with the launcher's own Rust, as the version the "Native mods" instance
+    /// plays. Not sandboxed: the mods' code runs with your rights
+    NativeBuild {
+        /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
+        /// (default: the native mods installed and turned on in the instance)
+        folder: Option<PathBuf>,
+        /// The instance whose installed native mods to build, and which then plays the build
+        /// (default: the selected one; the game's own home builds into the Native mods instance)
+        #[arg(long)]
+        instance: Option<String>,
+        /// The installed version whose game files the build reuses, and whose commit it builds on
+        /// when no mod pins one (default: the selected one)
+        #[arg(long)]
+        version: Option<String>,
+        /// You read the mods' source and trust it with full access to this computer
+        #[arg(long)]
+        trust_native_code: bool,
     },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
@@ -697,6 +732,12 @@ enum Cmd {
     Mods {
         #[command(subcommand)]
         action: Option<ModsCmd>,
+    },
+    /// The portable Rust toolchain native mods compile with (docs/native-mods.md): the launcher's
+    /// own, in its data folder, never installed on the system
+    Rust {
+        #[command(subcommand)]
+        action: Option<RustCmd>,
     },
     /// Servers hosted with horizon-server (the Servers page): list them, create one, or run any
     /// horizon-server command on one
@@ -968,15 +1009,54 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 );
             }
         }
+        Cmd::NativeBuild {
+            folder,
+            instance,
+            version,
+            trust_native_code,
+        } => {
+            if !trust_native_code {
+                return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
+            }
+            let base = backend::resolve_version(version.as_deref())?;
+            let started = std::time::Instant::now();
+            let target = match &instance {
+                Some(name) => instances::find(name)?,
+                None => instances::selected(),
+            };
+            let (folder, target) = match folder {
+                Some(folder) => (folder, None),
+                None => (
+                    horizon_launcher::native_mods::installed_mods(&target.home)?,
+                    Some(&target),
+                ),
+            };
+            let built = horizon_launcher::native_mods::build(&base, &folder, target, |step| {
+                eprintln!("{}", step.label())
+            })?;
+            println!(
+                "{built} built and selected for its instance ({:.0} s).",
+                started.elapsed().as_secs_f64()
+            );
+        }
         Cmd::Remove { tag } => {
             backend::remove_version(&tag)?;
             println!("Removed {tag}.");
         }
-        Cmd::Prepare { minecraft, version } => {
+        Cmd::Prepare {
+            minecraft,
+            download,
+            version,
+        } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
+            let from = if download {
+                backend::MinecraftFrom::Mojang
+            } else {
+                backend::MinecraftFrom::Install
+            };
             let (preparer, minecraft) =
-                backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
+                backend::preparer(&tag, &minecraft, from, &|line| eprintln!("{line}"))?;
             backend::sounds(&tag, &minecraft, &|line| println!("{line}"));
             match preparer {
                 backend::Preparer::Process(cmd) => attached(cmd)?,
@@ -1246,7 +1326,56 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
+        Cmd::Rust { action } => rust(action.unwrap_or(RustCmd::Status), as_json)?,
         Cmd::Mcp => unreachable!(),
+    }
+    Ok(())
+}
+
+fn rust(action: RustCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::rust_toolchain as rust;
+    match action {
+        RustCmd::Status => {
+            let installed = rust::installed();
+            let version = installed.as_ref().map(|t| t.version()).transpose()?;
+            let linker = rust::linker().err();
+            if as_json {
+                json(serde_json::json!({
+                    "pinned": rust::VERSION,
+                    "host": rust::host().map(|h| h.target),
+                    "installed": installed.as_ref().map(|t| t.dir.display().to_string()),
+                    "version": version,
+                    "linker": linker,
+                }));
+            } else {
+                match (&installed, &version) {
+                    (Some(t), Some(v)) => println!("{v} in {}", t.dir.display()),
+                    _ => println!(
+                        "Rust {} is not installed (`horizon-launcher rust install`).",
+                        rust::VERSION
+                    ),
+                }
+                println!(
+                    "{}",
+                    linker.unwrap_or_else(|| "This computer can link the game.".into())
+                );
+            }
+        }
+        RustCmd::Install => {
+            let shown = std::cell::Cell::new(0);
+            let toolchain = rust::install(|f| {
+                let percent = (f * 100.0) as u32;
+                if percent >= shown.get() + 10 {
+                    shown.set(percent);
+                    eprintln!("{percent}%");
+                }
+            })?;
+            println!("{} in {}", toolchain.version()?, toolchain.dir.display());
+        }
+        RustCmd::Remove => {
+            rust::remove()?;
+            println!("Removed the launcher's Rust toolchain and Cargo home.");
+        }
     }
     Ok(())
 }
@@ -1312,9 +1441,13 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "selected": accounts.player() == account::Player::Offline(n.clone()),
                     })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
+                    "owner": accounts.has_owner(account::store()),
                 }));
             } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
-                println!("No Microsoft account signed in: the game plays offline.");
+                println!(
+                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
+                     Edition: horizon-launcher account sign-in"
+                );
             } else {
                 for a in &accounts.accounts {
                     let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
@@ -1332,6 +1465,9 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     println!(
                         "Playing offline as the game's own name (`account select NAME` to switch)."
                     );
+                }
+                if !accounts.has_owner(account::store()) {
+                    println!("{}.", account::NEEDS_OWNER);
                 }
             }
         }
@@ -1372,7 +1508,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 ),
                 (None, None) => return Err(find(&accounts, &who).unwrap_err()),
             };
-            accounts.play_as(player)?;
+            accounts.play_as(account::store(), player)?;
             accounts.save()?;
             println!("The game plays as {name}.");
         }
@@ -1381,7 +1517,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 Some(n) => account::Player::Offline(n),
                 None => account::Player::GameName,
             };
-            accounts.play_as(player)?;
+            accounts.play_as(account::store(), player)?;
             accounts.save()?;
             match accounts.name_arg() {
                 Some(n) => println!("The game plays offline as {n}."),
@@ -1444,7 +1580,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             }
         }
         AccountCmd::ForgetOffline { name } => {
-            accounts.remove_offline(&name)?;
+            accounts.remove_offline(&name, &horizon_launcher::skins::dir())?;
             accounts.save()?;
             println!("Forgot the offline name {name}.");
         }

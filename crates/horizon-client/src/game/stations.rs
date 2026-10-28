@@ -779,6 +779,7 @@ impl Game<'_> {
             return;
         };
         let pos = s.pos;
+        let enchanted_item = enchanted.clone();
         // Player.onEnchantmentPerformed
         self.give_levels(-(lapis_needed as i32));
         self.level.xp_seed = self.world.random.next_int();
@@ -795,6 +796,7 @@ impl Game<'_> {
         }
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
         self.stats.custom("enchant_item", 1);
+        self.trigger_enchanted_item(&enchanted_item, lapis_needed as i32);
         self.play_at("minecraft:block.enchantment_table.use", pos, 1.0, pitch);
         self.station_changed();
     }
@@ -1768,6 +1770,11 @@ impl Game<'_> {
         };
         let gray = rgba(170, 170, 170, 255);
         let item_info = self.res.items().get(&stack.item);
+        // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
+        // before the components.
+        for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
+            push(&mut lines, text, c);
+        }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
             horizon_client::item_tooltip::instrument_line(stack, &display, &translate)
@@ -2023,15 +2030,19 @@ impl Game<'_> {
             && stack.damage > 0
             && advanced
         {
-            push(
-                &mut lines,
-                format!(
-                    "Durability: {} / {}",
-                    info.max_damage - stack.damage,
-                    info.max_damage
+            // `item.durability`, in the selected language.
+            lines.push((
+                horizon_client::text::Text::translate(
+                    "item.durability",
+                    &[
+                        horizon_client::text::Text::literal(
+                            (info.max_damage - stack.damage).to_string(),
+                        ),
+                        horizon_client::text::Text::literal(info.max_damage.to_string()),
+                    ],
                 ),
                 u32::MAX,
-            );
+            ));
         }
         // ItemStack.addDetailsToTooltipTail: with advanced tooltips the item id
         // and how many components the stack has.
@@ -2048,9 +2059,16 @@ impl Game<'_> {
                 );
             }
         }
-        // ItemStack.OP_NBT_WARNING, for a player with game master permission.
-        if !nested && self.ui.registries.permission >= 2 && block_entity_item::op_warning(stack) {
-            for (key, fallback) in [
+        // ItemStack.OP_NBT_WARNING: `BlockItem` and `SpawnEggItem`
+        // `.shouldPrintOpWarning` for a player with game master permission;
+        // a nested projectile has no player. The first line is bold.
+        if !nested
+            && self.ui.registries.permission >= 2
+            && (item_info.is_some_and(|i| i.block.is_some())
+                && block_entity_item::op_warning(stack)
+                || block_entity_item::spawn_egg_op_warning(stack))
+        {
+            for (i, (key, fallback)) in [
                 ("item.op_warning.line1", "Warning:"),
                 (
                     "item.op_warning.line2",
@@ -2060,12 +2078,15 @@ impl Game<'_> {
                     "item.op_warning.line3",
                     "Do not use unless you know the exact contents!",
                 ),
-            ] {
-                push(
-                    &mut lines,
-                    self.translate(key, fallback),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let text = horizon_client::text::Text::legacy(&self.translate(key, fallback));
+                lines.push((
+                    if i == 0 { text.bold() } else { text },
                     rgba(255, 85, 85, 255),
-                );
+                ));
             }
         }
         lines

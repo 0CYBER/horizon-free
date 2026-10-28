@@ -588,24 +588,43 @@ impl Mob {
         if p.creative || p.allies.contains(&self.id) {
             return false;
         }
-        self.player_in_range(w, range, check_sight)
+        self.player_in_range(w, range, check_sight, true)
+    }
+    /// forCombat().ignoreInvisibilityTesting() for the player: the check for
+    /// a target the mob already has, which ignores the visibility scaling.
+    pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
+        let Some(p) = &w.player else { return false };
+        if p.creative || p.allies.contains(&self.id) {
+            return false;
+        }
+        self.player_in_range(w, range, true, false)
     }
     /// TargetingConditions.forNonCombat().range(range).test for the player
     /// (seen by anyone, within range scaled by visibility, in sight).
     pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
-        self.player_in_range(w, range, true)
+        self.player_in_range(w, range, true, true)
     }
-    fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+    /// `TargetingConditions.forNonCombat().range(range).ignoreLineOfSight()`
+    /// for the player (still scaled by visibility).
+    pub fn can_see_player_through_walls(&mut self, w: &MobWorld, range: f64) -> bool {
+        self.player_in_range(w, range, false, true)
+    }
+    /// `scale` is `TargetingConditions.testInvisible`: scale the range by
+    /// the player's visibility.
+    fn player_in_range(
+        &mut self,
+        w: &MobWorld,
+        range: f64,
+        check_sight: bool,
+        scale: bool,
+    ) -> bool {
         let Some(p) = &w.player else { return false };
         if !p.alive || p.spectator {
             return false;
         }
         // LivingEntity.getVisibilityPercent
-        let mut visibility = 1.0;
-        if p.sneaking {
-            visibility *= 0.8;
-        }
-        if let Some(head) = &p.head {
+        let mut visibility = if scale { p.visibility_percent() } else { 1.0 };
+        if let Some(head) = p.head.as_ref().filter(|_| scale) {
             let skull = match self.species() {
                 Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {
                     "minecraft:zombie_head"
@@ -654,14 +673,26 @@ impl Goal for Float {
 #[derive(Clone, Debug)]
 pub struct Panic {
     pub speed: f64,
+    /// Only the damage of `#panic_environmental_causes` (an armadillo).
+    pub environmental: bool,
+    /// `TurtlePanicGoal`: always look for water this far away, not only
+    /// when on fire.
+    pub water_range: Option<i32>,
     pos: [f64; 3],
 }
 impl Panic {
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
+            environmental: false,
+            water_range: None,
             pos: [0.0; 3],
         }
+    }
+    /// `TurtlePanicGoal`.
+    pub fn looking_for_water(mut self, range: i32) -> Self {
+        self.water_range = Some(range);
+        self
     }
 }
 pub fn should_panic(m: &Mob) -> bool {
@@ -675,21 +706,29 @@ impl Goal for Panic {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !should_panic(m) {
+        let wanted = if self.environmental {
+            m.last_damage.is_some_and(|(d, t)| {
+                super::armadillo::environmental(d.kind) && i64::from(m.age) - t <= 40
+            }) || m.fire_ticks > 0 && !m.kind.flags.fire_immune
+        } else {
+            should_panic(m)
+        };
+        if !wanted {
             return false;
         }
-        if m.fire_ticks > 0 {
+        let range = self.water_range.or((m.fire_ticks > 0).then_some(5));
+        if let Some(range) = range {
             let (bx, by, bz) = (
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             );
             if cx.w.data.state(cx.w.world.block(bx, by, bz)).top == 0.0 {
-                // findBlocksInBoxByManhattanDistance(pos, 5, 1) for water.
+                // findBlocksInBoxByManhattanDistance(pos, range, 1) for water.
                 let mut best: Option<([i32; 3], i32)> = None;
                 for dy in -1i32..=1 {
-                    for dx in -5i32..=5 {
-                        for dz in -5i32..=5 {
+                    for dx in -range..=range {
+                        for dz in -range..=range {
                             let d = dx.abs() + dy.abs() + dz.abs();
                             if cx.w.fluid(bx + dx, by + dy, bz + dz) == crate::blocks::Fluid::Water
                                 && best.is_none_or(|b| d < b.1)
@@ -1442,6 +1481,9 @@ pub struct HurtByTarget {
     /// `Bee.BeeHurtByOtherGoal`: kept only while angry, and alerting others
     /// only when the attacker is in sight.
     pub bee: bool,
+    /// Whom `alertOther` calls: a filter on the mob (`PandaHurtByTargetGoal`
+    /// calls aggressive pandas only).
+    pub alert_if: Option<fn(&Seen) -> bool>,
     /// `PolarBear.PolarBearHurtByTargetGoal`: a hurt cub only calls the
     /// adult bears and drops the target itself.
     pub polar_bear: bool,
@@ -1455,6 +1497,7 @@ impl HurtByTarget {
             alert_except: vec![],
             ignore: vec![],
             bee: false,
+            alert_if: None,
             polar_bear: false,
             timestamp: 0,
             st: TargetState {
@@ -1473,6 +1516,10 @@ impl HurtByTarget {
     }
     pub fn bee(mut self) -> Self {
         self.bee = true;
+        self
+    }
+    pub fn alert_if(mut self, f: fn(&Seen) -> bool) -> Self {
+        self.alert_if = Some(f);
         self
     }
     pub fn polar_bear(mut self) -> Self {
@@ -1552,6 +1599,7 @@ impl Goal for HurtByTarget {
                             && (s.position.z - pos.z).abs() <= range + 1.0
                     })
                     .filter(|s| !self.alert_except.contains(&s.species))
+                    .filter(|s| self.alert_if.is_none_or(|f| f(s)))
                     // PolarBearHurtByTargetGoal.alertOther: adults only.
                     .filter(|s| !(self.polar_bear && s.baby))
                     .filter(|s| Who::Mob(s.id) != by)
@@ -1591,6 +1639,10 @@ pub struct AvoidEntity {
     pub sprint: f64,
     /// Extra condition on the avoider (e.g. untamed cats only).
     pub when: Option<fn(&Mob) -> bool>,
+    /// Extra condition on the player or mob avoided (`AvoidEntityGoal`'s
+    /// predicate: a sneaking player, a tame wolf).
+    pub player_when: Option<fn(&super::PlayerView) -> bool>,
+    pub seen_when: Option<fn(&Seen) -> bool>,
     from: Vec3,
     /// The mob being avoided (`toAvoid`), when it is one.
     pub found: Option<u32>,
@@ -1603,12 +1655,22 @@ impl AvoidEntity {
             walk,
             sprint,
             when: None,
+            player_when: None,
+            seen_when: None,
             from: Vec3::ZERO,
             found: None,
         }
     }
     pub fn when(mut self, f: fn(&Mob) -> bool) -> Self {
         self.when = Some(f);
+        self
+    }
+    pub fn player_when(mut self, f: fn(&super::PlayerView) -> bool) -> Self {
+        self.player_when = Some(f);
+        self
+    }
+    pub fn seen_when(mut self, f: fn(&Seen) -> bool) -> Self {
+        self.seen_when = Some(f);
         self
     }
 }
@@ -1631,6 +1693,7 @@ impl Goal for AvoidEntity {
                     .filter(|p| {
                         p.alive
                             && !p.creative
+                            && self.player_when.is_none_or(|f| f(p))
                             && m.distance_sqr(p.position) <= max * max
                             && (p.position.y - m.position.y).abs() <= max + 3.0
                     })
@@ -1639,10 +1702,12 @@ impl Goal for AvoidEntity {
             Avoid::Species(list) => {
                 let id = m.id;
                 let y = m.position.y;
+                let seen_when = self.seen_when;
                 let hit =
                     cx.w.nearby(m.position, max, move |s| {
                         s.id != id
                             && list.contains(&s.species)
+                            && seen_when.is_none_or(|f| f(s))
                             && (s.position.y - y).abs() <= 3.0 + max
                     })
                     .map(|s| (s.id, s.position))
@@ -2021,6 +2086,30 @@ impl Goal for RestrictSun {
         m.ai.nav.avoid_sun = false;
     }
 }
+/// `FleeSunGoal.getHidePos`: a spot within 10 blocks that the sky does not
+/// see and the mob likes.
+pub fn hide_pos(m: &mut Mob, w: &MobWorld) -> Option<[f64; 3]> {
+    let (bx, by, bz) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    for _ in 0..10 {
+        let p = [
+            bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
+            by + m.random.next_int_bound(6).unwrap_or(0) - 3,
+            bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
+        ];
+        if !w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(w, p) < 0.0 {
+            return Some([
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]);
+        }
+    }
+    None
+}
 /// FleeSunGoal: find shade while burning.
 #[derive(Clone, Debug)]
 pub struct FleeSun {
@@ -2052,22 +2141,13 @@ impl Goal for FleeSun {
         if !cx.w.can_see_sky(bx, by, bz) {
             return false;
         }
-        for _ in 0..10 {
-            let p = [
-                bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
-                by + m.random.next_int_bound(6).unwrap_or(0) - 3,
-                bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
-            ];
-            if !cx.w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(cx.w, p) < 0.0 {
-                self.wanted = [
-                    f64::from(p[0]) + 0.5,
-                    f64::from(p[1]),
-                    f64::from(p[2]) + 0.5,
-                ];
-                return true;
+        match hide_pos(m, cx.w) {
+            Some(at) => {
+                self.wanted = at;
+                true
             }
+            None => false,
         }
-        false
     }
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()

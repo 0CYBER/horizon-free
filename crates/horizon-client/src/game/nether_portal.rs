@@ -30,7 +30,7 @@ use std::collections::HashMap;
 /// `Player.getDimensionChangingDelay`.
 pub(super) const PLAYER_DELAY: i32 = 10;
 /// `Entity.getDimensionChangingDelay`.
-pub(super) const ENTITY_DELAY: i32 = 300;
+const ENTITY_DELAY: i32 = 300;
 
 /// Where in its portal a traveller stood, and where its exit is to be found.
 #[derive(Clone, Copy, Debug)]
@@ -297,7 +297,8 @@ impl Game<'_> {
         let p = plan.approximate;
         let centre = Vec3::new(f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5);
         if plan.dim == Dim::End {
-            if let Err(e) = self.end_arrival(centre) {
+            // In the End the arrival only builds the platform: no spawn search.
+            if let Err(e) = self.end_arrival(centre, &mut None) {
                 log::error!("End platform: {e}");
             }
             return centre;
@@ -653,16 +654,22 @@ impl Game<'_> {
         if let Some(Tag::Int(cooldown)) = tag.get("PortalCooldown")
             && *cooldown > 0
         {
-            self.set_portal_cooldown(id, *cooldown);
+            self.portals.entities.insert(
+                id,
+                PortalState {
+                    cooldown: *cooldown,
+                    process: None,
+                },
+            );
         }
     }
-    /// `Entity.setPortalCooldown`: the entity that came through a portal
-    /// does not go back through it for a while.
-    pub(super) fn set_portal_cooldown(&mut self, id: u32, cooldown: i32) {
+    /// `Entity.setPortalCooldown` on an entity that has just spawned in a
+    /// portal: it stands in the portal for 300 ticks without going through.
+    pub(super) fn set_portal_cooldown(&mut self, id: u32) {
         self.portals.entities.insert(
             id,
             PortalState {
-                cooldown,
+                cooldown: ENTITY_DELAY,
                 process: None,
             },
         );

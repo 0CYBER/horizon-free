@@ -1,6 +1,7 @@
 //! Sign block entities (`SignBlockEntity`, `SignText`): two four-line text
 //! sides with a dye colour and glow, saved in vanilla's `front_text` /
 //! `back_text` NBT layout.
+pub use crate::chunk::block_entity::{SignData, SignText};
 use horizon_world::nbt::Tag;
 
 /// `DyeColor` names and `getTextColor` values by id.
@@ -24,14 +25,6 @@ pub const DYE_TEXT: [(&str, u32); 16] = [
 ];
 const BLACK: u8 = 15;
 
-/// One sign side (`SignText`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SignText {
-    pub lines: [String; 4],
-    /// `DyeColor` id.
-    pub color: u8,
-    pub glowing: bool,
-}
 impl Default for SignText {
     fn default() -> Self {
         Self {
@@ -61,14 +54,6 @@ impl SignText {
     }
 }
 
-/// `SignBlockEntity` / `HangingSignBlockEntity` data.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SignData {
-    pub hanging: bool,
-    pub front: SignText,
-    pub back: SignText,
-    pub waxed: bool,
-}
 impl SignData {
     pub fn id(&self) -> &'static str {
         if self.hanging {
@@ -147,10 +132,10 @@ fn component_text(tag: &Tag) -> String {
                 _ => s,
             }
         }
-        Tag::Compound(_) => match tag.get("text") {
-            Some(Tag::String(t)) => t.to_string_lossy(),
-            _ => String::new(),
-        },
+        // Component.getString: translations and key binds resolved.
+        Tag::Compound(_) => {
+            crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(tag)).plain()
+        }
         _ => String::new(),
     }
 }

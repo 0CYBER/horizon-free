@@ -66,6 +66,8 @@ pub(super) struct Parked {
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     pub(super) mobs: Vec<Mob>,
+    /// The entity ids of the level's fence knots (`knot_ids`).
+    knot_ids: HashMap<[i32; 3], u32>,
     projectiles: Vec<horizon_client::projectiles::Projectile>,
     dropped: Vec<ItemEntity>,
     orbs: Vec<ExperienceOrb>,
@@ -176,6 +178,7 @@ impl Game<'_> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             mobs: Vec::new(),
+            knot_ids: HashMap::new(),
             projectiles: Vec::new(),
             dropped: Vec::new(),
             orbs: Vec::new(),
@@ -229,6 +232,7 @@ impl Game<'_> {
         swap(&mut self.tnts, &mut p.tnts);
         swap(&mut self.hoppers, &mut p.hoppers);
         swap(&mut self.mobs, &mut p.mobs);
+        swap(&mut self.knot_ids, &mut p.knot_ids);
         swap(&mut self.creatures.projectiles, &mut p.projectiles);
         swap(&mut self.dropped, &mut p.dropped);
         swap(&mut self.orbs, &mut p.orbs);
@@ -427,9 +431,9 @@ impl Game<'_> {
         }
         *next += self.clock.tick_duration();
         if *next > now {
-            // A `/pregen` task or force-loaded chunks keep the workers fed
-            // until the next tick.
-            self.pump_pregen(*next);
+            // The chunks loading (the players', force-loaded ones, a
+            // `/pregen` task) keep the workers fed until the next tick.
+            self.pump_chunks(*next, paused);
             let now = Instant::now();
             if *next > now {
                 std::thread::sleep(*next - now);

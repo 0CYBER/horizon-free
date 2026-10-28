@@ -36,17 +36,18 @@ MCP: `remove`, needs `confirm: true`.
 
 ## `horizon-launcher prepare`
 
-Prepare a version's resources from your own Minecraft install.
+Prepare a version's resources from your own Minecraft install, or from Mojang.
 
     horizon-launcher prepare
 
 - `--minecraft`: The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
+- `--download`: Download Minecraft from Mojang for the signed-in account that owns it, instead of using an install
 
 MCP: `prepare`.
 
 ## `horizon-launcher play`
 
-Start the client.
+Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition).
 
     horizon-launcher play
 
@@ -69,6 +70,18 @@ Run a dedicated server here; type commands into its console.
 - `--accept-eula`: Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)
 
 MCP: `server`, `server_command`, `server_log`, `server_stop`.
+
+## `horizon-launcher native-build`
+
+Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon revision they pin, with the launcher's own Rust, as the version the "Native mods" instance plays. Not sandboxed: the mods' code runs with your rights.
+
+    horizon-launcher native-build [FOLDER]
+
+- `FOLDER`: A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them (default: the native mods installed and turned on in the instance)
+- `--instance`: The instance whose installed native mods to build, and which then plays the build (default: the selected one; the game's own home builds into the Native mods instance)
+- `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+
+MCP: none: the player's switch.
 
 ## `horizon-launcher notes`
 
@@ -98,7 +111,7 @@ MCP: `account_list`.
 
 ## `horizon-launcher account sign-in`
 
-Sign in with a Microsoft account in your browser (device code).
+Sign in with a Microsoft account in your browser (device code). Play needs one that owns Minecraft: Java Edition.
 
     horizon-launcher account sign-in
 
@@ -126,7 +139,7 @@ MCP: `account_select`.
 
 ## `horizon-launcher account offline`
 
-Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
+Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
 
     horizon-launcher account offline [NAME]
 
@@ -136,7 +149,7 @@ MCP: `account_offline`.
 
 ## `horizon-launcher account forget-offline`
 
-Forget one of your offline names.
+Forget one of your offline names; its skin and cape go with it.
 
     horizon-launcher account forget-offline <NAME>
 
@@ -761,6 +774,30 @@ Turn off a mod the browser installed; it stays installed.
 - `--instance`: The instance (default: the selected one)
 
 MCP: `mods_disable`.
+
+## `horizon-launcher rust status`
+
+Whether it is installed, its version and whether this computer can link with it.
+
+    horizon-launcher rust status
+
+MCP: `rust_status`.
+
+## `horizon-launcher rust install`
+
+Download the pinned toolchain from static.rust-lang.org (once), checked by SHA-256.
+
+    horizon-launcher rust install
+
+MCP: `rust_install`.
+
+## `horizon-launcher rust remove`
+
+Delete the toolchain and the native builds' Cargo home.
+
+    horizon-launcher rust remove
+
+MCP: `rust_remove`.
 
 ## `horizon-launcher servers list`
 

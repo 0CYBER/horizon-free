@@ -1,8 +1,10 @@
 //! `CommandBlockEntity` with its `BaseCommandBlock`: the command, the success
 //! count comparators read, the output it keeps, and the powered, automatic
 //! and condition flags `CommandBlock.tick` runs on.
-use crate::{
-    save::{number, text},
+pub use crate::chunk::block_entity::CommandBlock;
+use horizon_client_core::{
+    nbt_value::{number, text},
+    scoreboard,
     text::Text,
 };
 use horizon_world::nbt::Tag;
@@ -76,22 +78,6 @@ pub fn automatic_block(name: &str) -> bool {
     name == "minecraft:chain_command_block"
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommandBlock {
-    pub command: String,
-    pub success_count: i32,
-    /// `CustomName` as saved (a text component).
-    pub custom_name: Option<Tag>,
-    pub track_output: bool,
-    pub last_output: Option<Text>,
-    pub update_last_execution: bool,
-    /// The game time of the last run, -1 for none.
-    pub last_execution: i64,
-    pub powered: bool,
-    pub auto: bool,
-    pub condition_met: bool,
-}
-
 impl Default for CommandBlock {
     fn default() -> Self {
         Self {
@@ -123,7 +109,7 @@ impl CommandBlock {
             last_output: track_output
                 .then(|| tag.get("LastOutput"))
                 .flatten()
-                .map(|t| crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t))),
+                .map(|t| scoreboard::comp_text(&scoreboard::tag_to_json(t))),
             update_last_execution,
             last_execution: if update_last_execution {
                 number(tag.get("LastExecution")).unwrap_or(-1)
@@ -179,7 +165,7 @@ impl CommandBlock {
     pub fn name(&self) -> Text {
         self.custom_name.as_ref().map_or_else(
             || Text::literal("@"),
-            |t| crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
+            |t| scoreboard::comp_text(&scoreboard::tag_to_json(t)),
         )
     }
 }

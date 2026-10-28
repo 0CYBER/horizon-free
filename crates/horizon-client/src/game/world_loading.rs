@@ -93,7 +93,12 @@ impl WorldRequest {
             level.hardcore = o.hardcore;
             level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
             level.allow_commands = Some(o.commands(creative));
-            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+            horizon_client::save::write_world_gen_settings_with(
+                &save_root,
+                level.seed,
+                o.world_gen(),
+                o.flat_settings(),
+            )?;
             // WorldCreationUiState.getGameRules, written with the level.
             level.game_rules = o.rules.by_name();
         }
@@ -241,10 +246,14 @@ pub(super) fn preload_world_data(
                 .spawn(move || {
                     horizon_threads::behind_server();
                     // Errors are left for the world opening to report.
-                    let _ = horizon_client::vanillagen::shared_data(
+                    if let Ok(data) = horizon_client::vanillagen::shared_data(
                         &resources.join("worldgen"),
                         registry,
-                    );
+                    ) {
+                        // The Overworld's feature decoration, which every
+                        // seed shares: about 140 ms off opening the world.
+                        let _ = data.prepare_decoration("minecraft:normal", "minecraft:overworld");
+                    }
                     let _ = horizon_client::structure_blocks::loot_data(&resources);
                     let _ = super::lan::sync_data(&resources);
                 });

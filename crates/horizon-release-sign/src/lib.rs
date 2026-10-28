@@ -114,8 +114,20 @@ pub fn verify(
     parse_sums(text)
 }
 
+/// The channel nightly builds are signed for (nightly-build.yml): their message is
+/// `horizon release nightly`, which no release's tag is, so a nightly's signature never passes for a
+/// release's, nor a release's for a nightly's.
+pub const NIGHTLY: &str = "nightly";
+
+/// Whether `tag` is a nightly's: `nightly`, or a past one kept as `nightly-<date>`.
+pub fn is_nightly(tag: &str) -> bool {
+    tag == NIGHTLY || tag.starts_with("nightly-")
+}
+
 /// The signed SHA-256 of `asset` in release `tag`, or why the download must be refused.
 /// `sums` and `signature` are the release's SHA256SUMS and SHA256SUMS.sig, None when it has none.
+/// A nightly is never a release: its tags are refused here, whatever their signature
+/// ([`nightly_digest`] checks those).
 pub fn signed_digest(
     tag: &str,
     asset: &str,
@@ -123,17 +135,46 @@ pub fn signed_digest(
     signature: Option<&str>,
     keys: &[PublicKey],
 ) -> Result<String, String> {
+    if is_nightly(tag) {
+        return Err(format!(
+            "{tag} is a Nightly build: only a launcher with Nightly turned on installs it."
+        ));
+    }
+    digest_in(tag, tag, asset, sums, signature, keys)
+}
+
+/// The signed SHA-256 of `asset` in the nightly build: its checksums must be signed for the
+/// [`NIGHTLY`] channel, so a release's signed list (or one replayed from a release) is refused.
+pub fn nightly_digest(
+    asset: &str,
+    sums: Option<&[u8]>,
+    signature: Option<&str>,
+    keys: &[PublicKey],
+) -> Result<String, String> {
+    digest_in(NIGHTLY, "The Nightly build", asset, sums, signature, keys)
+}
+
+/// `asset`'s SHA-256 in `sums`, once one of `keys` is found to have signed them for `signed_for`;
+/// `name` says which build in messages.
+fn digest_in(
+    signed_for: &str,
+    name: &str,
+    asset: &str,
+    sums: Option<&[u8]>,
+    signature: Option<&str>,
+    keys: &[PublicKey],
+) -> Result<String, String> {
     let (Some(sums), Some(signature)) = (sums, signature) else {
         return Err(format!(
-            "{tag} is not signed, and Horizon installs only signed releases: pick a newer version."
+            "{name} is not signed, and Horizon installs only signed releases: pick a newer version."
         ));
     };
-    verify(tag, sums, signature, keys)?
+    verify(signed_for, sums, signature, keys)?
         .into_iter()
-        .find(|(name, _)| name == asset)
+        .find(|(n, _)| n == asset)
         .map(|(_, hex)| hex)
         .ok_or_else(|| {
-            format!("{asset} is not in {tag}'s signed checksums, so it was not installed.")
+            format!("{asset} is not in {name}'s signed checksums, so it was not installed.")
         })
 }
 
@@ -318,6 +359,34 @@ mod tests {
         assert_eq!(digest, Ok(sha256_hex(b"windows")));
         assert!(check("x", &sha256_hex(b"windows"), &sha256_hex(b"windows")).is_ok());
         assert!(check("x", &sha256_hex(b"windows"), &sha256_hex(b"linux")).is_err());
+    }
+
+    /// The release channel refuses everything signed for the nightly channel, and the other way
+    /// round: one key signs both, and only the message's channel keeps them apart.
+    #[test]
+    fn nightly_and_release_signatures_never_pass_for_each_other() {
+        let (nightly, sums, signature) = signed(NIGHTLY);
+        let keys = [nightly.public()];
+        let asset = "horizon-windows-x64.zip";
+        let digest = nightly_digest(asset, Some(sums.as_bytes()), Some(&signature), &keys);
+        assert_eq!(digest, Ok(sha256_hex(b"windows")));
+        // Served under a release's tag: the message names the nightly channel, not v0.2.81.
+        for tag in ["v0.2.81", "v2026.10.28", "0.2.81"] {
+            let as_release =
+                signed_digest(tag, asset, Some(sums.as_bytes()), Some(&signature), &keys);
+            assert!(as_release.is_err(), "{tag} took a nightly's signature");
+        }
+        // Asked for by a nightly tag on the release channel: refused before any signature is read.
+        for tag in [NIGHTLY, "nightly-2026-10-27"] {
+            let err = signed_digest(tag, asset, Some(sums.as_bytes()), Some(&signature), &keys);
+            assert!(err.unwrap_err().contains("Nightly build"), "{tag}");
+        }
+        // A release's signed list replayed as tonight's nightly.
+        let (release, sums, signature) = signed("v0.2.81");
+        let keys = [release.public()];
+        assert!(nightly_digest(asset, Some(sums.as_bytes()), Some(&signature), &keys).is_err());
+        assert!(nightly_digest(asset, Some(sums.as_bytes()), None, &keys).is_err());
+        assert!(is_nightly("nightly-2026-10-27") && !is_nightly("v0.2.81"));
     }
 
     #[test]

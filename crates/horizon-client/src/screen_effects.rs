@@ -69,6 +69,12 @@ pub struct ScreenEffects {
     pub vignette_brightness: f32,
     pub portal: f32,
     pub o_portal: f32,
+    /// Nausea's `MobEffectInstance.BlendState` factor and the previous tick's.
+    pub nausea: f32,
+    pub o_nausea: f32,
+    /// `LocalPlayer.spinningEffectTime` and `spinningEffectSpeed` (degrees).
+    pub spinning_time: f32,
+    pub spinning_speed: f32,
 }
 impl Default for ScreenEffects {
     fn default() -> Self {
@@ -76,6 +82,10 @@ impl Default for ScreenEffects {
             vignette_brightness: 1.0,
             portal: 0.0,
             o_portal: 0.0,
+            nausea: 0.0,
+            o_nausea: 0.0,
+            spinning_time: 0.0,
+            spinning_speed: 0.0,
         }
     }
 }
@@ -104,6 +114,28 @@ impl ScreenEffects {
             0.0
         };
         self.portal = (self.portal + step).clamp(0.0, 1.0);
+    }
+    /// `LocalPlayer.tickSpinningEffect` and Nausea's blend. `nausea` is `None`
+    /// without the effect, else whether it is past its blend-out point
+    /// (`!endsWithin(60)`, `MobEffects.NAUSEA`).
+    pub fn tick_spinning(&mut self, nausea: Option<bool>) {
+        self.o_nausea = self.nausea;
+        match nausea {
+            // BlendState.tick: fades in over 150 ticks and out over 20.
+            Some(active) => {
+                let (target, duration) = if active { (1.0, 150.0) } else { (0.0, 20.0) };
+                self.nausea += (target - self.nausea).clamp(-1.0 / duration, 1.0 / duration);
+            }
+            // The blend state belongs to the instance, so a new one starts at 0.
+            None => self.nausea = 0.0,
+        }
+        if self.portal > 0.0 || self.nausea > 0.0 {
+            self.spinning_speed =
+                (self.portal * 20.0 + self.nausea * 7.0) / (self.portal + self.nausea);
+            self.spinning_time += self.spinning_speed;
+        } else {
+            self.spinning_speed = 0.0;
+        }
     }
     pub fn build(&self, input: &ScreenInputs) -> Vec<ScreenQuad> {
         let mut out = Vec::new();
