@@ -92,9 +92,6 @@ pub(super) struct ModsState {
     /// Capability `recipes`'s tables, made once a mod reads them.
     #[cfg(feature = "mods")]
     pub(super) recipes: Option<std::sync::Arc<horizon_mods::Recipes>>,
-    /// The recipe book's known displays, and the book's version they are of.
-    #[cfg(feature = "mods")]
-    pub(super) known_recipes: (Option<u64>, std::sync::Arc<[i32]>),
     /// Capability `ui`'s item panel beside container screens.
     #[cfg(feature = "mods")]
     pub(super) browser: super::mod_browser::Browser,

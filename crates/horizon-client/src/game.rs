@@ -112,8 +112,6 @@ mod mod_browser;
 #[cfg(feature = "mods")]
 mod mod_browser_recipes;
 mod mod_input;
-#[cfg(feature = "mods")]
-mod mod_recipes;
 mod mod_render;
 mod mods;
 mod mount_menu;
@@ -123,6 +121,7 @@ mod moving_pistons;
 mod music;
 mod names;
 mod native_hooks;
+mod native_recipes;
 mod native_shaders;
 mod natural_spawning;
 mod nautili;
@@ -1822,6 +1821,8 @@ struct Game<'a> {
     extras: extras::ExtrasState,
     /// Horizon mods (`game/mods.rs`), none running unless turned on.
     mods: mods::ModsState,
+    /// Every item and recipe, for mods (`game/native_recipes.rs`), made once.
+    recipe_tables: native_recipes::RecipeTables,
     /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
     native_shaders: native_shaders::NativeShaders,
     /// Meshed sections waiting for an upload budget (Horizon settings).
@@ -14088,6 +14089,7 @@ impl<'a> Game<'a> {
             frame_graph: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            recipe_tables: Default::default(),
             native_shaders: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
