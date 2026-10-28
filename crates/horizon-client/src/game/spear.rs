@@ -247,6 +247,8 @@ impl Game<'_> {
             self.mobs[index].knockback(0.4, xd, zd);
             let (strength, _) = self.extra_knockback(&kind, 0.0);
             self.mobs[index].knockback(f64::from(strength), xd, zd);
+            // ...and the attacker stops sprinting.
+            self.stop_sprint_after_extra_knockback();
         }
         let dismounted = dismounts && self.mobs[index].extra.mount.is_some();
         if dismounted {
