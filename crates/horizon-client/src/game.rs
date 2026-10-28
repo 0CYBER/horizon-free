@@ -8390,7 +8390,9 @@ impl Game<'_> {
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, m) in self.mobs.iter().enumerate() {
-            if !m.alive() {
+            // ProjectileUtil.getEntityHitResult: the mob the player rides
+            // shares its root vehicle and is never the hit.
+            if !m.alive() || Some(m.id) == self.riding {
                 continue;
             }
             if let Some(t) = ray_box(eye, dir, reach, m.bounds())
