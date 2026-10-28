@@ -335,8 +335,34 @@ Make an instance: empty but for your options and name, or a copy of another one'
 
 - `NAME`
 - `--copy`: The instance to copy (its name or id)
+- `--minecraft`: Make a Minecraft: Java Edition instance of this version (1.21.4, latest or latest-snapshot) instead of a Horizon one
 
 MCP: `instance_create`.
+
+## `horizon-launcher instance versions`
+
+The versions of Minecraft: Java Edition a Java instance can play, the newest first.
+
+    horizon-launcher instance versions
+
+- `--snapshots`: Snapshots too
+- `--old`: Old betas and alphas too
+
+MCP: `instance_versions`.
+
+## `horizon-launcher instance java`
+
+A Java instance's Java: its own Java home or the automatic pick, memory and JVM arguments.
+
+    horizon-launcher instance java <INSTANCE>
+
+- `INSTANCE`
+- `--home`: A Java home to run it on
+- `--auto`: Go back to the Java the version needs, picked or downloaded by the launcher
+- `--memory`: The most memory the game may use, in MiB
+- `--args`: Extra JVM arguments (one string; "" clears them)
+
+MCP: `instance_java`.
 
 ## `horizon-launcher instance rename`
 
@@ -577,6 +603,24 @@ Turn a pack off and move it to the system's trash.
 - `--instance`
 
 MCP: `packs_remove`, needs `confirm: true`.
+
+## `horizon-launcher java list`
+
+The Java runtimes Horizon downloaded from Mojang and the ones installed on this computer.
+
+    horizon-launcher java list
+
+MCP: `java_list`.
+
+## `horizon-launcher java install`
+
+Download Mojang's Java runtime: a major (8, 16, 17, 21, 25) or a component name from a version's JSON (java-runtime-delta).
+
+    horizon-launcher java install <JAVA>
+
+- `JAVA`
+
+MCP: `java_install`.
 
 ## `horizon-launcher screenshots list`
 
