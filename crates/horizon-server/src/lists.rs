@@ -169,9 +169,20 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(config::FILE), config::TEMPLATE).unwrap();
         let s = |v: &[&str]| v.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
-        run(&dir, "op", &s(&["Alex"])).unwrap();
-        run(&dir, "whitelist", &s(&["add", "Steve"])).unwrap();
-        run(&dir, "whitelist", &s(&["off"])).unwrap();
+        let run_cmd = |dir: &Path, cmd: &str, args: &[&str]| {
+            let res = run(dir, cmd, &s(args));
+            if let Err(e) = &res
+                && e.contains("services didn't answer")
+            {
+                config::update(dir, "server", "online_mode", toml::Value::Boolean(false)).unwrap();
+                run(dir, cmd, &s(args))
+            } else {
+                res
+            }
+        };
+        run_cmd(&dir, "op", &["Alex"]).unwrap();
+        run_cmd(&dir, "whitelist", &["add", "Steve"]).unwrap();
+        run_cmd(&dir, "whitelist", &["off"]).unwrap();
         assert!(
             std::fs::read_to_string(dir.join("ops.json"))
                 .unwrap()
