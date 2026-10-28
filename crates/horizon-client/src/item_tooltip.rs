@@ -751,9 +751,53 @@ pub fn lore_texts(stack: &ItemStack) -> Vec<crate::text::Text> {
         .collect()
 }
 
+/// Preserve child colours and explicit styles in the stored hover name.
+/// A custom name inherits italic from `ItemStack.getStyledHoverName`.
+pub fn styled_name(stack: &ItemStack, fallback: impl FnOnce() -> String) -> crate::text::Text {
+    if let Some(component) = stack.data().and_then(|d| d.custom_name.as_ref()) {
+        return crate::entity_nbt::name_text(component).with_style(&crate::text::Style {
+            italic: Some(true),
+            ..Default::default()
+        });
+    }
+    if let Some(component) = stack.data().and_then(|d| d.other("minecraft:item_name")) {
+        return crate::entity_nbt::name_text(component);
+    }
+    crate::text::Text::legacy(&fallback())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn styled_name_keeps_gradient_spans_and_explicit_italic() {
+        let component = Tag::compound([
+            ("text", Tag::String("".into())),
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::compound([
+                        ("text", Tag::String("A".into())),
+                        ("color", Tag::String("#ff0000".into())),
+                        ("italic", Tag::Byte(0)),
+                    ]),
+                    Tag::compound([
+                        ("text", Tag::String("B".into())),
+                        ("color", Tag::String("#0000ff".into())),
+                    ]),
+                ]),
+            ),
+        ]);
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack.data_mut().custom_name = Some(component);
+        let text = styled_name(&stack, || "unused".into());
+        assert_eq!(text.plain(), "AB");
+        assert_eq!(text.spans[0].style.color, Some(0xff0000));
+        assert_eq!(text.spans[1].style.color, Some(0x0000ff));
+        assert!(!text.spans[0].style.is_italic());
+        assert!(text.spans[1].style.is_italic());
+    }
 
     #[test]
     fn lore_keeps_component_colours_under_dark_purple_italic() {
@@ -845,7 +889,7 @@ mod tests {
         assert_eq!(name_line(&banner, &translate), "Ominous Banner");
         assert_eq!(name_line(&banner, &|_| None), "Ominous Banner");
         assert_eq!(rarity(&banner, "common"), "uncommon");
-        banner.data_mut().custom_name = Some("Captain's Standard".into());
+        banner.data_mut().custom_name = Some(Tag::String("Captain's Standard".into()));
         assert_eq!(name_line(&banner, &translate), "Captain's Standard");
         let mut custom_item = ItemStack::new("minecraft:diamond_sword", 1);
         custom_item.data_mut().other.push((
@@ -853,7 +897,7 @@ mod tests {
             Tag::String("Excalibur".into()),
         ));
         assert_eq!(name_line(&custom_item, &translate), "Excalibur");
-        custom_item.data_mut().custom_name = Some("Custom Blade".into());
+        custom_item.data_mut().custom_name = Some(Tag::String("Custom Blade".into()));
         assert_eq!(name_line(&custom_item, &translate), "Custom Blade");
         banner.enchant("minecraft:unbreaking", 1);
         assert_eq!(rarity(&banner, "common"), "rare");

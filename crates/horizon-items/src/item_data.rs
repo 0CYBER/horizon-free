@@ -16,8 +16,9 @@ pub struct StackData {
     pub stored_enchantments: Levels,
     /// `minecraft:repair_cost` (anvil prior-work penalty).
     pub repair_cost: u32,
-    /// `minecraft:custom_name` as plain text.
-    pub custom_name: Option<String>,
+    /// The original `minecraft:custom_name` component; plain text is derived
+    /// when gameplay needs it, so styled names have one source of truth.
+    pub custom_name: Option<Tag>,
     /// `minecraft:potion_contents.potion`.
     pub potion: Option<Arc<str>>,
     /// `minecraft:trim`: (material, pattern).
@@ -102,23 +103,29 @@ const MODELLED: &[&str] = &[
     "minecraft:written_book_content",
 ];
 impl StackData {
-    /// An unmodelled component's saved value.
+    pub fn custom_name_plain(&self) -> Option<String> {
+        self.custom_name.as_ref().and_then(read_text)
+    }
+
+    /// A preserved component's saved value.
     pub fn other(&self, id: &str) -> Option<&Tag> {
+        if id == "minecraft:custom_name" {
+            return self.custom_name.as_ref();
+        }
         self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
     }
-    /// `SetNameFunction.run`: a loot text component stored as `custom_name`
-    /// (plain text, as modelled) or as the unmodelled `item_name`.
+    /// `SetNameFunction.run`: retain a loot name as its original component.
     pub fn set_loot_name(&mut self, id: &str, text: &serde_json::Value) {
         let tag = horizon_client_core::scoreboard::json_to_tag(text);
-        if id == "minecraft:custom_name" {
-            self.custom_name = read_text(&tag);
-        } else {
-            self.set_other(id, Some(tag));
-        }
+        self.set_other(id, Some(tag));
     }
-    /// Set (or with None remove) an unmodelled component.
+    /// Set (or with None remove) a preserved component.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
         self.other.retain(|(k, _)| k != id);
+        if id == "minecraft:custom_name" {
+            self.custom_name = value.filter(|tag| read_text(tag).is_some());
+            return;
+        }
         if let Some(v) = value {
             self.other.push((id.to_owned(), v));
             self.other.sort_by(|a, b| a.0.cmp(&b.0));
@@ -243,8 +250,8 @@ impl ItemStack {
     pub fn repair_cost(&self) -> u32 {
         self.data().map_or(0, |d| d.repair_cost)
     }
-    pub fn custom_name(&self) -> Option<&str> {
-        self.data().and_then(|d| d.custom_name.as_deref())
+    pub fn custom_name(&self) -> Option<String> {
+        self.data()?.custom_name_plain()
     }
     /// `minecraft:item_name` in the current language (`getItemName`'s
     /// component). It stays in the patch as loaded, so a translatable name
@@ -545,7 +552,7 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             entries.push(("minecraft:repair_cost", Tag::Int(d.repair_cost as i32)));
         }
         if let Some(name) = &d.custom_name {
-            entries.push(("minecraft:custom_name", Tag::String(name.as_str().into())));
+            entries.push(("minecraft:custom_name", name.clone()));
         }
         if let Some(potion) = &d.potion {
             entries.push((
@@ -751,7 +758,10 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             .and_then(int)
             .unwrap_or(0)
             .max(0) as u32,
-        custom_name: c.get("minecraft:custom_name").and_then(read_text),
+        custom_name: c
+            .get("minecraft:custom_name")
+            .filter(|tag| read_text(tag).is_some())
+            .cloned(),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
         banner_patterns: crate::banner_layer::layers_from_nbt(c.get("minecraft:banner_patterns")),
@@ -928,7 +938,7 @@ mod tests {
         stack.enchant("minecraft:sharpness", 3);
         stack.enchant("minecraft:unbreaking", 2);
         stack.data_mut().repair_cost = 3;
-        stack.data_mut().custom_name = Some("Blade".into());
+        stack.data_mut().custom_name = Some(Tag::String("Blade".into()));
         let tag = encode_components(&stack).expect("components");
         let (damage, extra) = decode_components(Some(&tag));
         assert_eq!(damage, 12);
@@ -940,7 +950,7 @@ mod tests {
         assert_eq!(back.enchantment_level("minecraft:sharpness"), 3);
         assert_eq!(back.enchantment_level("minecraft:unbreaking"), 2);
         assert_eq!(back.repair_cost(), 3);
-        assert_eq!(back.custom_name(), Some("Blade"));
+        assert_eq!(back.custom_name().as_deref(), Some("Blade"));
     }
 
     #[test]
@@ -974,8 +984,46 @@ mod tests {
         let components = Tag::compound([("minecraft:custom_name", name)]);
         let (_, extra) = decode_components(Some(&components));
         assert_eq!(
-            extra.and_then(|d| d.custom_name.clone()).as_deref(),
+            extra.and_then(|d| d.custom_name_plain()).as_deref(),
             Some("Games Right click")
+        );
+    }
+
+    #[test]
+    fn rich_custom_name_is_the_single_saved_value_after_rename() {
+        let name = Tag::compound([
+            ("text", Tag::String("".into())),
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::compound([
+                        ("text", Tag::String("A".into())),
+                        ("color", Tag::String("#ff0000".into())),
+                    ]),
+                    Tag::compound([
+                        ("text", Tag::String("B".into())),
+                        ("color", Tag::String("#0000ff".into())),
+                    ]),
+                ]),
+            ),
+        ]);
+        let components = Tag::compound([("minecraft:custom_name", name.clone())]);
+        let (_, extra) = decode_components(Some(&components));
+        let mut stack = ItemStack {
+            extra,
+            ..ItemStack::new("minecraft:stick", 1)
+        };
+        assert_eq!(stack.custom_name().as_deref(), Some("AB"));
+        assert_eq!(encode_components(&stack), Some(components));
+        stack
+            .data_mut()
+            .set_other("minecraft:custom_name", Some(Tag::String("Changed".into())));
+        assert_eq!(stack.custom_name().as_deref(), Some("Changed"));
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&Tag::String("Changed".into()))
         );
     }
 

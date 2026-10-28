@@ -1028,6 +1028,7 @@ impl HudBatch {
                 cursor,
                 g,
                 c,
+                style.shadow_color,
                 bold,
                 style.is_italic(),
                 style.underlined == Some(true),
@@ -1039,20 +1040,32 @@ impl HudBatch {
         }
         self.patches.extend(font.take_patches());
         let white = font.white();
-        let passes: &[bool] = if shadow { &[true, false] } else { &[false] };
+        let has_shadow = shadow
+            || glyphs
+                .iter()
+                .any(|glyph| glyph.3.is_some_and(|color| color != 0));
+        let passes: &[bool] = if has_shadow { &[true, false] } else { &[false] };
         for &is_shadow in passes {
-            for &(gx, g, c, bold, italic, underline, strike, first, advance) in &glyphs {
+            for &(gx, g, c, custom_shadow, bold, italic, underline, strike, first, advance) in
+                &glyphs
+            {
+                if is_shadow && (custom_shadow == Some(0) || (!shadow && custom_shadow.is_none())) {
+                    continue;
+                }
                 let (dx, col) = if is_shadow {
                     let b = c.to_le_bytes();
-                    (
-                        g.offset,
+                    let color = if let Some(argb) = custom_shadow {
+                        let alpha = ((argb >> 24) as u8 as u16 * b[3] as u16 / 255) as u8;
+                        rgba((argb >> 16) as u8, (argb >> 8) as u8, argb as u8, alpha)
+                    } else {
                         rgba(
                             (f32::from(b[0]) * 0.25) as u8,
                             (f32::from(b[1]) * 0.25) as u8,
                             (f32::from(b[2]) * 0.25) as u8,
                             b[3],
-                        ),
-                    )
+                        )
+                    };
+                    (g.offset, color)
                 } else {
                     (0.0, c)
                 };
@@ -1820,6 +1833,48 @@ mod tests {
         // No glyph that wide: FontSet's missing glyph.
         let missing = fonts.font.random_glyph(&Default::default(), 30.0);
         assert!(missing.rect.is_none() && missing.right == 5.0);
+    }
+
+    #[test]
+    fn component_shadow_color_overrides_text_call_shadow() {
+        let root = two_glyph_font("component-shadow");
+        let atlas = HudAtlas::build(&root).unwrap();
+        let mut batch = HudBatch::new([320, 240]);
+        let text = crate::text::Text::styled(
+            "a",
+            crate::text::Style {
+                shadow_color: Some(0x8040_2010),
+                ..Default::default()
+            },
+        );
+        batch.text_styled(&atlas, &text, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(batch.vertices.len(), 12);
+        assert_eq!(batch.vertices[0].color, rgba(0x40, 0x20, 0x10, 0x80));
+        batch.vertices.clear();
+        let no_shadow = crate::text::Text::styled(
+            "a",
+            crate::text::Style {
+                shadow_color: Some(0),
+                ..Default::default()
+            },
+        );
+        batch.text_styled(&atlas, &no_shadow, 10.0, 10.0, u32::MAX, true);
+        assert_eq!(batch.vertices.len(), 6);
+        batch.vertices.clear();
+        let gradient = crate::component::to_text(
+            &serde_json::json!({
+                "text": "",
+                "extra": [
+                    {"text": "a", "color": "#ff0000"},
+                    {"text": "b", "color": "#0000ff"}
+                ]
+            }),
+            &mut |_| crate::text::Text::empty(),
+        );
+        batch.text_styled(&atlas, &gradient, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(batch.vertices[0].color, rgba(255, 0, 0, 255));
+        assert_eq!(batch.vertices[6].color, rgba(0, 0, 255, 255));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

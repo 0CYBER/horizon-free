@@ -162,6 +162,7 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
         });
     }
+    style.shadow_color = o.get("shadow_color").and_then(shadow_color);
     let flag = |k: &str| o.get(k).and_then(Value::as_bool);
     style.bold = flag("bold");
     style.italic = flag("italic");
@@ -222,6 +223,26 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
         .and_then(Value::as_str)
         .map(str::to_owned);
     style
+}
+
+/// `Style.shadow_color`: a packed ARGB int or normalized RGBA array.
+pub(crate) fn shadow_color(value: &Value) -> Option<u32> {
+    if let Some(packed) = value.as_i64() {
+        return i32::try_from(packed).ok().map(|n| n as u32);
+    }
+    let rgba = value.as_array()?;
+    if rgba.len() != 4 {
+        return None;
+    }
+    let channels = rgba
+        .iter()
+        .map(|channel| {
+            let value = channel.as_f64()?;
+            (value.is_finite() && (0.0..=1.0).contains(&value))
+                .then_some((value * 255.0).round() as u32)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(channels[3] << 24 | channels[0] << 16 | channels[1] << 8 | channels[2])
 }
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
 /// are resolved by `resolve` (ComponentUtils.updateForEntity).
@@ -317,6 +338,20 @@ pub fn name_text(tag: &Tag) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadow_color_accepts_packed_and_rgba_styles() {
+        let packed = serde_json::json!({"text": "A", "shadow_color": -16711936});
+        let text = to_text(&packed, &mut |_| Text::empty());
+        assert_eq!(text.spans[0].style.shadow_color, Some(0xff00ff00));
+        assert_eq!(text.component()["shadow_color"], -16711936);
+        let rgba = serde_json::json!({"text": "A", "shadow_color": [1, 0, 0.5, 1]});
+        let text = to_text(&rgba, &mut |_| Text::empty());
+        assert_eq!(text.spans[0].style.shadow_color, Some(0xffff0080));
+        let no_shadow = serde_json::json!({"text": "A", "shadow_color": 0});
+        let text = to_text(&no_shadow, &mut |_| Text::empty());
+        assert_eq!(text.spans[0].style.shadow_color, Some(0));
+    }
 
     #[test]
     fn snbt_and_json_components() {

@@ -1755,13 +1755,8 @@ impl Game<'_> {
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
         let mut lines = Vec::new();
         if !nested && display.name_visible(self.screen == Screen::Creative) {
-            // `getStyledHoverName`: a custom name is italic.
-            let name = self.stack_hover_name(stack);
-            let name = if stack.custom_name().is_some() {
-                horizon_client::text::Text::literal(name).italic()
-            } else {
-                horizon_client::text::Text::legacy(&name)
-            };
+            let name =
+                horizon_client::item_tooltip::styled_name(stack, || self.stack_hover_name(stack));
             lines.push((name, color));
         }
         let translate = |k: &str| self.pack.names.display_get(k);
@@ -1788,7 +1783,6 @@ impl Game<'_> {
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map(str::to_owned)
                 .or_else(|| s.item_name())
                 .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
