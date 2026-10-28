@@ -5988,6 +5988,7 @@ impl Game<'_> {
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
         self.draw_pad_cursor(&mut batch);
+        self.resolve_inline_profiles(&batch.inline_profiles);
         batch
     }
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {

@@ -1,6 +1,6 @@
 //! Text components from commands: `ComponentArgument` reads an SNBT (or JSON)
 //! value, `ComponentSerialization` turns it into styled text.
-use crate::text::{Style, Text, named_color};
+use crate::text::{InlineObject, Style, Text, named_color};
 use horizon_world::nbt::Tag;
 use serde_json::{Map, Value};
 
@@ -258,6 +258,10 @@ pub fn to_text_with(
             let style = object_style(o);
             let content = if let Some(t) = contents(o) {
                 t
+            } else if let Some(object) = inline_object(o, resolve, contents) {
+                let mut text = Text::literal("\u{fffc}");
+                text.spans[0].style.inline_object = Some(object);
+                text
             } else if let Some(t) = o.get("text") {
                 match t {
                     Value::String(s) => Text::literal(s.clone()),
@@ -294,9 +298,42 @@ pub fn to_text_with(
             {
                 out.push(to_text_with(extra, resolve, contents).with_style(&style));
             }
-            out
+            if o.contains_key("object") || o.contains_key("player") || o.contains_key("sprite") {
+                out.with_component(Value::Object(o.clone()))
+            } else {
+                out
+            }
         }
         Value::Null => Text::empty(),
+    }
+}
+
+fn inline_object(
+    object: &serde_json::Map<String, Value>,
+    resolve: &mut dyn FnMut(&str) -> Text,
+    contents: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<Text>,
+) -> Option<InlineObject> {
+    let kind = object.get("object").and_then(Value::as_str);
+    let fallback = object
+        .get("fallback")
+        .map(|value| to_text_with(value, resolve, contents).plain())
+        .unwrap_or_default();
+    match kind {
+        Some("player") | None if object.contains_key("player") => Some(InlineObject::Player {
+            profile: object.get("player")?.clone(),
+            hat: object.get("hat").and_then(Value::as_bool).unwrap_or(true),
+            fallback,
+        }),
+        Some("atlas") | None if object.contains_key("sprite") => Some(InlineObject::Atlas {
+            atlas: object
+                .get("atlas")
+                .and_then(Value::as_str)
+                .unwrap_or("minecraft:blocks")
+                .to_owned(),
+            sprite: object.get("sprite")?.as_str()?.to_owned(),
+            fallback,
+        }),
+        _ => None,
     }
 }
 
@@ -312,6 +349,32 @@ pub fn name_text(tag: &Tag) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_object_survives_text_parsing_and_keeps_its_siblings() {
+        let component = serde_json::json!({
+            "text": "<",
+            "extra": [
+                {"object": "player", "player": {"name": "elyapluggin"}, "hat": false,
+                 "fallback": "[head]"},
+                {"text": " >", "color": "gold"}
+            ]
+        });
+        let text = to_text(&component, &mut |_| Text::empty());
+        assert_eq!(text.plain(), "<[head] >");
+        assert!(matches!(
+            &text.spans[1].style.inline_object,
+            Some(InlineObject::Player { hat: false, .. })
+        ));
+        assert!(text.spans[2].style.inline_object.is_none());
+        assert_eq!(text.component(), component);
+        let sprite = serde_json::json!({"object": "atlas", "sprite": "minecraft:item/porkchop"});
+        let text = to_text(&sprite, &mut |_| Text::empty());
+        assert!(matches!(
+            &text.spans[0].style.inline_object,
+            Some(InlineObject::Atlas { sprite, .. }) if sprite == "minecraft:item/porkchop"
+        ));
+    }
 
     #[test]
     fn snbt_and_json_components() {

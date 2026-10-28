@@ -546,6 +546,7 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        self.gui.atlas.object_skins.clear();
         self.server_packs_disconnect();
         self.close_dialogs();
         // Single player's server thread saves the world before the title shows.
@@ -2828,7 +2829,10 @@ impl Game<'_> {
                 let text = |t: &Tag| {
                     let json = horizon_client::scoreboard::tag_to_json(t);
                     let text = horizon_client::scoreboard::comp_text(&json);
-                    (!text.plain().is_empty()).then_some(text)
+                    text.spans
+                        .iter()
+                        .any(|span| !span.text.is_empty())
+                        .then_some(text)
                 };
                 self.tab_list.header = text(&p.header);
                 self.tab_list.footer = text(&p.footer);
@@ -3074,6 +3078,13 @@ impl Game<'_> {
                 .as_ref()
                 .and_then(|r| r.skins.get(&p.uuid).cloned())
                 .unwrap_or_else(|| horizon_client::tab_list::default_skin(p.uuid).to_owned());
+            self.gui
+                .atlas
+                .set_object_skin(format!("id:{:032x}", p.uuid), p.skin.clone());
+            self.gui.atlas.set_object_skin(
+                format!("name:{}", p.name.to_ascii_lowercase()),
+                p.skin.clone(),
+            );
         }
         let r = self.remote.as_ref()?;
         let upside_down = players
@@ -3085,6 +3096,32 @@ impl Game<'_> {
             .map(|p| p.uuid)
             .collect();
         Some((players, r.online_mode, upside_down))
+    }
+
+    /// Resolve inline `object:player` profiles through the same skin cache as
+    /// player heads on items. The next frame uses the uploaded atlas texture.
+    pub(super) fn resolve_inline_profiles(&mut self, profiles: &[serde_json::Value]) {
+        use horizon_client::skins;
+        for profile in profiles {
+            let skin = skins::head_skin(
+                profile,
+                &mut self.skin_profiles.borrow_mut(),
+                &mut self.skin_downloads.borrow_mut(),
+                |location| self.gui.atlas.sprites.contains_key(location),
+            );
+            let id = skins::parse_profile(profile).id;
+            self.gui
+                .atlas
+                .set_object_skin(format!("id:{id:032x}"), skin.clone());
+            let name = profile
+                .as_str()
+                .or_else(|| profile.get("name").and_then(serde_json::Value::as_str));
+            if let Some(name) = name {
+                self.gui
+                    .atlas
+                    .set_object_skin(format!("name:{}", name.to_ascii_lowercase()), skin);
+            }
+        }
     }
     /// The signed-in account's `textures`, once the services answered.
     fn own_textures(&self) -> Option<horizon_client::skins::Textures> {
