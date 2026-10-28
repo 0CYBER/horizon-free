@@ -218,6 +218,8 @@ impl RenderAssets {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
         sprites.finish();
+        // `finish` grows the buffer by doubling: keep only the bytes in use.
+        sprites.pixels.shrink_to_fit();
         Ok(Self {
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,

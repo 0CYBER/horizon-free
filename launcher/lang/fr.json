@@ -167,5 +167,14 @@
   "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "Connectez-vous avec un compte Microsoft qui possède Minecraft: Java Edition pour jouer",
   "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "Horizon a besoin d'un compte Microsoft qui possède Minecraft: Java Edition, comme les autres launchers. Il permet aussi de jouer sur les serveurs en ligne avec votre nom et votre skin.",
   "Sign in": "Se connecter",
-  "Sign in with Microsoft": "Se connecter avec Microsoft"
+  "Sign in with Microsoft": "Se connecter avec Microsoft",
+  "Not now": "Pas maintenant",
+  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "Horizon a besoin d'un compte Microsoft qui possède Minecraft: Java Edition, comme les autres launchers.",
+  "Your worlds, offline names and settings stay where they are.": "Vos mondes, vos noms hors ligne et vos réglages restent où ils sont.",
+  "Open {link} in your browser and enter this code:": "Ouvrez {link} dans votre navigateur et entrez ce code :",
+  "From my install": "Depuis mon installation",
+  "Download and prepare": "Télécharger et préparer",
+  "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.": "Pas préparé. Horizon peut télécharger Minecraft {version} depuis Mojang pour votre compte, ou utiliser votre propre installation.",
+  "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.": "Pas préparé. Connectez-vous d'abord avec le compte Microsoft qui possède Minecraft {version}.",
+  "Cancel": "Annuler"
 }

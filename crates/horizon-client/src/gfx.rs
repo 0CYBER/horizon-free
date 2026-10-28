@@ -105,12 +105,9 @@ const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
 /// targets (phase 2 draws over phase 1, reading the test's results).
-/// LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
+/// `LevelRenderer.addSkyPass`: fluids and camera effects block the sky pass.
 fn sky_open(frame: &Frame) -> bool {
-    match frame.fog {
-        Some(f) => f.sky_end > 2.0,
-        None => !frame.underwater,
-    }
+    !frame.sky_blocked
 }
 
 /// The Overworld-style sky (disc, sunset, stars, void) draws this frame.
@@ -222,6 +219,9 @@ pub struct Frame<'a> {
     /// The `GameRenderer.bobHurt`/`bobView` pose multiplied into the
     /// projection (`crate::camera::bob_matrix`).
     pub bob: Mat4,
+    /// The spinning effect multiplied into the level's projection only
+    /// (`crate::camera::spinning_effect_matrix`), not the hand's.
+    pub spin: Mat4,
     pub sky: Sky,
     /// Render distance in blocks (fog end).
     pub distance: f32,
@@ -235,6 +235,8 @@ pub struct Frame<'a> {
     pub cave_culling: bool,
     /// Title screen: only the dedicated panorama cube map and the HUD.
     pub title: bool,
+    /// Lava, powder snow, blindness or darkness blocks the sky pass.
+    pub sky_blocked: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
     /// The End: clear to black and draw the resident sky box behind the world.
@@ -3418,7 +3420,7 @@ impl Renderer {
             frame.fov_degrees,
             frame.yaw,
             frame.pitch,
-            frame.bob,
+            frame.bob * frame.spin,
             frame.depth_far,
         )
     }
@@ -4508,7 +4510,7 @@ impl Renderer {
             cull.bind_depth(&self.device, world_depth);
         }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
-        let clear = if frame.title || (frame.end_sky && !frame.underwater) {
+        let clear = if frame.title || (frame.end_sky && !frame.underwater && sky_open(frame)) {
             wgpu::Color::BLACK
         } else {
             wgpu::Color {

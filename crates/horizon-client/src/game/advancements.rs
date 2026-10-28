@@ -993,6 +993,42 @@ impl Game<'_> {
             block_ok && state_ok && adv::conditions(&c["player"], &pctx, w)
         });
     }
+    /// `SlideDownBlockTrigger`: match the actual block and its state.
+    pub(super) fn trigger_honey_slide(&mut self, pos: [i32; 3]) {
+        let me = self.player_entity();
+        self.trigger("minecraft:slide_down_block", move |c, w| {
+            let ctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &ctx, w) && adv::block(c, pos, w)
+        });
+    }
+
+    /// `TargetBlockTrigger`: signal and projectile conditions are evaluated in
+    /// the shooter's context, including distance from the shooter.
+    pub(super) fn trigger_target_hit(&mut self, projectile: &EntityView, strength: i32) {
+        let me = self.player_entity();
+        let projectile = projectile.clone();
+        self.trigger("minecraft:target_hit", move |c, w| {
+            let player = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let target = adv::Entities {
+                this: Some(&projectile),
+                ..player
+            };
+            adv::conditions(&c["player"], &player, w)
+                && adv::range_i(&c["signal_strength"], i64::from(strength))
+                && adv::conditions(&c["projectile"], &target, w)
+        });
+    }
+
     /// `ItemUsedOnLocationTrigger` (placed_block, item_used_on_block).
     pub(super) fn trigger_block(&mut self, name: &str, pos: [i32; 3], stack: &ItemStack) {
         let me = self.player_entity();

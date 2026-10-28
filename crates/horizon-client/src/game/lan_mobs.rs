@@ -42,12 +42,12 @@ pub(super) fn player_for(
     }
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
-    // A tame wolf or cat sees its owner (`TamableAnimal.getOwner`), while they
+    // A tame wolf, cat or parrot sees its owner (`TamableAnimal.getOwner`), while they
     // are in play, whoever is nearer. Not while it targets or was just hurt by
     // a player: then `Who::Player` is that attacker, whoever it is, and the
     // owner goals ignore it until the wolf lets go.
     if !targeting
-        && matches!(m.species(), Species::Wolf | Species::Cat)
+        && matches!(m.species(), Species::Wolf | Species::Cat | Species::Parrot)
         && m.extra.tame
         && let Some(owner) = m.extra.owner
     {

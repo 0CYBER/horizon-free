@@ -73,7 +73,7 @@ class AllowTests(unittest.TestCase):
 
     def test_the_repos_list_names_the_three_reviewers(self):
         reviewers = ns.read_reviewers((ROOT / ns.REVIEWERS).read_text())
-        self.assertEqual(reviewers.logins, {"kacpherek", "rdbtcvs", "online5277"})
+        self.assertEqual(reviewers.logins, {"kacpherek", "rdbtcvs", "online5277", "levzzz5154"})
         self.assertFalse(reviewers.paused)
 
 class RefusalTests(unittest.TestCase):

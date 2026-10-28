@@ -119,19 +119,48 @@ ones only there.
 
 ## Merging
 
-Pull requests merge with a merge commit. The orchestrator sessions review a pull request, then turn on
-auto-merge (`gh pr merge <n> --auto --merge`): GitHub merges it once the required checks pass. Branch
-protection on main requires `verify`. Branches don't have to be up to date with main: two sessions merge in
-parallel, and main's own `checks` run catches the rare semantic conflict.
+Pull requests merge with a merge commit, by hand: never `gh pr merge --auto`. Branch protection on main
+requires `verify` for everyone, and Ludovic's review for the files `.github/CODEOWNERS` lists (what builds, signs
+and ships releases). Branches don't have to be up to date with main: main's own `checks` run catches the rare
+semantic conflict.
+
+**Who merges.** The Horizon Team (GitHub team `horizon-team`: kacpherek, levzzz5154, rdbtCVS, Online5277) and
+Ludovic. The orchestrator's agents prove only the risky pull requests (below), so a contributor's ordinary pull
+request doesn't wait for them.
+
+**An ordinary pull request merges on CI.** A Team member:
+
+1. reads the whole diff (for a fork, before adding `run-parity`: that runs the fork's code on a maintainer's machine);
+2. adds `run-parity` to a fork's pull request; our own branches run `parity` by themselves. Since #2448 it tests
+   the pull request merged into main;
+3. merges once `verify` and `parity` pass, nobody's change request is open, and every comment has been read (a
+   "don't merge" from anyone holds it).
+
+Never merge your own pull request: another Team member reviews and merges it. Never force-push or rebase a
+contributor's branch; push a fixup commit, or merge main into it.
+
+**A risky pull request gets the `needs-proof` label** and waits for an agent's local proof (both single-player
+paths, `lan_e2e`, a screenshot for anything visible) before it merges. Risky means any of:
+
+- it changes what is saved or loaded (`save.rs`, `entity_nbt.rs`, `block_entity_nbt.rs`, `region.rs`, `datafix/`):
+  a bug there damages players' worlds;
+- the network or the server thread: `horizon-protocol`, `net.rs`, `remote*.rs`, `lan/`, `lan*.rs`,
+  `integrated.rs`, `levels.rs`, `dedicated*`;
+- world generation (`worldgen/`): seeds must keep generating the same terrain;
+- the launcher's installs and updates, or the mod runtime;
+- the harnesses themselves (`tools/test_*_parity.py`, the Java oracles): a wrong harness hides regressions;
+- over ~500 lines, or `parity` failed, was skipped or ran no harness for gameplay code.
+
+Unsure? Add `needs-proof`: it costs a few hours, a broken release costs more.
 
 `parity` becomes required once it has run green on pull requests for a while (a week without a false failure):
 
 ```sh
-gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status_checks/contexts -f 'contexts[]=parity / parity'
+gh api -X POST repos/horizon-rust/horizon/branches/main/protection/required_status_checks/contexts -f 'contexts[]=parity / parity'
 ```
 
 A skipped `parity` (a fork's pull request without the label) counts as passed, so requiring it never blocks a
-fork's pull request; the maintainer decides whether to run it.
+fork's pull request: the Team member decides whether to run it, and a skipped run makes the pull request risky.
 
 ## Parity on main
 
@@ -420,10 +449,36 @@ than main's head and holds something main lacks, otherwise main (`tools/ci/night
 new publishes nothing. A Nightly can include pull requests not reviewed yet: that is what it is for, playing them
 before the gate.
 
-### Trusted reviewers pick the pull requests
+### Trusted reviewers
+
+One list, `.github/trusted-reviewers.txt`, governs two things for the people on it (kacpherek, rdbtCVS and
+Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and for Ludovic, with no repository role: `/nightly` (below) and triage by comment.
+
+```text
+/close                    closes an issue as completed; a pull request is closed without merging
+/close not planned        closes an issue as not planned
+/close duplicate of #123  comments "Duplicate of #123", closes as a duplicate
+/reopen
+/label bug, good first issue    existing labels only; never creates one
+/unlabel bug
+```
+
+- **Where.** On the first line of a comment on the issue or pull request (`.github/workflows/triage-command.yml`,
+  `tools/ci/triage_command.py`). The workflow answers with one comment, `🤖 Triage: <action>, on behalf of @login`,
+  linking the comment that asked; a refusal answers too.
+- **Refused.** Any label with `release` in its name (`release-now`, `release-blocker`, `skip-release`) and
+  `full-parity`; anything on Ludovic's own issues and pull requests; a merged pull request; a locked thread; more
+  than 60 actions per reviewer in 24 hours (counted from the workflow's own comments).
+- **Safety.** Same as `/nightly`: main's copy of the workflow runs, no pull request's code is checked out or run,
+  the comment reaches the script as env vars, and the token has `issues` and `pull-requests` write only.
+- **Ludovic stays in charge.** A one-line pull request removing a login from the list revokes it as soon as it merges
+  (the file is his under CODEOWNERS). A line `paused` stops `/nightly` and the triage commands for every reviewer;
+  his own still work.
+
+### Trusted reviewers pick the Nightly's pull requests
 
 The Nightly is where contributors test pull requests before the gate. The trusted reviewers listed in
-`.github/nightly-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27) and Ludovic pick them with a
+`.github/trusted-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and Ludovic pick them with a
 comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `tools/ci/nightly_set.py`):
 
 ```text
@@ -458,9 +513,9 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
 - **Ludovic stays in charge.**
   - Ludovic's `/nightly clear` or `/nightly remove` always applies. A pull request he removed can only come back
     when he adds it.
-  - A one-line pull request removing a login from `.github/nightly-reviewers.txt` revokes it as soon as it merges
+  - A one-line pull request removing a login from `.github/trusted-reviewers.txt` revokes it as soon as it merges
     (the file is his under CODEOWNERS).
-  - A line `paused` in that file stops every reviewer's `/nightly`; his own still work.
+  - A line `paused` in that file stops every reviewer's `/nightly` (and triage commands); his own still work.
   - Main, the gate and releases don't change: picks reach only players who turned Nightly on.
 
 - **Jobs.** `pick` chooses or assembles the commit and writes the notes (each pull request in it with its title,
@@ -522,4 +577,4 @@ Releases ship often, so nothing they leave behind may grow without bound.
   stops its own harnesses on SIGTERM and SIGHUP (a cancelled job), so these come only from a SIGKILL or a harness run
   by hand. Runner builds go through the machine's sccache (`tools/ci/runner-env.sh`), so what it removes
   comes back from the cache. Update the copy after changing the script:
-  `ssh macmini 'curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/tools/ci/runner-gc.sh -o ~/.actions-runners/runner-gc.sh'`.
+  `ssh macmini 'curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/tools/ci/runner-gc.sh -o ~/.actions-runners/runner-gc.sh'`.

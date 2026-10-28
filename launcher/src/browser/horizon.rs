@@ -1,5 +1,5 @@
 //! Horizon's own registry (docs/api/mod-index.md): mods, modpacks and resource packs made for
-//! Horizon, reviewed as pull requests in ludovic111/horizon-mods. One file lists them all,
+//! Horizon, reviewed as pull requests in horizon-rust/horizon-mods. One file lists them all,
 //! `index.json`; every download is checked against it before it reaches the game folder
 //! (`horizon_mods::index::check_file`: size, SHA-256, the author's signature, the file's own
 //! manifest), and files the index says were taken down are refused and turned off.
@@ -14,12 +14,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Where the registry publishes its index (GitHub Pages of ludovic111/horizon-mods).
-pub const INDEX_URL: &str = "https://ludovic111.github.io/horizon-mods/index.json";
+/// Where the registry publishes its index (GitHub Pages of horizon-rust/horizon-mods).
+pub const INDEX_URL: &str = "https://horizon-rust.github.io/horizon-mods/index.json";
 /// The registry's pages on the website, `<SITE>/<id>`.
 const SITE: &str = "https://playhorizon.dev/mods";
 /// The report form of a project.
-const REPORT: &str = "https://github.com/ludovic111/horizon-mods/issues/new?template=report.yml";
+const REPORT: &str = "https://github.com/horizon-rust/horizon-mods/issues/new?template=report.yml";
 /// The loader name the browser gives registry versions, so `support` and `pick` know them.
 pub const LOADER: &str = "horizon";
 /// How long a fetched index is used before it is fetched again.

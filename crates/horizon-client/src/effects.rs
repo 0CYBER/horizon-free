@@ -29,6 +29,10 @@ impl EffectInstance {
     fn infinite(&self) -> bool {
         self.duration == -1
     }
+    /// `MobEffectInstance.endsWithin`.
+    pub fn ends_within(&self, ticks: i32) -> bool {
+        !self.infinite() && self.duration <= ticks
+    }
     fn shorter_than(&self, other: &Self) -> bool {
         !self.infinite() && (self.duration < other.duration || other.infinite())
     }

@@ -73,6 +73,17 @@ pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::RotateWithMinecarts,
     Opt::HighContrastBlockOutlines,
 ];
+
+/// `MouseSettingsScreen.options` in Java Edition 26.3, in vanilla order.
+pub(crate) const MOUSE_OPTIONS: &[Opt] = &[
+    Opt::Sensitivity,
+    Opt::WheelSensitivity,
+    Opt::DiscreteScroll,
+    Opt::InvertX,
+    Opt::InvertY,
+    Opt::AllowCursorChanges,
+];
+
 impl Opt {
     /// Keep controls visible while their underlying systems are still missing.
     pub(crate) fn available(self) -> bool {
@@ -89,7 +100,6 @@ impl Opt {
                 | Opt::DistortionEffects
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
-                | Opt::HighContrastBlockOutlines
                 // Saved, but nothing in rendering reads them yet.
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
@@ -129,8 +139,10 @@ impl Opt {
             Opt::SimulationDistance => "options.simulationDistance",
             Opt::Sensitivity => "options.sensitivity",
             Opt::WheelSensitivity => "options.mouseWheelSensitivity",
+            Opt::InvertX => "options.invertMouseX",
             Opt::InvertY => "options.invertMouseY",
             Opt::DiscreteScroll => "options.discrete_mouse_scroll",
+            Opt::AllowCursorChanges => "options.allowCursorChanges",
             Opt::Volume(_) => "soundCategory.master",
             Opt::GuiScale => "options.guiScale",
             Opt::ViewBobbing => "options.viewBobbing",
@@ -454,8 +466,10 @@ impl Opt {
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
+            Opt::InvertX => on_off(s.invert_x),
             Opt::InvertY => on_off(s.invert_y),
             Opt::DiscreteScroll => on_off(s.discrete_scroll),
+            Opt::AllowCursorChanges => on_off(s.allow_cursor_changes),
             Opt::ViewBobbing => on_off(s.view_bobbing),
             Opt::Vsync => on_off(s.vsync),
             Opt::Fullscreen => on_off(s.fullscreen),
@@ -652,6 +666,7 @@ impl Opt {
             Opt::TextBackground
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
+            | Opt::HighContrastBlockOutlines
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts => {
@@ -659,8 +674,10 @@ impl Opt {
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
             }
+            Opt::InvertX => s.invert_x = !s.invert_x,
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::DiscreteScroll => s.discrete_scroll = !s.discrete_scroll,
+            Opt::AllowCursorChanges => s.allow_cursor_changes = !s.allow_cursor_changes,
             Opt::ViewBobbing => s.view_bobbing = !s.view_bobbing,
             Opt::Vsync => s.vsync = !s.vsync,
             Opt::Fullscreen => s.fullscreen = !s.fullscreen,
@@ -1434,12 +1451,7 @@ impl OptionsUi {
                 ]));
                 rows
             }
-            Page::Mouse => pairs(&[
-                Opt::Sensitivity,
-                Opt::WheelSensitivity,
-                Opt::DiscreteScroll,
-                Opt::InvertY,
-            ]),
+            Page::Mouse => pairs(MOUSE_OPTIONS),
             Page::Chat => pairs(&[
                 Opt::ChatVisibility,
                 Opt::ChatColors,
@@ -2874,6 +2886,45 @@ mod tests {
         let chat_only = s.text_background(0.0);
         Opt::TextBackground.cycle(&mut s, false, [854, 480]);
         assert_ne!(s.text_background(0.0), chat_only);
+    }
+
+    #[test]
+    fn mouse_settings_match_java_26_3_option_order() {
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Mouse);
+        let mut options = Vec::new();
+        for row in ui.list_rows(&Settings::default()) {
+            if let Row::Pair(a, b) = row {
+                options.push(a);
+                if let Some(b) = b {
+                    options.push(b);
+                }
+            }
+        }
+        assert_eq!(
+            options,
+            vec![
+                Opt::Sensitivity,
+                Opt::WheelSensitivity,
+                Opt::DiscreteScroll,
+                Opt::InvertX,
+                Opt::InvertY,
+                Opt::AllowCursorChanges,
+            ]
+        );
+    }
+
+    #[test]
+    fn mouse_settings_round_trip_with_java_defaults() {
+        let mut settings = Settings::default();
+        assert!(!settings.invert_x);
+        assert!(settings.allow_cursor_changes);
+        Opt::InvertX.cycle(&mut settings, false, [854, 480]);
+        Opt::AllowCursorChanges.cycle(&mut settings, false, [854, 480]);
+        let loaded = Settings::parse(&settings.serialize());
+        assert!(loaded.invert_x);
+        assert!(!loaded.allow_cursor_changes);
+        assert!(!loaded.file.bool("allowCursorChanges"));
     }
 
     #[test]

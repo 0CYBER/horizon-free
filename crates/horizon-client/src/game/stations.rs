@@ -2059,9 +2059,16 @@ impl Game<'_> {
                 );
             }
         }
-        // ItemStack.OP_NBT_WARNING, for a player with game master permission.
-        if !nested && self.ui.registries.permission >= 2 && block_entity_item::op_warning(stack) {
-            for (key, fallback) in [
+        // ItemStack.OP_NBT_WARNING: `BlockItem` and `SpawnEggItem`
+        // `.shouldPrintOpWarning` for a player with game master permission;
+        // a nested projectile has no player. The first line is bold.
+        if !nested
+            && self.ui.registries.permission >= 2
+            && (item_info.is_some_and(|i| i.block.is_some())
+                && block_entity_item::op_warning(stack)
+                || block_entity_item::spawn_egg_op_warning(stack))
+        {
+            for (i, (key, fallback)) in [
                 ("item.op_warning.line1", "Warning:"),
                 (
                     "item.op_warning.line2",
@@ -2071,12 +2078,15 @@ impl Game<'_> {
                     "item.op_warning.line3",
                     "Do not use unless you know the exact contents!",
                 ),
-            ] {
-                push(
-                    &mut lines,
-                    self.translate(key, fallback),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let text = horizon_client::text::Text::legacy(&self.translate(key, fallback));
+                lines.push((
+                    if i == 0 { text.bold() } else { text },
                     rgba(255, 85, 85, 255),
-                );
+                ));
             }
         }
         lines

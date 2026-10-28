@@ -97,6 +97,16 @@ pub fn diffuse(normal: Vec3, lights: (Vec3, Vec3)) -> f32 {
 pub fn vertex_light(packed: u8) -> u32 {
     (u32::from(packed >> 4) * 16) | ((u32::from(packed & 15) * 16) << 8)
 }
+/// `ChestRenderer.xmasTextures`: `SpecialDates.isExtendedChristmas` (24 to 26
+/// December in the local time zone), read once when the renderer is created.
+fn extended_christmas() -> bool {
+    use chrono::Datelike;
+    static XMAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *XMAS.get_or_init(|| {
+        let now = chrono::Local::now();
+        now.month() == 12 && (24..=26).contains(&now.day())
+    })
+}
 fn pack_color(rgb: u32, alpha: u32, brightness: f32) -> u32 {
     let c = |shift: u32| (((rgb >> shift) & 255) as f32 * brightness) as u32;
     alpha << 24 | c(0) << 16 | c(8) << 8 | c(16)
@@ -1173,11 +1183,25 @@ impl BlockEntityRenderer {
                 }
             }
             Kind::Chest {
+                block,
                 texture,
                 part,
                 y_rot,
                 ..
             } => {
+                // ChestRenderer.getChestMaterial: normal and trapped chests use the christmas
+                // sprites on 24-26 December. Copper and ender chests keep theirs.
+                let texture = if matches!(block.as_str(), "chest" | "trapped_chest")
+                    && extended_christmas()
+                {
+                    match part {
+                        ChestPart::Single => "entity/chest/christmas",
+                        ChestPart::Left => "entity/chest/christmas_left",
+                        ChestPart::Right => "entity/chest/christmas_right",
+                    }
+                } else {
+                    *texture
+                };
                 let model = match part {
                     ChestPart::Single => "chest",
                     ChestPart::Left => "double_chest_left",

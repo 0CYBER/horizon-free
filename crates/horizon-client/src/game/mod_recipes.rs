@@ -95,7 +95,9 @@ impl Game<'_> {
     /// Capability `recipes`'s tables and known displays for this tick's
     /// snapshot; nothing while no running mod reads them.
     pub(super) fn mod_recipes(&mut self) -> (Option<Arc<Recipes>>, Arc<[i32]>) {
-        if !self.mods.mods.wants_recipes() {
+        // The tables come from the world resources, which may still be
+        // loading behind the title on a slow start.
+        if !self.mods.mods.wants_recipes() || self.res.rest.get().is_none() {
             return (None, Arc::from([]));
         }
         if self.mods.recipes.is_none() {

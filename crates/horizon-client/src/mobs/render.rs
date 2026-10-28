@@ -115,8 +115,9 @@ pub fn body(m: &Mob) -> (String, String) {
         }
     };
     if avatar(m) {
+        // AvatarRenderer: PlayerModel's slim layer for a slim skin.
         return (
-            "main".into(),
+            if m.slim { "player_slim#main" } else { "main" }.into(),
             m.skin.clone().unwrap_or_else(|| m.kind.texture.clone()),
         );
     }
@@ -784,7 +785,8 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
 /// `HumanoidArmorLayer`: the armour models of the mob's main model with the
 /// equipment textures (leather tinted, with its overlay).
 fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
-    if super::equine::is_equine(m.species()) {
+    // A player's or mannequin's armour is drawn by the game's armour layers.
+    if super::equine::is_equine(m.species()) || avatar(m) {
         return;
     }
     let (model, _) = body(m);
