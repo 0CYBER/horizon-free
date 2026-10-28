@@ -1,4 +1,4 @@
-//! Horizon's graphics settings screens, Simple and Advanced: which settings
+//! Horizon's graphics settings screens, Simple, Advanced and HDR: which settings
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
@@ -14,6 +14,8 @@ use crate::{
 pub enum Level {
     Simple,
     Advanced,
+    /// HDR output's own settings, opened from Advanced while HDR is on.
+    Hdr,
 }
 
 /// Horizon's own settings (`graphics::Graphics`).
@@ -37,6 +39,8 @@ pub enum H {
     ResolutionScale,
     Antialiasing,
     Hdr,
+    /// Opens `Level::Hdr`.
+    HdrSettings,
     HdrPaperWhite,
     HdrPeak,
     BatteryMode,
@@ -119,6 +123,24 @@ pub fn rows(level: Level) -> Vec<Row> {
     );
     let mut rows = match level {
         Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui],
+        Level::Hdr => vec![
+            Row::Header("HDR"),
+            h(
+                H::Hdr,
+                None,
+                "Lava, fire and sunlight shine brighter than white. Needs an HDR display.",
+            ),
+            h(
+                H::HdrPaperWhite,
+                None,
+                "How bright white paper and menus look. Match your desktop.",
+            ),
+            h(
+                H::HdrPeak,
+                None,
+                "How bright the brightest highlights get. Your display's peak.",
+            ),
+        ],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
@@ -224,19 +246,9 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "FXAA smooths jagged edges of the world; slightly softer image.",
             ),
             h(
-                H::Hdr,
+                H::HdrSettings,
                 None,
                 "HDR output on an HDR display: lava, fire and sunlight shine brighter.",
-            ),
-            h(
-                H::HdrPaperWhite,
-                None,
-                "HDR: how bright white paper and menus look. Match your desktop.",
-            ),
-            h(
-                H::HdrPeak,
-                None,
-                "HDR: how bright the brightest highlights get. Your display's peak.",
             ),
             h(
                 H::PresentMode,
@@ -385,6 +397,7 @@ impl H {
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
+            H::HdrSettings => Text::literal("HDR Settings..."),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
             H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
@@ -470,6 +483,25 @@ impl Item {
     /// False for a setting whose system is not in Horizon yet (`Opt::available`).
     fn available(self) -> bool {
         !matches!(self, Item::Vanilla(o) if !o.available())
+    }
+    /// Why a control can't be used now, when it can't: HDR's screen opens only where
+    /// the display offers HDR output, whatever `horizon-graphics.txt` says (a copied game
+    /// folder, a display swapped for an SDR one: the renderer leaves HDR off there, and
+    /// the saved values wait for an HDR display), and its sliders do something only
+    /// while it is on.
+    fn blocked(self, s: &Settings) -> Option<&'static str> {
+        if !self.available() {
+            return Some("This feature is not yet available in Horizon.");
+        }
+        match self {
+            Item::Horizon(H::HdrSettings | H::Hdr) if !crate::graphics::hdr_offered() => {
+                Some("Your display or system doesn't offer HDR output.")
+            }
+            Item::Horizon(H::HdrPaperWhite | H::HdrPeak) if !s.horizon.hdr => {
+                Some("Turn HDR on to use it.")
+            }
+            _ => None,
+        }
     }
     /// On/off settings and their value.
     pub fn switch(self, s: &Settings) -> Option<bool> {
@@ -572,6 +604,7 @@ pub enum Action {
     Changed,
     OpenAdvanced,
     OpenSimple,
+    OpenHdr,
     Done,
 }
 
@@ -649,6 +682,17 @@ impl GraphicsUi {
         let other = match level {
             Level::Simple => Action::OpenAdvanced,
             Level::Advanced => Action::OpenSimple,
+            // One Done, back to Advanced.
+            Level::Hdr => {
+                widgets.push(Widget {
+                    x: cx - 100.0,
+                    y: by,
+                    w: 200.0,
+                    target: Target::Button(Action::Done),
+                    list: false,
+                });
+                return (widgets, headers, content);
+            }
         };
         widgets.push(Widget {
             x: cx - 155.0,
@@ -710,12 +754,10 @@ impl GraphicsUi {
                         continue;
                     }
                     let label = item.label(s);
-                    let live = item.available();
-                    if hover && !live {
-                        tooltip = Some(atlas.font.split(
-                            &Text::literal("This feature is not yet available in Horizon."),
-                            170.0,
-                        ));
+                    let blocked = item.blocked(s);
+                    let live = blocked.is_none();
+                    if hover && let Some(why) = blocked {
+                        tooltip = Some(atlas.font.split(&Text::literal(why), 170.0));
                     }
                     match item.slider(s) {
                         Some(value) => STYLE.slider(
@@ -725,6 +767,7 @@ impl GraphicsUi {
                             &label,
                             value,
                             hover || self.dragging == Some(item),
+                            live,
                         ),
                         None => STYLE.button(
                             batch,
@@ -774,6 +817,7 @@ impl GraphicsUi {
         let title = match level {
             Level::Simple => "Graphics",
             Level::Advanced => "Graphics: Advanced",
+            Level::Hdr => "Graphics: HDR",
         };
         STYLE.title(batch, atlas, &Text::literal(title));
         if let Some(lines) = tooltip {
@@ -817,7 +861,10 @@ impl GraphicsUi {
             return match wd.target {
                 Target::Button(action) => vec![Action::ButtonClick, action],
                 // A disabled control does nothing: no sound, no preset change.
-                Target::Item(item) if !item.available() => Vec::new(),
+                Target::Item(item) if item.blocked(s).is_some() => Vec::new(),
+                Target::Item(Item::Horizon(H::HdrSettings)) => {
+                    vec![Action::ButtonClick, Action::OpenHdr]
+                }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
@@ -847,6 +894,47 @@ impl GraphicsUi {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hdr_settings_open_where_hdr_is_offered() {
+        let mut s = Settings::default();
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 2000.0);
+        let at = |ui: &mut GraphicsUi, level, item| {
+            let (widgets, _, _) = ui.layout(level, size.0, size.1);
+            let w = widgets
+                .iter()
+                .find(|w| matches!(w.target, Target::Item(i) if i == item))
+                .unwrap();
+            (w.x + 1.0, w.y + 1.0)
+        };
+        let button = at(&mut ui, Level::Advanced, Item::Horizon(H::HdrSettings));
+        let click = |ui: &mut GraphicsUi, s: &mut Settings, level, point| {
+            ui.click(level, s, point, size, [480, 2000], false, false)
+        };
+        crate::graphics::offer_hdr(false);
+        assert!(click(&mut ui, &mut s, Level::Advanced, button).is_empty());
+        // Not even with HDR saved on, from another computer.
+        s.horizon.hdr = true;
+        assert!(click(&mut ui, &mut s, Level::Advanced, button).is_empty());
+        s.horizon.hdr = false;
+        crate::graphics::offer_hdr(true);
+        assert_eq!(
+            click(&mut ui, &mut s, Level::Advanced, button),
+            [Action::ButtonClick, Action::OpenHdr]
+        );
+        // On HDR's screen, the sliders wait for the switch above them.
+        let peak = at(&mut ui, Level::Hdr, Item::Horizon(H::HdrPeak));
+        assert!(click(&mut ui, &mut s, Level::Hdr, peak).is_empty());
+        s.horizon.hdr = true;
+        assert_eq!(click(&mut ui, &mut s, Level::Hdr, peak), [Action::Changed]);
+        let on = |level, item| {
+            extra_rows(level)
+                .iter()
+                .any(|r| matches!(r, Row::Setting(x) if x.item == Item::Horizon(item)))
+        };
+        assert!(on(Level::Hdr, H::Hdr) && !on(Level::Advanced, H::Hdr));
+        assert!(on(Level::Hdr, H::HdrPeak) && !on(Level::Advanced, H::HdrPeak));
+    }
     #[test]
     fn graphics_buttons_sound_on_press_and_sliders_on_release() {
         let mut s = Settings::default();

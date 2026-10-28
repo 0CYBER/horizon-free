@@ -1125,7 +1125,9 @@ impl Renderer {
                 ));
             }
             surface.configure(&device, &config);
-            (config, caps.present_modes.clone(), hdr::output(&caps))
+            let output = hdr::output(&caps);
+            crate::graphics::offer_hdr(output.is_some());
+            (config, caps.present_modes.clone(), output)
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
             let config = wgpu::SurfaceConfiguration {
