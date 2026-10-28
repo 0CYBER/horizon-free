@@ -105,14 +105,7 @@ pub fn chunks_with_block_entities<'a>(
 }
 
 use horizon_client_core::nbt_value::string;
-pub use horizon_client_core::nbt_value::{number, text};
-pub(crate) fn float(tag: Option<&Tag>) -> Option<f64> {
-    Some(match tag? {
-        Tag::Float(b) => f64::from(f32::from_bits(*b)),
-        Tag::Double(b) => f64::from_bits(*b),
-        other => number(Some(other))? as f64,
-    })
-}
+pub use horizon_client_core::nbt_value::{float, number, text};
 /// Insert or replace a key of a compound tag.
 pub(crate) fn put(tag: &mut Tag, key: &str, value: Tag) {
     if let Tag::Compound(map) = tag {

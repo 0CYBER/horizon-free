@@ -2216,13 +2216,16 @@ impl Hub {
                 // game's, run after this pass. A move queued behind it is checked
                 // against the block the player just broke and falls through, so it
                 // would be sent back; it waits for the next tick, when the block is
-                // gone, as vanilla handles the two packets in order.
+                // gone, as vanilla handles the packets in order. So does everything
+                // queued before that move: the arm swing (Punch) comes between the dig
+                // and the move.
                 S::PlayerAction(p) if p.action <= 3 => {
                     events.push(HostEvent::Packet(conn, Box::new(S::PlayerAction(p))));
-                    if matches!(
-                        self.guests[i].inbox.front(),
-                        Some(S::MovePlayerPos(_) | S::MovePlayerPosRot(_))
-                    ) {
+                    if self.guests[i]
+                        .inbox
+                        .iter()
+                        .any(|p| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
+                    {
                         break;
                     }
                 }
