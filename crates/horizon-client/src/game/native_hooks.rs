@@ -23,7 +23,7 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
@@ -78,6 +78,87 @@ pub(crate) struct NativeMod {
     /// Its keys: name, label and default key (`key.keyboard.z`). The page
     /// lists them first; `native_mod_key` reads the player's choice.
     pub(crate) keys: Vec<[String; 3]>,
+}
+
+/// An item of [`NativeRecipes::items`], by its index there, with a count
+/// and the components it has beyond the item's own, in vanilla's item
+/// syntax (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`),
+/// or "".
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeRecipeStack {
+    pub(crate) item: u32,
+    pub(crate) count: u32,
+    pub(crate) components: String,
+}
+
+/// The station a recipe is made at.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeRecipeKind {
+    CraftingShaped,
+    CraftingShapeless,
+    Smelting,
+    Blasting,
+    Smoking,
+    Campfire,
+    Stonecutting,
+    Smithing,
+    Brewing,
+}
+
+/// A recipe of [`NativeRecipes`].
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeRecipe {
+    /// `minecraft:oak_planks`.
+    pub(crate) id: String,
+    pub(crate) kind: NativeRecipeKind,
+    /// The recipe book's tab (`crafting_building_blocks`, `furnace_food`),
+    /// or "".
+    pub(crate) category: String,
+    /// Recipes the book shows on one button share a group, or "".
+    pub(crate) group: String,
+    /// A shaped recipe's grid: `slots` holds its cells row by row. 0 for
+    /// the other kinds.
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    /// Each slot's stacks, any one of which fits; an empty list is an empty
+    /// cell. Cooking and stonecutting: the input. Smithing: the template,
+    /// the base, the addition. Brewing: the bottle, the reagent.
+    pub(crate) slots: Vec<Vec<NativeRecipeStack>>,
+    /// What it makes; several when that varies (a trim on any armour).
+    pub(crate) results: Vec<NativeRecipeStack>,
+    /// Cooking: game ticks and experience; 0 for the other kinds.
+    pub(crate) cooking_time: u32,
+    pub(crate) experience: f32,
+    /// The recipe book's id for it (one per way the book shows it), as
+    /// `native_known_recipes` lists them; -1 for the kinds the book doesn't
+    /// show (campfire, stonecutting, smithing, brewing).
+    pub(crate) book_id: i32,
+}
+
+/// An item of [`NativeRecipes::items`].
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeItem {
+    /// `minecraft:diamond`, `<mod>:<path>`.
+    pub(crate) id: String,
+    /// In the player's language.
+    pub(crate) name: String,
+    /// Its item tags, without the `#`.
+    pub(crate) tags: Vec<String>,
+}
+
+/// Every item and recipe the game knows (`native_recipes`): `items` in the
+/// registry's order, which each [`NativeRecipeStack::item`] indexes; the
+/// recipes are the book's in its order, then campfire, stonecutting,
+/// smithing and brewing.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeRecipes {
+    pub(crate) items: Vec<NativeItem>,
+    pub(crate) recipes: Vec<NativeRecipe>,
 }
 
 /// The mappings `native_mapping` answers for, with the key their default
@@ -269,6 +350,37 @@ impl Game<'_> {
     pub(super) fn native_set_setting(&self, mod_id: &str, key: &str, value: &str) {
         let dir = self.native_data_dir(mod_id);
         let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
+    }
+    /// Every item and recipe the game knows, made once (the same for every
+    /// call); none outside a world. They are the window's own: the world's
+    /// in single player, vanilla's on a server, which sends a client no
+    /// others.
+    pub(super) fn native_recipes(&mut self) -> Option<Arc<NativeRecipes>> {
+        self.player.as_ref()?;
+        self.made_recipes()
+    }
+    /// The `book_id`s of the recipes the player's recipe book holds now
+    /// (the server's book on a server); empty outside a world.
+    pub(super) fn native_known_recipes(&mut self) -> Arc<[i32]> {
+        if self.player.is_none() {
+            return Arc::from([]);
+        }
+        self.known_displays()
+    }
+    /// Places a recipe in the open screen's grid as a click in the recipe
+    /// book does (`ServerboundPlaceRecipePacket`): the inventory's grid or a
+    /// crafting table's. `all` places as many as the items allow, as with
+    /// Shift. Refused while no such screen is open and for a recipe the
+    /// player's book doesn't hold; one missing items shows as a ghost.
+    pub(super) fn native_place_recipe(&mut self, book_id: i32, all: bool) -> Result<(), String> {
+        self.recipe_place(book_id, all)
+    }
+    /// Creative mode only: gives the player `count` of `item`
+    /// (`minecraft:diamond`) as taking it from the creative inventory does
+    /// (`ServerboundSetCreativeModeSlot`): the selected slot first, then the
+    /// hotbar, then the inventory. The count is cut to one stack.
+    pub(super) fn native_give(&mut self, item: &str, count: u32) -> Result<(), String> {
+        self.recipe_give(item, count)
     }
 }
 
