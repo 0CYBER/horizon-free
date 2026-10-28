@@ -1148,6 +1148,23 @@ impl Game<'_> {
         else {
             return;
         };
+        // A decorated pot is no block entity here: its tag is kept with the chunk.
+        if name == "minecraft:decorated_pot" {
+            if let Tag::Compound(fields) = tag
+                && !fields.is_empty()
+            {
+                let mut full = fields.clone();
+                full.insert("id".into(), Tag::String(name.into()));
+                for (k, v) in ["x", "y", "z"].into_iter().zip(pos) {
+                    full.insert(k.into(), Tag::Int(v));
+                }
+                super::spill::put_saved_entity(&mut self.world, pos, Tag::Compound(full));
+                // The section is drawn again with the pot's sherds.
+                let state = self.world.block(pos[0], pos[1], pos[2]);
+                let _ = self.world.set(pos[0], pos[1], pos[2], state);
+            }
+            return;
+        }
         let Some(entity) = self.world.block_entities.get(&key) else {
             return;
         };
@@ -1162,7 +1179,22 @@ impl Game<'_> {
         for (k, v) in ["x", "y", "z"].into_iter().zip(pos) {
             full.insert(k.into(), Tag::Int(v));
         }
-        if let Some((_, loaded)) = horizon_client::save::decode_block_entity(&Tag::Compound(full)) {
+        if let Some((_, mut loaded)) =
+            horizon_client::save::decode_block_entity(&Tag::Compound(full))
+        {
+            // The turn of a vault's item and a trial spawner's mob is the client's
+            // own, not in the tag: an update keeps it (VaultClientData).
+            match (self.world.block_entities.get(&key), &mut loaded) {
+                (Some(BlockEntity::Vault(old)), BlockEntity::Vault(new)) => {
+                    new.spin = old.spin;
+                    new.o_spin = old.o_spin;
+                }
+                (Some(BlockEntity::TrialSpawner(old)), BlockEntity::TrialSpawner(new)) => {
+                    new.spin = old.spin;
+                    new.o_spin = old.o_spin;
+                }
+                _ => {}
+            }
             self.world.block_entities.insert(key, loaded);
             // The section is drawn again with what the block entity shows.
             let state = self.world.block(pos[0], pos[1], pos[2]);
