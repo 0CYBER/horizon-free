@@ -351,6 +351,13 @@ impl Chunk {
     pub fn min_y(&self) -> i32 {
         self.min_y
     }
+    /// The column the chunk holds.
+    pub fn layout(&self) -> ColumnLayout {
+        ColumnLayout {
+            min_y: self.min_y,
+            sections: self.sections.len(),
+        }
+    }
     /// One above the column's highest block.
     #[inline]
     pub fn max_y(&self) -> i32 {
