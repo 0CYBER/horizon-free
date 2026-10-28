@@ -612,7 +612,12 @@ enum Cmd {
     /// plays. Not sandboxed: the mods' code runs with your rights
     NativeBuild {
         /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
-        folder: PathBuf,
+        /// (default: the native mods installed and turned on in the instance)
+        folder: Option<PathBuf>,
+        /// The instance whose installed native mods to build, and which then plays the build
+        /// (default: the selected one; the game's own home builds into the Native mods instance)
+        #[arg(long)]
+        instance: Option<String>,
         /// The installed version whose game files the build reuses, and whose commit it builds on
         /// when no mod pins one (default: the selected one)
         #[arg(long)]
@@ -1006,6 +1011,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         }
         Cmd::NativeBuild {
             folder,
+            instance,
             version,
             trust_native_code,
         } => {
@@ -1014,11 +1020,22 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             let base = backend::resolve_version(version.as_deref())?;
             let started = std::time::Instant::now();
-            let built = horizon_launcher::native_mods::build(&base, &folder, |step| {
+            let target = match &instance {
+                Some(name) => instances::find(name)?,
+                None => instances::selected(),
+            };
+            let (folder, target) = match folder {
+                Some(folder) => (folder, None),
+                None => (
+                    horizon_launcher::native_mods::installed_mods(&target.home)?,
+                    Some(&target),
+                ),
+            };
+            let built = horizon_launcher::native_mods::build(&base, &folder, target, |step| {
                 eprintln!("{}", step.label())
             })?;
             println!(
-                "{built} in the Native mods instance ({:.0} s).",
+                "{built} built and selected for its instance ({:.0} s).",
                 started.elapsed().as_secs_f64()
             );
         }
