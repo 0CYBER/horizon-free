@@ -2495,6 +2495,10 @@ pub enum Msg {
     NightlyProgress(f32),
     /// A nightly check ended: the version installed (None: already up to date), or why not.
     Nightly(Result<Option<String>, String>),
+    /// Where the native-mods build is (`native_mods::Step::label`).
+    NativeProgress(String),
+    /// The native-mods build ended: the version built, or why not.
+    Native(Result<String, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2681,6 +2685,10 @@ pub struct Settings {
     /// instance. Off by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub nightly: bool,
+    /// The player turned Native mods (experimental) on (`native_mods`): mixin mods compiled into
+    /// a game of their own. Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_mods: bool,
 }
 
 impl Settings {
