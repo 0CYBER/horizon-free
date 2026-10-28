@@ -8084,7 +8084,12 @@ impl Game<'_> {
             .then(|| self.gui.atlas.sprites.get("misc/shadow").copied())
             .flatten();
         if let Some(sprite) = shadow_sprite {
-            let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
+            // DimensionType.ambientLight: the_nether 0.1, the_end 0.25.
+            let ambient = match self.dim {
+                Dim::Nether => 0.1,
+                Dim::End => 0.25,
+                Dim::Overworld => 0.0,
+            };
             let darken = self.sky_darken();
             let a = alpha;
             let lerp = |p: Vec3, q: Vec3| {

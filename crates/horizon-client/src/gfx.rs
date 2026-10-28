@@ -1969,7 +1969,7 @@ impl Renderer {
         // ulps covers that spread at any resolution while staying far below
         // the 0.001 a model's feet sit higher, so shadows never bleed onto
         // the feet.
-        let shadow_blob_pipeline = entity_pipeline(
+        let shadow_blob_pipeline = entity_pipeline_with(
             "Entity shadows",
             None,
             false,
@@ -1981,6 +1981,8 @@ impl Renderer {
             },
             alpha_blend,
             false,
+            "fs_entity_shadow",
+            wgpu::ColorWrites::ALL,
         );
         // RenderPipelines.ITEM_TRANSLUCENT: blended, depth tested. Drawn before
         // translucent terrain, it cannot write depth: the water behind a
