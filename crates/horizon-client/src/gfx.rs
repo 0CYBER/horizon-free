@@ -100,8 +100,6 @@ pub(crate) mod upload;
 mod wgsl_prefix;
 mod world_post;
 
-/// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
-const COMPLETE_COLUMN: SectionMask = SectionMask::below(crate::chunk::SECTIONS);
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
@@ -534,6 +532,9 @@ pub struct Renderer {
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
+    /// The column `occlusion`, `sections` and `detail_columns` count in: the
+    /// level's (`clear_sections`).
+    layout: crate::chunk::ColumnLayout,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
     /// HDR output (Horizon setting): `Some` while the swapchain is HDR.
@@ -2647,6 +2648,7 @@ impl Renderer {
             block_entities: Default::default(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
+            layout: crate::chunk::ColumnLayout::VANILLA,
             world_post,
             hdr: None,
             hdr_output,
@@ -3079,7 +3081,8 @@ impl Renderer {
     pub fn block_entity_revision(&self) -> u64 {
         self.block_entity_revision
     }
-    pub fn clear_sections(&mut self) {
+    /// Drops every section, for a level whose chunks hold `layout`.
+    pub fn clear_sections(&mut self, layout: crate::chunk::ColumnLayout) {
         self.block_entities.clear();
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
@@ -3095,12 +3098,23 @@ impl Renderer {
         }
         self.sorted_indices.clear();
         self.translucency_cursor = 0;
-        self.occlusion.clear();
+        if layout == self.layout {
+            self.occlusion.clear();
+        } else {
+            self.layout = layout;
+            self.occlusion = occlusion::Occlusion::new(layout.min_y(), layout.sections() as i32);
+            self.sections.set_min_y(layout.min_y());
+        }
+    }
+    /// A column whose every section has its mesh (`lod_detail_columns`).
+    fn complete_column(&self) -> SectionMask {
+        SectionMask::below(self.layout.sections())
     }
     pub fn lod_detail_columns(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let complete = self.complete_column();
         self.detail_columns
             .iter()
-            .filter_map(move |(&column, &mask)| (mask == COMPLETE_COLUMN).then_some(column))
+            .filter_map(move |(&column, &mask)| (mask == complete).then_some(column))
     }
     /// Changes whenever `lod_detail_columns` does.
     pub fn lod_detail_revision(&self) -> u64 {
@@ -3120,7 +3134,8 @@ impl Renderer {
         } else {
             next.remove(key.1 as usize);
         }
-        if (mask == COMPLETE_COLUMN) != (next == COMPLETE_COLUMN) {
+        let complete = self.complete_column();
+        if (mask == complete) != (next == complete) {
             self.detail_revision += 1;
         }
         if next.is_empty() {
@@ -3136,12 +3151,12 @@ impl Renderer {
         let mut released = Vec::new();
         let mut block_entities = false;
         for (x, z) in columns {
-            if self.detail_columns.remove(&(x, z)) == Some(COMPLETE_COLUMN) {
+            if self.detail_columns.remove(&(x, z)) == Some(self.complete_column()) {
                 self.detail_revision += 1;
             }
             self.occlusion.remove_column(x, z);
             let retiring = !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(x, z));
-            for sy in 0..crate::chunk::SECTIONS as i32 {
+            for sy in 0..self.layout.sections() as i32 {
                 let key = (x, sy, z);
                 block_entities |= self.block_entities.remove(&key).is_some();
                 if retiring {
@@ -3751,7 +3766,7 @@ impl Renderer {
             planes: frustum(view_proj),
         };
         let camera = frame.camera;
-        let camera_section = camera_section(camera);
+        let camera_section = camera_section(camera, self.layout.min_y());
         // Solid quads facing away from the eye are left out: the bob moves
         // the eye off `camera`, so it is found from the projection.
         let eye = projection_center(view_proj).filter(|_| self.sides_on);
@@ -3965,7 +3980,7 @@ impl Renderer {
                 let scheduled = (i + count - self.translucency_cursor) % count < budget;
                 let origin = [
                     v.key.0 * 16,
-                    crate::chunk::MIN_Y + v.key.1 * 16,
+                    self.layout.min_y() + v.key.1 * 16,
                     v.key.2 * 16,
                 ];
                 if (!s.sort.is_sorted() || nearby || scheduled)
@@ -4068,7 +4083,7 @@ impl Renderer {
                 {
                     let origin = [
                         v.key.0 * 16,
-                        crate::chunk::MIN_Y + v.key.1 * 16,
+                        self.layout.min_y() + v.key.1 * 16,
                         v.key.2 * 16,
                     ];
                     if let Some(indices) =
@@ -5403,10 +5418,10 @@ impl Frustum {
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
 /// fire_side's 0.01 pixel in front of its block, from z-fighting.
 /// The section the camera is in.
-fn camera_section(camera: DVec3) -> SectionKey {
+fn camera_section(camera: DVec3, min_y: i32) -> SectionKey {
     (
         (camera.x.floor() as i32) >> 4,
-        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.y.floor() as i32 - min_y) >> 4,
         (camera.z.floor() as i32) >> 4,
     )
 }

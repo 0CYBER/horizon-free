@@ -1,7 +1,7 @@
 //! Resident client world: streamed chunk columns plus the bookkeeping the game
 //! loop needs to relight and remesh after edits.
 use crate::{
-    chunk::{Chunk, MIN_Y, SECTIONS},
+    chunk::{Chunk, ColumnLayout, LevelShape},
     section_mask::SectionMask,
 };
 use horizon_core::random::LegacyRandom;
@@ -20,11 +20,11 @@ pub struct DirtySections {
 }
 impl DirtySections {
     pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
-        debug_assert!((0..SECTIONS as i32).contains(&sy));
+        debug_assert!((0..SectionMask::CAPACITY as i32).contains(&sy));
         self.columns.entry((x, z)).or_default().insert(sy as usize);
     }
     pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
-        (0..SECTIONS as i32).contains(&sy)
+        (0..SectionMask::CAPACITY as i32).contains(&sy)
             && self
                 .columns
                 .get(&(x, z))
@@ -54,6 +54,9 @@ impl DirtySections {
     }
 }
 pub struct World {
+    /// The level's build range and skylight (its dimension type); its
+    /// chunks hold `shape.column()`.
+    pub shape: LevelShape,
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
     pub random: LegacyRandom,
@@ -172,6 +175,7 @@ impl Weather {
 impl World {
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
+            shape: LevelShape::OVERWORLD,
             chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,
@@ -256,6 +260,10 @@ impl World {
         world.revision = 0;
         Ok(world)
     }
+    /// The column the level's chunks hold.
+    pub fn layout(&self) -> ColumnLayout {
+        self.shape.column()
+    }
     /// Resident storage write; marks the touched sections (and neighbours on
     /// section borders) for remeshing and the surrounding chunks for relighting.
     /// Neighbour updates, drops and block entities belong to the gameplay layer.
@@ -263,7 +271,8 @@ impl World {
         let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
             return Err("write outside resident chunks".into());
         };
-        if y < MIN_Y || y >= MIN_Y + (SECTIONS as i32) * 16 {
+        let (min_y, sections) = (chunk.min_y(), chunk.sections.len() as i32);
+        if chunk.section_index(y).is_none() {
             return Err("write outside world height".into());
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
@@ -279,20 +288,18 @@ impl World {
                 log.push((x, y, z));
             }
             self.modified.insert((x >> 4, z >> 4));
-            let sy = (y - MIN_Y) >> 4;
             for dz in -1..=1 {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let (bx, by, bz) = (x + dx, y + dy, z + dz);
-                        let s = (by - MIN_Y) >> 4;
-                        if !(0..SECTIONS as i32).contains(&s) {
+                        let s = (by - min_y) >> 4;
+                        if !(0..sections).contains(&s) {
                             continue;
                         }
                         self.dirty_sections.insert((bx >> 4, s, bz >> 4));
                     }
                 }
             }
-            let _ = sy;
             if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
                 self.light_edits.push(((x, y, z), previous, state.0));
             } else {
@@ -306,17 +313,20 @@ impl World {
         Ok(())
     }
     /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
-    /// block that isn't `air`, or `MIN_Y` (also where the chunk isn't loaded).
+    /// block that isn't `air`, or the column's minimum Y (also where the chunk
+    /// isn't loaded).
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+        let bottom = self.layout().min_y();
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
             chunk.world_surface(x, z, |v| air(BlockStateId(v)))
         })
     }
     /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
     /// highest block where `blocks` (motion blocking or holding a fluid),
-    /// or `MIN_Y` (also where the chunk isn't loaded).
+    /// or the column's minimum Y (also where the chunk isn't loaded).
     pub fn motion_blocking(&self, x: i32, z: i32, blocks: impl Fn(BlockStateId) -> bool) -> i32 {
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+        let bottom = self.layout().min_y();
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
             chunk.motion_blocking(x & 15, z & 15, |v| blocks(BlockStateId(v)))
         })
     }
@@ -335,12 +345,13 @@ impl World {
         hi: [i32; 3],
         mut matches: impl FnMut(BlockStateId) -> bool,
     ) -> bool {
-        let top = MIN_Y + SECTIONS as i32 * 16 - 1;
+        let layout = self.layout();
+        let (bottom, top) = (layout.min_y(), layout.max_y() - 1);
         // Heights outside the sections read as state 0.
-        if (lo[1] < MIN_Y || hi[1] > top) && matches(BlockStateId(0)) {
+        if (lo[1] < bottom || hi[1] > top) && matches(BlockStateId(0)) {
             return true;
         }
-        let sections = (lo[1].max(MIN_Y) - MIN_Y) >> 4..=(hi[1].min(top) - MIN_Y) >> 4;
+        let sections = (lo[1].max(bottom) - bottom) >> 4..=(hi[1].min(top) - bottom) >> 4;
         for cx in lo[0] >> 4..=hi[0] >> 4 {
             for cz in lo[2] >> 4..=hi[2] >> 4 {
                 let Some(chunk) = self.chunks.get(&(cx, cz)) else {

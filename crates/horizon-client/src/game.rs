@@ -9205,7 +9205,7 @@ impl Game<'_> {
         self.clear_lod();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
-            r.clear_sections();
+            r.clear_sections(self.world.layout());
         }
         self.apply_settings();
         self.streaming.sky_light = dim != Dim::Nether;
@@ -9303,7 +9303,7 @@ impl Game<'_> {
         self.clear_lod();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
-            r.clear_sections();
+            r.clear_sections(self.world.layout());
         }
         self.apply_settings();
         Ok(destination)
@@ -9505,7 +9505,7 @@ impl Game<'_> {
         self.clear_lod();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
-            r.clear_sections();
+            r.clear_sections(self.world.layout());
         }
         self.title = Some(Title::new(
             std::env::current_dir()?.join("saves"),
