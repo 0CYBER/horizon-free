@@ -41,6 +41,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server's damage event) (#848);
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
+- names:     a renamed shulker box, copper chest and chest the guest places open on the guest's screen
+             with their custom names as the title (BaseContainerBlockEntity.getDisplayName, #3245);
 - machines:  a hopper, a dispenser and a dropper open on the guest's screen with their 5 and 9
              slots, and keep what the guest shift-clicks into them (#848);
 - brewing:   a brewing stand opens on the guest's screen; blaze powder, nether wart and a bottle the
@@ -307,7 +309,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
-          'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
+          'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
@@ -1530,6 +1532,32 @@ def check_containers(host, guest, out):
     assert taken.get('minecraft:emerald') == 1 and taken.get('minecraft:gold_ingot') == 1, f'taken: {taken}'
     assert after == ({}, {27: 'minecraft:iron_ingot'}), f'after taking: {after}'
     return {'ender': ender, 'double': double, 'taken': taken}
+
+
+def check_names(host, guest, out):
+    # BlockItem.updateBlockEntityComponents gives the item's custom_name to the block entity, and its
+    # menu opens with it as the title (ClientboundOpenScreenPacket), shulker boxes and copper chests too.
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    titles = {}
+    for i, item in enumerate(('red_shulker_box', 'copper_chest', 'chest')):
+        spot = (x - 2 + 2 * i, y, z + 2)
+        guest('command', command=f'setblock {spot[0]} {spot[1] - 1} {spot[2]} minecraft:stone')
+        guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:air')
+        guest('command', command=f'give @s minecraft:{item}[minecraft:custom_name="Named {i}"]')
+        guest.wait(10)
+        guest.raw('place', *spot, '--item', f'minecraft:{item}')
+        guest.wait(10)
+        guest.raw('interact', *spot)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        title = guest.until(lambda: guest('screen').get('title'), bool, ticks=40)
+        titles[item] = ''.join(span['text'] for span in title)
+        guest.shot(out, f'names-{item}')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(5)
+        guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:air')
+    want = {'red_shulker_box': 'Named 0', 'copper_chest': 'Named 1', 'chest': 'Named 2'}
+    assert titles == want, f'the titles of the renamed containers: {titles}'
+    return titles
 
 
 def check_machines(host, guest, out):
@@ -5167,7 +5195,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
-             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'containers': check_containers, 'names': check_names, 'feedback': check_feedback, 'titles': check_titles,
              'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,
              'loom': check_loom, 'stonecutter': check_stonecutter, 'grindstone': check_grindstone,
              'anvil': check_anvil, 'smithing': check_smithing, 'enchanting': check_enchanting,

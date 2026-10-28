@@ -42,6 +42,45 @@ pub fn recipe_used_key(id: &str) -> String {
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
 
+/// `getDefaultName` of the `BaseContainerBlockEntity` that `block` holds: the
+/// translation key of its menu's title when it has no custom name. Copper
+/// chests hold a `ChestBlockEntity`, shulker boxes of every colour a
+/// `ShulkerBoxBlockEntity`.
+pub fn default_name_key(block: &str) -> Option<&'static str> {
+    Some(match block {
+        "minecraft:chest" | "minecraft:trapped_chest" => "container.chest",
+        n if n.ends_with("copper_chest") => "container.chest",
+        "minecraft:barrel" => "container.barrel",
+        n if n.ends_with("shulker_box") => "container.shulkerBox",
+        "minecraft:dispenser" => "container.dispenser",
+        "minecraft:dropper" => "container.dropper",
+        "minecraft:hopper" => "container.hopper",
+        "minecraft:furnace" => "container.furnace",
+        "minecraft:smoker" => "container.smoker",
+        "minecraft:blast_furnace" => "container.blast_furnace",
+        "minecraft:brewing_stand" => "container.brewing",
+        "minecraft:crafter" => "container.crafter",
+        _ => return None,
+    })
+}
+
+/// `BaseContainerBlockEntity.getDisplayName` (`getName`), the title of the
+/// `ClientboundOpenScreenPacket` that opens it: the block entity's custom
+/// name (`CustomName`, a literal), else its default name.
+pub fn display_name(custom: Option<&str>, default_key: &str) -> horizon_world::nbt::Tag {
+    match custom {
+        Some(name) => horizon_protocol::text::literal(name),
+        None => horizon_protocol::text::translatable(default_key, &[]),
+    }
+}
+
+/// `ChestBlock.MENU_PROVIDER_COMBINER`'s `getDisplayName` for a double chest:
+/// the first half's custom name (the right half, `DoubleBlockCombiner`'s
+/// `FIRST`), else the second's, else `container.chestDouble`.
+pub fn double_chest_name(first: Option<&str>, second: Option<&str>) -> horizon_world::nbt::Tag {
+    display_name(first.or(second), "container.chestDouble")
+}
+
 impl Campfire {
     /// `placeFood`'s slot: the first empty one, given the item's
     /// `campfire_cooking` time; it takes one item of `held`.
