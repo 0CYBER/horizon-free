@@ -154,7 +154,11 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
             let body = String::from_utf8(body).unwrap();
             let (status, text) = {
                 let mut m = mock.lock().unwrap();
-                m.log.push((method.clone(), path.clone(), body.clone()));
+                // A bare `GET /` is a local tool probing every new port (T3 Code does, on the Mac
+                // mini), not the launcher: no endpoint here is the root.
+                if (method.as_str(), path.as_str()) != ("GET", "/") {
+                    m.log.push((method.clone(), path.clone(), body.clone()));
+                }
                 route(&mut m, &method, &path, &auth, &body)
             };
             let _ = write!(
