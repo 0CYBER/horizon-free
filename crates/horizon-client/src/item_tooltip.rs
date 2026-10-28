@@ -100,12 +100,18 @@ fn modifier_line(
     } else {
         return None;
     };
-    Some(
-        text(&format!("attribute.modifier.{kind}.{operation}"))
-            .replacen("%s", &format_amount(shown), 1)
-            .replacen("%s", &text(&format!("attribute.name.{attribute}")), 1)
-            .replace("%%", "%"),
-    )
+    let raw = text(&format!("attribute.modifier.{kind}.{operation}"));
+    let line = if raw.contains("%1$s") || raw.contains("%2$s") {
+        raw.replace("%1$s", &format_amount(shown))
+            .replace("%2$s", &text(&format!("attribute.name.{attribute}")))
+    } else {
+        raw.replacen("%s", &format_amount(shown), 1).replacen(
+            "%s",
+            &text(&format!("attribute.name.{attribute}")),
+            1,
+        )
+    };
+    Some(line.replace("%%", "%"))
 }
 
 /// `Attribute.getStyle`: the colour of a line for an attribute whose value
@@ -1095,5 +1101,28 @@ mod tests {
             Some("-60% Speed")
         );
         assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2, false), None);
+    }
+
+    #[test]
+    fn modifier_lines_support_positional_format() {
+        let lang = |k: &str| {
+            Some(
+                match k {
+                    "attribute.modifier.equals.0" => "%2$s: %1$s",
+                    "attribute.modifier.plus.2" => "+%1$s%% %2$s",
+                    "attribute.name.attack_damage" => "Damage",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 5.0, 0, true).as_deref(),
+            Some("Damage: 5")
+        );
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 0.2, 2, false).as_deref(),
+            Some("+20% Damage")
+        );
     }
 }
