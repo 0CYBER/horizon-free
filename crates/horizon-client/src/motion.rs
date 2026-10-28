@@ -1551,7 +1551,10 @@ impl MotionWorld<'_, '_, '_> {
         // Only the server broadcasts event 53 (`!level.isClientSide()`).
         let particles = !self.player.client_side
             && random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
-        if sound || particles {
+        // The server also checks the slide criterion every 20 game ticks,
+        // including ticks without a sound or a particle event.
+        let criterion = !self.player.client_side && self.scene.game_time % 20 == 0;
+        if sound || particles || criterion {
             self.player.events.push(MotionEvent::HoneySlide {
                 pos,
                 sound,

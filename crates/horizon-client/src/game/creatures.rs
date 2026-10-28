@@ -2666,10 +2666,25 @@ impl Game<'_> {
         let hit = self.with_level(|b, level, ticks| {
             b.target_projectile_hit(level, ticks, block, location, face, arrow)
         });
-        if hit.is_some() {
+        if let Some(strength) = hit {
             let _ = self.process_level_events();
-            if p.owner == Some(Who::Player) {
+            if p.owner == Some(Who::Player) && (p.guest.is_none() || p.guest == self.lan_acting) {
                 self.stats.custom("target_hit", 1);
+                let kind = if p
+                    .arrow
+                    .as_ref()
+                    .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+                {
+                    "minecraft:spectral_arrow"
+                } else {
+                    p.kind.id()
+                };
+                let projectile = horizon_client::advancements::EntityView {
+                    kind: kind.to_owned(),
+                    position: [p.position.x, p.position.y, p.position.z],
+                    ..Default::default()
+                };
+                self.trigger_target_hit(&projectile, strength);
             }
         }
     }
