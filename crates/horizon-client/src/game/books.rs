@@ -76,9 +76,11 @@ fn view_pages(data: Option<&StackData>) -> Vec<Text> {
         .iter()
         .enumerate()
         .map(|(i, page)| match tagged.then(|| &w.page_tags[i]) {
-            Some(tag @ horizon_world::nbt::Tag::Compound(_)) => {
-                horizon_client::entity_nbt::name_text(tag)
-            }
+            // A component object, or a component list (`ComponentSerialization`
+            // takes both; servers behind ViaVersion send the list form).
+            Some(
+                tag @ (horizon_world::nbt::Tag::Compound(_) | horizon_world::nbt::Tag::List(_)),
+            ) => horizon_client::entity_nbt::name_text(tag),
             _ => Text::literal(page),
         })
         .collect()
@@ -137,6 +139,18 @@ impl Game<'_> {
                 }
             }
             ClickEvent::OpenUrl(url) => self.click_url(url),
+            ClickEvent::RunCommand(command) => self.click_command(&command),
+            ClickEvent::SuggestCommand(command) => {
+                // defaultHandleClickEvent: the chat screen takes it over.
+                if self.player.is_some() {
+                    self.close_book();
+                    self.open_chat(&command);
+                }
+            }
+            ClickEvent::CopyToClipboard(value) => {
+                use horizon_client::clipboard::Clipboard;
+                self.clipboard.set(&value);
+            }
             _ => {}
         }
     }
