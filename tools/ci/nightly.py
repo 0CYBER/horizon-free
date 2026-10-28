@@ -125,8 +125,9 @@ def merged_since(previous: str | None, main: str) -> list[dict]:
     return train.merged_between("game", previous, main)
 
 
-def refresh(entries: list[dict], get, patterns: list[str]) -> tuple[list[dict], list[str]]:
-    """The scheduled nightly's set: each pull request at its newest head; merged, closed and refused ones out."""
+def refresh(entries: list[dict], get, patterns: list[str], team: set[str]) -> tuple[list[dict], list[str]]:
+    """The scheduled nightly's set: each pull request at its newest approved head (the Team's or Ludovic's agents'
+    approval, ns.approvers); a newer head nobody approved yet waits, merged, closed and refused ones are out."""
     kept, left_out = [], []
     for e in entries:
         pr = get(e["number"])
@@ -134,8 +135,15 @@ def refresh(entries: list[dict], get, patterns: list[str]) -> tuple[list[dict], 
             left_out.append(f"#{e['number']} {e['title']}: merged, so it's in main")
         elif why := ns.check(pr, e["number"], patterns):
             left_out.append(f"{why}: left out")
-        else:
+        elif ns.approvers(pr, pr.head, team):
             kept.append({**e, "head": pr.head, "title": pr.title})
+        elif ns.approvers(pr, e["head"], team):
+            kept.append(e)
+            left_out.append(f"#{e['number']} {e['title']}: its new head {pr.head[:7]} isn't approved yet, so the "
+                            f"approved {e['head'][:7]} stays")
+        else:
+            left_out.append(f"#{e['number']} {e['title']}: no approving review from the Team or Ludovic's agents at "
+                            "its head: left out")
     return kept, left_out
 
 
@@ -231,7 +239,8 @@ def pick(force: bool) -> None:
         get = ns.lookup(repo)
 
         def fresh(st: dict, builds: str):
-            kept, out = refresh(st.get("prs", []), get, patterns)
+            team = ns.read_reviewers(Path(ns.REVIEWERS).read_text() if Path(ns.REVIEWERS).exists() else "").logins
+            kept, out = refresh(st.get("prs", []), get, patterns, team)
             left_out[:] = out
             if kept == st.get("prs", []):
                 return None

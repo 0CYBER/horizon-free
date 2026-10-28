@@ -445,8 +445,10 @@ launcher and the website read: both then look the newest launcher tags up one by
 reviewer asks, for players who want fixes before they are released (#2681). It builds main's newest commit where
 `checks` and `parity-main` passed, as a release does (or the `base` input), plus the pull requests the trusted
 reviewers picked, merged in their order; with none picked, that commit alone (`tools/ci/nightly.py pick`). No green
-commit (main's newest `checks` or `parity-main` run failed) builds nothing. A night with nothing new publishes nothing. A Nightly can include pull requests not reviewed yet: that is what it is for, playing them
-before the gate.
+commit (main's newest `checks` or `parity-main` run failed) builds nothing. A night with nothing new publishes nothing. Since the Nightly is the version every player installs, a pull request goes in only with an
+approving review at the exact head that is built, from a trusted reviewer or from Ludovic's account (his own or his
+agents' review), never its author's (Ludovic, 2026-10-28). A push after the review needs a new one: until then the
+scheduled build keeps the approved head. `/nightly dry-run` needs no review: it publishes nothing.
 
 Every Nightly ships its exact source. Its notes name the commit; `horizon-source.tar.gz` on the release is that
 commit's `git archive`, signed with the builds in `SHA256SUMS`; and `nightly.py keep-source` tags the commit
