@@ -32,8 +32,12 @@ trusting native code is the player's decision, never an agent's.
    official `rustc`, `cargo` and `rust-std` (and `rust-mingw` on Windows), each pinned by SHA-256, downloaded once
    from static.rust-lang.org into `<launcher data>/rust/`, with its own Cargo home `<launcher data>/cargo/`. No
    rustup, nothing on the system; the player's own Rust is never used. Windows uses the `windows-gnu` host, which
-   links without Visual Studio. The linker is the system's on macOS (the Command Line Tools: the launcher asks for
-   `xcode-select --install`) and Linux (`cc`). `horizon-launcher rust status|install|remove`.
+   links without Visual Studio. `rust-mingw` only links, so on Windows the toolchain also brings MinGW-w64
+   (`rust_toolchain::MINGW`: WinLibs' GCC 16.2.0 on MinGW-w64 14.0.0, MSVCRT like `rust-mingw`, one zip pinned by
+   SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring`, `hidapi` and wasmtime compile C,
+   and `windows-sys`' `raw-dylib` imports need `dlltool` and the assembler it runs. The linker is the system's on
+   macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`).
+   `horizon-launcher rust status|install|remove`.
 2. **horizon-mixins**, at the commit the mods name (their `.hnmod`'s `mixins`), else `native_mods::MIXINS_REV`,
    built once with that cargo (`cargo install --locked --git … --rev …`) into `native/tools/<commit>/`.
 3. **The source** of the pinned commit: GitHub's archive of it, once per commit (`native/source/<commit>/`, about
@@ -70,6 +74,15 @@ Measured 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on N
 | Rebuild after a helper's code changed | 2 min 46 s of compiling (only `horizon-client`), 2 min 53 s in all |
 | A change horizon-mixins ignores (a comment) | nothing compiled; 31 s, mostly the version folder's copy |
 
+Measured 2026-10-29 on Windows 11 (Ryzen 7 9800X3D, 16 threads), the same mod and Nightly, an empty `native/target/`
+(horizon-mixins, the source and the crates were already downloaded):
+
+| What | Size, time |
+|---|---|
+| Rust 1.99.1 and MinGW-w64 (`<launcher data>/rust/`) | 1.7 GB, MinGW-w64 875 MB of it |
+| Crates in the launcher's Cargo home | 657 MB |
+| First build: release profile, the whole game | 6 min 57 s of compiling, 8 min 3 s in all; `native/target/` 2.0 GB |
+
 Only the native builds an instance plays are kept (`native_mods::prune`); `native/target/` stays for the next one.
 
 ## Trust
@@ -95,4 +108,4 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 
 - Rebuild after the mods or the Nightly change (asking first, as it compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
-- Windows and Linux: the toolchains are pinned, but a full game build on them is unproven.
+- Linux: the toolchain is pinned, but a full game build on it is unproven. Windows builds and plays (above).
