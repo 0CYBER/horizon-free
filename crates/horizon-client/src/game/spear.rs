@@ -45,7 +45,7 @@ impl Game<'_> {
 
     /// `ServerPlayer.getKnownMovement` of the acting player: what they moved
     /// in the last tick. A guest's comes with their moves.
-    fn known_player_movement(&self) -> Vec3 {
+    pub(super) fn known_player_movement(&self) -> Vec3 {
         if self.lan_acting.is_some() {
             return self.known_movement;
         }

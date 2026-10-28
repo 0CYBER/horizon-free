@@ -4014,7 +4014,10 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return Ok(false);
         };
-        let (velocity, on_ground) = (p.velocity, p.ground.on_ground);
+        // Projectile.shootFromRotation adds getKnownMovement: what the thrower
+        // last moved, not a velocity the server kept for a guest.
+        let on_ground = p.ground.on_ground;
+        let velocity = self.known_player_movement();
         let start = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
         let mut proj = Projectile::new(kind.clone(), start, Some(Who::Player));
         proj.shoot_from_rotation(
