@@ -415,9 +415,11 @@ impl Game<'_> {
             .map(|(k, _)| k.clone())
             .collect();
     }
-    /// The block the player is looking at, for coordinate suggestions.
+    /// The block the player is looking at, for coordinate suggestions, and
+    /// the entity, for entity arguments (ClientSuggestionProvider).
     fn refresh_dynamic_registries(&mut self) {
         self.ui.registries.target_block = self.pick().map(|h| h.pos);
+        self.ui.registries.selected_entities = self.crosshair_entity_uuid().into_iter().collect();
         // ClientPacketListener.getOnlinePlayerNames on a server.
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;

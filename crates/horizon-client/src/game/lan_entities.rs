@@ -7,6 +7,7 @@ use super::Game;
 use horizon_client::lan::{
     entity::{EntityState, Riding, States},
     hub::Hub,
+    playerdata::ints_uuid,
 };
 use horizon_protocol::entity_data::{Value, serializer};
 use horizon_world::nbt::Tag;
@@ -270,6 +271,16 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
+    /// `ClientboundAddEntityPacket(Entity, ServerEntity, int)`: the entity's
+    /// own UUID (`Entity.getUUID`), the one `/data`, saves and UUID
+    /// selectors use, so a client can name it back (the crosshair UUID that
+    /// `ClientSuggestionProvider.getSelectedEntities` suggests).
+    pub(super) fn lan_entity_uuids(&mut self, states: &mut States) {
+        for e in states.as_mut_slice() {
+            e.uuid = ints_uuid(self.uuid_for(e.id as u32));
+        }
+    }
+
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {
