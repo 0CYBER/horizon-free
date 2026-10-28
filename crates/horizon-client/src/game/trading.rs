@@ -137,7 +137,9 @@ impl Game<'_> {
                 horizon_world::nbt::Tag::Int(horizon_world::DATA_VERSION),
             ),
         ]);
-        let _ = horizon_client::save::write_dat(&self.random_sequences_path(), tag);
+        if let Err(e) = horizon_client::save::write_dat(&self.random_sequences_path(), tag) {
+            log::warn!("the villager random sequences were not written: {e}");
+        }
     }
     /// `AbstractVillager.addOffersFromTradeSet` with the world's random
     /// sequence of the set, at the merchant's position.
