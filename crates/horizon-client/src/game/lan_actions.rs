@@ -1038,10 +1038,21 @@ impl Game<'_> {
                     if spectator {
                         return;
                     }
+                    if !host.hub.guests[gi].may_reach_block(a.pos) {
+                        return;
+                    }
                     // ServerPlayerGameMode.handleBlockBreakAction: no dig starts
                     // under spawn protection (the ack puts the block back).
                     if self.under_spawn_protection(host, gi, a.pos) {
                         self.spawn_protection_message(host, conn, a.pos);
+                        return;
+                    }
+                    // mayInteract: a block outside the world border can't be
+                    // dug (the ack puts it back on the client).
+                    if !self
+                        .border
+                        .contains(f64::from(a.pos[0]), f64::from(a.pos[2]))
+                    {
                         return;
                     }
                     let face = direction(i32::from(a.direction));
@@ -1070,6 +1081,15 @@ impl Game<'_> {
                 1 => {}
                 3 => {
                     host.hub.ack(conn, a.sequence);
+                    if !host.hub.guests[gi].may_reach_block(a.pos) {
+                        // Too far (handleBlockBreakAction's "too far"): the
+                        // dig drops and the ack has the client undo its
+                        // prediction.
+                        let play = host.play.entry(conn).or_default();
+                        play.digging = None;
+                        play.mining = None;
+                        return;
+                    }
                     self.guest_stop_digging(host, conn, a.pos);
                 }
                 2 => {
@@ -1162,6 +1182,14 @@ impl Game<'_> {
                 if spectator {
                     return;
                 }
+                // handleUseItemOn: within reach, and the hit point within the block.
+                let inside = p
+                    .cursor
+                    .iter()
+                    .all(|&c| (f64::from(c) - 0.5).abs() < 1.0000001);
+                if !(inside && host.hub.guests[gi].may_reach_block(p.pos)) {
+                    return;
+                }
                 let face = direction(p.face);
                 let hit = Hit {
                     pos: p.pos,
@@ -1175,9 +1203,14 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 // handleUseItemOn: under spawn protection nothing is used or
                 // placed; the player is told and the blocks below go back.
+                // mayInteract: nothing is used on a block outside the world
+                // border either.
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
-                } else {
+                } else if self
+                    .border
+                    .contains(f64::from(p.pos[0]), f64::from(p.pos[2]))
+                {
                     let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
                     let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
                     let swung = self.as_guest(host, conn, |g| {

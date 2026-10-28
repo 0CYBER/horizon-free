@@ -459,6 +459,22 @@ impl Guest {
         let range = if self.creative() { 5.0 } else { 4.5 };
         within_block_range(eye, range + buffer, pos)
     }
+    /// `Player.isWithinBlockInteractionRange(pos, 1.0)`, which the server
+    /// checks a block action against (ServerPlayerGameMode.handleBlockBreakAction,
+    /// ServerGamePacketListenerImpl.handleUseItemOn): from the eyes of the
+    /// guest's body in its pose (crouching, swimming, gliding).
+    pub fn may_reach_block(&self, pos: [i32; 3]) -> bool {
+        let eye = self
+            .motion
+            .as_ref()
+            .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
+        let range = if self.creative() { 5.0 } else { 4.5 };
+        within_block_range(
+            [self.position[0], self.position[1] + eye, self.position[2]],
+            range + 1.0,
+            pos,
+        )
+    }
     /// The inventory menu's 46 slots (ServerPlayer.inventoryMenu): 0 crafting
     /// result, 1..=4 crafting grid, 5..=8 armor, 9..=35 main, 36..=44 hotbar,
     /// 45 off hand.
@@ -808,5 +824,44 @@ mod tests {
         chestplate.data_mut().trim = Some(("minecraft:x".into(), "coast".into()));
         let stack = stack_to_network(|_| 7, synced_id, &Some(chestplate)).unwrap();
         assert_eq!(stack.component(component::TRIM), None);
+    }
+
+    fn guest_at(position: [f64; 3]) -> Guest {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        Guest::new(
+            Joined {
+                conn: 0,
+                uuid: 0,
+                name: "guest".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(8),
+                brand: String::new(),
+                sender: PlayerSender::new(tx, Arc::new(std::sync::atomic::AtomicUsize::new(0))),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:1".parse().unwrap(),
+            },
+            1,
+            position,
+            10,
+        )
+    }
+
+    #[test]
+    fn a_block_action_must_be_within_reach() {
+        let mut g = guest_at([0.5, 64.0, 0.5]);
+        // Survival (4.5 + 1 from the eyes): five blocks off horizontally,
+        // not one further.
+        assert!(g.may_reach_block([5, 64, 0]));
+        assert!(!g.may_reach_block([6, 64, 0]));
+        // Creative's 5.0 reaches one block further.
+        g.game_mode = CREATIVE;
+        assert!(g.may_reach_block([6, 64, 0]));
+        assert!(!g.may_reach_block([7, 64, 0]));
+        // With no body yet the sneak flag gives the eye height: a block at
+        // the edge above is gone once crouched.
+        g.game_mode = SURVIVAL;
+        assert!(g.may_reach_block([0, 71, 0]));
+        g.sneaking = true;
+        assert!(!g.may_reach_block([0, 71, 0]));
     }
 }
