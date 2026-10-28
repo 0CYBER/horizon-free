@@ -6,6 +6,12 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 2 adds the item panel beside container screens and its recipe pages
+//! (`native_panel_items`, `native_panel_recipes`, `native_panel_event`),
+//! and the game's items and recipes (`native_recipes`,
+//! `native_known_recipes`, `native_place_recipe`, `native_give`): what a
+//! recipe viewer needs.
+//!
 //! Names, parameters and call sites are kept from release to release, and
 //! hook points are only ever added: each addition raises [`NATIVE_HOOKS_API`].
 //! A bundle that hooks only these names the API it needs (`hooks`), and the
@@ -13,7 +19,7 @@
 //! that would break such a bundle is not made.
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
-use super::{Game, Screen, execution_role::ExecutionRole};
+use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -29,7 +35,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 1;
+pub(crate) const NATIVE_HOOKS_API: u32 = 2;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -78,6 +84,83 @@ pub(crate) struct NativeMod {
     /// Its keys: name, label and default key (`key.keyboard.z`). The page
     /// lists them first; `native_mod_key` reads the player's choice.
     pub(crate) keys: Vec<[String; 3]>,
+}
+
+/// An item the panel shows (`native_panel_items`): its id
+/// (`minecraft:diamond`), a count (1 draws none) and its components beyond
+/// the item's own, in vanilla's item syntax, or "".
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeStack {
+    pub(crate) item: String,
+    pub(crate) count: u32,
+    pub(crate) components: String,
+}
+
+/// How the panel lays out a recipe of `native_panel_recipes`.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeRecipeLayout {
+    /// A crafting grid of `width` x `height` slots, an arrow and the result.
+    Grid,
+    /// One input over a flame, an arrow and the result (furnaces, smokers,
+    /// campfires).
+    Cooking,
+    /// One input, an arrow and the result (the stonecutter).
+    Single,
+    /// Template, base and addition, an arrow and the result.
+    Smithing,
+    /// A potion and an ingredient, an arrow and the result.
+    Brewing,
+}
+
+/// A recipe the panel shows (`native_panel_recipes`). Each slot, and the
+/// result, cycles through its stacks, one a second; an empty slot shows
+/// nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeRecipeView {
+    pub(crate) layout: NativeRecipeLayout,
+    /// The grid's size (`Grid` only), at most 3 x 3.
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) slots: Vec<Vec<NativeStack>>,
+    pub(crate) results: Vec<NativeStack>,
+    /// A short line under the recipe (a cooking time), or "".
+    pub(crate) note: String,
+    /// The action button beside it: none, enabled, or shown greyed.
+    pub(crate) action: Option<bool>,
+}
+
+/// What the player did on a native mod's panel (`native_panel_event`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum NativePanelEvent {
+    /// A click on an item of the panel, by its index in
+    /// `native_panel_items`' list.
+    Clicked { index: u32, right: bool },
+    /// The search box's text, each time the player changes it.
+    Search(String),
+    /// A key (`key.keyboard.r`; compare it with `native_mod_key`) went down
+    /// while the pointer was on an item: a slot of the screen's, or the
+    /// panel's.
+    Key { key: String, stack: NativeStack },
+    /// A click on a slot of a recipe the panel shows: the recipe's index in
+    /// `native_panel_recipes`' list and the slot's in it (the results come
+    /// after the slots), and the stack it showed then.
+    SlotClicked {
+        recipe: u32,
+        slot: u32,
+        stack: NativeStack,
+        right: bool,
+    },
+    /// The action button of the recipe at this index.
+    Action(u32),
+    /// The player turned the recipes' page: the index of the first recipe
+    /// now shown.
+    Page(u32),
+    /// The recipe page's back button.
+    Back,
+    /// The player picked the tab at this index.
+    Tab(u32),
 }
 
 /// An item of [`NativeRecipes::items`], by its index there, with a count
@@ -230,6 +313,11 @@ impl Game<'_> {
     pub(super) fn native_settings_click(&mut self, mod_id: &str, button: usize) {
         let _ = (mod_id, button);
     }
+    /// The player did `event` on mod `mod_id`'s panel (`native_panel_items`):
+    /// act on it when it is yours. API 2.
+    pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
+        let _ = (mod_id, event);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -351,6 +439,30 @@ impl Game<'_> {
         let dir = self.native_data_dir(mod_id);
         let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
     }
+    /// Shows the panel beside container screens with these items (at most
+    /// 8192), as the game's own slots in pages, with a search box; the
+    /// player's clicks, searches and keys over items come back as
+    /// `native_panel_event`. The panel is the last mod's to show one; empty
+    /// items and no recipe page take yours away.
+    pub(super) fn native_panel_items(&mut self, mod_id: &str, items: Vec<NativeStack>) {
+        self.panel.show_items(mod_id, items);
+    }
+    /// Shows these recipes in the panel instead of its items, as many as
+    /// fit a page, under `title` and a back button, with a row of `tabs`
+    /// (each an icon; `tab` is the selected one) between them. At most 256
+    /// recipes and 16 tabs; no recipes shows the items again. The same title
+    /// and tab again keep the page the player turned to.
+    pub(super) fn native_panel_recipes(
+        &mut self,
+        mod_id: &str,
+        title: &str,
+        tabs: Vec<NativeStack>,
+        tab: u32,
+        views: Vec<NativeRecipeView>,
+    ) {
+        let page = RecipePage::new(title, tabs, tab, views);
+        self.panel.show_recipes(mod_id, page);
+    }
     /// Every item and recipe the game knows, made once (the same for every
     /// call); none outside a world. They are the window's own: the world's
     /// in single player, vanilla's on a server, which sends a client no
@@ -434,6 +546,9 @@ impl Game<'_> {
             return;
         }
         if let Some(name) = keybinds::key_name(key) {
+            if pressed {
+                self.native_panel_key(name);
+            }
             self.native_key(name, pressed);
         }
     }
