@@ -40,6 +40,7 @@ pub mod component {
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
     pub const TRIM: i32 = 58;
+    pub const INSTRUMENT: i32 = 63;
     pub const LODESTONE_TRACKER: i32 = 69;
     pub const FIREWORK_EXPLOSION: i32 = 70;
     pub const FIREWORKS: i32 = 71;
@@ -112,6 +113,9 @@ pub enum Component {
         material: i32,
         pattern: i32,
     },
+    /// `InstrumentComponent` naming its instrument by `minecraft:instrument`
+    /// registry id; a direct instrument stays [`Component::Raw`].
+    Instrument(i32),
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
@@ -349,6 +353,18 @@ impl Component {
                     _ => Self::Raw(bytes.to_vec()),
                 }
             }
+            // InstrumentComponent.STREAM_CODEC: a holder, a reference's id plus one.
+            // A direct instrument has no registry name: read past.
+            INSTRUMENT => {
+                let start = r.position();
+                skip::component(INSTRUMENT, r)?;
+                let bytes = r.since(start);
+                let mut ids = Reader::new(bytes);
+                match ids.varint() {
+                    Ok(id @ 1..) if ids.remaining() == 0 => Self::Instrument(id - 1),
+                    _ => Self::Raw(bytes.to_vec()),
+                }
+            }
             other => {
                 let start = r.position();
                 skip::component(other, r)?;
@@ -363,6 +379,7 @@ impl Component {
                 w.varint(material + 1);
                 w.varint(pattern + 1);
             }
+            Self::Instrument(id) => w.varint(id + 1),
             Self::Int(v) if kind == component::DYED_COLOR => w.i32(*v),
             Self::Int(v) => w.varint(*v),
             Self::Unit => {}
@@ -911,6 +928,8 @@ mod tests {
             ("01890b01004a02200e000b6d696e6563726166743a7801790b", 74),
             ("01880301004c01f60801000001be0c0100000001d30c010000", 76),
             ("01a408010037020f6412a001", 55),
+            // A goat horn's instrument by reference (InstrumentComponent's holder).
+            ("01bd0801003f02", 63),
         ] {
             let bytes: Vec<u8> = (0..hex.len())
                 .step_by(2)
@@ -926,6 +945,7 @@ mod tests {
                         pattern: 1,
                     }
                 }
+                63 => *c == Component::Instrument(1),
                 _ => matches!(c, Component::Raw(_)),
             };
             assert!(

@@ -61,6 +61,11 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                     ("pattern", Tag::String(pattern.into())),
                 ])
             }
+            // Instruments are a synced registry: a goat horn names its own.
+            Component::Instrument(id) => match synced.name("minecraft:instrument", *id) {
+                Some(name) => Tag::String(name.into()),
+                None => continue,
+            },
             Component::Int(v) if *kind == component::RARITY => {
                 let rarity = ["common", "uncommon", "rare", "epic"];
                 Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
