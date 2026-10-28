@@ -246,6 +246,7 @@ impl Game<'_> {
                     super::packs::open_folder(&dir);
                 }
                 Event::ModSettings(i) => self.open_mod_screen(i, true),
+                Event::NativeButton(i, b) => self.native_settings_event(i, b),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
         }
@@ -274,6 +275,7 @@ impl Game<'_> {
                 s.horizon.hdr_paper_white as f32,
                 s.horizon.hdr_peak as f32,
                 s.horizon.hdr_ui_brightness as f32 / 100.0,
+                &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
         }
         // Window.updateFullscreenIfChanged: only a changed option asks the
