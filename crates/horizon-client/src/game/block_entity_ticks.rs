@@ -23,7 +23,11 @@ impl Game<'_> {
             let states = self.ticking_states();
             self.world.block_entities.set_states(states);
         }
-        self.forget_gone_hoppers();
+        // Only lingering cooldowns are dropped; a hopper that ticks checks
+        // its own block. Once a second is soon enough for the rest.
+        if self.world.game_time % 20 == 0 {
+            self.forget_gone_hoppers();
+        }
         let ticking = self.block_ticking_area();
         let mut spawners = Vec::new();
         let mut trial_spawners = Vec::new();
