@@ -681,6 +681,13 @@ impl Game<'_> {
     /// the server's echo doesn't hand back a bare item.
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
         let r = self.remote.as_ref()?;
+        // A stack as the server sent it, only its count changed: its own
+        // components go back, as a vanilla client keeps them.
+        if let Some((stack, patch)) = s.as_ref().and_then(|s| Some((s, s.wire_patch()?))) {
+            let mut out = Stack::new(self.item_id(&stack.item), stack.count as i32);
+            out.wire = horizon_protocol::item::WirePatch(Some(patch));
+            return Some(out);
+        }
         horizon_client::lan::guest::stack_to_network(
             |name| self.item_id(name),
             // Built-in first, as a hub's `SyncData::id` does: potions are one.
