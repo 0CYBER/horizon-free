@@ -53,13 +53,18 @@ The key hashes the commit, the horizon-mixins commit, Rust's version, the profil
 every bundle. The same set on the same commit is never built twice. A change gives a new build, and
 `native/target/` stays, so a rebuild compiles only `horizon-client` and what the mods touched.
 
-| What | Size, time (Mac mini M4 Pro) |
+Measured 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on Nightly `83f15fa`,
+`CARGO_BUILD_JOBS=8` while other agents' builds ran (upper bounds):
+
+| What | Size, time |
 |---|---|
-| Rust 1.99.1 (`<launcher data>/rust/`) | 453 MB, 58 s to download and unpack |
-| horizon-mixins | built once: BUILD_TOOL |
-| Source of one commit | 63 MB |
-| First release build of the game with Veinminer | BUILD_COLD; `native/target/` TARGET_SIZE |
-| Rebuild after one helper changed | BUILD_WARM |
+| Rust 1.99.1 (`<launcher data>/rust/`) | 453 MB; 58 s to download and unpack |
+| horizon-mixins (`native/tools/`) | 7 MB; built once in 19 s |
+| Crates in the launcher's Cargo home (`<launcher data>/cargo/`) | 289 MB |
+| Source of one commit, and the stage | 64 MB each |
+| First build: release profile, the whole game | 9 min 10 s of compiling, 9 min 41 s in all; `native/target/` 1.5 GB |
+| Rebuild after a helper's code changed | 2 min 46 s of compiling (only `horizon-client`), 2 min 53 s in all |
+| A change horizon-mixins ignores (a comment) | nothing compiled; 31 s, mostly the version folder's copy |
 
 Only the newest native build is kept (`native_mods::prune`); `native/target/` stays for the next one.
 
