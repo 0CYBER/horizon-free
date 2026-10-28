@@ -591,6 +591,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
         }
+        // IronGolem.addAdditionalSaveData.
+        "minecraft:iron_golem" => {
+            map.insert(
+                "PlayerCreated".into(),
+                Tag::Byte(i8::from(m.extra.player_created)),
+            );
+        }
         "minecraft:warden" => {
             if let Some(st) = &m.extra.warden {
                 map.insert("listener".into(), st.vibration.to_nbt());
@@ -1274,6 +1281,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Sheep {
         m.extra.color = number(tag.get("Color")).map_or(0, |c| (c as u8) & 15);
         m.extra.sheared = flag(tag, "Sheared");
+    }
+    // IronGolem.readAdditionalSaveData: not player created when absent.
+    if m.species() == crate::mobs::Species::IronGolem {
+        m.extra.player_created = flag(tag, "PlayerCreated");
     }
     if m.species() == crate::mobs::Species::Shulker {
         m.extra.variant3 = number(tag.get("AttachFace")).unwrap_or(0).clamp(0, 5) as u8;
