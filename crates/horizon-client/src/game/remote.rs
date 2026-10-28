@@ -3916,13 +3916,23 @@ impl Game<'_> {
         }
         let bounds = p.bounds();
         let teams = self.mob_teams();
+        // `Entity.getTeam` is `Scoreboard.getPlayersTeam(getScoreboardName())`:
+        // a player's score holder is its profile name, every other entity's
+        // its UUID text. `mob_teams` keys by UUID and names the local player
+        // `PLAYER_NAME`, which misses a server's teams for players.
+        let board = &self.score.board;
+        let player_team = board.players_team(&r.profile_name);
         let mut push = Vec3::ZERO;
         for m in &self.mobs {
-            let spectator = r
+            let listed = r
                 .level_players
                 .get(&(m.id as i32))
-                .and_then(|uuid| r.tab_players.get(uuid))
-                .is_some_and(|t| t.game_mode == SPECTATOR);
+                .and_then(|uuid| r.tab_players.get(uuid));
+            let spectator = listed.is_some_and(|t| t.game_mode == SPECTATOR);
+            let mob_team = match listed {
+                Some(t) => board.players_team(&t.name),
+                None => teams.of(Who::Mob(m.id)),
+            };
             // Bats never push; a spectator has no physics; passengers of the
             // same vehicle never push each other.
             if !m.alive()
@@ -3932,11 +3942,7 @@ impl Game<'_> {
                     .riding
                     .is_some_and(|v| v == m.id || m.extra.mount == Some(v))
                 || !m.bounds().intersects(bounds)
-                || !horizon_client::scoreboard::pushable_by(
-                    teams.of(Who::Mob(m.id)),
-                    teams.of(Who::Player),
-                    true,
-                )
+                || !horizon_client::scoreboard::pushable_by(mob_team, player_team, true)
             {
                 continue;
             }
@@ -3958,7 +3964,6 @@ impl Game<'_> {
         }
         // AbstractBoat.push(player) from the boat's own tick (its box grown
         // by 0.2 sideways) and from the player's pushEntities (its box).
-        let player_team = teams.of(Who::Player);
         let area = Vec3::new(f64::from(0.2_f32), f64::from(-0.01_f32), f64::from(0.2_f32));
         for b in self.boats.iter().filter(|b| self.riding != Some(b.id)) {
             let bb = b.bounds();
