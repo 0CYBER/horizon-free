@@ -84,7 +84,7 @@ impl Game<'_> {
                     &s,
                     self.pack.assets.registry,
                     self.res.biomes(),
-                    super::Dim::Overworld.shape(),
+                    self.level_shapes.overworld,
                 )
             })
         {

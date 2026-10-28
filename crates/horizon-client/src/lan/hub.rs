@@ -64,6 +64,8 @@ pub struct HubConfig {
     /// the owner's level from `ops`, the others' from Allow Commands and
     /// the guests' command access, and the integrated-only commands.
     pub integrated: bool,
+    /// The shapes of the world's levels (their dimension types).
+    pub levels: crate::chunk::LevelShapes,
 }
 
 /// The host player as the other players see them.
@@ -352,8 +354,7 @@ impl Hub {
             .unwrap_or(0);
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
-        let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(level_shape(&d));
+        encoder.set_dimension(config.levels.get(&config.dimension));
         Self {
             lan,
             config,
@@ -2643,8 +2644,8 @@ impl Hub {
             .sync
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
-        let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder.set_dimension(level_shape(&d));
+        self.encoder
+            .set_dimension(self.config.levels.get(dimension));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2797,16 +2798,6 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
         shared |= -128;
     }
     shared
-}
-
-/// The shape a level of the dimension type `d` has.
-fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
-    crate::chunk::LevelShape {
-        sky_light: d.has_skylight,
-        min_y: d.min_y,
-        height: d.height,
-        logical_height: d.height,
-    }
 }
 
 #[cfg(test)]

@@ -86,6 +86,43 @@ impl LevelShape {
     }
 }
 
+/// The shapes of a world's three levels, from its dimension types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelShapes {
+    pub overworld: LevelShape,
+    pub nether: LevelShape,
+    pub end: LevelShape,
+}
+impl LevelShapes {
+    pub const VANILLA: Self = Self {
+        overworld: LevelShape::OVERWORLD,
+        nether: LevelShape::NETHER,
+        end: LevelShape::END,
+    };
+    /// The shape of the level `id` (`minecraft:overworld`,
+    /// `minecraft:the_nether`, `minecraft:the_end`); others get the
+    /// Overworld's.
+    pub fn get(&self, id: &str) -> LevelShape {
+        match id {
+            "minecraft:the_nether" => self.nether,
+            "minecraft:the_end" => self.end,
+            _ => self.overworld,
+        }
+    }
+    pub fn get_mut(&mut self, id: &str) -> &mut LevelShape {
+        match id {
+            "minecraft:the_nether" => &mut self.nether,
+            "minecraft:the_end" => &mut self.end,
+            _ => &mut self.overworld,
+        }
+    }
+}
+impl Default for LevelShapes {
+    fn default() -> Self {
+        Self::VANILLA
+    }
+}
+
 /// The span of block Y a chunk holds: from `min_y`, `sections` sections up
 /// (`LevelShape::column`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

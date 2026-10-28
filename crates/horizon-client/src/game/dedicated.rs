@@ -633,6 +633,7 @@ impl Game<'_> {
             resource_pack: props.resource_pack.clone(),
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
+            levels: self.level_shapes,
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
             } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {
@@ -656,6 +657,7 @@ impl Game<'_> {
             view_distance: props.view_distance.clamp(2, 32),
             simulation_distance: props.simulation_distance.clamp(2, 32),
             dimension: self.dim.id().to_owned(),
+            levels: self.level_shapes,
             seed: self.level.seed,
             max_players: props.max_players.max(0) as usize,
             dedicated: true,

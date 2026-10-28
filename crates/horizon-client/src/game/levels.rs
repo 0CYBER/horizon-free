@@ -144,10 +144,11 @@ impl Game<'_> {
             &self.settings,
             &self.world_root,
             dim,
+            self.level_shapes.get(dim.id()),
             self.level.seed,
         )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
-        world.shape = dim.shape();
+        world.shape = self.level_shapes.get(dim.id());
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
             world,

@@ -44,6 +44,14 @@ impl ChunkFormat {
             biome_bits,
         }
     }
+    /// Decodes into chunks of `column`.
+    pub(super) fn in_column(self, column: ColumnLayout) -> Self {
+        Self { column, ..self }
+    }
+    /// The column decoded chunks hold.
+    pub(super) fn layout(&self) -> ColumnLayout {
+        self.column
+    }
     pub(super) fn with_dimension(&self, dimension: &DimensionType) -> Self {
         Self {
             column: self.column,
