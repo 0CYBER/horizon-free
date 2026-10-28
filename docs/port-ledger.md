@@ -26,6 +26,7 @@ python3 tools/port_ledger.py coverage --package world/entity --depth 3
 python3 tools/port_ledger.py gaps --kind seam                         # see the kinds below
 python3 tools/port_ledger.py report                                   # .local/port-ledger/report.{md,html}
 python3 tools/port_ledger.py diff old/ledger.json                     # against another build
+python3 tools/port_ledger.py todo --package world/entity/animal       # the next methods with no answer
 ```
 
 `--json` on any query gives machine output for agents.
@@ -50,15 +51,27 @@ method, Rust function or file), the gaps by kind, and coverage by package.
    (`shulker_bullet.rs`). A function in `impl HurtByTarget` is never taken for `AvoidEntityGoal.canUse`: its
    type must be named for the class, a sub- or superclass of it, or be one of Horizon's own containers
    (`Game`, `Sim`, `MotionWorld`).
-3. **Mentioned:** the method appears in some other comment of a function (often a caller explaining a step).
-4. **Linked:** where `X` is ported as `A`, a callee of `X` with no port and a callee of `A` nothing cites,
+3. **Mapped, skipped, absent:** a row in the verdict map (below) says where it is, why it needs no port, or
+   that Horizon doesn't do it.
+4. **Mentioned:** the method appears in some other comment of a function (often a caller explaining a step).
+5. **Linked:** where `X` is ported as `A`, a callee of `X` with no port and a callee of `A` nothing cites,
    whose names agree less Java's `get` (`getFlyingSpeed` → `flying_speed`).
-5. **Inferred:** nothing names it, but a function shares what is hard to share by chance: rare numbers
+6. **Structural:** in the class's home files (below), the function that touches the same state (the fields the
+   method reads and writes, by their Rust names) and reaches the ports of the same callees, weighed against its
+   length so one long function doesn't take every method.
+7. **Inferred:** nothing names it, but a function shares what is hard to share by chance: rare numbers
    (`0.458`, `72000`) and game ids (`SoundEvents.ENTITY_SHULKER_BULLET_HIT` against
    `"entity.shulker_bullet.hit"`, `Blocks.DETECTOR_RAIL` against `"minecraft:detector_rail"`).
-6. **Trivial:** an accessor, an abstract method or a few instructions: nothing to port on its own. Coverage
-   leaves these out of its percentage.
-7. **Missing:** none of these.
+8. **Trivial:** an accessor, an abstract method, a few instructions, or a constructor that only sets fields
+   (the struct's initialiser): nothing to port on its own. Coverage leaves these out of its percentage.
+9. **Missing:** none of these: no answer yet.
+
+Every class also gets a **home**: the Rust files it lives in, weighed from all of the above, the files citing
+it, files named for it and `impl`s of a type named for it (a nested class without one lives with its outer
+class). `where Class`, `class` and `issue` show it.
+
+`coverage` gives two shares: *found*, the methods worth porting (not trivial, not skipped) that have a port,
+and *answered*, all methods with any answer (a port, a reason to skip, trivial, or known to be missing).
 
 Citing the vanilla method in the first line of a function's doc is what makes it findable, by people, agents
 and this tool alike; `check` lists the functions a branch changed that look like ports but cite nothing. Test
@@ -78,6 +91,7 @@ type where it is known (`self`, a parameter, a `let`, a struct field, a trait to
 | `class` | A whole class nothing ports while most of its package is ported. Renderers, sound instances and goals are reached by registration, so no call graph shows them. | `ShulkerBulletRenderer`, `ElytraOnPlayerSoundInstance` |
 | `callee` | A ported method whose ported callee its port never reaches. Noisier: a port may get the value as an argument instead. | `Projectile.shootFromRotation` without `Entity.getKnownMovement`: throws added a stale server velocity; `ServerPlayer.getKnownMovement` without `getVehicle`: a spear's charge ignored the horse |
 | `stale` | A citation whose class or method the pinned version doesn't have (renamed, removed, or a typo). | |
+| `map` | A verdict-map row whose class, method or Rust fn doesn't exist, or whose verdict isn't one of the above. | |
 | `unported` | (`gaps --kind unported`) Vanilla methods with no port, ranked by how many vanilla methods call them. | |
 
 Calls to maths, geometry, randomness and text (`Mth`, `AABB`, `Vec3`, `RandomSource`, `Component`) never make
@@ -85,6 +99,29 @@ a `seam` or `callee` gap: every path does those its own way.
 
 A gap is a lead, not a verdict: read the vanilla method and the Rust function it names before changing
 anything.
+
+## The verdict map
+
+What no automatic match finds, someone reads and decides. `tools/port_map/*.tsv` holds those answers, one
+file per batch, tab-separated:
+
+```
+Class.method	verdict	where	note
+XoroshiroRandomSource.nextInt	port	crates/horizon-core/src/random.rs::XoroshiroRandom::next_int_bound	bounded form
+ArmadilloAi.initIdleActivity	inline	crates/horizon-client/src/mobs/armadillo.rs::register	gap: no AnimalMakeLove, so armadillos never breed
+MushroomCow.addAdditionalSaveData	missing		Type is not saved: a mooshroom turned brown by lightning loads red
+NoiseRouterData	skip:data		a class row covers the class's methods without a row of their own
+```
+
+Verdicts: `port` (the fn that does the method's job), `inline` (the bigger fn its behaviour is folded into),
+`missing`, `skip:<reason>` with a reason from `java`, `data`, `ui`, `debug`, `service`, `server`, `other`, and on
+a class row `home` with the class's files. `where` names a fn by file, impl type and name, not by line, so rows
+survive edits around them; a row whose class, method or fn doesn't exist shows up as a `map` gap.
+
+`todo [--package P] [--limit N] [--after CLASS]` prints the next batch of methods with no answer, whole classes
+at a time, with each class's Java source, home files, and Rust functions in them with similar names: the input
+for whoever (or whichever agent) writes the next batch file. Set `PORT_LEDGER_OUT` to build into another
+directory, so several people can check their own rows at once.
 
 ## Bug reports and branches
 
