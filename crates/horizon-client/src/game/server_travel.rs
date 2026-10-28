@@ -132,6 +132,14 @@ impl Game<'_> {
         self.server_trips.iter().any(|t| t.conn == conn)
     }
 
+    /// Whether a vehicle waits in `dim` for its rider to arrive elsewhere:
+    /// that level stays open until it has moved.
+    pub(super) fn vehicle_waits_in(&self, dim: Dim) -> bool {
+        self.server_trips
+            .iter()
+            .any(|t| t.vehicle.is_some() && t.source == dim)
+    }
+
     /// Per server tick in each level, after the guests' own: the arrivals of
     /// the trips into this level, then `Entity.handlePortal` for each player
     /// in it (Nether portals count up their transition time, End portals
@@ -142,6 +150,7 @@ impl Game<'_> {
         if self.options.dedicated.is_none() {
             return;
         }
+        self.carry_riders_through_portals(host);
         let conns: Vec<u32> = host
             .hub
             .guests
@@ -167,13 +176,16 @@ impl Game<'_> {
         let Some(g) = host.hub.guest(conn) else {
             return;
         };
-        let (at, invulnerable, sleeping) = (
+        let (at, invulnerable, sleeping, riding) = (
             Vec3::new(g.position[0], g.position[1], g.position[2]),
             g.creative(),
             g.sleeping,
+            g.vehicle.is_some(),
         );
         // Entity.checkInsideBlocks: the Nether portal blocks the box is in.
-        if let Some(pos) = self.nether_portal_inside(at) {
+        // `canUsePortal(false)` is false for a passenger: its vehicle goes
+        // through and carries it (`carry_riders_through_portals`).
+        if !riding && let Some(pos) = self.nether_portal_inside(at) {
             self.portals.player.set_inside(pos, PLAYER_DELAY);
         }
         // `ServerPlayer.showEndCredits`: the player stays out of the world while the
@@ -188,7 +200,7 @@ impl Game<'_> {
             return;
         }
         let (end_portal, gateway) = self.inside_end_portals(at, WIDTH, HEIGHT);
-        if end_portal {
+        if end_portal && !riding {
             // EndPortalBlock.entityInside: the first exit from the End shows the credits.
             if self.dim == Dim::End && !host.hub.guest(conn).is_some_and(|g| g.seen_credits) {
                 if let Some(g) = host.hub.guests.iter_mut().find(|g| g.conn == conn) {
@@ -248,6 +260,44 @@ impl Game<'_> {
             return;
         }
         self.start_server_trip(host, conn, plan.dim, Some(plan));
+    }
+
+    /// `Entity.handlePortal` of a vehicle server players ride, once through
+    /// a portal (a vehicle's transition time is 0): the riders travel with
+    /// it and ride it again on arrival (`Entity.teleportCrossDimension`), so
+    /// a rider never waits for its own portal delay.
+    fn carry_riders_through_portals(&mut self, host: &mut LanHost) {
+        for (vehicle, entry) in self.take_carrying(self.dim) {
+            let Some(plan) = self.vehicle_plan(vehicle, entry) else {
+                continue;
+            };
+            if !self.may_enter(plan.dim) {
+                continue;
+            }
+            let riders: Vec<u32> = host
+                .hub
+                .guests
+                .iter()
+                .filter(|g| g.vehicle == Some(vehicle) && !self.on_server_trip(g.conn))
+                .map(|g| g.conn)
+                .collect();
+            // Entity.canTeleport: out of the End, every rider has seen the
+            // credits.
+            if plan.end
+                && self.dim == Dim::End
+                && riders
+                    .iter()
+                    .any(|c| !host.hub.guest(*c).is_some_and(|g| g.seen_credits))
+            {
+                continue;
+            }
+            // An End portal's exit is found as a player's (its own respawn
+            // point out of the End).
+            let (target, plan) = (plan.dim, (!plan.end).then_some(plan));
+            for conn in riders {
+                self.start_server_trip(host, conn, target, plan);
+            }
+        }
     }
 
     /// A Nether portal block a player's box is in.

@@ -477,9 +477,17 @@ impl Game<'_> {
     /// (other than the Overworld) nobody has been in for a while.
     pub(super) fn close_idle_levels(&mut self) -> Result<()> {
         let occupied = self.levels_to_tick();
+        // A vehicle waiting there for its rider's arrival in another level.
+        let waiting: Vec<Dim> = self
+            .levels
+            .parked
+            .keys()
+            .copied()
+            .filter(|d| self.vehicle_waits_in(*d))
+            .collect();
         let mut closing = Vec::new();
         for (dim, p) in &mut self.levels.parked {
-            if occupied.contains(dim) {
+            if occupied.contains(dim) || waiting.contains(dim) {
                 p.idle = 0;
                 continue;
             }
