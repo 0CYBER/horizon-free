@@ -2845,11 +2845,13 @@ impl Game<'_> {
                         hurt
                     }
                     Who::Mob(id) => {
-                        let hurt = self
-                            .mobs
-                            .iter_mut()
-                            .find(|m| m.id == id)
-                            .is_some_and(|m| m.damage(amount, source));
+                        let hurt = self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+                            let damaged = m.damage(amount, source);
+                            if damaged && let Some((e, t)) = effect {
+                                m.add_effect(e, *t, 0);
+                            }
+                            damaged
+                        });
                         if p.owner == Some(Who::Player) {
                             self.last_hurt_by_player.insert(id, self.lan_acting);
                             if hurt && let Some(m) = self.mobs.iter().find(|m| m.id == id) {
@@ -4387,7 +4389,21 @@ impl Game<'_> {
                 let Some(model) = self.arrow_model.as_ref() else {
                     continue;
                 };
-                let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
+                let texture = a
+                    .arrow
+                    .as_ref()
+                    .map(|s| match &*s.pickup_item.item {
+                        "minecraft:spectral_arrow" => "entity/projectiles/arrow_spectral",
+                        "minecraft:tipped_arrow" => "entity/projectiles/arrow_tipped",
+                        _ => "entity/projectiles/arrow",
+                    })
+                    .unwrap_or("entity/projectiles/arrow");
+                let Some(r) = atlas
+                    .sprites
+                    .get(texture)
+                    .or_else(|| atlas.sprites.get("entity/projectiles/arrow"))
+                    .copied()
+                else {
                     continue;
                 };
                 let m = glam::Mat4::from_translation(c)

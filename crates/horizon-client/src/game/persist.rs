@@ -155,6 +155,7 @@ impl Game<'_> {
                     kind.as_str(),
                     "minecraft:experience_orb"
                         | "minecraft:arrow"
+                        | "minecraft:spectral_arrow"
                         | "minecraft:fireball"
                         | "minecraft:small_fireball"
                         | "minecraft:falling_block"
@@ -184,7 +185,7 @@ impl Game<'_> {
                             self.orbs.push(orb);
                         }
                     }
-                    "minecraft:arrow" => {
+                    "minecraft:arrow" | "minecraft:spectral_arrow" => {
                         if let Some((mut p, in_block)) = entity_nbt::arrow_from_nbt(
                             &tag,
                             player_uuid,
@@ -698,7 +699,7 @@ impl Game<'_> {
             } else {
                 None
             };
-            let (uuid, raw) = anon(&self.persist, p.kind.id(), p.position);
+            let (uuid, raw) = anon(&self.persist, p.entity_kind(), p.position);
             let in_block = p
                 .arrow
                 .as_ref()

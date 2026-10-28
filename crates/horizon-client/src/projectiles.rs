@@ -266,6 +266,17 @@ impl Projectile {
         }
         trail
     }
+    pub fn entity_kind(&self) -> &'static str {
+        if self
+            .arrow
+            .as_ref()
+            .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+        {
+            "minecraft:spectral_arrow"
+        } else {
+            self.kind.id()
+        }
+    }
     pub fn is_arrow(&self) -> bool {
         matches!(self.kind, ProjectileKind::Arrow { .. })
     }
