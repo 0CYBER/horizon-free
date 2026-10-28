@@ -105,10 +105,28 @@ impl Game<'_> {
         let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
             return;
         };
-        self.tick_beacon(key, &mut b);
+        self.tick_beacon(key, &mut b, false);
         self.world.block_entities.put(key, BlockEntity::Beacon(b));
     }
-    fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon) {
+    /// `ClientLevel.tickBlockEntities` for beacons: a server's chunk data
+    /// carries no beam sections, so the client builds them too; effects,
+    /// sounds and the advancement stay with the server.
+    pub(super) fn client_tick_beacons(&mut self) {
+        let keys: Vec<_> = self
+            .world
+            .block_entities
+            .iter()
+            .filter_map(|(k, e)| matches!(e, BlockEntity::Beacon(_)).then_some(*k))
+            .collect();
+        for key in keys {
+            let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
+                continue;
+            };
+            self.tick_beacon(key, &mut b, true);
+            self.world.block_entities.put(key, BlockEntity::Beacon(b));
+        }
+    }
+    fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon, client: bool) {
         let mut check = if b.last_check_y < y {
             b.checking.clear();
             b.last_check_y = y - 1;
@@ -153,7 +171,7 @@ impl Game<'_> {
             if !b.sections.is_empty() {
                 b.levels = self.beacon_base(x, y, z);
             }
-            if b.levels > 0 && !b.sections.is_empty() {
+            if !client && b.levels > 0 && !b.sections.is_empty() {
                 self.beacon_effects([x, y, z], b);
                 self.beacon_sound([x, y, z], "minecraft:block.beacon.ambient");
             }
@@ -163,10 +181,12 @@ impl Game<'_> {
             b.sections = std::mem::take(&mut b.checking);
             let (was, is) = (previous > 0, b.levels > 0);
             if !was && is {
-                self.beacon_sound([x, y, z], "minecraft:block.beacon.activate");
-                let levels = b.levels;
-                self.for_each_player(|g| g.beacon_constructed([x, y, z], levels));
-            } else if was && !is {
+                if !client {
+                    self.beacon_sound([x, y, z], "minecraft:block.beacon.activate");
+                    let levels = b.levels;
+                    self.for_each_player(|g| g.beacon_constructed([x, y, z], levels));
+                }
+            } else if was && !is && !client {
                 self.beacon_sound([x, y, z], "minecraft:block.beacon.deactivate");
             }
         }
