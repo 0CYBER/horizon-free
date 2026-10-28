@@ -19,7 +19,8 @@ use horizon_client::{
     extras::Corner,
     extras_hud::Corners,
     hud::{HudBatch, rgba},
-    keybinds, mod_list,
+    keybinds,
+    mod_list::{self, Installed, NativePage},
     text::Text,
 };
 use std::{fs, path::PathBuf, time::Duration};
@@ -64,6 +65,19 @@ pub(crate) struct NativePlayer {
     pub(crate) pitch: f32,
     /// `minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`.
     pub(crate) dimension: &'static str,
+}
+
+/// A native mod as Options > Mods lists it (`native_mods`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NativeMod {
+    /// Its id: its settings folder and its keys' lines.
+    pub(crate) id: String,
+    /// `Name 1.0`.
+    pub(crate) title: String,
+    pub(crate) description: String,
+    /// Its keys: name, label and default key (`key.keyboard.z`). The page
+    /// lists them first; `native_mod_key` reads the player's choice.
+    pub(crate) keys: Vec<[String; 3]>,
 }
 
 /// The mappings `native_mapping` answers for, with the key their default
@@ -121,6 +135,19 @@ impl Game<'_> {
     /// The minimap a native mod shows: set `minimap` when it is none yet.
     pub(super) fn native_minimap(&self, minimap: &mut Option<NativeMinimap>) {
         let _ = minimap;
+    }
+    /// Options > Mods lists the native mods: push yours.
+    pub(super) fn native_mods(&mut self, mods: &mut Vec<NativeMod>) {
+        let _ = mods;
+    }
+    /// The buttons of mod `mod_id`'s settings page, under its keys: push
+    /// their labels when it is yours. Asked again after each click.
+    pub(super) fn native_settings(&mut self, mod_id: &str, buttons: &mut Vec<String>) {
+        let _ = (mod_id, buttons);
+    }
+    /// Button `button` of mod `mod_id`'s settings page was clicked.
+    pub(super) fn native_settings_click(&mut self, mod_id: &str, button: usize) {
+        let _ = (mod_id, button);
     }
 }
 
@@ -241,6 +268,49 @@ impl Game<'_> {
 
 /// Where the game calls the hook points.
 impl Game<'_> {
+    /// Options > Mods' rows for the native mods, after the others.
+    pub(super) fn list_native_mods(&mut self) {
+        let mut mods = Vec::new();
+        self.native_mods(&mut mods);
+        self.settings.mods.installed.retain(|m| m.native.is_none());
+        // A WebAssembly mod of the same id doesn't run (`start_mods`).
+        for row in &mut self.settings.mods.installed {
+            if mods.iter().any(|m| m.id == row.id) {
+                row.problem = Some("Replaced by its native version".into());
+            }
+        }
+        for m in mods {
+            let mut buttons = Vec::new();
+            self.native_settings(&m.id, &mut buttons);
+            let page = NativePage {
+                keys: m.keys,
+                buttons,
+            };
+            self.settings.mods.installed.push(Installed {
+                id: m.id,
+                title: m.title,
+                description: m.description,
+                problem: None,
+                dev: false,
+                has_settings: false,
+                native: Some(page),
+            });
+        }
+    }
+    /// A click on button `button` of native mod `i`'s page (its index in
+    /// Options > Mods), and the page's labels after it.
+    pub(super) fn native_settings_event(&mut self, i: usize, button: usize) {
+        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+            return;
+        };
+        self.native_settings_click(&id, button);
+        let mut buttons = Vec::new();
+        self.native_settings(&id, &mut buttons);
+        let row = self.settings.mods.installed.get_mut(i);
+        if let Some(page) = row.and_then(|m| m.native.as_mut()) {
+            page.buttons = buttons;
+        }
+    }
     /// A key event for `native_key`.
     pub(super) fn native_key_event(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
         if repeat {

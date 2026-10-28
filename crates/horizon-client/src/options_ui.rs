@@ -820,6 +820,9 @@ pub fn apply_preset(s: &mut Settings) {
     }
 }
 
+/// `selected_key` while a native mod's key waits (`selected_native_key`).
+const NATIVE_KEY: &str = "horizon.nativeModKey";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Main,
@@ -834,6 +837,8 @@ pub enum Page {
     Font,
     Packs,
     Mods,
+    /// A native mod's settings page: its index in `mods.installed`.
+    NativeMod(usize),
     /// Horizon's shader packs, either kind (`shader_pack_list`).
     ShaderPacks,
     /// Horizon's graphics settings (`graphics_ui`).
@@ -872,6 +877,9 @@ enum Act {
     /// The installed mod's own settings page (capability `ui`), shown as a
     /// screen: `Event::ModSettings` has the game open it.
     ModSettings(usize),
+    /// A native mod's key (mod, key) waits for a key; a button of its page.
+    NativeKey(usize, usize),
+    NativeButton(usize, usize),
     OpenModFolder,
     /// Credits & Attribution's Credits button (WinScreen without the poem).
     Credits,
@@ -931,6 +939,9 @@ pub enum Event {
     /// Open the mod's own settings page (capability `ui`): the installed
     /// mod's index in `mods.installed`.
     ModSettings(usize),
+    /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
+    /// mod and refreshes the page.
+    NativeButton(usize, usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -963,8 +974,11 @@ pub struct OptionsUi {
     slider_value: Option<(Opt, f32, Instant)>,
     /// The pointer's last y while a scrollbar is held.
     pub(crate) scrollbar_drag_y: Option<f32>,
-    /// Key Binds: the mapping waiting for a key.
+    /// Key Binds: the mapping waiting for a key ([`NATIVE_KEY`]: a native
+    /// mod's, `selected_native_key`).
     pub selected_key: Option<&'static str>,
+    /// The native mod's key waiting: (mod, key) in `mods.installed`.
+    selected_native_key: Option<(usize, usize)>,
     /// Controller Binds: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
     /// The glyphs the binds list shows (the setting, else the pad's family).
@@ -1002,6 +1016,7 @@ impl Default for OptionsUi {
             slider_value: None,
             scrollbar_drag_y: None,
             selected_key: None,
+            selected_native_key: None,
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
@@ -1167,6 +1182,7 @@ impl OptionsUi {
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
             Page::Mods => "Mods",
+            Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "Shader Packs",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
@@ -1223,6 +1239,43 @@ impl OptionsUi {
             }
         }
         filtered
+    }
+
+    /// A native mod's page: its name, its keys as Key Binds rows (the
+    /// player's choice, else the default), then its buttons.
+    fn native_rows(&self, s: &Settings, i: usize) -> Vec<Row> {
+        let Some(m) = s.mods.installed.get(i) else {
+            return Vec::new();
+        };
+        let mut rows = vec![Row::Note(m.title.clone())];
+        let Some(page) = &m.native else {
+            return rows;
+        };
+        let chosen = s.mods.keys.get(&m.id);
+        for (k, [name, label, default]) in page.keys.iter().enumerate() {
+            let key = chosen.and_then(|c| c.get(name)).unwrap_or(default);
+            let mut message = keybinds::display_name(key);
+            if self.selected_native_key == Some((i, k)) {
+                message = Text::literal("> ")
+                    .append(message.with_color(text::WHITE))
+                    .append(" <")
+                    .with_color(text::YELLOW);
+            }
+            let caption = button(0.0, 0.0, 150.0, Text::literal(label.clone()), Act::None);
+            let change = button(0.0, 0.0, 150.0, message, Act::NativeKey(i, k));
+            rows.push(Row::Buttons(inactive(caption), Some(change)));
+        }
+        for (b, label) in page.buttons.iter().enumerate() {
+            let widget = button(
+                0.0,
+                0.0,
+                310.0,
+                Text::literal(label.clone()),
+                Act::NativeButton(i, b),
+            );
+            rows.push(Row::Buttons(widget, None));
+        }
+        rows
     }
 
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
@@ -1503,10 +1556,11 @@ impl OptionsUi {
                         } else if installed.dev {
                             label = label.append(" (Dev)");
                         }
-                        let dead = installed.dev || installed.id.is_empty();
+                        let dead =
+                            installed.dev || installed.native.is_some() || installed.id.is_empty();
                         // A running mod with a settings page (capability
                         // `ui`) gets its own button beside the toggle.
-                        if installed.has_settings {
+                        if installed.has_settings || installed.native.is_some() {
                             let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
                             let settings = button(
                                 0.0,
@@ -1526,6 +1580,7 @@ impl OptionsUi {
                     })
                     .collect()
             }
+            Page::NativeMod(i) => self.native_rows(s, i),
             Page::ShaderPacks => {
                 if s.shader_packs.is_empty() {
                     return vec![Row::Header(
@@ -2556,8 +2611,17 @@ impl OptionsUi {
                         }
                         Act::ModSettings(i) => {
                             events.push(Event::ButtonClick);
-                            events.push(Event::ModSettings(i));
+                            if s.mods.installed.get(i).is_some_and(|m| m.native.is_some()) {
+                                self.push(Page::NativeMod(i));
+                            } else {
+                                events.push(Event::ModSettings(i));
+                            }
                         }
+                        Act::NativeKey(i, k) => {
+                            self.selected_key = Some(NATIVE_KEY);
+                            self.selected_native_key = Some((i, k));
+                        }
+                        Act::NativeButton(i, b) => events.push(Event::NativeButton(i, b)),
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::PickShaderPack(i) => {
                             if let Some(pack) = s.shader_packs.get(i) {
@@ -2755,6 +2819,18 @@ impl OptionsUi {
         let Some(name) = self.selected_key.take() else {
             return Vec::new();
         };
+        if name == NATIVE_KEY {
+            let (i, k) = self.selected_native_key.take().unwrap_or_default();
+            let Some(m) = s.mods.installed.get(i) else {
+                return Vec::new();
+            };
+            let Some([key, ..]) = m.native.as_ref().and_then(|p| p.keys.get(k)) else {
+                return Vec::new();
+            };
+            let keys = s.mods.keys.entry(m.id.clone()).or_default();
+            keys.insert(key.clone(), value);
+            return vec![Event::Changed];
+        }
         if !s.extras.set_key(name, value.clone()) {
             s.keys.set(name, &value);
         }
@@ -3100,6 +3176,7 @@ mod tests {
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
                 has_settings: false,
+                native: None,
             });
         }
         let (widgets, ..) = ui.layout(&s, size.0, size.1);

@@ -36,6 +36,18 @@ pub struct Installed {
     /// The running mod set a page of widgets (capability `ui`): its row
     /// gains a Settings button.
     pub has_settings: bool,
+    /// A native mod (`game/native_hooks.rs`): built into the game, so always
+    /// on here, and its settings page.
+    pub native: Option<NativePage>,
+}
+
+/// A native mod's settings page: its keys as Key Binds rows, then its
+/// buttons. The keys the player chooses are kept in `ModList::keys`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NativePage {
+    /// Each key's name, label and default key (`key.keyboard.z`).
+    pub keys: Vec<[String; 3]>,
+    pub buttons: Vec<String>,
 }
 
 impl ModList {
@@ -94,11 +106,15 @@ impl ModList {
     pub fn is_on(&self, i: usize) -> bool {
         self.installed
             .get(i)
-            .is_some_and(|m| m.dev || self.enabled.contains(&m.id))
+            .is_some_and(|m| m.dev || m.native.is_some() || self.enabled.contains(&m.id))
     }
-    /// Turns installed mod `i` on or off (a dev mod stays on).
+    /// Turns installed mod `i` on or off (a dev or native mod stays on).
     pub fn toggle(&mut self, i: usize) {
-        let Some(m) = self.installed.get(i).filter(|m| !m.dev) else {
+        let Some(m) = self
+            .installed
+            .get(i)
+            .filter(|m| !m.dev && m.native.is_none())
+        else {
             return;
         };
         if !self.enabled.remove(&m.id) {
@@ -140,6 +156,7 @@ mod tests {
             problem: None,
             dev,
             has_settings: false,
+            native: None,
         };
         let mut list = ModList {
             installed: vec![installed("a", false), installed("b", true)],
@@ -152,5 +169,12 @@ mod tests {
         assert_eq!(list.serialize(), "mod.a:true\n");
         list.toggle(0);
         assert!(!list.is_on(0));
+        list.installed.push(Installed {
+            native: Some(NativePage::default()),
+            ..installed("c", false)
+        });
+        list.toggle(2);
+        assert!(list.is_on(2));
+        assert_eq!(list.serialize(), "");
     }
 }
