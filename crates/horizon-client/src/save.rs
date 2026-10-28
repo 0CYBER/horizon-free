@@ -4442,7 +4442,10 @@ mod tests {
         drop(first);
         // Windows refuses a read through another handle while the file is
         // locked, so the bytes are read once the lock is released.
-        assert_eq!(std::fs::read(dir.join("session.lock")).unwrap(), [0x26, 0x03]);
+        assert_eq!(
+            std::fs::read(dir.join("session.lock")).unwrap(),
+            [0x26, 0x03]
+        );
         assert!(super::SessionLock::acquire(&dir).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
