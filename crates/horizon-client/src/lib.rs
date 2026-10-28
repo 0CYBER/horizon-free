@@ -87,6 +87,7 @@ pub mod hud_overlays;
 pub mod hunger;
 pub mod inv_sort;
 pub mod inventory_effects;
+pub mod item_activation;
 pub mod item_render;
 pub mod item_sync;
 pub mod item_tooltip;
