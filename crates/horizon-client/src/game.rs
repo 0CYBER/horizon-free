@@ -122,6 +122,7 @@ mod moved_extras;
 mod moving_pistons;
 mod music;
 mod names;
+mod native_hooks;
 mod native_shaders;
 mod natural_spawning;
 mod nautili;
@@ -5083,6 +5084,7 @@ impl Game<'_> {
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
+        self.native_tick();
         self.tick_server_mods();
         let camera_eye = self.camera_eye_height();
         let stick = self.pad_move();
@@ -12808,6 +12810,7 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Playing
                         && self.sleeping.is_none()
                         && self.player.is_some()
+                        && !self.native_wheel_event(d)
                         && !self.mod_wheel(d)
                         && let Some((wheel, (_, vertical_steps))) =
                             self.mouse
@@ -13283,6 +13286,7 @@ impl ApplicationHandler for Game<'_> {
                         return Ok(());
                     };
                     self.mod_key(key, event.state == ElementState::Pressed, event.repeat);
+                    self.native_key_event(key, event.state == ElementState::Pressed, event.repeat);
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
