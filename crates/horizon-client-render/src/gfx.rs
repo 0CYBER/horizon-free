@@ -853,6 +853,14 @@ fn check_layers(limits: &wgpu::Limits, layers: u32) -> Result<()> {
     }
     Ok(())
 }
+/// Whether the swapchain can take a window of `width` x `height`: each side from 1 to the
+/// device's `max_texture_dimension_2d` (`max`), else `Surface::configure` panics. 0 is a
+/// minimized window. Past `max`: Windows lets a program size a window up to 65535 pixels
+/// (`SetWindowPos`), a 984x65496 client area, when an RTX 5080 takes 32768. Vanilla's
+/// `Window.onFramebufferResize` likewise keeps the last size for one that is not positive.
+fn drawable_size(width: u32, height: u32, max: u32) -> bool {
+    (1..=max).contains(&width) && (1..=max).contains(&height)
+}
 /// The swapchain format: a non-sRGB target, because vanilla blends and tints in gamma
 /// space, and 8-bit, because wgpu gives `Rgba16Float` the linear `ExtendedSrgb` color
 /// space: the compositor would read these gamma-encoded values as linear light and wash
@@ -1100,9 +1108,14 @@ impl Renderer {
         let info = adapter.get_info();
         crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
+        let max_side = device.limits().max_texture_dimension_2d;
         let (config, present_modes, hdr_output) = if let Some(surface) = &surface {
             let mut config = surface
-                .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+                .get_default_config(
+                    &adapter,
+                    size.width.clamp(1, max_side),
+                    size.height.clamp(1, max_side),
+                )
                 .ok_or("surface has no supported configuration")?;
             let caps = surface.get_capabilities(&adapter);
             config.format = surface_format(&caps.formats, config.format);
@@ -1134,8 +1147,8 @@ impl Renderer {
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 format,
-                width: size.width.max(1),
-                height: size.height.max(1),
+                width: size.width.clamp(1, max_side),
+                height: size.height.clamp(1, max_side),
                 present_mode: wgpu::PresentMode::Immediate,
                 desired_maximum_frame_latency: 2,
                 alpha_mode: wgpu::CompositeAlphaMode::Opaque,
@@ -2661,7 +2674,7 @@ impl Renderer {
             hud,
             menu_blur: None,
             info,
-            suspended: size.width == 0 || size.height == 0,
+            suspended: !drawable_size(size.width, size.height, max_side),
             drawn_sections: 0,
             section_draws: 0,
             section_draw_calls: 0,
@@ -2821,8 +2834,11 @@ impl Renderer {
             );
         }
     }
+    /// Follows the window to `width` x `height`. A size the swapchain can't take
+    /// ([`drawable_size`]) keeps the last one and draws nothing until the next.
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.suspended = width == 0 || height == 0;
+        let max = self.device.limits().max_texture_dimension_2d;
+        self.suspended = !drawable_size(width, height, max);
         if self.suspended {
             return;
         }
@@ -5452,6 +5468,23 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drawable_size_skips_minimized_and_oversized_windows() {
+        use super::drawable_size;
+        assert!(drawable_size(1280, 720, 8192));
+        assert!(drawable_size(1, 1, 8192));
+        assert!(drawable_size(8192, 8192, 8192));
+        // Minimized.
+        assert!(!drawable_size(0, 720, 8192));
+        assert!(!drawable_size(1280, 0, 8192));
+        assert!(!drawable_size(0, 0, 8192));
+        // One past the device's largest texture.
+        assert!(!drawable_size(8193, 720, 8192));
+        assert!(!drawable_size(1280, 8193, 8192));
+        // The crash: a window `SetWindowPos` made 65535 pixels tall, on an RTX 5080 (32768).
+        assert!(!drawable_size(984, 65496, 32768));
+        assert!(!drawable_size(984, u32::MAX, 32768));
+    }
     #[test]
     fn surface_is_8_bit_and_not_srgb() {
         use super::surface_format;
