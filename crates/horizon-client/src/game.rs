@@ -274,6 +274,7 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
+    error::EventLoopError,
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
@@ -14952,8 +14953,26 @@ fn write_report(game: &Game<'_>) -> Result<()> {
     Ok(())
 }
 
+/// The window system ended the event loop with a failure (on Linux, a compositor dropping the
+/// connection after a protocol error) while fullscreen was on: the next start opens windowed, so a
+/// fullscreen the system can't show doesn't crash every launch (#2904).
+fn leave_fullscreen_after(
+    result: &std::result::Result<(), EventLoopError>,
+    settings: &mut Settings,
+) {
+    if matches!(result, Err(EventLoopError::ExitFailure(_))) && settings.fullscreen {
+        settings.fullscreen = false;
+        settings.save(&Game::options_path());
+        log::warn!(
+            "the window system closed the game in fullscreen; the next start opens windowed"
+        );
+    }
+}
+
 fn run_event_loop(mut game: Game<'_>) -> Result<()> {
-    EventLoop::new()?.run_app(&mut game)?;
+    let result = EventLoop::new()?.run_app(&mut game);
+    leave_fullscreen_after(&result, &mut game.settings);
+    result?;
     horizon_client::discord_presence::stop();
     write_report(&game)?;
     if let Some(e) = game.error.take() {
@@ -15310,7 +15329,12 @@ fn run_loading(
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
-    EventLoop::new()?.run_app(&mut app)?;
+    let result = EventLoop::new()?.run_app(&mut app);
+    match &mut app {
+        App::Ready(game) => leave_fullscreen_after(&result, &mut game.settings),
+        App::Loading(loading) => leave_fullscreen_after(&result, &mut loading.settings),
+    }
+    result?;
     horizon_client::discord_presence::stop();
     match app {
         App::Ready(mut game) => {
