@@ -125,6 +125,7 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
 fn f5_reloads_the_server_list() {
     let mut f = Fixture::new();
     f.click("Multiplayer");
+    f.click("Proceed");
     let file = crate::multiplayer::servers_file(&f.title.saves);
     horizon_protocol::servers::save(
         &file,
