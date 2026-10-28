@@ -12212,7 +12212,8 @@ impl Game<'_> {
             KeyCode::KeyL if self.screen == Screen::Playing => self.open_advancements(false),
             KeyCode::KeyL if self.screen == Screen::Advancements => self.close_advancements(),
             KeyCode::Slash if self.screen == Screen::Playing => self.open_chat("/"),
-            KeyCode::F1 => self.toggle_hide_gui(),
+            // key.toggleGui is a KeyMapping: it clicks only with no screen open.
+            KeyCode::F1 if self.screen == Screen::Playing => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
             KeyCode::F2 => self.take_screenshot(),
             KeyCode::F5 if self.screen == Screen::Playing => self.cycle_camera(),
