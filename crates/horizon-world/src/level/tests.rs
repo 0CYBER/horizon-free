@@ -1424,3 +1424,41 @@ fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
     stand(&mut w, true, 1.9375);
     assert_eq!(w.prop(pos, "tilt"), "none");
 }
+
+#[test]
+fn using_storage_and_interactable_blocks_succeeds() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        ("chest", &[("facing", "north"), ("type", "single")]),
+        ("trapped_chest", &[("facing", "north"), ("type", "single")]),
+        ("barrel", &[("facing", "up")]),
+        ("ender_chest", &[("facing", "north")]),
+        ("shulker_box", &[("facing", "up")]),
+        ("dispenser", &[("facing", "north")]),
+        ("dropper", &[("facing", "north")]),
+        ("hopper", &[("facing", "down")]),
+        ("crafter", &[("orientation", "north_up")]),
+        ("furnace", &[("facing", "north")]),
+        ("blast_furnace", &[("facing", "north")]),
+        ("smoker", &[("facing", "north")]),
+        ("brewing_stand", &[]),
+        ("beacon", &[]),
+        ("decorated_pot", &[]),
+        ("jukebox", &[("has_record", "true")]),
+    ];
+    for &(name, props) in cases {
+        w.put(pos, w.id(name, props));
+        assert_eq!(
+            w.use_block(pos),
+            InteractionResult::Success,
+            "{name} should succeed (client swing)"
+        );
+    }
+    w.put(pos, w.id("jukebox", &[("has_record", "false")]));
+    assert_eq!(
+        w.use_block(pos),
+        InteractionResult::Pass,
+        "an empty jukebox passes"
+    );
+}

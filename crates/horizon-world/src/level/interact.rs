@@ -397,9 +397,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::BrewingStand
                 | Class::CartographyTable
                 | Class::Chest
+                | Class::CopperChest
                 | Class::Crafter
                 | Class::CraftingTable
                 | Class::Dispenser
+                | Class::Dropper
                 | Class::EnchantingTable
                 | Class::EnderChest
                 | Class::Grindstone
@@ -409,10 +411,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::Sign
                 | Class::SmithingTable
                 | Class::Stonecutter
+                | Class::TrappedChest
                 | Class::Lectern => {
                     self.player_effect(pos, state, PlayerEffect::OpenMenu);
                     Success
                 }
+                // DecoratedPotBlock.useWithoutItem: the wobble always succeeds.
+                Class::DecoratedPot => Success,
+                // JukeboxBlock.useWithoutItem: ejecting a disc is SUCCESS (the
+                // insert is useItemOn). An empty jukebox passes.
+                Class::Jukebox if table.bool(state, p.has_record) => Success,
                 Class::Command | Class::Structure | Class::Jigsaw => {
                     if player.game_master {
                         self.player_effect(pos, state, PlayerEffect::OpenMenu);

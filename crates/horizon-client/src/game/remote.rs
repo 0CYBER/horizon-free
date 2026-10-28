@@ -38,6 +38,7 @@ use horizon_protocol::{
     text::{Language, plain},
 };
 use horizon_world::{
+    level::InteractionResult,
     nbt::Tag,
     registry::BlockStateId,
     stepped_interpolation::{Path, PosRot, Start, SteppedInterpolation},
@@ -4635,11 +4636,12 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
-            let (reacts, changes) = if hand == Hand::Main {
+            let (result, changes) = if hand == Hand::Main {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
-                (false, DryUse::default())
+                (InteractionResult::Pass, DryUse::default())
             };
+            let reacts = result.consumes_action();
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -4664,6 +4666,11 @@ impl Game<'_> {
             if reacts {
                 self.predict_use(&changes, seq);
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
+                // MultiPlayerGameMode.useItemOn: SUCCESS SwingSource.CLIENT
+                // (a chest, barrel, furnace, …). CONSUME does not swing.
+                if result == InteractionResult::Success {
+                    self.with_hand(hand, Game::swing_arm);
+                }
             } else if self.predict_campfire_douse(hit.pos, held.as_ref(), seq) {
                 // CampfireBlock.useItemOn succeeded: this hand swings and the
                 // click ends, so a shield in the other hand is not raised.
@@ -4702,7 +4709,7 @@ impl Game<'_> {
                     // server's resend of the target it refused is no placement.
                     r.placing = None;
                 }
-                if reacts || placed.is_some() {
+                if placed.is_some() {
                     self.with_hand(hand, Game::swing_arm);
                 }
                 // BlockItem.place returns FAIL when placement is rejected:
@@ -4794,11 +4801,11 @@ impl Game<'_> {
         &mut self,
         hit: &super::Hit,
         held: Option<&ItemStack>,
-    ) -> (bool, DryUse) {
+    ) -> (InteractionResult, DryUse) {
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
-            return (false, DryUse::default());
+            return (InteractionResult::Pass, DryUse::default());
         }
         // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
         // (honey level 5) is SUCCESS, so the click ends after UseItemOn and
@@ -4808,7 +4815,7 @@ impl Game<'_> {
                 .hive_state(hit.pos)
                 .is_some_and(|(honey, _)| honey == Some(5))
         {
-            return (true, DryUse::default());
+            return (InteractionResult::Success, DryUse::default());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {
@@ -4822,18 +4829,16 @@ impl Game<'_> {
         let player = self.use_context();
         self.with_level(|b, level, _| {
             let mut level = DryLevel::new(level);
-            let reacts = b
-                .use_item_on(
-                    &mut level,
-                    &mut horizon_world::level::Ticks::default(),
-                    horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-                    face,
-                    horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-                    player,
-                    held.map(|s| &*s.item),
-                )
-                .consumes_action();
-            (reacts, (level.changed.into_iter().collect(), level.sounds))
+            let result = b.use_item_on(
+                &mut level,
+                &mut horizon_world::level::Ticks::default(),
+                horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                face,
+                horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+                player,
+                held.map(|s| &*s.item),
+            );
+            (result, (level.changed.into_iter().collect(), level.sounds))
         })
     }
 
