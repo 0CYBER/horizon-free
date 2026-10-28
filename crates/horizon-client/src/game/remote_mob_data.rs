@@ -136,8 +136,12 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.color = (*c & 15) as u8;
             }
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
-            (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
-                m.extra.size = (*size).clamp(1, 127);
+            (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
+                let size = (*size).clamp(1, 127);
+                m.extra.size = size;
+                if m.species() == Species::SulfurCube {
+                    m.extra.age = if size == 1 { -24000 } else { 0 };
+                }
             }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
             // and raised head of an angry enderman.
@@ -530,6 +534,21 @@ mod tests {
         assert!(calf.is_baby());
         apply(&mut calf, &[(16, s::BOOLEAN, Value::Bool(false))]);
         assert!(!calf.is_baby());
+    }
+
+    #[test]
+    fn cube_mobs_receive_size_from_metadata() {
+        for kind in ["slime", "magma_cube", "sulfur_cube"] {
+            let Some(mut m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert_eq!(m.extra.size, 1);
+            apply(&mut m, &[(18, s::INT, Value::Int(2))]);
+            assert_eq!(m.extra.size, 2);
+            if kind == "sulfur_cube" {
+                assert!(!m.is_baby());
+            }
+        }
     }
 
     #[test]

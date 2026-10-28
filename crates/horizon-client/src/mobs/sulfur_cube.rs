@@ -292,6 +292,8 @@ pub fn set_size(m: &mut Mob, size: i32, update_health: bool) {
         m.health = m.attrs.max_health;
         if size == 1 && !m.is_baby() {
             m.extra.age = -24000;
+        } else if size > 1 && m.is_baby() {
+            m.extra.age = 0;
         }
     }
 }

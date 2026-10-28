@@ -817,7 +817,7 @@ fn age_boundary_reached(m: &mut Mob) {
     match m.species() {
         Species::Goat => set_base(m, Attr::AttackDamage, if baby { 1.0 } else { 2.0 }),
         Species::Hoglin => set_base(m, Attr::AttackDamage, if baby { 0.5 } else { 6.0 }),
-        Species::SulfurCube if !baby => sulfur_size(m, 2),
+        Species::SulfurCube => sulfur_size(m, if baby { 1 } else { 2 }),
         _ => {}
     }
 }
@@ -826,6 +826,9 @@ pub fn set_baby(m: &mut Mob, baby: bool) {
     let s = m.species();
     if ageable(s) {
         set_age(m, if baby { baby_start_age(s) } else { 0 });
+        if s == Species::SulfurCube {
+            sulfur_size(m, if baby { 1 } else { 2 });
+        }
         return;
     }
     match s {
