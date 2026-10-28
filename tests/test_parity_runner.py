@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -144,6 +145,14 @@ class ParityRunnerTests(unittest.TestCase):
             self.assertEqual(parity.platform_skips(config), {})
         with mock.patch.object(parity.sys, "platform", "darwin"):
             self.assertEqual(parity.platform_skips(config), {"options": "libm"})
+
+    def test_termination_signals_are_caught_where_they_exist(self):
+        for numbers in ({"SIGTERM": 15, "SIGHUP": 1}, {"SIGTERM": 15}):  # Windows has no SIGHUP
+            handled = []
+            fake = SimpleNamespace(**numbers, signal=lambda number, _handler: handled.append(number))
+            with self.subTest(numbers=numbers), mock.patch.object(parity, "signal", fake):
+                parity.exit_on_termination()
+                self.assertEqual(handled, list(numbers.values()))
 
     def test_a_hosts_excludes_are_skipped_when_it_runs_parity_itself(self):
         config = {"hosts": {"playhorizon": {"exclude": {"remote_fireworks": "starved"}}, "macmini": {"exclude": {}}}}

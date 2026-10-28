@@ -1143,9 +1143,10 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles, r
 def exit_on_termination():
     """SIGTERM and SIGHUP (a cancelled CI job, a dropped ssh) end this process through its finally blocks, which stop
     the running harnesses. Each runs in its own session, so without that they, and the vanilla servers they started,
-    outlive it (orphans of days were found on the Mac mini's runners, 2026-10-26)."""
-    for number in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(number, lambda received, _frame: sys.exit(128 + received))
+    outlive it (orphans of days were found on the Mac mini's runners, 2026-10-26). Windows has no SIGHUP."""
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), lambda received, _frame: sys.exit(128 + received))
 
 
 def worker_main(shared_local):
