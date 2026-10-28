@@ -10,16 +10,26 @@ use std::{
 
 pub const FILE: &str = "horizon-graphics.txt";
 
-static REPORTED_PEAK: AtomicU32 = AtomicU32::new(0);
-
-/// Sets the peak the system reports for the display HDR output goes to, in nits
-/// in HDR output's scale (the renderer, when it opens its surface).
-pub fn report_peak(nits: Option<u32>) {
-    REPORTED_PEAK.store(nits.unwrap_or(0), Ordering::Relaxed);
+/// What the system reports for the display HDR output goes to, in nits in HDR output's
+/// scale: where its SDR white sits (the desktop's white) and the peak.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reported {
+    pub paper_white: u32,
+    pub peak: u32,
 }
-/// The peak the system reports, if it does.
-pub fn reported_peak() -> Option<u32> {
-    Some(REPORTED_PEAK.load(Ordering::Relaxed)).filter(|&n| n > 0)
+
+static REPORTED: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Sets what the system reports (the renderer, when it opens its surface).
+pub fn report(reported: Option<Reported>) {
+    let (paper_white, peak) = reported.map_or((0, 0), |r| (r.paper_white, r.peak));
+    REPORTED[0].store(paper_white, Ordering::Relaxed);
+    REPORTED[1].store(peak, Ordering::Relaxed);
+}
+/// What the system reports, if it does.
+pub fn reported() -> Option<Reported> {
+    let [paper_white, peak] = REPORTED.each_ref().map(|n| n.load(Ordering::Relaxed));
+    (peak > 0).then_some(Reported { paper_white, peak })
 }
 
 /// Simple-level presets. `Custom` leaves every option as the player set it.
@@ -277,7 +287,8 @@ pub struct Graphics {
     pub fxaa: bool,
     /// HDR output (HDR10, or scRGB), where the display path offers it.
     pub hdr: bool,
-    /// HDR paper white (where SDR white sits), in nits.
+    /// HDR paper white (where SDR white sits), in nits; 0 is Auto: the desktop's SDR
+    /// white, as the system reports it ([`Graphics::paper_white_nits`]).
     pub hdr_paper_white: u32,
     /// HDR peak brightness the world's highlights reach, in nits; 0 is Auto:
     /// what the system reports for the display ([`Graphics::peak_nits`]).
@@ -314,7 +325,7 @@ impl Default for Graphics {
             resolution_scale: 100,
             fxaa: false,
             hdr: false,
-            hdr_paper_white: 200,
+            hdr_paper_white: 0,
             hdr_peak: 0,
             battery: false,
             api: GraphicsApi::Auto,
@@ -368,7 +379,12 @@ impl Graphics {
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "hdr" => g.hdr = flag(g.hdr),
-                "hdrPaperWhite" => g.hdr_paper_white = number(g.hdr_paper_white).clamp(80, 480),
+                "hdrPaperWhite" => {
+                    g.hdr_paper_white = match number(g.hdr_paper_white) {
+                        0 => 0,
+                        n => n.clamp(80, 480),
+                    }
+                }
                 "hdrPeak" => {
                     g.hdr_peak = match number(g.hdr_peak) {
                         0 => 0,
@@ -428,11 +444,19 @@ impl Graphics {
     pub fn save(&self, dir: &Path) {
         let _ = fs::write(dir.join(FILE), self.serialize());
     }
+    /// Paper white, in nits: the player's, or on Auto the desktop's SDR white as the
+    /// system reports it, else 203 (BT.2408's reference white).
+    pub fn paper_white_nits(&self) -> u32 {
+        match self.hdr_paper_white {
+            0 => reported().map_or(203, |r| r.paper_white),
+            n => n,
+        }
+    }
     /// The peak the world's highlights reach, in nits: the player's, or on Auto
     /// what the system reports, else 1000.
     pub fn peak_nits(&self) -> u32 {
         match self.hdr_peak {
-            0 => reported_peak().unwrap_or(1000),
+            0 => reported().map_or(1000, |r| r.peak),
             n => n,
         }
     }
@@ -537,6 +561,8 @@ mod tests {
         // 0 is Auto; anything else is a peak the slider reaches.
         assert_eq!(Graphics::parse("hdrPeak:0\n").hdr_peak, 0);
         assert_eq!(Graphics::parse("hdrPeak:50\n").hdr_peak, 200);
+        assert_eq!(Graphics::parse("hdrPaperWhite:0\n").hdr_paper_white, 0);
+        assert_eq!(Graphics::parse("hdrPaperWhite:5\n").hdr_paper_white, 80);
         // The old menus' Simple / Advanced choice is ignored, and so is the
         // shader pack older versions saved.
         assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());

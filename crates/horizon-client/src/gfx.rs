@@ -1127,7 +1127,7 @@ impl Renderer {
             surface.configure(&device, &config);
             let output = hdr::output(&caps);
             if output.is_some() && previous.is_none() {
-                crate::graphics::report_peak(reported_peak(&window));
+                crate::graphics::report(reported(&window));
             }
             (config, caps.present_modes.clone(), output)
         } else {
@@ -5858,11 +5858,14 @@ mod sprite_upload_tests {
     }
 }
 
-/// The peak the compositor reports for `window`'s display, in nits in HDR output's
-/// scale. KWin and the others map content's reference white (203 nits in PQ) onto
-/// their own, so that's the target's maximum over that ratio. Kept within the
-/// settings' lowest peak and PQ's top, so metadata never ends below the black level.
-fn reported_peak(window: &Window) -> Option<u32> {
+/// What the system reports for `window`'s display, in HDR output's scale.
+///
+/// Wayland: KWin maps content's reference white (203 nits in PQ, BT.2408) onto its own,
+/// so the desktop's white is 203 there and the peak is the target's maximum over that
+/// ratio. Checked on KWin; other compositors with `wp_color_management_v1` (Mutter,
+/// wlroots) are assumed to map it the same way. The peak is kept within the settings'
+/// lowest and PQ's top, so the metadata never ends below the black level.
+fn reported(window: &Window) -> Option<crate::graphics::Reported> {
     #[cfg(target_os = "linux")]
     if let Some(l) = horizon_hdr::wayland::window_luminances(window) {
         let peak = (l.target_max * 203.0 / l.reference.max(1.0)).round() as u32;
@@ -5873,7 +5876,10 @@ fn reported_peak(window: &Window) -> Option<u32> {
             l.target_min,
             l.target_max,
         );
-        return Some(peak.clamp(200, 10_000));
+        return Some(crate::graphics::Reported {
+            paper_white: 203,
+            peak: peak.clamp(200, 10_000),
+        });
     }
     let _ = window;
     None

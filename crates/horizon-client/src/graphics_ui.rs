@@ -231,7 +231,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::HdrPaperWhite,
                 None,
-                "HDR: how bright white paper and menus look. Match your desktop.",
+                "HDR: how bright white paper and menus look. Auto: your desktop's white.",
             ),
             h(
                 H::HdrPeak,
@@ -341,7 +341,11 @@ impl H {
             }
             H::Workers => Some(g.workers as f32 / max_workers() as f32),
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
-            H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
+            // Auto, then 80..480 by 10.
+            H::HdrPaperWhite => Some(match g.hdr_paper_white {
+                0 => 0.0,
+                n => (n as f32 - 70.0) / 410.0,
+            }),
             // Auto, then 200..2000 by 50.
             H::HdrPeak => Some(match g.hdr_peak {
                 0 => 0.0,
@@ -389,7 +393,13 @@ impl H {
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
-            H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
+            H::HdrPaperWhite => match g.hdr_paper_white {
+                0 => labelled(
+                    "Paper White",
+                    format!("Auto ({} nits)", g.paper_white_nits()),
+                ),
+                n => labelled("Paper White", format!("{n} nits")),
+            },
             H::HdrPeak => match g.hdr_peak {
                 0 => labelled("Peak Brightness", format!("Auto ({} nits)", g.peak_nits())),
                 n => labelled("Peak Brightness", format!("{n} nits")),
@@ -416,7 +426,12 @@ impl H {
             }
             H::Workers => g.workers = (v * max_workers() as f32).round() as u32,
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
-            H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
+            H::HdrPaperWhite => {
+                g.hdr_paper_white = match (v * 41.0).round() as u32 {
+                    0 => 0,
+                    step => 70 + step * 10,
+                }
+            }
             H::HdrPeak => {
                 g.hdr_peak = match (v * 37.0).round() as u32 {
                     0 => 0,
