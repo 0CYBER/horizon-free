@@ -802,14 +802,30 @@ impl Game<'_> {
         // takes the experience (before the loot is dropped). It takes what
         // would drop, whoever killed the mob.
         self.sculk_mob_died(m);
+        let mut catalyst_xp = 0;
         let consumed =
             self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
-                if horizon_client::mobs::drops::drops_experience(&dying) {
+                catalyst_xp = if horizon_client::mobs::drops::drops_experience(&dying) {
                     horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
-                }
+                };
+                catalyst_xp
             });
+        // CatalystListener: with experience to take, the player who last hurt
+        // the mob gets KILL_MOB_NEAR_SCULK_CATALYST.
+        if consumed && catalyst_xp > 0 {
+            let who = match killer {
+                Some(Some(conn)) => Some(super::commands::Target::Guest(conn)),
+                Some(None) if self.lan_acting.is_none() => Some(super::commands::Target::Player),
+                _ => None,
+            };
+            if let Some(who) = who {
+                self.for_player(who, |g| {
+                    g.trigger_player("minecraft:kill_mob_near_sculk_catalyst")
+                });
+            }
+        }
         if by_player {
             // A guest's kill is theirs: their statistics, scores and
             // advancements (LivingEntity.die credits lastHurtByPlayer).
@@ -3306,7 +3322,16 @@ impl Game<'_> {
         }
         {
             let item = self.held().map(|h| h.item.to_string()).unwrap_or_default();
+            let used = self.held().cloned();
             if self.interact_leash(index, &item) {
+                if let Some(stack) = &used {
+                    let target = self.mob_entity(&self.mobs[index]);
+                    self.trigger_item_entity(
+                        "minecraft:player_interacted_with_entity",
+                        stack,
+                        &target,
+                    );
+                }
                 self.swing_arm();
                 return Ok(true);
             }
@@ -3880,6 +3905,11 @@ impl Game<'_> {
         if !handled {
             return Ok(false);
         }
+        // PlayerInteractTrigger: the item used on the mob, once the interaction took.
+        if let Some(stack) = &held {
+            let target = self.mob_entity(&self.mobs[index]);
+            self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
+        }
         // Turtle.ageBoundaryReached: food that finishes a baby's growth.
         if baby_turtle && !self.mobs[index].is_baby() {
             self.handle_mob_events(vec![MobEvent::GiftLoot {
@@ -3923,6 +3953,9 @@ impl Game<'_> {
             }
         }
         if let Some(stack) = armor_drop {
+            // Mob.shearItem: PLAYER_SHEARED_EQUIPMENT with the armor and the wolf.
+            let target = self.mob_entity(&self.mobs[index]);
+            self.trigger_item_entity("minecraft:player_sheared_equipment", &stack, &target);
             self.spawn_item(stack, [center[0], center[1] + 0.5, center[2]], [0.0; 3], 10);
         }
         for (item, count) in drops {

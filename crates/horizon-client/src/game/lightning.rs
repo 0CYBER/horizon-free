@@ -4,7 +4,8 @@
 //! `thunderHit` (damage and burning, charged creepers, zombified piglins,
 //! witches, mooshroom colours, turtles, burnt items), lightning rods, the sky
 //! flash, the sounds and the branching additive bolt.
-use super::Game;
+use super::{Game, commands::Target};
+use horizon_client::advancements::EntityView;
 use horizon_client::mobs::{Damage, DamageKind, MobEvent, SpawnSetup, Species};
 use horizon_core::{position::BlockPos, random::RandomSource};
 
@@ -18,6 +19,13 @@ pub(super) struct Bolt {
     visual_only: bool,
     /// Mooshrooms and copper golems change once per bolt.
     converted: Vec<u32>,
+    /// The mobs it has struck (`hitEntities`).
+    hit: Vec<u32>,
+    /// Blocks it set on fire (`blocksSetOnFire`).
+    fires: i32,
+    /// The player who channelled it (`LightningBolt.cause`): `Some(None)` for
+    /// the host, `Some(Some(conn))` for a guest.
+    pub cause: Option<Option<u32>>,
 }
 impl Game<'_> {
     /// `ServerChunkCache.tickSpawningChunk`: one `tickThunder` roll per
@@ -206,6 +214,9 @@ impl Game<'_> {
             seed,
             visual_only,
             converted: Vec::new(),
+            hit: Vec::new(),
+            fires: 0,
+            cause: None,
         });
     }
     /// `ClientLevel.addEntity` for a server's lightning bolt: on a client it
@@ -224,11 +235,16 @@ impl Game<'_> {
             seed,
             visual_only: true,
             converted: Vec::new(),
+            hit: Vec::new(),
+            fires: 0,
+            cause: None,
         });
     }
     /// `spawnFire`: fire at the strike point and `extra` random neighbours,
-    /// wherever `BaseFireBlock.getState` fire can survive.
-    fn bolt_fire(&mut self, at: [f64; 3], extra: i32) {
+    /// wherever `BaseFireBlock.getState` fire can survive. Returns how many
+    /// blocks it set on fire.
+    fn bolt_fire(&mut self, at: [f64; 3], extra: i32) -> i32 {
+        let mut set = 0;
         let base = [
             at[0].floor() as i32,
             at[1].floor() as i32,
@@ -253,8 +269,10 @@ impl Game<'_> {
             });
             if let Some(fire) = fire {
                 let _ = self.level_set(p, fire);
+                set += 1;
             }
         }
+        set
     }
     /// `LightningBolt.tick` for every bolt.
     pub(super) fn tick_bolts(&mut self) {
@@ -278,7 +296,7 @@ impl Game<'_> {
                 if !b.visual_only {
                     // Only Normal and Hard start fires with the strike itself.
                     if self.ui.difficulty >= 2 {
-                        self.bolt_fire(b.at, 4);
+                        b.fires += self.bolt_fire(b.at, 4);
                     }
                     self.strike_rod(b.at);
                 }
@@ -293,6 +311,7 @@ impl Game<'_> {
             b.life -= 1;
             if b.life < 0 {
                 if b.flashes == 0 {
+                    self.lightning_strike_triggers(b);
                     return false;
                 }
                 if b.life < -self.world.random.next_int_bound(10).unwrap_or(0) {
@@ -300,7 +319,7 @@ impl Game<'_> {
                     b.life = 1;
                     b.seed = self.world.random.next_long();
                     if !b.visual_only {
-                        self.bolt_fire(b.at, 0);
+                        b.fires += self.bolt_fire(b.at, 0);
                     }
                 }
             }
@@ -310,7 +329,11 @@ impl Game<'_> {
                 }
                 self.flash = 2;
                 if !b.visual_only {
-                    self.thunder_hit(b);
+                    let struck = self.thunder_hit(b);
+                    if let Some(cause) = b.cause {
+                        let who = cause.map_or(Target::Player, Target::Guest);
+                        self.for_player(who, |g| g.trigger_channeled_lightning(&struck));
+                    }
                 }
             }
             true
@@ -355,8 +378,41 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| b.lightning_clear_copper(level, ticks, p));
         let _ = self.process_level_events();
     }
-    /// `thunderHit` for entities within 3 blocks (up to 9 above).
-    fn thunder_hit(&mut self, b: &mut Bolt) {
+    /// `LightningStrikeTrigger` at the bolt's discard: every player within 256
+    /// blocks, with the mobs in its 30-block box that it did not hit.
+    fn lightning_strike_triggers(&mut self, b: &Bolt) {
+        let at = b.at;
+        let bolt = EntityView {
+            kind: "minecraft:lightning_bolt".into(),
+            position: at,
+            blocks_set_on_fire: b.fires,
+            ..Default::default()
+        };
+        let viewers: Vec<EntityView> = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive() && !b.hit.contains(&m.id))
+            .filter(|m| {
+                (m.position.x - at[0]).abs() <= 15.0
+                    && (m.position.z - at[2]).abs() <= 15.0
+                    && m.position.y >= at[1] - 15.0
+                    && m.position.y <= at[1] + 21.0
+            })
+            .map(|m| self.mob_entity(m))
+            .collect();
+        self.for_each_player(|g| {
+            let Some(p) = g.player.as_ref().map(|p| p.position) else {
+                return;
+            };
+            let d2 = (p.x - at[0]).powi(2) + (p.y - at[1]).powi(2) + (p.z - at[2]).powi(2);
+            if d2 < 256.0 * 256.0 {
+                g.trigger_lightning_strike(&bolt, &viewers);
+            }
+        });
+    }
+    /// `thunderHit` for entities within 3 blocks (up to 9 above). Returns the
+    /// mobs in that box before the hit, as `CHANNELED_LIGHTNING` counts them.
+    fn thunder_hit(&mut self, b: &mut Bolt) -> Vec<EntityView> {
         let at = b.at;
         let inside = move |p: [f64; 3]| {
             (p[0] - at[0]).abs() <= 3.0
@@ -364,6 +420,13 @@ impl Game<'_> {
                 && p[1] >= at[1] - 3.0
                 && p[1] <= at[1] + 9.0
         };
+        let struck: Vec<(u32, EntityView)> = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive() && inside([m.position.x, m.position.y, m.position.z]))
+            .map(|m| (m.id, self.mob_entity(m)))
+            .collect();
+        b.hit.extend(struck.iter().map(|(id, _)| *id));
         let damage = Damage {
             kind: DamageKind::Generic,
             attacker: None,
@@ -461,6 +524,7 @@ impl Game<'_> {
             !inside([e.position.x, e.position.y, e.position.z])
                 || e.stack.item.contains("netherite")
         });
+        struck.into_iter().map(|(_, view)| view).collect()
     }
     /// Simulation-order render inputs; seeded geometry lives in the renderer.
     pub(super) fn bolt_instances(&self) -> Vec<horizon_client::gfx::lightning::Bolt> {
