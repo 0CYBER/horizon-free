@@ -181,9 +181,15 @@ pub fn compatible(meta: &serde_json::Value) -> bool {
 /// `PackCompatibility.forVersion`: too old, too new, compatible, or unknown
 /// when the metadata names no format.
 pub fn compatibility(meta: &serde_json::Value) -> crate::pack_screen::Compat {
+    compatibility_for(meta, RESOURCE_FORMAT)
+}
+/// `compatibility` against `current`, the resource or the data pack format.
+pub fn compatibility_for(
+    meta: &serde_json::Value,
+    current: (i64, i64),
+) -> crate::pack_screen::Compat {
     use crate::pack_screen::Compat;
     let pack = &meta["pack"];
-    let current = RESOURCE_FORMAT;
     let range = if let (Some(min), Some(max)) = (
         format_of(&pack["min_format"]),
         format_of(&pack["max_format"]),
@@ -275,6 +281,10 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
     serde_json::from_slice(&bytes).ok()
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
+    pack_for(id, title, source, RESOURCE_FORMAT)
+}
+/// A pack whose compatibility is against `format`.
+fn pack_for(id: String, title: Text, source: Source, format: (i64, i64)) -> Option<Pack> {
     let meta = read_meta(&source)?;
     let (raw_description, description_style) = component_root(&meta["pack"]["description"]);
     Some(Pack {
@@ -284,7 +294,7 @@ fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
         raw_description,
         description_style,
         compatible: compatible(&meta),
-        compatibility: compatibility(&meta),
+        compatibility: compatibility_for(&meta, format),
         overlays: overlays_of(&meta),
         filter: filter_of(&meta),
         source,
@@ -305,7 +315,13 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
             out.push(p);
         }
     }
-    let mut user: Vec<Pack> = fs::read_dir(packs_dir)
+    out.extend(folder(packs_dir, RESOURCE_FORMAT));
+    out
+}
+/// The packs (folders and zips) in `dir`, by name, as `FolderRepositorySource`
+/// finds them; their compatibility is against `format`.
+pub fn folder(dir: &Path, format: (i64, i64)) -> Vec<Pack> {
+    let mut user: Vec<Pack> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -319,12 +335,11 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
             } else {
                 return None;
             };
-            pack(format!("file/{name}"), Text::literal(name), source)
+            pack_for(format!("file/{name}"), Text::literal(name), source, format)
         })
         .collect();
     user.sort_by(|a, b| a.id.cmp(&b.id));
-    out.extend(user);
-    out
+    user
 }
 /// A file a pack provides: its path (folder packs) and its name inside the pack.
 type Provided = (Option<PathBuf>, String);

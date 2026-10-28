@@ -125,6 +125,114 @@ pub fn discover(world: &Path) -> Vec<DataPack> {
     packs
 }
 
+// ---- Create World ------------------------------------------------------------
+
+/// Create World's Data Packs screen (`PackSelectionScreen` on vanilla's
+/// `mcworld-` folder): the folder's packs (`PackSource.WORLD`) and the
+/// built-in one (`resources` holds its `pack.png`), which can be unselected
+/// and stays at the bottom. Horizon has no experiments, so their feature
+/// packs are not offered.
+pub fn screen_packs(dir: &Path, resources: &Path) -> Vec<crate::pack_screen::PackInfo> {
+    use crate::{
+        pack_screen::{Compat, PackInfo, Source, load_icon},
+        packs::Position,
+        text::{Style, Text},
+    };
+    let format = horizon_core::version::DATA_PACK_FORMAT;
+    let mut infos: Vec<PackInfo> = crate::packs::folder(dir, format)
+        .into_iter()
+        .map(|p| PackInfo {
+            icon: p.icon_png().as_deref().and_then(load_icon),
+            id: p.id,
+            title: p.title,
+            description: p.raw_description,
+            description_style: p.description_style,
+            source: Source::World,
+            compat: p.compatibility,
+            required: false,
+            position: Position::Top,
+            fixed: false,
+        })
+        .collect();
+    infos.push(PackInfo {
+        id: "vanilla".into(),
+        title: Text::translate("dataPack.vanilla.name", &[]),
+        description: Text::translate("dataPack.vanilla.description", &[]),
+        description_style: Style::default(),
+        source: Source::BuiltIn,
+        compat: Compat::Compatible,
+        icon: std::fs::read(resources.join("pack.png"))
+            .ok()
+            .as_deref()
+            .and_then(load_icon),
+        required: false,
+        position: Position::Bottom,
+        fixed: false,
+    });
+    infos
+}
+/// A new empty folder for Create World's packs
+/// (`Files.createTempDirectory("mcworld-")`).
+pub fn temp_folder() -> std::io::Result<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("mcworld-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+/// What's in a folder of packs, to notice packs added or removed while the
+/// screen shows it (`PackSelectionScreen.Watcher`).
+pub fn folder_stamp(dir: &Path) -> Vec<(String, Option<std::time::SystemTime>)> {
+    let mut stamp: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| {
+            let modified = e.metadata().and_then(|m| m.modified()).ok();
+            (e.file_name().to_string_lossy().into_owned(), modified)
+        })
+        .collect();
+    stamp.sort();
+    stamp
+}
+/// Create World's packs into the new world before it opens
+/// (`copyTempDataPackDirToNewWorld`): every pack of `dir` goes to
+/// `<world>/datapacks`, and `datapacks.json` enables those `selected`
+/// (lowest priority first) and disables the rest.
+pub fn install(dir: &Path, world: &Path, selected: &[String]) -> Result<(), String> {
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let target = world.join("datapacks");
+    std::fs::create_dir_all(&target).map_err(|e| err(&target, e))?;
+    let mut disabled = Vec::new();
+    for pack in crate::packs::folder(dir, horizon_core::version::DATA_PACK_FORMAT) {
+        let (crate::packs::Source::Dir(from) | crate::packs::Source::Zip(from)) = &pack.source;
+        copy(from, &target.join(pack.id.trim_start_matches("file/")))?;
+        if !selected.contains(&pack.id) {
+            disabled.push(pack.id);
+        }
+    }
+    if !selected.iter().any(|id| id == "vanilla") {
+        disabled.push("vanilla".into());
+    }
+    let json = serde_json::json!({ "enabled": selected, "disabled": disabled });
+    let file = world.join("datapacks.json");
+    std::fs::write(&file, json.to_string()).map_err(|e| err(&file, e))
+}
+/// A file, or a folder and everything in it.
+fn copy(from: &Path, to: &Path) -> Result<(), String> {
+    let err = |e: std::io::Error| format!("{} -> {}: {e}", from.display(), to.display());
+    if !from.is_dir() {
+        return std::fs::copy(from, to).map(drop).map_err(err);
+    }
+    std::fs::create_dir_all(to).map_err(err)?;
+    for e in std::fs::read_dir(from).map_err(err)?.flatten() {
+        copy(&e.path(), &to.join(e.file_name()))?;
+    }
+    Ok(())
+}
+
 // ---- functions ---------------------------------------------------------------
 
 /// A `.mcfunction`: plain command lines and macro lines.
@@ -565,5 +673,52 @@ mod tests {
         assert_eq!(wanted.len(), 7);
         assert_eq!(p.list_kinds(&kinds), wanted);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_world_installs_its_packs() {
+        let root = std::env::temp_dir().join(format!("hz-datapack-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (dir, world) = (root.join("mcworld"), root.join("world"));
+        let write = |pack: &str, p: &str, t: &str| {
+            let path = dir.join(pack).join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, t).unwrap();
+        };
+        write("fns", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        write("fns", "data/x/function/f.mcfunction", "say hi");
+        write("off", "pack.mcmeta", r#"{"pack":{"pack_format":121}}"#);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(dir.join("old.zip")).unwrap());
+        zip.start_file("pack.mcmeta", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut zip, br#"{"pack":{"pack_format":48}}"#).unwrap();
+        zip.finish().unwrap();
+        let infos = screen_packs(&dir, &root);
+        let ids: Vec<&str> = infos.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["file/fns", "file/off", "file/old.zip", "vanilla"]);
+        let compat: Vec<_> = infos.iter().map(|p| p.compat).collect();
+        use crate::pack_screen::Compat;
+        assert_eq!(
+            compat,
+            [
+                Compat::Compatible,
+                Compat::Compatible,
+                Compat::TooOld,
+                Compat::Compatible
+            ]
+        );
+        let selected = ["vanilla", "file/old.zip", "file/fns"].map(String::from);
+        install(&dir, &world, &selected).unwrap();
+        let packs = discover(&world);
+        let ids: Vec<&str> = packs.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["file/fns", "file/off", "file/old.zip"]);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(world.join("datapacks.json")).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!({"enabled": selected, "disabled": ["file/off"]})
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

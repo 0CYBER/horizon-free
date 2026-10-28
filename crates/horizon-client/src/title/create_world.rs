@@ -38,6 +38,11 @@ pub struct WorldOptions {
     pub bonus_chest: bool,
     /// `getGameRules`: the Game Rules screen's values, saved with the world.
     pub rules: crate::gamerules::GameRules,
+    /// The Data Packs screen's selection, lowest priority first.
+    pub data_packs: Vec<String>,
+    /// The folder of packs for the new world (vanilla's `mcworld-`
+    /// temporary folder), made when Data Packs first opens.
+    pub pack_dir: Option<std::path::PathBuf>,
 }
 impl Default for WorldOptions {
     fn default() -> Self {
@@ -51,6 +56,8 @@ impl Default for WorldOptions {
             structures: true,
             bonus_chest: false,
             rules: crate::gamerules::GameRules::default(),
+            data_packs: vec!["vanilla".into()],
+            pack_dir: None,
         }
     }
 }
@@ -286,7 +293,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 28,
             ),
         ],
-        // Experiments and data packs have no screens yet.
+        // Experiments have no screen yet.
         _ => [
             "selectWorld.gameRules",
             "selectWorld.experiments",
@@ -300,7 +307,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 gy + 28.0 * i as f32,
                 210.0,
                 tr(key),
-                i == 0,
+                i != 1,
                 29 + i as u8,
             )
         })
