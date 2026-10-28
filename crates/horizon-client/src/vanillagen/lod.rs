@@ -300,6 +300,8 @@ pub(super) struct VanillaLodSampler {
     cache: FxHashMap<(i32, i32), Arc<[Column; 256]>>,
     order: VecDeque<(i32, i32)>,
     details: Vec<LodDetail>,
+    /// Reduced far detail: `lod_grid` approximates wide cells.
+    approximate: bool,
 }
 impl VanillaLodSampler {
     pub(super) fn new(generator: Arc<VanillaTerrain>) -> Self {
@@ -318,6 +320,7 @@ impl VanillaLodSampler {
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
+            approximate: false,
         }
     }
 }
@@ -331,7 +334,11 @@ impl LodSampler for VanillaLodSampler {
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
+            approximate: self.approximate,
         }))
+    }
+    fn set_approximate(&mut self, approximate: bool) {
+        self.approximate = approximate;
     }
     fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
         let mut missing = Vec::new();
@@ -391,16 +398,17 @@ impl LodSampler for VanillaLodSampler {
         self.grid(x, z, width, 1).pop().unwrap_or_default()
     }
     fn grid(&mut self, x: i32, z: i32, width: i32, side: usize) -> Vec<Column> {
-        let samples = match self
-            .worker
-            .lod_grid(x + width / 2, z + width / 2, width, side)
-        {
-            Ok(samples) => samples,
-            Err(error) => {
-                log::warn!("Horizon: direct far sampling failed: {error}");
-                return vec![Column::default(); side * side];
-            }
-        };
+        let samples =
+            match self
+                .worker
+                .lod_grid(x + width / 2, z + width / 2, width, side, self.approximate)
+            {
+                Ok(samples) => samples,
+                Err(error) => {
+                    log::warn!("Horizon: direct far sampling failed: {error}");
+                    return vec![Column::default(); side * side];
+                }
+            };
         samples
             .into_iter()
             .enumerate()

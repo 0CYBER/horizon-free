@@ -1813,6 +1813,7 @@ trait SeededPipeline: Send + Sync {
         z: i32,
         width: i32,
         side: usize,
+        approximate: bool,
     ) -> Result<Vec<LodColumn>, GeneratorError>;
     fn structure_starts(
         &self,
@@ -2132,68 +2133,78 @@ where
         z: i32,
         width: i32,
         side: usize,
+        approximate: bool,
     ) -> Result<Vec<LodColumn>, GeneratorError> {
         if width <= 0 || side == 0 || side > 64 {
             return Err(resource("far sample dimensions"));
         }
         let mut geometry = Vec::with_capacity(side * side);
         // The coarse and band passes below share the 2D (x/z-only) parts.
-        let mut context = SamplerContext::sparse().with_planes();
+        let mut context = if approximate {
+            SamplerContext::sparse().with_planes()
+        } else {
+            SamplerContext::sparse()
+        };
         let (min, height) = (self.settings.noise_min_y, self.settings.noise_height);
         let step_xz = width.max(4);
         let ox = x.div_euclid(4) * 4;
         let oz = z.div_euclid(4) * 4;
         let nx = ((x - ox + (side as i32 - 1) * width + step_xz - 1) / step_xz) + 1;
         let nz = ((z - oz + (side as i32 - 1) * width + step_xz - 1) / step_xz) + 1;
-        // Cells many blocks wide keep their interpolated shape on a coarser
-        // vertical lattice, for a fraction of the density work.
+        // Approximate: cells many blocks wide keep their interpolated shape on
+        // a coarser vertical lattice, for a fraction of the density work.
         let step_y = match width {
+            _ if !approximate => 8,
             ..32 => 8,
             32..128 => 16,
             _ => 32,
         };
-        // Far tiles show the surface: find its band on a coarse lattice (its
-        // points are the fine lattice's), then sample the fine lattice only
-        // inside it. Most of a tall world's column is sky or deep rock. Parts
-        // thinner than the coarse step above an air sample (floating
-        // islands, overhang lips) can be missed; below the band, a column is
-        // one span of the default block.
-        const COARSE: i32 = 64;
         let final_density = self.router.get(RouterField::FinalDensity);
-        let coarse_layers = (height + COARSE - 1) / COARSE + 1;
-        let coarse = DensityVolume::new(
-            [nx, coarse_layers, nz],
-            [ox, min, oz],
-            [step_xz, COARSE, step_xz],
-        )
-        .map_err(stage("far density"))?;
-        let mut coarse_densities = vec![0.; coarse.size()];
-        final_density
-            .sample_volume(&mut context, &mut coarse_densities, coarse)
+        // Approximate: far tiles show the surface, so find its band on a
+        // coarse lattice (its points are the fine lattice's), then sample the
+        // fine lattice only inside it. Most of a tall world's column is sky or
+        // deep rock. Parts thinner than the coarse step above an air sample
+        // (floating islands, overhang lips) can be missed; below the band, a
+        // column is one span of the default block.
+        let (band_min, band_max) = if approximate {
+            const COARSE: i32 = 64;
+            let coarse_layers = (height + COARSE - 1) / COARSE + 1;
+            let coarse = DensityVolume::new(
+                [nx, coarse_layers, nz],
+                [ox, min, oz],
+                [step_xz, COARSE, step_xz],
+            )
             .map_err(stage("far density"))?;
-        let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
-        for iz in 0..nz as usize {
-            for ix in 0..nx as usize {
-                let solid = (0..coarse_layers as usize)
-                    .rev()
-                    .find(|&iy| coarse_densities[coarse.index([ix, iy, iz]).unwrap()] > 0.);
-                if let Some(iy) = solid {
-                    let y = min + iy as i32 * COARSE;
-                    lowest = lowest.min(y - COARSE);
-                    highest = highest.max(y + 2 * COARSE);
+            let mut coarse_densities = vec![0.; coarse.size()];
+            final_density
+                .sample_volume(&mut context, &mut coarse_densities, coarse)
+                .map_err(stage("far density"))?;
+            let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
+            for iz in 0..nz as usize {
+                for ix in 0..nx as usize {
+                    let solid = (0..coarse_layers as usize)
+                        .rev()
+                        .find(|&iy| coarse_densities[coarse.index([ix, iy, iz]).unwrap()] > 0.);
+                    if let Some(iy) = solid {
+                        let y = min + iy as i32 * COARSE;
+                        lowest = lowest.min(y - COARSE);
+                        highest = highest.max(y + 2 * COARSE);
+                    }
                 }
             }
-        }
-        let (band_min, band_max) = if lowest > highest {
-            (min, min + height)
+            if lowest > highest {
+                (min, min + height)
+            } else {
+                let lowest = lowest.max(min);
+                (
+                    min + (lowest - min) / step_y * step_y,
+                    highest
+                        .max(self.settings.sea_level + COARSE)
+                        .min(min + height),
+                )
+            }
         } else {
-            let lowest = lowest.max(min);
-            (
-                min + (lowest - min) / step_y * step_y,
-                highest
-                    .max(self.settings.sea_level + COARSE)
-                    .min(min + height),
-            )
+            (min, min + height)
         };
         let ny = (band_max - band_min + step_y - 1) / step_y + 1;
         let volume =
@@ -2239,7 +2250,11 @@ where
             biomes: HashMap::new(),
             // Columns `width` blocks apart are width / 4 quarts apart; cells
             // stop at 64 blocks (wider ones moved a third of level 6's biomes).
-            cell: if width >= 4 { width.min(16) } else { 0 },
+            cell: if approximate && width >= 4 {
+                width.min(16)
+            } else {
+                0
+            },
         };
         for dz in 0..side {
             for dx in 0..side {
@@ -2725,14 +2740,19 @@ impl GeneratorWorker {
     }
     /// Direct far sampling: work scales with rendered vertical resolution,
     /// without allocating chunks, carving masks or propagated aquifers.
+    /// `approximate` (Reduced far detail) trades the exact tile for speed in
+    /// wide cells: one biome per 4x4 columns, a coarser vertical lattice, and
+    /// density only around the surface.
     pub fn lod_grid(
         &mut self,
         x: i32,
         z: i32,
         width: i32,
         side: usize,
+        approximate: bool,
     ) -> Result<Vec<LodColumn>, GeneratorError> {
-        self.pipeline.lod_grid(&mut self.state, x, z, width, side)
+        self.pipeline
+            .lod_grid(&mut self.state, x, z, width, side, approximate)
     }
     pub fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<Option<String>> {
         self.pipeline.noise_biomes(&mut self.state, quarts)
@@ -3046,7 +3066,7 @@ mod tests {
         }
         let dense_time = started.elapsed();
         let started = std::time::Instant::now();
-        let direct = worker.lod_grid(-1024, 0, 32, 8).unwrap();
+        let direct = worker.lod_grid(-1024, 0, 32, 8, false).unwrap();
         for z in 0..8 {
             for x in 0..8 {
                 let wx = -1024 + x * 32;
@@ -3081,7 +3101,11 @@ mod tests {
         let (surface, spans) = worker.surface_column(256, 0);
         assert!(surface.is_none());
         assert!(spans.is_empty());
-        let (surface, spans) = worker.lod_grid(256, 0, 32, 1).unwrap().pop().unwrap();
+        let (surface, spans) = worker
+            .lod_grid(256, 0, 32, 1, false)
+            .unwrap()
+            .pop()
+            .unwrap();
         assert!(
             surface.is_none() && spans.is_empty(),
             "direct sampling retains End void"

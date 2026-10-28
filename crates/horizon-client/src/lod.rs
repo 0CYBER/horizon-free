@@ -515,6 +515,8 @@ struct Shared {
     kinds: std::sync::OnceLock<Vec<u8>>,
     wake: Condvar,
     stop: AtomicBool,
+    /// Reduced far detail: samplers approximate wide cells.
+    approximate: AtomicBool,
 }
 /// One background worker and at most two outstanding sample jobs. Only the
 /// current view's quadtree and a bounded set of visited summaries are retained.
@@ -567,6 +569,7 @@ impl Lod {
             kinds: std::sync::OnceLock::new(),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
+            approximate: AtomicBool::new(false),
         });
         let worker = shared.clone();
         let mesh_context = context.clone();
@@ -610,6 +613,9 @@ impl Lod {
                                         }
                                     };
                                     let [x, _, z] = key.origin();
+                                    sample.set_approximate(
+                                        shared.approximate.load(Ordering::Relaxed),
+                                    );
                                     let samples =
                                         sample.grid(x, z, key.size() / CELLS as i32, CELLS);
                                     if shared.stop.load(Ordering::Relaxed) {
@@ -672,6 +678,7 @@ impl Lod {
                         }
                         Job::Sample(key) => {
                             let [x, _, z] = key.origin();
+                            sampler.set_approximate(worker.approximate.load(Ordering::Relaxed));
                             let samples = sampler.grid(x, z, key.size() / CELLS as i32, CELLS);
                             Done::Sample { key, samples }
                         }
@@ -967,9 +974,11 @@ impl Lod {
         self.near_loading = loading;
     }
     /// Reduced far detail (`graphics::FarDetail::Reduced`): the next update
-    /// replans when it changes.
+    /// replans when it changes, and tiles sampled from then on approximate
+    /// wide cells (`GeneratorWorker::lod_grid`).
     pub fn set_reduced_detail(&mut self, reduced: bool) {
         self.reduced_detail = reduced;
+        self.shared.approximate.store(reduced, Ordering::Relaxed);
     }
     fn held(&self) -> bool {
         self.small && self.near_loading
