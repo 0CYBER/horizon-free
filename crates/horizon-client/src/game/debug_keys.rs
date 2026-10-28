@@ -917,6 +917,17 @@ impl Game<'_> {
                 (t.pitch, t.yaw),
             );
         }
+        // EntityType.EYE_OF_ENDER: 0.25 by 0.25, never turned.
+        for (previous, now) in self.end.eye_positions() {
+            let v = |p: glam::DVec3| Vec3::new(p.x, p.y, p.z);
+            g.hitbox(
+                at(v(previous), v(now)),
+                (0.25, 0.25),
+                0.2125,
+                false,
+                (0.0, 0.0),
+            );
+        }
         for r in &self.rockets {
             // Projectile.updateRotation: the look follows the motion.
             let v = r.velocity;
