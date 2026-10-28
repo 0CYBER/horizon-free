@@ -149,7 +149,7 @@ MCP: `account_offline`.
 
 ## `horizon-launcher account forget-offline`
 
-Forget one of your offline names.
+Forget one of your offline names; its skin and cape go with it.
 
     horizon-launcher account forget-offline <NAME>
 

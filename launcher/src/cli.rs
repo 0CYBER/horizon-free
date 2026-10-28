@@ -103,7 +103,7 @@ enum AccountCmd {
     /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
     /// made up
     Offline { name: Option<String> },
-    /// Forget one of your offline names
+    /// Forget one of your offline names; its skin and cape go with it
     ForgetOffline { name: String },
     /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
     /// PNG, the model. Kept by the launcher and given to the game when that name plays
@@ -1580,7 +1580,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             }
         }
         AccountCmd::ForgetOffline { name } => {
-            accounts.remove_offline(&name)?;
+            accounts.remove_offline(&name, &horizon_launcher::skins::dir())?;
             accounts.save()?;
             println!("Forgot the offline name {name}.");
         }

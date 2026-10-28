@@ -501,8 +501,10 @@ impl Launcher {
     }
 
     fn go(&mut self, page: Page) {
-        // The game may have made up a name since: read it again (a small file, once a switch).
+        // The game may have made up a name since, and the CLI or another window may have
+        // changed the accounts: read them again (small files, once a switch).
         self.offline_name = offline_name();
+        self.accounts = Accounts::load();
         if page != self.page {
             self.page = page;
             self.switches += 1;
@@ -1791,6 +1793,10 @@ impl Launcher {
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.account_menu = !this.account_menu;
+                if this.account_menu {
+                    // Who can play may have changed elsewhere since the window opened.
+                    this.accounts = Accounts::load();
+                }
                 cx.notify();
             }));
         let account = div()
@@ -3400,8 +3406,11 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = None;
-                            let _ = this.accounts.save();
+                            let mut accounts = Accounts::load();
+                            accounts.selected = None;
+                            if accounts.save().is_ok() {
+                                this.accounts = accounts;
+                            }
                             cx.notify();
                         }),
                     ),
@@ -3411,8 +3420,7 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = Some(uuid.clone());
-                            let _ = this.accounts.save();
+                            this.play_as(account::Player::Microsoft(uuid.clone()));
                             cx.notify();
                         }),
                     ),
@@ -3421,12 +3429,15 @@ impl Launcher {
             actions = actions.child(
                 button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
-                        let store = account::store();
-                        if let Err(e) = this.accounts.remove(store, &uuid) {
-                            this.sign_in_state = Some(SignInState::Done(Err(e)));
+                        let mut accounts = Accounts::load();
+                        match accounts
+                            .remove(account::store(), &uuid)
+                            .and_then(|()| accounts.save())
+                        {
+                            Ok(()) => this.accounts = accounts,
+                            Err(e) => this.sign_in_state = Some(SignInState::Done(Err(e))),
                         }
-                        let _ = this.accounts.save();
-                        this.owner = Some(this.accounts.has_owner(store));
+                        this.owner = Some(this.accounts.has_owner(account::store()));
                         cx.notify();
                     },
                 )),
