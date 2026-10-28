@@ -228,27 +228,32 @@ pub fn tiled(
     size: f32,
     color: u32,
 ) {
+    tiled_sized(batch, atlas, sprite, x, y, w, h, [size, size], color);
+}
+/// Repeat a texture using its width and height in GUI pixels.
+#[allow(clippy::too_many_arguments)]
+pub fn tiled_sized(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    sprite: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    size: [f32; 2],
+    color: u32,
+) {
     let Some(r) = atlas.sprites.get(sprite).copied() else {
         return;
     };
-    let mut yy = 0.0;
-    while yy < h {
-        let th = size.min(h - yy);
-        let mut xx = 0.0;
-        while xx < w {
-            let tw = size.min(w - xx);
-            batch.rect_uv(
-                x + xx,
-                y + yy,
-                tw,
-                th,
-                sub(r, [size, size], [0.0, 0.0, tw, th]),
-                color,
-            );
-            xx += size;
-        }
-        yy += size;
-    }
+    tile(
+        batch,
+        r,
+        size,
+        [0.0, 0.0, size[0], size[1]],
+        [x, y, w, h],
+        color,
+    );
 }
 /// Text drawn at `scale` times its size (a scaled pose).
 pub fn text_scaled(
@@ -434,7 +439,7 @@ pub fn separators(
         ("gui/header_separator", "gui/footer_separator")
     };
     let w = batch.width;
-    tiled(
+    tiled_sized(
         batch,
         atlas,
         header,
@@ -442,10 +447,10 @@ pub fn separators(
         header_bottom - 2.0,
         w,
         2.0,
-        32.0,
+        [32.0, 2.0],
         u32::MAX,
     );
-    tiled(
+    tiled_sized(
         batch,
         atlas,
         footer,
@@ -453,7 +458,7 @@ pub fn separators(
         footer_top,
         w,
         2.0,
-        32.0,
+        [32.0, 2.0],
         u32::MAX,
     );
 }
@@ -1289,6 +1294,22 @@ mod tests {
     }
     fn faithful(json: &str) -> NineSlice {
         parse_nine_slice(&serde_json::from_str(json).unwrap()).unwrap()
+    }
+    #[test]
+    fn separator_tiles_sample_both_rows_and_clip_the_last_column() {
+        let mut batch = HudBatch::new([640, 480]);
+        tile(
+            &mut batch,
+            sprite(32, 2),
+            [32.0, 2.0],
+            [0.0, 0.0, 32.0, 2.0],
+            [0.0, 5.0, 40.0, 2.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 2);
+        assert_quad(q[0], ([0.0, 5.0, 32.0, 7.0], [0.0, 0.0, 1.0, 1.0]));
+        assert_quad(q[1], ([32.0, 5.0, 40.0, 7.0], [0.0, 0.0, 0.25, 1.0]));
     }
     #[test]
     fn a_high_resolution_button_slices_in_its_gui_units() {
