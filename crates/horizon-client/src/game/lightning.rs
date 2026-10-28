@@ -29,10 +29,13 @@ impl Game<'_> {
         if rain <= 0.2 || thunder <= 0.9 || self.dim != super::Dim::Overworld {
             return;
         }
-        let (_, mut chunks) = self.spawning_chunks(&self.level_players());
+        let mut scratch = std::mem::take(&mut self.spawn_scratch);
+        self.spawning_chunks(&self.level_players(), &mut scratch);
         let levels = self.tickets.levels();
-        chunks.retain(|&(x, z)| levels.random_ticking(x, z));
-        for (cx, cz) in chunks {
+        scratch
+            .candidates
+            .retain(|&(x, z)| levels.random_ticking(x, z));
+        for (cx, cz) in scratch.candidates.drain(..) {
             if self.world.random.next_int_bound(100_000).unwrap_or(1) != 0 {
                 continue;
             }
@@ -77,6 +80,7 @@ impl Game<'_> {
             ];
             self.spawn_bolt(at, trap);
         }
+        self.spawn_scratch = scratch;
     }
     /// `ServerLevel.findLightningRod`: `PoiManager.findClosest` over the
     /// lightning rod points of interest within 128 blocks of `center` whose
