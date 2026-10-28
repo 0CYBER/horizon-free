@@ -1,12 +1,10 @@
 //! Resident client world: streamed chunk columns plus the bookkeeping the game
 //! loop needs to relight and remesh after edits.
 use crate::chunk::{Chunk, MIN_Y, SECTIONS};
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use horizon_core::random::LegacyRandom;
 use horizon_world::registry::BlockStateId;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 /// Sections (x, section index, z) waiting to be remeshed, kept by column
 /// (a bit per section index), so the mesh scheduler looks at each column once
@@ -65,14 +63,14 @@ pub struct World {
     /// Saved entities of chunks that just loaded, spawned by the game.
     pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
-    pub modified: HashSet<(i32, i32)>,
+    pub modified: FxHashSet<(i32, i32)>,
     /// Block entities, and the order they tick in.
     pub block_entities: crate::block_entities::BlockEntities,
     /// Each chest's `ContainerOpenersCounter`: opener count and largest
     /// interaction range.
-    pub chest_openers: HashMap<(i32, i32, i32), (i32, f64)>,
+    pub chest_openers: FxHashMap<(i32, i32, i32), (i32, f64)>,
     /// `BaseContainerBlockEntity.name`: custom names of container block entities.
-    pub block_names: HashMap<(i32, i32, i32), String>,
+    pub block_names: FxHashMap<(i32, i32, i32), String>,
     /// States (by id) whose writes are recorded in `watched_writes` (sculk
     /// blocks, which need a block entity).
     pub watched: Vec<bool>,
@@ -80,7 +78,7 @@ pub struct World {
     pub watched_writes: Vec<((i32, i32, i32), u32, u32)>,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
-    pub inhabited: HashMap<(i32, i32), i64>,
+    pub inhabited: FxHashMap<(i32, i32), i64>,
     pub game_time: i64,
     pub day_time: i64,
     pub weather: Weather,
@@ -177,13 +175,13 @@ impl World {
             dirty_light: Default::default(),
             light_edits: Vec::new(),
             loaded_entities: Vec::new(),
-            modified: HashSet::new(),
+            modified: FxHashSet::default(),
             block_entities: Default::default(),
-            chest_openers: HashMap::new(),
-            block_names: HashMap::new(),
+            chest_openers: FxHashMap::default(),
+            block_names: FxHashMap::default(),
             watched: Vec::new(),
             watched_writes: Vec::new(),
-            inhabited: HashMap::new(),
+            inhabited: FxHashMap::default(),
             game_time: 0,
             day_time: 1000,
             weather: Weather::default(),
