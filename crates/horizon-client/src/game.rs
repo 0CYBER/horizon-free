@@ -5691,6 +5691,16 @@ impl Game<'_> {
             rotation.turn(xo * zoom, yo * zoom);
             self.yaw = rotation.y_rot;
             self.pitch = rotation.x_rot;
+            // Entity.turn ends in AbstractBoat.onPassengerTurned: clampRotation
+            // keeps the view within 105 degrees of the boat at every turn, not
+            // only at the tick, so it never swings past and back.
+            if let Some(b) = self
+                .riding
+                .and_then(|id| self.boats.iter().find(|b| b.id == id))
+            {
+                let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
+                self.yaw += delta.clamp(-105.0, 105.0) - delta;
+            }
         }
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
