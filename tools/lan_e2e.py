@@ -274,8 +274,8 @@ both sides go to --out (host-*.png, guest-*.png).
     python3 tools/lan_e2e.py --check chest --check tab
     python3 tools/lan_e2e.py --server-thread --check portals   # the host's world on its server thread
 
-Needs the prepared resources in .local/horizon-client and, on Linux, vscreen (the desktop); on
-macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
+Needs the prepared resources in .local/horizon-client. On Linux the games run on vscreen (the
+desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
 """
 import argparse
 import json
@@ -4989,9 +4989,11 @@ def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
     # Either way explicitly: the game's default is the server thread.
     host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
-    # A headless run (HORIZON_E2E_HEADLESS) has no focused window to draw in: the games render
-    # offscreen and never pause on the focus loss, or the world would stand still.
-    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS'))
+    # A headless run (HORIZON_E2E_HEADLESS, or a Linux without vscreen) has no focused window to draw
+    # in: the games render offscreen and never pause on the focus loss, or the world would stand still
+    # (a host paused before its world loads waits at "Connecting to the server..." for ever).
+    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS')) or (
+        sys.platform.startswith('linux') and not shutil.which('vscreen'))
     launch = ['launch']
     if headless or sys.platform == 'darwin':
         launch.append('--offscreen')
