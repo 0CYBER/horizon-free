@@ -37,8 +37,9 @@ pub enum H {
     ResolutionScale,
     Antialiasing,
     Hdr,
-    HdrPaperWhite,
+    HdrBlackLevel,
     HdrPeak,
+    HdrPaperWhite,
     BatteryMode,
     GraphicsApi,
 }
@@ -229,14 +230,19 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "HDR output on an HDR display: lava, fire and sunlight shine brighter.",
             ),
             h(
-                H::HdrPaperWhite,
+                H::HdrBlackLevel,
                 None,
-                "HDR: how bright white paper and menus look. Match your desktop.",
+                "HDR: your display's darkest black. 0 for OLED; LCDs glow a little.",
             ),
             h(
                 H::HdrPeak,
                 None,
                 "HDR: how bright the brightest highlights get. Your display's peak.",
+            ),
+            h(
+                H::HdrPaperWhite,
+                None,
+                "HDR: how bright white paper and menus look. Match your desktop.",
             ),
             h(
                 H::PresentMode,
@@ -343,6 +349,7 @@ impl H {
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
             H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
             H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
+            H::HdrBlackLevel => Some(g.hdr_black_level as f32 / 100.0),
             _ => None,
         }
     }
@@ -387,6 +394,10 @@ impl H {
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
             H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
+            H::HdrBlackLevel => labelled(
+                "Black Level",
+                format!("{:.2} nits", g.hdr_black_level as f32 / 100.0),
+            ),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -411,6 +422,7 @@ impl H {
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
             H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
             H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
+            H::HdrBlackLevel => g.hdr_black_level = (v * 100.0).round() as u32,
             _ => {}
         }
     }
