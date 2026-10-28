@@ -197,7 +197,8 @@ impl Game<'_> {
             ("y", Tag::Int(pos.y)),
             ("z", Tag::Int(pos.z)),
             ("blockState", self.state_to_nbt(piston.moved_state)),
-            ("facing", Tag::Int(piston.direction as i32)),
+            // Direction.LEGACY_ID_CODEC: the 3D data value as a byte.
+            ("facing", Tag::Byte(piston.direction as i8)),
             ("progress", Tag::Float(piston.progress_o.to_bits())),
             ("extending", flag(piston.extending)),
             ("source", flag(piston.source)),

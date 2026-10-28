@@ -494,7 +494,11 @@ pub fn canonical(tag: &Tag) -> Option<Tag> {
                     _ => string("minecraft:air"),
                 },
             );
-            f.put("facing", Tag::Int(int(tag.get("facing")).unwrap_or(0)));
+            // Direction.LEGACY_ID_CODEC: the 3D data value as a byte.
+            f.put(
+                "facing",
+                Tag::Byte(int(tag.get("facing")).unwrap_or(0) as i8),
+            );
             f.float("progress", 0.0);
             f.flag("extending", false);
             f.flag("source", false);
