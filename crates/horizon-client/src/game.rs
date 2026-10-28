@@ -2036,6 +2036,12 @@ impl Game<'_> {
             p.position.z,
         ])
     }
+    /// Where targeting starts and points: the eyes along the view. Every
+    /// crosshair target (blocks, fluids, entities, mod raycasts) is found
+    /// along this ray, so a tracked controller can stand in for it.
+    fn aim(&self) -> Option<([f64; 3], [f64; 3])> {
+        Some((self.eye_position()?, view_vector(self.yaw, self.pitch)))
+    }
     fn reach(&self) -> f64 {
         if self.creative { 5.0 } else { 4.5 }
     }
@@ -2110,8 +2116,8 @@ impl Game<'_> {
                 point: hit.point,
             });
         }
-        let origin = self.eye_position()?;
-        self.clip_ray(origin, view_vector(self.yaw, self.pitch), self.reach())
+        let (origin, dir) = self.aim()?;
+        self.clip_ray(origin, dir, self.reach())
     }
     /// The first block outline hit within `reach` along the unit `dir`.
     fn clip_ray(&self, origin: [f64; 3], dir: [f64; 3], reach: f64) -> Option<Hit> {
@@ -8385,8 +8391,7 @@ impl Game<'_> {
         darken
     }
     fn mob_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, m) in self.mobs.iter().enumerate() {
@@ -9541,8 +9546,7 @@ impl Game<'_> {
     }
     /// Voxel traversal that also stops at fluid source blocks (bucket pick).
     fn pick_fluid(&self) -> Option<Hit> {
-        let origin = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (origin, dir) = self.aim()?;
         let mut t = 0.0;
         let mut last = origin.map(|v| v.floor() as i32);
         while t <= self.reach() {
