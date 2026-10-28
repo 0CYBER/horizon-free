@@ -81,8 +81,8 @@ pub const TIERS: [Tier; 4] = [
     },
     Tier {
         share: 1.0,
-        start: 0.88,
-        full: 0.94,
+        start: 0.14,
+        full: 0.38,
     },
 ];
 
