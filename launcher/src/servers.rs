@@ -48,9 +48,14 @@ pub fn list() -> Vec<Entry> {
 }
 
 fn save_list(entries: &[Entry]) -> Result<(), String> {
+    let path = list_file();
     fs::create_dir_all(backend::data_dir()).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
-    fs::write(list_file(), text).map_err(|e| e.to_string())
+    // A torn write would drop every server from the sidebar: write beside
+    // the list and rename it into place.
+    let partial = path.with_extension("json.tmp");
+    fs::write(&partial, text).map_err(|e| e.to_string())?;
+    fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
 /// Adds a server folder to the list (once).
