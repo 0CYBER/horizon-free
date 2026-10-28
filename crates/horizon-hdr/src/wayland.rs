@@ -4,8 +4,9 @@
 //! reference white and tone-maps above what the display reaches, so the game can't
 //! measure the display through it: it asks instead.
 //!
-//! The query runs on winit's own connection, on an event queue of its own, so winit's
-//! events are left alone.
+//! The watch runs on winit's own connection, on an event queue of its own, so winit's
+//! events are left alone; winit's loop reads the socket, the watch only looks at what
+//! landed on its queue.
 use std::ffi::c_void;
 use wayland_backend::client::{Backend, ObjectId};
 use wayland_client::{
@@ -32,73 +33,118 @@ pub struct Luminances {
 #[derive(Default)]
 struct State {
     manager: Option<(u32, u32)>,
+    /// The compositor changed the surface's preferred description since the last query.
+    changed: bool,
     ready: Option<bool>,
     reference: Option<f32>,
     target: Option<(f32, f32)>,
     done: bool,
 }
 
-/// The preferred luminances of `window`'s surface. None off Wayland, or where the
-/// compositor has no `wp_color_management_v1`, or doesn't tell.
-pub fn window_luminances(
-    window: &(impl wgpu::rwh::HasDisplayHandle + wgpu::rwh::HasWindowHandle),
-) -> Option<Luminances> {
-    use wgpu::rwh::{RawDisplayHandle, RawWindowHandle};
-    let (RawDisplayHandle::Wayland(d), RawWindowHandle::Wayland(w)) = (
-        window.display_handle().ok()?.as_raw(),
-        window.window_handle().ok()?.as_raw(),
-    ) else {
-        return None;
-    };
-    // Safety: the window's live display and surface, borrowed for the call.
-    unsafe { preferred_luminances(d.display.as_ptr(), w.surface.as_ptr()) }
+/// What a compositor says about one window, kept up to date: [`Watch::changed`] says
+/// when it changes (another output, the player recalibrating the desktop).
+///
+/// Drop it before the window: its objects live on the window's connection.
+pub struct Watch {
+    queue: EventQueue<State>,
+    state: State,
+    manager: WpColorManagerV1,
+    feedback: WpColorManagementSurfaceFeedbackV1,
 }
 
-/// [`window_luminances`] on raw handles: `surface` (a `wl_surface*`) on `display` (a
-/// `wl_display*`).
-///
-/// # Safety
-///
-/// `display` and `surface` must be live libwayland objects of the same connection, and
-/// stay so for the call.
-unsafe fn preferred_luminances(display: *mut c_void, surface: *mut c_void) -> Option<Luminances> {
-    // Safety: the caller's live display; a foreign one is never closed from here.
-    let backend = unsafe { Backend::from_foreign_display(display.cast()) };
-    let conn = Connection::from_backend(backend);
-    // Safety: the caller's live wl_surface on this connection.
-    let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.cast()) }.ok()?;
-    let surface = WlSurface::from_id(&conn, id).ok()?;
-    let mut queue: EventQueue<State> = conn.new_event_queue();
-    let qh = queue.handle();
-    let mut state = State::default();
-    let registry = conn.display().get_registry(&qh, ());
-    queue.roundtrip(&mut state).ok()?;
-    let (name, version) = state.manager?;
-    let manager: WpColorManagerV1 = registry.bind(name, version.min(1), &qh, ());
-    let feedback = manager.get_surface_feedback(&surface, &qh, ());
-    let description = feedback.get_preferred(&qh, ());
-    while state.ready.is_none() {
-        queue.blocking_dispatch(&mut state).ok()?;
+impl Watch {
+    /// Starts watching `window`'s surface, with what the compositor says now. None off
+    /// Wayland, or where the compositor has no `wp_color_management_v1`.
+    pub fn new(
+        window: &(impl wgpu::rwh::HasDisplayHandle + wgpu::rwh::HasWindowHandle),
+    ) -> Option<(Self, Option<Luminances>)> {
+        use wgpu::rwh::{RawDisplayHandle, RawWindowHandle};
+        let (RawDisplayHandle::Wayland(d), RawWindowHandle::Wayland(w)) = (
+            window.display_handle().ok()?.as_raw(),
+            window.window_handle().ok()?.as_raw(),
+        ) else {
+            return None;
+        };
+        // Safety: the window's live display and surface, borrowed for the call.
+        let mut watch = unsafe { Self::on(d.display.as_ptr(), w.surface.as_ptr()) }?;
+        let now = watch.query();
+        Some((watch, now))
     }
-    let mut found = None;
-    if state.ready == Some(true) {
-        let _info = description.get_information(&qh, ());
-        while !state.done {
-            queue.blocking_dispatch(&mut state).ok()?;
+
+    /// [`Watch::new`] on raw handles: `surface` (a `wl_surface*`) on `display` (a
+    /// `wl_display*`).
+    ///
+    /// # Safety
+    ///
+    /// `display` and `surface` must be live libwayland objects of the same connection.
+    unsafe fn on(display: *mut c_void, surface: *mut c_void) -> Option<Self> {
+        // Safety: the caller's live display; a foreign one is never closed from here.
+        let backend = unsafe { Backend::from_foreign_display(display.cast()) };
+        let conn = Connection::from_backend(backend);
+        // Safety: the caller's live wl_surface on this connection.
+        let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.cast()) }.ok()?;
+        let surface = WlSurface::from_id(&conn, id).ok()?;
+        let mut queue: EventQueue<State> = conn.new_event_queue();
+        let qh = queue.handle();
+        let mut state = State::default();
+        let registry = conn.display().get_registry(&qh, ());
+        queue.roundtrip(&mut state).ok()?;
+        let (name, version) = state.manager?;
+        let manager: WpColorManagerV1 = registry.bind(name, version.min(1), &qh, ());
+        let feedback = manager.get_surface_feedback(&surface, &qh, ());
+        Some(Self {
+            queue,
+            state,
+            manager,
+            feedback,
+        })
+    }
+
+    /// What the compositor says now, if it changed since the last call. Cheap: it only
+    /// looks at events the window's own loop already read.
+    pub fn changed(&mut self) -> Option<Option<Luminances>> {
+        self.queue.dispatch_pending(&mut self.state).ok()?;
+        if !std::mem::take(&mut self.state.changed) {
+            return None;
         }
-        if let (Some(reference), Some((target_min, target_max))) = (state.reference, state.target) {
-            found = Some(Luminances {
-                reference,
+        Some(self.query())
+    }
+
+    /// The surface's preferred description now.
+    fn query(&mut self) -> Option<Luminances> {
+        let qh = self.queue.handle();
+        let state = &mut self.state;
+        (state.ready, state.reference, state.target, state.done) = (None, None, None, false);
+        let description = self.feedback.get_preferred(&qh, ());
+        let found = (|| {
+            while state.ready.is_none() {
+                self.queue.blocking_dispatch(state).ok()?;
+            }
+            if state.ready != Some(true) {
+                return None;
+            }
+            let _info = description.get_information(&qh, ());
+            while !state.done {
+                self.queue.blocking_dispatch(state).ok()?;
+            }
+            let (target_min, target_max) = state.target?;
+            Some(Luminances {
+                reference: state.reference?,
                 target_min,
                 target_max,
-            });
-        }
+            })
+        })();
+        description.destroy();
+        found
     }
-    description.destroy();
-    feedback.destroy();
-    manager.destroy();
-    let _ = queue.roundtrip(&mut state);
-    found
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.feedback.destroy();
+        self.manager.destroy();
+        let _ = self.queue.flush();
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -134,13 +180,16 @@ impl Dispatch<WpColorManagerV1, ()> for State {
 }
 impl Dispatch<WpColorManagementSurfaceFeedbackV1, ()> for State {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &WpColorManagementSurfaceFeedbackV1,
-        _: wp_color_management_surface_feedback_v1::Event,
+        event: wp_color_management_surface_feedback_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wp_color_management_surface_feedback_v1::Event::PreferredChanged { .. } = event {
+            state.changed = true;
+        }
     }
 }
 impl Dispatch<WpImageDescriptionV1, ()> for State {

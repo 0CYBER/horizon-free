@@ -376,6 +376,9 @@ pub struct Renderer {
     pub last_wait: std::time::Duration,
     /// CPU time of the last `render`, waits excluded.
     pub last_encode: std::time::Duration,
+    /// What the system says about the window's display; before `window`, so it's
+    /// dropped first.
+    display: DisplayWatch,
     window: Arc<Window>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -1126,9 +1129,6 @@ impl Renderer {
             }
             surface.configure(&device, &config);
             let output = hdr::output(&caps);
-            if output.is_some() && previous.is_none() {
-                crate::graphics::report(reported(&window));
-            }
             (config, caps.present_modes.clone(), output)
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
@@ -2517,7 +2517,15 @@ impl Renderer {
                 on_off(gpu_timer.is_some()),
             ));
         }
+        let display = if hdr_output.is_some() {
+            let (watch, now) = DisplayWatch::new(&window);
+            crate::graphics::report(now);
+            watch
+        } else {
+            DisplayWatch::default()
+        };
         Ok(Self {
+            display,
             instance,
             adapter,
             surface,
@@ -3220,6 +3228,16 @@ impl Renderer {
             hdr.peak = peak;
             self.send_hdr_metadata();
         }
+    }
+    /// Whether what the system reports for the display changed (another output, the
+    /// player recalibrating the desktop): the settings' Auto values follow it then, so
+    /// apply them again.
+    pub fn display_changed(&mut self) -> bool {
+        let Some(now) = self.display.changed() else {
+            return false;
+        };
+        crate::graphics::report(now);
+        true
     }
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
         self.world_post.scale = scale.clamp(0.25, 2.0);
@@ -5858,29 +5876,55 @@ mod sprite_upload_tests {
     }
 }
 
-/// What the system reports for `window`'s display, in HDR output's scale.
-///
-/// Wayland: KWin maps content's reference white (203 nits in PQ, BT.2408) onto its own,
-/// so the desktop's white is 203 there and the peak is the target's maximum over that
-/// ratio. Checked on KWin; other compositors with `wp_color_management_v1` (Mutter,
-/// wlroots) are assumed to map it the same way. The peak is kept within the settings'
-/// lowest and PQ's top, so the metadata never ends below the black level.
-fn reported(window: &Window) -> Option<crate::graphics::Reported> {
+/// What the system says about the window's display, kept up to date: on Wayland, the
+/// compositor's preferred image description of the surface.
+#[derive(Default)]
+struct DisplayWatch {
     #[cfg(target_os = "linux")]
-    if let Some(l) = horizon_hdr::wayland::window_luminances(window) {
-        let peak = (l.target_max * 203.0 / l.reference.max(1.0)).round() as u32;
-        log::info!(
-            "Horizon renderer: the compositor shows this window with reference white {} nits, \
-             {}..{} nits: peak {peak} nits in HDR output's scale",
-            l.reference,
-            l.target_min,
-            l.target_max,
-        );
-        return Some(crate::graphics::Reported {
-            paper_white: 203,
-            peak: peak.clamp(200, 10_000),
-        });
+    wayland: Option<horizon_hdr::wayland::Watch>,
+}
+impl DisplayWatch {
+    /// Starts watching, with what the system reports now.
+    fn new(window: &Window) -> (Self, Option<crate::graphics::Reported>) {
+        #[cfg(target_os = "linux")]
+        if let Some((wayland, now)) = horizon_hdr::wayland::Watch::new(window) {
+            let watch = Self {
+                wayland: Some(wayland),
+            };
+            return (watch, now.map(reported));
+        }
+        let _ = window;
+        (Self::default(), None)
     }
-    let _ = window;
-    None
+    /// What the system reports, if that changed since the last call.
+    fn changed(&mut self) -> Option<Option<crate::graphics::Reported>> {
+        #[cfg(target_os = "linux")]
+        if let Some(wayland) = &mut self.wayland {
+            return wayland.changed().map(|now| now.map(reported));
+        }
+        None
+    }
+}
+
+/// What a compositor's luminances mean in HDR output's scale.
+///
+/// KWin maps content's reference white (203 nits in PQ, BT.2408) onto its own, so the
+/// desktop's white is 203 there and the peak is the target's maximum over that ratio.
+/// Checked on KWin; other compositors with `wp_color_management_v1` (Mutter, wlroots)
+/// are assumed to map it the same way. The peak is kept within the settings' lowest and
+/// PQ's top, so the metadata never ends below the black level.
+#[cfg(target_os = "linux")]
+fn reported(l: horizon_hdr::wayland::Luminances) -> crate::graphics::Reported {
+    let peak = (l.target_max * 203.0 / l.reference.max(1.0)).round() as u32;
+    log::info!(
+        "Horizon renderer: the compositor shows this window with reference white {} nits, \
+         {}..{} nits: peak {peak} nits in HDR output's scale",
+        l.reference,
+        l.target_min,
+        l.target_max,
+    );
+    crate::graphics::Reported {
+        paper_white: 203,
+        peak: peak.clamp(200, 10_000),
+    }
 }
