@@ -5412,6 +5412,7 @@ impl Game<'_> {
             self.send(S::Attack(play::Attack {
                 id: self.mobs[i].id as i32,
             }));
+            self.remote_player_attack(i);
             self.reset_attack_strength();
         } else if !self.entity_targeted()
             && let Some(hit) = self.pick()
@@ -5430,6 +5431,46 @@ impl Game<'_> {
         self.swing_arm();
         self.send(S::Punch(Empty));
         instant
+    }
+
+    /// `MultiPlayerGameMode.attack` runs `Player.attack` on this client too.
+    /// For a mob `hurtOrSimulate` fails here (`Entity.hurtClient`), so the
+    /// hit has no attacker side; but `RemotePlayer.hurtClient` is true, so a
+    /// hit on another player with extra knockback runs the attacker's side of
+    /// `causeExtraKnockback`: the 0.6 horizontal speed cut and the sprint
+    /// stop. Without it the next move outruns the server's player.
+    fn remote_player_attack(&mut self, mob: usize) {
+        let id = self.mobs[mob].id as i32;
+        if !self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.level_players.contains_key(&id))
+        {
+            return;
+        }
+        // `getAttackStrengthScale(0.5)`: here the ticker is `hand_strength`'s
+        // (`attack_ticks` only counts in the local world), and the attack
+        // speed is the player's synced attribute, which a server may change.
+        let speed = self
+            .player
+            .as_mut()
+            .and_then(|p| {
+                let key = p.attributes.key("minecraft:attack_speed")?;
+                p.attributes.lookup(Some(&key))?;
+                p.attributes
+                    .value(Some(key), horizon_world::attribute_map::ValueKind::Computed)
+                    .ok()
+            })
+            .unwrap_or_else(|| self.main_hand_attack_speed());
+        let scale = self.hand_strength.scale(0.5, speed);
+        let (knockback, _) = self.extra_knockback("minecraft:player", scale);
+        if knockback <= 0.0 {
+            return;
+        }
+        if let Some(p) = self.player.as_mut() {
+            p.velocity = Vec3::new(p.velocity.x * 0.6, p.velocity.y, p.velocity.z * 0.6);
+        }
+        self.stop_sprint_after_extra_knockback();
     }
 
     fn remote_continue_attack(&mut self, down: bool) {

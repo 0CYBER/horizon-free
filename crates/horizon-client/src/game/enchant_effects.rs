@@ -147,9 +147,11 @@ impl Game<'_> {
         (f64::from(trig::sin(yaw)), -f64::from(trig::cos(yaw)))
     }
     /// The attacker's side of `causeExtraKnockback` as the attacking client
-    /// sees it: the server's player stops sprinting, and its flag reaches the
-    /// client. (The server's 0.6 speed cut never does: the client's own
-    /// `Player.attack` simulates no hurt, so it skips the knockback.)
+    /// sees it after a hit on a mob: the server's player stops sprinting, and
+    /// its flag reaches the client. (The server's 0.6 speed cut never does:
+    /// the client's own `Player.attack` simulates no hurt on a mob, so it
+    /// skips the knockback. A hit on another player does simulate one:
+    /// `remote_player_attack`.)
     pub(super) fn stop_sprint_after_extra_knockback(&mut self) {
         if let Some(p) = self.player.as_mut() {
             let _ = p.set_sprinting(false);
