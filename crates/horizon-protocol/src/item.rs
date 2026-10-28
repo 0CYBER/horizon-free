@@ -6,6 +6,7 @@ use crate::{
     buf::{Codec, Reader, Writer, pack_block_pos, unpack_block_pos},
 };
 use horizon_world::nbt::Tag;
+use std::sync::Arc;
 
 mod skip;
 
@@ -45,6 +46,8 @@ pub mod component {
     pub const LODESTONE_TRACKER: i32 = 69;
     pub const FIREWORK_EXPLOSION: i32 = 70;
     pub const FIREWORKS: i32 = 71;
+    pub const BLOCK_ENTITY_DATA: i32 = 62;
+    pub const CONTAINER: i32 = 77;
 }
 
 /// A written book's content (`WrittenBookContent.STREAM_CODEC`): the
@@ -528,6 +531,17 @@ impl Component {
     }
 }
 
+/// A component patch as `DelimitedSlot` writes it (both counts, then each
+/// value behind its length), kept from a stack that was read so one nobody
+/// edited goes back byte for byte. It is no part of a stack's equality.
+#[derive(Clone, Debug, Default)]
+pub struct WirePatch(pub Option<Arc<[u8]>>);
+impl PartialEq for WirePatch {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// A non-empty item stack.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stack {
@@ -535,6 +549,9 @@ pub struct Stack {
     pub count: i32,
     pub added: Vec<(i32, Component)>,
     pub removed: Vec<i32>,
+    /// The patch as it was read; [`DelimitedSlot`] writes it in place of
+    /// `added` and `removed` when set. Only for a stack nobody has edited.
+    pub wire: WirePatch,
 }
 impl Stack {
     pub fn new(item: i32, count: i32) -> Self {
@@ -543,6 +560,7 @@ impl Stack {
             count,
             added: Vec::new(),
             removed: Vec::new(),
+            wire: WirePatch::default(),
         }
     }
     pub fn component(&self, kind: i32) -> Option<&Component> {
@@ -559,25 +577,7 @@ impl Stack {
 pub struct Slot;
 impl Codec<Option<Stack>> for Slot {
     fn read(r: &mut Reader) -> Result<Option<Stack>> {
-        let count = r.varint()?;
-        if count <= 0 {
-            return Ok(None);
-        }
-        let item = r.varint()?;
-        let positive = r.count(65536)?;
-        let negative = r.count(65536)?;
-        let mut added = Vec::with_capacity(positive.min(64));
-        for _ in 0..positive {
-            let kind = r.varint()?;
-            added.push((kind, Component::read(kind, r)?));
-        }
-        let removed = (0..negative).map(|_| r.varint()).collect::<Result<_>>()?;
-        Ok(Some(Stack {
-            item,
-            count,
-            added,
-            removed,
-        }))
+        read_stack(r, false)
     }
     fn write(v: &Option<Stack>, w: &mut Writer) {
         let Some(s) = v else {
@@ -591,6 +591,79 @@ impl Codec<Option<Stack>> for Slot {
         for (kind, c) in &s.added {
             w.varint(*kind);
             c.write(*kind, w);
+        }
+        for kind in &s.removed {
+            w.varint(*kind);
+        }
+    }
+}
+
+/// A stack of either optional codec: with `delimited` each component value
+/// has a length in front (DataComponentPatch.DELIMITED_STREAM_CODEC). The
+/// patch is also kept, in the delimited form, for [`Stack::wire`].
+fn read_stack(r: &mut Reader, delimited: bool) -> Result<Option<Stack>> {
+    let count = r.varint()?;
+    if count <= 0 {
+        return Ok(None);
+    }
+    let item = r.varint()?;
+    let positive = r.count(65536)?;
+    let negative = r.count(65536)?;
+    let mut added = Vec::with_capacity(positive.min(64));
+    let mut patch = Writer::new();
+    patch.varint(positive as i32);
+    patch.varint(negative as i32);
+    for _ in 0..positive {
+        let kind = r.varint()?;
+        let (component, value) = if delimited {
+            let len = r.count(r.remaining())?;
+            let value = r.bytes(len)?;
+            (Component::read(kind, &mut Reader::new(value))?, value)
+        } else {
+            let start = r.position();
+            (Component::read(kind, r)?, r.since(start))
+        };
+        patch.varint(kind);
+        patch.byte_array(value);
+        added.push((kind, component));
+    }
+    let removed: Vec<i32> = (0..negative).map(|_| r.varint()).collect::<Result<_>>()?;
+    removed.iter().for_each(|kind| patch.varint(*kind));
+    Ok(Some(Stack {
+        item,
+        count,
+        added,
+        removed,
+        wire: WirePatch((positive + negative > 0).then(|| patch.data.into())),
+    }))
+}
+
+/// ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC (`SetCreativeModeSlot`): as [`Slot`],
+/// but every component value goes behind its byte length
+/// (DataComponentPatch.DELIMITED_STREAM_CODEC), so a server skips what it can't read.
+pub struct DelimitedSlot;
+impl Codec<Option<Stack>> for DelimitedSlot {
+    fn read(r: &mut Reader) -> Result<Option<Stack>> {
+        read_stack(r, true)
+    }
+    fn write(v: &Option<Stack>, w: &mut Writer) {
+        let Some(s) = v else {
+            w.varint(0);
+            return;
+        };
+        w.varint(s.count);
+        w.varint(s.item);
+        if let Some(patch) = &s.wire.0 {
+            w.bytes(patch);
+            return;
+        }
+        w.varint(s.added.len() as i32);
+        w.varint(s.removed.len() as i32);
+        for (kind, c) in &s.added {
+            w.varint(*kind);
+            let mut value = Writer::new();
+            c.write(*kind, &mut value);
+            w.byte_array(&value.data);
         }
         for kind in &s.removed {
             w.varint(*kind);
@@ -617,6 +690,7 @@ impl Codec<Stack> for Template {
             count,
             added,
             removed,
+            wire: WirePatch::default(),
         })
     }
     fn write(s: &Stack, w: &mut Writer) {

@@ -61,6 +61,24 @@ pub struct StackData {
     /// Components Horizon does not model (lore, custom data, item name,
     /// max stack size...), kept as their saved values in key order.
     pub other: Vec<(String, Tag)>,
+    /// What the server sent for this stack, for sending it back unchanged.
+    pub wire: Wire,
+}
+/// The component patch a server sent for a stack, as the creative slot packet
+/// writes it, and the stack Horizon decoded from it, to tell whether anything
+/// changed since. Like vanilla's `BundleContents.selectedItem` it is left out
+/// when stacks are compared.
+#[derive(Clone, Debug, Default)]
+pub struct Wire(Option<Arc<(ItemStack, Arc<[u8]>)>>);
+impl Wire {
+    pub fn new(decoded: ItemStack, patch: Arc<[u8]>) -> Self {
+        Self(Some(Arc::new((decoded, patch))))
+    }
+}
+impl PartialEq for Wire {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 /// A bundle's selected item index (-1: none). Like vanilla's
 /// `BundleContents.equals` it is left out when stacks are compared.
@@ -159,7 +177,7 @@ pub struct WrittenBook {
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        self.wire.0.is_none() && *self == Self::default()
     }
 }
 
@@ -174,6 +192,16 @@ impl ItemStack {
     }
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
+    }
+    /// The patch the server sent for this stack, while the stack is still what
+    /// it decoded to (its count aside); None once anything else changed.
+    pub fn wire_patch(&self) -> Option<Arc<[u8]>> {
+        let (decoded, patch) = &**self.data()?.wire.0.as_ref()?;
+        let none = StackData::default();
+        (decoded.item == self.item
+            && decoded.damage == self.damage
+            && decoded.data().unwrap_or(&none) == self.data().unwrap_or(&none))
+        .then(|| patch.clone())
     }
     pub fn data_mut(&mut self) -> &mut StackData {
         self.extra.get_or_insert_with(Box::default)
@@ -872,6 +900,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         }),
         bundle_selected: BundleSelected::default(),
         other: Vec::new(),
+        wire: Wire::default(),
     };
     let mut data = data;
     if let Tag::Compound(map) = c {

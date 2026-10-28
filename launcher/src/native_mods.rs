@@ -28,7 +28,7 @@ const NAME: &str = "Native mods";
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "0500ff24aa5933fca95a877ef41125353c4b4fe3";
+pub const MIXINS_REV: &str = "0d6b103c70633d8fd9443d8d0acd3aadaacedb06";
 /// The profile and features of the release's own game (game-build.yml).
 const PROFILE: &str = "release";
 const FEATURES: &str = "horizon-client/mods";
