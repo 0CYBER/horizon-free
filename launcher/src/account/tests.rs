@@ -434,6 +434,51 @@ fn offline_names_play_only_beside_an_owner() {
 }
 
 #[test]
+fn the_developer_option_off_is_the_owner_gate() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    let refused = accounts.play_as_with(&store, Player::Offline("Builder_1".into()), false);
+    assert_eq!(refused.unwrap_err(), OFFLINE_NEEDS_OWNER);
+    assert_eq!(accounts, Accounts::default());
+    let (_, ep) = mock(|m| m.owns_game = false);
+    let refused = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, false);
+    assert_eq!(refused.unwrap_err(), NoOwner);
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let refused = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, false);
+    assert_eq!(refused.unwrap_err(), NoOwner);
+}
+
+#[test]
+fn the_developer_option_plays_offline_names_without_an_owner() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts
+        .play_as_with(&store, Player::Offline("Builder_1".into()), true)
+        .unwrap();
+    assert_eq!(accounts.player(), Player::Offline("Builder_1".into()));
+    assert_eq!(accounts.name_arg(), Some("Builder_1"));
+    // The game starts offline: no request, no session, and no owner to download the game for.
+    let (m, ep) = mock(|_| {});
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, true).unwrap();
+    assert!(pass.session.is_none() && pass.owner.is_none() && pass.offline.is_none());
+    assert!(m.lock().unwrap().log.is_empty());
+    // Beside an account the services say doesn't own the game: the same, still no owner.
+    let (_, ep) = mock(|m| m.owns_game = false);
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    accounts
+        .play_as_with(&store, Player::Offline("Builder_1".into()), true)
+        .unwrap();
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, true).unwrap();
+    assert!(pass.session.is_none() && pass.owner.is_none());
+    assert!(!accounts.has_owner(&store));
+    // A real owner is still found and brings what it brings without the option.
+    let (_, ep) = mock(|_| {});
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, true).unwrap();
+    assert_eq!(pass.owner.unwrap().0.name, "Notch");
+}
+
+#[test]
 fn refusals_have_messages() {
     let tokens = || MsTokens {
         access: "ms-access-1".into(),

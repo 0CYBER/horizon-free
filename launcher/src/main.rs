@@ -13,6 +13,7 @@ mod console;
 mod console_page;
 mod cull;
 mod datapacks_page;
+mod dev_options;
 mod export_page;
 mod game_tools;
 mod import_page;
@@ -219,6 +220,10 @@ struct Launcher {
     owner: Option<bool>,
     /// Play was refused (or Home's Sign in pressed): the owner gate's screen is open.
     owner_screen_open: bool,
+    /// Clicks on the sidebar's launcher version, and whether they revealed the developer options
+    /// (`dev_options`) for this run.
+    dev_clicks: u8,
+    dev_options: bool,
     /// The game is waiting for its session (a token renewal) before it starts.
     starting_client: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
@@ -428,6 +433,8 @@ impl Launcher {
             keychain: true,
             owner: None,
             owner_screen_open: false,
+            dev_clicks: 0,
+            dev_options: false,
             starting_client: None,
             friend_code: String::new(),
             friend_focused: false,
@@ -721,7 +728,10 @@ impl Launcher {
                                 continue;
                             }
                         };
-                        self.owner = Some(true);
+                        // Past the gate by the developer option alone is no owner.
+                        if !self.settings.dev_offline {
+                            self.owner = Some(true);
+                        }
                         if let Some(file) = file {
                             cmd.arg("--session-file").arg(file);
                         }
@@ -1164,9 +1174,10 @@ impl Launcher {
         self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
+        let offline_without_owner = self.settings.dev_offline;
         std::thread::spawn(move || {
             backend::complete_assets(&tag);
-            let session = account::session_for_game(&backend::game_home());
+            let session = account::session_for_game(&backend::game_home(), offline_without_owner);
             let _ = tx.send(Msg::Session(session));
         });
     }
@@ -2098,9 +2109,14 @@ impl Launcher {
         }
         foot = foot.child(
             caps(format!("Launcher {}", backend::VERSION))
+                .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .text_color(t.muted),
+                .text_color(t.muted)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.version_clicked();
+                    cx.notify();
+                })),
         );
         div()
             .id("sidebar")
@@ -2320,7 +2336,7 @@ impl Launcher {
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
         // owner there is nothing to play, so signing in comes first.
         let first = (!prepared && !self.preparing)
-            .then_some(self.owner)
+            .then_some(self.owner_shown())
             .flatten();
         let resources_value = match first {
             _ if self.preparing => tr("Preparing…").to_string(),
@@ -2430,7 +2446,7 @@ impl Launcher {
             rows = rows.child(self.join_friend_row(prepared && !running, cx));
             // The top bar shows who plays; a row only when there is something to do about it:
             // no account that owns the game (Play needs one), or offline.
-            if self.owner == Some(false) {
+            if self.owner_shown() == Some(false) {
                 rows = rows.child(index_row(
                     5,
                     tr("Microsoft account"),
@@ -3089,6 +3105,7 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .children(self.agents_section(cx))
+            .children(self.dev_options_section(cx))
     }
 
     /// Settings' Nightly row: off by default; on, the nightly build installs and updates in its
