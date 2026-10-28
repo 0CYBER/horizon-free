@@ -24,6 +24,15 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum JavaCmd {
+    /// The Java runtimes Horizon downloaded from Mojang and the ones installed on this computer
+    List,
+    /// Download Mojang's Java runtime: a major (8, 16, 17, 21, 25) or a component name from a
+    /// version's JSON (java-runtime-delta)
+    Install { java: String },
+}
+
+#[derive(Subcommand)]
 enum RustCmd {
     /// Whether it is installed, its version and whether this computer can link with it
     Status,
@@ -739,6 +748,11 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PacksCmd>,
     },
+    /// Java for Minecraft: Java Edition instances: list the runtimes, download Mojang's
+    Java {
+        #[command(subcommand)]
+        action: Option<JavaCmd>,
+    },
     /// The screenshots F2 took in an instance: list, delete
     Screenshots {
         #[command(subcommand)]
@@ -1356,7 +1370,45 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
         Cmd::Rust { action } => rust(action.unwrap_or(RustCmd::Status), as_json)?,
+        Cmd::Java { action } => java(action.unwrap_or(JavaCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
+    }
+    Ok(())
+}
+
+fn java(action: JavaCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::java;
+    match action {
+        JavaCmd::List => {
+            let mut all = java::mojang_runtimes(&java::runtimes_dir());
+            all.extend(java::installed());
+            if as_json {
+                json(serde_json::json!(all));
+            } else if all.is_empty() {
+                println!("No Java yet. Horizon downloads Mojang's when an instance needs it.");
+            } else {
+                for r in &all {
+                    let from = match r.source {
+                        java::Source::Mojang => "Mojang's, downloaded by Horizon",
+                        java::Source::Installed => "installed",
+                    };
+                    println!("Java {}  ({from})\n  {}", r.version, r.home.display());
+                }
+            }
+        }
+        JavaCmd::Install { java: which } => {
+            let need = java::Need::named(&which)?;
+            let runtime = java::install(&need, &|line| eprintln!("{line}"))?;
+            if as_json {
+                json(serde_json::json!(runtime));
+            } else {
+                println!(
+                    "Java {} is ready: {}",
+                    runtime.version,
+                    runtime.home.display()
+                );
+            }
+        }
     }
     Ok(())
 }

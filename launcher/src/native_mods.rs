@@ -5,7 +5,10 @@
 //! player's rights.
 //!
 //! A native mod pins the Horizon revision it was made for (a Nightly's or a release's commit), and
-//! every mod of one build must pin the same one. The build compiles that revision's source, from
+//! every mod of one build must pin the same one. A mod that hooks only Horizon's native hook points
+//! (`game/native_hooks.rs`) names the version it needs instead (`hooks`): it builds on any Horizon
+//! whose hook points have that version or a later one (they are only ever added to), the player's own
+//! by default, so such mods always build together. The build compiles that revision's source, from
 //! GitHub, never a checkout on this computer, and installs as its own version,
 //! `native-<revision>-<key>` (the key hashes the revision, the mods' files, the tool's commit and
 //! the profile, so the same set builds once). It plays in its own instance, "Native mods", so a
@@ -106,6 +109,9 @@ pub struct Bundle {
     pub horizon: Option<String>,
     /// The horizon-mixins commit it was tested with (its `.hnmod`'s).
     pub mixins: Option<String>,
+    /// The native hook points' version it needs (its `.hnmod`'s `hooks`): then `horizon` is the
+    /// revision it was tested on, and it builds on any with these hook points or later ones.
+    pub hooks: Option<u32>,
 }
 
 /// The bundles in `folder`: the folder itself when it is one (a `horizon-mixin.toml`, or an
@@ -143,9 +149,9 @@ fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
         return Ok(None);
     }
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let native: serde_json::Value =
+    let native_json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let field = |name: &str| native[name].as_str().map(str::to_owned);
+    let field = |name: &str| native_json[name].as_str().map(str::to_owned);
     let id = field("id").ok_or_else(|| format!("{} has no id.", path.display()))?;
     let found = bundle(&dir.join("mixins").join(&id), field("mixins"))?;
     match (&found.horizon, field("horizon")) {
@@ -154,6 +160,9 @@ fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
         )),
         (_, native) => Ok(Some(Bundle {
             horizon: found.horizon.clone().or(native),
+            hooks: native_json["hooks"]
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok()),
             ..found
         })),
     }
@@ -181,6 +190,7 @@ fn bundle(dir: &Path, mixins: Option<String>) -> Result<Bundle, String> {
         dir: dir.to_owned(),
         horizon: field("compatibility", "horizon_revision"),
         mixins,
+        hooks: None,
     })
 }
 
@@ -221,6 +231,90 @@ fn agreed(
         ));
     }
     Ok(revision)
+}
+
+/// Where Horizon declares its native hook points' version, and the line that does.
+const HOOKS_FILE: &str = "crates/horizon-client/src/game/native_hooks.rs";
+const HOOKS_LINE: &str = "pub(crate) const NATIVE_HOOKS_API: u32 = ";
+
+/// The native hook points' version in `HOOKS_FILE`'s text.
+fn hooks_in(source: &str) -> Option<u32> {
+    let line = source.lines().find_map(|l| l.strip_prefix(HOOKS_LINE))?;
+    line.trim_end().strip_suffix(';')?.parse().ok()
+}
+
+/// The native hook points' version of Horizon at `revision`, from GitHub (None: it has none).
+fn hooks_at(revision: &str) -> Option<u32> {
+    let url = format!(
+        "https://raw.githubusercontent.com/{}/{revision}/{HOOKS_FILE}",
+        backend::REPO
+    );
+    let text = backend::get(&url).ok()?.into_string().ok()?;
+    hooks_in(&text)
+}
+
+/// The revision to build `mods` on: `pinned` (the pins' agreement, else the installed version's)
+/// when every mod naming a hook points' version finds it or a later one there (`at` reads a
+/// revision's). Else, when nothing pins it, the revision those mods were tested on.
+fn with_hooks(
+    mods: &[Bundle],
+    pinned: String,
+    free: bool,
+    at: impl Fn(&str) -> Option<u32>,
+) -> Result<String, String> {
+    let hooked: Vec<&Bundle> = mods.iter().filter(|b| b.hooks.is_some()).collect();
+    let fits = |revision: &str| {
+        let found = at(revision);
+        hooked.iter().all(|b| found.is_some() && b.hooks <= found)
+    };
+    if hooked.is_empty() || fits(&pinned) {
+        return Ok(pinned);
+    }
+    let tested: Vec<Bundle> = hooked.iter().map(|b| (*b).clone()).collect();
+    let fallback = agreed(
+        &tested,
+        "Horizon",
+        |b| b.horizon.as_ref(),
+        || Err(String::new()),
+    );
+    if let (true, Ok(revision)) = (free, fallback) {
+        if fits(&revision) {
+            return Ok(revision);
+        }
+    }
+    let list: Vec<String> = hooked
+        .iter()
+        .map(|b| format!("{} (hook points v{})", b.id, b.hooks.unwrap_or_default()))
+        .collect();
+    Err(format!(
+        "Horizon {} doesn't have the native hook points these mods use: {}. Update Horizon or the mods.",
+        &pinned[..pinned.len().min(7)],
+        list.join(", ")
+    ))
+}
+
+/// A bundle that names a hook points' version builds on another revision than the one it was
+/// tested on: its `horizon_revision` (which horizon-mixins checks) becomes the build's.
+fn repin(bundle: &Bundle, revision: &str) -> Result<(), String> {
+    let path = bundle.dir.join(MANIFEST);
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut value: toml::Table = text
+        .parse()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(toml::Value::Table(compat)) = value.get_mut("compatibility") {
+        compat.insert("horizon_revision".into(), revision.into());
+    }
+    let text = toml::to_string(&value).map_err(|e| e.to_string())?;
+    fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Whether Horizon's source at `source` has the `mods` feature (the WebAssembly mods' runtime,
+/// gone from later revisions).
+fn has_mods_feature(source: &Path) -> bool {
+    let path = source.join("crates/horizon-client/Cargo.toml");
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let value: toml::Table = text.parse().unwrap_or_default();
+    value.get("features").and_then(|f| f.get("mods")).is_some()
 }
 
 /// The Horizon commit `version` (an installed release or Nightly) was built from, from GitHub.
@@ -488,12 +582,19 @@ pub fn build(
             ..b
         })
         .collect();
-    let revision = agreed(
-        &mods,
+    // A mod naming a hook points' version doesn't pin: it follows the others, else the game.
+    let pins: Vec<Bundle> = mods.iter().filter(|b| b.hooks.is_none()).cloned().collect();
+    let free = pins.iter().all(|b| b.horizon.is_none());
+    let pinned = agreed(
+        &pins,
         "Horizon",
         |b| b.horizon.as_ref(),
         || revision_of(base),
     )?;
+    let revision = with_hooks(&mods, pinned, free, hooks_at)?;
+    for b in mods.iter().filter(|b| b.hooks.is_some()) {
+        repin(b, &revision)?;
+    }
     let mixins = agreed(
         &mods,
         "horizon-mixins",
@@ -523,14 +624,10 @@ pub fn build(
         let target = root().join("target");
         let mut compile = rust.command(&rust.cargo());
         compile.current_dir(&stage).env("CARGO_TARGET_DIR", &target);
-        compile.args([
-            "build",
-            "--locked",
-            "--profile",
-            PROFILE,
-            "--features",
-            FEATURES,
-        ]);
+        compile.args(["build", "--locked", "--profile", PROFILE]);
+        if has_mods_feature(&stage) {
+            compile.args(["--features", FEATURES]);
+        }
         compile.args(["-p", "horizon-client", "--bin", "horizon-client"]);
         let mut crates = 0;
         run(compile, "Compiling the game", |line| {
@@ -545,6 +642,7 @@ pub fn build(
             "base": base,
             "horizon": revision,
             "horizon_mixins": mixins,
+            "hooks": mods.iter().find_map(|m| m.hooks),
             "rust": rust_toolchain::VERSION,
             "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
         });
@@ -553,7 +651,12 @@ pub fn build(
     }
     match instance.filter(|i| i.kind != instances::Kind::Default) {
         Some(own) => instances::edit(&own.id, |meta| meta.version = Some(version.clone()))?,
-        None => instance_on(&version)?,
+        None => {
+            let native = instance_on(&version)?;
+            let ids: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
+            carry_settings(&backend::game_home(), &native.home, &ids)?;
+            native
+        }
     };
     prune(&version);
     let _ = fs::remove_dir_all(&incoming);
@@ -610,6 +713,42 @@ fn instance_on(version: &str) -> Result<Instance, String> {
     instances::edit(INSTANCE, |meta| meta.version = Some(version.to_owned()))
 }
 
+/// The mods' settings from the game's own home `from` (where their WebAssembly versions kept
+/// them) into the Native mods instance's `to`, for each mod `to` has none of yet: its storage
+/// folder (`horizon-mods/.horizon-mod-data/<id>/`) and its keys (`key.<id>.<name>:…` lines of
+/// `horizon-mods.txt`). Nothing is overwritten.
+fn carry_settings(from: &Path, to: &Path, ids: &[&str]) -> Result<(), String> {
+    const DATA: &str = "horizon-mods/.horizon-mod-data";
+    const LIST: &str = "horizon-mods.txt";
+    let read = |home: &Path| fs::read_to_string(home.join(LIST)).unwrap_or_default();
+    let (theirs, mut ours) = (read(from), read(to));
+    let before = ours.len();
+    for id in ids {
+        let data = from.join(DATA).join(id);
+        let target = to.join(DATA).join(id);
+        if data.is_dir() && !target.exists() {
+            backend::copy_dir(&data, &target).map_err(|e| format!("{}: {e}", data.display()))?;
+        }
+        let prefix = format!("key.{id}.");
+        let has_keys = ours.lines().any(|l| l.starts_with(&prefix));
+        for line in theirs
+            .lines()
+            .filter(|l| l.starts_with(&prefix) && !has_keys)
+        {
+            if !ours.is_empty() && !ours.ends_with('\n') {
+                ours.push('\n');
+            }
+            ours += line;
+            ours.push('\n');
+        }
+    }
+    if ours.len() != before {
+        fs::create_dir_all(to).map_err(|e| e.to_string())?;
+        fs::write(to.join(LIST), ours).map_err(|e| format!("{LIST}: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Removes the native builds other than `keep` that no instance plays. The compiled crates
 /// (`native/target`) stay, so the next build only compiles what changed.
 pub fn prune(keep: &str) {
@@ -633,6 +772,46 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn the_native_mods_instance_gets_the_mods_settings_once() {
+        let (from, to) = (dir("carry-from"), dir("carry-to"));
+        let data = from.join("horizon-mods/.horizon-mod-data");
+        fs::create_dir_all(data.join("zoom")).unwrap();
+        fs::write(data.join("zoom/level"), "8").unwrap();
+        fs::create_dir_all(data.join("other")).unwrap();
+        fs::write(
+            from.join("horizon-mods.txt"),
+            "mod.zoom:true\nkey.zoom.zoom:key.keyboard.c\nkey.other.x:key.keyboard.x\n",
+        )
+        .unwrap();
+        fs::write(
+            to.join("horizon-mods.txt"),
+            "key.minimap.map:key.keyboard.m",
+        )
+        .unwrap();
+        carry_settings(&from, &to, &["zoom", "minimap"]).unwrap();
+        let ours = to.join("horizon-mods/.horizon-mod-data");
+        assert_eq!(fs::read_to_string(ours.join("zoom/level")).unwrap(), "8");
+        assert!(!ours.join("other").exists());
+        assert_eq!(
+            fs::read_to_string(to.join("horizon-mods.txt")).unwrap(),
+            "key.minimap.map:key.keyboard.m\nkey.zoom.zoom:key.keyboard.c\n"
+        );
+        // Changed in the instance since: kept.
+        fs::write(ours.join("zoom/level"), "4").unwrap();
+        fs::write(
+            from.join("horizon-mods.txt"),
+            "key.zoom.zoom:key.keyboard.v\n",
+        )
+        .unwrap();
+        carry_settings(&from, &to, &["zoom"]).unwrap();
+        assert_eq!(fs::read_to_string(ours.join("zoom/level")).unwrap(), "4");
+        assert!(fs::read_to_string(to.join("horizon-mods.txt"))
+            .unwrap()
+            .contains("key.zoom.zoom:key.keyboard.c"));
+        let _ = (fs::remove_dir_all(&from), fs::remove_dir_all(&to));
     }
 
     fn write_bundle(at: &Path, id: &str, helper: &str) {
@@ -749,6 +928,7 @@ mod tests {
             dir: PathBuf::new(),
             horizon: horizon.map(str::to_owned),
             mixins: None,
+            hooks: None,
         };
         let never = || -> Result<String, String> { panic!("a pin wins") };
         fn get(b: &Bundle) -> Option<&String> {
@@ -770,6 +950,80 @@ mod tests {
         );
         let bad = [pinned("a", Some("nightly"))];
         assert!(agreed(&bad, "Horizon", get, never).is_err());
+    }
+
+    #[test]
+    fn mods_on_the_hook_points_follow_the_game_or_the_pins() {
+        assert_eq!(
+            hooks_in("x\npub(crate) const NATIVE_HOOKS_API: u32 = 3;\n"),
+            Some(3)
+        );
+        assert_eq!(hooks_in("const NATIVE_HOOKS_API: u32 = 3;"), None);
+        let mod_ = |id: &str, horizon: &str, hooks: Option<u32>| Bundle {
+            id: id.into(),
+            version: "1".into(),
+            dir: PathBuf::new(),
+            horizon: Some(horizon.into()),
+            mixins: None,
+            hooks,
+        };
+        let c = "c".repeat(40);
+        // A (the game) has hook points v1, B v2, C none.
+        let at = |r: &str| match r.as_bytes()[0] {
+            b'a' => Some(1),
+            b'b' => Some(2),
+            _ => None,
+        };
+        let zoom = [mod_("zoom", B, Some(1)), mod_("minimap", &c, Some(1))];
+        assert_eq!(
+            with_hooks(&zoom, A.into(), true, at).unwrap(),
+            A,
+            "the game's own"
+        );
+        let tested = [mod_("zoom", A, Some(1))];
+        assert_eq!(
+            with_hooks(&tested, c.clone(), true, at).unwrap(),
+            A,
+            "an older game"
+        );
+        assert_eq!(
+            with_hooks(&tested, B.into(), false, at).unwrap(),
+            B,
+            "v1 mods on v2"
+        );
+        let newer = [mod_("recipes", B, Some(2))];
+        let err = with_hooks(&newer, A.into(), false, at).unwrap_err();
+        assert!(
+            err.contains("aaaaaaa") && err.contains("recipes (hook points v2)"),
+            "{err}"
+        );
+        assert_eq!(
+            with_hooks(&newer, A.into(), true, at).unwrap(),
+            B,
+            "its tested commit"
+        );
+        let pinned_only = [mod_("veinminer", B, None)];
+        assert_eq!(with_hooks(&pinned_only, B.into(), false, at).unwrap(), B);
+    }
+
+    #[test]
+    fn a_hooks_bundle_is_read_and_repinned_to_the_build() {
+        let d = dir("hooks");
+        write_native(&d, "zoom", A, B);
+        let json = fs::read_to_string(d.join(NATIVE_MANIFEST)).unwrap();
+        let json = json.replacen('}', ",\"hooks\":1}", 1);
+        fs::write(d.join(NATIVE_MANIFEST), json).unwrap();
+        let found = bundles(&d).unwrap();
+        assert_eq!(
+            (found[0].hooks, found[0].horizon.as_deref()),
+            (Some(1), Some(A))
+        );
+        repin(&found[0], B).unwrap();
+        let again = bundle(&found[0].dir, None).unwrap();
+        assert_eq!(
+            (again.id.as_str(), again.horizon.as_deref()),
+            ("zoom", Some(B))
+        );
     }
 
     #[test]
