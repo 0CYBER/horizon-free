@@ -4580,6 +4580,63 @@ impl Game<'_> {
                 self.wind_charge_geometry(a, c, packed, out);
                 continue;
             }
+            // ShulkerBulletRenderer: the tumbling bullet model, then a larger
+            // translucent copy of it (colour 0x26FFFFFF); always 15 block light.
+            if matches!(a.kind, ProjectileKind::ShulkerBullet { .. }) {
+                static BULLET: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
+                    std::sync::OnceLock::new();
+                let model = BULLET.get_or_init(|| {
+                    horizon_client::mobs::load_model(
+                        &self.options.resources,
+                        "minecraft:shulker_bullet#main",
+                    )
+                });
+                if let (Some(model), Some(r)) =
+                    (model, atlas.sprites.get("entity/shulker/spark").copied())
+                {
+                    use horizon_core::geometry::trig;
+                    let tc = a.age as f32 + alpha as f32;
+                    let mut poses = horizon_client::mobs::anim::Poses::new(model);
+                    poses.yrot("main", a.yaw.to_radians());
+                    poses.xrot("main", a.pitch.to_radians());
+                    let light = (packed & 0xFF) | ((15 * 16) << 8);
+                    let base = glam::Mat4::from_translation(c)
+                        * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.15, 0.0))
+                        * glam::Mat4::from_rotation_y(
+                            (trig::sin(f64::from(tc * 0.1)) * 180.0).to_radians(),
+                        )
+                        * glam::Mat4::from_rotation_x(
+                            (trig::cos(f64::from(tc * 0.1)) * 180.0).to_radians(),
+                        )
+                        * glam::Mat4::from_rotation_z(
+                            (trig::sin(f64::from(tc * 0.15)) * 360.0).to_radians(),
+                        )
+                        * glam::Mat4::from_scale(glam::Vec3::new(-0.5, -0.5, 0.5));
+                    let uv = [r.u0, r.v0, r.u1, r.v1];
+                    horizon_client::mobs::render::draw(
+                        model,
+                        base,
+                        &poses,
+                        uv,
+                        0xFFFF_FFFF,
+                        light,
+                        0,
+                        out,
+                    );
+                    // The translucent shell blends over the opaque core.
+                    horizon_client::mobs::render::draw(
+                        model,
+                        base * glam::Mat4::from_scale(glam::Vec3::splat(1.5)),
+                        &poses,
+                        uv,
+                        0x26FF_FFFF,
+                        light,
+                        0,
+                        out,
+                    );
+                }
+                continue;
+            }
             // WitherSkullRenderer: the skull model facing its flight.
             if let Some(dangerous) = super::wither::skull_kind(a) {
                 static SKULL: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
