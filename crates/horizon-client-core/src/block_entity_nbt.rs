@@ -877,6 +877,23 @@ mod tests {
         );
     }
 
+    /// `PistonMovingBlockEntity.saveAdditional`: `facing` through
+    /// `Direction.LEGACY_ID_CODEC` (a byte), `progress` a float.
+    #[test]
+    fn moving_piston_fields_match_vanilla() {
+        let out = canon(
+            "{id:\"minecraft:piston\",x:1,y:2,z:3,blockState:{Name:\"minecraft:stone\"},\
+             facing:5,progress:0.5f,extending:1b,source:0b}",
+        );
+        assert_eq!(out.get("facing"), Some(&Tag::Byte(5)));
+        assert_eq!(out.get("progress"), Some(&f32_tag(0.5)));
+        assert_eq!(out.get("extending"), Some(&Tag::Byte(1)));
+        assert_eq!(out.get("source"), Some(&Tag::Byte(0)));
+        let fresh = canon("{id:\"minecraft:piston\",x:1,y:2,z:3}");
+        assert_eq!(fresh.get("facing"), Some(&Tag::Byte(0)));
+        assert_eq!(fresh.get("blockState"), Some(&string("minecraft:air")));
+    }
+
     #[test]
     fn loot_table_replaces_items_and_zero_seed_is_omitted() {
         let out = canon(
