@@ -130,14 +130,14 @@ impl Game<'_> {
         let bounds = aabb(c.bounds()).next_deflated();
         blocks_in(bounds).any(|p| {
             let facts = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
-            self.res.items().block_in_tag("minecraft:fire", &facts.name)
+            self.items().block_in_tag("minecraft:fire", &facts.name)
         })
     }
 
     /// `CushionItem.useOn`: on the top face only, spawning at the click's
     /// height above the clicked block (or the replaceable block itself).
     pub(super) fn place_cushion(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item).cloned() else {
+        let Some(info) = self.items().get(&stack.item).cloned() else {
             return false;
         };
         let Some(default_color) = info.cushion_color.as_deref() else {
@@ -159,7 +159,7 @@ impl Game<'_> {
             point: hit.point,
         };
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if self.res.items().block_in_tag(
+        if self.items().block_in_tag(
             "minecraft:cushion_uses_collision_shape",
             &self.res.facts().get(state).name,
         ) && let Some(eye) = self.eye_position()

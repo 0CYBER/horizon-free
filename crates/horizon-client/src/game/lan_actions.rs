@@ -1387,7 +1387,7 @@ impl Game<'_> {
                 }
             }
             S::ContainerClick(p) => {
-                let rules = ItemRules(self.res.items());
+                let rules = ItemRules(world_items!(self));
                 let slots = host.hub.guests[gi]
                     .menu
                     .as_ref()

@@ -68,6 +68,11 @@ fn frame(v: &Value) -> Frame {
 impl Tree {
     /// Loads `<data>/<namespace>/advancement/**/*.json`.
     pub fn load(data: &Path) -> Tree {
+        Self::load_with(data, &horizon_world::loot::PackOverlay::NONE)
+    }
+    /// The tree with a world's data packs' advancement files over the game's
+    /// own: the top pack's file for each id replaces it.
+    pub fn load_with(data: &Path, overlay: &horizon_world::loot::PackOverlay) -> Tree {
         let mut tree = Tree::default();
         let Ok(namespaces) = std::fs::read_dir(data) else {
             return tree;
@@ -77,6 +82,8 @@ impl Tree {
             let root = ns.path().join("advancement");
             collect(&root, &root, &ns.file_name().to_string_lossy(), &mut files);
         }
+        // One JSON per id, the packs' over the game's own.
+        let mut json: BTreeMap<String, Value> = BTreeMap::new();
         files.sort();
         for (id, path) in files {
             let Ok(text) = std::fs::read_to_string(&path) else {
@@ -85,6 +92,17 @@ impl Tree {
             let Ok(v) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
+            json.insert(id, v);
+        }
+        for (id, files) in overlay.kind("advancement") {
+            match serde_json::from_slice::<Value>(horizon_world::loot::PackOverlay::top(files)) {
+                Ok(v) => {
+                    json.insert(id.to_owned(), v);
+                }
+                Err(e) => log::warn!("Horizon: pack advancement {id} not loaded: {e}"),
+            }
+        }
+        for (id, v) in json {
             if let Some(a) = parse(&id, &v) {
                 let index = tree.list.len();
                 for (ci, c) in a.criteria.iter().enumerate() {

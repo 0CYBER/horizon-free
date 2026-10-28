@@ -395,7 +395,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
-        let tags = &self.res.items().block_tags;
+        let tags = &self.items().block_tags;
         let is = |p: [i32; 3], tag: &str| {
             let name = &self
                 .res
@@ -436,8 +436,8 @@ impl Game<'_> {
             return;
         };
         let creative = self.creative;
-        let data = self.res.stations();
-        let items = self.res.items();
+        let data = self.stations();
+        let items = self.items();
         match s.kind {
             // A server's table: its data slots carry the offers, and its
             // client menu only clears them without an enchantable item.
@@ -769,8 +769,8 @@ impl Game<'_> {
             return;
         }
         let Some(enchanted) = stations::apply_enchantment(
-            &self.res.stations().enchantments,
-            self.res.items(),
+            &self.stations().enchantments,
+            self.items(),
             self.level.xp_seed,
             button,
             cost,
@@ -1398,7 +1398,7 @@ impl Game<'_> {
                         if inside(local, bx, by, bw, 17.0)
                             && let Some((id, l)) = &offers.clues[i]
                         {
-                            let e = &self.res.stations().enchantments;
+                            let e = &self.stations().enchantments;
                             let (name, _) = e.full_name(id, *l);
                             let clue = self
                                 .translate("container.enchant.clue", "%s . . . ?")
@@ -1594,8 +1594,7 @@ impl Game<'_> {
                                     i,
                                     ItemStack {
                                         count: 1,
-                                        ..self.res.stations().recipes.stonecutting
-                                            [s.stone.recipes[i]]
+                                        ..self.stations().recipes.stonecutting[s.stone.recipes[i]]
                                             .result
                                             .clone()
                                     },
@@ -1700,7 +1699,7 @@ impl Game<'_> {
     }
     /// `ItemStack.getRarity`'s colour for the name line and a `[name]` link.
     fn rarity_color(&self, stack: &ItemStack) -> u32 {
-        let props = self.res.stations().enchantments.props(&stack.item);
+        let props = self.stations().enchantments.props(&stack.item);
         let rarity = horizon_client::item_tooltip::rarity(
             stack,
             props.map_or("common", |p| p.rarity.as_str()),
@@ -1749,7 +1748,7 @@ impl Game<'_> {
         stack: &ItemStack,
         nested: bool,
     ) -> Vec<(horizon_client::text::Text, u32)> {
-        let e: &Enchantments = &self.res.stations().enchantments;
+        let e: &Enchantments = &self.stations().enchantments;
         let color = self.rarity_color(stack);
         let advanced = !nested && self.options_advanced_tooltips();
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
@@ -1769,7 +1768,7 @@ impl Game<'_> {
             lines.push((horizon_client::text::Text::legacy(&s), c));
         };
         let gray = rgba(170, 170, 170, 255);
-        let item_info = self.res.items().get(&stack.item);
+        let item_info = self.items().get(&stack.item);
         // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
         // before the components.
         for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
@@ -1802,7 +1801,7 @@ impl Game<'_> {
         // BannerPatternLayers.addToTooltip: up to six layer names.
         if display.shows("minecraft:banner_patterns") {
             for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
-                let key = self.res.stations().banners.layer_key(layer);
+                let key = self.stations().banners.layer_key(layer);
                 push(
                     &mut lines,
                     self.translate(&key, &key),
@@ -2101,7 +2100,7 @@ impl Game<'_> {
                 _ => serde_json::Value::Null,
             };
         };
-        let recipes = &self.res.stations().recipes.stonecutting;
+        let recipes = &self.stations().recipes.stonecutting;
         serde_json::json!({
             "costs": s.offers.costs,
             "clues": s.offers.clues.iter().map(|c| c.as_ref().map(|(e, l)| format!("{e} {l}"))).collect::<Vec<_>>(),
@@ -2251,7 +2250,7 @@ impl Game<'_> {
         }
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
-        let probe = horizon_client::bundle::tooltip_layout(self.res.items(), stack, 0.0, 0.0, 96.0);
+        let probe = horizon_client::bundle::tooltip_layout(self.items(), stack, 0.0, 0.0, 96.0);
         let extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
         let atlas = &self.gui.atlas;
         let (x, y, w, h) =
@@ -2260,7 +2259,7 @@ impl Game<'_> {
         let text_h = h - extra;
         Self::tooltip_text(batch, atlas, &lines, x, y);
         let Some(layout) =
-            horizon_client::bundle::tooltip_layout(self.res.items(), stack, x, y + text_h + 2.0, w)
+            horizon_client::bundle::tooltip_layout(self.items(), stack, x, y + text_h + 2.0, w)
         else {
             return;
         };
@@ -2403,8 +2402,8 @@ impl Game<'_> {
             return Ok(());
         };
         let out = b.tick(
-            &self.res.stations().brewing,
-            self.res.items(),
+            &world_stations!(self).brewing,
+            world_items!(self),
             self.res.providers(),
         );
         if out != brewing::BrewTick::default() {

@@ -28,13 +28,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The registries and tags are the same for every world: load them once.
+/// The registries and tags, loaded once per world (a world open or a
+/// `/reload` forgets them, as `forget_sync_data` does).
 static SYNC: Mutex<Option<std::result::Result<Arc<SyncData>, String>>> = Mutex::new(None);
 
-/// The registries and tags a server sends, loaded from `root` the first time.
-pub(super) fn sync_data(root: &std::path::Path) -> std::result::Result<Arc<SyncData>, String> {
+/// The registries and tags a server sends, loaded from `root` the first
+/// time, with the world's data packs' recipes and advancements over them.
+pub(super) fn sync_data(
+    root: &std::path::Path,
+    overlay: &horizon_world::loot::PackOverlay,
+) -> std::result::Result<Arc<SyncData>, String> {
     let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
-    sync.get_or_insert_with(|| SyncData::load(root).map(Arc::new))
+    sync.get_or_insert_with(|| SyncData::load(root, overlay).map(Arc::new))
         .clone()
 }
 
@@ -1118,7 +1123,7 @@ impl Game<'_> {
         config: HubConfig,
         host: Option<u128>,
     ) -> Result<()> {
-        let sync = sync_data(&self.options.resources)?;
+        let sync = sync_data(&self.options.resources, &self.pack_files())?;
         let biome_names: Vec<String> = self
             .res
             .biomes()
@@ -2186,7 +2191,7 @@ impl Game<'_> {
                         m.extra.main_hand.as_ref()
                     }
                 })
-                .and_then(|i| self.res.items().get(i))
+                .and_then(|i| self.items().get(i))
                 .is_some_and(|i| i.blocks_attacks.is_some());
         }
     }

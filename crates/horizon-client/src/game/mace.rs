@@ -140,11 +140,11 @@ impl Game<'_> {
             direct_attacker: Some("minecraft:player"),
             is_direct: true,
             damage_type: Some("minecraft:mace_smash"),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
         // EnchantmentHelper.modifyFallBasedDamage(..., 0)
-        let per_block = self.res.stations().enchantments.modify_value(
+        let per_block = world_stations!(self).enchantments.modify_value(
             held.as_ref(),
             "minecraft:smash_damage_per_fallen_block",
             &ctx,
@@ -168,10 +168,10 @@ impl Game<'_> {
                 horizon_client::mobs::DamageKind::Spear => "minecraft:spear",
                 _ => "minecraft:player_attack",
             }),
-            items: Some(self.res.items()),
+            items: Some(world_items!(self)),
             ..Default::default()
         };
-        let enchantments = &self.res.stations().enchantments;
+        let enchantments = &world_stations!(self).enchantments;
         let random = &mut self.world.random;
         // CombatRules.getDamageAfterAbsorb: EnchantmentHelper.modifyArmorEffectiveness.
         let mut breach = |fraction: f32| {

@@ -1041,7 +1041,7 @@ impl Game<'_> {
                     );
                 }
                 UiWidget::Item(i) => {
-                    if self.res.items().get(&i.item).is_some() {
+                    if world_items!(self).get(&i.item).is_some() {
                         items.push((i.item.clone(), x + 2.0, wy + 2.0));
                     } else {
                         batch.text(atlas, "?", x + 6.0, wy + 6.0, u32::MAX, true);

@@ -44,10 +44,15 @@ fn load(root: &std::path::Path) -> Option<Data> {
     let camel_husk = (camel.width as f32, camel.height as f32);
     Some(Data {
         types: types.into_iter().map(|(k, t)| (k, Arc::new(t))).collect(),
-        biome_tags: crate::items::load_tags(root, "worldgen/biome").unwrap_or_default(),
+        biome_tags: crate::items::load_tags(
+            root,
+            "worldgen/biome",
+            &horizon_world::loot::PackOverlay::NONE,
+        )
+        .unwrap_or_default(),
         registries: SpawnRegistries::load(root),
         enchantments: Enchantments::load(root),
-        items: Items::tags_only(root).ok()?,
+        items: Items::tags_only(root, &horizon_world::loot::PackOverlay::NONE).ok()?,
         camel_husk,
     })
 }

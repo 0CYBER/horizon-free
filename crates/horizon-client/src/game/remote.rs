@@ -4210,7 +4210,7 @@ impl Game<'_> {
                 m.extra.blocking = m.extra.using_item > 0
                     && used
                         .as_ref()
-                        .and_then(|i| self.res.items().get(i))
+                        .and_then(|i| world_items!(self).get(i))
                         .is_some_and(|i| i.blocks_attacks.is_some());
             }
             if m.extra.using_item > 0 {
@@ -4745,7 +4745,7 @@ impl Game<'_> {
         let held = self.with_hand(hand, |g| g.held().cloned());
         let held_block = held
             .as_ref()
-            .and_then(|h| self.res.items().get(&h.item))
+            .and_then(|h| self.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
             let (reacts, changes) = if hand == Hand::Main {
@@ -5032,7 +5032,7 @@ impl Game<'_> {
             yaw: self.yaw,
             pitch: self.pitch,
         }));
-        let Some(info) = self.res.items().get(&held.item).cloned() else {
+        let Some(info) = self.items().get(&held.item).cloned() else {
             return false;
         };
         // MultiPlayerGameMode.useItem's prediction: an item cooling down
@@ -5073,7 +5073,7 @@ impl Game<'_> {
         if self.using.is_some() {
             return;
         }
-        let bundle = self.res.items().get(&held.item).is_some_and(|i| i.bundle);
+        let bundle = self.items().get(&held.item).is_some_and(|i| i.bundle);
         let start = match &*held.item {
             // BundleItem.use: always starts; the server drops the contents.
             _ if bundle => true,
@@ -5186,7 +5186,7 @@ impl Game<'_> {
         // BundleItem.getUseDuration: 200 ticks, the server drops the contents.
         if stack
             .as_ref()
-            .is_some_and(|s| self.res.items().get(&s.item).is_some_and(|i| i.bundle))
+            .is_some_and(|s| self.items().get(&s.item).is_some_and(|i| i.bundle))
         {
             self.using = (in_hand && ticks + 1 < 200).then_some((slot, ticks + 1));
             return;
@@ -5199,7 +5199,7 @@ impl Game<'_> {
         }
         let consumable = stack
             .as_ref()
-            .and_then(|s| self.res.items().get(&s.item))
+            .and_then(|s| self.items().get(&s.item))
             .and_then(|i| i.consumable.clone());
         let (Some(stack), Some(consumable)) = (stack, consumable) else {
             self.using = None;
@@ -5242,7 +5242,7 @@ impl Game<'_> {
         let Some(stack) = self.stack_in(slot).cloned() else {
             return;
         };
-        let Some(info) = self.res.items().get(&stack.item).cloned() else {
+        let Some(info) = self.items().get(&stack.item).cloned() else {
             return;
         };
         if info.consumable.as_ref().is_some_and(|c| c.particles) {

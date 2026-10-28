@@ -754,6 +754,7 @@ pub fn lore_texts(stack: &ItemStack) -> Vec<crate::text::Text> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_world::loot::PackOverlay;
 
     #[test]
     fn lore_keeps_component_colours_under_dark_purple_italic() {
@@ -1042,7 +1043,7 @@ mod tests {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
-        let items = crate::items::Items::catalog(&root).unwrap();
+        let items = crate::items::Items::catalog(&root, &PackOverlay::NONE).unwrap();
         let enchantments = crate::enchant::Enchantments::load(&root);
         let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
         for (item, expected) in [

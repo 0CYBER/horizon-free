@@ -145,7 +145,10 @@ impl Game<'_> {
         if tag.get("LootTable").is_none() {
             return;
         }
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         decorated_pot::unpack_loot(
             &mut tag,
             loot.as_deref(),

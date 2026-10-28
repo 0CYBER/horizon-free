@@ -111,7 +111,7 @@ impl Game<'_> {
                     batch.sprite_scaled(atlas, &name, ox + r.x, oy + r.y, r.w, r.h, argb(s.color));
                 }
                 Shape::Item(i) => {
-                    if self.res.items().get(&i.item).is_none() {
+                    if self.items().get(&i.item).is_none() {
                         continue;
                     }
                     let start = batch.vertices.len();
