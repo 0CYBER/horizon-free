@@ -2,7 +2,7 @@
 //! (sections with their paletted containers, block entities and the sky and
 //! block DataLayers) and the section block-change batches.
 use crate::{
-    chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{Chunk, ColumnLayout, LevelShape, Light, Section},
     containers::BlockEntity,
     fast_hash::FxHashMap,
     section_mask::SectionMask,
@@ -106,6 +106,8 @@ pub struct ChunkEncoder {
     /// The level's sections among a column's: all of them in the Overworld,
     /// y 0 to 255 in the Nether and the End (`DimensionType` min_y and height).
     sections: std::ops::Range<usize>,
+    /// The column of the level's chunks, which `sections` counts in.
+    column: ColumnLayout,
     /// Whether the level has sky light (`DimensionType.hasSkyLight`).
     sky: bool,
 }
@@ -305,8 +307,9 @@ const WARM_MIN: usize = 16;
 /// varying light, its layers).
 struct Warm {
     coder: Arc<SectionCoder>,
-    /// The heightmaps' tables and the level's (min_y, height).
-    heightmaps: Option<(Arc<crate::save::SaveTables>, i32, i32)>,
+    /// The heightmaps' tables, the column's min_y and the level's (min_y,
+    /// height).
+    heightmaps: Option<(Arc<crate::save::SaveTables>, i32, i32, i32)>,
     columns: Vec<((i32, i32), Vec<Arc<Section>>)>,
     heights: Vec<OnceLock<ColumnHeightmaps>>,
     sections: Vec<Arc<Section>>,
@@ -320,8 +323,14 @@ impl Warm {
         loop {
             let i = self.next.fetch_add(1, Ordering::Relaxed);
             if let Some((_, sections)) = self.columns.get(i) {
-                if let Some((tables, min_y, height)) = &self.heightmaps {
-                    let maps = crate::save::client_heightmaps_in(sections, tables, *min_y, *height);
+                if let Some((tables, column_min_y, min_y, height)) = &self.heightmaps {
+                    let maps = crate::save::client_heightmaps_in(
+                        sections,
+                        *column_min_y,
+                        tables,
+                        *min_y,
+                        *height,
+                    );
                     let _ = self.heights[i].set(Arc::new(maps));
                 }
                 continue;
@@ -437,7 +446,8 @@ impl ChunkEncoder {
             tables: None,
             cache: Default::default(),
             heights: Default::default(),
-            sections: 0..SECTIONS,
+            sections: 0..ColumnLayout::VANILLA.sections(),
+            column: ColumnLayout::VANILLA,
             sky: true,
         }
     }
@@ -452,6 +462,7 @@ impl ChunkEncoder {
         let (min_y, height) = self.level();
         let maps = Arc::new(crate::save::client_heightmaps_in(
             &chunk.sections,
+            chunk.min_y(),
             tables,
             min_y,
             height,
@@ -463,7 +474,7 @@ impl ChunkEncoder {
     /// The level's min_y and height (`DimensionType`), the heightmaps' range.
     fn level(&self) -> (i32, i32) {
         (
-            MIN_Y + 16 * self.sections.start as i32,
+            self.column.section_y(self.sections.start),
             16 * self.sections.len() as i32,
         )
     }
@@ -519,15 +530,15 @@ impl ChunkEncoder {
         self.cached(section, |e| e.wire = Some(wire.clone()));
         wire
     }
-    /// Encode for a level of `min_y` and `height` (multiples of 16 within
-    /// the column), with or without sky light.
-    pub fn set_dimension(&mut self, min_y: i32, height: i32, sky: bool) {
-        let lo = usize::try_from((min_y - MIN_Y) >> 4)
-            .unwrap_or(0)
-            .min(SECTIONS);
-        let n = usize::try_from(height >> 4).unwrap_or(SECTIONS);
-        self.sections = lo..(lo + n).min(SECTIONS);
-        self.sky = sky;
+    /// Encode for a level of `shape`: its chunks hold `shape.column()`, of
+    /// which the level's own sections go on the wire.
+    pub fn set_dimension(&mut self, shape: LevelShape) {
+        let column = shape.column();
+        let lo = usize::try_from((shape.min_y - column.min_y()) >> 4).unwrap_or(0);
+        let n = usize::try_from(shape.height >> 4).unwrap_or(0);
+        self.column = column;
+        self.sections = lo.min(column.sections())..(lo + n).min(column.sections());
+        self.sky = shape.sky_light;
         // The heightmaps depend on the level's height.
         self.heights.get_mut().unwrap().clear();
     }
@@ -648,7 +659,10 @@ impl ChunkEncoder {
         let (min_y, height) = self.level();
         Some(Warm {
             coder: self.coder.clone(),
-            heightmaps: self.tables.clone().map(|t| (t, min_y, height)),
+            heightmaps: self
+                .tables
+                .clone()
+                .map(|t| (t, self.column.min_y(), min_y, height)),
             heights: stale.iter().map(|_| OnceLock::new()).collect(),
             columns: stale,
             done: sections.iter().map(|_| OnceLock::new()).collect(),
@@ -815,7 +829,7 @@ impl ChunkEncoder {
                     i32::from(index >> 8),
                     i32::from(index >> 4 & 15),
                 );
-                let wy = MIN_Y + (i as i32) * 16 + y;
+                let wy = chunk.min_y() + (i as i32) * 16 + y;
                 let pos = (chunk.x * 16 + x, wy, chunk.z * 16 + z);
                 entity_infos.push(BlockEntityInfo {
                     packed_xz: ((x << 4) | z) as i8,
@@ -1131,6 +1145,7 @@ fn write_light(lights: &[(usize, SectionLight)], sky: bool, w: &mut Writer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunk::{MIN_Y, SECTIONS};
 
     #[test]
     fn block_entity_blocks_are_recognised() {
@@ -1375,7 +1390,7 @@ mod tests {
                 "around {around:?}"
             );
         }
-        encoder.set_dimension(0, 256, false);
+        encoder.set_dimension(LevelShape::NETHER);
         assert_eq!(
             encoder.body(&chunk, &entities, SectionMask::ALL),
             packet(&encoder, SectionMask::ALL)
@@ -1474,7 +1489,7 @@ mod tests {
             &[],
         );
         let overworld = encoder.encode(&chunk, &HashMap::new());
-        encoder.set_dimension(0, 256, false);
+        encoder.set_dimension(LevelShape::NETHER);
         let nether = encoder.encode(&chunk, &HashMap::new());
         // An all-air section is the same bytes wherever it is.
         let per_section = overworld.chunk.buffer.len() / SECTIONS;
@@ -1489,5 +1504,21 @@ mod tests {
             &nether.light.empty_block_mask,
             18
         ));
+    }
+
+    #[test]
+    fn a_tall_column_sends_its_whole_height() {
+        let shape = LevelShape::new(-64, 2096, 2096, true).unwrap();
+        let mut chunk = Chunk::with_layout(0, 0, shape.column());
+        chunk.set(3, 2000, 4, 1);
+        let mut encoder = encoder();
+        let vanilla = encoder.encode(&Chunk::empty(0, 0), &HashMap::new());
+        encoder.set_dimension(shape);
+        let tall = encoder.encode(&chunk, &HashMap::new());
+        // 131 sections, one of them holding stone instead of air: longer than
+        // 131 air sections, and the sky light layers reach one above the top.
+        let per_section = vanilla.chunk.buffer.len() / SECTIONS;
+        assert!(tall.chunk.buffer.len() > per_section * 131);
+        assert_eq!(tall.light.sky.len(), 132);
     }
 }

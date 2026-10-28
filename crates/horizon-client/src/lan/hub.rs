@@ -353,7 +353,7 @@ impl Hub {
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
         let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
+        encoder.set_dimension(level_shape(&d));
         Self {
             lan,
             config,
@@ -2644,8 +2644,7 @@ impl Hub {
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
         let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder
-            .set_dimension(d.min_y, d.height, d.has_skylight);
+        self.encoder.set_dimension(level_shape(&d));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2798,6 +2797,16 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
         shared |= -128;
     }
     shared
+}
+
+/// The shape a level of the dimension type `d` has.
+fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
+    crate::chunk::LevelShape {
+        sky_light: d.has_skylight,
+        min_y: d.min_y,
+        height: d.height,
+        logical_height: d.height,
+    }
 }
 
 #[cfg(test)]

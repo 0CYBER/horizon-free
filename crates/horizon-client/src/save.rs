@@ -16,7 +16,7 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, MIN_Y, Section, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -925,10 +925,11 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
         )
     }))
 }
-/// The client heightmaps of a column's sections, in a level from `min_y`,
-/// `height` blocks high.
+/// The client heightmaps of a column's sections (from `column_min_y`), in a
+/// level from `min_y`, `height` blocks high.
 pub fn client_heightmaps_in(
     sections: &[Arc<Section>],
+    column_min_y: i32,
     tables: &SaveTables,
     min_y: i32,
     height: i32,
@@ -944,7 +945,7 @@ pub fn client_heightmaps_in(
         .collect();
     let view = HeightmapView {
         sections,
-        column_min_y: MIN_Y,
+        column_min_y,
         tables,
         min_y,
         height,
@@ -4587,7 +4588,7 @@ mod tests {
         assert_eq!(back.components, banner.components);
     }
     use super::*;
-    use crate::chunk::SECTIONS;
+    use crate::chunk::{MIN_Y, SECTIONS};
 
     #[test]
     fn end_gateway_block_entity_round_trips() {
