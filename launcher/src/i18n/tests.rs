@@ -89,7 +89,7 @@ fn holes(s: &str) -> BTreeSet<&str> {
 fn every_language_has_every_string_the_code_asks_for() {
     let (asked, all) = strings();
     assert!(asked.contains("Language"), "the scan finds tr(\"…\")");
-    for language in [Language::French, Language::Russian] {
+    for language in [Language::French, Language::Russian, Language::Spanish] {
         let table: HashMap<String, String> = serde_json::from_str(language.source())
             .unwrap_or_else(|e| panic!("lang/{}.json: {e}", language.code()));
         let missing: Vec<_> = asked.iter().filter(|s| !table.contains_key(*s)).collect();
@@ -119,17 +119,21 @@ fn every_language_has_every_string_the_code_asks_for() {
 fn the_system_language_is_the_first_one_the_launcher_has() {
     assert_eq!(Language::pick(["fr-CH", "en-US"]), Language::French);
     assert_eq!(Language::pick(["de-CH", "ru_RU.UTF-8"]), Language::Russian);
+    assert_eq!(Language::pick(["es-ES", "en-US"]), Language::Spanish);
     assert_eq!(Language::pick(["de-DE", "ja"]), Language::English);
     assert_eq!(Language::pick([]), Language::English);
     assert_eq!(Language::parse("FR"), Some(Language::French));
+    assert_eq!(Language::parse("ES"), Some(Language::Spanish));
     assert_eq!(Language::parse("french"), None);
     assert_eq!(serde_json::to_string(&Language::Russian).unwrap(), "\"ru\"");
+    assert_eq!(serde_json::to_string(&Language::Spanish).unwrap(), "\"es\"");
 }
 
 #[test]
 fn a_missing_string_shows_in_english() {
     assert_eq!(tr_in(Language::French, "Settings"), "Paramètres");
     assert_eq!(tr_in(Language::Russian, "Settings"), "Настройки");
+    assert_eq!(tr_in(Language::Spanish, "Settings"), "Ajustes");
     assert_eq!(tr_in(Language::English, "Settings"), "Settings");
     assert_eq!(tr_in(Language::French, "No such string"), "No such string");
 }
