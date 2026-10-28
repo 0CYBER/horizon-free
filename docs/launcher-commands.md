@@ -336,6 +336,8 @@ Make an instance: empty but for your options and name, or a copy of another one'
 - `NAME`
 - `--copy`: The instance to copy (its name or id)
 - `--minecraft`: Make a Minecraft: Java Edition instance of this version (1.21.4, latest or latest-snapshot) instead of a Horizon one
+- `--loader`: With this mod loader: fabric or quilt
+- `--loader-version`: The loader's version (default: its newest stable one)
 
 MCP: `instance_create`.
 
@@ -363,6 +365,18 @@ A Java instance's Java: its own Java home or the automatic pick, memory and JVM 
 - `--args`: Extra JVM arguments (one string; "" clears them)
 
 MCP: `instance_java`.
+
+## `horizon-launcher instance loader`
+
+A Java instance's mod loader: fabric or quilt, or none. --list shows its versions.
+
+    horizon-launcher instance loader <INSTANCE> <LOADER>
+
+- `INSTANCE`
+- `LOADER`
+- `--list`: List the loader's versions for the instance's Minecraft instead
+
+MCP: `instance_loader`.
 
 ## `horizon-launcher instance rename`
 
