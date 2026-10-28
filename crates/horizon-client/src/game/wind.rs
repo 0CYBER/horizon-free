@@ -55,7 +55,8 @@ impl Game<'_> {
         let (Some(eye), Some(p)) = (self.eye_position(), self.player.as_ref()) else {
             return Ok(false);
         };
-        let (velocity, on_ground, pos) = (p.velocity, p.ground.on_ground, p.position);
+        let (velocity, on_ground, pos) =
+            (self.known_player_movement(), p.ground.on_ground, p.position);
         let start = Vec3::new(pos.x, eye[1], pos.z);
         let mut proj = Projectile::new(ProjectileKind::WindCharge, start, Some(Who::Player));
         proj.shoot_from_rotation(

@@ -4155,7 +4155,7 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return Ok(false);
         };
-        let (velocity, on_ground) = (p.velocity, p.ground.on_ground);
+        let (velocity, on_ground) = (self.known_player_movement(), p.ground.on_ground);
         let start = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
         let mut proj = Projectile::new(kind.clone(), start, Some(Who::Player));
         proj.shoot_from_rotation(

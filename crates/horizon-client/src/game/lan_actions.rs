@@ -171,6 +171,8 @@ pub(super) struct GuestSwap {
     combat: super::combat::CombatTracker,
     /// The guest whose turn this one nests in, if any.
     acting: (Option<u32>, Option<String>, Option<u128>),
+    /// That turn's `known_movement`.
+    known_movement: Vec3,
     /// The packets queued for that guest.
     packets: Vec<play::Clientbound>,
     /// The entity events queued for that guest.
@@ -397,6 +399,8 @@ impl Game<'_> {
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
         let levitation = std::mem::replace(&mut self.adv.levitation, play.levitation);
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
+        let [x, y, z] = g.known_movement;
+        let known_movement = std::mem::replace(&mut self.known_movement, Vec3::new(x, y, z));
         let acting = (
             self.lan_acting.replace(conn),
             self.lan_acting_name.replace(g.name.clone()),
@@ -470,6 +474,7 @@ impl Game<'_> {
             levitation,
             death_cause,
             acting,
+            known_movement,
             packets,
             entity_events,
             swings,
@@ -531,6 +536,7 @@ impl Game<'_> {
             death_cause,
             combat,
             acting,
+            known_movement,
             packets,
             entity_events,
             swings,
@@ -576,6 +582,7 @@ impl Game<'_> {
             );
         }
         (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
+        self.known_movement = known_movement;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
         // An ender chest the guest opened: the menu shows their inventory
         // itself (lan_open_container), not a stand-in block entity.
@@ -1772,14 +1779,8 @@ impl Game<'_> {
             return;
         };
         let at = g.position;
-        // ServerPlayer.getKnownMovement: the move their client just sent.
-        let movement = g
-            .moves
-            .last()
-            .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
         let sound = self
             .guest_hit_by(host, conn, |g| {
-                g.known_movement = movement;
                 if g.cannot_attack_with_item(g.attack_ticks as i32, 5) {
                     None
                 } else {
@@ -2227,13 +2228,7 @@ impl Game<'_> {
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
             if digging.is_some() || using || delayed {
-                // ServerPlayer.getKnownMovement: the move their client just sent.
-                let movement = host.hub.guests[gi]
-                    .moves
-                    .last()
-                    .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
                 self.as_guest(host, conn, |g| {
-                    g.known_movement = movement;
                     g.attack_ticks = g.attack_ticks.saturating_add(1);
                     if let Some((pos, face)) = digging {
                         g.forced_hit = Some(Hit {

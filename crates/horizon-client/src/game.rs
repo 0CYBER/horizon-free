@@ -10520,10 +10520,9 @@ impl Game<'_> {
         {
             a.ignite_for_seconds(seconds);
         }
-        let (velocity, on_ground) = self
-            .player
-            .as_ref()
-            .map_or((Vec3::ZERO, true), |pl| (pl.velocity, pl.ground.on_ground));
+        // Projectile.shootFromRotation adds the shooter's getKnownMovement.
+        let velocity = self.known_player_movement();
+        let on_ground = self.player.as_ref().is_none_or(|pl| pl.ground.on_ground);
         arrow.shoot_from_rotation(
             &mut self.world.random,
             self.pitch,
