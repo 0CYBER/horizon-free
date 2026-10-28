@@ -8175,6 +8175,7 @@ impl Game<'_> {
                 banner: &|p| self.banner_layers_at(p),
                 skull: &|p| self.skull_skin_at(p),
                 glyph: &|c| self.gui.atlas.glyph_cell(c),
+                glyphs: self.gui.atlas.font.epoch(),
             };
             // Block entities outside the view frustum are skipped (with a
             // block of margin for models larger than their block).
