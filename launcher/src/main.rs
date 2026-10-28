@@ -2066,6 +2066,14 @@ impl Launcher {
             }
             foot = foot.child(side);
         }
+        if !self.links.sponsor.is_empty() {
+            foot = foot.child(link(
+                "sponsor",
+                tr("Sponsor"),
+                "heart",
+                self.links.sponsor.clone(),
+            ));
+        }
         if !self.links.discord.is_empty() {
             foot = foot.child(link(
                 "discord",
