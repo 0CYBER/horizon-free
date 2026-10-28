@@ -277,6 +277,19 @@ impl Game<'_> {
     pub(super) fn spawn_mob(&mut self, kind: &str, at: [f64; 3], persistent: bool) -> Option<u32> {
         self.spawn_mob_for(kind, at, persistent, false)
     }
+    /// `SummonCommand` and `SpawnEggItem`: vanilla spawns the mob, but it
+    /// never calls `Mob.setPersistenceRequired` for it, so the mob is not
+    /// persistent: the despawn rule holds it like any other mob, and only
+    /// its NBT can make it persistent.
+    pub(super) fn spawn_mob_spawned(&mut self, kind: &str, at: [f64; 3]) -> Option<u32> {
+        // The spawn is not a natural one (no jockeys, the patrol leader roll
+        // stays), but the mob is not persistent.
+        let id = self.spawn_mob_for(kind, at, true, false)?;
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            m.persistent = false;
+        }
+        Some(id)
+    }
     /// `spawn_mob` for a patrol or raid (`EntitySpawnReason.PATROL` / `EVENT`),
     /// which never rolls a patrol leader.
     pub(super) fn spawn_mob_for(
@@ -334,7 +347,7 @@ impl Game<'_> {
             }
         };
         let id = self
-            .spawn_mob(kind, at, true)
+            .spawn_mob_spawned(kind, at)
             .ok_or_else(|| format!("unknown or unsupported mob {kind}"))?;
         if baby && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             m.extra.age = if m.species() == Species::Sniffer {
@@ -4075,7 +4088,7 @@ impl Game<'_> {
         let (species, variant, color) =
             (parent.species(), parent.extra.variant, parent.extra.color);
         let target = self.mob_entity(&self.mobs[index]);
-        let Some(id) = self.spawn_mob(&kind, at, true) else {
+        let Some(id) = self.spawn_mob_spawned(&kind, at) else {
             return false;
         };
         if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
@@ -4121,7 +4134,7 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob(&kind, at, true).is_none() {
+        if self.spawn_mob_spawned(&kind, at).is_none() {
             return Ok(false);
         }
         self.swing_arm();
