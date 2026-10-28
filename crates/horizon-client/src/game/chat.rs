@@ -675,7 +675,7 @@ impl Game<'_> {
         // unless a client mod owns the command.
         if self.remote.is_some() {
             if let Some(command) = message.strip_prefix('/')
-                && self.mod_command(command)
+                && self.client_mod_command(command)
             {
                 return;
             }
@@ -684,7 +684,7 @@ impl Game<'_> {
         }
         if let Some(command) = message.strip_prefix('/') {
             // A client mod's command first, then a server mod's, as on a server.
-            if !self.mod_command(command) && !self.local_server_mod_command(command) {
+            if !self.client_mod_command(command) && !self.local_server_mod_command(command) {
                 self.run_command(command);
             }
         } else {
@@ -873,7 +873,7 @@ impl Game<'_> {
     /// parse; here the server answers it.)
     pub(super) fn click_command(&mut self, command: &str) {
         let command = command.strip_prefix('/').unwrap_or(command);
-        if self.mod_command(command) {
+        if self.client_mod_command(command) {
             return;
         }
         if self.remote.is_some() {
