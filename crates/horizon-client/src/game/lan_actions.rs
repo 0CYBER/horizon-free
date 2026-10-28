@@ -3041,10 +3041,10 @@ impl Game<'_> {
                 Some(_) => {}
             }
         }
+        // Entity.take: the clients play the pickup sound themselves
+        // (handleTakeItemEntity).
         for (item, count) in taken {
             host.hub.take_item(item as i32, id, count as i32, position);
-            host.hub
-                .sound("minecraft:entity.item.pickup", position, 0.2, 1.4, 7, None);
         }
     }
 
