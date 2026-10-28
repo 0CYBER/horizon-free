@@ -585,8 +585,8 @@ struct GameLevel<'w> {
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The item frames a comparator reads through a conductor.
     item_frames: &'w [horizon_client::entities::ItemFrame],
-    /// Each minecart's kind and comparator signal, in `cart_boxes` order.
-    cart_signals: Vec<(minecarts::CartKind, i32)>,
+    /// The minecarts, in `cart_boxes` order, for a detector rail's comparator.
+    carts: &'w [minecarts::Minecart],
     /// Arrow and thrown trident boxes (wooden buttons).
     arrow_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The other entities that keep blocks from being placed into them.
@@ -737,7 +737,7 @@ impl GameLevel<'_> {
             Vec3::new(x + 0.8, y + 0.8, z + 0.8),
         );
         let mut container = None;
-        for ((lo, hi), &(kind, signal)) in self.cart_boxes.iter().zip(&self.cart_signals) {
+        for ((lo, hi), cart) in self.cart_boxes.iter().zip(self.carts) {
             let cart = Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
                 Vec3::new(hi[0], hi[1], hi[2]),
@@ -745,15 +745,27 @@ impl GameLevel<'_> {
             if !area.intersects(cart) {
                 continue;
             }
-            match kind {
+            match cart.kind {
                 minecarts::CartKind::CommandBlock => return 0,
                 minecarts::CartKind::Chest | minecarts::CartKind::Hopper => {
-                    container = container.or(Some(signal));
+                    // Counted here, for the cart a comparator reads, not for
+                    // every cart on every block tick.
+                    container = container.or_else(|| Some(self.cart_signal(cart)));
                 }
                 _ => {}
             }
         }
         container.unwrap_or(0)
+    }
+    /// A container minecart's comparator signal: its open menu's slots while
+    /// someone has it open, else its own.
+    fn cart_signal(&self, cart: &minecarts::Minecart) -> i32 {
+        let key = (i32::MAX - 15, minecarts::CART_KEY_Y, cart.id as i32);
+        let slots = match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Chest(open)) => open,
+            _ => &cart.items,
+        };
+        minecarts::Minecart::container_signal(slots, self.items)
     }
     /// Every entity box that blocks building: the players who aren't
     /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
@@ -2854,7 +2866,6 @@ impl Game<'_> {
                 )
             })
             .collect();
-        let cart_signals = self.cart_signals();
         let arrow_boxes = self
             .creatures
             .projectiles
@@ -2898,7 +2909,7 @@ impl Game<'_> {
         let mut level = GameLevel {
             cart_boxes,
             item_frames: &self.item_frames,
-            cart_signals,
+            carts: &self.carts,
             arrow_boxes,
             blockers,
             dropped: &self.dropped,
