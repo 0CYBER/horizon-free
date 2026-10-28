@@ -738,11 +738,11 @@ impl GameLevel<'_> {
         );
         let mut container = None;
         for ((lo, hi), cart) in self.cart_boxes.iter().zip(self.carts) {
-            let cart = Aabb::new(
+            let bounds = Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
                 Vec3::new(hi[0], hi[1], hi[2]),
             );
-            if !area.intersects(cart) {
+            if !area.intersects(bounds) {
                 continue;
             }
             match cart.kind {
