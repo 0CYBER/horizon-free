@@ -66,7 +66,10 @@ trusting native code is the player's decision, never an agent's.
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
    saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
-   folder built from the command line, or mods of the default home, go to the **Native mods** instance).
+   folder built from the command line, or mods of the default home, go to the **Native mods** instance). That
+   instance gets each mod's settings from the default home the first time it plays it (its
+   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where the mod's
+   WebAssembly version kept them); nothing it already has is overwritten.
 
 ## Cache and disk
 
