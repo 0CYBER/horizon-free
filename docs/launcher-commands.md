@@ -335,8 +335,34 @@ Make an instance: empty but for your options and name, or a copy of another one'
 
 - `NAME`
 - `--copy`: The instance to copy (its name or id)
+- `--minecraft`: Make a Minecraft: Java Edition instance of this version (1.21.4, latest or latest-snapshot) instead of a Horizon one
 
 MCP: `instance_create`.
+
+## `horizon-launcher instance versions`
+
+The versions of Minecraft: Java Edition a Java instance can play, the newest first.
+
+    horizon-launcher instance versions
+
+- `--snapshots`: Snapshots too
+- `--old`: Old betas and alphas too
+
+MCP: `instance_versions`.
+
+## `horizon-launcher instance java`
+
+A Java instance's Java: its own Java home or the automatic pick, memory and JVM arguments.
+
+    horizon-launcher instance java <INSTANCE>
+
+- `INSTANCE`
+- `--home`: A Java home to run it on
+- `--auto`: Go back to the Java the version needs, picked or downloaded by the launcher
+- `--memory`: The most memory the game may use, in MiB
+- `--args`: Extra JVM arguments (one string; "" clears them)
+
+MCP: `instance_java`.
 
 ## `horizon-launcher instance rename`
 

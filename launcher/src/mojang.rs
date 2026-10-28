@@ -136,7 +136,7 @@ pub fn download(
 }
 
 /// Mojang's name for this system in its Java runtime index.
-fn java_platform() -> Option<&'static str> {
+pub(crate) fn java_platform() -> Option<&'static str> {
     Some(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "mac-os-arm64",
         ("macos", "x86_64") => "mac-os",
