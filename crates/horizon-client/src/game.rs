@@ -670,15 +670,22 @@ impl EntityObstructionWorld for BuildingObstruction {
     }
 }
 impl GameLevel<'_> {
-    /// The mobs that trigger plates and tripwires: living entities that don't
-    /// ignore block triggers (`Entity.isIgnoringBlockTriggers`: bats; armor
-    /// stands are not in `mobs`).
+    /// The living entities that trigger plates and tripwires and don't ignore
+    /// block triggers (`Entity.isIgnoringBlockTriggers`: bats and marker armor
+    /// stands). Armor stands live apart from `mobs`.
     fn mob_trigger_boxes(&self) -> impl Iterator<Item = Aabb> + '_ {
         self.blockers
             .mobs
             .iter()
             .filter(|m| !m.removed && m.species() != horizon_client::mobs::Species::Bat)
             .map(Mob::bounds)
+            .chain(
+                self.blockers
+                    .armor_stands
+                    .iter()
+                    .filter(|s| !s.marker)
+                    .map(|s| s.bounds()),
+            )
     }
     /// The non-living entities that trigger plates and tripwires (boats,
     /// crystals, primed TNT, falling blocks, item entities, experience orbs and
