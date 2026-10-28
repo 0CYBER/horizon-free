@@ -398,8 +398,39 @@ impl Game<'_> {
         let _ = self.apply_spawner_events(key, events, &HashMap::new());
         // sendBlockUpdated(3) and the player's block_change game event.
         self.spawner_block_updated(key);
+        self.update_spawner_display(key);
         self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
         Some(true)
+    }
+    /// Ticks spawners and trial spawners near the player on a remote client (`tick_remote`).
+    pub(super) fn tick_remote_spawners(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let center = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        let mut keys = Vec::new();
+        let mut trial_keys = Vec::new();
+        for (&pos, be) in &self.world.block_entities {
+            let d = (pos.0 - center[0])
+                .abs()
+                .max((pos.1 - center[1]).abs())
+                .max((pos.2 - center[2]).abs());
+            if d <= 64 {
+                match be {
+                    BlockEntity::Spawner(_) => keys.push(pos),
+                    BlockEntity::TrialSpawner(_) => trial_keys.push(pos),
+                    _ => {}
+                }
+            }
+        }
+        self.client_tick_spawners(&keys);
+        for key in trial_keys {
+            self.client_tick_trial_spawner(key);
+        }
     }
     /// `SpawnerRenderer` and `TrialSpawnerRenderer`: the next mob of every
     /// spawner near the camera, small and turning.
@@ -435,8 +466,23 @@ impl Game<'_> {
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.2, 0.0))
                 * glam::Mat4::from_rotation_x((-30.0_f32).to_radians())
                 * glam::Mat4::from_scale(glam::Vec3::splat(scale));
-            let light = self.world.light(key.0, key.1, key.2);
-            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let (x, y, z) = *key;
+            let mut sky = self.world.light(x, y, z) >> 4;
+            let mut block = self.world.light(x, y, z) & 15;
+            for (dx, dy, dz) in [
+                (0, 1, 0),
+                (0, -1, 0),
+                (1, 0, 0),
+                (-1, 0, 0),
+                (0, 0, 1),
+                (0, 0, -1),
+            ] {
+                let l = self.world.light(x + dx, y + dy, z + dz);
+                sky = sky.max(l >> 4);
+                block = block.max(l & 15);
+            }
+            block = block.max(8);
+            let packed = (u32::from(sky) * 16) | ((u32::from(block) * 16) << 8);
             if mob.species() == horizon_client::mobs::Species::SulfurCube {
                 self.sulfur_cube_body_geometry(
                     mob,

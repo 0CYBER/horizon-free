@@ -1165,6 +1165,7 @@ impl Game<'_> {
         }
         if let Some((_, loaded)) = horizon_client::save::decode_block_entity(&Tag::Compound(full)) {
             self.world.block_entities.insert(key, loaded);
+            self.update_spawner_display(key);
             // The section is drawn again with what the block entity shows.
             let state = self.world.block(pos[0], pos[1], pos[2]);
             let _ = self.world.set(pos[0], pos[1], pos[2], state);
@@ -3617,6 +3618,7 @@ impl Game<'_> {
         // and the moving pistons a block event's client-side moveBlocks made
         // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.tick_remote_spawners();
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
         });

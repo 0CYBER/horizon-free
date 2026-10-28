@@ -55,7 +55,21 @@ impl SpawnData {
     /// `SpawnData.CODEC`: `entity` (required), `custom_spawn_rules` and
     /// `equipment`.
     pub fn decode(tag: &Tag) -> Option<Self> {
-        let Some(Tag::Compound(entity)) = tag.get("entity") else {
+        let entity = if let Some(Tag::Compound(entity)) = tag.get("entity") {
+            entity.clone()
+        } else if let Tag::Compound(c) = tag {
+            let id_key = JavaString::from("id");
+            let legacy_key = JavaString::from("EntityId");
+            if c.contains_key(&id_key) || c.contains_key(&legacy_key) {
+                let mut entity = c.clone();
+                if let Some(id_tag) = entity.remove(&legacy_key) {
+                    entity.insert(id_key, id_tag);
+                }
+                entity
+            } else {
+                return None;
+            }
+        } else {
             return None;
         };
         let rules = match tag.get("custom_spawn_rules") {
@@ -69,11 +83,7 @@ impl SpawnData {
             Some(_) => return None,
             None => None,
         };
-        Some(Self::new(
-            entity.clone(),
-            rules,
-            tag.get("equipment").cloned(),
-        ))
+        Some(Self::new(entity, rules, tag.get("equipment").cloned()))
     }
     pub fn encode(&self) -> Tag {
         let mut out = vec![("entity", Tag::Compound(self.entity.clone()))];
@@ -202,10 +212,13 @@ fn encode_range((lo, hi): (i32, i32)) -> Tag {
 
 impl Default for Spawner {
     fn default() -> Self {
+        let mut entity = Compound::new();
+        entity.insert(JavaString::from("id"), Tag::String("minecraft:pig".into()));
+        let pig = SpawnData::new(entity, None, None);
         Self {
             spawn_delay: 20,
-            potentials: Vec::new(),
-            next: None,
+            potentials: vec![(pig, 1)],
+            next: Some(Next::Potential(0)),
             min_spawn_delay: 200,
             max_spawn_delay: 800,
             spawn_count: 4,
@@ -297,7 +310,21 @@ impl Spawner {
             _ => {
                 let data = match s.next.take() {
                     Some(Next::Own(d)) => d,
-                    _ => SpawnData::default(),
+                    _ => {
+                        let legacy_id = tag
+                            .get("EntityId")
+                            .or_else(|| tag.get("entity_id"))
+                            .and_then(|t| match t {
+                                Tag::String(s) => normalize_id(&s.to_string_lossy()),
+                                _ => None,
+                            });
+                        let mut entity = Compound::new();
+                        entity.insert(
+                            JavaString::from("id"),
+                            Tag::String(legacy_id.as_deref().unwrap_or("minecraft:pig").into()),
+                        );
+                        SpawnData::new(entity, None, None)
+                    }
                 };
                 let had = tag.get("SpawnData").and_then(SpawnData::decode).is_some();
                 if had {
@@ -306,6 +333,25 @@ impl Spawner {
                 vec![(data, 1)]
             }
         };
+        if s.next.is_none() && !s.potentials.is_empty() {
+            s.next = Some(Next::Potential(0));
+        }
+        if s.next.is_none() && s.potentials.is_empty() {
+            let legacy_id = tag
+                .get("EntityId")
+                .or_else(|| tag.get("entity_id"))
+                .and_then(|t| match t {
+                    Tag::String(s) => normalize_id(&s.to_string_lossy()),
+                    _ => None,
+                });
+            if let Some(id) = legacy_id {
+                let mut entity = Compound::new();
+                entity.insert(JavaString::from("id"), Tag::String(id.as_str().into()));
+                let data = SpawnData::new(entity, None, None);
+                s.potentials = vec![(data, 1)];
+                s.next = Some(Next::Potential(0));
+            }
+        }
         let int = |k: &str, d: i32| number(tag.get(k)).map_or(d, |v| v as i32);
         s.min_spawn_delay = int("MinSpawnDelay", 200);
         s.max_spawn_delay = int("MaxSpawnDelay", 800);
@@ -352,15 +398,17 @@ impl Spawner {
         )
     }
     pub fn next_data(&self) -> Option<&SpawnData> {
-        match self.next.as_ref()? {
-            Next::Own(d) => Some(d),
-            Next::Potential(i) => self.potentials.get(*i).map(|(d, _)| d),
+        match self.next.as_ref() {
+            Some(Next::Own(d)) => Some(d),
+            Some(Next::Potential(i)) => self.potentials.get(*i).map(|(d, _)| d),
+            None => self.potentials.first().map(|(d, _)| d),
         }
     }
     fn next_data_mut(&mut self) -> Option<&mut SpawnData> {
-        match self.next.as_mut()? {
-            Next::Own(d) => Some(d),
-            Next::Potential(i) => self.potentials.get_mut(*i).map(|(d, _)| d),
+        match self.next.as_mut() {
+            Some(Next::Own(d)) => Some(d),
+            Some(Next::Potential(i)) => self.potentials.get_mut(*i).map(|(d, _)| d),
+            None => self.potentials.first_mut().map(|(d, _)| d),
         }
     }
     fn random_potential(&self, random: &mut impl RandomSource) -> Option<usize> {
@@ -749,5 +797,43 @@ mod tests {
         );
         assert_eq!(light_limit(Some(&tag("[I;9,2]"))), None);
         assert_eq!(encode_range((3, 3)), Tag::Int(3));
+    }
+
+    #[test]
+    fn spawner_defaults_to_pig() {
+        let s = Spawner::default();
+        assert_eq!(
+            s.next_data().and_then(SpawnData::id).as_deref(),
+            Some("minecraft:pig")
+        );
+        assert_eq!(s.potentials.len(), 1);
+    }
+
+    #[test]
+    fn spawner_loads_potentials_without_spawn_data() {
+        let s = Spawner::load(&tag(
+            "{SpawnPotentials:[{weight:1,data:{entity:{id:\"minecraft:skeleton\"}}}]}",
+        ));
+        assert_eq!(
+            s.next_data().and_then(SpawnData::id).as_deref(),
+            Some("minecraft:skeleton")
+        );
+        let update = s.update_tag();
+        assert!(update.get("SpawnData").is_some());
+    }
+
+    #[test]
+    fn spawner_loads_flat_spawn_data_and_legacy_entity_id() {
+        let s1 = Spawner::load(&tag("{SpawnData:{id:\"minecraft:zombie\"}}"));
+        assert_eq!(
+            s1.next_data().and_then(SpawnData::id).as_deref(),
+            Some("minecraft:zombie")
+        );
+
+        let s2 = Spawner::load(&tag("{EntityId:\"minecraft:creeper\"}"));
+        assert_eq!(
+            s2.next_data().and_then(SpawnData::id).as_deref(),
+            Some("minecraft:creeper")
+        );
     }
 }
