@@ -394,14 +394,14 @@ mod tests {
         let get = |name: &str| env.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
         assert_eq!(get("RUSTUP_TOOLCHAIN"), Some(None));
         assert_eq!(get("RUSTC_WRAPPER"), Some(None));
-        assert!(get("RUSTC")
-            .flatten()
-            .unwrap()
-            .starts_with("/rust/1.99.1-x/bin/rustc"));
-        assert!(get("PATH")
-            .flatten()
-            .unwrap()
-            .starts_with("/rust/1.99.1-x/bin"));
+        assert_eq!(
+            PathBuf::from(get("RUSTC").flatten().unwrap()),
+            toolchain.dir.join("bin").join(exe("rustc"))
+        );
+        assert_eq!(
+            std::env::split_paths(&get("PATH").flatten().unwrap()).next(),
+            Some(toolchain.dir.join("bin"))
+        );
         assert!(get("CARGO_HOME").flatten().unwrap().ends_with("cargo"));
     }
 }
