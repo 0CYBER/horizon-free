@@ -80,6 +80,9 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
   has read the source: the `.hnmod` *is* the source (only `.rs` and `.toml`, checked without running anything),
   pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
+  are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
+  player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
 - **Isolation of data.** Native mods run only in the instance built for them, with its own worlds, options and logs.
 - What this does not do: sandbox the compiled game. horizon-mixins' checks stop mistakes, not a malicious helper
   ([security notes](https://github.com/horizon-rust/horizon-mixins/blob/main/docs/security.md)).
