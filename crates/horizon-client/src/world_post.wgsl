@@ -91,12 +91,17 @@ fn sample_history(uv: vec2<f32>) -> vec3<f32> {
     return max(c / weight, vec3(0.0));
 }
 
-// It runs at the history's size, which upscaling makes larger than the world's:
-// each output pixel takes the world pixel it falls in.
+// It runs at the history's size, which upscaling makes larger than the world's.
+// The history is unjittered: each output pixel takes the world pixel whose
+// jittered sample lands nearest its centre, weighted by how near it lands.
 @fragment fn fs_taa(in: PostOut) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(in.uv * vec2<f32>(textureDimensions(world)));
-    let last = vec2<i32>(textureDimensions(world)) - 1;
-    let centre = textureLoad(world, min(p, last), 0);
+    let size = vec2<f32>(textureDimensions(world));
+    // The jitter moved the scene by `jitter` in clip space: where this pixel's
+    // point was drawn, in world pixels.
+    let drawn = (in.uv + taa.jitter.xy * vec2(0.5, -0.5)) * size;
+    let last = vec2<i32>(size) - 1;
+    let p = clamp(vec2<i32>(floor(drawn)), vec2(0), last);
+    let centre = textureLoad(world, p, 0);
     var lo = centre.rgb;
     var hi = centre.rgb;
     // Reversed depth: the nearest of the 3x3 is the largest, and its motion keeps
@@ -111,13 +116,18 @@ fn sample_history(uv: vec2<f32>) -> vec3<f32> {
             near = max(near, textureLoad(depth, q, 0));
         }
     }
-    let ndc = vec2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0) - taa.jitter.xy;
+    let ndc = vec2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
     let previous = taa.reproject * vec4(ndc, near, 1.0);
     let uv = vec2(0.5, -0.5) * previous.xy / previous.w + 0.5;
     if taa.jitter.z > 0.0 || any(uv != clamp(uv, vec2(0.0), vec2(1.0))) {
         return vec4(centre.rgb, centre.a);
     }
     let past = clamp(sample_history(uv), lo, hi);
+    // How far the sample landed from this pixel's centre, in output pixels: a
+    // Gaussian of it scales the new frame's share, so that frames whose sample
+    // fell far away (most of them when upscaling) barely move the pixel.
+    let off = (drawn - (vec2<f32>(p) + 0.5)) * vec2<f32>(textureDimensions(history)) / size;
+    let share = 0.1 * exp(-2.0 * dot(off, off));
     // The alpha carries the emissive mark through to HDR output (hdr.wgsl).
-    return vec4(mix(past, centre.rgb, 0.1), centre.a);
+    return vec4(mix(past, centre.rgb, share), centre.a);
 }

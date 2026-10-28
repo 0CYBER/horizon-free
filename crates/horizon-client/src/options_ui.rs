@@ -2692,7 +2692,7 @@ impl OptionsUi {
             return;
         }
         if let Some(level) = Self::graphics_level(self.page()) {
-            self.graphics.scroll(level, size.1, amount);
+            self.graphics.scroll(level, s, size.1, amount);
             return;
         }
         match &mut self.pack_screen {

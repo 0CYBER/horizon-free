@@ -309,9 +309,13 @@ pub fn rows(level: Level) -> Vec<Row> {
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
 /// Horizon's graphics screens supplement the vanilla options on Video Settings.
-fn extra_rows(level: Level) -> Vec<Row> {
+/// Upscaling is only there while TAA is, which does it.
+fn extra_rows(level: Level, settings: &Settings) -> Vec<Row> {
     let mut rows = rows(level);
     rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
+    if !settings.horizon.taa {
+        rows.retain(|row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::Upscaling)));
+    }
     // Drop headings whose settings were all on the parent screens.
     let mut has_setting = false;
     rows.reverse();
@@ -631,8 +635,8 @@ impl GraphicsUi {
     fn bounds(h: f32) -> (f32, f32) {
         (STYLE.band, h - STYLE.band)
     }
-    fn content_height(level: Level) -> f32 {
-        extra_rows(level).iter().fold(4.0, |height, row| {
+    fn content_height(level: Level, s: &Settings) -> f32 {
+        extra_rows(level, s).iter().fold(4.0, |height, row| {
             height
                 + match row {
                     Row::Header(_) => STYLE.header_height,
@@ -644,17 +648,18 @@ impl GraphicsUi {
     fn layout(
         &mut self,
         level: Level,
+        s: &Settings,
         w: f32,
         h: f32,
     ) -> (Vec<Widget>, Vec<(f32, &'static str)>, f32) {
-        let content = Self::content_height(level);
+        let content = Self::content_height(level, s);
         self.clamp_scroll(h, content);
         let (top, _) = Self::bounds(h);
         let x = STYLE.row_x(w);
         let mut y = top + 4.0 - self.scroll;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
-        for row in extra_rows(level) {
+        for row in extra_rows(level, s) {
             match row {
                 Row::Header(name) => {
                     headers.push((y, name));
@@ -708,7 +713,7 @@ impl GraphicsUi {
         in_world: bool,
     ) {
         let (w, h) = (batch.width, batch.height);
-        let (widgets, headers, content) = self.layout(level, w, h);
+        let (widgets, headers, content) = self.layout(level, s, w, h);
         let (top, bottom) = Self::bounds(h);
         STYLE.background(batch, atlas, top, bottom, in_world);
         let shown = |y: f32, height: f32| y >= top && y + height <= bottom;
@@ -718,7 +723,7 @@ impl GraphicsUi {
                 STYLE.header(batch, atlas, &Text::literal(name), x, y);
             }
         }
-        let descriptions: Vec<(Cost, &'static str)> = extra_rows(level)
+        let descriptions: Vec<(Cost, &'static str)> = extra_rows(level, s)
             .into_iter()
             .filter_map(|r| match r {
                 Row::Setting(s) => Some((s.cost, s.text)),
@@ -819,7 +824,7 @@ impl GraphicsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Action> {
-        let (widgets, _, _) = self.layout(level, w, h);
+        let (widgets, _, _) = self.layout(level, s, w, h);
         let (top, bottom) = Self::bounds(h);
         if drag {
             if let Some(item) = self.dragging
@@ -863,8 +868,8 @@ impl GraphicsUi {
     pub fn release(&mut self) -> bool {
         self.dragging.take().is_some()
     }
-    pub fn scroll(&mut self, level: Level, h: f32, amount: f32) {
-        let content = Self::content_height(level);
+    pub fn scroll(&mut self, level: Level, s: &Settings, h: f32, amount: f32) {
+        let content = Self::content_height(level, s);
         self.clamp_scroll(h, content);
         self.scroll -= amount * 18.0;
         self.clamp_scroll(h, content);
@@ -880,7 +885,7 @@ mod tests {
         let mut s = Settings::default();
         let mut ui = GraphicsUi::default();
         let size = (480.0, 320.0);
-        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let (widgets, _, _) = ui.layout(Level::Advanced, &s, size.0, size.1);
         let button = widgets
             .iter()
             .find(|w| matches!(w.target, Target::Button(_)))
@@ -945,45 +950,47 @@ mod tests {
 
     #[test]
     fn scrolling_stops_at_both_limits_before_layout() {
+        let s = Settings::default();
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
             let h = 2.0 * STYLE.band + 10.0;
             let (top, bottom) = GraphicsUi::bounds(h);
-            let max = GraphicsUi::content_height(level) - (bottom - top);
+            let max = GraphicsUi::content_height(level, &s) - (bottom - top);
             assert!(max > 4.5);
             for _ in 0..3 {
-                ui.scroll(level, h, 1000.0);
+                ui.scroll(level, &s, h, 1000.0);
                 assert_eq!(ui.scroll, 0.0);
             }
             for _ in 0..3 {
-                ui.scroll(level, h, -1000.0);
+                ui.scroll(level, &s, h, -1000.0);
                 assert_eq!(ui.scroll, max);
             }
-            ui.scroll(level, h, 0.25);
+            ui.scroll(level, &s, h, 0.25);
             assert_eq!(ui.scroll, max - 4.5);
-            ui.scroll(level, h, 1000.0);
-            ui.scroll(level, h, -0.25);
+            ui.scroll(level, &s, h, 1000.0);
+            ui.scroll(level, &s, h, -0.25);
             assert_eq!(ui.scroll, 4.5);
         }
     }
 
     #[test]
     fn resizing_clamps_before_positioning_graphics_rows() {
+        let s = Settings::default();
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
-            ui.scroll(level, 2.0 * STYLE.band + 10.0, -1000.0);
+            ui.scroll(level, &s, 2.0 * STYLE.band + 10.0, -1000.0);
             assert!(ui.scroll > 0.0);
-            let (widgets, headers, _) = ui.layout(level, 480.0, 4000.0);
+            let (widgets, headers, _) = ui.layout(level, &s, 480.0, 4000.0);
             assert_eq!(ui.scroll, 0.0);
             if let Some((y, _)) = headers.first() {
                 assert_eq!(*y, STYLE.band + 4.0);
             }
-            let (expected, _, _) = GraphicsUi::default().layout(level, 480.0, 4000.0);
+            let (expected, _, _) = GraphicsUi::default().layout(level, &s, 480.0, 4000.0);
             assert_eq!(
                 widgets.iter().map(|w| w.y).collect::<Vec<_>>(),
                 expected.iter().map(|w| w.y).collect::<Vec<_>>()
             );
-            ui.scroll(level, 4000.0, -1000.0);
+            ui.scroll(level, &s, 4000.0, -1000.0);
             assert_eq!(ui.scroll, 0.0);
         }
     }
@@ -991,7 +998,7 @@ mod tests {
     #[test]
     fn classic_submenus_only_add_horizon_settings_without_empty_groups() {
         for level in [Level::Simple, Level::Advanced] {
-            let rows = extra_rows(level);
+            let rows = extra_rows(level, &Settings::default());
             assert!(rows.iter().any(|row| matches!(row, Row::Setting(_))));
             for (i, row) in rows.iter().enumerate() {
                 match row {
@@ -1098,6 +1105,16 @@ mod tests {
         assert!(s.horizon.taa);
         item.cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.upscaling, Upscaling::Native);
+
+        // The Upscaling row is only on the screen while TAA is on.
+        let shown = |s: &Settings| {
+            extra_rows(Level::Advanced, s)
+                .iter()
+                .any(|row| matches!(row, Row::Setting(r) if r.item == upscaling))
+        };
+        assert!(!shown(&s));
+        s.horizon.taa = true;
+        assert!(shown(&s));
     }
 
     #[test]
@@ -1116,7 +1133,7 @@ mod tests {
 
         let mut ui = GraphicsUi::default();
         let size = (480.0, 4000.0);
-        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let (widgets, _, _) = ui.layout(Level::Advanced, &s, size.0, size.1);
         let switch = widgets
             .iter()
             .find(|w| matches!(w.target, Target::Item(i) if i == item))
