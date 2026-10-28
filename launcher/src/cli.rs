@@ -24,6 +24,16 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum RustCmd {
+    /// Whether it is installed, its version and whether this computer can link with it
+    Status,
+    /// Download the pinned toolchain from static.rust-lang.org (once), checked by SHA-256
+    Install,
+    /// Delete the toolchain and the native builds' Cargo home
+    Remove,
+}
+
+#[derive(Subcommand)]
 enum ServersCmd {
     /// The servers, their folder and whether they run
     List,
@@ -704,6 +714,12 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ModsCmd>,
     },
+    /// The portable Rust toolchain native mods compile with (docs/native-mods.md): the launcher's
+    /// own, in its data folder, never installed on the system
+    Rust {
+        #[command(subcommand)]
+        action: Option<RustCmd>,
+    },
     /// Servers hosted with horizon-server (the Servers page): list them, create one, or run any
     /// horizon-server command on one
     Servers {
@@ -1261,7 +1277,56 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
+        Cmd::Rust { action } => rust(action.unwrap_or(RustCmd::Status), as_json)?,
         Cmd::Mcp => unreachable!(),
+    }
+    Ok(())
+}
+
+fn rust(action: RustCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::rust_toolchain as rust;
+    match action {
+        RustCmd::Status => {
+            let installed = rust::installed();
+            let version = installed.as_ref().map(|t| t.version()).transpose()?;
+            let linker = rust::linker().err();
+            if as_json {
+                json(serde_json::json!({
+                    "pinned": rust::VERSION,
+                    "host": rust::host().map(|h| h.target),
+                    "installed": installed.as_ref().map(|t| t.dir.display().to_string()),
+                    "version": version,
+                    "linker": linker,
+                }));
+            } else {
+                match (&installed, &version) {
+                    (Some(t), Some(v)) => println!("{v} in {}", t.dir.display()),
+                    _ => println!(
+                        "Rust {} is not installed (`horizon-launcher rust install`).",
+                        rust::VERSION
+                    ),
+                }
+                println!(
+                    "{}",
+                    linker.unwrap_or_else(|| "This computer can link the game.".into())
+                );
+            }
+        }
+        RustCmd::Install => {
+            let shown = std::cell::Cell::new(0);
+            let toolchain = rust::install(|f| {
+                let percent = (f * 100.0) as u32;
+                if percent >= shown.get() + 10 {
+                    shown.set(percent);
+                    eprintln!("{percent}%");
+                }
+            })?;
+            println!("{} in {}", toolchain.version()?, toolchain.dir.display());
+        }
+        RustCmd::Remove => {
+            rust::remove()?;
+            println!("Removed the launcher's Rust toolchain and Cargo home.");
+        }
     }
     Ok(())
 }
