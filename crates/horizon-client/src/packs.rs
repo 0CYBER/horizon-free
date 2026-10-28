@@ -385,13 +385,21 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
 }
 /// A directory junction, which Windows creates without privileges (a directory symlink needs
 /// developer mode). The mirror falls back to copying the tree when it fails.
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn junction(target: &Path, at: &Path) -> io::Result<()> {
     use std::os::windows::process::CommandExt;
+    // cmd parses its own line: Rust quotes only paths with spaces, so `&` or `^` in an
+    // unquoted path would split or change the command. A Windows path cannot hold `"`.
+    let quoted = |path: &Path| -> io::Result<std::ffi::OsString> {
+        let mut quoted = std::ffi::OsString::from("\"");
+        quoted.push(std::path::absolute(path)?);
+        quoted.push("\"");
+        Ok(quoted)
+    };
     let status = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(std::path::absolute(at)?)
-        .arg(std::path::absolute(target)?)
+        .raw_arg(quoted(at)?)
+        .raw_arg(quoted(target)?)
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -401,7 +409,7 @@ fn junction(target: &Path, at: &Path) -> io::Result<()> {
         .then_some(())
         .ok_or_else(|| io::Error::other("mklink /J failed"))
 }
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn junction(_: &Path, _: &Path) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
@@ -967,7 +975,8 @@ mod tests {
     }
     #[test]
     fn overlay_layers_packs_over_vanilla() {
-        let base = std::env::temp_dir().join(format!("horizon-packs-{}", std::process::id()));
+        // `&` would split an unquoted `cmd /C mklink` line.
+        let base = std::env::temp_dir().join(format!("horizon-packs-&{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let vanilla = base.join("vanilla");
         fs::create_dir_all(vanilla.join("assets/minecraft/textures/block")).unwrap();
@@ -1035,6 +1044,13 @@ mod tests {
         assert_eq!(
             fs::read(out.join("assets/minecraft/textures/font/ascii.png")).unwrap(),
             b"font"
+        );
+        // Linked, not mirrored: a junction on Windows, a symlink on unix.
+        assert!(
+            fs::symlink_metadata(out.join("assets/minecraft/textures/font"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
         );
         let _ = fs::remove_dir_all(base);
     }
