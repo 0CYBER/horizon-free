@@ -73,7 +73,6 @@ pub mod merchant;
 pub mod mobs;
 pub mod mod_content;
 pub mod motion;
-pub mod moved_extras;
 pub mod multiplayer;
 pub mod music;
 pub mod net;
