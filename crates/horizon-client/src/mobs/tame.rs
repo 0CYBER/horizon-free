@@ -829,7 +829,8 @@ impl Goal for CatTempt {
         // Cat.tick: a wild cat being tempted begs every 100 ticks.
         if m.age.is_multiple_of(100) {
             cx.events.push(MobEvent::Sound(
-                "entity.cat.beg_for_food",
+                super::finalize::variant_sound(m, "beg_for_food")
+                    .unwrap_or("entity.cat.beg_for_food"),
                 m.center(),
                 1.0,
                 1.0,
@@ -1197,7 +1198,8 @@ pub fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     cat_amounts(m);
     if (m.extra.flag || m.extra.relax_one) && m.age.is_multiple_of(5) {
         let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
-        events.push(MobEvent::Sound("entity.cat.purr", m.center(), volume, 1.0));
+        let sound = super::finalize::variant_sound(m, "purr").unwrap_or("entity.cat.purr");
+        events.push(MobEvent::Sound(sound, m.center(), volume, 1.0));
     }
 }
 /// The lying and relaxing amounts of `Cat.tick` (also a client's, from the

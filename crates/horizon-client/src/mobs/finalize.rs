@@ -2046,6 +2046,46 @@ pub fn sound_variants(s: Species) -> &'static [&'static str] {
         _ => &[],
     }
 }
+/// A sound of the mob's `*_sound_variant` set (`Pig.getSoundSet`,
+/// `Wolf.getSoundSet`, `Cat.getSoundSet`, ...): `kind` is the sound's key
+/// (`ambient`, `hurt`, `step`, `growl`, `purreow`...). Babies use the species'
+/// baby set (cows have none); an adult's set is `entity.<species>.*` for
+/// `classic` and `entity.<species>_<variant>.*` otherwise, except the
+/// footsteps that every variant shares (not the cow's). None for a species
+/// without sound variants.
+pub fn variant_sound(m: &Mob, kind: &str) -> Option<&'static str> {
+    use std::{collections::HashMap, sync::Mutex};
+    let species = m.species();
+    let name = match species {
+        Species::Pig => "pig",
+        Species::Cow => "cow",
+        Species::Chicken => "chicken",
+        Species::Wolf => "wolf",
+        Species::Cat => "cat",
+        _ => return None,
+    };
+    let variant = m
+        .extra
+        .sound_variant
+        .and_then(|i| sound_variants(species).get(i as usize))
+        .copied()
+        .unwrap_or("classic");
+    let id = if m.is_baby() && species != Species::Cow {
+        format!("entity.baby_{name}.{kind}")
+    } else if variant == "classic" || (kind == "step" && species != Species::Cow) {
+        format!("entity.{name}.{kind}")
+    } else {
+        format!("entity.{name}_{variant}.{kind}")
+    };
+    // A handful of ids in all: keep each one as a `&'static str`.
+    static IDS: Mutex<Option<HashMap<String, &'static str>>> = Mutex::new(None);
+    let mut ids = IDS.lock().ok()?;
+    let ids = ids.get_or_insert_with(HashMap::new);
+    Some(
+        *ids.entry(id)
+            .or_insert_with_key(|k| Box::leak(k.clone().into_boxed_str())),
+    )
+}
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {
     let i = index as usize;

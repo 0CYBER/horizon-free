@@ -1343,8 +1343,10 @@ impl Game<'_> {
                 MobEvent::Hiss { mob } => {
                     if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
                         let at = m.center();
+                        let sound = horizon_client::mobs::finalize::variant_sound(m, "hiss")
+                            .unwrap_or("entity.cat.hiss");
                         self.audio
-                            .play("minecraft:entity.cat.hiss", Some(at), 1.0, 1.0);
+                            .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
                     }
                 }
                 MobEvent::Tamed { .. } | MobEvent::Buck { .. } => self.mount_event(&e),
@@ -1921,6 +1923,9 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            // getBreedOffspring creates the baby without finalizeSpawn: it keeps
+            // the default (`classic`) sound variant.
+            child.extra.sound_variant = None;
             // A llama's baby was drawn in the parent's tick, with the
             // experience.
             if let Some(o) = llama {
@@ -2016,8 +2021,12 @@ impl Game<'_> {
             }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
-            // Fox.getBreedOffspring: either parent's variant.
-            if p.species() == Species::Fox && !coin {
+            // Fox, Pig, Cow and Chicken.getBreedOffspring: either parent's variant.
+            if matches!(
+                p.species(),
+                Species::Fox | Species::Pig | Species::Cow | Species::Chicken
+            ) && !coin
+            {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
             }
             if p.species() == Species::Sheep {
