@@ -1456,8 +1456,12 @@ fn hand_base(
             | Species::WitherSkeleton
     );
     let arm = if left { "left_arm" } else { "right_arm" };
+    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
+    // by 0.5 for slim arms: the hand is the middle of the arm.
     let offset = if skeleton {
         if left { -1.0 } else { 1.0 }
+    } else if avatar(m) && m.slim {
+        if left { -0.5 } else { 0.5 }
     } else {
         0.0
     };

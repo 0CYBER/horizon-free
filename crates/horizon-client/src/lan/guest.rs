@@ -523,6 +523,14 @@ pub fn firework_components(
     out
 }
 
+/// `DyeColor.getId` of a dye's name.
+fn dye_id(name: &str) -> Option<i32> {
+    crate::block_entity_render::DYES
+        .iter()
+        .position(|d| d.0 == name)
+        .map(|i| i as i32)
+}
+
 /// The off hand slot is conventionally 40 in saves and 45 in the menu.
 /// `synced_id` names an entry of a synced registry (enchantments, trim
 /// materials and patterns) by its id on this connection.
@@ -594,6 +602,36 @@ fn network_stack(
                     horizon_protocol::item::Component::Trim { material, pattern },
                 ));
             }
+        }
+        // BannerPatternLayers: each pattern a reference into the synced registry;
+        // a layer that has none leaves the stack without the component.
+        let layers: Option<Vec<(i32, i32)>> = d
+            .banner_patterns
+            .iter()
+            .map(|layer| {
+                let name = if layer.pattern.contains(':') {
+                    layer.pattern.to_string()
+                } else {
+                    format!("minecraft:{}", layer.pattern)
+                };
+                Some((
+                    synced_id("minecraft:banner_pattern", &name)?,
+                    dye_id(&layer.color)?,
+                ))
+            })
+            .collect();
+        if let Some(layers) = layers.filter(|layers| !layers.is_empty()) {
+            stack.added.push((
+                horizon_protocol::item::component::BANNER_PATTERNS,
+                horizon_protocol::item::Component::BannerPatterns(layers),
+            ));
+        }
+        // A shield's `base_color`.
+        if let Some(id) = d.base_color.as_deref().and_then(dye_id) {
+            stack.added.push((
+                horizon_protocol::item::component::BASE_COLOR,
+                horizon_protocol::item::Component::Int(id),
+            ));
         }
         if let Some(id) = d.map_id {
             stack.added.push((

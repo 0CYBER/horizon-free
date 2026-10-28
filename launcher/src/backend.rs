@@ -1369,7 +1369,7 @@ fn java(
 }
 
 /// The dynamic loader glibc programs on x86-64 Linux start through.
-const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
+pub(crate) const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
 
 /// Runs `cmd` with Java at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
 /// versions' own preparers look for Java.
@@ -1966,8 +1966,10 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "{tag} is not prepared yet. Prepare it first (it needs your own Minecraft {}).",
-            game_version(tag)
+            "{tag} is not prepared yet. Prepare it first: `horizon-launcher prepare --version {tag}` \
+             uses your own Minecraft {v}, or downloads it from Mojang for the signed-in account \
+             that owns it.",
+            v = game_version(tag)
         ))
     }
 }
@@ -2904,7 +2906,8 @@ mod tests {
                 let name = path.file_name().unwrap().to_string_lossy().to_string();
                 let in_tests = name.contains("tests") || path.parent().unwrap() != src;
                 // The code alone: test modules (this one included) come after it.
-                let mut text = fs::read_to_string(&path).unwrap();
+                // A Windows checkout has CRLF line ends: the searches below look for "\n".
+                let mut text = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
                 text.truncate(text.find("#[cfg(test)]").unwrap_or(text.len()));
                 sources.push((name, in_tests, text));
             }
