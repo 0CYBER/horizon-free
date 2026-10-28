@@ -477,7 +477,7 @@ impl Launcher {
         });
     }
 
-    fn open_server(&mut self, dir: PathBuf) {
+    pub(super) fn open_server(&mut self, dir: PathBuf) {
         if self.servers.open.as_ref() == Some(&dir) {
             return;
         }

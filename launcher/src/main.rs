@@ -1972,7 +1972,7 @@ impl Launcher {
                             .child(sub(tr(if up { "Running" } else { "Stopped" }).into())),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.servers.open = Some(dir.clone());
+                        this.open_server(dir.clone());
                         this.go(Page::Servers);
                         cx.notify();
                     })),
