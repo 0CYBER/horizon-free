@@ -28,7 +28,7 @@ impl Game<'_> {
         let mut spawners = Vec::new();
         let mut trial_spawners = Vec::new();
         self.item_columns = Some(Default::default());
-        for slot in self.world.block_entity_tickers() {
+        for slot in self.world.block_entity_tickers().iter().copied() {
             let pos = slot.0;
             // Ticks before this one can remove it (`TickingBlockEntity.isRemoved`).
             if !self.world.block_entities.is_live(slot)
