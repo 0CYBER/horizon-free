@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset},
+    graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset, Upscaling},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     settings::{Opt, Settings},
@@ -36,6 +36,7 @@ pub enum H {
     Overlay,
     ResolutionScale,
     Antialiasing,
+    Upscaling,
     Hdr,
     HdrPaperWhite,
     HdrPeak,
@@ -224,6 +225,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.",
             ),
             h(
+                H::Upscaling,
+                High,
+                "Renders the world smaller and rebuilds it with TAA. Faster, softer.",
+            ),
+            h(
                 H::Hdr,
                 None,
                 "HDR output on an HDR display: lava, fire and sunlight shine brighter.",
@@ -391,6 +397,7 @@ impl H {
                     (false, false) => "Off",
                 },
             ),
+            H::Upscaling => labelled("Upscaling", g.upscaling.label()),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
             H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
@@ -453,6 +460,16 @@ impl H {
                 let i = if g.taa { 2 } else { usize::from(g.fxaa) };
                 let i = (i + if back { 2 } else { 1 }) % 3;
                 (g.fxaa, g.taa) = (i == 1, i == 2);
+                if !g.taa {
+                    g.upscaling = Upscaling::Native;
+                }
+            }
+            // Upscaling is TAA's: picking a ratio turns it on.
+            H::Upscaling => {
+                g.upscaling = step(&Upscaling::ALL, g.upscaling, back);
+                if g.upscaling != Upscaling::Native {
+                    (g.fxaa, g.taa) = (false, true);
+                }
             }
             H::Hdr => g.hdr = !g.hdr,
             H::BatteryMode => g.battery = !g.battery,
@@ -1072,6 +1089,15 @@ mod tests {
         }
         item.cycle(&mut s, true, [854, 480]);
         assert_eq!((s.horizon.fxaa, s.horizon.taa), (false, true));
+
+        // Upscaling needs TAA: a ratio turns it on, leaving TAA goes back to Native.
+        s.horizon.taa = false;
+        let upscaling = Item::Horizon(H::Upscaling);
+        upscaling.cycle(&mut s, false, [854, 480]);
+        assert_eq!(upscaling.label(&s).plain(), "Upscaling: Quality");
+        assert!(s.horizon.taa);
+        item.cycle(&mut s, false, [854, 480]);
+        assert_eq!(s.horizon.upscaling, Upscaling::Native);
     }
 
     #[test]

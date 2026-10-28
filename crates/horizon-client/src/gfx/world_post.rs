@@ -21,9 +21,11 @@ struct WorldTarget {
     taa: Option<History>,
 }
 
-/// TAA's two history textures, written in turn: `resolve[i]` writes `history[i]`
-/// from the world and `history[1 - i]`; `show[i]` copies `history[i]` to the screen.
+/// TAA's two history textures at the output size (the world's, times the upscale), written
+/// in turn: `resolve[i]` writes `history[i]` from the world and `history[1 - i]`; `show[i]`
+/// copies `history[i]` to the screen.
 struct History {
+    size: [u32; 2],
     history: [wgpu::TextureView; 2],
     resolve: [wgpu::BindGroup; 2],
     show: [wgpu::BindGroup; 2],
@@ -49,6 +51,11 @@ pub struct Post {
     pub scale: f32,
     pub antialias: bool,
     pub taa: bool,
+    /// Output pixels per rendered pixel while TAA is on (1: native): the world renders
+    /// this much smaller and TAA rebuilds it at the resolution scale's size.
+    pub upscale: f32,
+    /// TAA runs this frame (`jitter`): not on the title screen or under a shader pack.
+    taa_on: bool,
     target: Option<WorldTarget>,
     taa_layout: wgpu::BindGroupLayout,
     taa_pipeline: wgpu::RenderPipeline,
@@ -182,6 +189,8 @@ impl Post {
             scale: 1.0,
             antialias: false,
             taa: false,
+            upscale: 1.0,
+            taa_on: false,
             target: None,
             taa_frame: 0,
             taa_previous: None,
@@ -189,22 +198,31 @@ impl Post {
         }
     }
 
-    fn target_size(&self, window: [u32; 2]) -> [u32; 2] {
-        window.map(|v| ((v as f32 * self.scale).round() as u32).clamp(1, 8192))
+    /// The world's rendered size and the size it is shown at (TAA's history).
+    fn sizes(&self, window: [u32; 2]) -> ([u32; 2], [u32; 2]) {
+        let output = window.map(|v| ((v as f32 * self.scale).round() as u32).clamp(1, 8192));
+        let upscale = if self.taa_on { self.upscale } else { 1.0 };
+        (
+            output.map(|v| ((v as f32 / upscale).round() as u32).max(1)),
+            output,
+        )
     }
 
     /// TAA's sub-pixel jitter this frame, as a clip-space matrix to multiply into the
     /// world's projection (identity while `on` is false); `view_proj` is the unjittered
     /// projection, relative to `camera`. Call it before `prepare`, once per frame.
     pub fn jitter(&mut self, window: [u32; 2], on: bool, view_proj: Mat4, camera: DVec3) -> Mat4 {
-        if !(on && self.taa) {
+        self.taa_on = on && self.taa;
+        if !self.taa_on {
             self.taa_previous = None;
             return Mat4::IDENTITY;
         }
         self.taa_frame = self.taa_frame.wrapping_add(1);
-        let size = self.target_size(window);
-        // Halton (2, 3) over 8 frames, in pixels around the centre.
-        let i = self.taa_frame % 8 + 1;
+        let (size, _) = self.sizes(window);
+        // Halton (2, 3) over 8 frames per output pixel (FSR's count), in rendered
+        // pixels around the centre.
+        let phases = (8.0 * self.upscale * self.upscale).ceil() as u32;
+        let i = self.taa_frame % phases + 1;
         let offset = Vec2::new(halton(i, 2), halton(i, 3)) - 0.5;
         let jitter = offset * 2.0 / Vec2::new(size[0] as f32, size[1] as f32);
         let current = view_proj.as_dmat4();
@@ -232,25 +250,25 @@ impl Post {
         window: [u32; 2],
         always: bool,
     ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
-        if self.scale == 1.0 && !self.antialias && !self.taa && !always {
+        if self.scale == 1.0 && !self.antialias && !self.taa_on && !always {
             self.target = None;
             return None;
         }
-        let size = self.target_size(window);
+        let (size, output) = self.sizes(window);
+        let history_size = self.taa_on.then_some(output);
         if self
             .target
             .as_ref()
-            .is_none_or(|t| t.size != size || t.taa.is_some() != self.taa)
+            .is_none_or(|t| t.size != size || t.taa.as_ref().map(|h| h.size) != history_size)
         {
-            let extent = wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            };
-            let make_tex = |label, format, usage| {
+            let make_tex = |label, size: [u32; 2], format, usage| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
-                    size: extent,
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
@@ -261,19 +279,20 @@ impl Post {
             };
             let sampled =
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-            let color =
-                make_tex("Scaled world", self.format, sampled).create_view(&Default::default());
+            let color = make_tex("Scaled world", size, self.format, sampled)
+                .create_view(&Default::default());
             // TEXTURE_BINDING: occlusion culling and TAA read it.
             let depth = make_tex(
                 "Scaled world depth",
+                size,
                 wgpu::TextureFormat::Depth32Float,
                 sampled,
             )
             .create_view(&Default::default());
             let group = self.bind(device, &color);
-            let taa = self.taa.then(|| {
+            let taa = history_size.map(|output| {
                 let history = [0, 1].map(|_| {
-                    make_tex("TAA history", HISTORY_FORMAT, sampled)
+                    make_tex("TAA history", output, HISTORY_FORMAT, sampled)
                         .create_view(&Default::default())
                 });
                 let resolve = [0, 1].map(|i| {
@@ -306,6 +325,7 @@ impl Post {
                 });
                 let show = [0, 1].map(|i| self.bind(device, &history[i]));
                 History {
+                    size: output,
                     history,
                     resolve,
                     show,

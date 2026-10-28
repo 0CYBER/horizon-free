@@ -91,10 +91,12 @@ fn sample_history(uv: vec2<f32>) -> vec3<f32> {
     return max(c / weight, vec3(0.0));
 }
 
+// It runs at the history's size, which upscaling makes larger than the world's:
+// each output pixel takes the world pixel it falls in.
 @fragment fn fs_taa(in: PostOut) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(in.clip.xy);
+    let p = vec2<i32>(in.uv * vec2<f32>(textureDimensions(world)));
     let last = vec2<i32>(textureDimensions(world)) - 1;
-    let centre = textureLoad(world, p, 0);
+    let centre = textureLoad(world, min(p, last), 0);
     var lo = centre.rgb;
     var hi = centre.rgb;
     // Reversed depth: the nearest of the 3x3 is the largest, and its motion keeps

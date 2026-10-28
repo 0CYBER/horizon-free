@@ -273,6 +273,7 @@ impl Game<'_> {
                 s.horizon.resolution_scale as f32 / 100.0,
                 s.horizon.fxaa,
                 s.horizon.taa,
+                s.horizon.upscaling.ratio(),
             );
             r.set_hdr(
                 s.horizon.hdr,
