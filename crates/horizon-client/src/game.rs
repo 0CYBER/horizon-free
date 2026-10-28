@@ -2333,12 +2333,19 @@ impl Game<'_> {
             .items()
             .get(&stack.item)
             .map_or(64, |i| i.max_stack);
-        // Prefer the selected slot, then the hotbar, then the main inventory.
+        // getSlotWithRemainingSpace: the selected slot, the off hand, then
+        // the hotbar and the main inventory.
         let order: Vec<usize> = std::iter::once(self.selected)
+            .chain(std::iter::once(shield::OFFHAND_SLOT))
             .chain((0..36).filter(|&i| i != self.selected))
             .collect();
         for &i in &order {
-            if let Some(slot) = &mut self.inventory[i]
+            let slot = if i == shield::OFFHAND_SLOT {
+                &mut self.offhand
+            } else {
+                &mut self.inventory[i]
+            };
+            if let Some(slot) = slot
                 && slot.same_item_same_components(&stack)
                 && slot.count < max
             {
