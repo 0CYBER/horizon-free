@@ -81,10 +81,13 @@ impl Game<'_> {
         let viewer = self.player_team();
         let mut tags = Vec::new();
         let players = self.other_players();
-        let named = self
-            .mobs
-            .iter()
-            .filter_map(|m| Some((m, m.custom_name.clone()?, false)));
+        let named = self.mobs.iter().filter_map(|m| {
+            let name = m.custom_name.as_ref()?;
+            // The tag's 64 block distance is measured to the entity: copy the
+            // name only for a mob the frame can show it on.
+            let at = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
+            (at.distance_squared(camera) < 64.0 * 64.0).then(|| (m, name.clone(), false))
+        });
         let players = players.into_iter().map(|(m, name)| (m, name, true));
         // Who is riding whom: asked once per tag below, and rescanning every mob
         // for each tag made this quadratic in the number of loaded mobs.
