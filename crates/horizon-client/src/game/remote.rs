@@ -213,7 +213,8 @@ pub(super) struct Remote {
     /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
     show_death_screen: bool,
     player_type: Option<Arc<MobType>>,
-    /// Inventory as last synchronised, for creative-mode slot updates.
+    /// Inventory (then the off hand) as last synchronised, for creative-mode
+    /// slot updates.
     synced: Vec<Option<ItemStack>>,
     decode_errors: u32,
     clock: Option<i32>,
@@ -510,7 +511,7 @@ impl Game<'_> {
             death_message: None,
             show_death_screen: true,
             player_type,
-            synced: vec![None; 36],
+            synced: vec![None; 37],
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
@@ -4307,12 +4308,14 @@ impl Game<'_> {
         {
             out.push(packet);
         }
-        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
+        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot);
+        // `synced[36]` is the off hand.
         let mut creative_slots = Vec::new();
         if self.creative {
-            for i in 0..36 {
-                if self.inventory[i] != r.synced[i] {
-                    r.synced[i] = self.inventory[i].clone();
+            for i in 0..37 {
+                let stack = self.inventory.get(i).unwrap_or(&self.offhand);
+                if *stack != r.synced[i] {
+                    r.synced[i] = stack.clone();
                     creative_slots.push(i);
                 }
             }
@@ -4321,8 +4324,13 @@ impl Game<'_> {
             self.send(packet);
         }
         for i in creative_slots {
-            let slot = if i < 9 { 36 + i } else { i } as i16;
-            let item = self.to_network(&self.inventory[i]);
+            // InventoryMenu's slots: the hotbar is 36..=44, the off hand 45.
+            let slot = match i {
+                0..9 => 36 + i,
+                36 => 45,
+                _ => i,
+            } as i16;
+            let item = self.to_network(self.inventory.get(i).unwrap_or(&self.offhand));
             self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
                 slot,
                 item,
@@ -4331,7 +4339,8 @@ impl Game<'_> {
     }
     /// Inventory as the server last described it.
     fn remote_synced(&mut self) {
-        let inventory = self.inventory.clone();
+        let mut inventory = self.inventory.clone();
+        inventory.push(self.offhand.clone());
         if let Some(r) = self.remote.as_mut() {
             r.synced = inventory;
         }
