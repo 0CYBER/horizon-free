@@ -1745,6 +1745,8 @@ trait SeededPipeline: Send + Sync {
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
+    /// The level's build range (minimum Y, height).
+    fn level(&self) -> (i32, i32);
     fn surface_sample(
         &self,
         worker: &mut WorkerState,
@@ -1843,6 +1845,9 @@ where
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
+    }
+    fn level(&self) -> (i32, i32) {
+        (self.settings.level_min_y, self.settings.level_height)
     }
     fn structure_starts(
         &self,
@@ -2513,6 +2518,10 @@ impl OverworldGenerator {
     }
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
+    }
+    /// The dimension's build range (minimum Y, height): what its chunks span.
+    pub fn level(&self) -> (i32, i32) {
+        self.pipeline.level()
     }
     /// Placed features of this dimension's biomes that decoration skips because
     /// their algorithm or bindings are not implemented, with the decode error.
