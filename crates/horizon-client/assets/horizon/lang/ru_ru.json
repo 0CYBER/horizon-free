@@ -11,5 +11,7 @@
   "horizon.options.look_deadzone": "Мёртвая зона обзора",
   "horizon.options.button_glyphs": "Символы кнопок",
   "horizon.options.menu_navigation": "Навигация по меню",
-  "horizon.options.on_screen_keyboard": "Экранная клавиатура"
+  "horizon.options.on_screen_keyboard": "Экранная клавиатура",
+  "options.audioDevice": "Устройство вывода",
+  "options.audioDevice.default": "По умолчанию"
 }

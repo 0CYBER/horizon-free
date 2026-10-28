@@ -128,6 +128,7 @@ impl Opt {
             Opt::RotateWithMinecarts => "rotateWithMinecart",
             Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
             Opt::MusicFrequency => "musicFrequency",
+            Opt::SoundDevice => "soundDevice",
             _ => return None,
         })
     }
@@ -144,6 +145,7 @@ impl Opt {
             Opt::DiscreteScroll => "options.discrete_mouse_scroll",
             Opt::AllowCursorChanges => "options.allowCursorChanges",
             Opt::Volume(_) => "soundCategory.master",
+            Opt::SoundDevice => "options.audioDevice",
             Opt::GuiScale => "options.guiScale",
             Opt::ViewBobbing => "options.viewBobbing",
             Opt::Gamma => "options.gamma",
@@ -527,6 +529,13 @@ impl Opt {
             Opt::ReducedDebugInfo => on_off(s.reduced_debug_info),
             Opt::HighContrast => on_off(s.high_contrast),
             Opt::ShowSubtitles => on_off(s.show_subtitles),
+            Opt::SoundDevice => {
+                if s.sound_device.is_empty() {
+                    tr("options.audioDevice.default")
+                } else {
+                    Text::literal(&s.sound_device)
+                }
+            }
             Opt::MusicFrequency => tr([
                 "options.music_frequency.default",
                 "options.music_frequency.frequent",
@@ -713,6 +722,23 @@ impl Opt {
             Opt::ReducedDebugInfo => s.reduced_debug_info = !s.reduced_debug_info,
             Opt::HighContrast => s.high_contrast = !s.high_contrast,
             Opt::ShowSubtitles => s.show_subtitles = !s.show_subtitles,
+            Opt::SoundDevice => {
+                let devices = crate::audio::output_devices();
+                let mut all = vec![String::new()];
+                for d in devices {
+                    if !all.contains(&d) {
+                        all.push(d);
+                    }
+                }
+                let current_idx = all.iter().position(|d| d == &s.sound_device).unwrap_or(0);
+                let count = all.len();
+                let next_idx = if back {
+                    (current_idx + count - 1) % count
+                } else {
+                    (current_idx + 1) % count
+                };
+                s.sound_device = all[next_idx].clone();
+            }
             Opt::MusicFrequency => {
                 let n = next(s.file.int("musicFrequency").clamp(0, 2) as u8, 3);
                 s.file
@@ -1439,6 +1465,7 @@ impl OptionsUi {
                 // SoundOptionsScreen: Music Frequency starts the next row (with
                 // Music Toast, not in Horizon yet).
                 rows.extend(pairs(&[Opt::MusicFrequency]));
+                rows.push(Row::Big(Opt::SoundDevice));
                 rows
             }
             Page::Controls => {
@@ -4271,5 +4298,30 @@ mod tests {
         }
         ui.stack = vec![Page::Main, Page::Controls];
         assert!(pushes(&mut ui).contains(&Page::Controller));
+    }
+
+    #[test]
+    fn sound_device_button_in_sound_page_and_cycles() {
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Sound);
+        let rows = ui.list_rows(&s);
+        assert!(
+            rows.iter().any(|r| matches!(r, Row::Big(Opt::SoundDevice))),
+            "Sound page should contain Row::Big(Opt::SoundDevice)"
+        );
+        assert_eq!(s.sound_device, "");
+        let devices = crate::audio::output_devices();
+        let count = 1 + devices.len();
+        // Cycling forward 'count' times wraps around back to the initial selection ("")
+        for _ in 0..count {
+            Opt::SoundDevice.cycle(&mut s, false, [854, 480]);
+        }
+        assert_eq!(s.sound_device, "");
+        // Cycling backward 'count' times also wraps around back to ""
+        for _ in 0..count {
+            Opt::SoundDevice.cycle(&mut s, true, [854, 480]);
+        }
+        assert_eq!(s.sound_device, "");
     }
 }
