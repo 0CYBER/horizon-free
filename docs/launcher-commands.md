@@ -578,6 +578,24 @@ Turn a pack off and move it to the system's trash.
 
 MCP: `packs_remove`, needs `confirm: true`.
 
+## `horizon-launcher java list`
+
+The Java runtimes Horizon downloaded from Mojang and the ones installed on this computer.
+
+    horizon-launcher java list
+
+MCP: `java_list`.
+
+## `horizon-launcher java install`
+
+Download Mojang's Java runtime: a major (8, 16, 17, 21, 25) or a component name from a version's JSON (java-runtime-delta).
+
+    horizon-launcher java install <JAVA>
+
+- `JAVA`
+
+MCP: `java_install`.
+
 ## `horizon-launcher screenshots list`
 
 The screenshots, the newest first, with their files (the default).
