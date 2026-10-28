@@ -1119,10 +1119,12 @@ pub enum MobEvent {
     /// The mob the `Explode` right after this comes from
     /// (`ServerExplosion.source`), and whether it is a charged creeper: the
     /// exploding creeper is already out of the mob list when the game applies
-    /// the blast, so its victims' loot cannot look it up.
+    /// the blast, so its victims' loot cannot look it up, nor the death
+    /// message its name (`name`, `getDisplayName`).
     ExplosionSource {
         mob: u32,
         charged: bool,
+        name: crate::text::Text,
     },
     /// The centre, the radius and the kind of the mob blowing up (it may be
     /// gone from the list by the time the blast is handled).

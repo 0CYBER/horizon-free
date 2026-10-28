@@ -1258,14 +1258,18 @@ impl Game<'_> {
                     owner,
                 } => self.add_fangs(at, yaw, delay, owner),
                 MobEvent::Shoot(..) => {}
-                MobEvent::ExplosionSource { mob, charged } => {
+                MobEvent::ExplosionSource { mob, charged, name } => {
                     self.combat.explosion_source = Some(mob);
+                    // The creeper causes the blast's damage, but it is out of
+                    // the mob list already: its name comes with the event.
+                    self.note_named_attacker("minecraft:explosion", mob, name);
                     if charged {
                         self.combat.charged_exploders.push(mob);
                     }
                 }
                 MobEvent::Explode(at, radius, species) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
+                    let noted = self.combat.explosion_source.is_some();
                     let source_mob = self.combat.explosion_source.or_else(|| {
                         self.mobs
                             .iter()
@@ -1276,7 +1280,7 @@ impl Game<'_> {
                             .map(|m| m.id)
                             .next()
                     });
-                    if let Some(id) = source_mob {
+                    if !noted && let Some(id) = source_mob {
                         self.note_attacker("minecraft:explosion", id);
                     }
                     self.combat.explosion_source = source_mob;
