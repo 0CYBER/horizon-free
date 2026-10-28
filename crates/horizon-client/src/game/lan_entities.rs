@@ -167,6 +167,24 @@ impl Game<'_> {
                 e.meta.push((15, serializer::BYTE, Value::Byte(flags)));
             }
             e.meta.extend(stand_poses(a));
+            // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE: a hologram's text.
+            if let Some(name) = &a.custom_name {
+                e.meta.push((
+                    2,
+                    serializer::OPTIONAL_COMPONENT,
+                    Value::OptText(Some(horizon_client::scoreboard::json_to_tag(
+                        &name.component(),
+                    ))),
+                ));
+                if a.name_visible {
+                    e.meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
+                }
+            }
+            // A name taken away or hidden again (`/data`) is sent as none / false.
+            e.defaults
+                .push((2, serializer::OPTIONAL_COMPONENT, Value::OptText(None)));
+            e.defaults
+                .push((3, serializer::BOOLEAN, Value::Bool(false)));
             // A pose put back to its default (`/data`) is sent as that default.
             e.defaults.push((15, serializer::BYTE, Value::Byte(0)));
             for (i, default) in horizon_client::entities::ArmorStand::DEFAULT_POSE
