@@ -214,7 +214,6 @@ use horizon_client::{
     audio::Audio,
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
-    chunk::{HEIGHT, MIN_Y},
     clock::FixedStep,
     collisions,
     containers::{BlockEntity, Providers},
@@ -939,7 +938,10 @@ impl LevelAccess for GameLevel<'_> {
         self.world.block(pos.x, pos.y, pos.z)
     }
     fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
-        if !self.world.loaded(pos.x, pos.z) || pos.y < MIN_Y || pos.y >= MIN_Y + HEIGHT {
+        if !self.world.loaded(pos.x, pos.z)
+            || pos.y < self.world.bottom_y()
+            || pos.y >= self.world.top_y()
+        {
             return None;
         }
         let previous = self.world.block(pos.x, pos.y, pos.z);
@@ -950,19 +952,11 @@ impl LevelAccess for GameLevel<'_> {
         self.world.loaded(pos.x, pos.z)
     }
     fn min_y(&self) -> i32 {
-        if self.dimension != LevelDimension::Overworld {
-            0
-        } else {
-            MIN_Y
-        }
+        self.world.shape.min_y
     }
     fn max_y(&self) -> i32 {
         // Exclusive, as LevelAccess::max_y documents.
-        if self.dimension != LevelDimension::Overworld {
-            256
-        } else {
-            MIN_Y + HEIGHT
-        }
+        self.world.shape.max_y()
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -1999,25 +1993,15 @@ impl Dim {
     }
     /// `Level.getMinY`: the dimension type's minimum y.
     fn min_y(self) -> i32 {
-        match self {
-            Self::Overworld => MIN_Y,
-            Self::Nether | Self::End => 0,
-        }
+        self.shape().min_y
     }
     /// `DimensionType.logicalHeight`.
     fn logical_height(self) -> i32 {
-        match self {
-            Self::Overworld => HEIGHT,
-            Self::Nether => 128,
-            Self::End => 256,
-        }
+        self.shape().logical_height
     }
     /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
     fn max_y(self) -> i32 {
-        match self {
-            Self::Overworld => MIN_Y + HEIGHT - 1,
-            Self::Nether | Self::End => 255,
-        }
+        self.shape().max_y() - 1
     }
 }
 fn facing_offset(facing: &str) -> [i32; 3] {
@@ -3859,7 +3843,7 @@ impl Game<'_> {
         // FallingBlockEntity.tick: off the ground, it gives up after 600
         // ticks (100 outside the world) and drops itself as an item.
         let y = next.y.floor() as i32;
-        let outside = y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
+        let outside = y <= self.world.bottom_y() || y >= self.world.top_y();
         if !on_ground && (f.age > 100 && outside || f.age > 600) {
             return Ok(if f.drop_item && entity_drops {
                 FallStep::Dropped(next)
@@ -4952,8 +4936,8 @@ impl Game<'_> {
             }
             return None;
         }
-        let mut y = MIN_Y + HEIGHT - 1;
-        while y > MIN_Y {
+        let mut y = self.world.top_y() - 1;
+        while y > self.world.bottom_y() {
             let s = self.world.block(x, y, z);
             if !self.res.facts().is_air(s) {
                 let f = self.res.facts().get(s);
@@ -5447,7 +5431,7 @@ impl Game<'_> {
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
-        if player.position.y < f64::from(MIN_Y - 64) {
+        if player.position.y < f64::from(self.world.bottom_y() - 64) {
             // Out of the world.
             let _ = player.set_health(0.0, false);
         }
@@ -9282,6 +9266,7 @@ impl Game<'_> {
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
+        world.shape = target.shape();
         world.fast_lava = target == Dim::Nether;
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
@@ -10842,7 +10827,7 @@ impl Game<'_> {
     /// `LevelExtractor.allChanged`: every loaded section is rebuilt.
     fn all_sections_changed(&mut self) {
         for &(x, z) in self.world.chunks.keys() {
-            for sy in 0..horizon_client::chunk::HEIGHT / 16 {
+            for sy in 0..self.world.layout().height() / 16 {
                 self.world.dirty_sections.insert((x, sy, z));
             }
         }

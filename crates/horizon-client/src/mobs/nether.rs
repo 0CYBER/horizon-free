@@ -287,7 +287,7 @@ impl Goal for RandomFloatAround {
         let mut t = [c.x + r(), c.y + r(), c.z + r()];
         let top =
             cx.w.motion_blocking_height(t[0].floor() as i32, t[2].floor() as i32);
-        if f64::from(top) < t[1].floor() && top > crate::chunk::MIN_Y {
+        if f64::from(top) < t[1].floor() && top > cx.w.world.bottom_y() {
             t[1] = c.y - (c.y - t[1]).abs();
         }
         m.ai.mov.set_wanted(t[0], t[1], t[2], 1.0);

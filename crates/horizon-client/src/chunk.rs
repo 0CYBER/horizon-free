@@ -160,6 +160,13 @@ impl ColumnLayout {
         self.min_y + index as i32 * 16
     }
 }
+/// `true` for each section of `layout`: what callers that keep no
+/// per-section record (of fluids, say) pass as "every section may have it".
+pub fn every_section(layout: ColumnLayout) -> &'static [bool] {
+    static ALL: [bool; crate::section_mask::SectionMask::CAPACITY] =
+        [true; crate::section_mask::SectionMask::CAPACITY];
+    &ALL[..layout.sections()]
+}
 impl Default for ColumnLayout {
     fn default() -> Self {
         Self::VANILLA

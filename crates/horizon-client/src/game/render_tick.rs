@@ -6,7 +6,6 @@ use horizon_client::{
     animate_tick::{AnimateContext, animate_tick, campfire_particles, marker_particle_target},
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
-    chunk::{HEIGHT, MIN_Y},
     containers::BlockEntity,
     particles::{ParticleLevel, ParticleOptions, ParticleType},
     world::World,
@@ -31,8 +30,8 @@ fn motion_blocking_leaves(
     from: i32,
     leaves: bool,
 ) -> i32 {
-    let mut y = from.min(MIN_Y + HEIGHT - 1);
-    while y > MIN_Y {
+    let mut y = from.min(world.top_y() - 1);
+    while y > world.bottom_y() {
         let f = facts.get(world.block(x, y, z));
         // #minecraft:leaves block motion, but MOTION_BLOCKING_NO_LEAVES skips them
         // (their water still counts).
@@ -46,7 +45,7 @@ fn motion_blocking_leaves(
         }
         y -= 1;
     }
-    MIN_Y
+    world.bottom_y()
 }
 /// `Biome.getPrecipitationAt` is rain (not snow) at this position.
 fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
@@ -366,7 +365,7 @@ impl Game<'_> {
                     let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
                     let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
                     let top = motion_blocking(world, facts, x, z, block[1] + 64);
-                    if top <= MIN_Y
+                    if top <= self.world.bottom_y()
                         || top > block[1] + 10
                         || top < block[1] - 10
                         || !rains_at(world, biomes, x, top, z)
@@ -418,8 +417,7 @@ impl Game<'_> {
                     self.rain_sound_time += 1;
                     if random.next_int_bound(3).unwrap_or(0) < waited {
                         self.rain_sound_time = 0;
-                        let roof =
-                            motion_blocking(world, facts, block[0], block[2], MIN_Y + HEIGHT);
+                        let roof = motion_blocking(world, facts, block[0], block[2], world.top_y());
                         let (name, volume, pitch) = if at[1] > block[1] + 1 && roof > block[1] {
                             ("minecraft:weather.rain.above", 0.1, 0.5)
                         } else {

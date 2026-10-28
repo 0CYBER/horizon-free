@@ -402,13 +402,12 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
-            let y0 = MIN_Y + s as i32 * 16;
+            let y0 = self.world.bottom_y() + s as i32 * 16;
             // Without a sculk state in its palette, no block of the section
             // is one: most sections are passed over without reading a block.
             if !section.blocks.maybe_has(|v| self.kind_of_state(v) != 0) {
