@@ -174,15 +174,15 @@ pub struct Instance {
 }
 
 impl Instance {
-    /// Ok when it plays Horizon; a Java instance's refusal, until the launcher starts the real
-    /// game.
+    /// Ok when it plays Horizon; a Java instance's refusal, until the window starts the real
+    /// game (`backend::java_game`).
     fn horizon(&self) -> Result<(), String> {
         match &self.java {
             None => Ok(()),
             Some(java) => Err(format!(
-                "{} plays Minecraft {} (Java Edition), which this launcher can't start yet: playing \
-                 Java instances comes in a coming update.",
-                self.name, java.minecraft
+                "{} plays Minecraft {} (Java Edition), which the window can't start yet: \
+                 `horizon-launcher play --instance \"{}\"` starts it.",
+                self.name, java.minecraft, self.name
             )),
         }
     }

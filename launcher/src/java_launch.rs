@@ -22,6 +22,12 @@ pub struct Player {
     pub xuid: String,
 }
 
+impl std::fmt::Debug for Player {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Player({}, <token hidden>)", self.name)
+    }
+}
+
 /// Everything the command needs besides the version JSON.
 pub struct Launch<'a> {
     /// Holds `versions/`, `libraries/`, `assets/`.

@@ -614,7 +614,8 @@ enum Cmd {
     Play {
         #[arg(long)]
         version: Option<String>,
-        /// The instance to play (its name or id; default: the selected one)
+        /// The instance to play (its name or id; default: the selected one). A Java instance
+        /// starts its Minecraft: Java Edition, downloaded with its Java the first time
         #[arg(long)]
         instance: Option<String>,
         /// Open or create this world (a folder under saves) at once
@@ -1122,6 +1123,28 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 Some(name) => instances::find(&name)?,
                 None => instances::selected(),
             };
+            if instance.java.is_some() {
+                if version.is_some()
+                    || world.is_some()
+                    || join.is_some()
+                    || server.is_some()
+                    || creative
+                {
+                    return Err(format!(
+                        "{} plays Minecraft: Java Edition: --version, --world, --creative, --join \
+                         and --server are for Horizon instances.",
+                        instance.name
+                    ));
+                }
+                let mut cmd = backend::java_game(&instance, &|line| eprintln!("{line}"))?;
+                cmd.args(arg);
+                let started = std::time::Instant::now();
+                let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
+                if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
+                    eprintln!("Play time not saved: {e}");
+                }
+                return played;
+            }
             let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
             instances::apply(&mut cmd, &instance)?;
             if let Some(code) = join {
