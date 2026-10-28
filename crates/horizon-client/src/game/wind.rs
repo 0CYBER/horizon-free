@@ -570,11 +570,15 @@ impl Game<'_> {
         poses.yrot("wind", age * 16.0_f32.to_radians());
         let base = glam::Mat4::from_translation(at)
             * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
-        horizon_client::mobs::render::draw(
+        horizon_client::mobs::render::draw_scrolled(
             model,
             base,
             &poses,
             [r.u0, r.v0, r.u1, r.v1],
+            horizon_client::mobs::render::scroll_offset(
+                age,
+                horizon_client::mobs::render::WIND_CHARGE_SCROLL,
+            ),
             0xFFFF_FFFF,
             light,
             0,
