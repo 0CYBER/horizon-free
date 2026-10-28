@@ -7,7 +7,7 @@ RETURN, MODIFY_ARG, OVERWRITE...; the tool's README lists them). A port such as 
 one module. Start a mod from [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template).
 
 Native mods are native code with the player's rights, not sandboxed. The launcher offers them off by default, behind
-a warning, reviewed before the registry lists one, and in a game and an instance of their own.
+a warning, reviewed before the registry lists one, and in a game of their own, built for the instance they are installed in.
 
 ## Pinned to a Nightly
 
@@ -21,9 +21,12 @@ pin builds on the commit of the installed version the build starts from.
 
 ## What the launcher does
 
-`horizon-launcher native-build FOLDER --trust-native-code` (the window's switch and Mods page come next). FOLDER
-is a bundle, an unpacked `.hnmod`, or a folder of them. It is not an MCP tool: trusting native code is the
-player's decision, never an agent's.
+In the window: install a native mod from the Mods page, turn on Settings → Game → **Native mods (experimental)**,
+then **Build**. The launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the
+row shows each step, the error if one fails, and the build the instance plays. From the command line:
+`horizon-launcher native-build [FOLDER] [--instance NAME] --trust-native-code`. FOLDER is a bundle, an unpacked
+`.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
+trusting native code is the player's decision, never an agent's.
 
 1. **Rust.** The launcher's own toolchain ([`rust_toolchain`](../launcher/src/rust_toolchain.rs)): Rust 1.99.1's
    official `rustc`, `cargo` and `rust-std` (and `rust-mingw` on Windows), each pinned by SHA-256, downloaded once
@@ -45,7 +48,8 @@ player's decision, never an agent's.
    horizon-mixins diagnostic in one line).
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
-   saying which commit, mods, horizon-mixins and Rust made it. The **Native mods** instance plays it.
+   saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
+   folder built from the command line, or mods of the default home, go to the **Native mods** instance).
 
 ## Cache and disk
 
@@ -66,16 +70,17 @@ Measured 2026-10-28 on the Mac mini (M4 Pro, 14 cores) with Veinminer 0.3.0 on N
 | Rebuild after a helper's code changed | 2 min 46 s of compiling (only `horizon-client`), 2 min 53 s in all |
 | A change horizon-mixins ignores (a comment) | nothing compiled; 31 s, mostly the version folder's copy |
 
-Only the newest native build is kept (`native_mods::prune`); `native/target/` stays for the next one.
+Only the native builds an instance plays are kept (`native_mods::prune`); `native/target/` stays for the next one.
 
 ## Trust
 
-- **Off by default.** The command needs `--trust-native-code`; the window will show a warning in red before every
-  build: the mods run with full access to the computer, their ids and versions, and who made them.
+- **Off by default.** The command needs `--trust-native-code`; the window shows a warning in red before every
+  build: the mods run with full access to the computer, and their ids and versions. The Mods page says who made
+  each one, and "Not made or endorsed by the Horizon project" for any mod not Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
   has read the source: the `.hnmod` *is* the source (only `.rs` and `.toml`, checked without running anything),
   pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
-- **Isolation of data.** The Native mods instance has its own worlds, options and logs.
+- **Isolation of data.** Native mods run only in the instance built for them, with its own worlds, options and logs.
 - What this does not do: sandbox the compiled game. horizon-mixins' checks stop mistakes, not a malicious helper
   ([security notes](https://github.com/horizon-rust/horizon-mixins/blob/main/docs/security.md)).
 
@@ -88,7 +93,6 @@ Only the newest native build is kept (`native_mods::prune`); `native/target/` st
 
 ## Left to do
 
-- The window: a Native mods switch, `native-mod` entries on the Mods page, the warning and the progress screen.
 - Rebuild after the mods or the Nightly change (asking first, as it compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
 - Windows and Linux: the toolchains are pinned, but a full game build on them is unproven.
