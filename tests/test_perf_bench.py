@@ -199,3 +199,13 @@ class PortabilityTests(unittest.TestCase):
                 log.write_text(dev)
                 self.assertIsNone(release_version(log))
             self.assertIsNone(release_version(Path(tmp) / "missing.log"))
+
+    def test_vanilla_gets_the_manifest_jvm_flags(self):
+        from tools.perf_bench import manifest_jvm_flags
+        manifest = {"arguments": {"jvm": [
+            {"rules": [{"action": "allow", "os": {"name": "osx"}}], "value": ["-XstartOnFirstThread"]},
+            {"rules": [{"action": "allow", "os": {"arch": "x86"}}], "value": "-Xss1M"},
+            "-XX:StackShadowPages=32", "--enable-native-access=ALL-UNNAMED",
+            "-Djava.library.path=${natives_directory}/java", "-cp", "${classpath}"]}}
+        self.assertEqual(manifest_jvm_flags(manifest), ["-XX:StackShadowPages=32"])
+        self.assertEqual(manifest_jvm_flags({}), [])

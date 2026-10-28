@@ -566,6 +566,13 @@ def vanilla_classpath(manifest):
     return jars
 
 
+def manifest_jvm_flags(manifest):
+    """The -XX flags the version manifest gives every OS, which the official launcher passes. 26.3's
+    -XX:StackShadowPages=32 matters: without it, about half of the starts on Windows crash (EXCEPTION_ACCESS_VIOLATION
+    under shaderc.dll, no hs_err file) while the client compiles its shaders, before the title screen."""
+    return [a for a in manifest.get("arguments", {}).get("jvm", []) if isinstance(a, str) and a.startswith("-XX:")]
+
+
 def extract_natives(jars, target):
     target.mkdir(parents=True, exist_ok=True)
     for jar in jars:
@@ -649,7 +656,7 @@ def run_vanilla(args, distance):
     (assets / "indexes").mkdir(parents=True, exist_ok=True)
     java = Path(os.environ["JAVA_HOME"]) / "bin/java" if os.environ.get("JAVA_HOME") else "java"
     command = [str(java), f"-Xmx{args.heap}", *LAUNCHER_JVM,
-               *runtime.conditional_client_jvm_options(manifest),
+               *runtime.conditional_client_jvm_options(manifest), *manifest_jvm_flags(manifest),
                "--enable-native-access=ALL-UNNAMED",
                f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
                f"-Dhorizon.bench.script={script}", f"-Dhorizon.bench.out={events}",
