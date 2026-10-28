@@ -5779,7 +5779,10 @@ impl Game<'_> {
             Some(None) => return,
             Some(Some((count, capped))) => {
                 batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                carried = self.carried.clone().map(|c| ItemStack { count: *count, ..c });
+                carried = self
+                    .carried
+                    .clone()
+                    .map(|c| ItemStack { count: *count, ..c });
                 (carried.as_ref(), *capped)
             }
             None => (stack.as_ref(), false),
