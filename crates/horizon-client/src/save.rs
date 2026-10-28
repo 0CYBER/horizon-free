@@ -4454,11 +4454,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("horizon-lock-{}", std::process::id()));
         let first = super::SessionLock::acquire(&dir).expect("first lock");
         assert!(super::SessionLock::acquire(&dir).is_err());
+        drop(first);
+        // Read once the lock is gone: Windows locks are mandatory, and a
+        // locked file can't be read even by its own process.
         assert_eq!(
             std::fs::read(dir.join("session.lock")).unwrap(),
             [0x26, 0x03]
         );
-        drop(first);
         assert!(super::SessionLock::acquire(&dir).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }

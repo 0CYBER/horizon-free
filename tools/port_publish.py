@@ -115,7 +115,10 @@ def body(item, report, diff, store_path, limit=25):
                   for c, counts in sorted(details["items"].items(), key=lambda kv: -sum(kv[1].values()))[:limit]]
     if item["kind"] == "facts":
         lines += [f"- {key}: {a} → {b}" for key, (a, b) in details.items()]
-    where = str(store_path).replace(str(Path.home()), "~")
+    try:
+        where = "~/" + Path(store_path).relative_to(Path.home()).as_posix()
+    except ValueError:
+        where = Path(store_path).as_posix()
     lines += ["", f"The full diff stays on the maintainer's machine (`{where}`), with the vanilla files it was built "
               "from: they are never published.", END]
     text = "\n".join(lines) + "\n"
@@ -222,7 +225,7 @@ def apply(actions, report, open_issues):
 
 def issue(action, name, text, number, new):
     """Create or update one issue; its URL."""
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as stream:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as stream:
         stream.write(text)
     try:
         if action == "create":
