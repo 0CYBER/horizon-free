@@ -4,7 +4,7 @@ use super::Game;
 use horizon_client::{
     blocks::Fluid,
     music::{BackgroundMusic, Music, MusicFrequency, Situation},
-    sound_engine::{SoundEngine, SoundInstance, TickContext},
+    sound_engine::{SoundEngine, SoundInstance, Sounds, TickContext},
 };
 
 impl Game<'_> {
