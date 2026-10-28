@@ -89,7 +89,6 @@ impl Opt {
                 | Opt::DistortionEffects
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
-                | Opt::HighContrastBlockOutlines
                 // Saved, but nothing in rendering reads them yet.
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
@@ -652,6 +651,7 @@ impl Opt {
             Opt::TextBackground
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
+            | Opt::HighContrastBlockOutlines
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts => {
