@@ -14,7 +14,7 @@ use horizon_client::{
     chunk::Chunk,
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ExperienceOrb, ItemEntity},
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
     items::ItemStack,
     menu::Input,
     mobs::{Mob, MobType, Who},
@@ -5992,25 +5992,41 @@ impl Game<'_> {
         }
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
-        let shown = horizon_client::net::shown_address(&r.session.address);
-        for (i, line) in [r.status.as_str(), shown.as_str()].iter().enumerate() {
-            let tw = HudBatch::text_width(atlas, line);
-            batch.text(
-                atlas,
-                line,
-                (w - tw) / 2.0,
-                h / 2.0 - 12.0 + i as f32 * 12.0,
-                if i == 0 {
-                    u32::MAX
-                } else {
-                    rgba(160, 160, 160, 255)
-                },
-                true,
-            );
+        if r.joined {
+            // LevelLoadingScreen: the world's terrain comes in.
+            horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+            horizon_client::level_loading::draw(batch, atlas, None, None);
+            return true;
         }
-        let _ = r.joined;
+        let cancel = self.connect_cancel((w, h)).is_some();
+        let status = horizon_client::text::Text::literal(r.status.as_str());
+        horizon_client::level_loading::draw_connecting(batch, atlas, &status, self.cursor, cancel);
         true
+    }
+    /// Connected or connecting with no player yet: `ConnectScreen`, then
+    /// `LevelLoadingScreen`, over the panorama with its blur.
+    pub(super) fn remote_loading(&self) -> bool {
+        self.remote.is_some() && self.player.is_none()
+    }
+    /// `ConnectScreen`'s Cancel: a server's (single player's server isn't
+    /// joined through `ConnectScreen`), until the login is done.
+    fn connect_cancel(&self, (w, h): (f32, f32)) -> Option<(f32, f32)> {
+        let r = self.remote.as_ref()?;
+        (self.player.is_none() && !r.joined && self.integrated.is_none())
+            .then(|| horizon_client::level_loading::connect_cancel(w, h))
+    }
+    /// A click on `ConnectScreen`: Cancel aborts the connection
+    /// (`connect.aborted`) and goes back. Escape does nothing there
+    /// (`shouldCloseOnEsc` is false).
+    pub(super) fn connect_screen_click(&mut self) -> Result<()> {
+        let Some((x, y)) = self.connect_cancel(self.gui_size()) else {
+            return Ok(());
+        };
+        if horizon_client::ui::hovered(self.cursor, x, y, 200.0, 20.0) {
+            self.audio.play_button_click();
+            self.leave_server(None)?;
+        }
+        Ok(())
     }
     /// The server's death message; chat uses the shared ChatComponent.
     pub(super) fn remote_hud(&self, batch: &mut HudBatch) {
