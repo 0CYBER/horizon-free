@@ -159,5 +159,22 @@
   "Nightly builds": "每夜构建",
   "Plays in its own Nightly instance: your worlds and the release stay as they are.": "在单独的 Nightly 实例中运行：你的世界和正式版保持不变。",
   "The nightly could not be installed: {error}": "无法安装每夜构建：{error}",
-  "No nightly build yet.": "还没有每夜构建。"
+  "No nightly build yet.": "还没有每夜构建。",
+  "Can include pull requests not reviewed yet, picked by trusted reviewers; may break.": "可能包含受信任的审核者挑选的、尚未审核的拉取请求；可能出现问题。",
+  "Installing the nightly, {percent}%": "正在安装每夜构建，{percent}%",
+  "{version} in the Nightly instance. Choose Horizon in the sidebar to play the release.": "Nightly 实例中已安装 {version}。在侧栏选择 Horizon 即可游玩正式版。",
+  "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.": "此版本启动器未配置 Microsoft 登录（HORIZON_MSA_CLIENT_ID），因此无法启动游戏。",
+  "Sign in with a Microsoft account that owns Minecraft: Java Edition to play": "登录拥有 Minecraft: Java Edition 的 Microsoft 账户，即可开始游戏",
+  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.": "和其他启动器一样，Horizon 需要一个拥有 Minecraft: Java Edition 的 Microsoft 账户。你也可以使用自己的名称和皮肤游玩在线服务器。",
+  "Sign in": "登录",
+  "Sign in with Microsoft": "使用 Microsoft 账户登录",
+  "Not now": "暂不",
+  "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.": "和其他启动器一样，Horizon 需要一个拥有 Minecraft: Java Edition 的 Microsoft 账户。",
+  "Your worlds, offline names and settings stay where they are.": "你的世界、离线名称和设置保持不变。",
+  "Open {link} in your browser and enter this code:": "在浏览器中打开 {link}，然后输入此代码：",
+  "From my install": "使用已有安装",
+  "Download and prepare": "下载并准备",
+  "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.": "未准备。Horizon 可以为你的账户从 Mojang 下载 Minecraft {version}，也可以使用你已有的安装。",
+  "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.": "未准备。请先登录拥有 Minecraft {version} 的 Microsoft 账户。",
+  "Cancel": "取消"
 }
