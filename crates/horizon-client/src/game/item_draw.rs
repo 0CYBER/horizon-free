@@ -82,11 +82,11 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 /// `DateTimeFormatter.ofPattern(pattern).format(now)` for the month, day,
-/// year and time letters item models use (UTC: no time zone database).
+/// year and time letters item models use, in the system time zone
+/// (`LocalTime` without a `time_zone`).
 pub(super) fn local_time(pattern: &str) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now = chrono::Local::now();
+    let secs = now.timestamp() + i64::from(now.offset().local_minus_utc());
     let (y, mo, d) = civil(secs.div_euclid(86_400));
     let s = secs.rem_euclid(86_400);
     let (h, mi, se) = (s / 3600, s / 60 % 60, s % 60);
