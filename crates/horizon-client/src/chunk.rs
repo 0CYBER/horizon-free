@@ -243,6 +243,47 @@ pub fn free_columns<T: Send + 'static>(columns: T, count: usize) {
 pub fn set_block_states(states: usize) {
     let bits = horizon_core::paletted::ceil_log2(states).max(16);
     BLOCK_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+    forget_shared();
+}
+
+/// One allocation per kind of uniform section (a single block, a single
+/// biome and one light value), shared by every column that has it, keyed by
+/// (block, biome, light). A tall column is mostly such sections: air with
+/// full sky light above the terrain. Edits copy them (`Arc::make_mut`).
+type SharedSections = std::collections::HashMap<(u32, u32, u8), Arc<Section>>;
+static SHARED: std::sync::Mutex<Option<SharedSections>> = std::sync::Mutex::new(None);
+
+/// Replaces the uniform sections of `sections` with the shared ones.
+pub fn share_uniform(sections: &mut [Arc<Section>]) {
+    let key = |s: &Section| -> Option<(u32, u32, u8)> {
+        let Light::Uniform(light) = s.light else {
+            return None;
+        };
+        if s.blocks.bits() != 0 || s.biomes.bits() != 0 {
+            return None;
+        }
+        Some((s.blocks.uniform()?, s.biomes.uniform()?, light))
+    };
+    let Ok(mut shared) = SHARED.lock() else {
+        return;
+    };
+    let shared = shared.get_or_insert_with(Default::default);
+    for section in sections {
+        let Some(k) = key(section) else {
+            continue;
+        };
+        let one = shared.entry(k).or_insert_with(|| section.clone());
+        if !Arc::ptr_eq(one, section) {
+            *section = one.clone();
+        }
+    }
+}
+
+/// Forgets the shared sections, when the palette changes.
+fn forget_shared() {
+    if let Ok(mut shared) = SHARED.lock() {
+        *shared = None;
+    }
 }
 /// Packed light per block: sky light in the high nibble, block light in the low one.
 #[derive(Clone)]
@@ -374,13 +415,14 @@ impl Chunk {
         Self::with_layout(x, z, ColumnLayout::VANILLA)
     }
     pub fn with_layout(x: i32, z: i32, layout: ColumnLayout) -> Self {
+        let mut one = [Arc::new(Section::default())];
+        share_uniform(&mut one);
+        let [empty] = one;
         Self {
             x,
             z,
             min_y: layout.min_y(),
-            sections: (0..layout.sections())
-                .map(|_| Arc::new(Section::default()))
-                .collect(),
+            sections: (0..layout.sections()).map(|_| empty.clone()).collect(),
             surface: OnceLock::new(),
             motion_blocking: OnceLock::new(),
             lit: false,
