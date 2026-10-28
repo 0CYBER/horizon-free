@@ -449,6 +449,12 @@ than main's head and holds something main lacks, otherwise main (`tools/ci/night
 new publishes nothing. A Nightly can include pull requests not reviewed yet: that is what it is for, playing them
 before the gate.
 
+Every Nightly ships its exact source. Its notes name the commit; `horizon-source.tar.gz` on the release is that
+commit's `git archive`, signed with the builds in `SHA256SUMS`; and `nightly.py keep-source` tags the commit
+`nightly-source/<date>-<short>`. That tag is never pruned, unlike the `nightly-<date>` release and the
+`nightly/build-*` branch (7 days each), because native mods pin a Nightly's commit and the launcher downloads that
+commit's source to build them ([native-mods.md](native-mods.md)).
+
 ### Trusted reviewers
 
 One list, `.github/trusted-reviewers.txt`, governs two things for the people on it (kacpherek, rdbtCVS and
