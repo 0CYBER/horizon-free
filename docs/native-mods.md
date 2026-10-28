@@ -19,6 +19,19 @@ builds after its Nightly is replaced. All the mods of one build must pin the sam
 launcher says which mod pins which, and the player installs versions made for the same Nightly. A bundle with no
 pin builds on the commit of the installed version the build starts from.
 
+### Mods on the hook points
+
+A mod that hooks only Horizon's native hook points (`crates/horizon-client/src/game/native_hooks.rs`: empty
+functions the game calls at fixed places, plus helpers, kept stable across releases) can name the version it
+needs instead of pinning: `"hooks": 1` in its `.hnmod`'s `horizon-native.json`, the `NATIVE_HOOKS_API` of that
+file when it was made. Hook points are only ever added: each addition raises `NATIVE_HOOKS_API`, and a mod builds
+on any Horizon whose version is the one it needs or a later one. Its `horizon` is then only the commit it was tested on. The launcher builds it on the commit the other mods
+pin, else on the installed version's commit (the game the player plays), after checking that commit's
+`NATIVE_HOOKS_API` (read from GitHub) is at least the mod's; when it isn't and nothing pins, it builds on the commit the
+mod was tested on. In its own copy of the mod it sets `horizon_revision` to the commit it builds on. Horizon's
+official mods (Zoom, FPS counter, Keystrokes, Minimap, Recipes) are made this way, so any of them build together
+with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page, turn on Settings → Game → **Native mods (experimental)**,
