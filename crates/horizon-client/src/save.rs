@@ -2673,6 +2673,21 @@ pub struct Level {
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// `PrimaryLevelData.setDifficulty`: the level data holds the world's
+    /// difficulty, so the game and the file follow each other and a world
+    /// that was set to hard is hard when it is opened again.
+    pub fn set_difficulty(&mut self, difficulty: u8) {
+        self.difficulty = crate::title::DIFFICULTIES[difficulty as usize % 4].to_owned();
+    }
+
+    /// `PrimaryLevelData.getDifficulty`: the id of the level data's
+    /// difficulty (peaceful 0 .. hard 3), normal when it is not one of them.
+    pub fn difficulty_id(&self) -> u8 {
+        crate::title::DIFFICULTIES
+            .iter()
+            .position(|d| *d == self.difficulty)
+            .map_or(2, |i| i as u8)
+    }
     /// Initialize the offline single-player identity before saving or dropping items.
     pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
         *self.player_uuid.get_or_insert_with(|| {
@@ -4916,6 +4931,36 @@ mod tests {
             section(Tag::Byte(0), None, Some(Tag::ByteArray(varied))),
         ]));
     }
+    /// #2571: the difficulty is a property of the world: the level data
+    /// holds it, so a world that was set to hard is hard when it is opened
+    /// again, and a world that was downloaded keeps the difficulty it was
+    /// made with.
+    #[test]
+    fn the_level_data_holds_the_difficulty() {
+        let dir = std::env::temp_dir().join(format!("horizon-difficulty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut level = Level {
+            name: "Test".into(),
+            ..Level::default()
+        };
+        // The world's difficulty is the level data's.
+        level.set_difficulty(3);
+        assert_eq!(level.difficulty, "hard");
+        assert_eq!(level.difficulty_id(), 3);
+        // It survives the save, so the world comes back with it.
+        level.write(&dir).unwrap();
+        let back = Level::read(&dir).unwrap();
+        assert_eq!(back.difficulty, "hard");
+        assert_eq!(back.difficulty_id(), 3);
+        // A world whose difficulty is not one of ours is normal.
+        let other = Level {
+            difficulty: "extreme".into(),
+            ..Level::default()
+        };
+        assert_eq!(other.difficulty_id(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn level_round_trips_through_the_vanilla_files() {
         let dir = std::env::temp_dir().join(format!("horizon-level-{}", std::process::id()));
