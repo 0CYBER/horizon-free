@@ -44,8 +44,16 @@ impl Game<'_> {
     }
 
     /// `ServerPlayer.getKnownMovement` of the acting player: what they moved
-    /// in the last tick. A guest's comes with their moves.
+    /// in the last tick. A guest's comes with their moves. A rider's is its
+    /// mount's move (`getKnownSpeed`: the vehicle's, or the move the driver's
+    /// client sent for it), so a charge on horseback carries the horse's speed.
     fn known_player_movement(&self) -> Vec3 {
+        if let Some(i) = self
+            .riding
+            .and_then(|v| self.mobs.iter().position(|m| m.id == v))
+        {
+            return self.mob_speed(i).scale(1.0 / 20.0);
+        }
         if self.lan_acting.is_some() {
             return self.known_movement;
         }
