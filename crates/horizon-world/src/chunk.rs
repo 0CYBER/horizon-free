@@ -345,15 +345,22 @@ impl ChunkData {
 /// of one state costs a compare, and no section allocates a hash table.
 fn id_in(
     palette: &[BlockStateId],
+    counts: &[u16],
     last: &mut Option<(BlockStateId, u32)>,
     state: BlockStateId,
 ) -> Option<u32> {
     if let Some((seen, id)) = *last
         && seen == state
+        && counts[id as usize] != 0
     {
         return Some(id);
     }
-    let id = palette.iter().position(|&v| v == state)? as u32;
+    // A dead slot is still on `free`; reviving it without removing it there
+    // would let the next new state overwrite it. Only live slots count.
+    let id = palette
+        .iter()
+        .zip(counts)
+        .position(|(&v, &count)| count != 0 && v == state)? as u32;
     *last = Some((state, id));
     Some(id)
 }
@@ -435,7 +442,7 @@ impl<'r> BlockSection<'r> {
         if old == state {
             return Ok(old);
         }
-        let id = match id_in(&self.palette, &mut self.last, state) {
+        let id = match id_in(&self.palette, &self.counts, &mut self.last, state) {
             Some(id) => id,
             None if self.counts[old_id as usize] == 1 => {
                 // Replacing the last occurrence can reuse its slot without repacking.
@@ -493,7 +500,7 @@ impl<'r> BlockSection<'r> {
         self.counts.clear();
         self.free.clear();
         for state in &values {
-            if let Some(id) = id_in(&self.palette, &mut self.last, *state) {
+            if let Some(id) = id_in(&self.palette, &self.counts, &mut self.last, *state) {
                 self.counts[id as usize] += 1;
             } else {
                 self.palette.push(*state);
@@ -508,7 +515,7 @@ impl<'r> BlockSection<'r> {
             let mut storage = PackedStorage::new(bits, 4096).map_err(|e| invalid(e.to_string()))?;
             let mut last = None;
             for (i, state) in values.iter().enumerate() {
-                let id = id_in(&self.palette, &mut last, *state).unwrap();
+                let id = id_in(&self.palette, &self.counts, &mut last, *state).unwrap();
                 storage.set(i, id).unwrap();
             }
             Some(storage)
@@ -594,12 +601,21 @@ mod tests {
         if old == state {
             return Ok(old);
         }
-        let old_id = section.palette.iter().position(|&s| s == old).unwrap() as u32;
+        // Dead slots stay in `palette` but are on the free list: the old map
+        // removed them, so only live entries count for either lookup.
+        let old_id = section
+            .palette
+            .iter()
+            .enumerate()
+            .find(|&(id, &s)| s == old && section.counts[id] != 0)
+            .map(|(id, _)| id as u32)
+            .unwrap();
         let known = section
             .palette
             .iter()
-            .position(|&s| s == state)
-            .map(|id| id as u32);
+            .enumerate()
+            .find(|&(id, &s)| s == state && section.counts[id] != 0)
+            .map(|(id, _)| id as u32);
         if section.counts[old_id as usize] == 1 && known.is_none() {
             section.palette[old_id as usize] = state;
             return Ok(old);
@@ -714,6 +730,20 @@ mod tests {
             }
             assert_eq!(base.to_nbt().unwrap(), fast.to_nbt().unwrap());
         }
+    }
+
+    /// A lookup must not revive a freed palette slot: the next new state pops
+    /// that slot off the free list and would silently overwrite it.
+    #[test]
+    fn lookups_do_not_revive_freed_palette_slots() {
+        let registry = benchmark_registry(8);
+        let mut section = BlockSection::uniform(BlockStateId(0), &registry).unwrap();
+        for (index, state) in [(3, 3), (0, 1), (0, 0), (1, 1), (2, 2)] {
+            section.set(index, BlockStateId(state)).unwrap();
+        }
+        assert_eq!(section.get(1).unwrap(), BlockStateId(1));
+        assert_eq!(section.get(2).unwrap(), BlockStateId(2));
+        assert_eq!(section.get(3).unwrap(), BlockStateId(3));
     }
 
     /// `set` and `get` against the pre-optimization implementations, on the same
