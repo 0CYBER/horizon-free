@@ -2,11 +2,12 @@
 """The port ledger: every vanilla method next to the Horizon functions that port it, both ways, and the gaps.
 
 vanilla_map.py maps vanilla classes to the files that name them. The ledger goes one level down and both
-ways: each vanilla method (from the decompiled sources) to the Rust functions, with their line spans, whose
-comments cite it (`Class.method`, `Class::method`, `Class#method`, as vanilla_map reads them), and each
-Rust function back to the vanilla methods it ports. Methods nobody cites get a second, inferred match from
-what both sides share that is hard to share by chance: rare numbers (0.458, 72000) and game ids (a sound,
-block, particle or item, `SoundEvents.ENTITY_SHULKER_BULLET_HIT` against "entity.shulker_bullet.hit").
+ways: each vanilla method (from the game jar's bytecode and the decompiled sources) to the Rust functions,
+with their line spans, that port it, and each Rust function back to the vanilla methods it ports. A port is
+found by its doc citing the method (`Class.method`, `Class::method`, `Class#method`), by a same-named fn in
+a file or impl named for the class, by the call graph (a callee of a port with a callee of the vanilla
+method), or from what both sides share that is hard to share by chance: rare numbers (0.458, 72000) and
+game ids (`SoundEvents.ENTITY_SHULKER_BULLET_HIT` against "entity.shulker_bullet.hit").
 
 Both sides' call graphs then show where a port exists but is not wired like vanilla, the kind of bug a
 method-by-method reading misses:
@@ -20,6 +21,8 @@ method-by-method reading misses:
   reaches;
 - class: a whole vanilla class nothing ports while most of its package is ported (a renderer, a sound
   instance, a goal: the game reaches those by registration, so no call graph shows them);
+- drift: a port that never names what its vanilla method uses: a sound, particle, item, block, effect or
+  game event, or a rare number (a missing sound or a changed constant);
 - stale: a citation whose class or method doesn't exist in the pinned version;
 - unported: vanilla methods with no port, ranked by how many vanilla methods call them.
 
@@ -28,16 +31,21 @@ method-by-method reading misses:
     python3 tools/port_ledger.py where ShulkerBulletRenderer   # a whole class
     python3 tools/port_ledger.py what crates/horizon-client/src/game/spear.rs:150
     python3 tools/port_ledger.py class Shulker                 # every method: ported where, or not
+    python3 tools/port_ledger.py issue 3123                    # the classes, code and gaps a report points at
+    python3 tools/port_ledger.py check [--base origin/main]    # what a branch touches, gaps it opens and closes
     python3 tools/port_ledger.py coverage [--package world/entity] [--depth 3]
     python3 tools/port_ledger.py gaps [--kind seam] [--package world/entity] [--limit 50]
-    python3 tools/port_ledger.py report                        # .local/port-ledger/report.md
+    python3 tools/port_ledger.py report                        # .local/port-ledger/report.md and report.html
+    python3 tools/port_ledger.py diff OTHER/ledger.json        # against another build
 
-Add --json to any query for machine output. The sources default to the lab's decompiled sources
-(.local/minecraft/<version>/sources/{client,server}, tools/lab.py decompile); --sources takes any
-directory of decompiled Java instead. Queries read the last build; `build` again after pulling.
+Add --json to any query for machine output. `build` reads the game jar (the lab's or the launcher's; --jar,
+--no-jar) and the lab's decompiled sources (.local/minecraft/<version>/sources/{client,server},
+tools/lab.py decompile; --sources takes any directory of decompiled Java). Queries read the last build;
+`build` again after pulling. docs/port-ledger.md has the details.
 """
 
 import argparse
+import bisect
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 import json
@@ -45,10 +53,12 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("PORT_LEDGER_ROOT") or Path(__file__).resolve().parents[1])
 OUT = ROOT / ".local" / "port-ledger"
 LEDGER = OUT / "ledger.json"
 
@@ -86,6 +96,11 @@ ID_HOLDERS = {
     "BlockEntityType", "MenuType", "RecipeType", "DataComponents", "Fluids", "Biomes", "Structures",
     "LootTables", "BuiltInLootTables", "GameEvent", "Instruments", "PaintingVariants", "BannerPatterns",
 }
+# Maths, geometry, randomness and text: every path calls them its own way, so a missing call says nothing.
+UTILITY_CLASSES = {
+    "Mth", "AABB", "Vec3", "Vec3i", "Vec2", "BlockPos", "SectionPos", "ChunkPos", "Direction", "RandomSource",
+    "Util", "Component", "MutableComponent", "Optional", "Math", "List", "Map", "Set", "Collection", "Iterator",
+}
 # Vanilla calls whose effect only the client's copy of the world shows.
 CLIENT_EFFECTS = re.compile(
     r"\.addParticle\(|\.addAlwaysVisibleParticle\(|\.playLocalSound\(|\bitemUsed\(|\.isClientSide\(\)"
@@ -107,7 +122,7 @@ JAVA_METHOD_REF = re.compile(r"\b([A-Za-z_]\w*)::([a-z]\w*)\b")
 JAVA_NEW = re.compile(r"\bnew\s+([A-Z][\w.]*)\s*[(<]")
 JAVA_TYPED = re.compile(r"\b([A-Z][\w.]*)(?:<[^;=(){}]*?>)?(?:\[\])*\s+([a-z]\w*)\s*(?=[=;:,)])")
 JAVA_ID = re.compile(r"\b(" + "|".join(sorted(ID_HOLDERS)) + r")\.([A-Z][A-Z0-9_]+)\b")
-NUMBER = re.compile(r"(?<![\w.])-?(?:\d[\d_]*\.\d[\d_]*(?:[eE][-+]?\d+)?|\d[\d_]*(?:[eE][-+]?\d+)?)"
+NUMBER = re.compile(r"(?<![\w.])-?(?:0[xX][0-9a-fA-F_]+|\d[\d_]*\.\d[\d_]*(?:[eE][-+]?\d+)?|\d[\d_]*(?:[eE][-+]?\d+)?)"
                     r"(?:_?(?:f32|f64|i32|i64|u8|u16|u32|u64|usize|isize|[fFdDL]))?(?![\w.])")
 RUST_FN = re.compile(r"\bfn\s+([A-Za-z_]\w*)")
 RUST_IMPL = re.compile(r"^\s*(?:unsafe\s+)?impl\b(?:\s*<.*?>)?\s+(?:(?:[\w:]+)(?:<.*?>)?\s+for\s+)?([\w:]+)")
@@ -116,6 +131,24 @@ RUST_MOD = re.compile(r"(?:^|\]\s*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*$")
 TEST_FILE = re.compile(r"(?:^|/)(?:tests?|benches|examples)/|(?:^|/|_)tests?\.rs$|_fixture\.rs$|fixture[s]?/|/probe")
 RUST_CALL = re.compile(r"\b([a-z_][a-z0-9_]*)\s*(?:::\s*<[^<>]*(?:<[^<>]*>[^<>]*)*>)?\s*\(")
 RUST_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+RUST_STRUCT = re.compile(r"(?:^|\s|\])(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Z]\w*)")
+RUST_IMPL_FOR = re.compile(r"^\s*(?:unsafe\s+)?impl\b(?:\s*<.*?>)?\s+([\w:]+)(?:<.*?>)?\s+for\s+([\w:]+)")
+RUST_FIELD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?([a-z_]\w*)\s*:\s*(.+?)\s*,?\s*$")
+RUST_PARAM = re.compile(r"\b(?:mut\s+)?([a-z_]\w*)\s*:\s*([^,()]+(?:\([^()]*\))?[^,()]*)")
+RUST_LET = re.compile(r"\blet\s+(?:mut\s+)?([a-z_]\w*)\s*(?::\s*([^=;]+?))?\s*=\s*(?:&\s*(?:mut\s+)?)?([A-Z]\w*)\s*(?:::|\{)")
+RUST_METHOD_CALL = re.compile(r"(\.|::)\s*([a-z_]\w*)\s*(?:::\s*<[^<>]*(?:<[^<>]*>[^<>]*)*>)?\s*\(")
+WRAPPERS = {"Option", "Box", "Arc", "Rc", "RefCell", "Cell", "Mutex", "RwLock", "Vec", "VecDeque", "HashMap",
+            "BTreeMap", "HashSet", "BTreeSet", "Result", "Weak", "Cow", "OnceLock", "OnceCell", "Self", "FxHashMap",
+            "FxHashSet", "MutexGuard", "Ref", "RefMut", "Pin", "PhantomData"}
+
+
+def core_type(text):
+    """The type a value of `text` is, for method calls: the first named type past references, wrappers and
+    impl/dyn (`&mut Option<Box<Foo<'a>>>` -> Foo, `impl HandWorld` -> HandWorld)."""
+    for name in re.findall(r"\b([A-Z]\w*)", text or ""):
+        if name not in WRAPPERS:
+            return name
+    return None
 
 
 # ---- Source text --------------------------------------------------------------------------------------
@@ -257,16 +290,67 @@ def line_of(starts, offset):
 def number_token(raw):
     """A numeric literal's value as a canonical token, or None for a trivial one."""
     s = raw.replace("_", "")
-    s = re.sub(r"(f32|f64|i32|i64|u8|u16|u32|u64|usize|isize|[fFdDL])$", "", s)
+    if re.match(r"-?0[xX]", s):
+        s = re.sub(r"(i32|i64|u8|u16|u32|u64|usize|isize|L)$", "", s)
+        try:
+            v = float(int(s, 16))
+        except ValueError:
+            return None
+        s = str(int(v))
+    else:
+        s = re.sub(r"(f32|f64|i32|i64|u8|u16|u32|u64|usize|isize|[fFdDL])$", "", s)
     try:
         v = float(s)
     except ValueError:
         return None
+    if not math.isfinite(v) or abs(v) >= 1e9 and not v.is_integer():
+        return None  # NaN, infinities, Float.MAX_VALUE
+    if v.is_integer() and 2 ** 31 <= v < 2 ** 32:
+        v -= 2 ** 32  # an ARGB colour: Java's int is Rust's u32 (0xFF000000 is -16777216)
+        s = str(int(v))
+    if not v.is_integer() and any(abs(v * k / math.pi - round(v * k / math.pi)) < 1e-5 and round(v * k / math.pi) != 0
+                                  for k in (1, 2, 3, 4, 6, 8, 9, 12, 18, 36, 180)):
+        return None  # a multiple of pi: Rust spells angles as PI / 4.0 or to_radians()
+    if abs(v) in (57.29578, 0.01745329) or abs(v - 57.2957795) < 1e-4 or abs(v - 0.0174533) < 1e-6:
+        return None
     if v.is_integer() and abs(v) < 1e15 and "." not in s and "e" not in s.lower():
         token = str(int(v))
     else:
-        token = repr(round(v, 9))
+        token = canonical_float(v)
     return None if token in TRIVIAL_NUMBERS or token.lstrip("-") in TRIVIAL_NUMBERS else "n:" + token
+
+
+def canonical_float(v):
+    """A float literal's value to 7 significant digits: Java's 0.2F (as float bits) and Rust's 0.2 agree."""
+    v = float(f"{v:.7g}")
+    return str(int(v)) + ".0" if v.is_integer() else repr(v)
+
+
+CLASS_SUFFIXES = ("BlockEntity", "Entity", "Block", "Item", "Renderer", "Model", "Screen", "Goal", "Menu", "Packet",
+                  "Behavior", "Sensor", "Feature", "Layer", "Manager", "Handler", "Ai", "Brain")
+
+
+def class_stems(class_path):
+    """The Rust file stems a class could live in: ShulkerBulletRenderer -> shulker_bullet_renderer,
+    shulker_bullet, shulker_bullets."""
+    simple = class_path.rsplit("/", 1)[-1].split("$")[-1]
+    out = {snake_case(simple)}
+    for suffix in CLASS_SUFFIXES:
+        if simple.endswith(suffix) and len(simple) > len(suffix) + 2:
+            out.add(snake_case(simple[:-len(suffix)]))
+    return out | {o + "s" for o in out} | {o + "es" for o in out} | {o[:-1] + "ies" for o in out if o.endswith("y")}
+
+
+def name_similarity(a, b):
+    """Shared words over all words of two snake names: drop_off and drop_off 1.0, set_active_activity_if_possible
+    and set_active_if_possible 0.8."""
+    wa, wb = set(a.split("_")) - {""}, set(b.split("_")) - {""}
+    return len(wa & wb) / len(wa | wb) if wa and wb else 0.0
+
+
+def snake_case(name):
+    """AnvilLand, ANVIL_LAND and anvil_land all as anvil_land."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower()
 
 
 def id_tokens_from_string(s):
@@ -276,6 +360,8 @@ def id_tokens_from_string(s):
     if not re.fullmatch(r"(?:[a-z0-9_.-]+:)?[a-z0-9_./-]+", s) or len(s) < 4:
         return set()
     path = s.split(":", 1)[-1]
+    if ":" not in s and (path.count(".") == 1 or path[0] in "._"):
+        return set()  # servers.dat, os.name: a file or property name, not a game id
     token = re.sub(r"[./-]", "_", path)
     if "_" not in token and len(token) < 6:
         return set()
@@ -435,6 +521,143 @@ def java_files(roots):
     return sorted(seen.values())
 
 
+# ---- Bytecode -----------------------------------------------------------------------------------------
+# The shipped jar is vanilla exactly (the decompiled sources may carry a loader's patches) and its calls
+# name their owner class and descriptor, so when a jar is at hand the call graph, hierarchy and literals
+# come from it; the sources only give file and line numbers.
+
+INVOKES = {"182", "183", "184", "185"}
+CLIENT_CALLS = {"addParticle", "addAlwaysVisibleParticle", "playLocalSound", "itemUsed", "isClientSide"}
+
+
+def jar_entries(jar):
+    """(class name, bytes) of every game class in a jar, the server bundler's inner jar included."""
+    import io
+    import zipfile
+
+    def walk(archive):
+        for name in archive.namelist():
+            if name.endswith(".class") and name.startswith(("net/minecraft/", "com/mojang/")):
+                yield name[:-6], archive.read(name)
+            elif name.startswith("META-INF/versions/") and name.endswith(".jar"):
+                with zipfile.ZipFile(io.BytesIO(archive.read(name))) as inner:
+                    yield from walk(inner)
+
+    with zipfile.ZipFile(jar) as archive:
+        yield from walk(archive)
+
+
+def parse_class_bytes(item):
+    name, data = item
+    try:
+        import class_index
+    except ImportError:
+        from . import class_index
+    try:
+        cf = class_index.ClassFile(data)
+    except Exception:
+        return None
+    acc = cf.access
+    kind = ("@interface" if acc & 0x2000 else "interface" if acc & 0x200 else "enum" if acc & 0x4000
+            else "record" if cf.super == "java/lang/Record" else "class")
+    top = name.split("$", 1)[0]
+    cls = {
+        "name": name.rsplit("/", 1)[-1].split("$")[-1], "path": name, "kind": kind,
+        "file": top + ".java", "line": None,
+        "extends": [x for x in [cf.super] + cf.interfaces if x and not x.startswith("java/")],
+        "methods": {}, "imports": {}, "package": name.rsplit("/", 1)[0],
+        "outer": name.rsplit("$", 1)[0] if "$" in name else None, "fields": {}, "bytecode": True,
+    }
+    if any(p[:1].isdigit() for p in name.rsplit("/", 1)[-1].split("$")[1:]):
+        cls["anonymous"] = True
+    for access, mname, desc, code in cf.methods:
+        owner = class_index.lambda_owner(mname)
+        target = owner[len("lambda$"):] if owner.startswith("lambda$") else mname
+        if access & 0x40 and not owner.startswith("lambda$"):  # bridge
+            continue
+        if access & 0x1000 and not owner.startswith("lambda$") or mname in ("$values", "values", "valueOf"):
+            continue  # synthetic, and an enum's generated members
+        m = cls["methods"].setdefault(target, {"name": target, "lines": [], "calls": set(), "tokens": set(),
+                                               "client": False, "size": 0})
+        if code is None:
+            m["abstract"] = not m["size"]
+            continue
+        m.pop("abstract", None)
+        try:
+            toks = cf.code_tokens(code)
+        except Exception:
+            continue
+        m["size"] += len(toks) // 3
+        body = toks[1:]
+        if not owner.startswith("lambda$") and len(body) <= 3 and mname != "<init>":
+            # A getter, setter or constant: `return this.x;` is nothing to port on its own.
+            m["accessor"] = True
+        elif not owner.startswith("lambda$"):
+            m["accessor"] = False
+        for t in toks:
+            op, _, rest = t.partition(" ")
+            if op in INVOKES and rest.startswith("m:"):
+                ref = rest[2:]
+                owner_cls, _, member = ref.partition(".")
+                meth = member.split("(", 1)[0]
+                if owner_cls.startswith(("net/minecraft/", "com/mojang/")):
+                    m["calls"].add((owner_cls, meth))
+                if meth in CLIENT_CALLS:
+                    m["client"] = True
+            elif op == "186" and rest.startswith("y:"):
+                # invokedynamic: a method reference (Foo::bar) or lambda handle among the bootstrap arguments.
+                for h in re.findall(r"h\d+:((?:net|com)/[\w/$]+)\.([\w$]+)\(", rest):
+                    target_name = h[1]
+                    if target_name.startswith("lambda$"):
+                        continue
+                    m["calls"].add((h[0], target_name))
+            elif op == "178" and rest.startswith("m:"):
+                owner_cls, _, member = rest[2:].partition(".")
+                holder = owner_cls.rsplit("/", 1)[-1].split("$")[0]
+                field = re.match(r"([A-Z][A-Z0-9_]*?)(?:L[a-z][\w/$]*;|\[.*|[BCDFIJSZ])$", member)
+                if holder in ID_HOLDERS and field and field.group(1) not in ("LOGGER", "CODEC", "STREAM_CODEC"):
+                    m["tokens"].add("id:" + field.group(1).lower())
+            elif op in ("18", "19", "20"):
+                if rest.startswith("s:"):
+                    m["tokens"] |= id_tokens_from_string(rest[2:])
+                elif rest.startswith("f:"):
+                    import struct as _s
+                    v = _s.unpack(">f", bytes.fromhex(rest[2:]))[0]
+                    t2 = number_token(canonical_float(v))
+                    if t2:
+                        m["tokens"].add(t2)
+                elif rest.startswith("d:"):
+                    import struct as _s
+                    v = _s.unpack(">d", bytes.fromhex(rest[2:]))[0]
+                    t2 = number_token(canonical_float(v))
+                    if t2:
+                        m["tokens"].add(t2)
+                elif rest.startswith(("i:", "l:")):
+                    t2 = number_token(rest[2:])
+                    if t2:
+                        m["tokens"].add(t2)
+            elif op == "17":  # sipush
+                t2 = number_token(str(int.from_bytes(bytes.fromhex(rest), "big", signed=True)))
+                if t2:
+                    m["tokens"].add(t2)
+    for m in cls["methods"].values():
+        m["calls"] = sorted(m["calls"])
+        m["tokens"] = sorted(m["tokens"])
+    return cls
+
+
+def default_jars():
+    lock = json.loads((ROOT / "research-lock.json").read_text()) if (ROOT / "research-lock.json").exists() else {}
+    version = str((lock.get("minecraft") or {}).get("version") or lock.get("version") or "26.3")
+    home = Path.home()
+    candidates = sorted((ROOT / ".local" / "minecraft" / version).glob("*.jar")) + [
+        home / "Library/Application Support/minecraft/versions" / version / f"{version}.jar",
+        home / ".minecraft/versions" / version / f"{version}.jar",
+        Path(os.environ.get("APPDATA", "")) / ".minecraft/versions" / version / f"{version}.jar",
+    ]
+    return [str(c) for c in candidates if c.is_file()][:2]
+
+
 # ---- Rust ---------------------------------------------------------------------------------------------
 
 
@@ -444,6 +667,8 @@ def parse_rust(path):
     starts = line_starts(text)
     lines_raw = text.split("\n")
     fns = []
+    structs = {}
+    trait_impls = []
     scopes = []  # (kind, ref)
     depth = 0
     seg_start = 0
@@ -463,7 +688,14 @@ def parse_rust(path):
                 line = line_of(starts, seg_start + (code[seg_start:i].find("fn") if "fn" in code[seg_start:i] else 0))
                 owner = next((s[1] for s in reversed(scopes) if s[0] == "fn"), None)
                 in_tests = any(s[0] == "mod" and s[1] in ("tests", "test") for s in scopes) or "#[test]" in header
+                params = {}
+                sig = header[m.end():]
+                generics = dict(re.findall(r"\b([A-Z]\w*)\s*:\s*(?:\?Sized\s*\+\s*)?([A-Z]\w*)", sig.split("(", 1)[0] + " " + (sig.split("where", 1)[1] if "where" in sig else "")))
+                for pname, ptype in RUST_PARAM.findall(sig.split("->", 1)[0]):
+                    t = core_type(ptype)
+                    params[pname] = generics.get(t, t)
                 fn = {
+                    "params": params,
                     "name": m.group(1),
                     "owner": impl_type,
                     "file": path,
@@ -477,6 +709,11 @@ def parse_rust(path):
                 scopes.append(("fn", fn))
             elif RUST_IMPL.match(header) and "fn " not in header:
                 scopes.append(("impl", RUST_IMPL.match(header).group(1).split("::")[-1]))
+                pair = RUST_IMPL_FOR.match(header)
+                if pair:
+                    trait_impls.append((pair.group(1).split("::")[-1], pair.group(2).split("::")[-1]))
+            elif RUST_STRUCT.search(header) and "fn " not in header and not any(s[0] == "fn" for s in scopes):
+                scopes.append(("struct", (RUST_STRUCT.search(header).group(1), i)))
             elif RUST_TRAIT.match(header):
                 scopes.append(("trait", RUST_TRAIT.match(header).group(1)))
             elif RUST_MOD.match(header):
@@ -492,6 +729,19 @@ def parse_rust(path):
                 if kind == "fn":
                     ref["end"] = line_of(starts, i)
                     ref["body_end"] = i
+                elif kind == "struct":
+                    name, at = ref
+                    fields = structs.setdefault(name, {})
+                    depth_here = 0
+                    for raw_line in code[at + 1:i].split("\n"):
+                        if depth_here == 0:
+                            fm = RUST_FIELD.match(raw_line)
+                            if fm:
+                                t = core_type(fm.group(2))
+                                if t:
+                                    fields[fm.group(1)] = t
+                        depth_here += raw_line.count("{") + raw_line.count("<") - raw_line.count("}") - raw_line.count(">")
+                        depth_here = max(0, depth_here)
             seg_start = i + 1
         elif c == ";" and paren == 0:
             header = " ".join(code[seg_start:i].split())
@@ -518,10 +768,32 @@ def parse_rust(path):
             name = m.group(1)
             if name in RUST_KEYWORDS:
                 continue
-            nxt = body[m.end() - 1 - 1:m.end() - 1]
             if body[m.start(1) + len(name):m.start(1) + len(name) + 1] == "!":
                 continue
             calls.add(name)
+        # Typed calls: the receiver's type through self, params, lets and struct fields (resolved in build,
+        # once every file's structs are known): [receiver path, method] with the path's root and fields.
+        lets = {v: (core_type(t) if t else ty) for v, t, ty in RUST_LET.findall(body)}
+        typed = []
+        for m in RUST_METHOD_CALL.finditer(body):
+            sep, name = m.group(1), m.group(2)
+            before = body[:m.start()].rstrip()
+            if sep == "::":
+                tm = re.search(r"([A-Za-z_]\w*)\s*(?:<[^<>]*>)?$", before)
+                if tm and (tm.group(1)[0].isupper()):
+                    typed.append([[tm.group(1)], name])
+                continue
+            rm = re.search(r"([A-Za-z_]\w*(?:\s*\.\s*[a-z_]\w*)*)$", before)
+            if not rm:
+                continue
+            start = rm.start()
+            if start > 0 and before[start - 1] in ".:)]":
+                continue
+            chain = [p.strip() for p in rm.group(1).split(".")]
+            typed.append([chain, name])
+        fn["typed"] = typed
+        fn["const_refs"] = sorted(set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", body)))
+        fn["locals"] = {k: v for k, v in lets.items() if v}
         # Method references passed as values: Game::swing_arm, Self::tick, |g| g.foo
         for m in re.finditer(r"(?:\bSelf|\b[A-Z]\w*)::([a-z_]\w*)\b(?!\s*\()", body):
             calls.add(m.group(1))
@@ -535,6 +807,9 @@ def parse_rust(path):
                 tokens |= id_tokens_from_string(s)
         fn["calls"] = sorted(calls)
         fn["tokens"] = sorted(tokens)
+        # Every name the body spells, snake-cased (Sound::AnvilLand -> anvil_land, WALK_TARGET -> walk_target):
+        # what drift checks a vanilla id against, since Rust names most ids as enum variants, not strings.
+        fn["words"] = sorted({snake_case(w) for w in re.findall(r"\b[A-Za-z][A-Za-z0-9_]{2,}\b", body)} - RUST_KEYWORDS)
     # Comments: a fn's doc and attribute block above its `fn` line, and the comments inside it (not inside
     # a nested fn).
     cites_by_fn = defaultdict(list)
@@ -568,7 +843,20 @@ def parse_rust(path):
         fn["comments"] = cites_by_fn.get(idx, [])
         fn.pop("body", None)
         fn.pop("body_end", None)
-    return {"file": path, "fns": fns, "file_comments": file_comments}
+    consts = {}
+    for m in re.finditer(r"\b(?:const|static)\s+([A-Z][A-Z0-9_]*)\s*:\s*[^=;]+=\s*([^;]+);", code):
+        toks = set()
+        for n in NUMBER.finditer(m.group(2)):
+            t = number_token(n.group(0))
+            if t:
+                toks.add(t)
+        for off, st in strings:
+            if m.start(2) <= off < m.end(2):
+                toks |= id_tokens_from_string(st)
+        if toks:
+            consts[m.group(1)] = sorted(toks)
+    return {"file": path, "fns": fns, "file_comments": file_comments, "structs": structs, "trait_impls": trait_impls,
+            "consts": consts}
 
 
 def rust_files():
@@ -593,6 +881,8 @@ class Vanilla:
         self.classes = {c["path"]: c for c in classes}
         self.by_simple = defaultdict(set)
         for c in classes:
+            if c.get("anonymous"):
+                continue
             parts = c["path"].rsplit("/", 1)[-1].split("$")
             self.by_simple[parts[-1]].add(c["path"])
             if len(parts) > 1:
@@ -636,6 +926,9 @@ class Vanilla:
             seen.add(p)
             out.append(p)
             for sup in self.classes[p]["extends"]:
+                if sup in self.classes:
+                    todo.append(sup)
+                    continue
                 r = self.resolve(sup.split(".")[-1] if "." not in sup or sup.startswith(("net.", "com.")) else sup, near=p)
                 if not r and "." in sup:
                     r = self.resolve(sup.rsplit(".", 1)[-1], near=p)
@@ -661,15 +954,37 @@ def short(cls_path, method=None):
     return f"{simple}.{method}" if method else simple
 
 
-def build(sources, jobs):
-    if not sources:
-        sys.exit("No decompiled sources: run `python3 tools/lab.py decompile`, or pass --sources DIR.")
-    files = java_files(sources)
-    classes = []
+def build(sources, jars, jobs):
+    if not sources and not jars:
+        sys.exit("No vanilla code: run `python3 tools/lab.py decompile`, or pass --sources DIR / --jar JAR.")
+    src_classes = []
     with ProcessPoolExecutor(max_workers=jobs) as pool:
-        for chunk in pool.map(parse_java, files, chunksize=64):
-            classes.extend(chunk)
+        if sources:
+            for chunk in pool.map(parse_java, java_files(sources), chunksize=64):
+                src_classes.extend(chunk)
+        bc_classes = []
+        seen_bc = set()
+        for jar in jars:
+            entries = [e for e in jar_entries(jar) if e[0] not in seen_bc]
+            seen_bc.update(e[0] for e in entries)
+            bc_classes += [c for c in pool.map(parse_class_bytes, entries, chunksize=64) if c]
         rust = list(pool.map(parse_rust, rust_files(), chunksize=8))
+    if bc_classes:
+        # The jar decides what exists and what calls what; the sources add files and lines.
+        src_by_path = {c["path"]: c for c in src_classes}
+        for c in bc_classes:
+            src = src_by_path.get(c["path"])
+            if not src:
+                continue
+            c["file"], c["line"], c["fields"], c["imports"] = src["file"], src["line"], src["fields"], src["imports"]
+            for name, m in c["methods"].items():
+                sm = src["methods"].get(name)
+                if sm:
+                    m["lines"] = sm["lines"]
+                    m["accessor"] = m.get("accessor", False) or (sm.get("accessor", False) and not m.get("calls"))
+        classes = bc_classes
+    else:
+        classes = src_classes
     van = Vanilla(classes)
 
     # Vanilla methods: one entry per class and name (overloads merged), with resolved callees.
@@ -681,7 +996,8 @@ def build(sources, jobs):
                 "calls_raw": m["calls"], "tokens": m["tokens"], "client": m["client"],
                 "abstract": m.get("abstract", False), "accessor": m.get("accessor", False),
                 "vars": m.get("vars", {}),
-                "size": sum((b or a) - a + 1 for a, b in m["lines"]),
+                "size": m.get("size") or sum((b or a) - a + 1 for a, b in m["lines"]),
+                "bytecode": bool(c.get("bytecode")), "anonymous": bool(c.get("anonymous")),
             }
     defined = defaultdict(set)
     for k, m in methods.items():
@@ -697,6 +1013,12 @@ def build(sources, jobs):
         callees = set()
         for recv, name in m["calls_raw"]:
             target = None
+            if m["bytecode"]:
+                # The call names its owner exactly; the method may be declared on a supertype.
+                decl, _ = van.find_method(recv, name) if recv in van.classes else (None, None)
+                if decl and key(decl, name) != k:
+                    callees.add(key(decl, name))
+                continue
             if recv in ("", "this", "super"):
                 decl, _ = van.find_method(m["class"], name)
                 if not decl:
@@ -807,6 +1129,24 @@ def build(sources, jobs):
             if k not in fn["primary"]:
                 mentioned[k].append(fn["id"])
 
+    # Constants a fn uses by name count as its literals (`const SPEED: f32 = 0.458;`).
+    file_consts = {f["file"]: f["consts"] for f in rust}
+    global_consts = defaultdict(list)
+    for f in rust:
+        for cname, toks in f["consts"].items():
+            global_consts[cname].append(toks)
+    for fn in fns:
+        extra = set()
+        for cname in fn.get("const_refs", ()):
+            toks = file_consts.get(fn["file"], {}).get(cname)
+            if toks is None and len(global_consts.get(cname, ())) == 1:
+                toks = global_consts[cname][0]
+            if toks:
+                extra.update(toks)
+        if extra:
+            fn["tokens"] = sorted(set(fn["tokens"]) | extra)
+        fn.pop("const_refs", None)
+
     # Named matches: a fn with the method's own name (tickRain -> tick_rain) in a file that cites the class.
     files_citing = defaultdict(set)
     for fn in fns:
@@ -821,6 +1161,38 @@ def build(sources, jobs):
     for fn in fns:
         if not fn.get("test"):
             by_name_live[fn["name"]].append(fn["id"])
+    by_simple = defaultdict(set)
+    for cp in van.classes:
+        by_simple[cp.rsplit("/", 1)[-1].split("$")[-1]].add(cp)
+    simple_names = sorted(n.lower() for n in by_simple)
+    lineage_cache = {}
+
+    def lineage_names(cp):
+        if cp not in lineage_cache:
+            lineage_cache[cp] = {p.rsplit("/", 1)[-1].split("$")[-1] for p in van.lineage(cp)}
+        return lineage_cache[cp]
+
+    def resembles_a_class(name):
+        """HurtByTarget is HurtByTargetGoal's port; Game and MotionWorld are Horizon's own containers."""
+        n = name.lower()
+        i = bisect.bisect_left(simple_names, n)
+        return i < len(simple_names) and simple_names[i].startswith(n)
+
+    def owner_fits(fid, class_path):
+        """Whether a fn's impl type lets it port a method of `class_path`: `impl HurtByTarget` doesn't port
+        AvoidEntityGoal.canUse however alike the names; `impl Mob` may port LivingEntity's or Zombie's; a fn
+        on one of Horizon's own containers (Game, Sim, MotionWorld) may port anything."""
+        owner = fns[fid].get("owner")
+        if not owner:
+            return True
+        cls = CLASS_AFFIXES.sub("", class_path.rsplit("/", 1)[-1].split("$")[-1]).lower()
+        own = CLASS_AFFIXES.sub("", owner).lower()
+        if len(own) >= 4 and len(cls) >= 4 and (cls.startswith(own) or own.startswith(cls)):
+            return True
+        if owner in by_simple:
+            return owner in lineage_names(class_path) or any(class_path in van.lineage(o) for o in by_simple[owner])
+        return not resembles_a_class(owner)
+
     named = {}
     for k, m in methods.items():
         if k in ported or k in mentioned or m["name"].startswith("<") or len(m["name"]) < 4:
@@ -832,9 +1204,38 @@ def build(sources, jobs):
         outer = van.classes[m["class"]]["outer"]
         if outer:
             homes = homes | files_citing.get(outer, set())
-        hits = [fid for fid in by_name_live.get(snake, ()) if fns[fid]["file"] in homes]
+        hits = [fid for fid in by_name_live.get(snake, ()) if fns[fid]["file"] in homes and owner_fits(fid, m["class"])]
         if hits:
             named[k] = hits
+    named_via = {k: "file cites the class" for k in named}
+    # Then by the class's own name, for files that cite nothing: a same-named fn in `impl ShulkerBullet`,
+    # or in shulker_bullet.rs (ShulkerBulletEntity, ShulkerBullets too).
+    files_by_stem = defaultdict(set)
+    for fn in fns:
+        if not fn.get("test"):
+            files_by_stem[fn["file"].rsplit("/", 1)[-1][:-3]].add(fn["file"])
+    for k, m in methods.items():
+        if (k in ported or k in mentioned or k in named or m["name"].startswith("<") or len(m["name"]) < 4
+                or m["class"].startswith(SKIP_PACKAGES)):
+            continue
+        snake = snake_case(m["name"])
+        cands = by_name_live.get(snake, ()) if snake not in GENERIC_CALLS else ()
+        if not cands:
+            continue
+        simple = m["class"].rsplit("/", 1)[-1].split("$")[-1]
+        outer = van.classes[m["class"]]["outer"]
+        homes = set().union(*(files_by_stem.get(st, set()) for st in class_stems(outer or m["class"])))
+        if outer:
+            homes |= files_citing.get(outer, set())
+        via = "impl " + simple
+        hits = [fid for fid in cands if fns[fid].get("owner") == simple
+                and (not outer or fns[fid]["file"] in homes)]
+        if not hits and not outer:
+            via = "file name"
+            hits = [fid for fid in cands if fns[fid]["file"] in homes and owner_fits(fid, m["class"])]
+        if hits:
+            named[k] = hits
+            named_via[k] = via
 
     # Inferred matches for what nobody cites: rare shared ids and numbers, plus the name.
     df_j, df_r = Counter(), Counter()
@@ -874,31 +1275,116 @@ def build(sources, jobs):
         if best:
             inferred[k] = [{"fn": fid, "score": round(s, 1), "shared": sh[:6]} for s, fid, sh in best[:3]]
 
-    # Rust call graph by name (names are what a text index can resolve; ambiguous names fan out).
+    # Rust call graph: a call resolves through its receiver's type (self, a parameter, a let, struct
+    # fields; a trait to its impls) when the type is known, else by name, fanning out to at most a few fns.
     by_name = defaultdict(list)
+    by_owner = defaultdict(list)
     for fn in fns:
         by_name[fn["name"]].append(fn["id"])
-    rcallers = defaultdict(set)
-    for fn in fns:
-        for c in fn["calls"]:
-            if c in GENERIC_CALLS:
-                continue
-            for fid in by_name.get(c, ()):
-                rcallers[fid].add(fn["id"])
+        by_owner[(fn.get("owner"), fn["name"])].append(fn["id"])
+    structs = defaultdict(dict)
+    impls_of = defaultdict(set)
+    for f in rust:
+        for name, fields in f["structs"].items():
+            structs[name].update(fields)
+        for trait, typ in f["trait_impls"]:
+            impls_of[trait].add(typ)
 
-    def reach(fid, depth=4):
-        """Names of the fns `fid` calls within `depth` steps (generic names don't fan out)."""
-        names, frontier = set(), {fid}
+    def resolve_typed(fn, path, name):
+        root = path[0]
+        if root in ("self", "Self"):
+            t = fn.get("owner")
+        elif root[:1].isupper():
+            t = root
+        else:
+            t = fn.get("params", {}).get(root) or fn.get("locals", {}).get(root)
+        for seg in path[1:]:
+            t = structs.get(t, {}).get(seg) if t else None
+        if not t:
+            return None
+        found = list(by_owner.get((t, name), ()))
+        for impl_type in impls_of.get(t, ()):
+            found += by_owner.get((impl_type, name), ())
+        return found or None
+
+    edges = defaultdict(set)
+    unresolved_names = defaultdict(set)
+    typed_hits = 0
+    for fn in fns:
+        precise = set()
+        for path, name in fn.get("typed", []):
+            hit = resolve_typed(fn, path, name)
+            if hit:
+                typed_hits += 1
+                edges[fn["id"]].update(hit)
+                precise.add(name)
+        for c in fn["calls"]:
+            if c in precise or c in RUST_KEYWORDS:
+                continue
+            cands = by_name.get(c, ())
+            if c not in GENERIC_CALLS and 0 < len(cands) <= 4:
+                edges[fn["id"]].update(cands)
+            else:
+                unresolved_names[fn["id"]].add(c)
+        edges[fn["id"]].discard(fn["id"])
+    rcallers = defaultdict(set)
+    for f, targets in edges.items():
+        for t in targets:
+            rcallers[t].add(f)
+
+    # Linked matches: walk the call graph out from the known pairs. When X ports as A, a callee of X with
+    # no port and a callee of A that nothing cites are a pair too if their names agree (less Java's get).
+    claimed = {f for d in (ported, named, mentioned) for v in d.values() for f in v}
+    known = defaultdict(set)
+    for d in (ported, named):
+        for k, v in d.items():
+            known[k] |= set(v)
+    linked = {}
+
+    def bare(name):
+        sn = snake_case(name)
+        return sn[4:] if sn.startswith("get_") and len(sn) > 7 else sn
+
+    for _ in range(3):
+        added = {}
+        for k, fids in list(known.items()):
+            m = methods.get(k)
+            if not m:
+                continue
+            jc = [c for c in m["callees"] if c in methods and c not in known and c not in mentioned
+                  and c not in added and not methods[c]["name"].startswith("<")]
+            rc = {c for f in fids for c in edges.get(f, ()) if c not in claimed and not fns[c].get("test")
+                  and fns[c]["name"] not in GENERIC_CALLS}
+            if not jc or not rc:
+                continue
+            for c in jc:
+                b = bare(methods[c]["name"])
+                if b in GENERIC_CALLS or len(b) < 4:
+                    continue
+                scored = sorted(((name_similarity(b, fns[r]["name"]), r) for r in rc), reverse=True)
+                if scored[0][0] >= 0.67 and (len(scored) == 1 or scored[1][0] < scored[0][0]):
+                    added[c] = (scored[0][1], k)
+        if not added:
+            break
+        for c, (fid, via) in added.items():
+            if fid in claimed:
+                continue
+            claimed.add(fid)
+            linked[c] = {"fn": fid, "via": via}
+            known[c] = {fid}
+
+    def reach(fid, depth=5):
+        """Names of the fns `fid` reaches within `depth` calls, and of the calls left unresolved."""
+        seen, frontier = {fid}, {fid}
+        names = set()
         for _ in range(depth):
             nxt = set()
             for f in frontier:
-                for c in fns[f]["calls"]:
-                    if c not in names:
-                        names.add(c)
-                        if c not in GENERIC_CALLS and len(by_name.get(c, ())) <= 4:
-                            nxt.update(by_name.get(c, ()))
+                names |= unresolved_names.get(f, set())
+                nxt |= edges.get(f, set()) - seen
+            seen |= nxt
             frontier = nxt
-        return names
+        return names | {fns[f]["name"] for f in seen if f != fid}
 
     remote = {fn["id"] for fn in fns if re.search(r"/game/remote[^/]*\.rs$", fn["file"])}
 
@@ -928,7 +1414,7 @@ def build(sources, jobs):
     def callee_port_names(c):
         """Names of the fns that port vanilla method c: those whose doc opens with it, else a fn with the
         same, specific name (itemUsed -> item_used)."""
-        names = {fns[f]["name"] for o in [c] + overrides(c) for f in ported.get(o, [])}
+        names = {fns[f]["name"] for o in [c] + overrides(c) for f in known.get(o, ())}
         if names:
             return names
         snake = re.sub(r"(?<!^)(?=[A-Z])", "_", methods[c]["name"]).lower()
@@ -977,18 +1463,60 @@ def build(sources, jobs):
         creach = [set().union(*(reaches[f] for f in c)) | {fns[f]["name"] for f in c} for c in clusters]
         ccover = [{c for c, names in port_names.items() if r & names} for r in creach]
         for callee, targets in port_names.items():
+            if methods[callee]["class"].rsplit("/", 1)[-1].split("$")[0] in UTILITY_CLASSES:
+                continue
             hit = [i for i, r in enumerate(creach) if r & targets]
             miss = [i for i, r in enumerate(creach) if not (r & targets)]
-            if hit and miss:
+            if hit and miss and substantial(callee):
                 for i in miss:
                     peers = [h for h in hit if side(clusters[h][0]) != side(clusters[i][0]) and ccover[h] & ccover[i]]
                     if peers:
+                        # Singleplayer runs as a client of the integrated server, so a gap on the
+                        # in-frame path rarely shows; it sorts after the others.
                         gaps.append({"kind": "seam", "vanilla": k, "callee": callee, "fn": clusters[i][0],
-                                     "cluster": clusters[i], "sibling": clusters[peers[0]][0]})
+                                     "cluster": clusters[i], "sibling": clusters[peers[0]][0],
+                                     "old_path": side(clusters[i][0]) == "frame"})
             elif not hit and len(targets) <= 3 and substantial(callee):
                 gaps.append({"kind": "callee", "vanilla": k, "callee": callee, "fn": fids[0]})
         if m["client"] and not any(reached_from_remote(fid) for fid in fids):
             gaps.append({"kind": "client", "vanilla": k, "fn": fids[0]})
+    # Drift: what a vanilla method names (a sound, particle, item, block, effect) or the rare numbers it
+    # uses, that no port of it (nor what the port calls, two steps deep) has.
+    df_tok = Counter()
+    for m in methods.values():
+        df_tok.update(set(m["tokens"]))
+    for k, fids in ported.items():
+        m = methods.get(k)
+        if not m or not m["tokens"]:
+            continue
+        # A port a fraction of the method's size ports a part of it; what the rest names is not drift.
+        if m["size"] > 20 and sum(fns[f]["end"] - fns[f]["line"] + 1 for f in fids) * 4 < m["size"]:
+            continue
+        have, words, seen = set(), set(), set(fids)
+        frontier = set(fids)
+        for depth in range(3):
+            for f in frontier:
+                have |= set(fns[f]["tokens"])
+                words |= set(fns[f]["words"])
+            if depth == 2:
+                break
+            frontier = {c for f in frontier for c in edges.get(f, ())} - seen
+            seen |= frontier
+        words |= {t[3:] for t in have if t.startswith("id:")}
+        long_words = [w for w in words if "_" in w or len(w) >= 6]
+
+        def spelled(ident):
+            if ident in words:
+                return True
+            # entity.shulker_bullet.hit vs Sound::ShulkerBulletHit; speed vs MOVEMENT_SPEED
+            return any(ident.endswith("_" + w) or w.endswith("_" + ident) for w in long_words)
+
+        missing_ids = sorted(t for t in m["tokens"] if t.startswith("id:") and not spelled(t[3:]))
+        missing_nums = sorted(t for t in m["tokens"] if t.startswith("n:") and t not in have and df_tok[t] <= 40)
+        if missing_ids or missing_nums:
+            main = max(fids, key=lambda f: fns[f]["end"] - fns[f]["line"])
+            gaps.append({"kind": "drift", "vanilla": k, "fn": main, "ids": missing_ids, "numbers": missing_nums})
+
     for s in stale:
         gaps.append({"kind": "stale", **s})
     # Whole classes nothing ports, in packages where Horizon ports the neighbours (a renderer, a sound
@@ -1004,7 +1532,7 @@ def build(sources, jobs):
         pkg_rate[pkg]["classes"] += 1
         pkg_rate[pkg]["hit"] += hit
     for cp, ks in by_class.items():
-        if cp.startswith(SKIP_PACKAGES) or cp.startswith("com/") or "$" in cp or len(ks) < 2:
+        if cp.startswith(SKIP_PACKAGES) or cp.startswith("com/") or "$" in cp or len(ks) < 2 or van.classes[cp].get("anonymous"):
             continue
         if any(x in ported or x in mentioned or x in inferred for x in ks) or cp in class_cites or cp in file_class_cites:
             continue
@@ -1015,20 +1543,31 @@ def build(sources, jobs):
         if rate >= 0.3:
             gaps.append({"kind": "class", "vanilla_class": cp, "package_ported": round(rate, 2), "methods": len(ks)})
 
+    stats = {"typed_calls_resolved": typed_hits, "edges": sum(len(v) for v in edges.values())}
     ledger = {
+        "stats": stats,
         "sources": sources,
+        "jars": jars,
         "methods": methods,
         "callers": {k: sorted(v) for k, v in callers.items()},
         "fns": fns,
         "ported": dict(ported),
         "mentioned": dict(mentioned),
         "named": named,
+        "named_via": named_via,
+        "linked": linked,
         "inferred": inferred,
         "class_cites": {k: sorted(set(v)) for k, v in class_cites.items()},
         "file_class_cites": {k: sorted(v) for k, v in file_class_cites.items()},
         "gaps": gaps,
         "classes": {c["path"]: {"file": c["file"], "line": c["line"], "extends": c["extends"], "kind": c["kind"]} for c in classes},
     }
+    for fn in fns:
+        fn.pop("typed", None)
+        fn.pop("locals", None)
+        fn.pop("params", None)
+        fn.pop("words", None)
+        fn["callees"] = sorted(edges.get(fn["id"], ()))
     OUT.mkdir(parents=True, exist_ok=True)
     LEDGER.write_text(json.dumps(ledger))
     return ledger
@@ -1056,8 +1595,13 @@ def status_of(led, k):
         return "mentioned"
     if k in led.get("named", {}):
         return "named"
+    if k in led.get("linked", {}):
+        return "linked"
     if k in led["inferred"]:
         return "inferred"
+    m = led["methods"][k]
+    if m.get("accessor") or m.get("abstract") or m.get("size", 9) <= 3:
+        return "trivial"  # a getter, setter, abstract or one-line method: nothing to port on its own
     return "missing"
 
 
@@ -1096,7 +1640,9 @@ def method_view(led, k):
         "status": status_of(led, k),
         "ported_in": [fn_ref(led, f) for f in led["ported"].get(k, [])],
         "mentioned_in": [fn_ref(led, f) for f in led["mentioned"].get(k, [])][:20],
-        "same_name_in": [fn_ref(led, f) for f in led.get("named", {}).get(k, [])],
+        "same_name_in": [fn_ref(led, f) + f" (by {led.get('named_via', {}).get(k, 'name')})" for f in led.get("named", {}).get(k, [])],
+        "linked": ([f"{fn_ref(led, led['linked'][k]['fn'])} (called where {short(led['methods'][led['linked'][k]['via']]['class'], led['methods'][led['linked'][k]['via']]['name'])} is ported)"]
+                   if k in led.get("linked", {}) else []),
         "inferred": [f"{fn_ref(led, i['fn'])} (score {i['score']}, shares {', '.join(i['shared'])})" for i in led["inferred"].get(k, [])],
         "client_effect": m["client"],
         "calls": [f"{short(led['methods'][c]['class'], led['methods'][c]['name'])} [{status_of(led, c)}]" for c in m["callees"] if c in led["methods"]][:40],
@@ -1119,6 +1665,8 @@ def cmd_what(led, where, as_json):
             "fn": fn_ref(led, f["id"]),
             "ports": [short(led["methods"][k]["class"], led["methods"][k]["name"]) for k in f["primary"] if k in led["methods"]],
             "mentions": [short(led["methods"][k]["class"], led["methods"][k]["name"]) for k in f["cites"] if k in led["methods"] and k not in f["primary"]],
+            "same_name_as": [short(led["methods"][k]["class"], led["methods"][k]["name"]) for k, v in led.get("named", {}).items() if f["id"] in v],
+            "linked_to": [short(led["methods"][k]["class"], led["methods"][k]["name"]) for k, v in led.get("linked", {}).items() if v["fn"] == f["id"]],
             "inferred_for": [short(led["methods"][k]["class"], led["methods"][k]["name"]) for k, v in led["inferred"].items() if any(i["fn"] == f["id"] for i in v)],
         })
     emit(out, as_json, f"No function at {where}.")
@@ -1132,6 +1680,7 @@ def cmd_class(led, query, as_json):
             m = led["methods"][k]
             where = ([fn_ref(led, f) for f in led["ported"].get(k, [])]
                      or [fn_ref(led, f) for f in led.get("named", {}).get(k, [])]
+                     or ([fn_ref(led, led["linked"][k]["fn"]) + " (linked)"] if k in led.get("linked", {}) else [])
                      or [fn_ref(led, f) + " (mention)" for f in led["mentioned"].get(k, [])[:1]]
                      or [fn_ref(led, i["fn"]) + " ?" for i in led["inferred"].get(k, [])[:1]])
             rows.append({"method": m["name"], "status": status_of(led, k), "where": where, "callers": len(led["callers"].get(k, []))})
@@ -1148,7 +1697,8 @@ def package_of(path, depth):
 def coverage_rows(led, package=None, depth=2):
     rows = defaultdict(Counter)
     for k, m in led["methods"].items():
-        if m["class"].startswith(SKIP_PACKAGES) or m["accessor"] or m["abstract"] or m["name"] == "<clinit>":
+        if (m["class"].startswith(SKIP_PACKAGES) or m["accessor"] or m["abstract"] or m["name"] == "<clinit>"
+                or m.get("anonymous")):
             continue
         pkg = package_of(m["class"], depth)
         if package and not pkg.startswith(package) and not m["class"].split("/", 2)[-1].startswith(package):
@@ -1158,21 +1708,28 @@ def coverage_rows(led, package=None, depth=2):
     return rows
 
 
+COVERAGE_COLS = ("ported", "named", "mentioned", "linked", "inferred", "trivial", "missing")
+
+
+def found_pct(c):
+    """The share of the methods worth porting (not trivial ones) that have a port found."""
+    worth = c["total"] - c["trivial"]
+    return round(100 * (worth - c["missing"]) / worth, 1) if worth else 100.0
+
+
 def cmd_coverage(led, package, depth, as_json):
     rows = coverage_rows(led, package, depth)
-    cols = ("ported", "named", "mentioned", "inferred", "missing")
-    out = [dict({"package": p, "total": c["total"]}, **{k: c[k] for k in cols},
-                found_pct=round(100 * (c["total"] - c["missing"]) / c["total"], 1))
+    out = [dict({"package": p, "total": c["total"]}, **{k: c[k] for k in COVERAGE_COLS}, found_pct=found_pct(c))
            for p, c in sorted(rows.items(), key=lambda kv: -kv[1]["total"])]
     if as_json:
         print(json.dumps(out, indent=1))
         return
     tot = Counter()
     for r in out:
-        tot.update({k: r[k] for k in ("total",) + cols})
-    print(f"{'package':40s} {'methods':>7s} {'ported':>7s} {'named':>6s} {'mention':>7s} {'infer':>6s} {'missing':>7s} found%")
-    for r in out + ([dict({"package": "all"}, **tot, found_pct=round(100 * (tot["total"] - tot["missing"]) / tot["total"], 1))] if tot["total"] else []):
-        print(f"{r['package']:40s} {r['total']:7d} {r['ported']:7d} {r['named']:6d} {r['mentioned']:7d} {r['inferred']:6d} {r['missing']:7d} {r['found_pct']:5.0f}")
+        tot.update({k: r[k] for k in ("total",) + COVERAGE_COLS})
+    print(f"{'package':40s} {'methods':>7s} " + " ".join(f"{k[:7]:>7s}" for k in COVERAGE_COLS) + " found%")
+    for r in out + ([dict({"package": "all"}, **tot, found_pct=found_pct(tot))] if tot["total"] else []):
+        print(f"{r['package']:40s} {r['total']:7d} " + " ".join(f"{r[k]:7d}" for k in COVERAGE_COLS) + f" {r['found_pct']:5.0f}")
 
 
 def gap_text(led, g):
@@ -1182,12 +1739,19 @@ def gap_text(led, g):
         rest = [led["fns"][f]["name"] for f in g.get("cluster", [])[1:]]
         with_rest = f" (with {', '.join(rest)})" if rest else ""
         return (f"seam: {fn_ref(led, g['fn'])}{with_rest} ports {name(g['vanilla'])} but never reaches the port of "
-                f"{name(g['callee'])}; {fn_ref(led, g['sibling'])} does")
+                f"{name(g['callee'])}; {fn_ref(led, g['sibling'])} does" + (" (old in-frame path)" if g.get("old_path") else ""))
     if g["kind"] == "callee":
         return f"callee: {name(g['vanilla'])} calls {name(g['callee'])}; {fn_ref(led, g['fn'])} doesn't reach its port"
     if g["kind"] == "client":
         return (f"client: {name(g['vanilla'])} shows an effect only the client's copy draws; its port "
                 f"{fn_ref(led, g['fn'])} isn't reached from game/remote*.rs")
+    if g["kind"] == "drift":
+        parts = []
+        if g["ids"]:
+            parts.append("never names " + ", ".join(t[3:] for t in g["ids"][:8]))
+        if g["numbers"]:
+            parts.append("lacks the constants " + ", ".join(t[2:] for t in g["numbers"][:8]))
+        return f"drift: the port of {name(g['vanilla'])} ({fn_ref(led, g['fn'])}) " + " and ".join(parts)
     if g["kind"] == "class":
         return (f"class: nothing ports {short(g['vanilla_class'])} ({g['methods']} methods), though "
                 f"{round(100 * g['package_ported'])}% of {g['vanilla_class'].rsplit('/', 1)[0]} is ported")
@@ -1196,16 +1760,28 @@ def gap_text(led, g):
     return json.dumps(g)
 
 
+GAP_ORDER = {"seam": 0, "client": 1, "drift": 2, "class": 3, "callee": 4, "stale": 5}
+
+
+def gap_rank(g):
+    """Best leads first: by kind, the live path before the old one, then the classes with the most ported neighbours."""
+    return (GAP_ORDER.get(g["kind"], 9), g.get("old_path", False), -g.get("package_ported", 0), -len(g.get("ids", ())),
+            g.get("vanilla") or g.get("vanilla_class") or g.get("file", ""))
+
+
 def unported(led, package=None, limit=50):
     rows = []
     for k, m in led["methods"].items():
-        if status_of(led, k) != "missing" or m["class"].startswith(SKIP_PACKAGES) or m["accessor"] or m["abstract"]:
+        if (status_of(led, k) != "missing" or m["class"].startswith(SKIP_PACKAGES) or m["accessor"] or m["abstract"]
+                or m.get("anonymous")):
             continue
         if m["name"] in ("<clinit>", "toString", "hashCode", "equals", "codec", "streamCodec") or m["class"].startswith("com/"):
             continue
         if package and not m["class"].startswith("net/minecraft/" + package):
             continue
-        cls_ported = any(key(m["class"], n) in led["ported"] for n in (led["methods"][x]["name"] for x in [k]))
+        # Positions, maths and block-state lookups: Rust has its own types for those, not ports of them.
+        if m["class"].rsplit("/", 1)[-1].split("$")[0] in UTILITY_CLASSES | {"StateHolder", "BlockStateBase"}:
+            continue
         rows.append((len(led["callers"].get(k, [])), k))
     rows.sort(reverse=True)
     return [{"vanilla": short(led["methods"][k]["class"], led["methods"][k]["name"]), "callers": n,
@@ -1216,19 +1792,17 @@ def cmd_gaps(led, kind, package, limit, as_json):
     if kind == "unported":
         emit(unported(led, package, limit), as_json, "Nothing unported there.")
         return
-    order = {"seam": 0, "client": 1, "class": 2, "callee": 3, "stale": 4}
     gaps = [g for g in led["gaps"] if (not kind or g["kind"] == kind)]
     if package:
         gaps = [g for g in gaps if (g.get("vanilla") or g.get("vanilla_class") or "").startswith("net/minecraft/" + package)
                 or package in g.get("file", "")]
-    gaps.sort(key=lambda g: (order.get(g["kind"], 9), -g.get("package_ported", 0),
-                             g.get("vanilla") or g.get("vanilla_class") or g.get("file", "")))
+    gaps.sort(key=gap_rank)
     shown = gaps[:limit]
     if as_json:
         print(json.dumps([dict(g, text=gap_text(led, g)) for g in shown], indent=1))
         return
     counts = Counter(g["kind"] for g in gaps)
-    print(", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: order.get(kv[0], 9))) or "No gaps.")
+    print(", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: GAP_ORDER.get(kv[0], 9))) or "No gaps.")
     for g in shown:
         print("-", gap_text(led, g))
 
@@ -1256,29 +1830,384 @@ def emit(out, as_json, empty):
         print()
 
 
+ISSUE_REPO = "horizon-rust/horizon"
+# Class-name affixes a player never says: "ender pearl" is ThrownEnderpearl, "shulker bullet" ShulkerBullet.
+CLASS_AFFIXES = re.compile(r"^(Thrown|Abstract|Base|Client|Server)|(Entity|Item|Block|BlockEntity|Renderer|Model|Goal)$")
+
+
+def issue_text(ref):
+    """An issue's title and text: a GitHub issue number, `-` for stdin, or the report itself."""
+    if ref == "-":
+        return clean_report(sys.stdin.read())
+    if not ref.isdigit():
+        return clean_report(ref)
+    try:
+        raw = subprocess.run(["gh", "issue", "view", ref, "--repo", ISSUE_REPO, "--json", "title,body,comments"],
+                             capture_output=True, text=True, check=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        sys.exit(f"Couldn't read issue {ref} with gh ({e}); pass the report's text instead.")
+    data = json.loads(raw)
+    # The title counts twice: it names the bug, the body describes everything around it.
+    return clean_report("\n".join([data["title"], data["title"], data.get("body") or ""]
+                                   + [c["body"] for c in data.get("comments", [])[:10]]))
+
+
+REPORT_BOILERPLATE = re.compile(
+    r"^\W*(\*\*)?(version|os|horizon version|os, cpu, gpu|reported on discord|attachments|opened by|tags)\b.*$"
+    r"|^\W*(what i did|what happened|what i expected)\s*:", re.I | re.M)
+
+
+def clean_report(text):
+    """A report less what the bug-report template and its links say about every bug."""
+    text = re.sub(r"<!--.*?-->|<[^>]+>|\[([^\]]*)\]\([^)]*\)|https?://\S+", lambda m: m.group(1) or " ", text, flags=re.S)
+    return REPORT_BOILERPLATE.sub(" ", text)
+
+
+def suspect_classes(led, text, limit=8):
+    """Vanilla classes a report names, as a player writes them ("shulker bullet", "EnderEyeItem",
+    "eye of ender"), most specific first."""
+    words = re.findall(r"[a-z0-9]+", re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text).lower())
+    phrases = Counter()
+    for n in range(1, 5):
+        for i in range(len(words) - n + 1):
+            phrases["".join(words[i:i + n])] += 1
+    title = set(re.findall(r"[a-z0-9]+", text.split("\n", 1)[0].lower()))
+    scores = {}
+    for cp, c in led["classes"].items():
+        if cp.startswith(SKIP_PACKAGES) or re.search(r"\$\d", cp):
+            continue
+        simple = cp.rsplit("/", 1)[-1].split("$")[-1]
+        # An inner class's own name (Storage, Builder, Entry) is too plain to go on by itself.
+        inner = 0.3 if "$" in cp and "_" not in snake_case(simple) else 1.0
+        for name, weight in ((simple, inner), (CLASS_AFFIXES.sub("", simple), 0.8 * inner)):
+            k = name.lower()
+            if len(k) < 4 or k not in phrases:
+                continue
+            parts = snake_case(name).split("_")
+            # Longer names say more; one common word ("Player", "Block") alone says little.
+            score = weight * (len(k) + 6 * (len(parts) - 1)) * (1.5 if any(p in title for p in parts) else 1.0)
+            score *= 1 + 0.2 * min(phrases[k] - 1, 5)
+            if score > scores.get(cp, 0):
+                scores[cp] = score
+    # A class named inside another (Outer$Inner) yields to its outer class when both match the same words.
+    return sorted(scores, key=lambda c: -scores[c])[:limit], scores
+
+
+def suspect_methods(led, text, classes, limit=10):
+    """Vanilla methods the report's words name: in the suspect classes (slotClicked for "right-clicking" in a
+    creative inventory report), or anywhere for a rare word of the title ("hitbox" -> getHitbox)."""
+    def words_of(t):
+        return set(re.findall(r"[a-z0-9]+", re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", t).lower()))
+    words = {w for w in words_of(text) if len(w) >= 4} | {w[:-1] for w in words_of(text) if w.endswith("s")}
+    words |= {w[:-3] for w in words if w.endswith("ing")} | {w[:-2] for w in words if w.endswith("ed")}
+    title = {w for w in words_of(text.split("\n", 1)[0]) if len(w) >= 5}
+    homes = {c for cp in classes[:3] for c in (cp, cp.split("$")[0])}
+    by_word = defaultdict(list)
+    for k, m in led["methods"].items():
+        if m["class"].startswith(SKIP_PACKAGES) or m["name"].startswith(("<", "lambda$")) or status_of(led, k) == "trivial":
+            continue
+        for w in set(snake_case(m["name"]).split("_")):
+            by_word[w].append(k)
+    picks = Counter()
+    for w in words:
+        for k in by_word.get(w, ()):
+            m = led["methods"][k]
+            parts = set(snake_case(m["name"]).split("_"))
+            shared = len(parts & words) / len(parts)
+            if m["class"].split("$")[0] in homes or m["class"] in homes:
+                picks[k] = max(picks[k], 2 + shared)
+            elif w in title and len(by_word[w]) <= 10 and shared >= 0.5:
+                picks[k] = max(picks[k], shared + 1 / len(by_word[w]))
+    return [k for k, _ in picks.most_common(limit)]
+
+
+def cmd_issue(led, ref, as_json):
+    text = issue_text(ref)
+    classes, scores = suspect_classes(led, text)
+    out = []
+    methods = suspect_methods(led, text, classes)
+    if methods:
+        rows = []
+        for k in methods:
+            fids = led["ported"].get(k) or led.get("named", {}).get(k) or (
+                [led["linked"][k]["fn"]] if k in led.get("linked", {}) else [])
+            m = led["methods"][k]
+            rows.append(f"{short(m['class'], m['name'])} [{status_of(led, k)}]" + (f" -> {fn_ref(led, fids[0])}" if fids else ""))
+        out.append({"methods named by the report": rows})
+    for cp in classes:
+        ks = [k for k, m in led["methods"].items() if m["class"] == cp]
+        found = []
+        for k in sorted(ks, key=lambda k: -led["methods"][k].get("size", 0)):
+            st = status_of(led, k)
+            fids = led["ported"].get(k) or led.get("named", {}).get(k) or (
+                [led["linked"][k]["fn"]] if k in led.get("linked", {}) else [])
+            if fids:
+                found.append(f"{led['methods'][k]['name']} [{st}] -> {fn_ref(led, fids[0])}")
+        gaps = sorted((g for g in led["gaps"] if (g.get("vanilla") or "").startswith(cp + "#")
+                       or g.get("vanilla_class") == cp or (g.get("callee") or "").startswith(cp + "#")), key=gap_rank)
+        counts = Counter(status_of(led, k) for k in ks)
+        out.append({
+            "class": short(cp), "score": round(scores[cp], 1), "source": led["classes"][cp]["file"],
+            "status": ", ".join(f"{v} {k}" for k, v in counts.most_common()),
+            "files": sorted(set(led.get("file_class_cites", {}).get(cp, [])) | {led["fns"][f]["file"] for f in led["class_cites"].get(cp, [])})[:8],
+            "ported_as": found[:12],
+            "gaps": [gap_text(led, g) for g in [g for g in gaps if g["kind"] != "callee"][:10] + [g for g in gaps if g["kind"] == "callee"][:3]],
+        })
+    emit(out, as_json, "The report names no vanilla class the ledger knows; try the class or item name.")
+
+
+def gap_identity(led, g):
+    """A gap as the same gap in another build of the ledger: by what it is about, not by line numbers."""
+    f = led["fns"][g["fn"]] if "fn" in g else {}
+    return (g["kind"], g.get("vanilla"), g.get("callee"), g.get("vanilla_class"), f.get("file"), f.get("name"),
+            g.get("file"), g.get("cite"))
+
+
+def diff_ledgers(old, new):
+    """What changed between two builds: gaps closed and opened, methods newly found or lost."""
+    og = {gap_identity(old, g): g for g in old["gaps"]}
+    ng = {gap_identity(new, g): g for g in new["gaps"]}
+    ost = {k: status_of(old, k) for k in old["methods"]}
+    nst = {k: status_of(new, k) for k in new["methods"]}
+    rank = {s: i for i, s in enumerate(COVERAGE_COLS)}
+    found, lost = [], []
+    for k, st in nst.items():
+        before = ost.get(k, "missing")
+        if rank[st] < rank[before] and before in ("missing", "trivial", "inferred"):
+            found.append(f"{short(new['methods'][k]['class'], new['methods'][k]['name'])}: {before} -> {st}")
+        elif rank[st] > rank[before] and st in ("missing", "inferred") and before not in ("trivial",):
+            lost.append(f"{short(new['methods'][k]['class'], new['methods'][k]['name'])}: {before} -> {st}")
+    return {
+        "gaps closed": [gap_text(old, og[k]) for k in sorted(set(og) - set(ng), key=lambda k: gap_rank(og[k]))],
+        "gaps opened": [gap_text(new, ng[k]) for k in sorted(set(ng) - set(og), key=lambda k: gap_rank(ng[k]))],
+        "newly found": sorted(found), "lost": sorted(lost),
+    }
+
+
+def cmd_diff(led, other, as_json):
+    old = json.loads(Path(other).read_text())
+    out = diff_ledgers(old, led)
+    emit([out], as_json, "")
+
+
+def changed_ranges(base):
+    """New-side line ranges each Rust file changed since its merge base with `base` (uncommitted work too)."""
+    mb = subprocess.run(["git", "merge-base", base, "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    if mb.returncode:
+        sys.exit(f"No merge base with {base}: {mb.stderr.strip()}")
+    diff = subprocess.run(["git", "diff", "-U0", mb.stdout.strip(), "--", "crates", "launcher"],
+                          cwd=ROOT, capture_output=True, text=True).stdout
+    ranges, path = defaultdict(list), None
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else None
+        elif line.startswith("@@") and path and path.endswith(".rs"):
+            m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+            start, n = int(m.group(1)), int(m.group(2) or 1)
+            ranges[path].append((start, start + max(n, 1) - 1))
+    return mb.stdout.strip(), ranges
+
+
+def build_at(rev, led):
+    """The ledger of another revision, built in a throwaway worktree with the same vanilla inputs."""
+    tmp = Path(tempfile.mkdtemp(prefix="port-ledger-"))
+    tree = tmp / "tree"
+    subprocess.run(["git", "worktree", "add", "--detach", "--quiet", str(tree), rev], cwd=ROOT, check=True)
+    try:
+        env = dict(os.environ, PORT_LEDGER_ROOT=str(tree))
+        cmd = [sys.executable, str(Path(__file__).resolve()), "build"]
+        for src in led["sources"]:
+            cmd += ["--sources", src]
+        cmd += [x for j in led.get("jars", []) for x in ("--jar", j)] or ["--no-jar"]
+        subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
+        return json.loads((tree / ".local" / "port-ledger" / "ledger.json").read_text())
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=ROOT, capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def cmd_check(led, base, compare, as_json):
+    mb, ranges = changed_ranges(base)
+    changed = {p for p in ranges}
+    newest = max(((ROOT / p).stat().st_mtime for p in changed if (ROOT / p).exists()), default=0)
+    if newest > LEDGER.stat().st_mtime:
+        print("The ledger is older than your changes; rebuilding...", file=sys.stderr)
+        led = build(led["sources"], led.get("jars", []), os.cpu_count())
+    named_for = defaultdict(list)
+    for k, v in led.get("named", {}).items():
+        for f in v:
+            named_for[f].append(k)
+    for k, v in led.get("linked", {}).items():
+        named_for[v["fn"]].append(k)
+    gaps_by_vanilla = defaultdict(list)
+    for g in led["gaps"]:
+        if g.get("vanilla"):
+            gaps_by_vanilla[g["vanilla"]].append(g)
+    ports, suggest, bare, stale = [], [], [], []
+    for f in led["fns"]:
+        spans = ranges.get(f["file"])
+        if not spans or f.get("test") or not any(a <= (f["end"] or f["line"]) and f["line"] <= b for a, b in spans):
+            continue
+        name = lambda k: short(led["methods"][k]["class"], led["methods"][k]["name"])
+        for k in f["primary"]:
+            if k not in led["methods"]:
+                continue
+            gs = sorted(gaps_by_vanilla.get(k, []), key=gap_rank)
+            gs = [g for g in gs if g["kind"] != "callee"] + [g for g in gs if g["kind"] == "callee"][:2]
+            m = led["methods"][k]
+            ports.append({"fn": fn_ref(led, f["id"]), "ports": f"{name(k)} ({m['file']}:{m['lines'][0][0] if m['lines'] else '?'})",
+                          "open gaps": [gap_text(led, g) for g in gs[:6]]})
+        if not f["cites"] and named_for.get(f["id"]):
+            k = named_for[f["id"]][0]
+            suggest.append(f"{fn_ref(led, f['id'])}: looks like the port of {name(k)}; open its doc with `{name(k)}`")
+        elif not f["cites"] and (f["end"] or f["line"]) - f["line"] >= 12:
+            bare.append(fn_ref(led, f["id"]))
+    for g in led["gaps"]:
+        if g["kind"] == "stale" and any(a <= g["line"] <= b for a, b in ranges.get(g["file"], ())):
+            stale.append(gap_text(led, g))
+    out = {"base": f"{base} ({mb[:9]})", "files changed": len(changed), "ports you touched": ports,
+           "citations to add": suggest, "stale citations": stale,
+           "long uncited fns (cite the vanilla method if they port one)": bare[:15]}
+    if compare:
+        print(f"Building the ledger at {mb[:9]} to compare...", file=sys.stderr)
+        out.update(diff_ledgers(build_at(mb, led), led))
+    if as_json:
+        print(json.dumps(out, indent=1))
+        return
+    for k, v in out.items():
+        if isinstance(v, list):
+            if not v:
+                continue
+            print(f"{k}:")
+            for x in v:
+                if isinstance(x, dict):
+                    print(f"  {x['fn']}\n    ports {x['ports']}")
+                    for gg in x["open gaps"]:
+                        print(f"    - {gg}")
+                else:
+                    print(f"  {x}")
+        else:
+            print(f"{k}: {v}")
+
+
+REPORT_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Port ledger</title>
+<style>
+:root { --bg: #fff; --fg: #1b1b1b; --muted: #666; --line: #e3e3e3; --chip: #f2f2f2; --accent: #2457c5;
+  --ok: #1d7a3a; --mid: #946200; --bad: #b3261e; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151515; --fg: #e8e8e8; --muted: #9a9a9a; --line: #2c2c2c;
+  --chip: #232323; --accent: #8ab0ff; --ok: #6fcf8f; --mid: #e0b54a; --bad: #ff8a80; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+header { padding: 20px 16px 8px; max-width: 1200px; margin: auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); }
+nav { display: flex; gap: 4px; margin: 14px 0 0; border-bottom: 1px solid var(--line); }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 12px;
+  font: inherit; cursor: pointer; }
+nav button.on { color: var(--fg); border-color: var(--accent); }
+main { max-width: 1200px; margin: auto; padding: 12px 16px 40px; }
+input, select { font: inherit; color: inherit; background: var(--chip); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; }
+input { width: 100%; }
+.row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.row > input { flex: 1; min-width: 220px; }
+.item { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.k { font-weight: 600; }
+.st { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 4px; background: var(--chip); margin-left: 6px; }
+.ported, .named, .mentioned { color: var(--ok); } .linked, .inferred { color: var(--mid); } .missing { color: var(--bad); }
+.trivial { color: var(--muted); }
+code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+th { cursor: pointer; color: var(--muted); font-weight: 500; }
+.scroll { overflow-x: auto; }
+.bar { height: 6px; background: var(--chip); border-radius: 3px; min-width: 60px; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.more { color: var(--muted); padding: 10px 0; }
+</style></head><body>
+<header><h1>Port ledger</h1><div class="sub" id="summary"></div>
+<nav><button data-tab="search" class="on">Find</button><button data-tab="gaps">Gaps</button><button data-tab="coverage">Coverage</button></nav></header>
+<main>
+<section id="search"><div class="row"><input id="q" placeholder="A vanilla class or method (EyeOfEnder, LivingEntity.travel) or a Rust fn or file (remote_use, spear.rs)" autofocus>
+<select id="st"><option value="">any status</option><option>ported</option><option>named</option><option>mentioned</option><option>linked</option><option>inferred</option><option>missing</option><option>trivial</option></select></div><div id="results"></div></section>
+<section id="gaps" hidden><div class="row"><select id="gk"></select><input id="gq" placeholder="Filter gaps"></div><div id="gapl"></div></section>
+<section id="coverage" hidden><div class="scroll"><table id="cov"></table></div></section>
+</main>
+<script>
+const D = __DATA__;
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"})[c]);
+$("summary").textContent = D.summary;
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== b.dataset.tab);
+});
+const hay = D.methods.map(m => (m[0] + " " + m[1] + " " + m[4].join(" ")).toLowerCase());
+function search() {
+  const q = $("q").value.trim().toLowerCase(), st = $("st").value, out = [];
+  if (q.length < 2 && !st) { $("results").innerHTML = '<div class="more">Type at least two letters.</div>'; return; }
+  const terms = q.split(/\\s+/).filter(Boolean);
+  for (let i = 0; i < D.methods.length && out.length < 300; i++) {
+    const m = D.methods[i];
+    if (st && m[2] !== st) continue;
+    if (terms.every(t => hay[i].includes(t))) out.push(m);
+  }
+  $("results").innerHTML = out.map(m => `<div class="item"><span class="k">${esc(m[0])}</span><span class="st ${m[2]}">${m[2]}</span>
+    <div><code>${esc(m[3])}</code></div>${m[4].map(l => `<div>&rarr; <code>${esc(l)}</code></div>`).join("")}</div>`).join("")
+    + (out.length >= 300 ? '<div class="more">First 300 shown; narrow the search.</div>' : out.length ? "" : '<div class="more">Nothing matches.</div>');
+}
+$("q").oninput = search; $("st").onchange = search;
+const kinds = [...new Set(D.gaps.map(g => g[0]))];
+$("gk").innerHTML = '<option value="">every kind</option>' + kinds.map(k => `<option>${k}</option>`).join("");
+function gaps() {
+  const k = $("gk").value, q = $("gq").value.trim().toLowerCase();
+  const list = D.gaps.filter(g => (!k || g[0] === k) && (!q || g[1].toLowerCase().includes(q)));
+  $("gapl").innerHTML = list.slice(0, 500).map(g => `<div class="item"><span class="st">${g[0]}</span> ${esc(g[1])}</div>`).join("")
+    + `<div class="more">${list.length} gaps${list.length > 500 ? ", first 500 shown" : ""}.</div>`;
+}
+$("gk").onchange = gaps; $("gq").oninput = gaps; gaps();
+let sortCol = 1, sortDir = -1;
+function cov() {
+  const rows = D.coverage.slice().sort((a, b) => (a[sortCol] > b[sortCol] ? 1 : a[sortCol] < b[sortCol] ? -1 : 0) * sortDir);
+  $("cov").innerHTML = "<tr>" + D.covcols.map((c, i) => `<th data-i="${i}">${c}</th>`).join("") + "<th></th></tr>"
+    + rows.map(r => "<tr>" + r.map(v => `<td>${v}</td>`).join("") + `<td><div class="bar"><i style="width:${r[r.length - 1]}%"></i></div></td></tr>`).join("");
+  document.querySelectorAll("#cov th[data-i]").forEach(th => th.onclick = () => {
+    const i = +th.dataset.i; sortDir = sortCol === i ? -sortDir : (i ? -1 : 1); sortCol = i; cov();
+  });
+}
+cov(); search();
+</script></body></html>
+"""
+
+
 def cmd_report(led):
     lines = ["# Port ledger", "", f"Vanilla sources: {', '.join(led['sources'])}", ""]
     rows = coverage_rows(led, None, 2)
     tot = Counter()
     for c in rows.values():
         tot.update(c)
-    lines += [f"{tot['total']} vanilla methods in the packages Horizon ports: {tot['ported']} ported by a fn whose doc opens "
-              f"with them, {tot['named']} by a same-named fn in a file citing the class, {tot['mentioned']} named in a comment, "
-              f"{tot['inferred']} matched by shared ids and numbers, {tot['missing']} with no port found.", "",
+    lines += [f"{tot['total']} vanilla methods outside the skipped packages: {tot['ported']} ported by a fn whose doc opens "
+              f"with them, {tot['named']} by a same-named fn (in a file citing the class, an impl of it or a file named "
+              f"for it), {tot['mentioned']} named in a comment, {tot['linked']} linked through the call graph, "
+              f"{tot['inferred']} matched by shared ids and numbers, {tot['trivial']} too small to port alone, "
+              f"{tot['missing']} with no port found ({found_pct(tot):.0f}% of those worth porting found).", "",
               "## Coverage by package", "",
-              "| Package | Methods | Ported | Named | Mentioned | Inferred | Missing | Found % |",
-              "|---|---:|---:|---:|---:|---:|---:|---:|"]
+              "| Package | Methods | " + " | ".join(k.capitalize() for k in COVERAGE_COLS) + " | Found % |",
+              "|---|---:|" + "---:|" * len(COVERAGE_COLS) + "---:|"]
     for p, c in sorted(rows.items(), key=lambda kv: -kv[1]["total"])[:80]:
-        lines.append(f"| {p} | {c['total']} | {c['ported']} | {c['named']} | {c['mentioned']} | {c['inferred']} | "
-                     f"{c['missing']} | {100 * (c['total'] - c['missing']) / c['total']:.0f} |")
+        lines.append(f"| {p} | {c['total']} | " + " | ".join(str(c[k]) for k in COVERAGE_COLS) + f" | {found_pct(c):.0f} |")
     counts = Counter(g["kind"] for g in led["gaps"])
     lines += ["", "## Gaps", "", ", ".join(f"{k}: {v}" for k, v in counts.most_common()), ""]
     for kind, title in (("seam", "Ported on both paths (in-frame and server-client), wired on only one"),
                         ("client", "Client-only effects the server-client path never reaches"),
+                        ("drift", "Ports that never name a sound, particle, item or constant vanilla uses"),
                         ("class", "Whole classes nothing ports, next to ported neighbours"),
                         ("callee", "Ported callers that never reach a ported callee"),
                         ("stale", "Citations the pinned version doesn't have")):
-        items = [g for g in led["gaps"] if g["kind"] == kind]
+        items = sorted((g for g in led["gaps"] if g["kind"] == kind), key=gap_rank)
         if not items:
             continue
         lines += [f"### {title} ({len(items)})", ""]
@@ -1287,7 +2216,33 @@ def cmd_report(led):
     lines += ["## Most-called vanilla methods with no port", ""]
     lines += [f"- {u['vanilla']} ({u['callers']} callers, {u['status']})" for u in unported(led, None, 150)]
     (OUT / "report.md").write_text("\n".join(lines) + "\n")
+    write_html(led, rows, tot)
     print(OUT / "report.md")
+    print(OUT / "report.html")
+
+
+def write_html(led, rows, tot):
+    """report.html: one page to look anything up in, offline, no server."""
+    def locs(k):
+        fids = led["ported"].get(k) or led.get("named", {}).get(k) or (
+            [led["linked"][k]["fn"]] if k in led.get("linked", {}) else []) or [i["fn"] for i in led["inferred"].get(k, [])[:1]]
+        return [fn_ref(led, f) for f in fids[:3]] or [fn_ref(led, f) + " (mention)" for f in led["mentioned"].get(k, [])[:2]]
+    methods = []
+    for k, m in led["methods"].items():
+        if m["class"].startswith(SKIP_PACKAGES) or m["name"] == "<clinit>" or m.get("anonymous"):
+            continue
+        methods.append([short(m["class"], m["name"]), m["class"], status_of(led, k),
+                        f"{m['file']}:{m['lines'][0][0] if m['lines'] else '?'}", locs(k)])
+    methods.sort(key=lambda r: (COVERAGE_COLS.index(r[2]) if r[2] in COVERAGE_COLS else 9, r[0]))
+    gaps = [[g["kind"], gap_text(led, g).split(": ", 1)[1]] for g in sorted(led["gaps"], key=gap_rank)]
+    covcols = ["package", "methods"] + list(COVERAGE_COLS) + ["found %"]
+    coverage = [[p, c["total"]] + [c[k] for k in COVERAGE_COLS] + [found_pct(c)]
+                for p, c in sorted(rows.items(), key=lambda kv: -kv[1]["total"])]
+    data = {"summary": f"{len(led['methods'])} vanilla methods, {len(led['fns'])} Rust functions; "
+                       f"{found_pct(tot):.0f}% of the methods worth porting have a port found; {len(led['gaps'])} gaps.",
+            "methods": methods, "gaps": gaps, "covcols": covcols, "coverage": coverage}
+    payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    (OUT / "report.html").write_text(REPORT_HTML.replace("__DATA__", payload))
 
 
 def main():
@@ -1296,6 +2251,8 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build")
     b.add_argument("--sources", action="append", help="a directory of decompiled vanilla Java (repeatable)")
+    b.add_argument("--jar", action="append", help="a vanilla game jar (repeatable; default: the lab's or the launcher's)")
+    b.add_argument("--no-jar", action="store_true", help="read the sources only")
     b.add_argument("--jobs", type=int, default=os.cpu_count())
     sub.add_parser("where").add_argument("query")
     sub.add_parser("what").add_argument("location")
@@ -1304,21 +2261,28 @@ def main():
     c.add_argument("--package")
     c.add_argument("--depth", type=int, default=2)
     g = sub.add_parser("gaps")
-    g.add_argument("--kind", choices=["seam", "client", "class", "callee", "stale", "unported"])
+    g.add_argument("--kind", choices=["seam", "client", "drift", "class", "callee", "stale", "unported"])
     g.add_argument("--package")
     g.add_argument("--limit", type=int, default=50)
     sub.add_parser("report")
+    d = sub.add_parser("diff", help="what changed against another ledger.json")
+    d.add_argument("other")
+    ck = sub.add_parser("check", help="what a branch's changes touch: ports, their open gaps, citations to add")
+    ck.add_argument("--base", default="origin/main")
+    ck.add_argument("--no-compare", action="store_true", help="skip building the base to list gaps opened and closed")
+    sub.add_parser("issue", help="the vanilla classes, Rust code and gaps a bug report points at").add_argument(
+        "ref", help=f"an issue number on {ISSUE_REPO}, the report's text, or - to read it from stdin")
     args = parser.parse_args()
     if args.cmd == "build":
-        led = build(args.sources or default_sources(), args.jobs)
+        jars = [] if args.no_jar else (args.jar or default_jars())
+        led = build(args.sources or default_sources(), jars, args.jobs)
         rows = coverage_rows(led)
         tot = Counter()
         for r in rows.values():
             tot.update(r)
-        found = tot["total"] - tot["missing"]
-        print(f"{len(led['methods'])} vanilla methods, {len(led['fns'])} Rust functions; of {tot['total']} in ported "
-              f"packages: {tot['ported']} ported, {tot['named']} named, {tot['mentioned']} mentioned, {tot['inferred']} "
-              f"inferred ({100 * found / max(1, tot['total']):.0f}% found); gaps: "
+        print(f"{len(led['methods'])} vanilla methods, {len(led['fns'])} Rust functions; of {tot['total']} outside the "
+              f"skipped packages: " + ", ".join(f"{tot[k]} {k}" for k in COVERAGE_COLS)
+              + f" ({found_pct(tot):.0f}% of those worth porting found); gaps: "
               + ", ".join(f"{k} {v}" for k, v in Counter(gg['kind'] for gg in led['gaps']).most_common())
               + f" -> {LEDGER}")
         return
@@ -1335,6 +2299,12 @@ def main():
         cmd_gaps(led, args.kind, args.package, args.limit, args.json)
     elif args.cmd == "report":
         cmd_report(led)
+    elif args.cmd == "issue":
+        cmd_issue(led, args.ref, args.json)
+    elif args.cmd == "diff":
+        cmd_diff(led, args.other, args.json)
+    elif args.cmd == "check":
+        cmd_check(led, args.base, not args.no_compare, args.json)
 
 
 if __name__ == "__main__":
