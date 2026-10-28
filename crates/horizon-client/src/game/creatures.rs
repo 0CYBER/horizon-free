@@ -2949,7 +2949,15 @@ impl Game<'_> {
                 _ => 0.0,
             };
             self.hit_special(id, amount, by_player, false);
-            return Ok(());
+            // ThrowableProjectile.onHit goes on after onHitEntity: a pearl
+            // still takes its owner to where it broke (into the crystal's
+            // blast), an egg still hatches, a snowball still breaks.
+            if !matches!(
+                p.kind,
+                ProjectileKind::EnderPearl | ProjectileKind::Egg | ProjectileKind::Snowball
+            ) {
+                return Ok(());
+            }
         }
         if p.arrow.is_some()
             && let Hit::Entity {
