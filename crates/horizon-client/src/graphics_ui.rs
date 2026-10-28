@@ -221,7 +221,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::Antialiasing,
                 Medium,
-                "FXAA smooths jagged edges of the world; slightly softer image.",
+                "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.",
             ),
             h(
                 H::Hdr,
@@ -383,7 +383,14 @@ impl H {
                 n => labelled("Worker Threads", n),
             },
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
-            H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
+            H::Antialiasing => labelled(
+                "Anti-aliasing",
+                match (g.fxaa, g.taa) {
+                    (_, true) => "TAA",
+                    (true, false) => "FXAA",
+                    (false, false) => "Off",
+                },
+            ),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
             H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
@@ -441,7 +448,12 @@ impl H {
             H::Weather => g.weather = !g.weather,
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
-            H::Antialiasing => g.fxaa = !g.fxaa,
+            // Off, FXAA, TAA.
+            H::Antialiasing => {
+                let i = if g.taa { 2 } else { usize::from(g.fxaa) };
+                let i = (i + if back { 2 } else { 1 }) % 3;
+                (g.fxaa, g.taa) = (i == 1, i == 2);
+            }
             H::Hdr => g.hdr = !g.hdr,
             H::BatteryMode => g.battery = !g.battery,
             H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
@@ -481,7 +493,6 @@ impl Item {
             Item::Horizon(H::Fog) => g.fog,
             Item::Horizon(H::Weather) => g.weather,
             Item::Horizon(H::AnimatedTextures) => g.animated_textures,
-            Item::Horizon(H::Antialiasing) => g.fxaa,
             Item::Horizon(H::Hdr) => g.hdr,
             Item::Horizon(H::BatteryMode) => g.battery,
             Item::Vanilla(Opt::ViewBobbing) => s.view_bobbing,
@@ -1049,6 +1060,18 @@ mod tests {
         assert_eq!(H::UploadBudget.slider(&s), Some(1.0));
         H::UploadBudget.set_slider(&mut s, 0.0);
         assert_eq!(s.horizon.upload_budget_kib, 0);
+    }
+
+    #[test]
+    fn antialiasing_cycles_off_fxaa_taa() {
+        let mut s = Settings::default();
+        let item = Item::Horizon(H::Antialiasing);
+        for label in ["FXAA", "TAA", "Off"] {
+            item.cycle(&mut s, false, [854, 480]);
+            assert_eq!(item.label(&s).plain(), format!("Anti-aliasing: {label}"));
+        }
+        item.cycle(&mut s, true, [854, 480]);
+        assert_eq!((s.horizon.fxaa, s.horizon.taa), (false, true));
     }
 
     #[test]

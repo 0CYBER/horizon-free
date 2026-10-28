@@ -262,6 +262,8 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
+    /// TAA over the world (FXAA is off while it is on).
+    pub taa: bool,
     /// HDR output (HDR10, or scRGB), where the display path offers it.
     pub hdr: bool,
     /// HDR paper white (where SDR white sits), in nits.
@@ -299,6 +301,7 @@ impl Default for Graphics {
             overlay: Overlay::Off,
             resolution_scale: 100,
             fxaa: false,
+            taa: false,
             hdr: false,
             hdr_paper_white: 200,
             hdr_peak: 1000,
@@ -361,6 +364,7 @@ impl Graphics {
                 "workers" => g.workers = number(g.workers).min(64),
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
+                "taa" => g.taa = flag(g.taa),
                 "hdr" => g.hdr = flag(g.hdr),
                 "hdrPaperWhite" => g.hdr_paper_white = number(g.hdr_paper_white).clamp(80, 480),
                 "hdrPeak" => g.hdr_peak = number(g.hdr_peak).clamp(200, 2000),
@@ -381,7 +385,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -406,6 +410,7 @@ impl Graphics {
             },
             self.resolution_scale,
             bool_text(self.fxaa),
+            bool_text(self.taa),
             bool_text(self.hdr),
             self.hdr_paper_white,
             self.hdr_peak,
@@ -506,6 +511,7 @@ mod tests {
             overlay: Overlay::Graph,
             resolution_scale: 75,
             fxaa: true,
+            taa: true,
             hdr: true,
             hdr_paper_white: 240,
             hdr_peak: 1400,
