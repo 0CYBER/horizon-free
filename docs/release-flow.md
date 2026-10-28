@@ -513,7 +513,7 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
   `nightly-<date>` release points to, or any other branch (`nightly.py prune-builds`).
 - **Refused.** A pull request that changes a path CODEOWNERS gives to Ludovic (`.github/`, `tools/ci/`, the
   signing and update code, `launcher/src/backend.rs`, `launcher/links.json`…), more than 30 in a set, and more than
-  6 builds a day (the scheduled one always runs).
+  12 builds a day (the scheduled one always runs; 6 until 2026-10-28).
 - **No repository role.** Reviewers need no permission on the repository: the list file and the workflow are the
   whole of it.
 - **Ludovic stays in charge.**
