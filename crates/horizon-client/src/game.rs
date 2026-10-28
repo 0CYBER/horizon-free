@@ -11684,6 +11684,11 @@ impl Game<'_> {
         } else {
             self.bob_matrix(camera_alpha as f32)
         };
+        let spin = if title {
+            glam::Mat4::IDENTITY
+        } else {
+            self.spinning_matrix(camera_alpha as f32)
+        };
         let terrain_distance = self.terrain_distance();
         let distance = (terrain_distance * 16) as f32;
         let depth_far =
@@ -11691,7 +11696,7 @@ impl Game<'_> {
         self.view_frustum = self
             .renderer
             .as_ref()
-            .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob, depth_far));
+            .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob * spin, depth_far));
         // Keep the buffer local while builders need mutable access to the game.
         let mut entities = std::mem::take(&mut self.entity_vertices);
         entities.clear();
@@ -11774,6 +11779,7 @@ impl Game<'_> {
             pitch,
             fov_degrees,
             bob,
+            spin,
             sky,
             distance,
             detail_distance: (self.streaming.radius * 16) as f32,
@@ -14688,6 +14694,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         pitch: 10.0,
         fov_degrees: 85.0,
         bob: glam::Mat4::IDENTITY,
+        spin: glam::Mat4::IDENTITY,
         sky: horizon_client::environment::Sky::default(),
         distance: 12.0,
         detail_distance: 12.0,
