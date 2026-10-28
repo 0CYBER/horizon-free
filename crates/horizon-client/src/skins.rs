@@ -123,16 +123,31 @@ pub fn profile_skin_url(profile: &serde_json::Value) -> Option<String> {
 /// the same `properties` list, held as a compound. A name-only profile (a
 /// string tag) has no properties and no skin URL.
 pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String> {
-    let properties = match profile.get("properties")? {
-        horizon_world::nbt::Tag::List(list) => list,
-        _ => return None,
-    };
-    let value = properties.iter().find_map(|p| {
-        let name = nbt_text(p.get("name"))?;
-        (name == "textures")
-            .then(|| nbt_text(p.get("value")))
-            .flatten()
-    })?;
+    let props = profile
+        .get("properties")
+        .or_else(|| profile.get("Properties"))?;
+    let value = match props {
+        horizon_world::nbt::Tag::List(list) => list.iter().find_map(|p| {
+            let name = nbt_text(p.get("name")).or_else(|| nbt_text(p.get("Name")))?;
+            if name == "textures" {
+                nbt_text(p.get("value")).or_else(|| nbt_text(p.get("Value")))
+            } else {
+                None
+            }
+        }),
+        horizon_world::nbt::Tag::Compound(map) => {
+            let textures = map
+                .get(&"textures".into())
+                .or_else(|| map.get(&"Textures".into()))?;
+            match textures {
+                horizon_world::nbt::Tag::List(list) => list
+                    .iter()
+                    .find_map(|p| nbt_text(p.get("Value")).or_else(|| nbt_text(p.get("value")))),
+                _ => None,
+            }
+        }
+        _ => None,
+    }?;
     unpack(&value, Signature::Unsigned, &TEXTURE_URIS).skin
 }
 
@@ -140,7 +155,8 @@ pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String>
 /// uuid string (older and component forms). Used for `DefaultPlayerSkin.get`
 /// when a head's skin is not downloaded yet.
 pub fn profile_uuid_nbt(profile: &horizon_world::nbt::Tag) -> Option<u128> {
-    match profile.get("id")? {
+    let id_tag = profile.get("id").or_else(|| profile.get("Id"))?;
+    match id_tag {
         horizon_world::nbt::Tag::IntArray(v) if v.len() == 4 => Some(
             v.iter()
                 .fold(0u128, |a, &w| (a << 32) | u128::from(w as u32)),
@@ -388,32 +404,70 @@ pub fn parse_profile(v: &serde_json::Value) -> ProfileInfo {
             dynamic: valid_player_name(name).then(|| NameOrId::Name(name.clone())),
         };
     }
-    let name = v.get("name").and_then(|n| n.as_str()).map(str::to_owned);
-    let id = v.get("id").and_then(profile_id);
-    let properties = v.get("properties").and_then(|p| p.as_array());
-    let textures = properties
-        .into_iter()
-        .flatten()
-        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("textures"))
-        .and_then(|p| {
-            Some((
-                p.get("value")?.as_str()?.to_owned(),
-                if p.get("signature").is_some() {
-                    Signature::Signed
-                } else {
-                    Signature::Unsigned
-                },
-            ))
+    let name = v
+        .get("name")
+        .or_else(|| v.get("Name"))
+        .and_then(|n| n.as_str())
+        .map(str::to_owned);
+    let id = v.get("id").or_else(|| v.get("Id")).and_then(profile_id);
+    let properties = v.get("properties").or_else(|| v.get("Properties"));
+    let textures = match properties {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .find(|p| {
+                p.get("name")
+                    .or_else(|| p.get("Name"))
+                    .and_then(|n| n.as_str())
+                    == Some("textures")
+            })
+            .and_then(|p| {
+                Some((
+                    p.get("value")
+                        .or_else(|| p.get("Value"))?
+                        .as_str()?
+                        .to_owned(),
+                    if p.get("signature").or_else(|| p.get("Signature")).is_some() {
+                        Signature::Signed
+                    } else {
+                        Signature::Unsigned
+                    },
+                ))
+            }),
+        Some(serde_json::Value::Object(obj)) => {
+            let textures_prop = obj.get("textures").or_else(|| obj.get("Textures"));
+            match textures_prop {
+                Some(serde_json::Value::Array(arr)) => arr.iter().find_map(|p| {
+                    let val = p
+                        .get("Value")
+                        .or_else(|| p.get("value"))?
+                        .as_str()?
+                        .to_owned();
+                    let sig = if p.get("Signature").or_else(|| p.get("signature")).is_some() {
+                        Signature::Signed
+                    } else {
+                        Signature::Unsigned
+                    };
+                    Some((val, sig))
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let has_properties = textures.is_some()
+        || properties.is_some_and(|p| match p {
+            serde_json::Value::Array(a) => !a.is_empty(),
+            serde_json::Value::Object(o) => !o.is_empty(),
+            _ => false,
         });
     // `ResolvableProfile.create`: a Partial is Dynamic with no properties
     // and exactly one of a name or an id.
-    let dynamic =
-        (properties.is_none_or(|p| p.is_empty()) && name.is_some() != id.is_some()).then(|| {
-            name.as_deref().map_or_else(
-                || NameOrId::Id(id.unwrap()),
-                |n| NameOrId::Name(n.to_owned()),
-            )
-        });
+    let dynamic = (!has_properties && name.is_some() != id.is_some()).then(|| {
+        name.as_deref().map_or_else(
+            || NameOrId::Id(id.unwrap()),
+            |n| NameOrId::Name(n.to_owned()),
+        )
+    });
     ProfileInfo {
         // `createPartialProfile`: the id, else the name's offline UUID, else nil.
         id: id
@@ -432,11 +486,18 @@ pub fn dynamic_nbt(profile: &horizon_world::nbt::Tag) -> Option<NameOrId> {
         let name = s.to_string_lossy();
         return valid_player_name(&name).then_some(NameOrId::Name(name));
     }
-    if matches!(profile.get("properties"), Some(horizon_world::nbt::Tag::List(l)) if !l.is_empty())
+    if let Some(props) = profile
+        .get("properties")
+        .or_else(|| profile.get("Properties"))
     {
-        return None;
+        match props {
+            horizon_world::nbt::Tag::List(l) if !l.is_empty() => return None,
+            horizon_world::nbt::Tag::Compound(m) if !m.is_empty() => return None,
+            _ => {}
+        }
     }
-    match (nbt_text(profile.get("name")), profile_uuid_nbt(profile)) {
+    let name = nbt_text(profile.get("name")).or_else(|| nbt_text(profile.get("Name")));
+    match (name, profile_uuid_nbt(profile)) {
         (Some(name), None) => Some(NameOrId::Name(name)),
         (None, Some(id)) => Some(NameOrId::Id(id)),
         _ => None,
@@ -1023,6 +1084,25 @@ mod tests {
             super::profile_uuid_nbt(&text_id),
             Some(u128::from_str_radix("e843a1f4000000010000000200000003", 16).unwrap())
         );
+        // Legacy SkullOwner format with Properties compound and uppercase Id.
+        let legacy = horizon_world::nbt::parse_snbt(&format!(
+            r#"{{Name:"T",Id:[I;-158327916,1572358581,-2125825222,-487948715],Properties:{{textures:[{{Value:"{value}"}}]}}}}"#
+        ))
+        .unwrap()
+        .0;
+        assert_eq!(
+            super::profile_skin_url_nbt(&legacy).as_deref(),
+            Some("https://textures.minecraft.net/texture/abc123")
+        );
+        assert_eq!(
+            super::profile_uuid_nbt(&legacy),
+            Some(
+                [-158327916, 1572358581, -2125825222, -487948715]
+                    .iter()
+                    .fold(0u128, |a, &w: &i32| (a << 32) | u128::from(w as u32))
+            )
+        );
+        assert_eq!(super::dynamic_nbt(&legacy), None);
     }
 
     #[test]

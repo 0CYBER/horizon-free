@@ -652,11 +652,16 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         return Some((pos, BlockEntity::Beacon(Box::new(beacon))));
     }
     // A skull's block entity id is not its block's name (every head block).
-    if id == "minecraft:skull" {
+    if id == "minecraft:skull" || id == "Skull" {
+        let profile = tag
+            .get("profile")
+            .or_else(|| tag.get("SkullOwner"))
+            .or_else(|| tag.get("ExtraType"))
+            .cloned();
         return Some((
             pos,
             BlockEntity::Skull(crate::containers::Skull::new(
-                tag.get("profile").cloned(),
+                profile,
                 text(tag.get("note_block_sound")),
                 tag.get("custom_name")
                     .and_then(crate::block_entity_nbt::component),
@@ -4679,6 +4684,26 @@ mod tests {
             Some(BlockEntity::Skull(_))
         ));
         assert!(BlockEntity::for_block("minecraft:piston_head").is_none());
+    }
+
+    #[test]
+    fn skull_block_entity_decodes_legacy_skull_owner() {
+        let legacy = horizon_world::nbt::parse_snbt(
+            r#"{id:"minecraft:skull",x:5,y:65,z:-20,SkullOwner:{Name:"CustomStatue",Id:[I;9,8,7,6],Properties:{textures:[{Value:"eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvMTIzIn19fQ=="}]}}}"#,
+        )
+        .unwrap()
+        .0;
+        let (pos, back) = decode_block_entity(&legacy).expect("skull from SkullOwner");
+        assert_eq!(pos, (5, 65, -20));
+        let crate::containers::BlockEntity::Skull(skull) = &back else {
+            panic!("not a skull");
+        };
+        assert!(skull.profile.is_some());
+        let skin = skull.skin.as_ref().expect("skull skin");
+        assert_eq!(
+            skin.download.as_ref().map(|(u, _)| u.as_str()),
+            Some("http://textures.minecraft.net/texture/123")
+        );
     }
 
     #[test]
