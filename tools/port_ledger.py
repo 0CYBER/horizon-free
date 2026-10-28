@@ -2441,6 +2441,52 @@ cov(); search();
 """
 
 
+def cmd_map_check(led, paths):
+    """Check verdict-map files against the last build without rebuilding: every class, method and fn a row
+    names must exist (several people can check their own files at once)."""
+    fn_at = set()
+    for f in led["fns"]:
+        if not f.get("decl"):
+            fn_at.add((f["file"], f.get("owner") or "", f["name"]))
+            fn_at.add((f["file"], "*", f["name"]))
+    classes = led["classes"]
+
+    def has_method(cp, meth, depth=0):
+        if key(cp, meth) in led["methods"]:
+            return True
+        return depth < 12 and any(sup in classes and has_method(sup, meth, depth + 1) for sup in classes.get(cp, {}).get("extends", []))
+
+    problems, rows = [], 0
+    for path in paths:
+        for n, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            rows += 1
+            parts = [x.strip() for x in line.split("\t")] + ["", "", ""]
+            name, verdict, where = parts[0], parts[1], parts[2]
+            head, _, last = name.rpartition(".")
+            cls_q, meth = (head, last) if head and (last[:1].islower() or last.startswith("<")) else (name, None)
+            q = cls_q.replace(".", "$")
+            cands = [p for p in classes if p.endswith("/" + q) or p.rsplit("/", 1)[-1] == q]
+            where_ok = True
+            if verdict in ("port", "inline"):
+                file_, _, rest = where.partition("::")
+                owner, _, fname = rest.rpartition("::")
+                where_ok = (file_, owner, fname) in fn_at or (file_, "*", fname) in fn_at
+            if len(cands) != 1:
+                problems.append(f"{path}:{n} {name}: {'no' if not cands else 'ambiguous'} class {cls_q}")
+            elif meth and not has_method(cands[0], meth):
+                problems.append(f"{path}:{n} {name}: no method {meth} on {cls_q}")
+            elif not (verdict in ("port", "inline", "missing") or verdict.startswith("skip:") and verdict[5:] in SKIP_REASONS
+                      or verdict == "home" and not meth):
+                problems.append(f"{path}:{n} {name}: unknown verdict {verdict!r}")
+            elif meth is None and verdict in ("port", "inline"):
+                problems.append(f"{path}:{n} {name}: a class row takes skip:<reason>, missing or home")
+            elif not where_ok:
+                problems.append(f"{path}:{n} {name}: no fn {where}")
+    print("\n".join(problems) if problems else f"{rows} rows, no problems.")
+
+
 def todo_batch(led, package=None, limit=150, start_after=None):
     """The next methods with no answer, whole classes at a time, in package order: what a mapper reads next."""
     by_class = defaultdict(list)
@@ -2582,6 +2628,8 @@ def main():
     g.add_argument("--package")
     g.add_argument("--limit", type=int, default=50)
     sub.add_parser("report")
+    mc = sub.add_parser("map-check", help="check verdict-map files against the last build, without rebuilding")
+    mc.add_argument("paths", nargs="+")
     t = sub.add_parser("todo", help="the next methods with no answer, for the verdict map (tools/port_map)")
     t.add_argument("--package", help="e.g. world/entity/animal")
     t.add_argument("--limit", type=int, default=150, help="about this many methods, whole classes at a time")
@@ -2624,6 +2672,8 @@ def main():
         cmd_issue(led, args.ref, args.json)
     elif args.cmd == "diff":
         cmd_diff(led, args.other, args.json)
+    elif args.cmd == "map-check":
+        cmd_map_check(led, args.paths)
     elif args.cmd == "todo":
         cmd_todo(led, args.package, args.limit, args.after, args.json)
     elif args.cmd == "check":
