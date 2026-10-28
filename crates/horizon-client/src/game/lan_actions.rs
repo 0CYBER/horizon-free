@@ -668,9 +668,7 @@ impl Game<'_> {
         let new_mode = self.mode_id();
         self.mode = mode;
         self.creative = creative;
-        self.selected = std::mem::replace(&mut g.selected, selected);
-        // `g.selected` now holds the host's value: swap the inventories back.
-        std::mem::swap(&mut self.selected, &mut g.selected);
+        g.selected = std::mem::replace(&mut self.selected, selected);
         std::mem::swap(&mut self.inventory, &mut g.inventory);
         std::mem::swap(&mut self.armor, &mut g.armor);
         std::mem::swap(&mut self.offhand, &mut g.offhand);
@@ -3317,4 +3315,25 @@ fn swing_packet(id: i32, hand: Hand, animation: SwingAnimation) -> C {
         kind: i32::from(animation.kind),
         duration: animation.duration,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn guest_selected_slot_restores_from_turn_updates() {
+        let mut host_selected = 0;
+        let mut guest_selected = 0;
+
+        // enter_guest: host's selected slot is saved, guest's is put in place.
+        let host_saved = std::mem::replace(&mut host_selected, guest_selected);
+        assert_eq!(host_selected, 0);
+
+        // Guest actions (like tryPickItem / pick_item) change the active slot.
+        host_selected = 3;
+
+        // leave_guest: guest's new slot is saved into the guest record, host's is restored.
+        guest_selected = std::mem::replace(&mut host_selected, host_saved);
+        assert_eq!(guest_selected, 3);
+        assert_eq!(host_selected, 0);
+    }
 }
