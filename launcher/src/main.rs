@@ -226,6 +226,8 @@ struct Launcher {
     dev_options: bool,
     /// The game is waiting for its session (a token renewal) before it starts.
     starting_client: Option<String>,
+    /// Play was pressed on a version not prepared yet: it starts once this preparation ends well.
+    play_when_prepared: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
     friend_code: String,
@@ -436,6 +438,7 @@ impl Launcher {
             dev_clicks: 0,
             dev_options: false,
             starting_client: None,
+            play_when_prepared: None,
             friend_code: String::new(),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
@@ -921,6 +924,13 @@ impl Launcher {
                     match job {
                         Job::Prepare => {
                             self.preparing = false;
+                            // Play pressed before the version was prepared plays now.
+                            if let Some(tag) = self.play_when_prepared.take() {
+                                if error.is_none() && backend::is_prepared(&tag) {
+                                    self.starting_pack = None;
+                                    self.start_client(tag);
+                                }
+                            }
                             if let (None, Some(started)) = (&error, self.prepare_started.take()) {
                                 self.perf.record_since("launcher.prepare_ms", started);
                             }
@@ -1542,6 +1552,27 @@ fn segments<T: Copy + PartialEq + 'static>(
                 .child(div().relative().child(tr(label)))
                 .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx))
         }))
+}
+
+/// What the Play button does for the selected version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlayPress {
+    Play,
+    /// Not prepared, for an account that owns the game: prepare it (from the player's install,
+    /// else downloaded from Mojang for that account), then play, as the official launcher does.
+    PrepareThenPlay,
+    /// Not prepared and no owner (signing in comes first), or busy preparing or playing.
+    Nothing,
+}
+
+/// `owner`: whether an account here owns the game, by the keychain (`Launcher::owner`).
+fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
+    match (prepared, owner) {
+        _ if busy => PlayPress::Nothing,
+        (true, _) => PlayPress::Play,
+        (false, Some(true)) => PlayPress::PrepareThenPlay,
+        (false, _) => PlayPress::Nothing,
+    }
 }
 
 /// The selected version once one has been removed: the saved choice if it is still installed,
@@ -2303,14 +2334,23 @@ impl Launcher {
                     .top(px(17.))
                     .child(blocks::icon("play", 22., t.on_face)),
             );
-        if !prepared || self.preparing || running {
-            play = disabled(play);
-        } else {
-            play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.picker_open = false;
-                this.play();
-                cx.notify();
-            }));
+        match play_press(prepared, self.owner, self.preparing || running) {
+            PlayPress::Nothing => play = disabled(play),
+            PlayPress::Play => {
+                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker_open = false;
+                    this.play();
+                    cx.notify();
+                }))
+            }
+            PlayPress::PrepareThenPlay => {
+                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker_open = false;
+                    this.play_when_prepared = this.selected().cloned();
+                    this.prepare(backend::MinecraftFrom::Install);
+                    cx.notify();
+                }))
+            }
         }
         let actions = div()
             .flex()
@@ -2338,8 +2378,14 @@ impl Launcher {
         let first = (!prepared && !self.preparing)
             .then_some(self.owner_shown())
             .flatten();
+        // No launcher folder with Minecraft on this computer: an owner needs none.
+        let no_install = self.settings.minecraft_dir.is_none();
         let resources_value = match first {
             _ if self.preparing => tr("Preparing…").to_string(),
+            Some(true) if no_install => trf(
+                "Not prepared. Play downloads Minecraft {version} from Mojang for your account and prepares it.",
+                &[("version", &version)],
+            ),
             Some(true) => trf(
                 "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.",
                 &[("version", &version)],
@@ -2369,6 +2415,18 @@ impl Launcher {
             }));
         }
         let prepare = match first {
+            Some(true) if no_install => div().child(
+                button(
+                    "prepare-download",
+                    "Download and prepare",
+                    Kind::Secondary,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.prepare(backend::MinecraftFrom::Mojang);
+                    cx.notify();
+                })),
+            ),
             Some(true) => div()
                 .flex()
                 .gap(px(8.))
@@ -2402,12 +2460,15 @@ impl Launcher {
             ),
             None => div().child(prepare),
         };
+        let owner = self.owner == Some(true);
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child(tr(
-                        "Not found. Choose the folder where your launcher keeps Minecraft.",
-                    ))
+                    .child(if owner {
+                        tr("None needed: Horizon downloads Minecraft from Mojang for your account.")
+                    } else {
+                        tr("Not found. Choose the folder where your launcher keeps Minecraft.")
+                    })
                     .into_any_element()
             },
             |p| {
@@ -4428,6 +4489,24 @@ mod tests {
             super::selection_after_removal(&[], Some("v0.2.47".into())),
             None
         );
+    }
+
+    /// An owner's Play works on a version not prepared yet: it prepares it (downloading
+    /// Minecraft from Mojang when this computer has no install), then plays. Without an owner
+    /// it stays off: signing in comes first.
+    #[test]
+    fn play_prepares_first_for_an_owner() {
+        use super::{play_press, PlayPress};
+        assert_eq!(play_press(true, Some(true), false), PlayPress::Play);
+        assert_eq!(play_press(true, None, false), PlayPress::Play);
+        assert_eq!(
+            play_press(false, Some(true), false),
+            PlayPress::PrepareThenPlay
+        );
+        assert_eq!(play_press(false, Some(false), false), PlayPress::Nothing);
+        assert_eq!(play_press(false, None, false), PlayPress::Nothing);
+        assert_eq!(play_press(false, Some(true), true), PlayPress::Nothing);
+        assert_eq!(play_press(true, Some(true), true), PlayPress::Nothing);
     }
 
     #[test]

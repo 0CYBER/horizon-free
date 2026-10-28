@@ -31,7 +31,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   system's libraries, the asset index and the assets. Every file must have the size and sha1
   Mojang lists. The Play page shows how far it is and has Cancel; files already whole are kept,
   so the next try goes on from there. **From my install** prepares from the player's own launcher
-  instead, and an install that lacks the version falls back to the download. Without an owner,
+  instead, and an install that lacks the version falls back to the download. **Play** on a version
+  not prepared yet does it all for an owner, as the official launcher does: it prepares from the
+  install when there is one, else downloads (with Mojang's Java when no Java 25 is installed), then
+  starts the game. With no install on the computer the Play page offers the download alone and the
+  Minecraft folder row says none is needed. Without an owner,
   the Play page asks to sign in first. `horizon-launcher prepare --download`.
 - **Mods**: search Modrinth (CurseForge support is coming soon) for resource
   packs and modpacks, each marked Works, Partly or Doesn't run in
