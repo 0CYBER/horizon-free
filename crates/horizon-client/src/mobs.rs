@@ -538,6 +538,8 @@ pub enum DamageKind {
     Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
+    /// `cramming`: too many entities in one place (`maxEntityCramming`).
+    Cramming,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -616,6 +618,7 @@ impl Damage {
                 | DamageKind::SonicBoom
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::Cramming
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -642,6 +645,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::Cramming
         )
     }
     pub fn is_projectile(&self) -> bool {
@@ -1824,6 +1828,8 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// The `mob_drops` game rule (`shouldDropLoot`).
     pub mob_drops: bool,
+    /// The `max_entity_cramming` game rule.
+    pub max_entity_cramming: i32,
     /// `getCurrentDifficultyAt` at the mob being ticked (near the player
     /// outside the mob tick).
     pub difficulty: spawning::LocalDifficulty,
@@ -2217,6 +2223,7 @@ impl Mob {
                     | DamageKind::InWall
                     | DamageKind::Thorns
                     | DamageKind::OutOfWorld
+                    | DamageKind::Cramming
                     | DamageKind::Generic
             )
     }
