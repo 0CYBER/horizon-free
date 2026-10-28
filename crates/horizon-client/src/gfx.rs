@@ -5224,11 +5224,12 @@ impl Renderer {
         if let Some((path, buffer)) = readback {
             if let Some(hdr_buffer) = hdr_readback {
                 let hdr_path = hdr_screenshot_path(&path);
-                if let Err(e) = self.write_hdr_screenshot(&hdr_path, &hdr_buffer) {
-                    log::warn!(
+                match self.write_hdr_screenshot(&hdr_path, &hdr_buffer) {
+                    Ok(()) => log::info!("Saved HDR screenshot to {}", hdr_path.display()),
+                    Err(e) => log::warn!(
                         "Horizon renderer: HDR screenshot {}: {e}",
                         hdr_path.display()
-                    );
+                    ),
                 }
             }
             self.screenshot_result = Some(
