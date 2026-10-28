@@ -3124,6 +3124,8 @@ impl Game<'_> {
             entries.push((local, own));
         }
         let mut resolved: Vec<(u128, String)> = Vec::new();
+        // PlayerSkin.model of each resolved skin: the textures' `slim`.
+        let mut slim = std::collections::HashSet::new();
         for (uuid, textures) in entries {
             // PlayerInfo.createSkinLookup: only the local player's own skin
             // may be unsigned.
@@ -3134,10 +3136,22 @@ impl Game<'_> {
                 })
             };
             if let Some(skin) = skin {
+                if textures.slim {
+                    slim.insert(uuid);
+                }
                 resolved.push((uuid, skin));
             }
         }
         resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
+        // PlayerInfo.getSkin: the downloaded skin and its model, else the
+        // profile's default skin (DefaultPlayerSkin.get), slim or wide.
+        let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
+            Some(skin) => (skin.clone(), slim.contains(&uuid)),
+            None => {
+                let skin = horizon_client::tab_list::default_skin(uuid);
+                (skin.to_owned(), skin.contains("/slim/"))
+            }
+        };
         let Some((level, skins, own)) = self.remote.as_mut().map(|r| {
             r.skins = resolved.into_iter().collect();
             (
@@ -3146,30 +3160,26 @@ impl Game<'_> {
                     .map(|(id, uuid)| (*id as u32, *uuid))
                     .collect::<Vec<_>>(),
                 r.skins.clone(),
-                // Without a skin, the profile's default one (DefaultPlayerSkin.get).
-                r.skins
-                    .get(&r.profile)
-                    .cloned()
-                    .unwrap_or_else(|| horizon_client::tab_list::default_model_skin(r.profile)),
+                r.profile,
             )
         }) else {
             return;
         };
         for (id, uuid) in level {
-            let skin = skins
-                .get(&uuid)
-                .cloned()
-                .unwrap_or_else(|| horizon_client::tab_list::default_model_skin(uuid));
+            let (skin, is_slim) = skin_of(&skins, uuid);
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
             {
                 mob.skin = Some(skin);
+                mob.slim = is_slim;
             }
         }
         if let Some(mob) = self.player_model.as_mut() {
-            mob.skin = Some(own);
+            let (skin, is_slim) = skin_of(&skins, own);
+            mob.skin = Some(skin);
+            mob.slim = is_slim;
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3219,7 +3229,7 @@ impl Game<'_> {
                 (m.id, textures)
             })
             .collect();
-        let mut resolved: Vec<(u32, Option<String>)> = Vec::new();
+        let mut resolved: Vec<(u32, Option<String>, bool)> = Vec::new();
         for (id, textures) in mannequins {
             let skin = {
                 let mut downloads = self.skin_downloads.borrow_mut();
@@ -3227,15 +3237,17 @@ impl Game<'_> {
                     downloads.state(kind, url)
                 })
             };
-            resolved.push((id, skin));
+            let slim = skin.is_some() && textures.slim;
+            resolved.push((id, skin, slim));
         }
-        for (id, skin) in resolved {
+        for (id, skin, slim) in resolved {
             let skin = skin.filter(|s| !s.starts_with("skins/") || self.again_skin(s));
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id && &*m.kind.id == "minecraft:mannequin")
             {
+                mob.slim = slim && skin.is_some();
                 mob.skin = skin;
             }
         }

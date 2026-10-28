@@ -1184,6 +1184,8 @@ struct WorldRest {
     end_environment: Environment,
     behaviours: Behaviours,
     player_arm: Option<horizon_client::mobs::Part>,
+    /// The slim model's right arm (3 pixels wide).
+    player_arm_slim: Option<horizon_client::mobs::Part>,
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
     /// `SpinAttackEffectModel` (Riptide's spinning boxes).
     spin_attack: Option<horizon_client::mobs::Part>,
@@ -1256,8 +1258,12 @@ impl Resources {
     fn threads(&self) -> usize {
         self.core.threads
     }
-    fn player_arm(&self) -> &Option<horizon_client::mobs::Part> {
-        &self.rest().player_arm
+    fn player_arm(&self, slim: bool) -> &Option<horizon_client::mobs::Part> {
+        if slim {
+            &self.rest().player_arm_slim
+        } else {
+            &self.rest().player_arm
+        }
     }
     fn player_type(&self) -> &Option<Arc<horizon_client::mobs::MobType>> {
         &self.rest().player_type
@@ -10493,7 +10499,8 @@ impl Game<'_> {
                 if hand == Hand::Off {
                     continue;
                 }
-                let Some(arm) = self.res.player_arm().clone() else {
+                let slim = self.player_model.as_ref().is_some_and(|m| m.slim);
+                let Some(arm) = self.res.player_arm(slim).clone() else {
                     continue;
                 };
                 // The player's own skin, as the inventory's model shows it.
@@ -14571,6 +14578,8 @@ fn load_world_rest(
         mob_data,
         player_type: perspective::player_type(root),
         player_arm: horizon_client::mobs::load_model(root, "minecraft:player#main")
+            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
+        player_arm_slim: horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
         spin_attack: horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"),
     })
