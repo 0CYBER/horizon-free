@@ -383,8 +383,30 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
         fs::copy(target, at).map(|_| ())
     }
 }
+/// A directory junction, which Windows creates without privileges (a directory symlink needs
+/// developer mode). The mirror falls back to copying the tree when it fails.
+#[cfg(not(unix))]
+fn junction(target: &Path, at: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(std::path::absolute(at)?)
+        .arg(std::path::absolute(target)?)
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| io::Error::other("mklink /J failed"))
+}
+#[cfg(unix)]
+fn junction(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
-/// load order, last wins). Untouched directories are symlinks into vanilla.
+/// load order, last wins). Untouched directories are links into vanilla.
 pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()> {
     cache::build(vanilla, packs, out)
 }
@@ -516,11 +538,17 @@ fn build_overlay_uncached(
                         }
                     }
                 }
+            } else if filters.is_empty()
+                && !touched.contains(&child)
+                && vanilla.join(&child).is_dir()
+                && junction(&vanilla.join(&child), &out.join(&child)).is_ok()
+            {
+                // Linked whole, like the unix symlink: no file in it is visited or copied.
             } else if touched.contains(&child)
-                // Windows cannot link a directory the way unix does (`link` above), so an
-                // untouched one has to be mirrored: skipping it hid textures/font and the
-                // title panorama from the overlay, and a font json that names those sheets
-                // then failed to load (#1688).
+                // Without a junction Windows cannot link a directory the way unix does (`link`
+                // above), so an untouched one has to be mirrored: skipping it hid textures/font
+                // and the title panorama from the overlay, and a font json that names those
+                // sheets then failed to load (#1688).
                 || (vanilla.join(&child).is_dir() && (cfg!(not(unix)) || !filters.is_empty()))
             {
                 mirror(
@@ -960,6 +988,13 @@ mod tests {
         )
         .unwrap();
         fs::write(vanilla.join("facts.json"), b"[]").unwrap();
+        // A directory no pack touches (#1688: a font json names sheets in it).
+        fs::create_dir_all(vanilla.join("assets/minecraft/textures/font")).unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/font/ascii.png"),
+            b"font",
+        )
+        .unwrap();
         let pack_dir = base.join("packs/Mine");
         fs::create_dir_all(pack_dir.join("assets/minecraft/textures/block")).unwrap();
         fs::write(
@@ -997,6 +1032,10 @@ mod tests {
             br#"{"a":"vanilla","b":"pack"}"#
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/font/ascii.png")).unwrap(),
+            b"font"
+        );
         let _ = fs::remove_dir_all(base);
     }
     #[test]
