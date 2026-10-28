@@ -4201,7 +4201,7 @@ impl Game<'_> {
         };
         let parent = &self.mobs[index];
         if !parent.alive()
-            || stack.item.strip_suffix("_spawn_egg") != Some(parent.kind.id.as_str())
+            || !horizon_client::mobs::finalize::spawn_egg_is_for(&stack.item, &parent.kind.id)
             || !horizon_client::mobs::drops::can_be_baby(parent.species())
             // WanderingTrader.getBreedOffspring returns null: no offspring, the
             // click carries on to trading.
@@ -4220,11 +4220,7 @@ impl Game<'_> {
             return false;
         };
         if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
-            horizon_client::mobs::finalize::set_baby(child, true);
-            child.extra.variant = variant;
-            if species == Species::Sheep {
-                child.extra.color = color;
-            }
+            horizon_client::mobs::finalize::spawn_egg_offspring(child, species, variant, color);
         }
         self.trigger_item_entity("minecraft:player_interacted_with_entity", &stack, &target);
         self.consume_held();
