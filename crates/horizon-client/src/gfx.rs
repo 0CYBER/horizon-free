@@ -3202,12 +3202,15 @@ impl Renderer {
     }
     /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
-    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32) {
+    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32, ui: f32) {
         let output = self.hdr_output.filter(|_| on && self.surface.is_some());
         if output.is_some() != self.hdr.is_some() {
             let format = self.config.format.remove_srgb_suffix();
             self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
+        }
+        if let Some(hdr) = &mut self.hdr {
+            hdr.ui = ui;
         }
         if let Some(hdr) = &mut self.hdr
             && (hdr.paper_white, hdr.peak) != (paper_white, peak)
@@ -5064,6 +5067,10 @@ impl Renderer {
                 ((world_quads + additive_quads) * 4) as i32,
                 0..1,
             );
+            drop(pass);
+            if let Some(hdr) = &self.hdr {
+                hdr.mark_hand(&mut encoder);
+            }
         }
         // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
         self.entity_outline.draw(

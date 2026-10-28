@@ -265,6 +265,9 @@ pub struct Graphics {
     pub hdr_paper_white: u32,
     /// HDR peak brightness the world's highlights reach, in nits.
     pub hdr_peak: u32,
+    /// HDR brightness of the HUD and menus, in percent of paper white (25..=100); the
+    /// first-person hand stays at the world's.
+    pub hdr_ui_brightness: u32,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
@@ -299,6 +302,7 @@ impl Default for Graphics {
             hdr: false,
             hdr_paper_white: 200,
             hdr_peak: 1000,
+            hdr_ui_brightness: 100,
             battery: false,
             api: GraphicsApi::Auto,
             shader_pack: String::new(),
@@ -353,6 +357,9 @@ impl Graphics {
                 "hdr" => g.hdr = flag(g.hdr),
                 "hdrPaperWhite" => g.hdr_paper_white = number(g.hdr_paper_white).clamp(80, 480),
                 "hdrPeak" => g.hdr_peak = number(g.hdr_peak).clamp(200, 2000),
+                "hdrUiBrightness" => {
+                    g.hdr_ui_brightness = number(g.hdr_ui_brightness).clamp(25, 100)
+                }
                 "batteryMode" => g.battery = flag(g.battery),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "pickedShaderPack" => g.shader_pack = value.to_owned(),
@@ -370,7 +377,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrUiBrightness:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -398,6 +405,7 @@ impl Graphics {
             bool_text(self.hdr),
             self.hdr_paper_white,
             self.hdr_peak,
+            self.hdr_ui_brightness,
             bool_text(self.battery),
             self.api.name(),
             self.shader_pack,
@@ -498,6 +506,7 @@ mod tests {
             hdr: true,
             hdr_paper_white: 240,
             hdr_peak: 1400,
+            hdr_ui_brightness: 60,
             battery: true,
             api: GraphicsApi::Dx12,
             shader_pack: "Golden Hour".into(),

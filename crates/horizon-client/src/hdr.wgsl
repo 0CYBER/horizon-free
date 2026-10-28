@@ -16,6 +16,9 @@ struct Params {
     debug: f32,
     // 1 for an HDR10 swapchain, 0 for scRGB.
     pq: f32,
+    _unused: f32,
+    // The HUD and menus' brightness as a share of paper white.
+    ui: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 
@@ -61,15 +64,29 @@ fn pq(nits: vec3<f32>) -> vec3<f32> {
     return vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }
 
+// Hdr::keep_world: once the world is kept, the frame's alpha starts at 0 again.
+@fragment fn fs_clear_alpha() -> @location(0) vec4<f32> {
+    return vec4(0.0);
+}
+
 @fragment fn fs_hdr(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let at = vec2<i32>(pos.xy);
-    let c = textureLoad(frame, at, 0).rgb;
+    let f = textureLoad(frame, at, 0);
+    let c = f.rgb;
+    // What covers the world here (Hdr::keep_world): nothing at 0, the hand at
+    // 1/255 (Hdr::mark_hand: drawn at the world's brightness), else the HUD or a
+    // menu, by how much.
+    let covered = f.a > 0.0;
+    let ui = select(f.a, 0.0, f.a < 1.5 / 255.0);
     // Gamma 2.2, as SDR displays and the compositors' SDR paths decode it.
     var light = pow(max(c, vec3(0.0)), vec3(2.2));
     let w = textureLoad(world, at, 0);
     // The world's alpha is 0 on light-emitting blocks, the sun and the moon
-    // (terrain.wgsl, the celestial pipeline): only those shine.
-    if params.world > 0.5 && params.peak > 1.0 && w.a < 0.75 && shows_world(c, w.rgb) {
+    // (terrain.wgsl, the celestial pipeline): only those shine, and only where
+    // nothing was drawn over them since: grey text over the white sun still looks
+    // like the sun darkened, but it raised the frame's alpha.
+    if params.world > 0.5 && params.peak > 1.0 && w.a < 0.75 && !covered
+        && shows_world(c, w.rgb) {
         // Brightness of the world pixel, before the vignette darkens the frame
         // toward its edges: a light source shines the same anywhere on screen.
         let wl = pow(max(w.rgb, vec3(0.0)), vec3(2.2));
@@ -84,6 +101,8 @@ fn pq(nits: vec3<f32>) -> vec3<f32> {
             }
         }
     }
+    // The HUD and menus at their own brightness, by how much they cover.
+    light *= mix(1.0, params.ui, ui);
     let scrgb = light * params.paper;
     if params.pq > 0.5 {
         return vec4(pq(BT709_TO_BT2020 * scrgb * 80.0), 1.0);
