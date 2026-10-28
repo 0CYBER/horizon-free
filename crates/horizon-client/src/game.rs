@@ -3009,6 +3009,10 @@ impl Game<'_> {
             self.portals.sections.remove(&key);
             self.block_ticks
                 .remove_chunk(horizon_core::position::ChunkPos::new(key.0, key.1));
+            // Its moving pistons were saved with it and load back with it.
+            self.block_ticks
+                .moving_pistons
+                .retain(|(p, _)| (p.x >> 4, p.z >> 4) != key);
         }
         self.tick_chunks.recycle_added(added);
     }
@@ -3220,10 +3224,20 @@ impl Game<'_> {
             .iter()
             .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state()))
             .collect();
-        self.world.moving_piston_fallback = previous
+        let mut fallback: Vec<_> = previous
             .into_iter()
             .filter(|(pos, _)| !current.iter().any(|(next, _)| next == pos))
             .collect();
+        // A finished piston stays drawn until the chunk mesh shows the block
+        // it placed, however many ticks that takes.
+        let older = std::mem::take(&mut self.world.moving_piston_fallback);
+        for (pos, piston) in older {
+            let replaced = current.iter().chain(&fallback).any(|(p, _)| *p == pos);
+            if !replaced && self.section_mesh_pending(pos) {
+                fallback.push((pos, piston));
+            }
+        }
+        self.world.moving_piston_fallback = fallback;
         self.world.moving_pistons = current;
     }
     /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:

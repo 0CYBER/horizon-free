@@ -15,7 +15,15 @@ impl Game<'_> {
     ) {
         let partial = alpha as f32;
         let mut states = self.world.moving_pistons.clone();
-        states.extend(self.world.moving_piston_fallback.iter().copied());
+        // A piston that just finished bridges the frames until the chunk mesh
+        // shows the block it placed; drawn over that mesh, it z-fights (#3002).
+        states.extend(
+            self.world
+                .moving_piston_fallback
+                .iter()
+                .filter(|(p, _)| self.section_mesh_pending(*p))
+                .copied(),
+        );
         for (p, piston) in states {
             let Some((block, base)) = self.moving_piston_blocks(piston, partial) else {
                 continue;
@@ -37,6 +45,17 @@ impl Game<'_> {
                 self.moving_block_vertices(base, at, corner - camera, packed, out);
             }
         }
+    }
+    /// Whether the chunk mesh doesn't show the blocks at `p` yet (edited,
+    /// meshing, or waiting for its upload).
+    pub(super) fn section_mesh_pending(&self, p: [i32; 3]) -> bool {
+        let Some(y) = p[1].checked_sub(horizon_client::chunk::MIN_Y) else {
+            return false;
+        };
+        let section = (p[0] >> 4, y.div_euclid(16), p[2] >> 4);
+        self.world.dirty_sections.contains(&section)
+            || self.streaming.is_meshing(section)
+            || self.pending_uploads.iter().any(|(key, _)| *key == section)
     }
     /// The moved block and, for a retracting piston, its extended base.
     fn moving_piston_blocks(
@@ -81,7 +100,8 @@ impl Game<'_> {
         Some((piston.moved_state, None))
     }
     /// One `MovingBlockRenderState`: the baked model at `at` (camera-relative),
-    /// seeded by its block position and tinted like a falling block.
+    /// seeded by its block position and tinted per face with the block colours
+    /// at that position, as `ModelBlockRenderer` tints it in the chunk mesh.
     fn moving_block_vertices(
         &self,
         state: BlockStateId,
@@ -90,23 +110,31 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let tint = self
-            .particle_sprite(state, [seed.x, seed.y, seed.z])
-            .map(|(_, tint)| tint);
-        let start = out.len();
-        self.block_model_vertices(
+        let chunks = &self.world.chunks;
+        let (cx, cz) = (seed.x >> 4, seed.z >> 4);
+        let region: [[Option<&horizon_client::chunk::Chunk>; 3]; 3] = std::array::from_fn(|dz| {
+            std::array::from_fn(|dx| {
+                chunks
+                    .get(&(cx + dx as i32 - 1, cz + dz as i32 - 1))
+                    .map(|c| &**c)
+            })
+        });
+        let tint = self.pack.context.tables.block_tints(
+            state,
+            [seed.x, seed.y, seed.z],
+            &region,
+            self.res.biomes(),
+            self.streaming.biome_zoom,
+            self.streaming.biome_blend,
+        );
+        self.tinted_block_model_vertices(
             state,
             horizon_core::random::position_seed(seed),
             glam::Mat4::from_translation(at.as_vec3()),
             light,
             false,
+            tint,
             out,
         );
-        if let Some(tint) = tint {
-            let tint = horizon_client::mobs::render::abgr(tint);
-            for vertex in &mut out[start..] {
-                vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);
-            }
-        }
     }
 }

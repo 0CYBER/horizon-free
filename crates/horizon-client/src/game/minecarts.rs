@@ -1225,6 +1225,21 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
+        self.tinted_block_model_vertices(state, seed, m, light, diffuse, |_| None, out);
+    }
+    /// `block_model_vertices` with each face multiplied by `tint` of its
+    /// tint index (RGB, `None` for untinted faces).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn tinted_block_model_vertices(
+        &self,
+        state: BlockStateId,
+        seed: i64,
+        m: glam::Mat4,
+        light: u32,
+        diffuse: bool,
+        tint: impl Fn(i32) -> Option<u32>,
+        out: &mut Vec<Vertex>,
+    ) {
         let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
             return;
         };
@@ -1245,11 +1260,17 @@ impl Game<'_> {
                     D::North | D::South => 204,
                     D::West | D::East => 153,
                 };
-                let color = if diffuse {
+                let mut color = if diffuse {
                     u32::MAX
                 } else {
                     0xFF00_0000 | shade << 16 | shade << 8 | shade
                 };
+                if let Some(t) = tint(face.quad.tint_index) {
+                    color = horizon_client::hud_layout::multiply(
+                        color,
+                        horizon_client::mobs::render::abgr(t),
+                    );
+                }
                 let normal = if diffuse {
                     use horizon_client::item_render::{direction_vector, transform_normal};
                     let n = transform_normal(m, direction_vector(face.quad.facing));
