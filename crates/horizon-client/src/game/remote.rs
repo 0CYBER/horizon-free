@@ -3489,8 +3489,6 @@ impl Game<'_> {
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         // Gui.tick: the titles, the action bar and the held item's name.
         self.tick_hud();
-        // The subtitle overlay's share of the tick: the local path has it in
-        // `tick_mobs`, which a server's client never reaches.
         self.tick_subtitles();
         let entity_collisions = self.player_entity_collisions();
         let pushed = self.remote_pushes();
