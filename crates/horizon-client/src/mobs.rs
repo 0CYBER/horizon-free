@@ -2264,15 +2264,21 @@ impl Mob {
         ) * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
-                "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
-                "minecraft:slowness" => v *= (1.0 - 0.15 * f64::from(amp + 1)).max(0.0),
+                "speed" | "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
+                "slowness" | "minecraft:slowness" => {
+                    v *= (1.0 - 0.15 * f64::from(amp + 1)).max(0.0)
+                }
                 _ => {}
             }
         }
         v
     }
     pub fn has_effect(&self, effect: &str) -> bool {
-        self.extra.effects.iter().any(|e| e.0 == effect)
+        let stripped = effect.strip_prefix("minecraft:").unwrap_or(effect);
+        self.extra
+            .effects
+            .iter()
+            .any(|e| e.0.strip_prefix("minecraft:").unwrap_or(e.0) == stripped)
     }
     /// `LivingEntity.isCurrentlyGlowing`: the Glowing effect or the `Glowing` tag (on a
     /// server's client, `glowing` holds shared flag 6 instead).
@@ -2280,6 +2286,7 @@ impl Mob {
         self.glowing || self.has_effect("minecraft:glowing")
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
+        let effect = horizon_client_core::potions::namespaced(effect);
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
             // MobEffectInstance.update: a stronger effect replaces with its
             // own duration, an equal one only extends it; a weaker one is

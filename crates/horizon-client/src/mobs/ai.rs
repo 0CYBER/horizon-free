@@ -1942,15 +1942,15 @@ fn tick_effects(m: &mut Mob) {
         let infinite = *ticks == -1;
         let count = if infinite { m.age as i32 } else { *ticks };
         match *effect {
-            "minecraft:poison"
+            "poison" | "minecraft:poison"
                 if count % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
             {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "minecraft:wither" if count % interval(40) == 0 => {
+            "wither" | "minecraft:wither" if count % interval(40) == 0 => {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "minecraft:regeneration"
+            "regeneration" | "minecraft:regeneration"
                 if count % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
             {
                 m.health = (m.health + 1.0).min(m.attrs.max_health);
@@ -2172,6 +2172,48 @@ mod frog_tests {
                 outside: 0.1,
                 gravity: true,
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod poison_effect_tests {
+    use super::*;
+    use crate::mobs::MobTypes;
+    use std::sync::Arc;
+
+    #[test]
+    fn poison_effect_damages_living_mobs_but_not_undead() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists() {
+            return;
+        }
+        let data = MobTypes::load(&root).unwrap();
+
+        // Pig is not undead: should take damage from poison.
+        let pig_kind = Arc::new(data.types.get("minecraft:pig").unwrap().clone());
+        let mut pig = Mob::new(1, pig_kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        pig.add_effect("poison", 100, 0);
+        assert_eq!(pig.extra.effects[0].0, "minecraft:poison");
+        let initial_pig_health = pig.health;
+        tick_effects(&mut pig);
+        assert_eq!(
+            pig.health,
+            initial_pig_health - 1.0,
+            "living mob should take 1.0 damage from poison"
+        );
+
+        // Zombie is undead: immune to poison damage.
+        let zombie_kind = Arc::new(data.types.get("minecraft:zombie").unwrap().clone());
+        let mut zombie = Mob::new(2, zombie_kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        zombie.add_effect("poison", 100, 0);
+        let initial_zombie_health = zombie.health;
+        tick_effects(&mut zombie);
+        assert_eq!(
+            zombie.health, initial_zombie_health,
+            "undead mobs are immune to poison"
         );
     }
 }
