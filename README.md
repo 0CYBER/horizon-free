@@ -48,7 +48,7 @@ The [documentation](https://playhorizon.dev/docs/) covers each of these.
 - **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
 - **Resource packs and data packs:** resource packs work, and data packs load functions, predicates and item modifiers.
 - **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining servers, online-mode ones with the Microsoft account the launcher signs in with. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
-- **Mods:** Horizon has its own mod system (Rust compiled to WebAssembly). Java mod jars do not run. See [Mods and data packs](https://playhorizon.dev/docs/mods).
+- **Mods:** content mods add blocks, items and data, and native mods change the game's own Rust code, built by the launcher on your copy. Java mod jars do not run. See [Mods and data packs](https://playhorizon.dev/docs/mods).
 
 Screenshots, captured in the Rust client itself with vanilla assets and no mods or shaders:
 
