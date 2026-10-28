@@ -37,6 +37,7 @@ pub mod component {
     pub const CHARGED_PROJECTILES: i32 = 51;
     pub const BUNDLE_CONTENTS: i32 = 52;
     pub const POTION_CONTENTS: i32 = 53;
+    pub const SUSPICIOUS_STEW_EFFECTS: i32 = 55;
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
     pub const TRIM: i32 = 58;
@@ -112,6 +113,9 @@ pub enum Component {
         material: i32,
         pattern: i32,
     },
+    /// `SuspiciousStewEffects`: each entry's `minecraft:mob_effect` id and
+    /// duration in ticks.
+    StewEffects(Vec<(i32, i32)>),
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
@@ -213,6 +217,16 @@ impl Component {
             LORE => {
                 let n = r.count(256)?;
                 Self::Lore((0..n).map(|_| r.nbt()).collect::<Result<_>>()?)
+            }
+            // SuspiciousStewEffects.Entry.STREAM_CODEC: MobEffect.STREAM_CODEC
+            // (the registry id), then the duration, both varints.
+            SUSPICIOUS_STEW_EFFECTS => {
+                let n = r.count(r.remaining())?;
+                Self::StewEffects(
+                    (0..n)
+                        .map(|_| Ok((r.varint()?, r.varint()?)))
+                        .collect::<Result<_>>()?,
+                )
             }
             ENCHANTMENTS | STORED_ENCHANTMENTS => {
                 let n = r.count(r.remaining())?;
@@ -373,7 +387,7 @@ impl Component {
                 w.varint(lines.len() as i32);
                 lines.iter().for_each(|l| w.nbt(l));
             }
-            Self::Enchantments(list) => {
+            Self::Enchantments(list) | Self::StewEffects(list) => {
                 w.varint(list.len() as i32);
                 for (e, level) in list {
                     w.varint(*e);
@@ -926,6 +940,8 @@ mod tests {
                         pattern: 1,
                     }
                 }
+                // night_vision for 100 ticks, poison for the default 160.
+                55 => *c == Component::StewEffects(vec![(15, 100), (18, 160)]),
                 _ => matches!(c, Component::Raw(_)),
             };
             assert!(

@@ -3,8 +3,8 @@
 //! `item::Slot` and prints, per stack, whether every byte was consumed, the
 //! patch's component ids (added, then removed), which of them Horizon
 //! decoded into its own lossy types (the rest it reads past keeping their
-//! bytes, or decodes into ids it writes back unchanged, like trims) and
-//! whether encoding the decoded stack gives the same bytes back.
+//! bytes, or decodes into ids it writes back unchanged, like trims and stew
+//! effects) and whether encoding the decoded stack gives the same bytes back.
 //!
 //!     cargo run -p horizon-protocol --example item_wire_probe -- vanilla.jsonl rust.jsonl
 use horizon_protocol::{
@@ -46,7 +46,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let typed: Vec<i32> = stack
                     .iter()
                     .flat_map(|s| &s.added)
-                    .filter(|(_, c)| !matches!(c, Component::Raw(_) | Component::Trim { .. }))
+                    .filter(|(_, c)| {
+                        !matches!(
+                            c,
+                            Component::Raw(_) | Component::Trim { .. } | Component::StewEffects(_)
+                        )
+                    })
                     .map(|(k, _)| *k)
                     .collect();
                 json!({
