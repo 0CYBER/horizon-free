@@ -11167,7 +11167,7 @@ impl Game<'_> {
         let selected = self.creative_screen.selected;
         // Only what is drawn of the tabs: their stacks stay where they are.
         let tabs = self.creative_screen.tab_headers();
-        let tab = tabs[selected.min(tabs.len() - 1)].clone();
+        let tab = &tabs[selected.min(tabs.len() - 1)];
         let tab_sprite = |t: &horizon_client::creative::Tab, on: bool| {
             format!(
                 "gui/sprites/container/creative_inventory/tab_{}_{}_{}",
@@ -11203,8 +11203,8 @@ impl Game<'_> {
             r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
             batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
         }
-        let (tx, ty) = Creative::tab_position(&tab);
-        batch.sprite(&self.gui.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
+        let (tx, ty) = Creative::tab_position(tab);
+        batch.sprite(&self.gui.atlas, &tab_sprite(tab, true), ox + tx, oy + ty);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             let stack = ItemStack {
@@ -11222,7 +11222,7 @@ impl Game<'_> {
         }
         let atlas = &self.gui.atlas;
         if !tab.inventory {
-            let title = self.creative_tab_title(&tab);
+            let title = self.creative_tab_title(tab);
             batch.text(
                 atlas,
                 &title,
