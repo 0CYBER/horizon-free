@@ -155,6 +155,12 @@ impl Game<'_> {
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
+    /// Whether the player left mod `mod_id` on in Options > Mods. A mod
+    /// turned off does nothing (check this first in each hook) until the
+    /// launcher's next build leaves it out.
+    pub(super) fn native_on(&self, mod_id: &str) -> bool {
+        !self.settings.mods.disabled.contains(mod_id)
+    }
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(super) fn native_playing(&self) -> bool {
         self.screen == Screen::Playing
@@ -272,13 +278,12 @@ impl Game<'_> {
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
         self.native_mods(&mut mods);
-        self.settings.mods.installed.retain(|m| m.native.is_none());
-        // A WebAssembly mod of the same id doesn't run (`start_mods`).
-        for row in &mut self.settings.mods.installed {
-            if mods.iter().any(|m| m.id == row.id) {
-                row.problem = Some("Replaced by its native version".into());
-            }
-        }
+        // A WebAssembly mod of the same id doesn't run (`start_mods`): the
+        // native row stands for it, and alone toggles its `mod.<id>` line.
+        self.settings
+            .mods
+            .installed
+            .retain(|row| row.native.is_none() && !mods.iter().any(|m| m.id == row.id));
         for m in mods {
             let mut buttons = Vec::new();
             self.native_settings(&m.id, &mut buttons);

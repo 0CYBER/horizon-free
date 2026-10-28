@@ -1556,8 +1556,7 @@ impl OptionsUi {
                         } else if installed.dev {
                             label = label.append(" (Dev)");
                         }
-                        let dead =
-                            installed.dev || installed.native.is_some() || installed.id.is_empty();
+                        let dead = installed.dev || installed.id.is_empty();
                         // A running mod with a settings page (capability
                         // `ui`) gets its own button beside the toggle.
                         if installed.has_settings || installed.native.is_some() {
