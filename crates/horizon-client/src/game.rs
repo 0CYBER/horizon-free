@@ -10973,7 +10973,11 @@ impl Game<'_> {
         // Creative players skip the monster check (`!this.isCreative()`).
         let monsters = !self.creative
             && self.mobs.iter().any(|m| {
-                m.hostile()
+                // `Monster.class` entities that `isPreventingPlayerRest`: a
+                // zombified piglin only while it is angry.
+                horizon_client::mobs::ai::is_monster(m.species())
+                    && (m.species() != horizon_client::mobs::Species::ZombifiedPiglin
+                        || (m.extra.anger > 0 && m.ai.target.is_some()))
                     && m.alive()
                     && (m.position.x - position.x).abs() < 8.0
                     && (m.position.y - position.y).abs() < 5.0

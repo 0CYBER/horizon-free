@@ -533,9 +533,9 @@ pub fn tick(
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
-/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1) and the
-/// sweet berry bush (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75,
-/// 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
+/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1), the
+/// cobweb (stuck at 0.25, 0.05, 0.25) and the sweet berry bush
+/// (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75, 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
 /// or Z this tick). The blocks are those the mob's box touches anywhere along
 /// its move this tick, from where it started to where it ended.
 fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
@@ -561,6 +561,21 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                     match w.block_name(x, y, z) {
                         "minecraft:cactus" => {
                             m.damage(1.0, Damage::of(DamageKind::Cactus));
+                        }
+                        // WebBlock.entityInside -> makeStuckInBlock, which a
+                        // spider ignores for cobwebs and a wither always.
+                        "minecraft:cobweb"
+                            if !matches!(
+                                m.species(),
+                                Species::Spider | Species::CaveSpider | Species::Wither
+                            ) =>
+                        {
+                            m.fall_distance = 0.0;
+                            m.stuck_multiplier = if m.has_effect("minecraft:weaving") {
+                                Vec3::new(0.5, 0.25, 0.5)
+                            } else {
+                                Vec3::new(0.25, f64::from(0.05_f32), 0.25)
+                            };
                         }
                         "minecraft:sweet_berry_bush"
                             if !matches!(m.species(), Species::Fox | Species::Bee) =>

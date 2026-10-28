@@ -121,6 +121,13 @@ impl Game<'_> {
                     );
                 }
             }
+            // An ender dragon part takes the point of damage too; a crystal is
+            // not hit (`AbstractWindCharge.canHitEntity`).
+            Who::Mob(id) if id >= super::dragon::SPECIAL => {
+                if id < super::dragon::SPECIAL + 8 {
+                    self.hit_special(id, 1.0, p.owner == Some(Who::Player), false);
+                }
+            }
             Who::Mob(id) => {
                 let source = Damage {
                     kind: DamageKind::Thrown,
