@@ -74,7 +74,7 @@ const LAUNCHER_BINARY: &str = if cfg!(windows) {
     "horizon-launcher"
 };
 
-const CLIENT: &str = if cfg!(windows) {
+pub(crate) const CLIENT: &str = if cfg!(windows) {
     "horizon-client.exe"
 } else {
     "horizon-client"
@@ -867,7 +867,7 @@ fn files_under(dir: &Path, relative: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;

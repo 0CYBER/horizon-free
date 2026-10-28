@@ -71,6 +71,17 @@ Run a dedicated server here; type commands into its console.
 
 MCP: `server`, `server_command`, `server_log`, `server_stop`.
 
+## `horizon-launcher native-build`
+
+Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon revision they pin, with the launcher's own Rust, as the version the "Native mods" instance plays. Not sandboxed: the mods' code runs with your rights.
+
+    horizon-launcher native-build <FOLDER>
+
+- `FOLDER`: A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
+- `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+
+MCP: none: the player's switch.
+
 ## `horizon-launcher notes`
 
 Show a release's patch notes (default: the newest).

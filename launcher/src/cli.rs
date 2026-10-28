@@ -607,6 +607,20 @@ enum Cmd {
         #[arg(long)]
         accept_eula: bool,
     },
+    /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
+    /// revision they pin, with the launcher's own Rust, as the version the "Native mods" instance
+    /// plays. Not sandboxed: the mods' code runs with your rights
+    NativeBuild {
+        /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
+        folder: PathBuf,
+        /// The installed version whose game files the build reuses, and whose commit it builds on
+        /// when no mod pins one (default: the selected one)
+        #[arg(long)]
+        version: Option<String>,
+        /// You read the mods' source and trust it with full access to this computer
+        #[arg(long)]
+        trust_native_code: bool,
+    },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
     /// Show the Discord, sponsor and website links
@@ -989,6 +1003,24 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     "Installed {tag}. Prepare it next: horizon-launcher prepare --version {tag}"
                 );
             }
+        }
+        Cmd::NativeBuild {
+            folder,
+            version,
+            trust_native_code,
+        } => {
+            if !trust_native_code {
+                return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
+            }
+            let base = backend::resolve_version(version.as_deref())?;
+            let started = std::time::Instant::now();
+            let built = horizon_launcher::native_mods::build(&base, &folder, |step| {
+                eprintln!("{}", step.label())
+            })?;
+            println!(
+                "{built} in the Native mods instance ({:.0} s).",
+                started.elapsed().as_secs_f64()
+            );
         }
         Cmd::Remove { tag } => {
             backend::remove_version(&tag)?;
