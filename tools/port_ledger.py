@@ -346,6 +346,8 @@ SKIP_REASONS = {
 def read_port_map():
     """The verdict map's rows: `vanilla<TAB>verdict<TAB>where<TAB>note`, one file per batch in tools/port_map/."""
     rows = []
+    if os.environ.get("PORT_LEDGER_NO_MAP"):
+        return rows  # measuring the automatic matches against the map needs them built without it
     for path in sorted(MAP_DIR.glob("*.tsv")) if MAP_DIR.is_dir() else []:
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if not line.strip() or line.lstrip().startswith("#"):
