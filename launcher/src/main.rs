@@ -1422,17 +1422,82 @@ fn button(
 /// Copies to the clipboard, or into `HORIZON_LAUNCHER_CLIPBOARD` when a test run sets it
 /// (`horizon_launcher::desktop_seams`).
 fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
-    let Some(file) = horizon_launcher::desktop_seams::clipboard_file() else {
-        cx.write_to_clipboard(item);
+    if let Some(file) = horizon_launcher::desktop_seams::clipboard_file() {
+        let bytes = match item.entries().first() {
+            Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
+            _ => item.text().unwrap_or_default().into_bytes(),
+        };
+        if let Err(e) = std::fs::write(&file, bytes) {
+            eprintln!("{}: {e}", file.display());
+        }
         return;
-    };
-    let bytes = match item.entries().first() {
-        Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
-        _ => item.text().unwrap_or_default().into_bytes(),
-    };
-    if let Err(e) = std::fs::write(&file, bytes) {
-        eprintln!("{}: {e}", file.display());
     }
+    cx.write_to_clipboard(item.clone());
+    #[cfg(target_os = "linux")]
+    if let Some(text) = item.text() {
+        sync_system_clipboard(text);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sync_system_clipboard(text: String) {
+    if text.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            if let Ok(mut child) = Command::new("wl-copy")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                if let Ok(status) = child.wait() {
+                    if status.success() {
+                        return;
+                    }
+                }
+            }
+        }
+
+        if std::env::var_os("DISPLAY").is_some() {
+            if let Ok(mut child) = Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                if let Ok(status) = child.wait() {
+                    if status.success() {
+                        return;
+                    }
+                }
+            }
+
+            if let Ok(mut child) = Command::new("xsel")
+                .args(["--clipboard", "--input"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        }
+    });
 }
 
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
