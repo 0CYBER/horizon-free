@@ -606,6 +606,7 @@ fn mob_meta(
             if e.size > 1 {
                 meta.push((18, serializer::INT, Value::Int(e.size)));
             }
+            defaults.push((18, serializer::INT, Value::Int(1)));
         }
         // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED and DATA_IS_IGNITED: the
         // guest swells the creeper from them. The direction always goes in,
