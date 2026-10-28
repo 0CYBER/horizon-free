@@ -26,7 +26,7 @@ COMMON_SOURCES = [
     lab.ROOT / 'Cargo.toml',
     lab.ROOT / 'Cargo.lock',
     lab.ROOT / 'crates/horizon-client/Cargo.toml',
-    lab.ROOT / 'crates/horizon-client/src/sound_events.rs',
+    lab.ROOT / 'crates/horizon-client-render/src/sound_events.rs',
     lab.ROOT / 'crates/horizon-client/src/sound_engine.rs',
 ]
 

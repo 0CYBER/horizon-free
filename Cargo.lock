@@ -1380,6 +1380,7 @@ dependencies = [
  "horizon-bench",
  "horizon-client-core",
  "horizon-client-input",
+ "horizon-client-render",
  "horizon-command",
  "horizon-core",
  "horizon-dualsense",
@@ -1432,6 +1433,46 @@ dependencies = [
  "horizon-theme",
  "png",
  "winit",
+]
+
+[[package]]
+name = "horizon-client-render"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "bytemuck",
+ "chrono",
+ "flate2",
+ "glam",
+ "horizon-assets",
+ "horizon-bench",
+ "horizon-client-core",
+ "horizon-client-input",
+ "horizon-command",
+ "horizon-core",
+ "horizon-hdr",
+ "horizon-items",
+ "horizon-protocol",
+ "horizon-shader-api",
+ "horizon-shaders",
+ "horizon-telemetry",
+ "horizon-theme",
+ "horizon-threads",
+ "horizon-world",
+ "log",
+ "miniz_oxide 0.8.9",
+ "naga",
+ "png",
+ "pollster",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "unicode-bidi",
+ "ureq",
+ "wgpu",
+ "winit",
+ "zip",
 ]
 
 [[package]]

@@ -328,7 +328,7 @@ pub fn stack_lines(backtrace: &str, from_panic: bool) -> String {
     // The workspace as it was on the machine that built this binary (it need not exist here).
     let manifest = env!("CARGO_MANIFEST_DIR");
     let root = manifest
-        .strip_suffix("crates/horizon-client")
+        .strip_suffix("crates/horizon-client-render")
         .unwrap_or(manifest);
     let mut frames: Vec<(String, Option<String>)> = Vec::new();
     for line in backtrace.lines() {
@@ -603,7 +603,7 @@ mod tests {
         );
         assert_eq!(
             stack_lines(&bt, true),
-            "horizon_client::crash::debug_crash_tick (crates/horizon-client/src/crash.rs:359:9)\nwinit::dispatch (winit-0.30.13/src/event_loop.rs:642:56)\nmain\n"
+            "horizon_client::crash::debug_crash_tick (crates/horizon-client-render/src/crash.rs:359:9)\nwinit::dispatch (winit-0.30.13/src/event_loop.rs:642:56)\nmain\n"
         );
     }
 
