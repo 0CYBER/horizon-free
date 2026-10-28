@@ -88,7 +88,11 @@ pub(crate) const CLIENT: &str = if cfg!(windows) {
 /// one is set (`proxy`).
 fn agent(url: &str) -> ureq::Agent {
     crate::proxy::agent(
-        ureq::AgentBuilder::new().user_agent(&format!("horizon-launcher/{VERSION}")),
+        ureq::AgentBuilder::new()
+            .user_agent(&format!("horizon-launcher/{VERSION}"))
+            // A connection that goes quiet fails instead of waiting for ever.
+            .timeout_connect(std::time::Duration::from_secs(15))
+            .timeout_read(std::time::Duration::from_secs(60)),
         url,
     )
     .build()
@@ -1116,9 +1120,42 @@ fn lacks_panorama(resources: &Path) -> bool {
 /// in any Minecraft folder, one line each in the log, once per launcher run, and the version plays
 /// as before. Nothing is prepared again.
 pub fn complete_assets(tag: &str) {
+    refill_own_store(tag);
     complete_assets_in(&versions_dir(), tag, minecraft_folders, &|line| {
         eprintln!("{line}")
     });
+}
+
+/// Horizon's own download (an owner's) may have stopped before the sounds and the languages,
+/// and the copies below read them from its store: asked again, once per run, through the same
+/// owner gate as any download from Mojang (`download_for_owner`), which keeps the files already
+/// whole.
+fn refill_own_store(tag: &str) {
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let own = data_dir().join("minecraft");
+    let resources = resources_at(&versions_dir().join(tag));
+    if !own.join("assets/indexes").is_dir()
+        || !(lacks_languages(&resources) || !sounds_in(&resources))
+        || ASKED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    let Some(pins) = read_json(&version_dir(tag).join("research-lock.json"))
+        .and_then(|l| sources::Pins::read(&l))
+    else {
+        return;
+    };
+    let fetch = |url: &str| -> Result<Vec<u8>, String> {
+        let mut body = Vec::new();
+        get(url)?
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| e.to_string())?;
+        Ok(body)
+    };
+    if let Err(e) = download_for_owner(&pins, &own, &fetch, &|line| eprintln!("{line}")) {
+        eprintln!("{tag}: the missing assets were not downloaded:{e}");
+    }
 }
 
 /// `folders`: where to look, asked only when the version lacks something.
@@ -2919,6 +2956,20 @@ mod tests {
         assert!(!asked.lock().unwrap().is_empty());
         let _ = fs::remove_dir_all(&dir);
 
+        // A store that lacks assets is not filled for a non-owner either: nothing is asked.
+        fs::create_dir_all(dir.join("assets/indexes")).unwrap();
+        fs::write(
+            dir.join("assets/indexes/34.json"),
+            r#"{"objects":{"a":{"hash":"00","size":1}}}"#,
+        )
+        .unwrap();
+        asked.lock().unwrap().clear();
+        for (pass, signed_in) in [(Err(account::NoOwner), true), (no_owner(), true)] {
+            assert!(download_for(&pins, &dir, pass, signed_in, &fetch, &log).is_err());
+        }
+        assert!(asked.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+
         // In the sources: one call downloads the game, in `download_for`, and the only caller
         // of that asks the strict gate. Game-file hosts appear nowhere else.
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -2957,6 +3008,9 @@ mod tests {
         // `download_for` is defined once and called once, by `download_for_owner`.
         assert_eq!(backend.matches("download_for(").count(), 2);
         assert!(body("download_for_owner").contains("download_for("));
+        // Refilling an incomplete store asks the same gate and names no host or download itself.
+        assert!(body("refill_own_store").contains("download_for_owner("));
+        assert!(!body("refill_own_store").contains("mojang::"));
         for host in [
             "piston-data",
             "libraries.minecraft.net",
