@@ -5630,8 +5630,10 @@ impl Game<'_> {
         if self.lan_acting.is_some() {
             return;
         }
-        // MouseHandler.grabMouse never captures an inactive window.
-        if capture && !self.focused {
+        // MouseHandler.grabMouse never captures an inactive window, and vanilla
+        // grabs only on `setScreen(null)`: the pack prompt and server dialogs
+        // are screens over the world that keep the pointer.
+        if capture && (!self.focused || self.server_packs.prompt.is_some() || self.dialog_open()) {
             return;
         }
         // The container screen's press state belongs to the screen: a screen
@@ -6112,7 +6114,14 @@ impl Game<'_> {
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
         batch.blur_at = batch.vertices.len() as u32;
-        match self.screen {
+        // PackConfirmScreen takes the open screen's place (it comes back once
+        // the prompt is answered): the screen under the prompt isn't drawn.
+        let screen = if self.server_packs.prompt.is_some() {
+            Screen::Playing
+        } else {
+            self.screen
+        };
+        match screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
             Screen::Paused => {
@@ -6152,9 +6161,11 @@ impl Game<'_> {
         // ToastManager.extractRenderState: F1 hides the toasts too.
         self.draw_toasts(&mut batch, !show_hud);
         self.draw_pack_toasts(&mut batch, !show_hud);
-        self.remote_hud(&mut batch);
-        self.draw_sign_editor(&mut batch);
-        self.draw_book(&mut batch);
+        if self.server_packs.prompt.is_none() {
+            self.remote_hud(&mut batch);
+            self.draw_sign_editor(&mut batch);
+            self.draw_book(&mut batch);
+        }
         batch
     }
     fn creative_inventory_open(&self) -> bool {
@@ -12677,13 +12688,16 @@ impl ApplicationHandler for Game<'_> {
                         self.left = false;
                         self.right = false;
                         self.capture(false);
-                        // Screens (books, signs) stay open instead of pausing.
+                        // Gui.setPauseScreen: an open screen (books, signs, the
+                        // pack prompt, a server dialog) stays instead of pausing.
                         if self.screen == Screen::Playing
                             && self.player.is_some()
                             && !self.options.no_pause
                             && self.settings.file.bool("pauseOnLostFocus")
                             && self.book.is_none()
                             && self.sign_edit.is_none()
+                            && self.server_packs.prompt.is_none()
+                            && !self.dialog_open()
                         {
                             self.screen = Screen::Paused;
                         }
