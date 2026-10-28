@@ -421,10 +421,23 @@ impl Game<'_> {
         }) else {
             return false;
         };
+        let id = self.mobs[i].id;
+        self.wake_villager(id);
+        true
+    }
+    /// `LivingEntity.stopSleeping` for the villager `id`, outside its own
+    /// tick: it stands up and its bed is no longer occupied.
+    pub(super) fn wake_villager(&mut self, id: u32) {
+        let Some(i) = self.mobs.iter().position(|m| m.id == id) else {
+            return;
+        };
         let mut mobs = std::mem::take(&mut self.mobs);
-        villager::stop_sleeping(&mut mobs[i], &self.mob_world_base(&[]));
+        let mut events = Vec::new();
+        villager::stop_sleeping(&mut mobs[i], &self.mob_world_base(&[]), &mut events);
         villager_brain::woken(&mut mobs[i], self.world.game_time);
         self.mobs = mobs;
-        true
+        if let Err(e) = self.handle_mob_events(events) {
+            log::warn!("waking villager {id}: {e}");
+        }
     }
 }
