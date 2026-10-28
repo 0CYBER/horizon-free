@@ -272,7 +272,7 @@ impl Game<'_> {
             r.set_hdr(
                 s.horizon.hdr,
                 s.horizon.hdr_paper_white as f32,
-                s.horizon.hdr_peak as f32,
+                s.horizon.peak_nits() as f32,
             );
         }
         // Window.updateFullscreenIfChanged: only a changed option asks the

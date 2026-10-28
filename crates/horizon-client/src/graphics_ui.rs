@@ -236,7 +236,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::HdrPeak,
                 None,
-                "HDR: how bright the brightest highlights get. Your display's peak.",
+                "HDR: how bright highlights get. Auto: the peak your system reports.",
             ),
             h(
                 H::PresentMode,
@@ -342,7 +342,11 @@ impl H {
             H::Workers => Some(g.workers as f32 / max_workers() as f32),
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
             H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
-            H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
+            // Auto, then 200..2000 by 50.
+            H::HdrPeak => Some(match g.hdr_peak {
+                0 => 0.0,
+                n => (n as f32 - 150.0) / 1850.0,
+            }),
             _ => None,
         }
     }
@@ -386,7 +390,10 @@ impl H {
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
-            H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
+            H::HdrPeak => match g.hdr_peak {
+                0 => labelled("Peak Brightness", format!("Auto ({} nits)", g.peak_nits())),
+                n => labelled("Peak Brightness", format!("{n} nits")),
+            },
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -410,7 +417,12 @@ impl H {
             H::Workers => g.workers = (v * max_workers() as f32).round() as u32,
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
             H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
-            H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
+            H::HdrPeak => {
+                g.hdr_peak = match (v * 37.0).round() as u32 {
+                    0 => 0,
+                    step => 150 + step * 50,
+                }
+            }
             _ => {}
         }
     }

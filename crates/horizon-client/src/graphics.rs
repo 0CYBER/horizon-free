@@ -2,9 +2,25 @@
 //! `horizon-graphics.txt` next to `options.txt` so that file stays exactly
 //! vanilla's. Every default reproduces vanilla's rendering; only choices the
 //! player makes here depart from it.
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 pub const FILE: &str = "horizon-graphics.txt";
+
+static REPORTED_PEAK: AtomicU32 = AtomicU32::new(0);
+
+/// Sets the peak the system reports for the display HDR output goes to, in nits
+/// in HDR output's scale (the renderer, when it opens its surface).
+pub fn report_peak(nits: Option<u32>) {
+    REPORTED_PEAK.store(nits.unwrap_or(0), Ordering::Relaxed);
+}
+/// The peak the system reports, if it does.
+pub fn reported_peak() -> Option<u32> {
+    Some(REPORTED_PEAK.load(Ordering::Relaxed)).filter(|&n| n > 0)
+}
 
 /// Simple-level presets. `Custom` leaves every option as the player set it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -263,7 +279,8 @@ pub struct Graphics {
     pub hdr: bool,
     /// HDR paper white (where SDR white sits), in nits.
     pub hdr_paper_white: u32,
-    /// HDR peak brightness the world's highlights reach, in nits.
+    /// HDR peak brightness the world's highlights reach, in nits; 0 is Auto:
+    /// what the system reports for the display ([`Graphics::peak_nits`]).
     pub hdr_peak: u32,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the worker threads. Off by default;
@@ -298,7 +315,7 @@ impl Default for Graphics {
             fxaa: false,
             hdr: false,
             hdr_paper_white: 200,
-            hdr_peak: 1000,
+            hdr_peak: 0,
             battery: false,
             api: GraphicsApi::Auto,
             shader_pack: String::new(),
@@ -352,7 +369,12 @@ impl Graphics {
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "hdr" => g.hdr = flag(g.hdr),
                 "hdrPaperWhite" => g.hdr_paper_white = number(g.hdr_paper_white).clamp(80, 480),
-                "hdrPeak" => g.hdr_peak = number(g.hdr_peak).clamp(200, 2000),
+                "hdrPeak" => {
+                    g.hdr_peak = match number(g.hdr_peak) {
+                        0 => 0,
+                        n => n.clamp(200, 2000),
+                    }
+                }
                 "batteryMode" => g.battery = flag(g.battery),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "pickedShaderPack" => g.shader_pack = value.to_owned(),
@@ -405,6 +427,14 @@ impl Graphics {
     }
     pub fn save(&self, dir: &Path) {
         let _ = fs::write(dir.join(FILE), self.serialize());
+    }
+    /// The peak the world's highlights reach, in nits: the player's, or on Auto
+    /// what the system reports, else 1000.
+    pub fn peak_nits(&self) -> u32 {
+        match self.hdr_peak {
+            0 => reported_peak().unwrap_or(1000),
+            n => n,
+        }
     }
     /// Worker threads for chunk generation and meshing.
     pub fn worker_threads(&self) -> usize {
@@ -504,6 +534,9 @@ mod tests {
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
+        // 0 is Auto; anything else is a peak the slider reaches.
+        assert_eq!(Graphics::parse("hdrPeak:0\n").hdr_peak, 0);
+        assert_eq!(Graphics::parse("hdrPeak:50\n").hdr_peak, 200);
         // The old menus' Simple / Advanced choice is ignored, and so is the
         // shader pack older versions saved.
         assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());

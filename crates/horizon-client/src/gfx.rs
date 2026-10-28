@@ -1126,22 +1126,8 @@ impl Renderer {
             }
             surface.configure(&device, &config);
             let output = hdr::output(&caps);
-            #[cfg(target_os = "linux")]
-            if output.is_some()
-                && previous.is_none()
-                && let Some(l) = horizon_hdr::wayland::window_luminances(&*window)
-            {
-                // KWin and the others map content's reference white (203 nits in PQ) onto
-                // their own, so the peak in HDR output's scale is the target's maximum
-                // over that ratio.
-                log::info!(
-                    "Horizon renderer: the compositor shows this window with reference white {} \
-                     nits, {}..{} nits: peak {:.0} in HDR output's scale",
-                    l.reference,
-                    l.target_min,
-                    l.target_max,
-                    l.target_max * 203.0 / l.reference.max(1.0)
-                );
+            if output.is_some() && previous.is_none() {
+                crate::graphics::report_peak(reported_peak(&window));
             }
             (config, caps.present_modes.clone(), output)
         } else {
@@ -5870,4 +5856,25 @@ mod sprite_upload_tests {
             assert_eq!(chain.capacity(), chain.len());
         }
     }
+}
+
+/// The peak the compositor reports for `window`'s display, in nits in HDR output's
+/// scale. KWin and the others map content's reference white (203 nits in PQ) onto
+/// their own, so that's the target's maximum over that ratio. Kept within the
+/// settings' lowest peak and PQ's top, so metadata never ends below the black level.
+fn reported_peak(window: &Window) -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    if let Some(l) = horizon_hdr::wayland::window_luminances(window) {
+        let peak = (l.target_max * 203.0 / l.reference.max(1.0)).round() as u32;
+        log::info!(
+            "Horizon renderer: the compositor shows this window with reference white {} nits, \
+             {}..{} nits: peak {peak} nits in HDR output's scale",
+            l.reference,
+            l.target_min,
+            l.target_max,
+        );
+        return Some(peak.clamp(200, 10_000));
+    }
+    let _ = window;
+    None
 }
