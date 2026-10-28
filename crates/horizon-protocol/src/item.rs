@@ -31,6 +31,8 @@ pub mod component {
     pub const ATTACK_RANGE: i32 = 30;
     pub const STORED_ENCHANTMENTS: i32 = 45;
     pub const PROFILE: i32 = 72;
+    pub const BANNER_PATTERNS: i32 = 74;
+    pub const BASE_COLOR: i32 = 75;
     pub const DYED_COLOR: i32 = 47;
     pub const MAP_ID: i32 = 48;
     pub const MAP_POST_PROCESSING: i32 = 50;
@@ -112,6 +114,10 @@ pub enum Component {
         material: i32,
         pattern: i32,
     },
+    /// `BannerPatternLayers`: each layer's `banner_pattern` registry id and
+    /// its dye id (`DyeColor.getId`). A layer with a direct pattern has no
+    /// registry name: that value stays [`Component::Raw`].
+    BannerPatterns(Vec<(i32, i32)>),
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
@@ -349,6 +355,19 @@ impl Component {
                     _ => Self::Raw(bytes.to_vec()),
                 }
             }
+            // DyeColor.STREAM_CODEC: its id.
+            BASE_COLOR => Self::Int(r.varint()?),
+            // BannerPatternLayers.STREAM_CODEC: a list of a pattern holder (a
+            // reference's id plus one, or 0 and the pattern itself) and a dye.
+            BANNER_PATTERNS => {
+                let start = r.position();
+                skip::component(BANNER_PATTERNS, r)?;
+                let bytes = r.since(start);
+                match Self::banner_layers(bytes) {
+                    Some(layers) => Self::BannerPatterns(layers),
+                    None => Self::Raw(bytes.to_vec()),
+                }
+            }
             other => {
                 let start = r.position();
                 skip::component(other, r)?;
@@ -356,9 +375,32 @@ impl Component {
             }
         })
     }
+    /// The layers of encoded `BannerPatternLayers` whose patterns are all
+    /// registry references (`None` when one is direct).
+    fn banner_layers(bytes: &[u8]) -> Option<Vec<(i32, i32)>> {
+        let mut r = Reader::new(bytes);
+        let n = r.count(r.remaining()).ok()?;
+        let mut layers = Vec::with_capacity(n);
+        for _ in 0..n {
+            let pattern = r.varint().ok()?;
+            let color = r.varint().ok()?;
+            if pattern < 1 {
+                return None;
+            }
+            layers.push((pattern - 1, color));
+        }
+        (r.remaining() == 0).then_some(layers)
+    }
     pub(crate) fn write(&self, kind: i32, w: &mut Writer) {
         match self {
             Self::Raw(bytes) => w.bytes(bytes),
+            Self::BannerPatterns(layers) => {
+                w.varint(layers.len() as i32);
+                for (pattern, color) in layers {
+                    w.varint(pattern + 1);
+                    w.varint(*color);
+                }
+            }
             Self::Trim { material, pattern } => {
                 w.varint(material + 1);
                 w.varint(pattern + 1);
