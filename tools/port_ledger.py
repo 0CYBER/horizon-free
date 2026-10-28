@@ -2466,6 +2466,10 @@ def cmd_map_check(led, paths):
             rows += 1
             parts = [x.strip() for x in line.split("\t")] + ["", "", ""]
             name, verdict, where = parts[0], parts[1], parts[2]
+            if "#" in name:
+                if name not in led["methods"]:
+                    problems.append(f"{path}:{n} {name}: no method {name}")
+                continue
             head, _, last = name.rpartition(".")
             cls_q, meth = (head, last) if head and (last[:1].islower() or last.startswith("<")) else (name, None)
             q = cls_q.replace(".", "$")
