@@ -2607,6 +2607,9 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // LivingEntity.aiStep: a Riptide spin counts down on the server's
+            // copy too, or it would stay in the spin pose (eye 0.4) for good.
+            w.player.count_down_server_spin();
             // Player.tick ends with updatePlayerPose: a swimmer, or a player
             // crawling under a block, takes the short box its moves are checked with.
             let _ = w.update_player_pose();
@@ -2706,8 +2709,15 @@ impl Game<'_> {
                 // others (Player.playSound excludes the player, whose client
                 // plays it), the entity event 53 everyone around.
                 MotionEvent::HoneySlide {
-                    sound, particles, ..
+                    pos,
+                    sound,
+                    particles,
                 } => {
+                    if self.world.game_time % 20 == 0 {
+                        self.as_guest(host, conn, |game| {
+                            game.trigger_honey_slide([pos.x, pos.y, pos.z])
+                        });
+                    }
                     let Some((id, at)) = host.hub.guest(conn).map(|g| (g.entity_id, g.position))
                     else {
                         continue;

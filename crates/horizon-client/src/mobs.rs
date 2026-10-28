@@ -937,6 +937,8 @@ pub struct Mob {
     /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
     /// replaces the type's default when its download is ready.
     pub skin: Option<String>,
+    /// `PlayerSkin.model` is `SLIM`: the player model with 3-pixel arms.
+    pub slim: bool,
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
@@ -1908,6 +1910,7 @@ impl Mob {
             rider: None,
             outbox: Vec::new(),
             skin: None,
+            slim: false,
             profile: None,
             attrs: Attrs {
                 speed: kind.speed,

@@ -86,25 +86,39 @@ impl Window {
 struct Mouse { ignore_first: bool }
 impl Mouse { fn set_ignore_first_move(&mut self) { self.ignore_first = true; } }
 struct Remote;
+#[derive(Default)]
+struct ServerPacks { prompt: Option<()> }
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
     captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
     mining: bool, lan_acting: Option<u32>, renderer: Option<Renderer>, cursor: (f32, f32),
+    server_packs: ServerPacks,
 }
 impl Default for Game {
     fn default() -> Self {
         Self { focused: true, agent_pointer: false, window: Some(Window::default()),
             mouse: Mouse::default(), captured: false, title: None,
             screen: Screen::Playing, remote: None, mining: false, lan_acting: None,
-            renderer: None, cursor: (0.0, 0.0) }
+            renderer: None, cursor: (0.0, 0.0), server_packs: ServerPacks::default() }
     }
 }
 impl Game {
     fn stop_mining(&mut self) { self.mining = false; }
     fn reset_inventory_clicks(&mut self) {}
+    fn dialog_open(&self) -> bool { false }
 METHODS
 }
 fn main() {
+    // The server pack prompt keeps the pointer: nothing grabs it while it is open.
+    {
+        let mut game = Game::default();
+        game.server_packs.prompt = Some(());
+        game.capture(true);
+        assert!(!game.captured);
+        game.server_packs.prompt = None;
+        game.capture(true);
+        assert!(game.captured);
+    }
     // New and existing worlds, returning to title, and reopening a world.
     for remote in [false, true] {
         let mut game = Game::default();

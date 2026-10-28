@@ -1331,6 +1331,7 @@ impl Def {
         let mut v = vec![base];
         let extra: &[&str] = match self.species {
             Species::Pig => &["pig_baby", "cold_pig"],
+            Species::Mannequin => &["player_slim"],
             Species::Cow => &[
                 "cow_baby",
                 "cold_cow",

@@ -213,7 +213,8 @@ pub(super) struct Remote {
     /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
     show_death_screen: bool,
     player_type: Option<Arc<MobType>>,
-    /// Inventory as last synchronised, for creative-mode slot updates.
+    /// Inventory (then the off hand) as last synchronised, for creative-mode
+    /// slot updates.
     synced: Vec<Option<ItemStack>>,
     decode_errors: u32,
     clock: Option<i32>,
@@ -510,7 +511,7 @@ impl Game<'_> {
             death_message: None,
             show_death_screen: true,
             player_type,
-            synced: vec![None; 36],
+            synced: vec![None; 37],
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
@@ -3086,6 +3087,20 @@ impl Game<'_> {
             .collect();
         Some((players, r.online_mode, upside_down))
     }
+    /// The signed-in account's `textures`, once the services answered.
+    fn own_textures(&self) -> Option<horizon_client::skins::Textures> {
+        use horizon_client::skins::{self, NameOrId, Resolve};
+        let auth = horizon_client::auth::current()?;
+        let state = self
+            .skin_profiles
+            .borrow_mut()
+            .state(&NameOrId::Id(auth.uuid));
+        let Resolve::Done(Some(profile)) = state else {
+            return None;
+        };
+        let (value, signature) = profile.textures()?;
+        Some(skins::unpack(&value, signature, &skins::TEXTURE_URIS))
+    }
     /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
@@ -3094,12 +3109,23 @@ impl Game<'_> {
             return;
         };
         let local = r.profile;
-        let entries: Vec<(u128, horizon_client::skins::Textures)> = r
+        let mut entries: Vec<(u128, horizon_client::skins::Textures)> = r
             .skin_textures
             .iter()
             .map(|(uuid, textures)| (*uuid, textures.clone()))
             .collect();
+        // Minecraft.profileFuture: the signed-in account's own profile, fetched from the
+        // services, gives the local player its skin where the server sends none (single
+        // player's offline-mode server).
+        if !entries.iter().any(|(u, t)| *u == local && t.skin.is_some())
+            && let Some(own) = self.own_textures()
+        {
+            entries.retain(|(u, _)| *u != local);
+            entries.push((local, own));
+        }
         let mut resolved: Vec<(u128, String)> = Vec::new();
+        // PlayerSkin.model of each resolved skin: the textures' `slim`.
+        let mut slim = std::collections::HashSet::new();
         for (uuid, textures) in entries {
             // PlayerInfo.createSkinLookup: only the local player's own skin
             // may be unsigned.
@@ -3110,10 +3136,22 @@ impl Game<'_> {
                 })
             };
             if let Some(skin) = skin {
+                if textures.slim {
+                    slim.insert(uuid);
+                }
                 resolved.push((uuid, skin));
             }
         }
         resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
+        // PlayerInfo.getSkin: the downloaded skin and its model, else the
+        // profile's default skin (DefaultPlayerSkin.get), slim or wide.
+        let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
+            Some(skin) => (skin.clone(), slim.contains(&uuid)),
+            None => {
+                let skin = horizon_client::tab_list::default_skin(uuid);
+                (skin.to_owned(), skin.contains("/slim/"))
+            }
+        };
         let Some((level, skins, own)) = self.remote.as_mut().map(|r| {
             r.skins = resolved.into_iter().collect();
             (
@@ -3122,27 +3160,26 @@ impl Game<'_> {
                     .map(|(id, uuid)| (*id as u32, *uuid))
                     .collect::<Vec<_>>(),
                 r.skins.clone(),
-                r.skins.get(&r.profile).cloned(),
+                r.profile,
             )
         }) else {
             return;
         };
         for (id, uuid) in level {
-            let Some(skin) = skins.get(&uuid) else {
-                continue;
-            };
+            let (skin, is_slim) = skin_of(&skins, uuid);
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
             {
-                mob.skin = Some(skin.clone());
+                mob.skin = Some(skin);
+                mob.slim = is_slim;
             }
         }
-        if let Some(skin) = own
-            && let Some(mob) = self.player_model.as_mut()
-        {
+        if let Some(mob) = self.player_model.as_mut() {
+            let (skin, is_slim) = skin_of(&skins, own);
             mob.skin = Some(skin);
+            mob.slim = is_slim;
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3192,7 +3229,7 @@ impl Game<'_> {
                 (m.id, textures)
             })
             .collect();
-        let mut resolved: Vec<(u32, Option<String>)> = Vec::new();
+        let mut resolved: Vec<(u32, Option<String>, bool)> = Vec::new();
         for (id, textures) in mannequins {
             let skin = {
                 let mut downloads = self.skin_downloads.borrow_mut();
@@ -3200,15 +3237,17 @@ impl Game<'_> {
                     downloads.state(kind, url)
                 })
             };
-            resolved.push((id, skin));
+            let slim = skin.is_some() && textures.slim;
+            resolved.push((id, skin, slim));
         }
-        for (id, skin) in resolved {
+        for (id, skin, slim) in resolved {
             let skin = skin.filter(|s| !s.starts_with("skins/") || self.again_skin(s));
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id && &*m.kind.id == "minecraft:mannequin")
             {
+                mob.slim = slim && skin.is_some();
                 mob.skin = skin;
             }
         }
@@ -3592,6 +3631,7 @@ impl Game<'_> {
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         // Gui.tick: the titles, the action bar and the held item's name.
         self.tick_hud();
+        self.tick_subtitles();
         let entity_collisions = self.player_entity_collisions();
         let pushed = self.remote_pushes();
         let Some(player) = self.player.as_mut() else {
@@ -4307,12 +4347,14 @@ impl Game<'_> {
         {
             out.push(packet);
         }
-        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
+        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot);
+        // `synced[36]` is the off hand.
         let mut creative_slots = Vec::new();
         if self.creative {
-            for i in 0..36 {
-                if self.inventory[i] != r.synced[i] {
-                    r.synced[i] = self.inventory[i].clone();
+            for i in 0..37 {
+                let stack = self.inventory.get(i).unwrap_or(&self.offhand);
+                if *stack != r.synced[i] {
+                    r.synced[i] = stack.clone();
                     creative_slots.push(i);
                 }
             }
@@ -4321,8 +4363,13 @@ impl Game<'_> {
             self.send(packet);
         }
         for i in creative_slots {
-            let slot = if i < 9 { 36 + i } else { i } as i16;
-            let item = self.to_network(&self.inventory[i]);
+            // InventoryMenu's slots: the hotbar is 36..=44, the off hand 45.
+            let slot = match i {
+                0..9 => 36 + i,
+                36 => 45,
+                _ => i,
+            } as i16;
+            let item = self.to_network(self.inventory.get(i).unwrap_or(&self.offhand));
             self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
                 slot,
                 item,
@@ -4331,7 +4378,8 @@ impl Game<'_> {
     }
     /// Inventory as the server last described it.
     fn remote_synced(&mut self) {
-        let inventory = self.inventory.clone();
+        let mut inventory = self.inventory.clone();
+        inventory.push(self.offhand.clone());
         if let Some(r) = self.remote.as_mut() {
             r.synced = inventory;
         }
@@ -5055,8 +5103,11 @@ impl Game<'_> {
         // countdown goes on past zero (LivingEntity.updateUsingItem completes
         // only on the server) until the server's USE_ITEM_COMPLETE.
         let remaining = consumable.ticks() - ticks as i32;
-        if consumable.particles && consumable.should_emit(remaining) {
-            self.eat_particles(&stack, 5);
+        if consumable.should_emit(remaining) {
+            // `emit_consume` plays the eat sound and spawns the bites (when the
+            // item has consume particles), as `tick_used_item` does on the
+            // player's own server.
+            self.emit_consume(&consumable, &stack, 5);
         }
         self.using = Some((slot, ticks + 1));
     }
@@ -5337,11 +5388,12 @@ impl Game<'_> {
             KeyCode::KeyE => {
                 // The inventory opens without telling the server.
                 self.recipe_ui.reset_screen();
-                self.screen = if self.creative {
-                    Screen::Creative
+                if self.creative {
+                    self.screen = Screen::Creative;
+                    self.creative_screen.reopen();
                 } else {
-                    Screen::Inventory
-                };
+                    self.screen = Screen::Inventory;
+                }
                 self.craft_size = 2;
                 self.capture(false);
                 Ok(true)

@@ -859,7 +859,7 @@ impl Game<'_> {
     /// first, as `ClientPacketListener.sendUnattendedCommand` lets client
     /// commands take it. (Vanilla asks first when the command fails to
     /// parse; here the server answers it.)
-    fn click_command(&mut self, command: &str) {
+    pub(super) fn click_command(&mut self, command: &str) {
         let command = command.strip_prefix('/').unwrap_or(command);
         if self.mod_command(command) {
             return;
