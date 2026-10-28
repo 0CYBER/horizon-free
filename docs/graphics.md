@@ -22,7 +22,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
 | | resolution scale, anti-aliasing (FXAA or TAA), TAA upscaling, present mode, frame pacing | `horizon-graphics.txt` |
-| HDR (its own screen, from Display) | HDR, black level, peak brightness, paper white, UI brightness | `horizon-graphics.txt` |
+| HDR (its own screen, from Display) | HDR, black level, peak brightness, paper white, UI brightness, a shortcut key to the screen | `horizon-graphics.txt` |
 | Performance | battery mode, worker threads, upload budget per frame | `horizon-graphics.txt` |
 | Overlay | performance overlay: FPS, frame/CPU/GPU times, frame-time graph | `horizon-graphics.txt` |
 

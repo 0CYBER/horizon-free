@@ -12575,7 +12575,7 @@ impl Game<'_> {
             }
             return Ok(());
         }
-        if self.sort_key_press(key) {
+        if self.sort_key_press(key) || self.hdr_key_press(key) {
             return Ok(());
         }
         if self.remote.is_some() && self.remote_key(key)? {
@@ -13524,7 +13524,7 @@ impl ApplicationHandler for Game<'_> {
                         // Neither edge of a bound button is an ordinary slot click.
                         return Ok(());
                     }
-                    if pressed && self.sort_mouse_press(button) {
+                    if pressed && (self.sort_mouse_press(button) || self.hdr_mouse_press(button)) {
                         return Ok(());
                     }
                     match self.screen {
