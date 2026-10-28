@@ -4233,6 +4233,10 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if self.use_redstone_ore(hit.pos, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
             match self.use_respawn_anchor(hit.pos, held.as_ref())? {
                 respawn_anchor::AnchorUse::Charged => {
                     self.swing_arm();
