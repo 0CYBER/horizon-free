@@ -340,33 +340,26 @@ impl ChunkData {
 
 /// Resident section: 4,096 blocks stored as numeric palette entries. Uniform
 /// sections have no word array; property strings live in the shared registry.
-/// Multiplicative hash for dense state IDs; section palettes are hashed on
-/// every block write, where SipHash dominated generation profiles.
-#[derive(Default)]
-struct StateIdHasher(u64);
-impl std::hash::Hasher for StateIdHasher {
-    fn finish(&self) -> u64 {
-        self.0
+/// Palettes are almost always tiny, so a local id is a scan of that vector
+/// (the resident container does the same) with the last lookup cached: a run
+/// of one state costs a compare, and no section allocates a hash table.
+fn id_in(
+    palette: &[BlockStateId],
+    last: &mut Option<(BlockStateId, u32)>,
+    state: BlockStateId,
+) -> Option<u32> {
+    if let Some((seen, id)) = *last
+        && seen == state
+    {
+        return Some(id);
     }
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0.rotate_left(8) ^ u64::from(b)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        }
-    }
-    fn write_u32(&mut self, value: u32) {
-        self.0 = (self.0 ^ u64::from(value)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    }
-}
-type LocalIds =
-    std::collections::HashMap<BlockStateId, u32, std::hash::BuildHasherDefault<StateIdHasher>>;
-fn local_ids(state: BlockStateId) -> LocalIds {
-    let mut ids = LocalIds::default();
-    ids.insert(state, 0);
-    ids
+    let id = palette.iter().position(|&v| v == state)? as u32;
+    *last = Some((state, id));
+    Some(id)
 }
 pub struct BlockSection<'r> {
     palette: Vec<BlockStateId>,
-    local_ids: LocalIds,
+    last: Option<(BlockStateId, u32)>,
     counts: Vec<u16>,
     free: Vec<u32>,
     storage: Option<PackedStorage>,
@@ -383,7 +376,7 @@ impl<'r> BlockSection<'r> {
         }
         Ok(Self {
             palette: vec![state],
-            local_ids: local_ids(state),
+            last: Some((state, 0)),
             counts: vec![4096],
             free: Vec::new(),
             storage: None,
@@ -442,19 +435,18 @@ impl<'r> BlockSection<'r> {
         if old == state {
             return Ok(old);
         }
-        let id = match self.local_ids.get(&state) {
-            Some(&id) => id,
+        let id = match id_in(&self.palette, &mut self.last, state) {
+            Some(id) => id,
             None if self.counts[old_id as usize] == 1 => {
                 // Replacing the last occurrence can reuse its slot without repacking.
                 self.palette[old_id as usize] = state;
-                self.local_ids.remove(&old);
-                self.local_ids.insert(state, old_id);
+                self.last = Some((state, old_id));
                 return Ok(old);
             }
             None => {
                 if let Some(id) = self.free.pop() {
                     self.palette[id as usize] = state;
-                    self.local_ids.insert(state, id);
+                    self.last = Some((state, id));
                     id
                 } else {
                     let id = self.palette.len() as u32;
@@ -471,7 +463,7 @@ impl<'r> BlockSection<'r> {
                     }
                     self.palette.push(state);
                     self.counts.push(0);
-                    self.local_ids.insert(state, id);
+                    self.last = Some((state, id));
                     id
                 }
             }
@@ -480,12 +472,14 @@ impl<'r> BlockSection<'r> {
         self.counts[old_id as usize] -= 1;
         self.counts[id as usize] += 1;
         if self.counts[old_id as usize] == 0 {
-            self.local_ids.remove(&old);
             self.free.push(old_id);
+            if self.last == Some((old, old_id)) {
+                self.last = None;
+            }
         }
         if self.counts[id as usize] == 4096 {
             self.palette = vec![state];
-            self.local_ids = local_ids(state);
+            self.last = Some((state, 0));
             self.counts = vec![4096];
             self.free.clear();
             self.storage = None;
@@ -495,24 +489,27 @@ impl<'r> BlockSection<'r> {
     pub fn compact(&mut self) -> io::Result<()> {
         let values: Vec<_> = (0..4096).map(|i| self.get(i).unwrap()).collect();
         self.palette.clear();
-        self.local_ids.clear();
+        self.last = None;
         self.counts.clear();
         self.free.clear();
         for state in &values {
-            if !self.local_ids.contains_key(state) {
-                self.local_ids.insert(*state, self.palette.len() as u32);
+            if let Some(id) = id_in(&self.palette, &mut self.last, *state) {
+                self.counts[id as usize] += 1;
+            } else {
                 self.palette.push(*state);
-                self.counts.push(0);
+                self.counts.push(1);
+                self.last = Some((*state, self.palette.len() as u32 - 1));
             }
-            self.counts[self.local_ids[state] as usize] += 1;
         }
         let bits = bits_for_palette(self.palette.len(), 4);
         self.storage = if bits == 0 {
             None
         } else {
             let mut storage = PackedStorage::new(bits, 4096).map_err(|e| invalid(e.to_string()))?;
+            let mut last = None;
             for (i, state) in values.iter().enumerate() {
-                storage.set(i, self.local_ids[state]).unwrap();
+                let id = id_in(&self.palette, &mut last, *state).unwrap();
+                storage.set(i, id).unwrap();
             }
             Some(storage)
         };
@@ -597,18 +594,20 @@ mod tests {
         if old == state {
             return Ok(old);
         }
-        let old_id = section.local_ids[&old];
-        if section.counts[old_id as usize] == 1 && !section.local_ids.contains_key(&state) {
+        let old_id = section.palette.iter().position(|&s| s == old).unwrap() as u32;
+        let known = section
+            .palette
+            .iter()
+            .position(|&s| s == state)
+            .map(|id| id as u32);
+        if section.counts[old_id as usize] == 1 && known.is_none() {
             section.palette[old_id as usize] = state;
-            section.local_ids.remove(&old);
-            section.local_ids.insert(state, old_id);
             return Ok(old);
         }
-        let id = if let Some(id) = section.local_ids.get(&state) {
-            *id
+        let id = if let Some(id) = known {
+            id
         } else if let Some(id) = section.free.pop() {
             section.palette[id as usize] = state;
-            section.local_ids.insert(state, id);
             id
         } else {
             let id = section.palette.len() as u32;
@@ -625,7 +624,6 @@ mod tests {
             }
             section.palette.push(state);
             section.counts.push(0);
-            section.local_ids.insert(state, id);
             id
         };
         section
@@ -637,12 +635,10 @@ mod tests {
         section.counts[old_id as usize] -= 1;
         section.counts[id as usize] += 1;
         if section.counts[old_id as usize] == 0 {
-            section.local_ids.remove(&old);
             section.free.push(old_id);
         }
         if section.counts[id as usize] == 4096 {
             section.palette = vec![state];
-            section.local_ids = local_ids(state);
             section.counts = vec![4096];
             section.free.clear();
             section.storage = None;
@@ -709,7 +705,6 @@ mod tests {
             assert_eq!(base.palette, fast.palette);
             assert_eq!(base.counts, fast.counts);
             assert_eq!(base.free, fast.free);
-            assert_eq!(base.local_ids, fast.local_ids);
             for index in 0..4096 {
                 assert_eq!(
                     baseline_get(&base, index).unwrap(),
