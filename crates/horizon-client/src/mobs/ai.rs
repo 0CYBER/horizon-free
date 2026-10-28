@@ -1962,6 +1962,7 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         Family::Guardian => super::guardian::travel(m, w, input, events),
         // Shulkers never move on their own.
         Family::Shulker => true,
+        Family::Allay => super::allay::travel(m, w, input, events),
         Family::Vex => super::vex::travel(m),
         Family::Nautilus => super::nautilus::travel(m, w, input, events),
         _ => false,
