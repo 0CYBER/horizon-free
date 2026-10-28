@@ -5766,30 +5766,28 @@ impl Game<'_> {
     /// highlight (its count yellow when the slot caps it), and hides while
     /// it is the drag's only slot.
     fn draw_slot_item(
-        &mut self,
+        &self,
         batch: &mut HudBatch,
         drag: Option<&DragView>,
         slot: usize,
-        stack: Option<ItemStack>,
+        stack: &Option<ItemStack>,
         x: f32,
         y: f32,
     ) {
+        let carried;
         let (stack, capped) = match drag.and_then(|d| d.slots.get(&slot)) {
             Some(None) => return,
             Some(Some((count, capped))) => {
                 batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                let carried = self
-                    .carried
-                    .clone()
-                    .map(|c| ItemStack { count: *count, ..c });
-                (carried, *capped)
+                carried = self.carried.clone().map(|c| ItemStack { count: *count, ..c });
+                (carried.as_ref(), *capped)
             }
-            None => (stack, false),
+            None => (stack.as_ref(), false),
         };
         if let Some(stack) = stack {
-            self.draw_item_model(batch, &stack, x, y);
+            self.draw_item_model(batch, stack, x, y);
             let text = capped.then(|| format!("\u{a7}e{}", stack.count));
-            self.draw_item_decorations(batch, &stack, x, y, text);
+            self.draw_item_decorations(batch, stack, x, y, text);
         }
     }
     /// `extractCarriedItem`: the carried stack at the cursor, showing what a
@@ -6407,7 +6405,7 @@ impl Game<'_> {
                 );
             }
             let stack = self.slot_view(i);
-            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
+            self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
     }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
@@ -11200,15 +11198,14 @@ impl Game<'_> {
             let drag = self.drag_view();
             for c in 0..9 {
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
-                let stack = self.inventory[c].clone();
-                self.draw_slot_item(batch, drag.as_ref(), c, stack.clone(), x, y);
+                self.draw_slot_item(batch, drag.as_ref(), c, &self.inventory[c], x, y);
                 if self.cursor.0 >= x
                     && self.cursor.0 < x + 16.0
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
                     batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                    hovered = stack;
+                    hovered = self.inventory[c].clone();
                 }
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
