@@ -2912,7 +2912,13 @@ impl Game<'_> {
             behaviours: self.res.behaviours(),
             items: self.res.items(),
             recipes: self.res.recipes(),
-            loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
+            // A client rolls no loot (LootTable.getRandomItems needs a
+            // ServerLevel): it doesn't load the tables on its game thread.
+            loot: if self.remote.is_some() {
+                None
+            } else {
+                horizon_client::structure_blocks::loot_data(&self.options.resources)
+            },
             registry: self.pack.assets.registry,
             rules,
             difficulty: i32::from(self.ui.difficulty),
