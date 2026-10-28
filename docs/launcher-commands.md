@@ -763,6 +763,30 @@ Turn off a mod the browser installed; it stays installed.
 
 MCP: `mods_disable`.
 
+## `horizon-launcher rust status`
+
+Whether it is installed, its version and whether this computer can link with it.
+
+    horizon-launcher rust status
+
+MCP: `rust_status`.
+
+## `horizon-launcher rust install`
+
+Download the pinned toolchain from static.rust-lang.org (once), checked by SHA-256.
+
+    horizon-launcher rust install
+
+MCP: `rust_install`.
+
+## `horizon-launcher rust remove`
+
+Delete the toolchain and the native builds' Cargo home.
+
+    horizon-launcher rust remove
+
+MCP: `rust_remove`.
+
 ## `horizon-launcher servers list`
 
 The servers, their folder and whether they run.

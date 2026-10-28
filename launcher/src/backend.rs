@@ -500,15 +500,24 @@ fn signed_digest(tag: &str, asset: &str) -> Result<String, String> {
     )
 }
 
-/// Downloads `url` into `to`; the file is kept only if its SHA-256 is `sha256`, the signed one.
-fn download(
+/// Downloads `url` into `to`; the file is kept only if its SHA-256 is `sha256`, the signed (or
+/// pinned) one. A `size` of 0 takes the server's Content-Length for the progress.
+pub(crate) fn download(
     url: &str,
     size: u64,
     sha256: &str,
     to: &Path,
     progress: &impl Fn(f32),
 ) -> Result<(), String> {
-    let mut reader = get(url)?.into_reader();
+    let response = get(url)?;
+    let size = match size {
+        0 => response
+            .header("Content-Length")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0),
+        n => n,
+    };
+    let mut reader = response.into_reader();
     let mut file = fs::File::create(to).map_err(|e| e.to_string())?;
     let mut hash = horizon_release_sign::Sha256::default();
     let (mut done, mut buf) = (0u64, vec![0u8; 1 << 16]);
