@@ -428,6 +428,7 @@ impl Game<'_> {
         m.extra.elytra.tick(fall_flying, crouching, velocity);
         m.extra.swim.tick(visually_swimming, in_water);
         m.extra.swing_right_arm = swing_right_arm;
+        m.extra.swing_stab = self.swing.current.is_some_and(|c| c.animation.kind == 2);
         m.hurt_time = hurt;
     }
     /// Whether the player's own model shows in the world view.

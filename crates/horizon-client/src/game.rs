@@ -10648,6 +10648,14 @@ impl Game<'_> {
                     }
                 }
                 _ if spinning => ItemPose::SpinAttack,
+                // ItemInHandRenderer: a STAB swing of this hand jabs.
+                _ if self
+                    .swing
+                    .current
+                    .is_some_and(|c| c.hand == hand && c.animation.kind == 2) =>
+                {
+                    ItemPose::Stab
+                }
                 _ => ItemPose::Swing,
             };
             let m = to_world
