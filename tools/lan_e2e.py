@@ -258,6 +258,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              sends each target its packet).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
+- cure-discount: the host and the guest each cure a zombie villager with a golden apple and pay 14
+              wheat instead of 20 for its emerald (the ZOMBIE_VILLAGER_CURED gossip, #3306).
 - falling:   an item, a falling block and primed TNT the host summons high up fall smoothly on the
              guest, a little further every tick between the server's updates (every 20 ticks, 10 for
              TNT), as their own client tick moves them (they used to hang, then jump down once a
@@ -6315,6 +6317,87 @@ def check_hero_trading(host, guest, out):
 
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})
+
+
+def check_cure_discount(host, guest, out):
+    """#3306: ZombieVillager.finishConversion credits the player who fed the golden apple
+    (conversionStarter, level.getPlayerByUUID): the ZOMBIE_VILLAGER_CURED gossip (+20 major and +25
+    minor positive, reputation 125) lowers that player's price by floor(125 * 0.05) = 6, for the
+    host on its server thread and for a guest alike."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'cure_trade'
+    at = (x + 2.5, y, z + 0.5)
+    seen = {}
+    try:
+        host('command', command=f'fill {x - 4} {y - 1} {z - 2} {x + 4} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'fill {x - 4} {y} {z - 2} {x + 4} {y + 3} {z + 2} minecraft:air')
+        host('command', command='time set midnight')
+        for game, other in ((host, guest), (guest, host)):
+            back_to_game(game)
+            back_to_game(other)
+            other('command', command=f'tp @s {x - 3.5} {y} {z + 0.5}')
+            game('command', command='gamemode survival')
+            game('command', command='effect clear @s')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} -90 0')
+            game('command', command='clear @s')
+            game('command', command='give @s minecraft:golden_apple')
+            game.wait(10)
+            game.raw('select', 'minecraft:golden_apple')
+            host('command', command=f'summon minecraft:zombie_villager {at[0]} {at[1]} {at[2]} '
+                 f'{{Tags:["{tag}"],NoAI:1b,PersistenceRequired:1b,Xp:1,VillagerData:{{type:"minecraft:plains",'
+                 'profession:"minecraft:farmer",level:1},Offers:{Recipes:[{buy:{id:"minecraft:wheat",count:20},'
+                 'sell:{id:"minecraft:emerald",count:1},maxUses:16,uses:0,xp:0,priceMultiplier:0.05f,demand:0}]}}')
+            host('command', command=f'effect give @e[tag={tag}] minecraft:weakness 60 0')
+            game.wait(20)
+            zombie = next(e['id'] for e in game.raw('entities', 8, 'minecraft:zombie_villager')['entities']
+                          if math.dist(e['pos'], at) < 0.5)
+            # ZombieVillager.mobInteract: the apple starts the cure; then it is cut short.
+            game.raw('interact-entity', zombie)
+            game.wait(10)
+            # Horizon counts the cure down in the AI step, so NoAI goes for the last tick.
+            host('command', command=f'data merge entity @e[tag={tag},limit=1] {{ConversionTime:1,NoAI:0b}}')
+            villager = None
+            for _ in range(30):
+                game.wait(5)
+                villager = next((e['id'] for e in game.raw('entities', 8, 'minecraft:villager')['entities']
+                                 if math.dist(e['pos'], at) < 2), None)
+                if villager is not None:
+                    break
+            assert villager is not None, f'{game.name}: the zombie villager was not cured'
+            near = f'x={at[0]},y={at[1]},z={at[2]},distance=..3,sort=nearest,limit=1'
+            host('command', command=f'data merge entity @e[type=minecraft:villager,{near}] '
+                 f'{{NoAI:1b,Tags:["{tag}"]}}')
+            game('command', command='clear @s')
+            game('command', command='give @s minecraft:wheat 20')
+            game.wait(10)
+            game.raw('interact-entity', villager)
+            game.raw('wait-for', 'screen', 'station', '--timeout', 10)
+            assert game('screen')['station'] == 'Merchant', f'{game.name}: no merchant screen'
+            game.raw('click-gui', -1, 28)
+            game.wait(10)
+            assert station_slots(game).get(650) == ('minecraft:emerald', 1), f'{game.name}: no result'
+            game.shot(out, f'cure-discount-{game.name}')
+            game.raw('click-slot', 650, 'shift')
+            game.wait(10)
+            game.raw('key', 'esc', 'tap')
+            game.wait(10)
+            case = {item: server_count(game, item) for item in ('wheat', 'emerald')}
+            seen[game.name] = case
+            want = {'wheat': 20 - 14, 'emerald': 1}
+            assert case == want, f'{game.name}: expected {want}, got {case}'
+            host('command', command=f'kill @e[tag={tag}]')
+            game.wait(5)
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='clear @s')
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command='time set day')
+    return seen
+
+
+CHECKS += ['cure-discount']
+CHECK_FNS.update({'cure-discount': check_cure_discount})
 
 
 def check_spectator_travel(host, guest, out):
