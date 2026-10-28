@@ -94,9 +94,22 @@ pub fn download(
             });
         }
     }
+    let libraries = game.len() - 1;
+    // The logging setup the game is started with (`logging.client.argument`): for 1.7 to 1.18,
+    // Mojang's fixed one is what keeps Log4Shell out.
+    let logging = &manifest["logging"]["client"]["file"];
+    if !logging.is_null() {
+        game.push(File {
+            url: text(logging, "url")?,
+            sha1: text(logging, "sha1")?,
+            size: logging["size"].as_u64(),
+            path: dir
+                .join("assets/log_configs")
+                .join(relative(&text(logging, "id")?)?),
+        });
+    }
     log(format!(
-        "Downloading Minecraft {v} from Mojang: the game and {} libraries",
-        game.len() - 1
+        "Downloading Minecraft {v} from Mojang: the game and {libraries} libraries"
     ));
     fetch_all(&game, jobs, fetch, cancel, log)?;
     let index = &manifest["assetIndex"];
