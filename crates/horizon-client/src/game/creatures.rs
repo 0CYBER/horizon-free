@@ -745,6 +745,7 @@ impl Game<'_> {
         self.guardian_bubbles();
         self.villager_reputation_tick();
         self.merchant_tick();
+        self.villager_item_sense();
         self.villager_pickups();
         for m in dead {
             self.mob_died(&m);
@@ -1362,6 +1363,26 @@ impl Game<'_> {
                         }
                     }
                 },
+                MobEvent::Bonemeal { pos } => {
+                    let at = BlockPos::new(pos[0], pos[1], pos[2]);
+                    if self.with_level(|b, level, ticks| b.grow_crop(level, ticks, at)) {
+                        self.level_events
+                            .push(horizon_world::level::LevelEvent::LevelEvent {
+                                id: 1505,
+                                pos: at,
+                                data: 15,
+                            });
+                        let _ = self.process_level_events();
+                    }
+                }
+                MobEvent::RingBell { bell } => {
+                    let pos = BlockPos::new(bell[0], bell[1], bell[2]);
+                    let rang = self
+                        .with_level(|b, level, ticks| b.bell_attempt_to_ring(level, ticks, pos));
+                    if rang {
+                        let _ = self.process_level_events();
+                    }
+                }
                 MobEvent::ChestOpen { chest, open } => self.golem_chest_open(chest, open),
                 MobEvent::ChestSlot { chest, slot, stack } => {
                     self.golem_chest_slot(chest, slot, stack)
