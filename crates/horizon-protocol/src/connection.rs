@@ -281,6 +281,13 @@ impl ConnReader {
         loop {
             if let Some(frame) = frame::split(&mut self.buffer)? {
                 let body = frame::decompress(frame, self.threshold)?;
+                if body.is_empty() {
+                    // A frame with no packet in it. Vanilla's PacketDecoder
+                    // only decodes a packet from a readable buffer, so an
+                    // empty compressed frame is skipped and the connection
+                    // stays up.
+                    continue;
+                }
                 let mut r = Reader::new(&body);
                 let id = r.varint()?;
                 let start = r.position();
@@ -495,5 +502,31 @@ mod tests {
         c.enable_encryption(&[7; 16]);
         assert_eq!(c.recv().unwrap(), (5, vec![4, 3]));
         client.join().unwrap();
+    }
+
+    /// A server may send a compressed frame that carries no packet: the
+    /// uncompressed length is 0 and the frame holds nothing else. Vanilla
+    /// skips it (its PacketDecoder only reads a packet from a readable
+    /// buffer), so the client stays connected.
+    #[test]
+    fn an_empty_compressed_frame_is_skipped() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut c = Connection::from_stream(stream).unwrap();
+            c.set_compression(64);
+            // The empty frame: its length prefix, then the uncompressed
+            // length 0 and nothing else.
+            c.writer.send_contents(&[0]).unwrap();
+            let mut body = vec![3];
+            body.extend_from_slice(b"after");
+            c.writer.send(&body).unwrap();
+        });
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+        c.set_compression(64);
+        let (id, payload) = c.recv().unwrap();
+        assert_eq!((id, payload.as_slice()), (3, &b"after"[..]));
+        server.join().unwrap();
     }
 }
