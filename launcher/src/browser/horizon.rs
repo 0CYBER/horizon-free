@@ -210,7 +210,8 @@ fn kind_of(kind: &index::Kind) -> Option<Kind> {
         index::Kind::ResourcePack => Some(Kind::ResourcePack),
         index::Kind::Modpack => Some(Kind::Modpack),
         index::Kind::Shader => Some(Kind::Shader),
-        index::Kind::Other(_) => None,
+        // The format checker knows native sources, but this launcher cannot compile them yet.
+        index::Kind::NativeMod | index::Kind::Other(_) => None,
     }
 }
 

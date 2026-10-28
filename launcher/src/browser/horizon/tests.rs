@@ -34,6 +34,14 @@ fn hud(index: &Index) -> Project {
 }
 
 #[test]
+fn native_registry_entries_stay_hidden_until_the_launcher_can_build_them() {
+    assert_eq!(kind_of(&index::Kind::NativeMod), None);
+    let mut index = sample();
+    index.projects[0].kind = index::Kind::NativeMod;
+    assert!(search(&index, &Query::new("", Kind::Mod)).is_empty());
+}
+
+#[test]
 fn searches_by_kind_and_words() {
     let index = sample();
     let found = |text: &str, kind| -> Vec<String> {
