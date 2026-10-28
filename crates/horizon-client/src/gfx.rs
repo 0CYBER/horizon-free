@@ -1125,7 +1125,25 @@ impl Renderer {
                 ));
             }
             surface.configure(&device, &config);
-            (config, caps.present_modes.clone(), hdr::output(&caps))
+            let output = hdr::output(&caps);
+            #[cfg(target_os = "linux")]
+            if output.is_some()
+                && previous.is_none()
+                && let Some(l) = horizon_hdr::wayland::window_luminances(&*window)
+            {
+                // KWin and the others map content's reference white (203 nits in PQ) onto
+                // their own, so the peak in HDR output's scale is the target's maximum
+                // over that ratio.
+                log::info!(
+                    "Horizon renderer: the compositor shows this window with reference white {} \
+                     nits, {}..{} nits: peak {:.0} in HDR output's scale",
+                    l.reference,
+                    l.target_min,
+                    l.target_max,
+                    l.target_max * 203.0 / l.reference.max(1.0)
+                );
+            }
+            (config, caps.present_modes.clone(), output)
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
             let config = wgpu::SurfaceConfiguration {
