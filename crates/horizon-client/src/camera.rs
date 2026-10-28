@@ -772,6 +772,27 @@ pub fn bob_matrix(state: &BobState, damage_tilt_strength: f64, bob_view_option: 
     pose
 }
 
+/// The spinning effect `GameRenderer.renderLevel` multiplies into the level's
+/// projection after the bob: a skew about a tilted axis, from a portal's or
+/// Nausea's intensity (already scaled by Distortion Effects) and the angle in
+/// degrees. The first-person hand keeps its own projection without it.
+pub fn spinning_effect_matrix(intensity: f32, angle_degrees: f32) -> glam::Mat4 {
+    if intensity <= 0.0 {
+        return glam::Mat4::IDENTITY;
+    }
+    let mut skew = 5.0 / (intensity * intensity + 5.0) - intensity * 0.04;
+    skew *= skew;
+    let axis = glam::Vec3::new(
+        0.0,
+        std::f32::consts::SQRT_2 / 2.0,
+        std::f32::consts::SQRT_2 / 2.0,
+    );
+    let angle = angle_degrees * DEG_TO_RAD;
+    glam::Mat4::from_axis_angle(axis, angle)
+        * glam::Mat4::from_scale(glam::Vec3::new(1.0 / skew, 1.0, 1.0))
+        * glam::Mat4::from_axis_angle(axis, -angle)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

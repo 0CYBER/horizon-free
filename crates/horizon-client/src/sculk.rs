@@ -2,7 +2,7 @@
 //! `VibrationSelector`) shared by sculk sensors, shriekers and wardens, the
 //! sculk block entities and the per-player warden spawn tracker.
 pub use crate::chunk::block_entity::{Data, Info, SculkEntity, SculkKind, Selector};
-use crate::mobs::Who;
+use horizon_client_core::who::Who;
 use horizon_core::{
     geometry::{Direction, Vec3, traverse_blocks},
     position::BlockPos,
@@ -315,7 +315,9 @@ fn info_to_nbt(info: &Info) -> Tag {
     ])
 }
 fn info_from_nbt(tag: &Tag) -> Option<Info> {
-    let event = intern(&crate::save::text(tag.get("game_event"))?)?;
+    let event = intern(&horizon_client_core::nbt_value::text(
+        tag.get("game_event"),
+    )?)?;
     let distance = match tag.get("distance") {
         Some(Tag::Float(f)) => f32::from_bits(*f),
         _ => 0.0,
