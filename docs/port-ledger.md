@@ -127,7 +127,7 @@ directory, so several people can check their own rows at once.
 
 `issue N` reads a GitHub issue (`gh issue view`), or takes the report's text (`-` reads stdin), drops the
 bug-report template, and ranks the vanilla classes it names the way players write them ("shulker bullet",
-"eye of ender"), then the methods its words name in those classes. For each class it lists where Horizon ports
+"eye of ender", and registry names from the entity, block and item registries: "mooshroom" is `MushroomCow`), then the methods its words name in those classes. For each class it lists where Horizon ports
 it and the gaps around it: on #3123 ("an iron golem you built no longer attacks you") it points at
 `IronGolem.isPlayerCreated` and `setPlayerCreated`, both missing.
 

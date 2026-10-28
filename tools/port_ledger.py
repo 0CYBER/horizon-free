@@ -1003,6 +1003,34 @@ def short(cls_path, method=None):
     return f"{simple}.{method}" if method else simple
 
 
+REGISTRIES = ("net/minecraft/world/entity/EntityTypes.java", "net/minecraft/world/level/block/Blocks.java",
+              "net/minecraft/world/item/Items.java")
+REGISTERED = re.compile(r"public static final \w+(?:<(\w+)>)? (\w+) = register\w*\((.*?)\);", re.S)
+
+
+def registry_aliases(sources, van):
+    """The names players use, from the registries: mooshroom -> MushroomCow, redstone_ore -> RedStoneOreBlock.
+    A plain Block or Item has no class of its own to point at."""
+    out = {}
+    for src in sources:
+        for rel in REGISTRIES:
+            path = Path(src) / rel
+            if not path.is_file():
+                continue
+            near = rel[:-5]
+            for m in REGISTERED.finditer(path.read_text(encoding="utf-8", errors="replace")):
+                simple = m.group(1)
+                if not simple or simple in ("Block", "Item", "BlockItem", "Entity"):
+                    ctor = re.search(r"\b([A-Z]\w*)::new", m.group(3))
+                    simple = ctor.group(1) if ctor else None
+                if not simple or simple in ("Block", "Item", "BlockItem"):
+                    continue
+                cp = van.resolve(simple, near=near)
+                if cp:
+                    out.setdefault(m.group(2).lower(), cp)
+    return out
+
+
 def build(sources, jars, jobs):
     if not sources and not jars:
         sys.exit("No vanilla code: run `python3 tools/lab.py decompile`, or pass --sources DIR / --jar JAR.")
@@ -1035,6 +1063,7 @@ def build(sources, jars, jobs):
     else:
         classes = src_classes
     van = Vanilla(classes)
+    aliases = registry_aliases(sources, van)
 
     # Vanilla methods: one entry per class and name (overloads merged), with resolved callees.
     methods = {}
@@ -1777,6 +1806,7 @@ def build(sources, jars, jobs):
         "skipped": skipped,
         "absent": absent,
         "homes": homes,
+        "aliases": aliases,
         "inferred": inferred,
         "class_cites": {k: sorted(set(v)) for k, v in class_cites.items()},
         "file_class_cites": {k: sorted(v) for k, v in file_class_cites.items()},
@@ -2151,6 +2181,16 @@ def suspect_classes(led, text, limit=8):
             score *= 1 + 0.2 * min(phrases[k] - 1, 5)
             if score > scores.get(cp, 0):
                 scores[cp] = score
+    # The names players use: "mooshroom" is MushroomCow, "redstone ore" RedStoneOreBlock.
+    for alias, cp in led.get("aliases", {}).items():
+        parts = alias.split("_")
+        k = "".join(parts)
+        if len(k) < 4 or k not in phrases:
+            continue
+        score = (len(k) + 6 * (len(parts) - 1)) * (1.5 if any(p in title for p in parts) else 1.0)
+        score *= 1 + 0.2 * min(phrases[k] - 1, 5)
+        if score > scores.get(cp, 0):
+            scores[cp] = score
     # A class named inside another (Outer$Inner) yields to its outer class when both match the same words.
     return sorted(scores, key=lambda c: -scores[c])[:limit], scores
 

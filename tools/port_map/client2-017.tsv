@@ -23,25 +23,25 @@ JoinMultiplayerScreen.tick	inline	crates/horizon-client/src/multiplayer.rs::Scre
 JoinMultiplayerScreen.removed	port	crates/horizon-client/src/lan/discovery.rs::ScanInner::drop	dropping the list screen drops its scanner, and the drop stops the LAN scan
 JoinMultiplayerScreen.deleteCallback	port	crates/horizon-client/src/multiplayer.rs::Screen::click	delete answer (ids 58, 59) removes the server, clears the selection and saves
 JoinMultiplayerScreen.editServerCallback	port	crates/horizon-client/src/multiplayer.rs::Screen::click	edit save (id 50); the list reloads and re-pings after it
-JoinMultiplayerScreen.addServerCallback	port	crates/horizon-client/src/multiplayer.rs::Screen::click	add save (id 50, no index); gap: minor: no hidden-server unhide (ServerList.unhide)
-JoinMultiplayerScreen.directJoinCallback	port	crates/horizon-client/src/multiplayer.rs::Screen::click	direct join (id 52) connects; gap: minor: a new address is not saved to the list first, as vanilla does
-JoinMultiplayerScreen.keyPressed	missing		minor: no keyboard path on the server list: F5 does not refresh; title.rs passes only Escape and text to the list
+JoinMultiplayerScreen.addServerCallback	port	crates/horizon-client/src/multiplayer.rs::Screen::click	gap: minor: no hidden-server unhide (ServerList.unhide); add save (id 50, no index)
+JoinMultiplayerScreen.directJoinCallback	port	crates/horizon-client/src/multiplayer.rs::Screen::click	gap: minor: a new address is not saved to the list first, as vanilla does; direct join (id 52) connects
+JoinMultiplayerScreen.keyPressed	missing		minor: no keyboard path on the server list: F5 does not refresh; title.rs shows no key handling for it beyond Escape and text
 JoinMultiplayerScreen.join	port	crates/horizon-client/src/multiplayer.rs::Screen::click	returns Outcome::Connect for the selected server, LAN game or friend invite
 JoinMultiplayerScreen.onSelectedChange	port	crates/horizon-client/src/multiplayer.rs::Screen::buttons	Join enabled with a selection; Edit and Delete only for a saved server
 RestrictionsScreen.createPermissionStatus	port	crates/horizon-client/src/game/lan_screen.rs::Restrictions::new	allowed or denied line per permission, green or red
 RestrictionsScreen.repositionElements	skip:ui		layout only: Restrictions::new sizes the scroll area from the window
 SafetyScreen.addFooterButtons	missing		player: opening Multiplayer skips vanilla's safety warning (Proceed or Back, don't show again); skipMultiplayerWarning is stored in options_file.rs but no screen reads it
-ServerReconfigScreen	missing		player: during a server reconfiguration vanilla shows a waiting screen with a Disconnect button; Horizon handles Event::Reconfigured with no such screen
+ServerReconfigScreen	missing		player: during a server reconfiguration vanilla shows a waiting screen with a Disconnect button; no such screen found; net.rs only forwards Event::Reconfigured
 ServerSelectionList.refreshEntries	port	crates/horizon-client/src/multiplayer.rs::rows	saved servers, LAN header and LAN games as one row list; selection is kept by index
 ServerSelectionList.updateOnlineServers	inline	crates/horizon-client/src/multiplayer.rs::rows	no separate list to refresh; rows are rebuilt from the saved servers
 ServerSelectionList.updateNetworkServers	inline	crates/horizon-client/src/multiplayer.rs::rows	gap: minor: no narrator announcement when a LAN game is found
 ServerSelectionList.LANHeader.extractContent	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	scanning label and loading dots drawn in the list
-ServerSelectionList.NetworkServerEntry.extractContent	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	LAN World title, MOTD and address; gap: minor: the address is always shown, Hide Server Address (hideServerAddress) is not read
+ServerSelectionList.NetworkServerEntry.extractContent	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	gap: minor: the address is always shown, Hide Server Address (hideServerAddress) is not read; LAN World title, MOTD and address
 ServerSelectionList.NetworkServerEntry.keyPressed	missing		minor: no keyboard join on the server list (Enter)
 ServerSelectionList.NetworkServerEntry.join	port	crates/horizon-client/src/multiplayer.rs::Screen::click	LAN game joined by a click on its row (Row::Lan) or a second click on the selected row
 ServerSelectionList.NetworkServerEntry.matches	skip:java		selection is kept by index, so no entry identity match is needed
-ServerSelectionList.OnlineServerEntry.extractContent	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	name, MOTD, ping bars, player count, hover join and move sprites; gap: player: no incompatible-version state (protocol mismatch) and no player-name tooltip; every failed ping reads Cannot connect
-ServerSelectionList.OnlineServerEntry.refreshStatus	port	crates/horizon-client/src/multiplayer.rs::ping_tooltip	ping tooltip: ms, no connection or pinging; the bar choice is in Screen::draw; gap: player: no player-name tooltip on the player count (playerList)
+ServerSelectionList.OnlineServerEntry.extractContent	port	crates/horizon-client/src/multiplayer.rs::Screen::draw	gap: player: no incompatible-version state (protocol mismatch) and no player-name tooltip; every failed ping reads Cannot connect; name, MOTD, ping bars, player count, hover join and move sprites
+ServerSelectionList.OnlineServerEntry.refreshStatus	port	crates/horizon-client/src/multiplayer.rs::ping_tooltip	gap: player: no player-name tooltip on the player count (playerList); ping tooltip: ms, no connection or pinging; the bar choice is in Screen::draw
 ServerSelectionList.OnlineServerEntry.extractIcon	port	crates/horizon-client/src/multiplayer.rs::draw_server_icon	server icon at 32x32
 ServerSelectionList.OnlineServerEntry.keyPressed	missing		minor: no keyboard path: Enter does not join and Shift+Up/Down does not move a server
 ServerSelectionList.OnlineServerEntry.swap	port	crates/horizon-client/src/multiplayer.rs::Screen::click	icon arrow click swaps the server up or down and saves
@@ -53,7 +53,7 @@ AccessibilityOptionsScreen.init	missing		minor: High Contrast is not greyed out 
 AccessibilityOptionsScreen.addOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	Narrator row with the Controls button, then the rest of the rows
 AccessibilityOptionsScreen.addFooter	missing		minor: the Accessibility Help link button is absent from the footer
 AccessibilityOptionsScreen.isMinecartOptionEnabled	missing		minor: no minecart feature-flag check; part of the greying-out in init
-ChatOptionsScreen.options	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	Chat page rows; gap: minor: Chat Delay and Narrator are on the Accessibility page instead
+ChatOptionsScreen.options	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: minor: Chat Delay and Narrator are on the Accessibility page instead; Chat page rows
 FontOptionsScreen.options	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	Force Unicode Font and Japanese glyph variants
 InWorldGameRulesScreen.initContent	port	crates/horizon-client/src/game/lan_screen.rs::Game::world_options_click	GameRules button: a remote world sends REQUEST_GAMERULE_VALUES (action 2); a local world builds RulesScreen from its rules
 InWorldGameRulesScreen.onDone	port	crates/horizon-client/src/game/lan_screen.rs::Game::close_game_rules	Done sends only the changed rules, and only with permission 2 on a remote world
@@ -65,16 +65,16 @@ InWorldGameRulesScreen.onGamemasterPermissionChanged	port	crates/horizon-client/
 LanguageSelectScreen.addTitle	inline	crates/horizon-client/src/options_ui.rs::OptionsUi::layout	language search box at the top of the Language page
 LanguageSelectScreen.setInitialFocus	skip:ui		focus only: typed text goes to the language search whatever has focus (type_text)
 LanguageSelectScreen.addContents	port	crates/horizon-client/src/options_ui.rs::OptionsUi::layout	language rows of the Language page
-LanguageSelectScreen.addFooter	port	crates/horizon-client/src/options_ui.rs::OptionsUi::layout	Font... and Done buttons; gap: minor: unsure whether the translation warning line is drawn
+LanguageSelectScreen.addFooter	port	crates/horizon-client/src/options_ui.rs::OptionsUi::layout	gap: minor: unsure whether the translation warning line is drawn; Font... and Done buttons
 LanguageSelectScreen.repositionElements	skip:ui		layout only: rows are laid out from the window size each frame
 LanguageSelectScreen.onDone	port	crates/horizon-client/src/options_ui.rs::OptionsUi::back	Done applies the chosen language (language_choice)
 LanguageSelectScreen.LanguageSelectionList.filterEntries	port	crates/horizon-client/src/options_ui.rs::OptionsUi::layout	filter by the search text against name and region (Page::Language)
 LanguageSelectScreen.LanguageSelectionList.Entry.extractContent	port	crates/horizon-client/src/options_ui.rs::OptionsUi::draw	the language row's label, centred
 LanguageSelectScreen.LanguageSelectionList.Entry.keyPressed	missing		minor: unsure: no Enter-to-select on language rows found in OptionsUi::key
-LanguageSelectScreen.LanguageSelectionList.Entry.mouseClicked	port	crates/horizon-client/src/options_ui.rs::OptionsUi::click	click selects; gap: minor: a second click on the chosen language finishes the page, which stands in for double-click
+LanguageSelectScreen.LanguageSelectionList.Entry.mouseClicked	port	crates/horizon-client/src/options_ui.rs::OptionsUi::click	gap: minor: a second click on the chosen language finishes the page, which stands in for double-click; click selects
 MouseSettingsScreen.options	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	MOUSE_OPTIONS in vanilla order
 OnlineOptionsScreen	missing		player: Options > Online is greyed out in Horizon, so friends list, friend requests, in-game friend notifications, server listing and Realms notifications cannot be set
-OptionsScreen.init	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	main page rows; gap: player: the Online button is greyed out and Skin Customisation opens no page
+OptionsScreen.init	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: player: the Online button is greyed out and Skin Customisation opens no page; main page rows
 OptionsScreen.createOnlineButton	missing		player: the Online button is greyed out, so Options > Online cannot be opened
 OptionsScreen.openScreenButton	port	crates/horizon-client/src/options_ui.rs::OptionsUi::click	sub-page buttons push their page (Act::Push)
 OptionsSubScreen.init	port	crates/horizon-client/src/options_ui.rs::OptionsUi::push	opening a page resets its scroll, search and page state
@@ -83,22 +83,22 @@ OptionsSubScreen.addFooter	inline	crates/horizon-client/src/options_ui.rs::Optio
 OptionsSubScreen.repositionElements	skip:ui		layout only: rows are laid out from the window size each frame
 OptionsSubScreen.onClose	port	crates/horizon-client/src/options_ui.rs::OptionsUi::back	Done and Escape leave the page and apply its results
 SkinCustomizationScreen.addOptions	missing		player: Skin Customisation opens no page in Horizon: no cape, jacket, sleeve, pants or main hand options
-SoundOptionsScreen.addOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	master and per-source volumes, subtitles, music frequency; gap: minor: no sound device, directional audio or music toast rows
+SoundOptionsScreen.addOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: minor: no sound device, directional audio or music toast rows; master and per-source volumes, subtitles, music frequency
 SoundOptionsScreen.getAllSoundOptionsExceptMaster	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	per-source volume rows (Volume(1..))
 UnsupportedGraphicsWarningScreen	missing		minor: no GPU warn list in Horizon, so the unsupported-graphics warning never appears when Improved Transparency is turned on
-VideoSettingsScreen.qualityOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	Video page quality rows; gap: player: no Texture Filtering or Max Anisotropy rows
-VideoSettingsScreen.displayOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	framerate, vsync, inactivity FPS, GUI scale, fullscreen, gamma; gap: player: no Exclusive Fullscreen or Preferred Graphics Backend rows
+VideoSettingsScreen.qualityOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: player: no Texture Filtering or Max Anisotropy rows; Video page quality rows
+VideoSettingsScreen.displayOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: player: no Exclusive Fullscreen or Preferred Graphics Backend rows; framerate, vsync, inactivity FPS, GUI scale, fullscreen, gamma
 VideoSettingsScreen.preferenceOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	autosave indicator, vignette, attack indicator, chunk fade-in
-VideoSettingsScreen.addOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	Video page sections with Horizon's Graphics buttons first; gap: player: no exclusive fullscreen row (see displayOptions)
+VideoSettingsScreen.addOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: player: no exclusive fullscreen row (see displayOptions); Video page sections with Horizon's Graphics buttons first
 VideoSettingsScreen.addTitle	missing		minor: no restart-required line; the option that needs a restart in vanilla (preferred backend) is absent
 VideoSettingsScreen.tick	missing		minor: no anisotropy greying and no restart-required line (see addTitle)
-VideoSettingsScreen.removed	port	crates/horizon-client/src/game/options.rs::Game::apply_ui_settings	mipmap levels applied to the renderer; gap: minor: applied on every apply, not only when the value changed; no anisotropy or filtering to check
+VideoSettingsScreen.removed	port	crates/horizon-client/src/game/options.rs::Game::apply_ui_settings	gap: minor: applied on every apply, not only when the value changed; no anisotropy or filtering to check; mipmap levels applied to the renderer
 VideoSettingsScreen.mouseClicked	missing		minor: no unsupported-graphics warning when Improved Transparency is turned on
 VideoSettingsScreen.mouseScrolled	missing		player: Ctrl with the mouse wheel does not change the GUI scale on the Video page; the wheel only scrolls (scroll_at has no Ctrl check)
 VideoSettingsScreen.updateFullscreenButton	skip:ui		rows are rebuilt from Settings on each layout, so there is no fullscreen widget to set
 VideoSettingsScreen.repositionElements	missing		minor: no exclusive fullscreen mode list to rebuild when the window moves to another monitor
 VideoSettingsScreen.updateTransparencyButton	skip:ui		rows are rebuilt from Settings on each layout, so the transparency row reads its value each frame
-ControlsScreen.options	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	toggle crouch, sprint and auto jump rows; gap: player: no Toggle Attack, Toggle Use, Sprint Window, Quit Shortcuts, Ctrl-click or Operator Items rows (the settings exist in options_file.rs)
+ControlsScreen.options	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	gap: player: no Toggle Attack, Toggle Use, Sprint Window, Quit Shortcuts, Ctrl-click or Operator Items rows (the settings exist in options_file.rs); toggle crouch, sprint and auto jump rows
 ControlsScreen.addOptions	port	crates/horizon-client/src/options_ui.rs::OptionsUi::list_rows	Mouse Settings and Key Binds buttons, then the toggles; Horizon adds Controller Settings
 KeyBindsList.CategoryEntry.extractContent	port	crates/horizon-client/src/options_ui.rs::OptionsUi::draw	category header text
 KeyBindsList.KeyEntry.<init>	port	crates/horizon-client/src/options_ui.rs::OptionsUi::layout	change and reset buttons per key row
@@ -132,7 +132,7 @@ TransferableSelectionList.PackEntry.getNarration	missing		minor: no narrator in 
 TransferableSelectionList.PackEntry.keyPressed	missing		minor: no keyboard select or move for a pack (Enter, Shift+Up/Down); nothing calls activate or move_by from keys
 TransferableSelectionList.PackEntry.showHoverOverlay	port	crates/horizon-client/src/pack_screen.rs::PackScreen::overlay	overlay shown unless the pack is both fixed and required
 TransferableSelectionList.PackEntry.keyboardSelection	missing		minor: no keyboard selection (see PackEntry.keyPressed)
-TransferableSelectionList.PackEntry.handlePackSelection	port	crates/horizon-client/src/pack_screen.rs::PackScreen::entry_click	icon click selects; an incompatible pack opens the confirmation (open_confirm) first; gap: minor: keyboard path missing (keyboardSelection)
+TransferableSelectionList.PackEntry.handlePackSelection	port	crates/horizon-client/src/pack_screen.rs::PackScreen::entry_click	gap: minor: keyboard path missing (keyboardSelection); icon click selects; an incompatible pack opens the confirmation (open_confirm) first
 TransferableSelectionList.PackEntry.shouldTakeFocusAfterInteraction	skip:ui		focus after a click matters only for keyboard entry navigation, which Horizon does not have
 CraftingRecipeBookComponent.isCraftingSlot	missing		minor: unsure: no crafting-slot check found in the recipe book code
 CraftingRecipeBookComponent.fillGhostRecipe	port	crates/horizon-client/src/recipe_book.rs::Book::ghost	crafting branch: shaped recipes placed by place_cells, shapeless in order; result set first
