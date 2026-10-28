@@ -11102,8 +11102,8 @@ impl Game<'_> {
             r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
             batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
         }
-        let (tx, ty) = Creative::tab_position(&tab);
-        batch.sprite(&self.gui.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
+        let (tx, ty) = Creative::tab_position(tab);
+        batch.sprite(&self.gui.atlas, &tab_sprite(tab, true), ox + tx, oy + ty);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             let stack = ItemStack {
