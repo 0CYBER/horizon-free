@@ -1225,17 +1225,18 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        self.tinted_block_model_vertices(state, seed, m, light, diffuse, |_| None, out);
+        self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, |_| None, out);
     }
     /// `block_model_vertices` with each face multiplied by `tint` of its
-    /// tint index (RGB, `None` for untinted faces).
+    /// tint index (RGB, `None` for untinted faces) and lit by `light` of
+    /// each quad.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn tinted_block_model_vertices(
         &self,
         state: BlockStateId,
         seed: i64,
         m: glam::Mat4,
-        light: u32,
+        light: impl Fn(&horizon_assets::bake::ModelQuad) -> u32,
         diffuse: bool,
         tint: impl Fn(i32) -> Option<u32>,
         out: &mut Vec<Vertex>,
@@ -1279,6 +1280,7 @@ impl Game<'_> {
                 } else {
                     [0; 4]
                 };
+                let light = light(&face.quad);
                 let light = if diffuse {
                     let emission = u32::from(face.quad.light_emission) * 16;
                     (light & 0xFF) | (light >> 8 & 0xFF).max(emission) << 8
