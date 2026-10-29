@@ -35,6 +35,14 @@ impl Kind {
         }
     }
 
+    /// As Modrinth and the instance's settings name it: `fabric`, `quilt`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Kind::Fabric => "fabric",
+            Kind::Quilt => "quilt",
+        }
+    }
+
     /// Its metadata service.
     fn meta(self) -> &'static str {
         match self {
