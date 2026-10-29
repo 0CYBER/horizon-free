@@ -294,6 +294,13 @@ def scenarios():
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # Chickens fleeing a hit (PanicGoal) beside a pool.
+    for seed in range(191, 193):
+        add(f'chicken_panic_{seed}', 60, ['fill -3 -61 -6 3 -61 6 minecraft:water',
+                                          'player 12.5 -60 6.5', f'mob minecraft:chicken 0.5 -60 6.5 0 {seed} persistent']
+            + [f'hurt {t} 0' for t in range(5, 60, 30)])
+    add('chicken_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:chicken 0.5 -60 0.5 0 195 persistent', 'hurt 5 0'])
+    add('pig_panic_dry', 60, ['player 12.5 -60 0.5', 'mob minecraft:pig 0.5 -60 0.5 0 196 persistent', 'hurt 5 0'])
     # Axolotls (#64): idle swimming, hunting a cod, and playing dead after hits, in a pool sunk into
     # the ground so no water flows out of it (the probe doesn't tick fluids).
     POOL = 'fill -5 -63 -5 5 -61 5 minecraft:water'
