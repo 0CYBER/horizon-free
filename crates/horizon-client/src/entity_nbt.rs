@@ -788,10 +788,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             match item {
                 Some(id) => {
-                    let keep = matches!(
-                        equipment.get(&slot.into()).and_then(|e| e.get("id")),
-                        Some(Tag::String(s)) if s.to_string_lossy() == **id
-                    );
+                    let keep = slot != "mainhand"
+                        && matches!(
+                            equipment.get(&slot.into()).and_then(|e| e.get("id")),
+                            Some(Tag::String(s)) if s.to_string_lossy() == **id
+                        );
                     if slot == "head"
                         && &**id == crate::mobs::raider::BANNER
                         && crate::mobs::raider::is_raider(m.species())
