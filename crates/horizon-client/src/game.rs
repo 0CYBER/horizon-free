@@ -10695,10 +10695,13 @@ impl Game<'_> {
             .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
         let weapon = self.held().cloned();
         let (power_bonus, infinity) = self.bow_enchantments(&ammo.item);
+        let effect = dispenser::tipped_effect(&ammo).or_else(|| {
+            (&*ammo.item == "minecraft:spectral_arrow").then_some(("minecraft:glowing", 200))
+        });
         let kind = horizon_client::projectiles::ProjectileKind::Arrow {
             base_damage: 2.0 + power_bonus,
             critical: power >= 1.0,
-            effect: None,
+            effect,
         };
         let mut arrow = horizon_client::projectiles::Projectile::new(
             kind,
