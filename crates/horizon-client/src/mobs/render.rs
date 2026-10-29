@@ -916,7 +916,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             let eye = if avatar(m) {
                 m.kind.eye_height as f32
             } else {
-                (m.eye_y() - m.position.y) as f32
+                m.awake_dims().2 as f32
             };
             let head = eye - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
