@@ -257,6 +257,7 @@ impl Game<'_> {
             snowy: has("minecraft:spawns_snow_foxes")
                 || b.name.contains("snow")
                 || b.name.contains("frozen"),
+            snow_fox: has("minecraft:spawns_snow_foxes"),
             swamp: b.name.contains("swamp"),
             ocean: has("minecraft:is_ocean"),
             mushroom: b.name == "minecraft:mushroom_fields",

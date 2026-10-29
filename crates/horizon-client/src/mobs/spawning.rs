@@ -12,6 +12,8 @@ pub struct BiomeFacts {
     /// Biome temperature at the position (strays in cold biomes, snow foxes).
     pub temperature: f32,
     pub snowy: bool,
+    /// `#minecraft:spawns_snow_foxes` (`Fox.Variant.byBiome`: snow, else red).
+    pub snow_fox: bool,
     pub swamp: bool,
     pub ocean: bool,
     pub mushroom: bool,
@@ -305,7 +307,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
             m.extra.variant = villager_type(biome);
             m.extra.pick_up_loot = true;
         }
+        // Fox.finalizeSpawn: the variant by biome, then the mouth's item.
         S::Fox => {
+            m.extra.variant = u8::from(biome.snow_fox);
             m.extra.pick_up_loot = true;
             super::fox::populate_default_equipment(m);
         }
