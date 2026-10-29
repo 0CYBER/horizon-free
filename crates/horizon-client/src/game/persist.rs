@@ -568,6 +568,13 @@ impl Game<'_> {
         }
         let tag = raw?.get("RootVehicle")?.get("Entity")?.clone();
         let root_uuid = entity_nbt::uuid(&tag)?;
+        let kind = entity_nbt::kind(&tag)?;
+        if !self.res.mob_types().contains_key(&kind)
+            && super::boats::any_boat_wood(&kind).is_none()
+            && super::minecarts::CartKind::from_id(&kind).is_none()
+        {
+            return None;
+        }
         if self.vehicle_by_uuid(root_uuid).is_none() {
             let at = entity_nbt::position(&tag)?;
             let key = (
