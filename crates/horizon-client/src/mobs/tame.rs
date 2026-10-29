@@ -627,8 +627,14 @@ fn update_persistent_anger(m: &mut Mob, w: &MobWorld) {
     {
         stop_being_angry(m);
     }
-    // The anger's target as it was when the tick began.
-    if angry_at == Some(Who::Player) && !valid_player_target(w) {
+    // The anger's target as it was when the tick began, once it is found: a
+    // player who is not here yet (a reloaded wolf ticks before the player
+    // joins) keeps the anger.
+    if angry_at == Some(Who::Player)
+        && w.player
+            .as_ref()
+            .is_some_and(|p| p.creative || p.spectator || w.difficulty.id == 0)
+    {
         stop_being_angry(m);
     }
 }
