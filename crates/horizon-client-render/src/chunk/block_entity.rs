@@ -80,6 +80,24 @@ pub enum BlockEntity {
     Shelf(Box<Shelf>),
     /// `ChiseledBookShelfBlockEntity`: a `Container` of six one-book slots.
     ChiseledBookshelf(Box<ChiseledBookshelf>),
+    /// `PotentSulfurBlockEntity` (`game/potent_sulfur.rs`).
+    PotentSulfur(PotentSulfur),
+}
+/// `PotentSulfurBlockEntity`: the seconds left to the geyser's next change of
+/// state (`waitingCountdown`, saved as `countdown`) and the game time of its
+/// last eruption block event, which the client's plume counts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PotentSulfur {
+    pub waiting_countdown: i32,
+    pub eruption_tick: i64,
+}
+impl Default for PotentSulfur {
+    fn default() -> Self {
+        Self {
+            waiting_countdown: -1,
+            eruption_tick: -1,
+        }
+    }
 }
 /// `BrushableBlockEntity`: the loot table is resolved on the first brush.
 #[derive(Clone, Debug, Default)]

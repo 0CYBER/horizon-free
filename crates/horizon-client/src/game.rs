@@ -1154,6 +1154,14 @@ impl LevelAccess for GameLevel<'_> {
     fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
         command_blocks::set_powered(self.world, self.registry, (pos.x, pos.y, pos.z), powered)
     }
+    /// `PotentSulfurBlockEntity.resetCountdown`.
+    fn reset_potent_sulfur_countdown(&mut self, pos: BlockPos) {
+        if let Some(BlockEntity::PotentSulfur(sulfur)) =
+            self.world.block_entities.get_mut(&(pos.x, pos.y, pos.z))
+        {
+            sulfur.waiting_countdown = -1;
+        }
+    }
 }
 /// FallingBlockEntity carrying a block state.
 #[derive(Clone, Debug)]
@@ -6566,7 +6574,8 @@ impl Game<'_> {
                 | BlockEntity::Campfire(_)
                 | BlockEntity::ChiseledBookshelf(_)
                 | BlockEntity::Brushable(_)
-                | BlockEntity::Shelf(_),
+                | BlockEntity::Shelf(_)
+                | BlockEntity::PotentSulfur(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -6852,7 +6861,8 @@ impl Game<'_> {
                     | BlockEntity::Campfire(_)
                     | BlockEntity::ChiseledBookshelf(_)
                     | BlockEntity::Brushable(_)
-                    | BlockEntity::Shelf(_),
+                    | BlockEntity::Shelf(_)
+                    | BlockEntity::PotentSulfur(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
