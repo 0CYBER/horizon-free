@@ -332,6 +332,9 @@ pub struct PlayerMotion {
     pub speed: f32,
     /// `LocalPlayer.itemUseSpeedMultiplier` while using an item (not riding).
     pub item_use_speed: Option<f32>,
+    /// `LocalPlayer.isSlowDueToUsingItem`: an item in use whose `use_effects`
+    /// do not allow sprinting.
+    pub item_use_slows_sprint: bool,
     pub last_climbable: Option<BlockPos>,
     /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
     /// metre walked, not once per move.
@@ -531,6 +534,7 @@ impl PlayerMotion {
             respiration: 0,
             speed: 0.0,
             item_use_speed: None,
+            item_use_slows_sprint: false,
             last_climbable: None,
             steps: MovementDistances {
                 next_step: 1.0,
@@ -724,6 +728,7 @@ impl PlayerMotion {
             on_ground: self.ground.on_ground,
             horizontal_collision: self.collision.horizontal,
             minor_horizontal_collision: self.collision.minor,
+            slow_item: self.item_use_slows_sprint,
             moving_slowly: self.moving_slowly(),
             in_water: self.fluids.was_touching_water,
             under_water: self.is_under_water(),
@@ -4393,6 +4398,58 @@ mod tests {
             "the sprint jump keeps its forward impulse: {:?} vs {running}",
             w.player.velocity
         );
+    }
+
+    /// Vanilla `LocalPlayer.aiStep`: an item in use whose `use_effects` do not
+    /// allow sprinting (a raised shield) keeps the sprint key, and a
+    /// double-tap of forward, from starting a sprint; an item that allows it
+    /// (a spear) does not.
+    #[test]
+    fn an_item_in_use_stops_a_sprint_from_starting_unless_it_allows_sprinting() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let sprint_key = crate::sprint::Keys {
+            sprint: true,
+            ..forward
+        };
+        w.player.item_use_speed = Some(0.2);
+        w.player.item_use_slows_sprint = true;
+        for _ in 0..10 {
+            w.controlled_simulation_tick(sprint_key).unwrap();
+        }
+        assert!(!w.player.sprinting, "a raised shield stops the sprint key");
+        // Forward, off, forward again: the double-tap would sprint.
+        for keys in [forward, Default::default(), forward, forward] {
+            w.controlled_simulation_tick(keys).unwrap();
+        }
+        assert!(!w.player.sprinting, "a raised shield stops a double-tap");
+        // A spear's use_effects allow sprinting.
+        w.player.item_use_speed = Some(1.0);
+        w.player.item_use_slows_sprint = false;
+        w.controlled_simulation_tick(sprint_key).unwrap();
+        assert!(w.player.sprinting, "an item that can_sprint lets it start");
     }
 
     /// Vanilla `Player.getFlyingSpeed`: a flying player moves at the ability

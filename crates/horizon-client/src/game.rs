@@ -2353,7 +2353,7 @@ impl Game<'_> {
     pub(crate) fn sync_player_body(&mut self) {
         let glider = self.glider_worn();
         let sleeping = self.sleeping.is_some();
-        let item_use_speed = self
+        let item_in_use = self
             .using
             .and_then(|(slot, _)| {
                 if slot == shield::OFFHAND_SLOT {
@@ -2362,8 +2362,9 @@ impl Game<'_> {
                     self.inventory.get(slot)?.as_ref()
                 }
             })
-            .and_then(|s| self.res.items().get(&s.item))
-            .map(|i| i.use_speed);
+            .and_then(|s| self.res.items().get(&s.item));
+        let item_use_speed = item_in_use.map(|i| i.use_speed);
+        let item_use_slows_sprint = item_in_use.is_some_and(|i| !i.can_sprint);
         let respiration = self.armor[0]
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
@@ -2379,6 +2380,7 @@ impl Game<'_> {
         player.pitch = self.pitch;
         player.auto_jump_enabled = self.settings.auto_jump;
         player.item_use_speed = item_use_speed;
+        player.item_use_slows_sprint = item_use_slows_sprint;
         player.respiration = respiration;
         player.glider = glider;
         let _ = player.set_sleeping(sleeping);
