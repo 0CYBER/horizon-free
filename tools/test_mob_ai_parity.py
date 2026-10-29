@@ -294,6 +294,10 @@ def scenarios():
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
+    # avoidSun: the path stops at the first node the sky sees).
+    add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
+                                   'player 12.5 -60 0.5', 'mob minecraft:skeleton 0.5 -60 0.5 0 211 persistent'], 'time=1000')
     # Axolotls (#64): idle swimming, hunting a cod, and playing dead after hits, in a pool sunk into
     # the ground so no water flows out of it (the probe doesn't tick fluids).
     POOL = 'fill -5 -63 -5 5 -61 5 minecraft:water'

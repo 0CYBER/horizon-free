@@ -50,6 +50,9 @@ pub struct Navigation {
     pub below_surface: bool,
     /// WallClimberNavigation.pathToPosition
     climb_to: Option<[i32; 3]>,
+    /// `PathNavigation.moveTo` stored a path that `trimPath` has not seen
+    /// yet: it runs on the navigation's next tick, which has the world.
+    trim_pending: bool,
 }
 impl Default for Navigation {
     fn default() -> Self {
@@ -80,6 +83,7 @@ impl Default for Navigation {
             avoid_sun: false,
             below_surface: false,
             climb_to: None,
+            trim_pending: false,
         }
     }
 }
@@ -321,6 +325,7 @@ impl Mob {
         if self.ai.nav.path.as_ref().is_none_or(|p| p.nodes.is_empty()) {
             return false;
         }
+        self.ai.nav.trim_pending = true;
         self.ai.nav.speed_modifier = speed;
         self.ai.nav.last_stuck_check = self.ai.nav.tick;
         // getTempMobPos needs the world for ground navigation; position is close enough
@@ -372,9 +377,34 @@ impl Mob {
             self.ai.nav.delayed_recompute = false;
         }
     }
+    /// `GroundPathNavigation.trimPath` with `avoidSun`: a mob that is out of
+    /// the sun keeps only the nodes before the first one the sky sees.
+    fn trim_path(&mut self, w: &MobWorld) {
+        if !self.ai.nav.avoid_sun
+            || !matches!(self.ai.nav.kind, NavKind::Ground | NavKind::WallClimber)
+        {
+            return;
+        }
+        let at = [
+            self.position.x.floor() as i32,
+            (self.position.y + 0.5).floor() as i32,
+            self.position.z.floor() as i32,
+        ];
+        if w.can_see_sky(at[0], at[1], at[2]) {
+            return;
+        }
+        if let Some(path) = &mut self.ai.nav.path
+            && let Some(i) = path.nodes.iter().position(|n| w.can_see_sky(n.x, n.y, n.z))
+        {
+            path.nodes.truncate(i);
+        }
+    }
     /// PathNavigation.tick.
     pub fn nav_tick(&mut self, w: &MobWorld) {
         self.ai.nav.tick += 1;
+        if std::mem::take(&mut self.ai.nav.trim_pending) {
+            self.trim_path(w);
+        }
         if self.ai.nav.delayed_recompute {
             self.recompute_path(w);
         }
