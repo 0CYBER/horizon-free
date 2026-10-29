@@ -8202,34 +8202,56 @@ CHECK_FNS['creative_tools'] = check_creative_tools
 
 
 def check_cushions(host, guest, out):
-    """#1935: place a colored cushion, consume it, track it, sit, dismount and break it."""
+    """#1935: place a colored cushion, consume it, track it, sit, dismount and break it.
+    #3117: placing swings the arm, and a seated player sits on another cushion at once."""
     seen = {}
     for label, player, color in (('host', host, 'red'), ('guest', guest, 'blue')):
         x, y, z = (int(v // 1) for v in pos_of(player))
         at = (x + 0.5, y, z + 2.5)
+        other = (x + 1.5, y, z + 2.5)
         host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
         host('command', command=f'setblock {x} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'setblock {x + 1} {y - 1} {z + 2} minecraft:stone')
         player('command', command='gamemode survival')
         player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{color}_cushion')
         player.wait(10)
         player.raw('look-at', *at)
+        swings = player('state')['swings']
         player.raw('mouse', 'right', 'click')
         player.wait(15)
-        def cushions(game):
+        def cushions(game, at=at):
             return [o for o in game('status')['objects'] if o['kind'] == 'minecraft:cushion'
                     and abs(o['position'][0] - at[0]) < .1 and abs(o['position'][2] - at[2]) < .1]
         server, client = cushions(host), cushions(player)
         seen[label] = {'server': server, 'client': client,
-                       'remaining': player('inventory')['counts'].get(f'minecraft:{color}_cushion', 0)}
+                       'remaining': player('inventory')['counts'].get(f'minecraft:{color}_cushion', 0),
+                       'place_swings': player('state')['swings'] - swings}
         assert len(server) == len(client) == 1, seen
         assert server[0]['color'] == client[0]['color'] == color, seen
         assert seen[label]['remaining'] == 0, seen
+        # CushionItem.useOn returns SUCCESS: the hand swings.
+        assert seen[label]['place_swings'] == 1, seen
         player.shot(out, 'cushion-placed')
+        player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{color}_cushion')
+        player.wait(10)
+        player.raw('look-at', *other)
+        player.raw('mouse', 'right', 'click')
+        player.wait(15)
+        second = cushions(host, other)
+        assert len(second) == 1, (seen, second)
         player.raw('look-at', at[0], at[1] + .125, at[2])
         player.raw('mouse', 'right', 'click')
         player.wait(10)
         seen[label]['riding'] = player('status').get('riding')
         assert seen[label]['riding'] == server[0]['id'], seen
+        # Entity.startRiding: a passenger first gets off its vehicle, so it moves to the other cushion.
+        player.raw('look-at', other[0], other[1] + .125, other[2])
+        player.raw('mouse', 'right', 'click')
+        player.wait(10)
+        # A client rides what the server's SetPassengers says.
+        seen[label]['switched'] = player('status').get('riding')
+        player.shot(out, 'cushion-switched')
+        assert seen[label]['switched'] == second[0]['id'], seen
         player.raw('key', 'shift', 'down')
         player.wait(5)
         player.raw('key', 'shift', 'up')
@@ -8246,6 +8268,10 @@ def check_cushions(host, guest, out):
             for g in (host, guest)
         }
         assert all(n == 10 for n in seen[label]['break_particles'].values()), seen
+        player.raw('look-at', other[0], other[1] + .125, other[2])
+        player.raw('mouse', 'left', 'click')
+        player.wait(10)
+        assert not cushions(host, other) and not cushions(player, other), seen
     return seen
 
 
