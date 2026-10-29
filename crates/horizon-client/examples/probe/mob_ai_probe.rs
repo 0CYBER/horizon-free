@@ -5,7 +5,7 @@
 //! usage: mob_ai_probe RESOURCES SCENARIOS OUTPUT
 use horizon_client::{
     assets::Assets,
-    beehive::HiveHost,
+    beehive::{BeehiveExt, HiveHost},
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, MIN_Y},
@@ -1112,6 +1112,7 @@ pub fn main() -> horizon_client::Result<()> {
                     others_grid: $grid,
                     others_index: None,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,
+                    monsters_burn: !(12542..23460).contains(&world.day_time.rem_euclid(24000)),
                     game_time: world.game_time,
                     day_time: world.day_time,
                     raining: s.rain,
@@ -1121,6 +1122,7 @@ pub fn main() -> horizon_client::Result<()> {
                     biomes: &biomes,
                     mob_griefing: true,
                     mob_drops: true,
+                    max_entity_cramming: 24,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,
