@@ -5,6 +5,7 @@ use crate::{
     chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::BlockEntity,
     fast_hash::FxHashMap,
+    mobs::spawner::{SpawnDataExt, SpawnerExt},
 };
 use horizon_protocol::{
     buf::{BitSet, Codec, List, Writer, set_bit},

@@ -45,6 +45,9 @@ pub struct VanillaTerrain {
     /// Block state id -> the block entity type of its block, if it has one.
     block_entity_types: Vec<Option<&'static str>>,
     seed: i64,
+    /// The world preset the terrain was generated with (`minecraft:normal`
+    /// unless a saved world says otherwise); far decoration uses it too.
+    preset: String,
     dimension: String,
     /// When the last proto chunk was generated, in milliseconds since
     /// `created`: the ring search waits for a pause in generation.
@@ -129,16 +132,25 @@ impl VanillaTerrain {
         seed: i64,
         dimension: &str,
     ) -> crate::Result<Self> {
-        Self::for_world(dir, registry, biomes, seed, dimension, true)
+        Self::for_world(
+            dir,
+            registry,
+            biomes,
+            seed,
+            "minecraft:normal",
+            dimension,
+            true,
+        )
     }
-    /// A dimension of a world whose `generate_structures` is `structures`
-    /// (`ChunkGenerator.createStructures` and `findNearestMapStructure` do
-    /// nothing without).
+    /// A dimension of a world preset (`worldgen/world_preset`) whose
+    /// `generate_structures` is `structures` (`ChunkGenerator.createStructures`
+    /// and `findNearestMapStructure` do nothing without).
     pub fn for_world(
         dir: &Path,
         registry: &'static BlockRegistry,
         biomes: &Biomes,
         seed: i64,
+        preset: &str,
         dimension: &str,
         structures: bool,
     ) -> crate::Result<Self> {
@@ -148,8 +160,7 @@ impl VanillaTerrain {
             .iter()
             .map(|name| biomes.id(name))
             .collect();
-        let generator =
-            OverworldGenerator::for_world(data, seed, "minecraft:normal", dimension, structures)?;
+        let generator = OverworldGenerator::for_world(data, seed, preset, dimension, structures)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(
@@ -199,6 +210,7 @@ impl VanillaTerrain {
             tick_states,
             block_entity_types,
             seed,
+            preset: preset.to_owned(),
             dimension: dimension.to_owned(),
             last_proto: std::sync::atomic::AtomicU64::new(0),
             created: std::time::Instant::now(),

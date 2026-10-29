@@ -15,8 +15,10 @@
 //! `level.dat`) are migrated on open.
 use crate::{
     Result,
+    beehive::BeehiveExt,
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -182,6 +184,19 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
     horizon_world::datafix::files::upgrade_world(world)
         .map_err(|e| format!("upgrading {}: {e}", world.display()))?;
     Ok(())
+}
+/// Whether opening the world runs file fixes, which vanilla asks for a backup
+/// first (`BackupStatus.FILE_FIXING_REQUIRED`). Saves of 1.8 and before have no
+/// DataVersion, read as -1.
+pub fn needs_file_fixes(world: &Path) -> bool {
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return false;
+    };
+    let Some(data) = root.get("Data") else {
+        return false;
+    };
+    let version = number(data.get("DataVersion")).unwrap_or(-1);
+    i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
 }
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
@@ -2508,6 +2523,30 @@ impl WorldGen {
             bonus_chest: flag("bonus_chest", false),
         })
     }
+    /// The bundled world preset a saved world's overworld was generated
+    /// with, from its generator: `minecraft:amplified` and
+    /// `minecraft:large_biomes` by their noise settings, and
+    /// `minecraft:single_biome_surface` by a fixed biome source. Anything
+    /// else (and any world without settings) is `minecraft:normal`.
+    pub fn preset(world: &Path) -> &'static str {
+        let settings = world_gen_settings(world);
+        let generator = settings
+            .as_ref()
+            .and_then(|s| s.get("dimensions"))
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"));
+        let noise = text(generator.and_then(|g| g.get("settings")));
+        let fixed_biome = generator
+            .and_then(|g| g.get("biome_source"))
+            .and_then(|b| text(b.get("type")))
+            .is_some_and(|t| t == "minecraft:fixed");
+        match noise.as_deref() {
+            Some("minecraft:amplified") => "minecraft:amplified",
+            Some("minecraft:large_biomes") => "minecraft:large_biomes",
+            Some("minecraft:overworld") if fixed_biome => "minecraft:single_biome_surface",
+            _ => "minecraft:normal",
+        }
+    }
 }
 impl Default for WorldGen {
     fn default() -> Self {
@@ -3824,6 +3863,8 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    use crate::mobs::spawner::SpawnDataExt;
+
     #[test]
     fn points_of_interest_save_as_poi_sections() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
