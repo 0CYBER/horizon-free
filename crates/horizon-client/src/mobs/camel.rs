@@ -88,6 +88,79 @@ pub fn finish_load(m: &mut Mob, game_time: i64) {
     let since = (game_time - tick.abs()).clamp(0, i64::from(i32::MAX / 2));
     m.extra.egg_time = (i64::from(m.age) - since) as i32;
 }
+/// `Camel.getBodyAnchorAnimationYOffset` at the partial tick 0: how high the
+/// seat of the front (`front`) or back rider is on a camel of `height` at
+/// `scale`, following it down and up through the sit and stand animations.
+fn body_anchor_y(m: &Mob, front: bool, height: f32, scale: f32) -> f64 {
+    let age_sit_y_offset = if m.is_baby() { 0.09375 } else { 0.375 };
+    let mut base_sit_offset = f64::from(height) - age_sit_y_offset;
+    let sitting_height_difference = scale * 1.43;
+    let vertical_drop = sitting_height_difference - scale * 0.2;
+    let bottom_point = sitting_height_difference - vertical_drop;
+    let transition = in_transition(m);
+    let sits = sitting(m);
+    if transition {
+        let duration: i32 = if sits {
+            SIT_DOWN as i32
+        } else {
+            STAND_UP as i32
+        };
+        let (half_point, flex_point_offset): (i32, f32) = if sits {
+            (28, if front { 0.5 } else { 0.1 })
+        } else {
+            (if front { 24 } else { 32 }, if front { 0.6 } else { 0.35 })
+        };
+        let time = (pose_time(m) as f32).clamp(0.0, duration as f32);
+        let first_part = time < half_point as f32;
+        let part = if first_part {
+            time / half_point as f32
+        } else {
+            (time - half_point as f32) / (duration - half_point) as f32
+        };
+        let flex_point = sitting_height_difference - flex_point_offset * vertical_drop;
+        // Mth.lerp.
+        let lerp = |delta: f32, a: f32, b: f32| a + delta * (b - a);
+        base_sit_offset += f64::from(if sits {
+            lerp(
+                part,
+                if first_part {
+                    sitting_height_difference
+                } else {
+                    flex_point
+                },
+                if first_part { flex_point } else { bottom_point },
+            )
+        } else {
+            lerp(
+                part,
+                if first_part {
+                    bottom_point - sitting_height_difference
+                } else {
+                    bottom_point - flex_point
+                },
+                if first_part {
+                    bottom_point - flex_point
+                } else {
+                    0.0
+                },
+            )
+        });
+    }
+    if sits && !transition {
+        base_sit_offset += f64::from(bottom_point);
+    }
+    base_sit_offset
+}
+/// `Camel.getPassengerAttachmentPoint` of the one rider Horizon seats, before
+/// the camel's yaw turns it: half a block ahead (scaled by `getAgeScale`, 0.6
+/// for a baby) at the body anchor, which sinks while the camel sits. The
+/// second seat (-0.7 behind, 0.2 more for an animal) is not used: nothing
+/// seats a second rider yet.
+pub fn passenger_attachment(m: &Mob) -> [f64; 3] {
+    let scale = if m.is_baby() { 0.6 } else { 1.0 };
+    let height = body_anchor_y(m, true, m.height(), scale) as f32;
+    [0.0, f64::from(height), f64::from(0.5 * scale)]
+}
 /// `Camel.refuseToMove`: sitting or getting up or down.
 pub fn refuse_to_move(m: &Mob) -> bool {
     sitting(m) || in_transition(m)

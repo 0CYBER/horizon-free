@@ -26,10 +26,7 @@ pub fn passenger_attachment(v: &Mob) -> [f64; 3] {
         Species::SkeletonHorse | Species::ZombieHorse => [0.0, 1.31875, 0.0],
         Species::Pig => [0.0, 0.86875, 0.0],
         Species::Nautilus | Species::ZombieNautilus => [0.0, 1.1375, 0.0],
-        // Camel.getPassengerAttachmentPoint for a lone standing driver.
-        Species::Camel | Species::CamelHusk if !super::camel::sitting(v) => {
-            [0.0, f64::from(v.height()) - 0.375, 0.5]
-        }
+        Species::Camel | Species::CamelHusk => super::camel::passenger_attachment(v),
         // The default attachments: the top of the bounding box.
         _ => [0.0, f64::from(v.height()), 0.0],
     }

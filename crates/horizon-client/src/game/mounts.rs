@@ -409,18 +409,15 @@ impl Game<'_> {
         let mut at = Vec3::new(m.position.x, m.position.y + seat(m.species()), m.position.z);
         if horizon_client::mobs::camel::is_camel(m.species()) {
             // Camel.getPassengerAttachmentPoint: the driver half a block
-            // forward, at the body anchor (lower while sitting).
-            let scale = if m.is_baby() { 0.6 } else { 1.0 };
-            let anchor = if horizon_client::mobs::camel::sitting(m) {
-                (2.375 - 1.43) * scale - if m.is_baby() { 0.09375 } else { 0.375 } + 0.2 * scale
-            } else {
-                2.375 * scale - if m.is_baby() { 0.09375 } else { 0.375 }
-            };
-            let yaw = m.yaw.to_radians();
+            // forward, at the body anchor (lower while sitting), turned with
+            // the camel.
+            let a = horizon_client::mobs::camel::passenger_attachment(m);
+            let turned = Vec3::new(a[0], a[1], a[2])
+                .rotate_y(-m.yaw * (std::f64::consts::PI / 180.0) as f32);
             at = Vec3::new(
-                m.position.x - f64::from(0.5 * scale * yaw.sin()),
-                m.position.y + f64::from(anchor) - 0.6,
-                m.position.z + f64::from(0.5 * scale * yaw.cos()),
+                m.position.x + turned.x,
+                m.position.y + turned.y - 0.6,
+                m.position.z + turned.z,
             );
         }
         if m.species() == Species::HappyGhast {
