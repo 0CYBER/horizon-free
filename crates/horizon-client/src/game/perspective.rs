@@ -357,9 +357,13 @@ impl Game<'_> {
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
+        // LivingEntity.getBedOrientation: the model lies in the bed as
+        // another player's does (`villager::sleep_pose`).
+        let bed = self.sleeping.map_or(0, |head| self.bed_facing(head));
         let Some(m) = self.player_model.as_mut() else {
             return;
         };
+        m.extra.ints[1] = bed;
         let at = Vec3::new(
             position.x,
             position.y - if crouching { 0.125 } else { 0.0 },
@@ -430,11 +434,15 @@ impl Game<'_> {
         m.extra.swing_right_arm = swing_right_arm;
         m.hurt_time = hurt;
     }
+    /// `LevelExtractor`'s skip of the camera entity: the player's own body
+    /// is drawn unless the camera is in first person, or while it sleeps.
+    pub(super) fn own_body_in_view(&self) -> bool {
+        !self.camera_type.first_person() || self.sleeping.is_some()
+    }
     /// Whether the player's own model shows in the world view.
-    fn player_model_shown(&self) -> bool {
+    pub(super) fn player_model_shown(&self) -> bool {
         // A shader pack's shadow pass draws the player in first person too (shadowPlayer).
-        (!self.camera_type.first_person() || self.pack_shadow_casters.1)
-            && self.sleeping.is_none()
+        (self.own_body_in_view() || self.pack_shadow_casters.1)
             && !self.spectator()
             && self.potions.effects.get("minecraft:invisibility").is_none()
             && self

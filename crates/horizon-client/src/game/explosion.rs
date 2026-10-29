@@ -258,6 +258,8 @@ impl Game<'_> {
         if dist > 1.0 || p.health.dead_or_dying() {
             return;
         }
+        // ServerPlayer.onExplosionHit: the blast that hit the player is theirs.
+        self.adv.marks.blast = Some((feet, false));
         let w = f64::from(p.dimensions.width) / 2.0;
         let h = f64::from(p.dimensions.height);
         let eye = [
