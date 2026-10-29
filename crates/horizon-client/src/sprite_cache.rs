@@ -336,7 +336,7 @@ mod tests {
         let fresh = sprite_pixels(&root);
         assert_eq!(&fresh[..4], &[0, 255, 0, 255]);
         // Corrupt and deleted caches fall back to decoding.
-        fs::write(root.join(FILE), b"HSPR    junk").unwrap();
+        fs::write(root.join(FILE), b"HSPR\x01\0\0\0 junk").unwrap();
         assert_eq!(sprite_pixels(&root), fresh);
         fs::remove_file(root.join(FILE)).unwrap();
         assert_eq!(sprite_pixels(&root), fresh);
