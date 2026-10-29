@@ -388,6 +388,12 @@ impl Mob {
         if super::villager::sleeping(self) {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
+        self.awake_dims()
+    }
+    /// `dims` without the sleeping box: a sleeping villager's
+    /// `getDimensions(Pose.STANDING)`, whose eye height lays it in the bed
+    /// (`LivingEntityRenderer.submit`).
+    pub fn awake_dims(&self) -> (f64, f64, f64) {
         let k = &self.kind;
         // Avatar.POSES: a player's or mannequin's box follows its pose.
         if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
@@ -935,12 +941,33 @@ impl Mob {
         } else {
             0.02
         };
+        self.travel_flying_speeds(
+            w,
+            input,
+            events,
+            fluid_speed,
+            fluid_speed,
+            self.kind.air_speed,
+        );
+    }
+    /// `LivingEntity.travelFlying(input, waterSpeed, lavaSpeed, airSpeed)`:
+    /// the speeds vary per mob (an allay flies at the speed its move control
+    /// set, `Allay.travel`).
+    pub fn travel_flying_speeds(
+        &mut self,
+        w: &MobWorld,
+        input: Vec3,
+        events: &mut Vec<MobEvent>,
+        water_speed: f32,
+        lava_speed: f32,
+        air_speed: f32,
+    ) {
         let (speed, drag) = if self.fluids.in_water {
-            (fluid_speed, f64::from(0.8_f32))
+            (water_speed, f64::from(0.8_f32))
         } else if self.fluids.in_lava {
-            (fluid_speed, 0.5)
+            (lava_speed, 0.5)
         } else {
-            (self.kind.air_speed, f64::from(0.91_f32))
+            (air_speed, f64::from(0.91_f32))
         };
         self.move_relative(speed, input);
         self.do_move(w, events);
