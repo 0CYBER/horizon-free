@@ -363,12 +363,10 @@ impl Game<'_> {
         let jump = self.charge_mount_jump(i, keys);
         let m = &mut self.mobs[i];
         if jump > 0.0 {
-            // onPlayerJump: rear while jumping (horses).
-            if matches!(
-                m.species(),
-                Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
-            ) {
-                m.extra.counter = 20;
+            // AbstractHorse.onPlayerJump: slide on the keys and rear (horses,
+            // donkeys and mules).
+            if equine::is_equine(m.species()) {
+                equine::on_player_jump(m);
             }
             // The nautilus plays its dash sound itself.
             if equine::is_equine(m.species()) {

@@ -99,6 +99,20 @@ pub fn rear_offset(m: &Mob) -> [f64; 3] {
 pub fn immobile(m: &Mob) -> bool {
     can_rear(m.species()) && (m.extra.flag || m.extra.counter > 0) && !controlled(m)
 }
+/// `AbstractHorse.standIfPossible`: a horse that can rear does, for twenty
+/// ticks (`setStanding(20)`, which also ends its grazing).
+pub fn stand_if_possible(m: &mut Mob) {
+    if can_rear(m.species()) {
+        m.extra.counter = 20;
+        m.extra.flag = false;
+    }
+}
+/// `AbstractHorse.onPlayerJump`: a released jump bar lets the horse slide on
+/// the rider's keys (`allowStandSliding`) and makes it rear.
+pub fn on_player_jump(m: &mut Mob) {
+    m.extra.stand_sliding = true;
+    stand_if_possible(m);
+}
 pub fn register(m: &mut Mob) {
     if super::camel::is_camel(m.species()) {
         return super::camel::register(m);
@@ -424,8 +438,7 @@ impl Goal for RandomStand {
         false
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        m.extra.counter = 20;
-        m.extra.flag = false;
+        stand_if_possible(m);
         // playStandSound: getAmbientStandSound is the ambient sound, plain
         // playSound(sound) at volume and pitch 1.
         let sound = super::ai::voice_sounds(m)[0];
@@ -617,8 +630,10 @@ pub fn ridden_step(m: &mut Mob) {
         }
         return;
     }
+    // AbstractHorse.getRiddenInput: no input on the ground while rearing,
+    // unless a jump let it slide.
     let standing = m.extra.counter > 0;
-    if m.on_ground && r.jump == 0.0 && standing {
+    if m.on_ground && r.jump == 0.0 && standing && !m.extra.stand_sliding {
         m.ai.xxa = 0.0;
         m.ai.zza = 0.0;
         return;
@@ -705,7 +720,8 @@ pub fn stand_tick(m: &mut Mob) {
     }
 }
 /// `AbstractHorse.tick`'s eat, stand and mouth animations, which follow the
-/// eating and standing flags (`flag` and `counter > 0`).
+/// eating and standing flags (`flag` and `counter > 0`), and the end of
+/// `allowStandSliding` once it stands no more.
 pub fn animate(m: &mut Mob) {
     let (eating, standing) = (m.extra.flag, m.extra.counter > 0);
     let v = &mut m.anim.v;
@@ -714,6 +730,7 @@ pub fn animate(m: &mut Mob) {
         m.anim.vo[EAT] = 0.0;
         v[STAND] = (v[STAND] + (1.0 - v[STAND]) * 0.4 + 0.05).min(1.0);
     } else {
+        m.extra.stand_sliding = false;
         if eating {
             v[EAT] = (v[EAT] + (1.0 - v[EAT]) * 0.4 + 0.05).min(1.0);
         } else {
