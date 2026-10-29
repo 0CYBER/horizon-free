@@ -4,7 +4,8 @@
 //! what its server sends, a server for a creative client's
 //! `SetCreativeModeSlot`. The other direction is `lan::guest::stack_to_network`.
 use crate::items::ItemStack;
-use horizon_protocol::item::{Component, Profile, Stack, component};
+use horizon_protocol::buf::{Codec, Reader};
+use horizon_protocol::item::{Component, Profile, Stack, Template, component};
 use horizon_protocol::registry::{Builtin, Dynamic};
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
@@ -25,7 +26,20 @@ pub fn from_network(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> ItemStack
         *out.data_mut() = *data;
     }
     out.tidy();
+    // What it decoded to, to send the server's own patch back if that holds.
+    if let Some(patch) = &s.wire.0 {
+        let decoded = out.clone();
+        out.data_mut().wire = crate::item_data::Wire::new(decoded, patch.clone());
+    }
     out
+}
+
+/// `DyeColor.byId`: an unknown id is white (`OutOfBoundsStrategy.ZERO`).
+fn dye_name(id: i32) -> &'static str {
+    usize::try_from(id)
+        .ok()
+        .and_then(|i| crate::block_entity_render::DYES.get(i))
+        .map_or("white", |d| d.0)
 }
 
 fn item_name(builtin: &Builtin, id: i32) -> Arc<str> {
@@ -46,6 +60,21 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             continue;
         };
         let value = match c {
+            // `ItemContainerContents`: a shulker box's items, for its tooltip.
+            Component::Raw(bytes) if *kind == component::CONTAINER => {
+                let Some(slots) = container_tag(bytes, builtin, synced) else {
+                    continue;
+                };
+                slots
+            }
+            // `TypedEntityData`: a block item's block entity, which the op
+            // warning and a spawner's tooltip read.
+            Component::Raw(bytes) if *kind == component::BLOCK_ENTITY_DATA => {
+                let Some(data) = block_entity_data_tag(bytes, builtin) else {
+                    continue;
+                };
+                data
+            }
             // Read past, not decoded: the item keeps its prototype's value.
             Component::Raw(_) => continue,
             // Trim materials and patterns are synced registries, as enchantments are.
@@ -61,6 +90,25 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                     ("pattern", Tag::String(pattern.into())),
                 ])
             }
+            // BannerPatternLayers: each layer's pattern is a synced registry entry.
+            Component::BannerPatterns(layers) => {
+                let layers: Option<Vec<Tag>> = layers
+                    .iter()
+                    .map(|(pattern, color)| {
+                        let pattern = synced.name("minecraft:banner_pattern", *pattern)?;
+                        Some(Tag::compound([
+                            ("pattern", Tag::String(pattern.into())),
+                            ("color", Tag::String(dye_name(*color).into())),
+                        ]))
+                    })
+                    .collect();
+                let Some(layers) = layers else {
+                    continue;
+                };
+                Tag::List(layers)
+            }
+            // A shield's `base_color`: the dye's id.
+            Component::Int(v) if *kind == component::BASE_COLOR => Tag::String(dye_name(*v).into()),
             Component::Int(v) if *kind == component::RARITY => {
                 let rarity = ["common", "uncommon", "rare", "epic"];
                 Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
@@ -144,19 +192,7 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             Component::Stacks(stacks) => Tag::List(
                 stacks
                     .iter()
-                    .map(|t| {
-                        let mut entries = vec![
-                            (
-                                "id",
-                                Tag::String(item_name(builtin, t.item).as_ref().into()),
-                            ),
-                            ("count", Tag::Int(t.count)),
-                        ];
-                        if let Some(c) = components_tag(t, builtin, synced) {
-                            entries.push(("components", c));
-                        }
-                        Tag::compound(entries)
-                    })
+                    .map(|t| template_tag(t, builtin, synced))
                     .collect(),
             ),
             Component::CustomModelData {
@@ -200,6 +236,51 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
         entries.push((key, value));
     }
     Some(Tag::compound(entries))
+}
+
+/// An `ItemStackTemplate` as its NBT codec writes it: id, count and components.
+fn template_tag(t: &Stack, builtin: &Builtin, synced: &Dynamic) -> Tag {
+    let mut entries = vec![
+        (
+            "id",
+            Tag::String(item_name(builtin, t.item).as_ref().into()),
+        ),
+        ("count", Tag::Int(t.count)),
+    ];
+    if let Some(c) = components_tag(t, builtin, synced) {
+        entries.push(("components", c));
+    }
+    Tag::compound(entries)
+}
+
+/// `TypedEntityData.streamCodec` of a block entity: its type's registry id,
+/// then its data without the id, which the saved component keeps.
+fn block_entity_data_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let id = r.varint().ok()?;
+    let kind = builtin.get("minecraft:block_entity_type")?.name(id)?;
+    let Tag::Compound(mut data) = r.nbt().ok()? else {
+        return None;
+    };
+    data.insert("id".into(), Tag::String(kind.into()));
+    Some(Tag::Compound(data))
+}
+
+/// `ItemContainerContents.STREAM_CODEC`, one optional template per slot, as
+/// the saved `container` lists the slots that hold one.
+fn container_tag(bytes: &[u8], builtin: &Builtin, synced: &Dynamic) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let mut slots = Vec::new();
+    for slot in 0..r.count(256).ok()? {
+        if r.bool().ok()? {
+            let stack = Template::read(&mut r).ok()?;
+            slots.push(Tag::compound([
+                ("slot", Tag::Int(slot as i32)),
+                ("item", template_tag(&stack, builtin, synced)),
+            ]));
+        }
+    }
+    Some(Tag::List(slots))
 }
 
 /// A wire `FireworkExplosion` as vanilla's NBT codec writes it
