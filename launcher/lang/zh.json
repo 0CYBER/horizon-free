@@ -185,5 +185,12 @@
   "These mods will run with full access to your computer": "这些模组运行时将拥有对你电脑的完全访问权限",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "如同你运行的其他程序一样，它们可以读取、修改或删除你的文件，并使用你的账户和网络。只有在信任其作者时才应构建这些模组：“模组”页面会列出作者。",
   "Mods: {mods}": "模组：{mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "构建时会编译游戏：首次大约需要十分钟及几 GB 磁盘空间，之后只需几分钟。"
+  "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "构建时会编译游戏：首次需要 20 到 30 分钟及几 GB 磁盘空间（会下载 Rust），之后只需几分钟。",
+  "Delete…": "删除…",
+  "Keep": "保留",
+  "Move to Trash": "移到回收站",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "要将 {name} 连同其世界和设置一起移到回收站吗？你之后可以从那里恢复。",
+  "Install and turn on native mods": "安装并启用原生模组",
+  "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version}（Java 版）。首次点击“开始游戏”时，会用你的账户从 Mojang 下载游戏及其所需的 Java。",
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "原生模组会编译成一个独立的游戏。安装原生模组会启用“原生模组”：之后你需要在“设置 > 原生模组”中构建包含它的游戏。首次构建会下载 Rust，可能需要 20 到 30 分钟；之后的构建会更快。"
 }
