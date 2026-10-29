@@ -294,15 +294,19 @@ enum InstanceCmd {
         out: Option<PathBuf>,
     },
     /// Show or set what runs around an instance's game: a shell command before it (the game
-    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
-    /// variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode,
-    /// MangoHud and the dedicated graphics card, when the computer has them
+    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), environment
+    /// variables ("NAME=value NAME2=value") and a shell command after it exits. An empty value
+    /// clears one. The game and the commands also get INST_NAME, INST_ID, INST_DIR,
+    /// INST_MC_DIR and, for a Java instance, INST_JAVA. On Linux, also GameMode, MangoHud and
+    /// the dedicated graphics card, when the computer has them
     Launch {
         instance: String,
         #[arg(long)]
         pre_launch: Option<String>,
         #[arg(long)]
         wrapper: Option<String>,
+        #[arg(long)]
+        post_exit: Option<String>,
         #[arg(long)]
         env: Option<String>,
         /// Linux: run it through GameMode (gamemoderun), on or off
@@ -1207,11 +1211,14 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 }
                 let mut cmd = backend::java_game(&instance, &|line| eprintln!("{line}"))?;
                 cmd.args(arg);
+                let vars = instance.vars(cmd.get_program());
+                cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 let started = std::time::Instant::now();
                 let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
                 if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                     eprintln!("Play time not saved: {e}");
                 }
+                after_exit(&instance, &vars);
                 return played;
             }
             let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
@@ -1237,10 +1244,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 cmd.arg("--name").arg(name);
             }
             cmd.envs(accounts.look_env());
+            let vars = instance.vars(cmd.get_program());
+            cmd.envs(vars.iter().map(|(k, v)| (k, v)));
             let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }
+            after_exit(&instance, &vars);
             played?
         }
         Cmd::Server {
@@ -2340,6 +2350,20 @@ fn other_json(f: &other_launchers::Found) -> serde_json::Value {
     })
 }
 
+/// Runs the instance's post-exit command in this terminal, if it has one, and waits for it.
+fn after_exit(instance: &instances::Instance, vars: &[(&'static str, std::ffi::OsString)]) {
+    let Some(mut cmd) =
+        horizon_launcher::launch::after_exit(&instance.launch, &instance.home, vars)
+    else {
+        return;
+    };
+    match cmd.status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("The post-exit command failed ({s})."),
+        Err(e) => eprintln!("The post-exit command didn't run: {e}"),
+    }
+}
+
 fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
     use instances::Icon;
     let value = |i: &instances::Instance, selected: bool| {
@@ -2525,6 +2549,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             gamemode,
             mangohud,
             dedicated_gpu,
+            post_exit,
         } => {
             use horizon_launcher::launch;
             let env = env.as_deref().map(launch::parse_env).transpose()?;
@@ -2549,6 +2574,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             }
             let changing = pre_launch.is_some()
                 || wrapper.is_some()
+                || post_exit.is_some()
                 || env.is_some()
                 || gamemode.is_some()
                 || mangohud.is_some()
@@ -2561,6 +2587,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     }
                     if let Some(w) = wrapper {
                         m.launch.wrapper = w.trim().to_string();
+                    }
+                    if let Some(p) = post_exit {
+                        m.launch.post_exit = p.trim().to_string();
                     }
                     if let Some(e) = env {
                         m.launch.env = e;
@@ -2580,6 +2609,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::json!({
                     "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                    "post_exit": l.post_exit,
                     "gamemode": l.gamemode, "mangohud": l.mangohud, "dedicated_gpu": l.dedicated_gpu,
                     "found": {
                         "gamemode": found.gamemode, "mangohud": found.mangohud,
@@ -2595,6 +2625,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 println!("  pre-launch: {}", l.pre_launch);
                 println!("  wrapper:    {}", l.wrapper);
                 println!("  env:        {}", launch::env_line(&l.env));
+                println!("  post-exit:  {}", l.post_exit);
                 let yes = |b: bool| if b { "on" } else { "off" };
                 for (name, on, has) in [
                     ("gamemode:", l.gamemode, found.gamemode),
