@@ -108,12 +108,9 @@ mod minecarts;
 mod mob_blocks;
 mod mob_gear;
 mod mob_sounds;
-mod mod_browser;
-#[cfg(feature = "mods")]
-mod mod_browser_recipes;
 mod mod_input;
 #[cfg(feature = "mods")]
-mod mod_recipes;
+mod mod_panel;
 mod mod_render;
 mod mods;
 mod mount_menu;
@@ -123,6 +120,9 @@ mod moving_pistons;
 mod music;
 mod names;
 mod native_hooks;
+mod native_panel;
+mod native_panel_recipes;
+mod native_recipes;
 mod native_shaders;
 mod natural_spawning;
 mod nautili;
@@ -1822,6 +1822,10 @@ struct Game<'a> {
     extras: extras::ExtrasState,
     /// Horizon mods (`game/mods.rs`), none running unless turned on.
     mods: mods::ModsState,
+    /// Every item and recipe, for mods (`game/native_recipes.rs`), made once.
+    recipe_tables: native_recipes::RecipeTables,
+    /// The item panel beside container screens (`game/native_panel.rs`).
+    panel: native_panel::Panel,
     /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
     native_shaders: native_shaders::NativeShaders,
     /// Meshed sections waiting for an upload budget (Horizon settings).
@@ -10493,6 +10497,7 @@ impl Game<'_> {
         let ammo = arrow_slot
             .and_then(|i| self.stack_in(i).cloned())
             .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
+        let weapon = self.held().cloned();
         let (power_bonus, infinity) = self.bow_enchantments(&ammo.item);
         let kind = horizon_client::projectiles::ProjectileKind::Arrow {
             base_damage: 2.0 + power_bonus,
@@ -10513,6 +10518,7 @@ impl Game<'_> {
                 self.creative || infinity,
             ));
             a.set_owner(Some(horizon_client::mobs::Who::Player));
+            a.fired_from_weapon = weapon;
         }
         // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).
         if let Some(seconds) = self.bow_projectile_ignite()
@@ -13706,6 +13712,14 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        // The world a backup made before its upgrade opens (EditWorldScreen's callback).
+        if let Some(folder) = self.title.as_mut().and_then(|t| t.take_open_request())
+            && let Err(error) = self.open_world(&folder, None, None, false, None)
+        {
+            self.error = Some(error);
+            event_loop.exit();
+            return;
+        }
         self.tick_server_packs();
         self.poll_control(event_loop);
         if self.pending_save.is_some() {
@@ -14088,6 +14102,8 @@ impl<'a> Game<'a> {
             frame_graph: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            recipe_tables: Default::default(),
+            panel: Default::default(),
             native_shaders: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
