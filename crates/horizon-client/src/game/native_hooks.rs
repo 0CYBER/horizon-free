@@ -385,6 +385,27 @@ impl Game<'_> {
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
     }
+    /// The mod block entity at `pos`, to read or change from a tick (a
+    /// generator charging the machine beside it); none for any other block
+    /// entity, and for the one ticking now, which is out of the world. As
+    /// its `setChanged` would, its chunk is saved next time and comparators
+    /// read it again. API 3.
+    pub(super) fn native_mod_block_entity_at(
+        &mut self,
+        pos: [i32; 3],
+    ) -> Option<&mut ModBlockEntity> {
+        let key = (pos[0], pos[1], pos[2]);
+        match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Mod(m)) if !m.id.is_empty() => {}
+            _ => return None,
+        }
+        self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+        self.container_changed(key);
+        match self.world.block_entities.get_mut(&key) {
+            Some(BlockEntity::Mod(m)) => Some(m),
+            _ => None,
+        }
+    }
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(super) fn native_playing(&self) -> bool {
         self.screen == Screen::Playing
@@ -643,6 +664,7 @@ impl Game<'_> {
         };
         // An empty id marks its place while the mod has it.
         let mut taken = std::mem::take(&mut **m);
+        let items = taken.items.clone();
         let state = self.world.block(pos.0, pos.1, pos.2).0;
         let slots = self
             .world
@@ -657,9 +679,14 @@ impl Game<'_> {
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
             && m.id.is_empty()
         {
+            let moved = taken.items != items;
             **m = taken;
-            // BlockEntity.setChanged: the next save writes its chunk.
+            // BlockEntity.setChanged: the next save writes its chunk, and
+            // comparators read a container whose items changed.
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+            if moved {
+                self.container_changed(pos);
+            }
         }
     }
     /// Options > Mods' rows for the native mods, after the others.
