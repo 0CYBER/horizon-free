@@ -2,7 +2,7 @@
 //! chunk-generation spawning (`NaturalSpawner`), mob events (attacks,
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
-use super::{Dim, Game, view_vector};
+use super::{Dim, Game, dispenser, view_vector};
 use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
     Result,
@@ -857,7 +857,7 @@ impl Game<'_> {
         }
         self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
-        self.villager_murdered(m, by_player);
+        self.villager_murdered(m, by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
         self.create_wither_rose(m);
@@ -1019,7 +1019,13 @@ impl Game<'_> {
                     } else {
                         from_loot(&stack)
                     };
-                    self.spawn_item(item, pos, [0.0, 0.2, 0.0], 10);
+                    // Every death drop is its own ItemEntity, and the drop
+                    // entity's own random (not the level's) gives it the
+                    // constructor's horizontal push (its motion otherwise
+                    // stays [0, 0.2, 0] and the drops land stacked at the
+                    // mob's centre, without disturbing the level random that
+                    // the orbs' merge ids and block ticks read next).
+                    self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
                 }
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
                 drops::Drop::Orb(_) => {}
@@ -1125,7 +1131,9 @@ impl Game<'_> {
                 .loot_table(table, false, None, &mut self.world.random),
         };
         for d in stacks {
-            self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
+            // The ItemEntity constructor's motion, from the entity's own
+            // random (not the level's).
+            self.spawn_item(d, at, dispenser::new_item_motion(), 10);
         }
     }
     /// Adds a projectile, giving it an id from the entity counter
@@ -1469,7 +1477,11 @@ impl Game<'_> {
                         extra: None,
                     },
                     at,
-                    [0.0, 0.2, 0.0],
+                    // The ItemEntity constructor's motion, from the entity's
+                    // own random (not the level's), so spawnAtLocation drops
+                    // (a fox's berries, a panda's held food, a goat's horn)
+                    // land apart.
+                    dispenser::new_item_motion(),
                     10,
                 ),
                 MobEvent::DropGift { table, at } => {
@@ -1478,14 +1490,9 @@ impl Game<'_> {
                             .items()
                             .loot_table(table, false, None, &mut self.world.random);
                     for stack in stacks {
-                        // The ItemEntity constructor's random motion.
-                        let r = &mut self.world.random;
-                        let v = [
-                            r.next_double() * 0.2 - 0.1,
-                            0.2,
-                            r.next_double() * 0.2 - 0.1,
-                        ];
-                        self.spawn_item(stack, at, v, 10);
+                        // The ItemEntity constructor's motion, from the
+                        // entity's own random (not the level's).
+                        self.spawn_item(stack, at, dispenser::new_item_motion(), 10);
                     }
                 }
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
@@ -1611,7 +1618,13 @@ impl Game<'_> {
                             self.pop_resource(pos, d);
                         }
                     }
-                    self.world.set(pos[0], pos[1], pos[2], self.world.air)?;
+                    // Level.destroyBlock: setBlock(fluidState.createLegacyBlock(), 3),
+                    // so water stays water and a waterlogged block leaves its water.
+                    let b = self.res.behaviours();
+                    let left = b.legacy_block(b.fluid(old));
+                    if left != old {
+                        self.level_set(pos, left)?;
+                    }
                 }
                 MobEvent::Particles { kind, at, count } => {
                     // Mob particle bursts (hearts, smoke, splashes) around a point.
@@ -4559,6 +4572,14 @@ impl Game<'_> {
                 self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+                self.player_pumpkin_geometry(
+                    mob,
+                    mob.extra.armor[0].as_ref(),
+                    camera,
+                    alpha,
+                    packed,
+                    out,
+                );
             }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
@@ -4644,7 +4665,15 @@ impl Game<'_> {
                 let Some(model) = self.arrow_model.as_ref() else {
                     continue;
                 };
-                let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
+                // SpectralArrowRenderer, and TippableArrowRenderer's `getColor() > 0`.
+                let texture = if a.is_spectral_arrow() {
+                    "entity/projectiles/arrow_spectral"
+                } else if a.arrow.as_ref().is_some_and(|s| s.effect_color > 0) {
+                    "entity/projectiles/arrow_tipped"
+                } else {
+                    "entity/projectiles/arrow"
+                };
+                let Some(r) = atlas.sprites.get(texture).copied() else {
                     continue;
                 };
                 let m = glam::Mat4::from_translation(c)
@@ -4877,6 +4906,17 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
         K::Cramming => "minecraft:cramming",
+        K::FallingAnvil => "minecraft:falling_anvil",
+        K::Fireworks => "minecraft:fireworks",
+        K::GenericKill => "minecraft:generic_kill",
+        K::LightningBolt => "minecraft:lightning_bolt",
+        K::OutsideBorder => "minecraft:outside_border",
+        K::Spit => "minecraft:spit",
+        K::Stalagmite => "minecraft:stalagmite",
+        K::Starve => "minecraft:starve",
+        K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
+        K::WindCharge => "minecraft:wind_charge",
+        K::Wither => "minecraft:wither",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).
