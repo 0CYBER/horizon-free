@@ -747,7 +747,7 @@ MCP: `mods_list`.
 
 ## `horizon-launcher mods search`
 
-Search for packs Horizon loads.
+Search for packs Horizon loads, or for what a Java instance runs (made for its Minecraft version and loader).
 
     horizon-launcher mods search [TEXT]...
 
@@ -755,6 +755,7 @@ Search for packs Horizon loads.
 - `--kind` (mod, resource, modpack, shader, datapack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
 - `--source` (modrinth, curseforge, horizon)
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_search`.
 
@@ -772,7 +773,7 @@ MCP: `mods_check`.
 
 ## `horizon-launcher mods install`
 
-Install a pack and what it needs into an instance, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as an instance of its own; a data pack goes into the world `--world` names.
+Install a pack and what it needs into an instance, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on (a Java instance gets the jar made for its version and loader in mods/); a modpack is imported as an instance of its own; a data pack goes into the world `--world` names.
 
     horizon-launcher mods install <PROJECT>
 

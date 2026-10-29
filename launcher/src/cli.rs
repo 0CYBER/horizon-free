@@ -485,7 +485,8 @@ enum ModsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Search for packs Horizon loads
+    /// Search for packs Horizon loads, or for what a Java instance runs (made for its
+    /// Minecraft version and loader)
     Search {
         text: Vec<String>,
         #[arg(long, value_enum, default_value_t = KindArg::Resource)]
@@ -495,6 +496,9 @@ enum ModsCmd {
         everything: bool,
         #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
         source: SourceArg,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
     },
     /// Say how well a Java mod runs in Horizon: its jar is downloaded (checksum checked),
     /// carried over and read; the answer is kept
@@ -507,8 +511,9 @@ enum ModsCmd {
         source: SourceArg,
     },
     /// Install a pack and what it needs into an instance, by its id or slug (checksums
-    /// checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as
-    /// an instance of its own; a data pack goes into the world `--world` names
+    /// checked); a Java mod is ported into horizon-mods and turned on (a Java instance gets the
+    /// jar made for its version and loader in mods/); a modpack is imported as an instance of
+    /// its own; a data pack goes into the world `--world` names
     Install {
         project: String,
         /// Install the project's data pack into this world of the instance (its name or folder)
@@ -1895,21 +1900,31 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::browser::{horizon, installed, Kind, Query, SourceId};
+    use horizon_launcher::browser::{horizon, installed, java_instance, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
     // What the browser installs goes into an instance's game folder; Java mods' checks are kept
     // in the default one, shared by all.
-    let home = match &action {
+    let instance = match &action {
         ModsCmd::List { instance }
+        | ModsCmd::Search { instance, .. }
         | ModsCmd::Install { instance, .. }
         | ModsCmd::Update { instance, .. }
         | ModsCmd::Remove { instance, .. }
         | ModsCmd::Enable { instance, .. }
         | ModsCmd::Disable { instance, .. } => match instance {
-            Some(name) => instances::find(name)?.home,
-            None => instances::selected().home,
+            Some(name) => Some(instances::find(name)?),
+            None => Some(instances::selected()),
         },
-        ModsCmd::Search { .. } | ModsCmd::Check { .. } => backend::game_home(),
+        ModsCmd::Check { .. } => None,
+    };
+    // A Java instance gets the source's own files, for its version and loader.
+    let java = instance
+        .as_ref()
+        .and_then(|i| i.java.as_ref())
+        .map(|j| j.target());
+    let home = match (&action, instance) {
+        (ModsCmd::Search { .. }, _) | (_, None) => backend::game_home(),
+        (_, Some(i)) => i.home,
     };
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
@@ -1952,6 +1967,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             kind,
             everything,
             source,
+            ..
         } => {
             let kind = match kind {
                 KindArg::Resource => Kind::ResourcePack,
@@ -1960,6 +1976,23 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 KindArg::Shader => Kind::Shader,
                 KindArg::Datapack => Kind::DataPack,
             };
+            if let Some(target) = &java {
+                let found = source.get()?.search(&target.query(&text.join(" "), kind))?;
+                if as_json {
+                    json(found.iter().map(|p| serde_json::json!({
+                        "id": p.id, "slug": p.slug, "title": p.title, "summary": p.summary,
+                        "author": p.author, "downloads": p.downloads, "page": p.page,
+                        "license": p.license,
+                    })).collect());
+                }
+                for p in found.iter().filter(|_| !as_json) {
+                    println!(
+                        "{}  ({})  {} downloads\n  {}",
+                        p.title, p.slug, p.downloads, p.summary
+                    );
+                }
+                return Ok(());
+            }
             let query = Query {
                 everything,
                 ..Query::new(&text.join(" "), kind)
@@ -2125,7 +2158,10 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 println!("Play it: horizon-launcher modpack play {}", pack.slug);
                 return Ok(());
             }
-            let done = installed::install(&*source, &p, everything, &home, &line)?;
+            let done = match &java {
+                Some(target) => java_instance::install(&*source, target, &p, &home, &line)?,
+                None => installed::install(&*source, &p, everything, &home, &line)?,
+            };
             if as_json {
                 json(done.iter().map(entry_json).collect());
             }
@@ -2168,14 +2204,24 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     println!("{}: {} isn't available here.", e.title, e.source.label());
                     continue;
                 };
-                match installed::update_for(&*source, e)? {
+                let newer = match &java {
+                    Some(target) => java_instance::update_for(&*source, target, e)?,
+                    None => installed::update_for(&*source, e)?,
+                };
+                match newer {
                     None => println!("{} {}: up to date.", e.title, e.number),
                     Some(v) if check => {
                         println!("{} {}: {} is available.", e.title, e.number, v.number)
                     }
                     Some(_) => {
                         let p = source.project(&e.project)?;
-                        for done in installed::install(&*source, &p, true, &home, &line)? {
+                        let done = match &java {
+                            Some(target) => {
+                                java_instance::install(&*source, target, &p, &home, &line)?
+                            }
+                            None => installed::install(&*source, &p, true, &home, &line)?,
+                        };
+                        for done in done {
                             println!("{} {}: {}", done.title, done.number, done.file);
                         }
                     }
@@ -2183,8 +2229,17 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             }
         }
         ModsCmd::Remove { project, .. } => {
-            let e = installed::remove(&home, &project)?;
+            let e = match java {
+                Some(_) => java_instance::remove(&home, &project)?,
+                None => installed::remove(&home, &project)?,
+            };
             println!("Removed {} ({}).", e.title, e.file);
+        }
+        ModsCmd::Enable { .. } | ModsCmd::Disable { .. } if java.is_some() => {
+            return Err(
+                "A Java instance loads every mod in its mods/ folder: remove one to turn it off."
+                    .into(),
+            );
         }
         ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
             let e = installed::Installed::load(&home)
@@ -2981,15 +3036,15 @@ mod tests {
             Some(ModsCmd::List { instance: None })
         ));
         assert!(parse(&[]).is_none());
-        // Search and Check read no instance: checks are shared.
-        assert!(Cli::try_parse_from([
-            "horizon-launcher",
-            "mods",
-            "search",
-            "x",
-            "--instance",
-            "A"
-        ])
-        .is_err());
+        // Search names one for a Java instance's version and loader; Check reads none: checks
+        // are shared.
+        assert!(matches!(
+            parse(&["search", "x", "--instance", "A"]),
+            Some(ModsCmd::Search { instance: Some(i), .. }) if i == "A"
+        ));
+        assert!(
+            Cli::try_parse_from(["horizon-launcher", "mods", "check", "x", "--instance", "A"])
+                .is_err()
+        );
     }
 }
