@@ -885,6 +885,8 @@ pub struct Extra {
     pub positions: Vec<[i32; 3]>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
+    /// An allay's vibration listener and liked note block.
+    pub allay: Option<Box<allay::State>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.

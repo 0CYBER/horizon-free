@@ -584,6 +584,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 ]));
             }
             map.insert("Inventory".into(), Tag::List(inv));
+            if let Some(st) = &m.extra.allay {
+                map.insert("listener".into(), st.vibration.to_nbt());
+            }
             map.insert(
                 "DuplicationCooldown".into(),
                 Tag::Long(i64::from(m.extra.egg_time)),
@@ -1246,6 +1249,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.ints[1] = number(first.get("count")).unwrap_or(1) as i32;
         }
         m.extra.egg_time = number(tag.get("DuplicationCooldown")).unwrap_or(0) as i32;
+        if let (Some(st), Some(listener)) = (m.extra.allay.as_mut(), tag.get("listener")) {
+            st.vibration = crate::sculk::Data::from_nbt(listener);
+        }
         let liked = tag
             .get("Brain")
             .and_then(|b| b.get("memories"))

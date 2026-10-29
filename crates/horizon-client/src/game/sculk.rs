@@ -7,7 +7,7 @@ use super::{Game, Result};
 use horizon_client::{
     containers::BlockEntity,
     fast_hash::{FxHashMap, FxHashSet},
-    mobs::{Mob, Species, Who, warden},
+    mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
@@ -543,6 +543,9 @@ impl Game<'_> {
             if self.mobs[i].species() == Species::Warden && self.mobs[i].alive() {
                 self.warden_listen(i, event, pos, &ctx);
             }
+            if self.mobs[i].species() == Species::Allay && self.mobs[i].alive() {
+                self.allay_listen(i, event, pos, &ctx);
+            }
         }
     }
     /// A game event at a block (`Level.gameEvent(source, event, pos)`).
@@ -722,6 +725,19 @@ impl Game<'_> {
         if avoided {
             self.trigger_player("minecraft:avoid_vibration");
         }
+    }
+
+    /// `VibrationSystem.Listener.handleGameEvent` for the allay at `index`
+    /// (`Allay.VibrationUser`).
+    fn allay_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
+        let now = self.world.game_time;
+        let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
+        allay::listen(&mut self.mobs[index], now, event, pos, ctx, |a, b| {
+            sculk::is_occluded(a, b, |p| {
+                let state = world.block(p.x, p.y, p.z);
+                occludes.get(state.0 as usize).copied().unwrap_or(false)
+            })
+        });
     }
 
     // ---- ticking ----

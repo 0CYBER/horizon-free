@@ -3,11 +3,12 @@
 //! jukeboxes and duplicate when given an amethyst shard mid-dance.
 use super::{
     Mob, MobEvent, MobWorld,
-    anim::{Poses, State},
+    anim::{Poses, State as AnimState},
     control::MoveKind,
     goals::{Cx, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, goal_clone},
     nav::NavKind,
 };
+use crate::sculk::{self, Context, Info};
 use horizon_core::geometry::Vec3;
 use horizon_core::geometry::trig::Mth;
 
@@ -19,8 +20,17 @@ use horizon_core::geometry::trig::Mth;
 // spinning (1).
 pub const HOLD: usize = 0;
 pub const SPIN: usize = 1;
+/// `Allay.VibrationUser.VIBRATION_EVENT_LISTENER_RANGE`.
+const LISTENER_RADIUS: i64 = 16;
+
+/// An allay's vibration listener (`Allay.vibrationData`).
+#[derive(Clone, Debug, Default)]
+pub struct State {
+    pub vibration: sculk::Data,
+}
 
 pub fn register(m: &mut Mob) {
+    m.extra.allay = Some(Box::default());
     m.ai.mov.kind = MoveKind::Flying {
         max_turn: 20.0,
         hovers: true,
@@ -134,6 +144,70 @@ impl Goal for StayClose {
         }
     }
 }
+/// `VibrationSystem.Listener.handleGameEvent` for an allay: a free listener
+/// within 16 blocks of its eyes schedules the note block notes it can hear
+/// (`GameEventTags.ALLAY_CAN_LISTEN`). `occluded` is
+/// `VibrationSystem.Listener.isOccluded`.
+pub fn listen(
+    m: &mut Mob,
+    now: i64,
+    event: &'static str,
+    pos: [f64; 3],
+    ctx: &Context,
+    occluded: impl Fn([f64; 3], [f64; 3]) -> bool,
+) {
+    let eye = [m.position.x, m.eye_y(), m.position.z];
+    let Some(st) = m.extra.allay.as_ref() else {
+        return;
+    };
+    if st.vibration.current.is_some() {
+        return;
+    }
+    let block = |p: [f64; 3]| p.map(|v| i64::from(v.floor() as i32));
+    let (source, listener) = (block(pos), block(eye));
+    let d = [0, 1, 2].map(|i| source[i] - listener[i]);
+    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > LISTENER_RADIUS * LISTENER_RADIUS {
+        return;
+    }
+    if !sculk::valid_vibration(sculk::allay_can_listen(event), event, ctx) || occluded(pos, eye) {
+        return;
+    }
+    let d = [pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]];
+    let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
+    if let Some(st) = m.extra.allay.as_mut() {
+        st.vibration.schedule(
+            Info {
+                event,
+                distance,
+                pos,
+                source: ctx.source,
+                owner: ctx.owner,
+            },
+            now,
+        );
+    }
+}
+/// `Allay.tick`'s server half: `VibrationSystem.Ticker.tick` after
+/// `super.tick()`, choosing a vibration and letting it travel to the eyes
+/// at a block a tick (the particle starts there).
+pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    let tick = m
+        .extra
+        .allay
+        .as_mut()
+        .map(|st| {
+            st.vibration
+                .tick(w.game_time, true, false, |d| d.floor() as i32)
+        })
+        .unwrap_or_default();
+    if let Some((info, travel)) = tick.started {
+        events.push(MobEvent::Vibration {
+            from: info.pos,
+            to: [m.position.x, m.eye_y(), m.position.z],
+            ticks: travel,
+        });
+    }
+}
 /// `Allay.travel`: `travelFlying(input, getSpeed())` — the airborne speed is
 /// the one the move control set this tick, and no gravity applies, so an
 /// allay never falls under its own travel.
@@ -174,7 +248,7 @@ pub fn animate(m: &mut Mob) {
     }
 }
 /// `AllayModel.setupAnim`.
-pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
+pub fn anim(m: &Mob, s: &AnimState, p: &mut Poses) {
     use std::f32::consts::PI;
     let (speed, pos) = (s.speed, s.pos);
     let flap_speed = (s.age * 20.0).to_radians() + pos;
