@@ -4410,8 +4410,12 @@ impl Game<'_> {
         {
             return Ok(true);
         }
-        // SpawnEggItem.useOn on a spawner sets its mob.
-        if let Some(done) = self.use_spawn_egg_on_spawner(hit.pos, &id) {
+        // SpawnEggItem.useOn on a spawner sets its mob (and an op's egg data).
+        let (spawner_id, data) = horizon_client::block_entity_item::spawn_egg_on_spawner(
+            stack,
+            self.acting_player_is_op(),
+        );
+        if let Some(done) = self.use_spawn_egg_on_spawner(hit.pos, &spawner_id, data.as_ref()) {
             if done {
                 self.swing_arm();
                 self.stats.add("used", &stack.item, 1);

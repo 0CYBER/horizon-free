@@ -1987,6 +1987,8 @@ struct Game<'a> {
     lan_acting_name: Option<String>,
     /// Their UUID (`Player.getUUID`).
     lan_acting_uuid: Option<u128>,
+    /// Their permission level: an op's above 0 (`PlayerList.isOp`).
+    lan_acting_permission: Option<u8>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// Packets for the guest acting now, sent once its action returns.
@@ -14607,6 +14609,7 @@ impl<'a> Game<'a> {
             guest_entity_events: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
+            lan_acting_permission: None,
             chat_capture: None,
             admin_feedback: Vec::new(),
             console_broadcast: None,
