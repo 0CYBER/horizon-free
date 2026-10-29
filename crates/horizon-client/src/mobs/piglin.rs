@@ -280,6 +280,10 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     if m.extra.piglin.activity == Activity::Avoid && wants_to_stop_fleeing(m, cx.w) {
         m.extra.piglin.avoid = None;
     }
+    // The ride activity's behaviours.
+    if m.species() == Species::Piglin && m.extra.piglin.activity == Activity::Ride {
+        mount(m, cx);
+    }
     update_activity(m, cx.w, cx.events);
 }
 /// `HoglinAi.updateActivity` and `PiglinAi.updateActivity`: take the first
@@ -426,6 +430,71 @@ fn baby_sometimes_ride_baby_hoglin(m: &mut Mob, cx: &mut Cx) {
         ttl,
         aimed: None,
     });
+}
+/// `PiglinAi.SPEED_MULTIPLIER_WHEN_MOUNTING`.
+const MOUNTING_SPEED: f64 = 0.8;
+/// The block under `at` (`BlockPos.containing`).
+fn block_of(at: Vec3) -> [i32; 3] {
+    [
+        at.x.floor() as i32,
+        at.y.floor() as i32,
+        at.z.floor() as i32,
+    ]
+}
+/// `Mount.create`: with no walk under way and a `RIDE_TARGET`, a piglin that
+/// is not a passenger already boards the ride target once it is closer than a
+/// block (`startRiding`), and otherwise looks at it and walks to it at 0.8
+/// (`WalkTarget` on an `EntityTracker`). `MoveToTargetSink` carries the walk:
+/// it ends once the target's block is a block away (`reachedTarget`) and aims
+/// again when that block has moved more than 2 blocks.
+fn mount(m: &mut Mob, cx: &mut Cx) {
+    if m.extra.mount.is_some() {
+        return;
+    }
+    let Some(ride) = m.extra.piglin.ride else {
+        return;
+    };
+    let Some((at, eye_y)) = cx.w.seen(ride.vehicle).map(|s| (s.position, s.eye_y)) else {
+        return;
+    };
+    let target = block_of(at);
+    let here = block_of(m.position);
+    let reached = (0..3).map(|i| (target[i] - here[i]).abs()).sum::<i32>() <= 1;
+    if !m.ai.nav.is_done() {
+        let moved = ride.aimed.is_none_or(|a| {
+            (0..3)
+                .map(|i| i64::from(target[i] - a[i]).pow(2))
+                .sum::<i64>()
+                > 4
+        });
+        if reached {
+            m.nav_stop();
+        } else if moved {
+            aim_at_ride_target(m, cx, at);
+        }
+        return;
+    }
+    if m.distance_sqr(at) < 1.0 {
+        cx.events.push(MobEvent::StartRiding {
+            rider: m.id,
+            vehicle: ride.vehicle,
+        });
+        return;
+    }
+    m.look_at([at.x, eye_y, at.z]);
+    if !reached {
+        aim_at_ride_target(m, cx, at);
+    }
+}
+/// `MoveToTargetSink.tryComputePath` to the block the ride target stands in:
+/// a path there at `SPEED_MULTIPLIER_WHEN_MOUNTING`, remembering where it was
+/// aimed.
+fn aim_at_ride_target(m: &mut Mob, cx: &mut Cx, at: Vec3) {
+    if m.nav_move_to_entity(cx.w, [at.x, at.y, at.z], 0, MOUNTING_SPEED)
+        && let Some(r) = m.extra.piglin.ride.as_mut()
+    {
+        r.aimed = Some(block_of(at));
+    }
 }
 /// `HoglinAi.piglinsOutnumberHoglins`: an adult hoglin counts itself and
 /// sees more adult piglins than hoglins.
