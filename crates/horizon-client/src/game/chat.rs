@@ -1193,6 +1193,7 @@ impl Game<'_> {
         };
         let message = match result {
             Ok(_) => {
+                log::info!("Saved screenshot to {}", path.display());
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 let link = Text::styled(
                     name,
@@ -1217,24 +1218,10 @@ impl Game<'_> {
         );
     }
 }
-/// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time
-/// approximated as UTC).
+/// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, in local time).
 pub fn screenshot_name(dir: &std::path::Path) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let days = (secs / 86400) as i64;
-    let (h, m, s) = ((secs % 86400) / 3600, (secs % 3600) / 60, secs % 60);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(mo <= 2);
-    let base = format!("{y}-{mo:02}-{d:02}_{h:02}.{m:02}.{s:02}");
+    // Util.getFilenameFormattedDateTime: the local date and time.
+    let base = chrono::Local::now().format("%Y-%m-%d_%H.%M.%S").to_string();
     let mut n = 1;
     loop {
         let name = if n == 1 {
