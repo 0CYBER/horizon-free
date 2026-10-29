@@ -361,7 +361,8 @@ impl Game<'_> {
                                 if action != "up" {
                                     self.play_mouse(button, true)?;
                                 }
-                                if action != "down" {
+                                // A repeat keeps the key held, as the window's.
+                                if action == "up" || action == "tap" {
                                     self.play_mouse(button, false)?;
                                 }
                             }
