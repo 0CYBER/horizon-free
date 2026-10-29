@@ -44,6 +44,17 @@ fn pose_time(m: &Mob) -> i64 {
 pub fn sitting(m: &Mob) -> bool {
     m.extra.camel_sitting
 }
+/// `Camel.getDefaultDimensions` for `Pose.SITTING`: the adult camel's box
+/// 1.43 lower with its eyes at 0.845, or a baby's 0.425 tall box with its
+/// eyes at 0.41. Standing, an adult has the type's box and a baby
+/// `BABY_STANDING_DIMENSIONS` (the species' baby size).
+pub fn sitting_dims(baby: bool) -> (f32, f32, f32) {
+    if baby {
+        (0.95, 0.425, 0.41)
+    } else {
+        (1.7, 2.375 - 1.43, 0.845)
+    }
+}
 fn in_transition(m: &Mob) -> bool {
     pose_time(m) < if sitting(m) { SIT_DOWN } else { STAND_UP }
 }

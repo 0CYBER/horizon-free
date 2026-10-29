@@ -423,6 +423,10 @@ impl Mob {
                 super::species::Baby::None => {}
             }
         }
+        // Camel.getDefaultDimensions: a sitting camel is lower.
+        if super::camel::is_camel(k.species) && super::camel::sitting(self) {
+            (w, h, e) = super::camel::sitting_dims(self.is_baby());
+        }
         // Warden.getDefaultDimensions: a metre tall while digging or emerging.
         if self.kind.species == super::Species::Warden && super::warden::digging_or_emerging(self) {
             h = 1.0;
