@@ -76,7 +76,7 @@ cargo build --profile fast -p horizon-client        # optimized, quick to link: 
 python3 tools/parity.py --changed origin/main       # the harnesses your branch can affect (CI's parity job)
 python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cover these files, without running them
 python3 tools/parity.py mob_ai sculk       # named harnesses
-python3 tools/lan_e2e.py --check chest     # two real games over LAN (server-thread host); --in-frame compares the fallback
+python3 tools/lan_e2e.py --check chest     # two real games over LAN (server-thread host)
 python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 ```
 
@@ -169,17 +169,18 @@ the same `horizon_client::<module>` paths), `G:` = bin (`crates/horizon-client/s
    "Server thread" with one level per dimension; the window joins it as a client through memory (`remote`),
    exactly as a LAN guest or a dedicated server's player does. This is what players run. Open
    `[server-thread]` issues list the gaps left.
-2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`):** the window's `Game` ticks
-   the world itself, one level that follows the player (`fn enter_dimension`). Deterministic rule fixtures still use this path; player-facing integration uses the default server thread.
+2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`): DEPRECATED, never use it, it
+   will be removed soon.** The window's `Game` ticks the world itself, one level that follows the player
+   (`fn enter_dimension`). Compatibility does not matter: don't add features or fixes for it, don't write new
+   tests against it, and move code off it when you touch it. The deterministic rule fixtures still run on it
+   until they are ported.
 
-LAN guests and dedicated servers always use the server code, so a fix there serves both. Test both paths
-when you touch player-facing gameplay:
+LAN guests and dedicated servers always use the server code, so a fix there serves both. Test the server
+thread when you touch player-facing gameplay:
 
 ```sh
 cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --in-frame    # in-frame
 python3 tools/lan_e2e.py --check <name>                  # host on its server thread, guest is a server client
-python3 tools/lan_e2e.py --in-frame --check <name>       # comparison (portals, levels, distance, lava need server-thread mode)
 python3 tools/parity.py dedicated_server server_entities server_player_damage
 ```
 
