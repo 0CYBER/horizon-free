@@ -373,10 +373,9 @@ impl Game<'_> {
             start,
             Some(Who::Player),
         );
-        let (v, on_ground) = self
-            .player
-            .as_ref()
-            .map_or((Vec3::ZERO, true), |p| (p.velocity, p.ground.on_ground));
+        let (v, on_ground) = self.player.as_ref().map_or((Vec3::ZERO, true), |p| {
+            (self.known_player_movement(), p.ground.on_ground)
+        });
         projectile.shoot_from_rotation(
             &mut self.world.random,
             self.pitch,

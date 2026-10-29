@@ -1246,7 +1246,14 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let g = &mut host.hub.guests[gi];
                 (g.yaw, g.pitch) = (p.yaw, p.pitch);
+                // ServerPlayer.getKnownMovement: the move their client just sent,
+                // which a throw adds to the projectile.
+                let movement = g
+                    .moves
+                    .last()
+                    .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
                 let swung = self.as_guest(host, conn, |g| {
+                    g.known_movement = movement;
                     g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
