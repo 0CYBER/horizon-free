@@ -4390,8 +4390,14 @@ impl Game<'_> {
             f64::from(p[1]),
             f64::from(p[2]) + 0.5,
         ];
-        if self.spawn_mob_spawned(&kind, at).is_none() {
+        let Some(mob_id) = self.spawn_mob_spawned(&kind, at) else {
             return Ok(false);
+        };
+        // Entity.applyImplicitComponents: a name from an anvil names the mob.
+        if let Some(name) = stack.custom_name()
+            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id)
+        {
+            m.custom_name = Some(name.to_owned());
         }
         self.swing_arm();
         if !self.creative
