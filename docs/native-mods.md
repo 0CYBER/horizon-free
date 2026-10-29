@@ -39,6 +39,9 @@ the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
 
+API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
+and final close. Bundles that use these events need `"hooks": 3`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -136,7 +139,7 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 - **Single player and LAN host:** the mods run in the host's game and its integrated server, so a server-side
   hook applies to every player of the world.
 - **Joining a server:** only client-side hooks do anything; the protocol is unchanged.
-- **Dedicated servers:** not built yet; the same pipeline can build the server (`--no-default-features`).
+- **Dedicated servers:** native mods are not built yet. Lifecycle hook call sites are ready for when the pipeline builds them (`--no-default-features`).
 
 ## Left to do
 
