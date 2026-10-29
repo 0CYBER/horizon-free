@@ -1062,8 +1062,14 @@ fn red_overlay(m: &Mob) -> bool {
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     if avatar(m) {
-        // AvatarRenderer.scale, shared by the inventory and world renderer.
-        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
+        // AvatarRenderer.scale, shared by the inventory and world renderer, on
+        // top of the entity's own `scale` (`LivingEntityRenderer.submit`).
+        let own = if m.extra.model_scale > 0.0 {
+            m.extra.model_scale
+        } else {
+            1.0
+        };
+        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375 * own));
     }
     match m.species() {
         Species::Wither => {
@@ -1229,7 +1235,7 @@ pub fn render_with(
                 let shifted =
                     camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
                 let base = base_transform(m, alpha, shifted);
-                render_visible(m, alpha, base, atlas, light, data, extra, out);
+                render_visible(m, alpha, base, atlas, light, data, extra, true, out);
             }
         }
         return;
@@ -1242,6 +1248,7 @@ pub fn render_with(
         light,
         data,
         extra,
+        true,
         out,
     );
 }
@@ -1287,6 +1294,24 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `render_with` without the body, for an avatar the viewer can't see:
+/// `LivingEntityRenderer.submit` gets no render type for an invisible body
+/// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
+/// (`HumanoidArmorLayer`: the armour in `extra`).
+#[allow(clippy::too_many_arguments)]
+pub fn render_layers(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    extra: &[(&Part, [f32; 4], u32, u32)],
+    out: &mut Vec<Vertex>,
+) {
+    let base = base_transform(m, alpha, camera);
+    render_visible(m, alpha, base, atlas, light, data, extra, false, out);
+}
 /// A mob drawn under `origin` instead of at its position (the spinning mob
 /// of `SpawnerRenderer.submitEntityInSpawner`).
 pub fn render_posed(
@@ -1299,7 +1324,7 @@ pub fn render_posed(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform_at(m, alpha, origin);
-    render_visible(m, alpha, base, atlas, light, data, &[], out);
+    render_visible(m, alpha, base, atlas, light, data, &[], true, out);
 }
 #[allow(clippy::too_many_arguments)]
 fn render_visible(
@@ -1310,6 +1335,7 @@ fn render_visible(
     light: u32,
     data: &MobData,
     extra: &[(&Part, [f32; 4], u32, u32)],
+    body_visible: bool,
     out: &mut Vec<Vertex>,
 ) {
     let overlay = u32::from(red_overlay(m));
@@ -1323,7 +1349,7 @@ fn render_visible(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let draw_body = |out: &mut Vec<Vertex>| {
-        if let Some(uv) = atlas(&texture) {
+        if body_visible && let Some(uv) = atlas(&texture) {
             draw(
                 &model,
                 base,

@@ -88,6 +88,9 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     let mut f = Fixture::new();
     f.title.last_server = "localhost:25566".into();
     f.click("Multiplayer");
+    // SafetyScreen comes first while its box was never ticked.
+    assert!(matches!(f.title.mode, Mode::MultiplayerWarning { .. }));
+    f.click("Proceed");
     f.click("Direct Connection");
     assert_eq!(f.title.focused_field().unwrap().1, "localhost:25566");
 
@@ -100,6 +103,7 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     f.title.escape();
     f.title.escape();
     f.click("Multiplayer");
+    f.click("Proceed");
     f.click("Direct Connection");
     assert_eq!(f.title.focused_field().unwrap().1, "[::1]:25568");
 
@@ -122,6 +126,7 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
 fn f5_reloads_the_server_list() {
     let mut f = Fixture::new();
     f.click("Multiplayer");
+    f.click("Proceed");
     let file = crate::multiplayer::servers_file(&f.title.saves);
     horizon_protocol::servers::save(
         &file,
@@ -738,6 +743,32 @@ fn delete_removes_links_without_following_them() {
     world_management::delete(&f.title.saves, "World").unwrap();
     assert!(!f.title.saves.join("World").exists());
     assert!(outside.join("keep.txt").is_file());
+}
+
+#[test]
+fn hovered_buttons_ask_for_the_hand_or_not_allowed() {
+    use crate::widgets::Cursor;
+    let mut f = Fixture::new();
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let cursor_over = |title: &Title, label: Option<&str>| {
+        let mouse = label.map_or((0.0, 0.0), |label| {
+            let buttons = title.buttons(480.0, 262.0);
+            let b = buttons.iter().find(|b| b.label == label).unwrap();
+            (b.x + b.w / 2.0, b.y + 10.0)
+        });
+        let _ = crate::widgets::take_cursor();
+        title.draw(&atlas, &mut HudBatch::new([480, 262]), mouse, true);
+        crate::widgets::take_cursor()
+    };
+    assert_eq!(
+        cursor_over(&f.title, Some("Singleplayer")),
+        Cursor::PointingHand
+    );
+    assert_eq!(cursor_over(&f.title, None), Cursor::Arrow);
+    // The world list's footer is inactive until a world is selected.
+    f.world("A", "Alpha");
+    f.title.enter_singleplayer();
+    assert_eq!(cursor_over(&f.title, Some("Edit")), Cursor::NotAllowed);
 }
 
 #[test]

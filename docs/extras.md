@@ -1,6 +1,6 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, auto-reconnect,
+Optional conveniences built into the client: fullbright, dynamic lights, your own name tag, auto-reconnect,
 Mouse Tweaks-style inventory controls and inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
@@ -79,6 +79,16 @@ The game still draws the minimap, for the mod (`render.set-minimap`, [mods.md](m
 - one cached 16x16 tile per loaded chunk (packed map colour and height), filled nearest first and refreshed when
   blocks change within 0.3 ms a frame; the 128x128 image is recomposed only when the view moved or a tile changed, and
   uploaded into a dedicated atlas slot. With no mod showing a map, nothing runs.
+
+### Own name tag (`ownNameTag`, default off)
+- In third person (F5, either view), the player's own name shows above its head,
+  as other players see it: the profile name in its team's prefix, suffix and
+  colour, the below-name score under it within 10 blocks, faded and without the
+  see-through copy while crouching. Vanilla never names the camera entity
+  (`LivingEntityRenderer.shouldShowName`).
+- Hidden in first person, while sleeping, in spectator mode, while invisible, and
+  whenever the team's name tag visibility would hide it, exactly as the other
+  players' tags (`game/names.rs`, `own_name_tag`). Client-only: nothing is sent.
 
 ### Auto-reconnect (`autoReconnect`, default off)
 - On the "Connection lost" screen after a multiplayer connection drops, a

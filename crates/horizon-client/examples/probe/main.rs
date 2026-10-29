@@ -88,6 +88,7 @@ mod sound_event_fixture;
 mod spawn_rules_fixture;
 mod sprint_probe;
 mod squid_client_probe;
+mod storage_menu_fixture;
 mod subtitle_fixture;
 mod tab_list_fixture;
 mod team_rules_fixture;
@@ -179,6 +180,7 @@ probes! {
     sound_event_fixture,
     spawn_rules_fixture,
     sprint_probe,
+    storage_menu_fixture,
     subtitle_fixture,
     tab_list_fixture,
     team_rules_fixture,
