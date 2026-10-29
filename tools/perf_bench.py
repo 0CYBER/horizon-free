@@ -510,7 +510,8 @@ def build_bench_mod(jars):
     shutil.rmtree(classes, ignore_errors=True)
     classes.mkdir(parents=True)
     sources = sorted(map(str, (source / "java").rglob("*.java")))
-    subprocess.run(["javac", "--release", "25", "-proc:none", "-encoding", "UTF-8", "-d", str(classes),
+    javac = Path(os.environ["JAVA_HOME"]) / "bin/javac" if os.environ.get("JAVA_HOME") else "javac"
+    subprocess.run([str(javac), "--release", "25", "-proc:none", "-encoding", "UTF-8", "-d", str(classes),
                     "-classpath", os.pathsep.join(map(str, jars)), *sources], check=True)
     output = build / "horizon-bench.jar"
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:

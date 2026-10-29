@@ -953,7 +953,20 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 continue;
             };
             let v = f64::from_bits(*bits);
+            // A mount's rolled health and speed stay attribute bases, which
+            // the server syncs (its hearts over the rider's hotbar).
+            let equine = crate::mobs::equine::is_equine(m.species());
             match id.as_str() {
+                "minecraft:max_health" if equine => crate::mobs::finalize::set_base(
+                    &mut m,
+                    crate::mobs::finalize::Attr::MaxHealth,
+                    v,
+                ),
+                "minecraft:movement_speed" if equine => crate::mobs::finalize::set_base(
+                    &mut m,
+                    crate::mobs::finalize::Attr::MovementSpeed,
+                    v,
+                ),
                 "minecraft:max_health" => m.attrs.max_health = v as f32,
                 "minecraft:movement_speed" => m.attrs.speed = v,
                 "minecraft:attack_damage" => m.attrs.attack_damage = v as f32,
@@ -1690,6 +1703,33 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
     p.left_owner = flag(tag, "LeftOwner");
     p.acceleration = float(tag.get("acceleration_power")).unwrap_or(0.1);
     Some(p)
+}
+
+/// `FireworkRocketEntity.readAdditionalSaveData`: Life, LifeTime (0 when
+/// absent: a bare `/summon` explodes at once), FireworksItem and
+/// ShotAtAngle, with `Projectile`'s Owner and LeftOwner.
+pub struct RocketNbt {
+    pub position: Vec3,
+    pub motion: Vec3,
+    pub life: i32,
+    pub lifetime: i32,
+    pub item: Option<crate::items::ItemStack>,
+    pub angled: bool,
+    pub owner: Option<Who>,
+    pub left_owner: bool,
+}
+pub fn firework_rocket_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<RocketNbt> {
+    let owner = uuid_from_tag(tag.get("Owner"));
+    Some(RocketNbt {
+        position: position(tag)?,
+        motion: motion(tag),
+        life: number(tag.get("Life")).unwrap_or(0) as i32,
+        lifetime: number(tag.get("LifeTime")).unwrap_or(0) as i32,
+        item: tag.get("FireworksItem").and_then(item_from_nbt),
+        angled: flag(tag, "ShotAtAngle"),
+        owner: (player.is_some() && owner == player).then_some(Who::Player),
+        left_owner: flag(tag, "LeftOwner"),
+    })
 }
 
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.
