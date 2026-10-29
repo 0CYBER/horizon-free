@@ -647,8 +647,9 @@ impl Title {
     }
     /// `WorldOpenFlows.openWorld`: a world that can't be locked, as one another
     /// instance has open, stays closed behind `onWorldAccessFailure`
-    /// (`createWorldAccess`); then `openWorldCheckVersionCompatibility`: a world
-    /// whose file fixes are due asks for a backup first; any other opens at once.
+    /// (`createWorldAccess`); then `openWorldCheckVersionCompatibility`: a world from
+    /// another series is an alert, one whose file fixes are due or that a newer version
+    /// saved asks for a backup first; any other opens at once.
     fn play(&mut self, world: WorldEntry) -> Action {
         if crate::save::SessionLock::acquire(&self.saves.join(&world.folder)).is_err() {
             self.toast = Some((
