@@ -158,7 +158,10 @@ pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
             ambient_interval: 80,
             flags: Default::default(),
             model: Arc::new(model),
-            layers: Default::default(),
+            // PlayerModel's slim arms, for slim skins.
+            layers: horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
+                .map(|slim| [("player_slim#main".to_owned(), Arc::new(slim))].into())
+                .unwrap_or_default(),
             texture: "entity/player/wide/steve".into(),
             brain: Brain::Passive,
             anim: Anim::Humanoid { zombie_arms: false },
@@ -354,9 +357,13 @@ impl Game<'_> {
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
+        // LivingEntity.getBedOrientation: the model lies in the bed as
+        // another player's does (`villager::sleep_pose`).
+        let bed = self.sleeping.map_or(0, |head| self.bed_facing(head));
         let Some(m) = self.player_model.as_mut() else {
             return;
         };
+        m.extra.ints[1] = bed;
         let at = Vec3::new(
             position.x,
             position.y - if crouching { 0.125 } else { 0.0 },
@@ -381,7 +388,15 @@ impl Game<'_> {
         m.head_pitch = pitch;
         let mut target = m.body_yaw;
         if dx * dx + dz * dz > 0.002_500_000_2 {
-            target = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+            // LivingEntity.tick: walking backwards the body faces away from
+            // the walk direction, not along it.
+            let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+            let facing = (wrap(yaw) - walk).abs();
+            target = if 95.0 < facing && facing < 265.0 {
+                walk - 180.0
+            } else {
+                walk
+            };
         }
         if swinging {
             target = yaw;
@@ -419,11 +434,15 @@ impl Game<'_> {
         m.extra.swing_right_arm = swing_right_arm;
         m.hurt_time = hurt;
     }
+    /// `LevelExtractor`'s skip of the camera entity: the player's own body
+    /// is drawn unless the camera is in first person, or while it sleeps.
+    pub(super) fn own_body_in_view(&self) -> bool {
+        !self.camera_type.first_person() || self.sleeping.is_some()
+    }
     /// Whether the player's own model shows in the world view.
-    fn player_model_shown(&self) -> bool {
+    pub(super) fn player_model_shown(&self) -> bool {
         // A shader pack's shadow pass draws the player in first person too (shadowPlayer).
-        (!self.camera_type.first_person() || self.pack_shadow_casters.1)
-            && self.sleeping.is_none()
+        (self.own_body_in_view() || self.pack_shadow_casters.1)
             && !self.spectator()
             && self.potions.effects.get("minecraft:invisibility").is_none()
             && self

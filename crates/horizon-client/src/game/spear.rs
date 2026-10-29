@@ -5,10 +5,13 @@
 //! attacker's own speed, and each condition runs out after its time
 //! (`Item.use`, `ItemStack.onUseTick`, `KineticWeapon.damageEntities`,
 //! `Player.stabAttack`). The hit's feedback (`onKineticHit`) reaches the
-//! players around as entity event 2.
+//! players around as entity event 2. A left click jabs instead
+//! (`PiercingWeapon.attack`), which Lunge turns into a dash.
 use super::{Game, view_vector};
 use horizon_client::{
+    attack_strength::delay,
     collisions::SceneCollisions,
+    first_person::Hand,
     items::ItemStack,
     mobs::Damage,
     spear::{HIT_FEEDBACK_TICKS, Kinetic, REACH},
@@ -41,8 +44,16 @@ impl Game<'_> {
     }
 
     /// `ServerPlayer.getKnownMovement` of the acting player: what they moved
-    /// in the last tick. A guest's comes with their moves.
-    fn known_player_movement(&self) -> Vec3 {
+    /// in the last tick. A guest's comes with their moves. A rider's is its
+    /// mount's move (`getKnownSpeed`: the vehicle's, or the move the driver's
+    /// client sent for it), so a charge on horseback carries the horse's speed.
+    pub(super) fn known_player_movement(&self) -> Vec3 {
+        if let Some(i) = self
+            .riding
+            .and_then(|v| self.mobs.iter().position(|m| m.id == v))
+        {
+            return self.mob_speed(i).scale(1.0 / 20.0);
+        }
         if self.lan_acting.is_some() {
             return self.known_movement;
         }
@@ -115,6 +126,28 @@ impl Game<'_> {
         hits
     }
 
+    /// `ProjectileUtil.getHitEntitiesAlong` with the spear's `AttackRange`: the
+    /// mobs along the view from the minimum reach to the maximum plus the
+    /// attacker's own movement, none when a block is closer than the minimum.
+    fn stab_targets(&self, eye: Vec3, look: Vec3, movement: Vec3) -> Vec<usize> {
+        // AttackRange.effectiveMinRange and effectiveMaxRange for a player.
+        let (min, max) = if self.creative {
+            (REACH.min_creative, REACH.max_creative)
+        } else {
+            (REACH.min, REACH.max)
+        };
+        let from = eye.add_vector(look.scale(f64::from(min)));
+        let mut to = eye.add_vector(look.scale(f64::from(max) + movement.dot(look).max(0.0)));
+        // A block closer than the minimum reach takes the whole stab.
+        if let Some(block) = self.clip_collider(eye, to) {
+            to = block;
+            if eye.distance_squared(to) < eye.distance_squared(from) {
+                return Vec::new();
+            }
+        }
+        self.mobs_along(from, to, f64::from(REACH.hitbox_margin))
+    }
+
     /// `KineticWeapon.damageEntities`: one tick of the spear in use, `ticks`
     /// ticks into the use.
     pub(super) fn spear_tick(&mut self, stack: &ItemStack, ticks: u32) {
@@ -136,25 +169,10 @@ impl Game<'_> {
         let look = Vec3::new(look[0], look[1], look[2]);
         let movement = self.known_player_movement();
         let attacker_speed = look.dot(movement.scale(20.0));
-        // AttackRange.effectiveMinRange and effectiveMaxRange for a player.
-        let (min, max) = if self.creative {
-            (REACH.min_creative, REACH.max_creative)
-        } else {
-            (REACH.min, REACH.max)
-        };
-        let from = eye.add_vector(look.scale(f64::from(min)));
-        let mut to = eye.add_vector(look.scale(f64::from(max) + movement.dot(look).max(0.0)));
-        // A block closer than the minimum reach takes the whole stab.
-        if let Some(block) = self.clip_collider(eye, to) {
-            to = block;
-            if eye.distance_squared(to) < eye.distance_squared(from) {
-                return;
-            }
-        }
         let now = self.world.game_time;
         let actor = self.lan_acting;
         let mut affected = false;
-        for i in self.mobs_along(from, to, f64::from(REACH.hitbox_margin)) {
+        for i in self.stab_targets(eye, look, movement) {
             let key = (actor, self.mobs[i].id);
             let recent = self
                 .stabbed
@@ -183,6 +201,9 @@ impl Game<'_> {
             }
             let who = actor.map_or(OWN, |conn| conn as i32);
             self.kinetic_hit_feedback(who, &kinetic, [feet.x, feet.y, feet.z]);
+            // SPEAR_MOBS_TRIGGER: the living entities stabbed in this use.
+            let stabbed = self.stabbed.keys().filter(|(who, _)| *who == actor).count();
+            self.trigger_spear_mobs(stabbed);
         }
     }
 
@@ -204,9 +225,18 @@ impl Game<'_> {
             return false;
         };
         let from = [p.position.x, p.position.y, p.position.z];
-        // The enchantments' share, with no attack strength scaling for a
-        // weapon in use.
+        // The enchantments' share, scaled by the attack strength unless the
+        // weapon is in use.
         let magic_boost = self.enchant_damage_bonus(&kind);
+        let (base_damage, magic_boost) = if self.using.is_none() {
+            let scale = self.attack_strength_scale();
+            (
+                base_damage * (0.2 + scale * scale * 0.8),
+                magic_boost * scale,
+            )
+        } else {
+            (base_damage, magic_boost)
+        };
         let total = if deals_damage {
             base_damage + magic_boost
         } else {
@@ -220,6 +250,8 @@ impl Game<'_> {
             self.mobs[index].knockback(0.4, xd, zd);
             let (strength, _) = self.extra_knockback(&kind, 0.0);
             self.mobs[index].knockback(f64::from(strength), xd, zd);
+            // ...and the attacker stops sprinting.
+            self.stop_sprint_after_extra_knockback();
         }
         let dismounted = dismounts && self.mobs[index].extra.mount.is_some();
         if dismounted {
@@ -273,6 +305,57 @@ impl Game<'_> {
             p.cause_food_exhaustion(0.1);
         }
         true
+    }
+
+    /// `Player.cannotAttackWithItem` for the held item: a spear needs its
+    /// `minimum_attack_charge` of 1, counting `tolerance` ticks more than the
+    /// `ticker` ticks charged.
+    pub(super) fn cannot_attack_with_item(&self, ticker: i32, tolerance: i32) -> bool {
+        self.held().is_some_and(|s| Kinetic::of(&s.item).is_some())
+            && (ticker + tolerance) as f32 / delay(self.main_hand_attack_speed()) < 1.0
+    }
+
+    /// `PiercingWeapon.attack` of the spear in the main hand, for a left
+    /// click: every mob along the view is stabbed, then `postPiercingAttack`
+    /// (Lunge), the hit sound and the swing. Gives the sound of the jab
+    /// (`makeSound`), which everyone but the user hears from the server.
+    pub(super) fn jab(&mut self) -> Option<&'static str> {
+        let kinetic = self.held().and_then(|s| Kinetic::of(&s.item))?;
+        let eye = self.eye_position()?;
+        let eye = Vec3::new(eye[0], eye[1], eye[2]);
+        let look = view_vector(self.yaw, self.pitch);
+        let look = Vec3::new(look[0], look[1], look[2]);
+        // The attack damage attribute.
+        let damage = 1.0
+            + self.attack_item_info().map_or(0.0, |i| i.attack_damage)
+            + self.effect_attack_bonus();
+        let movement = self.known_player_movement();
+        let mut hit = false;
+        for i in self.stab_targets(eye, look, movement) {
+            hit |= self.stab_mob(i, damage, true, true, false);
+        }
+        // Player.onAttack, then postPiercingAttack.
+        self.attack_ticks = 0;
+        self.post_piercing_attack();
+        if hit {
+            self.play_at_feet(kinetic.hit_sound);
+        }
+        // swingAndResetAttackStrength (ServerPlayer): a swing that starts
+        // resets the attack strength.
+        let swings = self.swings_started;
+        self.swing_hand(Hand::Main, kinetic.attack_animation());
+        if self.swings_started != swings {
+            self.reset_attack_strength();
+        }
+        Some(kinetic.attack_sound)
+    }
+
+    /// A sound at the player's feet.
+    pub(super) fn play_at_feet(&mut self, sound: &str) {
+        if let Some(p) = &self.player {
+            let at = [p.position.x, p.position.y, p.position.z];
+            self.audio.play(sound, Some(at), 1.0, 1.0);
+        }
     }
 
     /// `LivingEntity.onKineticHit` for `entity`: the hit feels (the spear

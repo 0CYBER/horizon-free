@@ -33,7 +33,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 
 HDR's light sources shine by the kind of light rather than its level (`mesher::hdr_tier`): the sun most, then glowstone, campfires and the soul fires, then flames and lava, torch and candle flames among them (particles too), then faint glowers such as a redstone torch or magma; glow lichen stays as in SDR. Each tier has its share of the headroom and the brightness its lift starts and ends at (`gfx/hdr.rs` `TIERS`); `HORIZON_HDR_DEBUG=1` greys what isn't lifted and tints what is magenta.
 
-Which settings each screen shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); `graphics_style.rs` draws them.
+Which settings each screen shows, their descriptions and costs are in `crates/horizon-client-render/src/graphics_ui.rs` (`rows`); `graphics_style.rs` draws them.
 
 ## Distant terrain
 

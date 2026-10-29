@@ -504,12 +504,7 @@ impl MobTypes {
         Ok(Self { types: out })
     }
 }
-/// Who caused damage or is being targeted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Who {
-    Player,
-    Mob(u32),
-}
+pub use horizon_client_core::who::Who;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DamageKind {
     PlayerAttack,
@@ -524,6 +519,7 @@ pub enum DamageKind {
     Explosion,
     Fall,
     FallingBlock,
+    FallingStalactite,
     OnFire,
     InFire,
     Lava,
@@ -543,6 +539,8 @@ pub enum DamageKind {
     Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
+    /// `cramming`: too many entities in one place (`maxEntityCramming`).
+    Cramming,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -621,6 +619,7 @@ impl Damage {
                 | DamageKind::SonicBoom
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::Cramming
         )
     }
     pub fn is_fire(&self) -> bool {
@@ -647,6 +646,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::Cramming
         )
     }
     pub fn is_projectile(&self) -> bool {
@@ -669,6 +669,15 @@ pub struct Attrs {
 }
 /// `minecraft:wolf_armor`'s maximum damage.
 pub const WOLF_ARMOR_DURABILITY: i32 = 64;
+/// `NeutralMob.readPersistentAngerSaveData`: the anger runs until its end
+/// time, so a mob that is loaded again is angry for what is left of it.
+pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
+    if anger_end <= 0 {
+        return 0;
+    }
+    (anger_end - game_time).clamp(0, i64::from(i32::MAX)) as i32
+}
+
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
@@ -706,6 +715,8 @@ pub struct Extra {
     pub body_damage: i32,
     /// The components (dye, name...) of that armor stack.
     pub body_extra: Option<Box<crate::item_data::StackData>>,
+    /// `Cat.RELAX_STATE_ONE`: watching a sleeping owner before lying down.
+    pub relax_one: bool,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,
@@ -726,6 +737,15 @@ pub struct Extra {
     pub anim_ticks: i32,
     pub egg_time: i32,
     pub anger: i32,
+    /// `NeutralMob.getPersistentAngerEndTime`: the absolute game time the
+    /// anger ends at, -1 when the mob is calm. The save keeps it, so the
+    /// anger goes on while the chunk is unloaded.
+    pub anger_end: i64,
+    /// `NeutralMob.getPersistentAngerTarget`: the entity the mob is angry
+    /// at, which the save keeps with it.
+    pub angry_at: Option<Who>,
+    /// `IronGolem.isPlayerCreated` (`PlayerCreated`): built from blocks.
+    pub player_created: bool,
     pub carried: Option<horizon_world::registry::BlockStateId>,
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
@@ -736,6 +756,9 @@ pub struct Extra {
     pub chest: Option<Arc<str>>,
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
+    /// The worn armour stacks (head to feet): the dyed colour and the
+    /// trim of a piece are on the stack, not on its id.
+    pub armor: [Option<crate::items::ItemStack>; 4],
     pub using_item: i32,
     pub using_off_hand: bool,
     pub blocking: bool,
@@ -940,6 +963,8 @@ pub struct Mob {
     /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
     /// replaces the type's default when its download is ready.
     pub skin: Option<String>,
+    /// `PlayerSkin.model` is `SLIM`: the player model with 3-pixel arms.
+    pub slim: bool,
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
@@ -963,7 +988,8 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
-    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    /// `Level.broadcastEntityEvent` for a mob: guests run its
+    /// `handleEntityEvent`.
     EntityEvent {
         mob: u32,
         event: i8,
@@ -980,6 +1006,17 @@ pub enum MobEvent {
         count: u32,
     },
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `UseBonemeal`: the villager's bone meal grows the crop at `pos`
+    /// (`BoneMealItem.growCrop`, then level event 1505).
+    Bonemeal {
+        pos: [i32; 3],
+    },
+    /// `RingBell`: the villager rings the meeting-point bell
+    /// (`BellBlock.attemptToRing`: the bell shakes, the sound and the game
+    /// event follow).
+    RingBell {
+        bell: [i32; 3],
+    },
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
     ChestOpen {
@@ -1108,10 +1145,12 @@ pub enum MobEvent {
     /// The mob the `Explode` right after this comes from
     /// (`ServerExplosion.source`), and whether it is a charged creeper: the
     /// exploding creeper is already out of the mob list when the game applies
-    /// the blast, so its victims' loot cannot look it up.
+    /// the blast, so its victims' loot cannot look it up, nor the death
+    /// message its name (`name`, `getDisplayName`).
     ExplosionSource {
         mob: u32,
         charged: bool,
+        name: crate::text::Text,
     },
     /// The centre, the radius and the kind of the mob blowing up (it may be
     /// gone from the list by the time the blast is handled).
@@ -1155,9 +1194,20 @@ pub enum MobEvent {
         count: u32,
         at: [f64; 3],
     },
+    /// `Mob.dropFromGiftLootTable`: a gift loot table's items dropped at `at`.
+    DropGift {
+        table: &'static str,
+        at: [f64; 3],
+    },
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
+    },
+    /// `LivingEntity.startSleeping` / `stopSleeping`: the bed head at `pos`
+    /// gets `occupied` (`setBlockAndUpdate`; the foot follows it).
+    BedOccupied {
+        pos: [i32; 3],
+        occupied: bool,
     },
     /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
     /// closes, both halves, with its sound and game event.
@@ -1222,8 +1272,10 @@ pub enum MobEvent {
         at: [f64; 3],
         amount: u32,
     },
-    /// Regeneration support after an axolotl-assisted kill.
-    AxolotlSupportPlayer,
+    /// Regeneration support after an axolotl-assisted kill, from the axolotl `mob`.
+    AxolotlSupportPlayer {
+        mob: u32,
+    },
     /// A dolphin that was given a fish asks the game for the nearest
     /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
     /// sets the dolphin's `extra.home` to it, or leaves it empty.
@@ -1483,6 +1535,8 @@ pub struct Seen {
     pub sitting: bool,
     /// `Entity.isSilent`.
     pub silent: bool,
+    /// `Cat.isLying` or `isRelaxStateOne`.
+    pub lying: bool,
     /// `Entity.isVehicle` or `isPassenger`.
     pub ridden: bool,
     /// `Attributes.KNOCKBACK_RESISTANCE`.
@@ -1578,6 +1632,7 @@ impl Mob {
             ],
             sitting: m.extra.sitting,
             silent: m.silent,
+            lying: m.species() == Species::Cat && (m.extra.flag || m.extra.relax_one),
             ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
@@ -1748,6 +1803,10 @@ pub struct PlayerView {
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
+    /// `isSleeping` and `getSleepTimer` (100 once slept through, then the
+    /// ticks fading out after waking up).
+    pub sleeping: bool,
+    pub sleep_timer: u32,
     /// `isPassenger`.
     pub passenger: bool,
 }
@@ -1788,6 +1847,9 @@ pub struct MobWorld<'a> {
     /// Where each id stands in `others`, when the caller keeps one.
     pub others_index: Option<&'a crate::fast_hash::FxHashMap<u32, u32>>,
     pub daylight: bool,
+    /// The `gameplay/monsters_burn` attribute: the overworld day timeline's
+    /// step track, false in every other dimension.
+    pub monsters_burn: bool,
     pub game_time: i64,
     pub day_time: i64,
     pub raining: bool,
@@ -1799,6 +1861,8 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// The `mob_drops` game rule (`shouldDropLoot`).
     pub mob_drops: bool,
+    /// The `max_entity_cramming` game rule.
+    pub max_entity_cramming: i32,
     /// `getCurrentDifficultyAt` at the mob being ticked (near the player
     /// outside the mob tick).
     pub difficulty: spawning::LocalDifficulty,
@@ -1898,6 +1962,7 @@ impl Mob {
             rider: None,
             outbox: Vec::new(),
             skin: None,
+            slim: false,
             profile: None,
             attrs: Attrs {
                 speed: kind.speed,
@@ -2037,8 +2102,10 @@ impl Mob {
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
-        if source.kind == DamageKind::FallingBlock
-            && !species::body_slot(self.species())
+        if matches!(
+            source.kind,
+            DamageKind::FallingBlock | DamageKind::FallingStalactite
+        ) && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;
@@ -2074,6 +2141,18 @@ impl Mob {
         let epf = gear::protection(self, source.kind);
         if epf > 0.0 {
             amount *= 1.0 - epf / 25.0;
+        }
+        // Witch.getDamageAfterMagicAbsorb: none from its own doing, else
+        // 85% less from `#witch_resistant_to`.
+        if self.species() == Species::Witch {
+            if source.attacker == Some(Who::Mob(self.id)) {
+                amount = 0.0;
+            } else if matches!(
+                source.kind,
+                DamageKind::Magic | DamageKind::SonicBoom | DamageKind::Thorns
+            ) {
+                amount *= 0.15;
+            }
         }
         // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
         let absorbed = self.wolf_armor_absorbs(&source);
@@ -2157,6 +2236,15 @@ impl Mob {
         }
         true
     }
+    /// A splash or cloud's harming effect on this mob: the potion's
+    /// `indirect_magic` is in `#witch_resistant_to`, so a witch takes 15%.
+    pub fn potion_harm(&self, amount: f32) -> f32 {
+        if self.species() == Species::Witch {
+            amount * 0.15
+        } else {
+            amount
+        }
+    }
     /// `Wolf.canArmorAbsorb`: it wears wolf armor and the damage type is not
     /// in `#bypasses_wolf_armor` (drowning, magic, thorns, in a wall, out of
     /// the world and the untyped kills).
@@ -2170,6 +2258,7 @@ impl Mob {
                     | DamageKind::InWall
                     | DamageKind::Thorns
                     | DamageKind::OutOfWorld
+                    | DamageKind::Cramming
                     | DamageKind::Generic
             )
     }

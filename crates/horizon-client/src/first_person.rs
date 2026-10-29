@@ -443,18 +443,7 @@ impl UseResult {
         matches!(self, Self::Success { swing: true }) && before == after
     }
 }
-pub fn consumable_animation(v: &serde_json::Value) -> horizon_world::consumable::UseAnimation {
-    use horizon_world::consumable::UseAnimation;
-    match v
-        .get("animation")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("eat")
-    {
-        "eat" => UseAnimation::Eat,
-        "drink" => UseAnimation::Drink,
-        _ => UseAnimation::None,
-    }
-}
+pub use horizon_items::use_animation::consumable_animation;
 /// What the click handling reads and does in the world.
 pub trait HandWorld {
     fn hit(&mut self) -> Hit;

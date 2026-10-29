@@ -209,7 +209,7 @@ impl Game<'_> {
             && max > 0
             && !self.creative
         {
-            let loss = self.durability_loss(stack, per_attack);
+            let loss = self.wear(stack, per_attack);
             let cell = self.held_mut();
             if let Some(held) = cell.as_mut() {
                 held.damage += loss;
@@ -228,6 +228,9 @@ impl Game<'_> {
             return;
         };
         p.velocity = Vec3::new(p.velocity.x, f64::from(0.01f32), p.velocity.z);
+        // A server player's client is told (ClientboundSetEntityMotionPacket): it moves by
+        // itself, so without it a Wind Burst's push would add to the speed of the fall.
+        p.health.sync_velocity = true;
         // calculateImpactPosition: an earlier impact below the player stays.
         let impact = match p.impulse.impact_position {
             Some(at) if at.y <= p.position.y => at,
