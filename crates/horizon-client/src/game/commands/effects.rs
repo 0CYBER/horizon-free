@@ -223,10 +223,9 @@ impl Game<'_> {
                         // getHoverName().getString(): the custom or item name, no brackets.
                         return Err(err(
                             "commands.enchant.failed.incompatible",
-                            &[&stack.custom_name().map_or_else(
-                                || self.pack.names.item(&stack.item).to_string(),
-                                str::to_owned,
-                            )],
+                            &[&stack
+                                .custom_name()
+                                .unwrap_or_else(|| self.pack.names.item(&stack.item).to_string())],
                         ));
                     }
                 }

@@ -296,7 +296,7 @@ pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
     let item: Arc<str> = stack.item.clone();
     let x = &mut m.extra;
     match slot {
-        Slot::MainHand => x.main_hand = Some(item),
+        Slot::MainHand => x.set_main_hand(Some(item)),
         Slot::OffHand => x.off_hand = Some(item),
         Slot::Feet => x.feet = Some(item),
         Slot::Legs => x.legs = Some(item),
@@ -2140,6 +2140,11 @@ pub(super) fn tipped_effect(stack: &ItemStack) -> Option<(&'static str, i32)> {
             def.effects
                 .iter()
                 .find(|(id, _, _)| !horizon_client::brewing::effect(id).is_some_and(|e| e.instant))
-                .map(|(id, duration, _)| (*id, (duration / 8).max(1)))
+                .map(|(id, duration, _)| {
+                    (
+                        horizon_client::brewing::namespaced(id),
+                        (duration / 8).max(1),
+                    )
+                })
         })
 }

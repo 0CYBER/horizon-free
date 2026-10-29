@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """LAN multiplayer end to end: a host opens its world to LAN and a guest joins, both real games.
 
-The host uses its integrated server thread by default; --in-frame compares the fallback, and
---server-thread remains accepted. Two Horizon clients run under horizon-ctl in scratch folders. The host
+The host uses its integrated server thread. --in-frame is DEPRECATED (never use it, it will be removed
+soon); --server-thread remains accepted. Two Horizon clients run under horizon-ctl in scratch folders. The host
 creates a survival world and opens it to LAN with commands allowed; the guest connects to it by
 address. The script then checks, from both sides, what a guest's game used to get wrong (#366):
 
@@ -38,7 +38,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
 - hurt:      a pig the guest hits, and one the host hits, flashes red on the other side too (the
-             server's damage event) (#848);
+             server's damage event) (#848), and so does a hurt host or guest (#2827);
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - names:     a renamed shulker box, copper chest and chest the guest places open on the guest's screen
@@ -308,7 +308,7 @@ from integration_env import game_environment, require_server_reports  # noqa: E4
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-# Match normal single player; --in-frame is the comparison path.
+# Match normal single player; --in-frame is deprecated.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
@@ -1358,9 +1358,29 @@ def check_hurt(host, guest, out):
         watcher.shot(out, 'hurt-' + name.replace(' ', '-') + '-seen')
         attacker.wait(20)
     host('command', command='kill @e[type=minecraft:pig]')
+    # A hurt player flashes red for the other one too (#2827).
+    # An in-frame host draws its guests as models of its own, not entities: only the screenshot.
+    watched = ((('host hurt', host, guest),) if not SERVER_THREAD else
+               (('host hurt', host, guest), ('guest hurt', guest, host)))
+    for name, hurt, watcher in watched:
+        hurt.wait(30)
+        # Instant damage hurts on the next effect tick.
+        hurt('command', command='effect give @s minecraft:instant_damage 1 0')
+        for _ in range(10):
+            other = watcher.raw('entities', 6, 'player')['entities'][0]
+            if other['hurt_time'] > 0:
+                break
+            watcher.wait(1)
+        seen[name] = {'watcher': other['hurt_time']}
+        watcher.shot(out, 'hurt-' + name.replace(' ', '-') + '-seen')
+    if not SERVER_THREAD:
+        guest.wait(30)
+        guest('command', command='effect give @s minecraft:instant_damage 1 0')
+        guest.wait(2)
+        host.shot(out, 'hurt-guest-hurt-seen')
     # LivingEntity.hurtTime: 10 when hurt, one less each tick; the reads come a few ticks later.
     for name, sides in seen.items():
-        assert all(t > 0 for t in sides.values()), f'{name}: the pig\'s hurt flash {seen}'
+        assert all(t > 0 for t in sides.values()), f'{name}: the hurt flash {seen}'
     return seen
 
 
@@ -5386,10 +5406,12 @@ def main():
     mode.add_argument('--server-thread', dest='server_thread', action='store_true', default=True,
                       help='host on its server thread (default; retained for existing callers)')
     mode.add_argument('--in-frame', dest='server_thread', action='store_false',
-                      help='host the world in the window, for comparison')
+                      help='DEPRECATED, never use: hosts the world in the window; unsupported, will be removed soon')
     args = parser.parse_args()
     global SERVER_THREAD
     SERVER_THREAD = args.server_thread
+    if not SERVER_THREAD:
+        print('DEPRECATED: --in-frame is unsupported and will be removed soon. Do not use it.', file=sys.stderr)
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
@@ -8415,6 +8437,46 @@ def check_dig_sounds(host, guest, out):
 
 CHECKS += ['dig_sounds']
 CHECK_FNS['dig_sounds'] = check_dig_sounds
+
+
+def check_shulker_menu(host, guest, out):
+    """A shulker box opens a ShulkerBoxMenu (ShulkerBoxBlockEntity.createMenu), whose ShulkerBoxSlots
+    refuse shulker boxes. The server opened it as a 9x3 chest menu, which took them."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    box = (x, y, z + 2)
+    try:
+        guest('command', command='gamemode survival')
+        guest('command', command='clear @s')
+        guest('command', command='give @s minecraft:cobblestone 1')
+        guest('command', command='give @s minecraft:red_shulker_box 1')
+        guest('command', command=f'setblock {box[0]} {box[1]} {box[2]} minecraft:shulker_box')
+        guest.wait(10)
+        guest.raw('interact', *box)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        guest.wait(10)
+        # The cobblestone goes in; the red shulker box stays on the cursor.
+        mouse(guest, hotbar_slot(guest, 'minecraft:cobblestone'))
+        mouse(guest, 301)
+        mouse(guest, hotbar_slot(guest, 'minecraft:red_shulker_box'))
+        mouse(guest, 300)
+        guest.wait(10)
+        guest.shot(out, 'shulker-menu')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+        inside, size = open_container(guest, box, out, 'shulker-menu-after')
+        counts = guest('inventory')['counts']
+        stored = host('command', command=f'data get block {box[0]} {box[1]} {box[2]} Items')
+    finally:
+        guest('command', command=f'setblock {box[0]} {box[1]} {box[2]} minecraft:air')
+        guest('command', command='clear @s')
+    assert size == 27 and inside == {1: 'minecraft:cobblestone'}, f'the shulker box holds {inside} ({size})'
+    assert 'red_shulker_box' not in json.dumps(stored), f'the server stored {stored}'
+    assert counts.get('minecraft:red_shulker_box') == 1, f'inventory after: {counts}'
+    return {'inside': inside, 'inventory': counts}
+
+
+CHECKS += ['shulker_menu']
+CHECK_FNS['shulker_menu'] = check_shulker_menu
 
 
 def check_keys_released(host, guest, out):

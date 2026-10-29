@@ -584,7 +584,18 @@ impl Game<'_> {
             if !ticking(a.position.x.floor() as i32, a.position.z.floor() as i32) {
                 continue;
             }
-            a.tick(&mut scene);
+            let in_water = a.in_water(&self.world, &self.res.motion().fluids);
+            let (world, registry, facts, collision) = (
+                &self.world,
+                self.pack.assets.registry,
+                self.res.facts(),
+                self.collision,
+            );
+            a.tick(&mut scene, in_water, &mut |bounds, velocity| {
+                horizon_client::motion::bubble_column_push(
+                    world, registry, facts, collision, bounds, velocity,
+                );
+            });
             if !a.environment_tick(&self.world, self.res.facts(), self.pack.assets.registry) {
                 dead.push(i);
             }

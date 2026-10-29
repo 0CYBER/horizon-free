@@ -261,6 +261,16 @@ def scenarios():
     add('strider_cold', 200, ['mob minecraft:strider 0.5 -60 0.5 0 134 persistent'])
     add('strider_tempted', 200, [LAVA, 'player 9.5 -60 0.5 hand=minecraft:warped_fungus',
                                  'mob minecraft:strider 0.5 -61 0.5 0 135 persistent'])
+    # Wild ocelots (Ocelot.registerGoals + reassessTrustingGoals): alone, fleeing a survival player
+    # inside 16 blocks (OcelotAvoidEntityGoal, sprinting inside 7), ignoring a creative one, and drawn
+    # by raw cod (OcelotTemptGoal). Rabbits wait for RaidGardenGoal, whose first canUse draws from
+    # the rabbit's random.
+    add('ocelot_alone', 200, ['mob minecraft:ocelot 0.5 -60 0.5 0 181 persistent'])
+    add('ocelot_player', 200, ['player 6.5 -60 0.5', 'mob minecraft:ocelot 0.5 -60 0.5 0 182 persistent'])
+    add('ocelot_player_far', 200, ['player 14.5 -60 0.5', 'mob minecraft:ocelot 0.5 -60 0.5 0 183 persistent'])
+    add('ocelot_creative', 200, ['player 6.5 -60 0.5 creative', 'mob minecraft:ocelot 0.5 -60 0.5 0 184 persistent'])
+    add('ocelot_tempted', 200, ['player 8.5 -60 0.5 hand=minecraft:cod',
+                                'mob minecraft:ocelot 0.5 -60 0.5 0 185 persistent'])
     # Bats: hanging under a stone ceiling alone, woken by a player passing beneath, flying off with
     # nothing above, and fluttering about a closed cave where they may hang up again.
     CEILING = 'fill -6 -57 -6 6 -57 6 minecraft:stone'
@@ -300,6 +310,11 @@ def scenarios():
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # AbstractHorse.hurtServer (#3432): every hurt draws nextInt(3), and a 0 rears the horse
+    # (standIfPossible). A llama makes the draw too but never rears (canPerformRearing). A horse
+    # scenario waits for #2720: a rearing horse is immobile (AbstractHorse.isImmobile).
+    add('llama_hurt', 200, ['player 4.5 -60 0.5', 'mob minecraft:llama 0.5 -60 0.5 0 182 persistent']
+        + [f'hurt {t} 0' for t in range(10, 190, 25)])
     # A wild cat avoids the player it sees (Cat.reassessTameGoals adds that goal last) and sprints while
     # it dashes at 1.33 (Cat.customServerAiStep).
     add('cat_player', 120, ['player 6.5 -60 0.5', 'mob minecraft:cat 0.5 -60 0.5 0 261 persistent'])
@@ -310,6 +325,10 @@ def scenarios():
                                 'mob minecraft:cod 2.5 -62 0.5 0 13 persistent noai'])
     add('axolotl_play_dead', 300, [POOL, 'player 12.5 -60 0.5', 'mob minecraft:axolotl 0.5 -62 0.5 0 28 persistent']
         + [f'hurt {t} 0' for t in range(4, 160, 12)])
+    # Fish swimming at random (#3631): RandomSwimmingGoal's position search in a sealed pool.
+    for species, seed in [('cod', 181), ('salmon', 182), ('tropical_fish', 183)]:
+        add(f'{species}_random_swim', 120, [POOL, 'player 12.5 -60 0.5',
+                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
     # A jobless villager outside a stone box, its composter inside and the doorway on the far
     # side: the path around needs more than the 256 nodes of the follow range (16 * 16); the
     # villager's setRequiredPathLength(48) raises PathFinder.maxVisitedNodes to 768.

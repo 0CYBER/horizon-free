@@ -1032,6 +1032,11 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
             let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
             glam::Mat4::from_rotation_x((-pitch).to_radians())
         }
+        // PhantomRenderer.setupRotations: the body follows its pitch.
+        Species::Phantom => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x(pitch.to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1056,8 +1061,14 @@ fn red_overlay(m: &Mob) -> bool {
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     if avatar(m) {
-        // AvatarRenderer.scale, shared by the inventory and world renderer.
-        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
+        // AvatarRenderer.scale, shared by the inventory and world renderer, on
+        // top of the entity's own `scale` (`LivingEntityRenderer.submit`).
+        let own = if m.extra.model_scale > 0.0 {
+            m.extra.model_scale
+        } else {
+            1.0
+        };
+        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375 * own));
     }
     match m.species() {
         Species::Wither => {
@@ -1075,6 +1086,13 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
         }
         Species::Slime | Species::MagmaCube => super::cube::scale(m, alpha),
         Species::SulfurCube => super::sulfur_cube::scale(m, alpha),
+        Species::Phantom => {
+            // PhantomRenderer.scale: 15% bigger per size, and the model moved
+            // down to the box (it is modelled 1.3125 blocks above the feet).
+            let s = 1.0 + 0.15 * m.extra.size as f32;
+            glam::Mat4::from_scale(glam::Vec3::splat(s))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 1.3125, 0.1875))
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1215,7 +1233,7 @@ pub fn render_with(
                 let shifted =
                     camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
                 let base = base_transform(m, alpha, shifted);
-                render_visible(m, alpha, base, atlas, light, data, extra, out);
+                render_visible(m, alpha, base, atlas, light, data, extra, true, out);
             }
         }
         return;
@@ -1228,6 +1246,7 @@ pub fn render_with(
         light,
         data,
         extra,
+        true,
         out,
     );
 }
@@ -1273,6 +1292,24 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `render_with` without the body, for an avatar the viewer can't see:
+/// `LivingEntityRenderer.submit` gets no render type for an invisible body
+/// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
+/// (`HumanoidArmorLayer`: the armour in `extra`).
+#[allow(clippy::too_many_arguments)]
+pub fn render_layers(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    extra: &[(&Part, [f32; 4], u32)],
+    out: &mut Vec<Vertex>,
+) {
+    let base = base_transform(m, alpha, camera);
+    render_visible(m, alpha, base, atlas, light, data, extra, false, out);
+}
 /// A mob drawn under `origin` instead of at its position (the spinning mob
 /// of `SpawnerRenderer.submitEntityInSpawner`).
 pub fn render_posed(
@@ -1285,7 +1322,7 @@ pub fn render_posed(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform_at(m, alpha, origin);
-    render_visible(m, alpha, base, atlas, light, data, &[], out);
+    render_visible(m, alpha, base, atlas, light, data, &[], true, out);
 }
 #[allow(clippy::too_many_arguments)]
 fn render_visible(
@@ -1296,6 +1333,7 @@ fn render_visible(
     light: u32,
     data: &MobData,
     extra: &[(&Part, [f32; 4], u32)],
+    body_visible: bool,
     out: &mut Vec<Vertex>,
 ) {
     let overlay = u32::from(red_overlay(m));
@@ -1309,7 +1347,7 @@ fn render_visible(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let draw_body = |out: &mut Vec<Vertex>| {
-        if let Some(uv) = atlas(&texture) {
+        if body_visible && let Some(uv) = atlas(&texture) {
             draw(
                 &model,
                 base,
@@ -1884,6 +1922,35 @@ mod tests {
                     "the vex's item is drawn at 0.55 scale, got {scale}"
                 );
             }
+        }
+    }
+
+    /// PhantomRenderer.scale moves the model down into its 0.5-high box:
+    /// the model's origin ends 1.501 - 1.3125 blocks above the feet (times
+    /// the size's scale), not 1.501 like other mobs (#3008).
+    #[test]
+    fn the_phantom_model_sits_in_its_box() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:phantom"].clone());
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        for (size, scale) in [(0, 1.0f32), (5, 1.75)] {
+            mob.extra.size = size;
+            let origin =
+                base_transform(&mob, 1.0, glam::DVec3::ZERO).transform_point3(glam::Vec3::ZERO);
+            let y = (1.501 - 1.3125) * scale;
+            assert!(
+                (origin.y - y).abs() < 1.0e-4,
+                "size {size}: origin {origin}"
+            );
+            assert!(
+                (origin.z.abs() - 0.1875 * scale).abs() < 1.0e-4,
+                "size {size}: origin {origin}"
+            );
         }
     }
     #[test]
