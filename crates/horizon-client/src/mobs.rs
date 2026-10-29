@@ -2408,7 +2408,11 @@ impl Mob {
         }
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
+    /// `Creaking.knockback`: a creaking that cannot move is not shoved.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
+        if creaking::is_creaking(self) && !creaking::can_move(self) {
+            return;
+        }
         let power = power * (1.0 - self.attrs.knockback_resistance);
         if power <= 0.0 {
             return;
