@@ -1115,10 +1115,10 @@ impl Game<'_> {
     }
 }
 impl Game<'_> {
-    /// The player's profile id as `UUID.toString()`: the saved id, else the
-    /// offline id of the player's name.
-    pub(in crate::game) fn player_uuid_string(&self) -> String {
-        let id = self.level.player_uuid.map_or_else(
+    /// The player's profile id: the saved id, else the offline id of the
+    /// player's name.
+    pub(in crate::game) fn player_uuid(&self) -> u128 {
+        self.level.player_uuid.map_or_else(
             || horizon_protocol::crypto::offline_uuid(super::super::chat::PLAYER_NAME),
             |[a, b, c, d]| {
                 (u128::from(a as u32) << 96)
@@ -1126,15 +1126,6 @@ impl Game<'_> {
                     | (u128::from(c as u32) << 32)
                     | u128::from(d as u32)
             },
-        );
-        let h = format!("{id:032x}");
-        format!(
-            "{}-{}-{}-{}-{}",
-            &h[..8],
-            &h[8..12],
-            &h[12..16],
-            &h[16..20],
-            &h[20..]
         )
     }
 }

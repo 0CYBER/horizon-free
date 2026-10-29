@@ -94,6 +94,16 @@ fn agent(url: &str) -> ureq::Agent {
     .build()
 }
 
+/// A file's body, from the network as the launcher reaches it.
+pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    get(url)?
+        .into_reader()
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
 pub(crate) fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
@@ -1306,6 +1316,89 @@ pub fn download_version_for_owner(
     Ok(dir)
 }
 
+/// The command that starts a Java instance's Minecraft, for an account that owns the game: its
+/// version downloaded from Mojang the first time (then it starts offline too), the Java it needs
+/// (the instance's own, else one found here, else Mojang's, downloaded), and the game in the
+/// instance's folder. The caller wraps it (`launch::wrap`) and never logs it: it holds the token.
+/// A Java instance's game, ready to start; `server` (`host[:port]`) is joined once it has.
+pub fn java_game(
+    instance: &crate::instances::Instance,
+    server: Option<&str>,
+    log: &dyn Fn(String),
+) -> Result<Command, String> {
+    let game = instance.java.as_ref().ok_or_else(|| {
+        format!(
+            "{} plays Horizon, not Minecraft: Java Edition",
+            instance.name
+        )
+    })?;
+    let player = account::java_player()?;
+    let minecraft = data_dir().join("minecraft");
+    let id = mojang::relative(&game.minecraft)?;
+    let natives = minecraft.join("natives").join(&id);
+    // Each version and loader profile is fetched once; it then starts offline too.
+    let downloaded = |id: &str| -> Result<PathBuf, String> {
+        Ok(minecraft
+            .join("versions")
+            .join(mojang::relative(id)?)
+            .join(".downloaded"))
+    };
+    let marker = downloaded(&game.minecraft)?;
+    if !marker.is_file() {
+        let listed = crate::minecraft_versions::load()?;
+        let version = listed.find(&game.minecraft)?;
+        download_version_for_owner(&version.id, &version.sha1, log)?;
+        fs::write(&marker, "").map_err(|e| format!("{}: {e}", marker.display()))?;
+    }
+    let mut start = game.minecraft.clone();
+    if let Some(loader) = &game.loader {
+        start = loader.kind.profile_id(&loader.version, &game.minecraft);
+        let marker = downloaded(&start)?;
+        if !marker.is_file() {
+            start = crate::loaders::install(loader, &game.minecraft, &minecraft, &get_bytes, log)?;
+            fs::write(downloaded(&start)?, "").map_err(|e| e.to_string())?;
+        }
+    }
+    let file = minecraft
+        .join("versions")
+        .join(mojang::relative(&start)?)
+        .join(format!("{start}.json"));
+    let version = crate::java_launch::resolve(crate::java_launch::read(&file)?, &minecraft)?;
+    let need = crate::java::Need::of(&version);
+    let found = crate::java::pick(
+        &need,
+        game.home.as_deref(),
+        &crate::java::mojang_runtimes(&crate::java::runtimes_dir()),
+        &crate::java::installed(),
+    )?;
+    let runtime = match found {
+        Some(runtime) => runtime,
+        None => {
+            log(format!("Downloading Java {} from Mojang", need.major));
+            crate::java::install(&need, log)?
+        }
+    };
+    let jvm_args: Vec<String> = game.jvm_args.split_whitespace().map(String::from).collect();
+    fs::create_dir_all(&instance.home).map_err(|e| format!("{}: {e}", instance.home.display()))?;
+    crate::java_launch::command(
+        &version,
+        &crate::java_launch::Launch {
+            minecraft: &minecraft,
+            game_dir: &instance.home,
+            natives: &natives,
+            java: &runtime.java(),
+            memory_mb: game
+                .memory_mb
+                .unwrap_or(crate::instances::DEFAULT_MEMORY_MB),
+            jvm_args: &jvm_args,
+            player: &player,
+            os: crate::java_launch::os_name(),
+            window: game.window,
+            server,
+        },
+    )
+}
+
 /// What [`download_for_owner`] does with the owner gate's answer: Mojang's files only for its
 /// `owner`, an account the services said owns the game just now.
 fn download_for(
@@ -2098,6 +2191,9 @@ pub fn client(tag: &str) -> Result<Command, String> {
     if let Some(e) = offline {
         eprintln!("Playing offline: {e}");
     }
+    if let Some(e) = account::take_unsaved() {
+        eprintln!("{e}");
+    }
     append_game_args(&mut cmd);
     Ok(cmd)
 }
@@ -2659,8 +2755,9 @@ pub enum Msg {
     LauncherUpdated(Result<(), String>),
     /// `reuse_prepared_everywhere` prepared these versions.
     Reused(Vec<(String, String)>),
-    /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
-    Keychain(bool),
+    /// None when secrets are kept in the OS keychain, else what to say: they last only until
+    /// the launcher closes, and why.
+    Keychain(Option<String>),
     /// Whether an account in the launcher owned the game at its last check (the owner gate).
     Owner(bool),
     /// The owner gate's answer for the game about to start: the selected account's session
@@ -2676,6 +2773,14 @@ pub enum Msg {
     NativeProgress(String),
     /// The native-mods build ended: the version built, or why not.
     Native(Result<String, String>),
+    /// A Java instance's game is ready to start (`java_game`, wrapped): the instance's id and
+    /// game folder, and the command or why not.
+    /// A Java instance's game ready to start, and its variables for the post-exit command.
+    JavaGame(
+        String,
+        PathBuf,
+        Result<(Command, crate::launch::Vars), String>,
+    ),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2865,10 +2970,14 @@ pub struct Settings {
     /// The window's language. Unset follows the system's (`i18n::Language::system`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<crate::i18n::Language>,
-    /// The player turned Native mods (experimental) on (`native_mods`): mixin mods compiled into
-    /// a game of their own. Off by default.
+    /// Native mods (experimental) are on (`native_mods`): mixin mods compiled into a game of
+    /// their own. Off until the player installs a native mod (`native_mods::turns_on`), or turns
+    /// them on in Settings.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_mods: bool,
+    /// The player has read what installing a native mod starts (`native_mods::needs_notice`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_mods_noticed: bool,
     /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
     /// offline names play without an account that owns the game, in the window only
     /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
