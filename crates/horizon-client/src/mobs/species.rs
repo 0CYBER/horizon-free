@@ -1470,15 +1470,17 @@ impl Def {
                         | S::Zoglin
                         | S::Wither
                 ),
+            // The `burn_in_daylight` entity type tag.
             burns_in_day: matches!(
                 s,
                 S::Zombie
+                    | S::ZombieHorse
                     | S::Drowned
                     | S::ZombieVillager
                     | S::Skeleton
                     | S::Stray
                     | S::Bogged
-                    | S::Parched
+                    | S::WitherSkeleton
                     | S::Phantom
                     | S::ZombieNautilus
             ),
@@ -1602,6 +1604,8 @@ impl Def {
     pub fn water_slowdown(&self) -> f32 {
         match self.species {
             Species::PolarBear => 0.98,
+            // SkeletonHorse.getWaterSlowDown.
+            Species::SkeletonHorse => 0.96,
             _ => 0.8,
         }
     }
