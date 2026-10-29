@@ -227,6 +227,9 @@ pub struct Guest {
     pub moves: Vec<([f64; 3], bool)>,
     /// Whether the guest was on the ground before the first of `moves`.
     pub moves_from_ground: bool,
+    /// `ServerPlayer.lastKnownClientMovement`: the last move accepted from
+    /// their client, zero after a client tick without one.
+    pub known_movement: [f64; 3],
     pub dead: bool,
     /// `LivingEntity.deathTime`: ticks since the guest died.
     pub death_time: u32,
@@ -357,6 +360,7 @@ impl Guest {
             ticks: 0,
             moves: Vec::new(),
             moves_from_ground: false,
+            known_movement: [0.0; 3],
             dead: false,
             death_time: 0,
             placed: false,
