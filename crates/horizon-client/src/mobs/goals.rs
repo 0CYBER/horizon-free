@@ -4,7 +4,7 @@ use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     jmath,
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use std::sync::Arc;
 
@@ -16,6 +16,9 @@ pub const TARGET: u8 = 8;
 /// What goals may read and emit during a tick.
 pub struct Cx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
+    /// The level's random (`level.getRandom()`), for the draws vanilla's
+    /// behaviours make from it rather than from the mob's own.
+    pub lr: &'a mut LegacyRandom,
     pub events: &'a mut Vec<MobEvent>,
 }
 pub trait Goal: std::fmt::Debug {
@@ -580,10 +583,17 @@ impl Mob {
         let b = self.bounds().inflate(Vec3::new(reach, 0.0, reach));
         b.intersects(t.bounds)
     }
+    /// `IronGolem.canAttack`: a golem a player built never attacks players.
+    pub fn spares_players(&self) -> bool {
+        self.species() == Species::IronGolem && self.extra.player_created
+    }
     /// TargetingConditions.forCombat().test for the player: alive, not
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
+        if self.spares_players() {
+            return false;
+        }
         // TargetingConditions.isCombat: never an ally.
         if p.creative || p.allies.contains(&self.id) {
             return false;
@@ -594,6 +604,9 @@ impl Mob {
     /// a target the mob already has, which ignores the visibility scaling.
     pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
         let Some(p) = &w.player else { return false };
+        if self.spares_players() {
+            return false;
+        }
         if p.creative || p.allies.contains(&self.id) {
             return false;
         }
@@ -1407,7 +1420,7 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
-    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && t.creative {
+    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && (t.creative || m.spares_players()) {
         return false;
     }
     let follow = m.attrs.follow_range * st.follow_scale;
@@ -1598,7 +1611,7 @@ impl Goal for HurtByTarget {
         let Some(t) = cx.w.target_info(by) else {
             return false;
         };
-        t.alive && t.can_be_seen_as_enemy && !(t.is_player && t.creative)
+        t.alive && t.can_be_seen_as_enemy && !(t.is_player && (t.creative || m.spares_players()))
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.bee && !super::bee::angry(m, cx.w) {
