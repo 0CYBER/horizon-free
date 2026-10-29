@@ -67,6 +67,13 @@ impl PackPrompt {
     }
 }
 
+impl ServerPackState {
+    /// The `ToastManager` slots the download toasts hold.
+    pub(super) fn toast_slots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.notifiers.iter().filter_map(|n| n.toast.as_ref()?.slot)
+    }
+}
+
 /// The game's `DownloadedPackSource`.
 #[derive(Default)]
 pub(super) struct ServerPackState {
@@ -75,7 +82,7 @@ pub(super) struct ServerPackState {
     queue: Option<download::Queue>,
     pub(super) prompt: Option<PackPrompt>,
     /// The server list entry the setting is saved to (none: a direct join).
-    address: Option<String>,
+    pub(super) address: Option<String>,
     /// The account the downloads are made for (the download headers).
     user: (String, u128),
     /// The packs loaded on top of the player's own, bottom first.
@@ -190,7 +197,7 @@ fn human_readable(bytes: u64) -> String {
     format!("{} {prefix}B", java_text::format_fixed(value, 1))
 }
 
-fn saves() -> PathBuf {
+pub(super) fn saves() -> PathBuf {
     std::env::current_dir().unwrap_or_default().join("saves")
 }
 
@@ -262,6 +269,8 @@ impl Game<'_> {
         open.requests.push((p.id, p.url, p.hash));
         open.required = p.required;
         open.prompt = text;
+        // Gui.setScreen: KeyMapping.releaseAll, so no walking behind the prompt.
+        self.keys.clear();
         self.capture(false);
     }
     /// `handleResourcePackPop`: one pack, or all of them.
@@ -503,15 +512,22 @@ impl Game<'_> {
             .layout(atlas, (w, h))
             .draw(batch, atlas, self.cursor, [&yes, &no]);
     }
-    /// The download notifiers' toasts, each in the next 32-pixel slot
-    /// below an advancement or recipe toast (`ToastManager`).
-    pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch) {
+    /// The download notifiers' toasts, each in a free 32-pixel slot of the
+    /// `ToastManager` (`hidden`, F1, keeps them timing out undrawn).
+    pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = f64::from(self.settings.notification_display_time);
-        let mut slot = usize::from(!self.adv.toasts.is_empty());
+        let mut used = self.toast_slots_used();
         for notifier in &mut self.server_packs.notifiers {
             let Some(toast) = &mut notifier.toast else {
                 continue;
             };
+            if toast.slot.is_none() {
+                let Some(slot) = (0..Self::TOAST_SLOTS).find(|s| used & (1 << s) == 0) else {
+                    continue;
+                };
+                used |= 1 << slot;
+                toast.slot = Some(slot);
+            }
             let (sound, finished) = toast.update(multiplier);
             if let Some(show) = sound {
                 let event = if show { "ui.toast.in" } else { "ui.toast.out" };
@@ -522,8 +538,9 @@ impl Game<'_> {
                 notifier.toast = None;
                 continue;
             }
-            toast.draw(&self.gui.atlas, batch, 32.0 * slot as f32);
-            slot += 1;
+            if let (false, Some(slot)) = (hidden, toast.slot) {
+                toast.draw(&self.gui.atlas, batch, 32.0 * slot as f32);
+            }
         }
     }
     /// A left click on the prompt: its answer when it hit a button.

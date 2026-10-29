@@ -317,6 +317,8 @@ impl Game<'_> {
         self.as_guest(host, conn, |game| {
             game.give_levels(-need);
             game.stats.custom("enchant_item", 1);
+            // CriteriaTriggers.ENCHANTED_ITEM, with the levels it cost.
+            game.trigger_enchanted_item(&enchanted, need);
         });
         host.hub.guests[gi].xp_seed = self.world.random.next_int();
         let env = self.menu_env();
