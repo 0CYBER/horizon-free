@@ -1480,6 +1480,10 @@ impl Game<'_> {
             if !self.gateway_enter([pos.x, pos.y, pos.z]) {
                 continue;
             }
+            // An entity that just came through any portal stays out of this one.
+            if self.restart_portal_cooldown(id) {
+                continue;
+            }
             self.end.gateways.entry(id).or_default().enter(pos);
         }
     }

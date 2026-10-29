@@ -671,6 +671,17 @@ impl Game<'_> {
             );
         }
     }
+    /// `Entity.setAsInsidePortal` on an entity that is still on its portal
+    /// cooldown, whatever the portal: the cooldown restarts and it stays.
+    pub(super) fn restart_portal_cooldown(&mut self, id: u32) -> bool {
+        match self.portals.entities.get_mut(&id) {
+            Some(state) if state.cooldown > 0 => {
+                state.cooldown = ENTITY_DELAY;
+                true
+            }
+            _ => false,
+        }
+    }
     /// `Entity.setPortalCooldown` on an entity that has just spawned in a
     /// portal: it stands in the portal for 300 ticks without going through.
     pub(super) fn set_portal_cooldown(&mut self, id: u32) {
