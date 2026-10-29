@@ -2126,6 +2126,7 @@ impl Game<'_> {
                 .armor
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
+            m.extra.armor = g.armor.clone();
             m.extra.crouching = g.sneaking;
             m.extra.avatar_pose = g.pose();
             m.extra.sprinting = g.sprinting;

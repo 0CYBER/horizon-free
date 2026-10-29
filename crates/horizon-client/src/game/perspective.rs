@@ -355,6 +355,7 @@ impl Game<'_> {
             .as_ref()
             .map(|s| s.item.clone());
         let off = self.offhand.as_ref().map(|s| s.item.clone());
+        let armor = self.armor.clone();
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
         // LivingEntity.getBedOrientation: the model lies in the bed as
@@ -417,6 +418,8 @@ impl Game<'_> {
         m.anim.attack_anim = attack.1;
         m.extra.main_hand = main;
         m.extra.off_hand = off;
+        // The worn stacks, for the elytra's glint (`WingsLayer`).
+        m.extra.armor = armor;
         m.extra.crouching = crouching;
         m.extra.passenger = riding;
         m.velocity = velocity;
@@ -629,6 +632,18 @@ impl Game<'_> {
         let base = horizon_client::mobs::render::base_transform(m, partial, camera)
             * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
         let angles = m.extra.elytra.angles(partial);
+        // WingsLayer draws through EquipmentLayerRenderer.renderLayers: the
+        // armour glint when the worn elytra `hasFoil()`.
+        let item_glint = |item: &str| {
+            let props = &self.res.items().enchantments.props;
+            props.get(item).is_some_and(|p| p.glint)
+        };
+        let overlay = match &m.extra.armor[1] {
+            Some(s) if chest == Some(&*s.item) && s.has_foil(item_glint(&s.item)) => {
+                horizon_client::mobs::render::ARMOR_GLINT
+            }
+            _ => 0,
+        };
         horizon_client::mobs::render_model(
             model,
             base,
@@ -645,7 +660,7 @@ impl Game<'_> {
             },
             [rect.u0, rect.v0, rect.u1, rect.v1],
             light,
-            0,
+            overlay,
             out,
         );
     }

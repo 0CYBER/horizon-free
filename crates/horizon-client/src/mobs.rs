@@ -2518,7 +2518,12 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
-                    glint_uv: [0.0, 0.0],
+                    // The armour glint scrolls the model UV in the shader.
+                    glint_uv: if overlay == render::ARMOR_GLINT {
+                        [v[3], v[4]]
+                    } else {
+                        [0.0, 0.0]
+                    },
                 });
             }
         }
