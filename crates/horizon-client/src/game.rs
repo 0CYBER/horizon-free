@@ -1586,6 +1586,9 @@ struct Game<'a> {
     /// Controllers (Horizon's own).
     pad: pad::Pads,
     frames: u64,
+    /// The glint clock and options, read once at the start of each frame
+    /// (game/item_draw.rs).
+    glint_frame: horizon_client::item_render::GlintFrame,
     /// `item_level` for one frame, game time, day time and dimension.
     item_level_cache: std::cell::RefCell<
         Option<(
@@ -11973,6 +11976,7 @@ impl Game<'_> {
         });
     }
     fn render(&mut self) -> Result<bool> {
+        self.glint_frame = self.capture_glint_frame();
         if self.renderer.as_mut().is_some_and(|r| r.display_changed()) {
             self.apply_ui_settings();
         }
@@ -12383,8 +12387,8 @@ impl Game<'_> {
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
             hud: &hud,
-            glint_alpha: self.settings.file.double("glintStrength") as f32,
-            glint_ticks: self.glint_ticks(),
+            glint_alpha: self.glint_frame.alpha,
+            glint_ticks: self.glint_frame.scroll_ticks(),
             clouds: (!title
                 && self.dim == Dim::Overworld
                 && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
@@ -14328,6 +14332,7 @@ impl<'a> Game<'a> {
             last_input: now,
             pad: Default::default(),
             frames: 0,
+            glint_frame: Default::default(),
             item_level_cache: Default::default(),
             world_frames: 0,
             fps: 0.0,
