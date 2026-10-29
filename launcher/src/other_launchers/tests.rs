@@ -48,7 +48,7 @@ fn prism_and_multimc_instances() {
             Found {
                 launcher: "Prism Launcher",
                 name: "My Fabric".into(),
-                minecraft: "1.21.1".into(),
+                minecraft: Some("1.21.1".into()),
                 loader: Some(Loader {
                     name: "fabric",
                     version: "0.16.9".into()
@@ -59,7 +59,7 @@ fn prism_and_multimc_instances() {
             Found {
                 launcher: "Prism Launcher",
                 name: "old".into(),
-                minecraft: "1.12.2".into(),
+                minecraft: Some("1.12.2".into()),
                 loader: Some(Loader {
                     name: "forge",
                     version: "14.23.5.2860".into()
@@ -116,7 +116,7 @@ fn official_launcher_profiles() {
         .map(|f| {
             (
                 f.name.as_str(),
-                f.minecraft.as_str(),
+                f.minecraft.as_deref().unwrap(),
                 f.loader.as_ref().map(|l| (l.name, l.version.as_str())),
                 f.shared,
             )
@@ -154,7 +154,7 @@ fn copies_an_instance_but_only_what_a_shared_folder_holds_for_one() {
     let mut found = Found {
         launcher: "Prism Launcher",
         name: "x".into(),
-        minecraft: "1.21.1".into(),
+        minecraft: Some("1.21.1".into()),
         loader: None,
         game: game.clone(),
         shared: false,
@@ -191,5 +191,59 @@ fn copies_an_instance_but_only_what_a_shared_folder_holds_for_one() {
     assert_eq!(listed(&shared), ["mods", "options.txt", "saves"]);
     // The other launcher's folder is left as it was.
     assert!(game.join("logs/latest.log").is_file());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn curseforge_and_modrinth_app_instances_are_their_game_folders() {
+    let root = scratch("apps");
+    let curseforge = root.join("Documents/curseforge/minecraft");
+    write(&curseforge.join("Instances/All the Mods/mods/a.jar"), "jar");
+    write(
+        &curseforge.join("Instances/All the Mods/minecraftinstance.json"),
+        "{}",
+    );
+    write(&curseforge.join("Instances/All the Mods/.curseclient"), "");
+    fs::create_dir_all(curseforge.join("Instances/empty")).unwrap();
+    let modrinth = root.join("data/ModrinthApp");
+    write(
+        &modrinth.join("profiles/Fabulously Optimized/options.txt"),
+        "",
+    );
+
+    let folders = Folders {
+        home: root.clone(),
+        data: root.join("data"),
+        config: root.join("config"),
+    };
+    let found = scan(Os::MacOs, &folders);
+    let short: Vec<_> = found
+        .iter()
+        .map(|f| (f.launcher, f.name.as_str(), f.minecraft.is_none(), f.shared))
+        .collect();
+    assert_eq!(
+        short,
+        [
+            (MODRINTH_APP, "Fabulously Optimized", true, false),
+            (CURSEFORGE, "All the Mods", true, false),
+        ]
+    );
+    let pack = curseforge.join("Instances/All the Mods");
+    assert_eq!(in_folder(&curseforge, None), [found[1].clone()]);
+    assert_eq!(in_folder(&pack, None), [found[1].clone()]);
+    assert_eq!(in_folder(&modrinth, None), [found[0].clone()]);
+
+    // The app's own files stay behind.
+    let to = root.join("copy");
+    copy_game(&found[1], &to).unwrap();
+    assert!(to.join("mods/a.jar").is_file());
+    assert!(!to.join("minecraftinstance.json").exists() && !to.join(".curseclient").exists());
+
+    let err = import(&found[1], "x", None).unwrap_err();
+    assert_eq!(
+        err,
+        "the CurseForge app doesn't say which Minecraft version All the Mods plays here: name \
+         it with --minecraft."
+    );
     let _ = fs::remove_dir_all(&root);
 }
