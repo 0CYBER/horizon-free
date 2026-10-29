@@ -16,12 +16,13 @@
 //! - run its client side animation in `client_tick`, sharing the function
 //!   with the server's `ai_step` where the server computes the same.
 use super::{
-    Mob, Species, allay, armadillo, axolotl, breeze, camel, copper_golem, creaking, frog, goat,
-    golem, guardian, piglin, ravager, shulker, sniffer, warden,
+    Mob, Species, allay, armadillo, axolotl, breeze, camel, copper_golem, creaking, equine, frog,
+    goat, golem, guardian, piglin, ravager, shulker, sniffer, undead, villager, warden,
 };
 
 // `Pose.id` of the poses mobs take.
 pub const STANDING: u8 = 0;
+pub const SLEEPING: u8 = 2;
 pub const LONG_JUMPING: u8 = 6;
 pub const CROAKING: u8 = 8;
 pub const USING_TONGUE: u8 = 9;
@@ -42,6 +43,8 @@ pub fn pose_id(m: &Mob) -> u8 {
         Species::Breeze => breeze::pose_id(m),
         Species::Camel | Species::CamelHusk if camel::sitting(m) => SITTING,
         Species::Frog => m.extra.pose,
+        // LivingEntity.startSleeping: the pose, with the bed in index 14.
+        Species::Villager if villager::sleeping(m) => SLEEPING,
         _ => STANDING,
     }
 }
@@ -87,6 +90,8 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
         Species::Armadillo => armadillo::tick(m),
         Species::Frog => frog::tick(m),
         Species::Goat => goat::tick(m),
+        s if equine::grazes(s) => equine::client_tick(m),
+        Species::Drowned => undead::drowned_client_tick(m),
         _ => {}
     }
 }
