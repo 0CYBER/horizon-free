@@ -759,6 +759,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         .into_iter()
         .enumerate()
         {
+            if slot == "mainhand"
+                && let Some(stack) = m.extra.main_hand_stack()
+            {
+                equipment.insert(slot.into(), crate::save::item_to_nbt(stack));
+                continue;
+            }
             // Enchanted or trimmed gear is saved with its components.
             if let (Some(id), Some(g)) = (item, crate::mobs::gear::gear(m))
                 && (!g.slots[index].is_empty() || g.trims[index].is_some())
@@ -976,20 +982,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
     // What it holds (equipment.mainhand / offhand), when saved.
     if let Some(eq) = tag.get("equipment") {
-        m.extra.main_hand = eq
-            .get("mainhand")
-            .and_then(|i| text(i.get("id")))
-            .map(Into::into);
-        // The custom name of the main hand item (`ItemStack.hasCustomName`).
-        m.extra.main_hand_name = eq
-            .get("mainhand")
-            .and_then(|i| i.get("components"))
-            .and_then(|c| c.get("minecraft:custom_name"))
-            .map(|t| {
-                horizon_client_core::scoreboard::comp_text(
-                    &horizon_client_core::scoreboard::tag_to_json(t),
-                )
-            });
+        m.extra
+            .set_main_hand_stack(eq.get("mainhand").and_then(crate::save::item_from_nbt));
         m.extra.off_hand = eq
             .get("offhand")
             .and_then(|i| text(i.get("id")))
@@ -1016,7 +1010,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     } else {
         // Registration hands out default weapons (finalizeSpawn does in
         // vanilla); a loaded mob holds only what its file lists.
-        m.extra.main_hand = None;
+        m.extra.set_main_hand(None);
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     // Mob.readAdditionalSaveData overrides what the constructor set (copper

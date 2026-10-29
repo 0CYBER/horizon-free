@@ -303,7 +303,9 @@ impl Game<'_> {
     /// The custom name of a mob's main hand item, when it has one.
     fn mob_main_hand_name(&self, id: u32) -> Option<Text> {
         let m = self.mobs.iter().find(|m| m.id == id)?;
-        m.extra.main_hand_name.clone()
+        let stack = m.extra.main_hand_stack()?;
+        stack.custom_name()?;
+        Some(self.stack_display_name(stack))
     }
     /// `CombatTracker.getDeathMessage`.
     pub(super) fn combat_death_message(&mut self) -> Text {

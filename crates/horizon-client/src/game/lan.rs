@@ -2116,11 +2116,8 @@ impl Game<'_> {
             m.limb_speed += ((dist * 4.0).min(1.0) - m.limb_speed) * 0.4;
             m.limb_position += m.limb_speed;
             m.age = m.age.wrapping_add(1);
-            m.extra.main_hand = g
-                .inventory
-                .get(g.selected)
-                .and_then(|s| s.as_ref())
-                .map(|s| s.item.clone());
+            m.extra
+                .set_main_hand_stack(g.inventory.get(g.selected).cloned().flatten());
             m.extra.off_hand = g.offhand.as_ref().map(|s| s.item.clone());
             [m.extra.head, m.extra.chest, m.extra.legs, m.extra.feet] = g
                 .armor
