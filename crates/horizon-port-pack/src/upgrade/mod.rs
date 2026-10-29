@@ -279,9 +279,14 @@ pub fn read_pack(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
             if entry.is_dir() {
                 continue;
             }
+            // A pack from the internet may name entries `../x` or `/x`.
+            let name = entry
+                .enclosed_name()
+                .filter(|name| is_inside(name))
+                .ok_or_else(|| at(&format!("entry {:?} leaves the pack", entry.name())))?;
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).map_err(|e| at(&e))?;
-            files.insert(entry.name().replace('\\', "/"), bytes);
+            files.insert(name.to_string_lossy().replace('\\', "/"), bytes);
         }
     }
     if !files.contains_key("pack.mcmeta") {
@@ -311,6 +316,9 @@ pub fn upgrade_into(input: &Path, out: &Path) -> Result<Report, String> {
     let files = read_pack(input)?;
     let (upgraded, report) = upgrade_pack(&files);
     for (path, bytes) in upgraded {
+        if !is_inside(Path::new(&path)) {
+            return Err(format!("{path}: leaves {}", out.display()));
+        }
         let target = out.join(&path);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -318,6 +326,14 @@ pub fn upgrade_into(input: &Path, out: &Path) -> Result<Report, String> {
         fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
     }
     Ok(report)
+}
+
+/// Whether `path` is a plain relative path: no root, drive, `.` or `..`.
+fn is_inside(path: &Path) -> bool {
+    path.components().next().is_some()
+        && path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 impl Report {
@@ -563,6 +579,36 @@ mod tests {
             json!(0.07)
         );
         assert!(v.get("spawners").is_none());
+    }
+
+    #[test]
+    fn entries_outside_the_pack_are_refused() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("upgrade-escape-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for (i, name) in ["../escape.txt", "data/../../escape.txt", "/escape.txt"]
+            .into_iter()
+            .enumerate()
+        {
+            let zip_path = dir.join(format!("p{i}.zip"));
+            let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+            for (file, bytes) in [("pack.mcmeta", &b"{}"[..]), (name, b"x")] {
+                zip.start_file(file, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            zip.finish().unwrap();
+            let out = dir.join(format!("out{i}/datapacks/p-26.3"));
+            let err = upgrade_into(&zip_path, &out).unwrap_err();
+            assert!(err.contains("leaves the pack"), "{name}: {err}");
+            assert!(!out.exists(), "{name}");
+        }
+        assert!(!dir.join("escape.txt").exists());
+        assert!(is_inside(Path::new("data/x/worldgen/biome/b.json")));
+        assert!(!is_inside(Path::new("data/../x.json")));
+        assert!(!is_inside(Path::new("")));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
