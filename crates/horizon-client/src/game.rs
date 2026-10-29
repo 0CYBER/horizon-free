@@ -13070,12 +13070,17 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Mod && d != 0.0 {
                         self.mod_screen_scroll(d);
                     }
-                    if self.screen == Screen::Creative && d != 0.0 {
+                    // AbstractContainerScreen.mouseScrolled: a bundle under the
+                    // cursor takes the wheel before the screen's own scrolling.
+                    let bundle = bundles::takes_bundle_wheel(self.screen)
+                        && d != 0.0
+                        && self.bundle_scroll(scaled(raw_x), scaled(raw_y));
+                    if self.screen == Screen::Creative && d != 0.0 && !bundle {
                         self.creative_screen.wheel(f64::from(d), &self.pack.names);
                     }
                     if self.screen == Screen::Inventory
                         && d != 0.0
-                        && !self.bundle_scroll(scaled(raw_x), scaled(raw_y))
+                        && !bundle
                         && !self.tweak_scroll(d, self.inventory_target().0)
                     {
                         self.station_scroll(d);
