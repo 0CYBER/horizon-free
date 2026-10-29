@@ -12089,21 +12089,7 @@ impl Game<'_> {
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             cave_culling,
             water_fog,
-            fog: Some({
-                let mut fog = self.frame_fog(camera, &sky, biome, water_fog);
-                // Horizon's fog setting: no distance fog (fluids keep theirs).
-                if !self.settings.horizon.fog
-                    && !underwater
-                    && self.darkness_fog().is_none()
-                    && !self.boss_overlay.should_create_world_fog()
-                    && self.potions.effects.get("blindness").is_none()
-                    && fog.environmental_end >= (self.streaming.radius * 16) as f32
-                {
-                    (fog.render_distance_start, fog.render_distance_end) = (1e9, 2e9);
-                    (fog.environmental_start, fog.environmental_end) = (1e9, 2e9);
-                }
-                fog
-            }),
+            fog: Some(self.frame_fog(camera, &sky, biome, water_fog)),
             dark_disc: self.dark_disc(camera),
             outline,
             outline_after_terrain,
