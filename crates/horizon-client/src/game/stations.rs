@@ -2000,6 +2000,16 @@ impl Game<'_> {
         {
             push(&mut lines, text, c);
         }
+        // SuspiciousStewEffects.addToTooltip: the creative flag, which vanilla
+        // sets for the creative screen's own slots, as `name_visible` above.
+        for (text, c) in horizon_client::item_tooltip::stew_lines(
+            stack,
+            !nested && self.screen == Screen::Creative,
+            &display,
+            &translate,
+        ) {
+            push(&mut lines, text, c);
+        }
         // BlockItemStateProperties.addToTooltip.
         if let Some(text) = horizon_client::item_tooltip::honey_line(stack, &display, &translate) {
             push(&mut lines, text, gray);

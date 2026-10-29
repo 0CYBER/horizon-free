@@ -325,6 +325,7 @@ pub struct Flags {
     pub water_sensitive: bool,
     pub animal: bool,
 }
+
 #[derive(Clone, Debug)]
 pub struct MobType {
     pub id: String,
@@ -808,6 +809,8 @@ pub struct Extra {
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
     pub main_hand: Option<Arc<str>>,
+    /// Components of the current held stack; setters clear these on replacement.
+    main_hand_stack: Option<crate::items::ItemStack>,
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     /// Worn armour below the head (humanoid mobs).
@@ -939,6 +942,26 @@ pub struct Extra {
     /// A panda's flags, counters and amounts.
     pub panda: Option<Box<panda::State>>,
 }
+impl Extra {
+    pub fn set_main_hand(&mut self, item: Option<Arc<str>>) {
+        self.main_hand = item;
+        self.main_hand_stack = None;
+    }
+    pub fn set_main_hand_stack(&mut self, stack: Option<crate::items::ItemStack>) {
+        self.main_hand = stack.as_ref().map(|s| s.item.clone());
+        self.main_hand_stack = stack;
+    }
+    pub fn main_hand_stack(&self) -> Option<&crate::items::ItemStack> {
+        self.main_hand_stack
+            .as_ref()
+            .filter(|s| self.main_hand.as_ref() == Some(&s.item))
+    }
+    pub fn take_main_hand(&mut self) -> Option<Arc<str>> {
+        self.main_hand_stack = None;
+        self.main_hand.take()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Mob {
     pub id: u32,
@@ -3330,5 +3353,28 @@ mod push_tests {
             let after = t.elapsed().as_secs_f64() * 1e3;
             println!("{n} mobs pushing each other: {before:.3} ms -> {after:.3} ms");
         }
+    }
+}
+
+#[cfg(test)]
+mod held_stack_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_even_the_same_item_clears_its_old_components() {
+        let mut extra = Extra::default();
+        let mut named = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
+        named.data_mut().custom_name = Some("Old Sword".into());
+        extra.set_main_hand_stack(Some(named.clone()));
+        assert_eq!(
+            extra.main_hand_stack().unwrap().custom_name(),
+            Some("Old Sword")
+        );
+        extra.set_main_hand(Some(named.item.clone()));
+        assert!(extra.main_hand_stack().is_none());
+        extra.set_main_hand_stack(Some(named));
+        extra.take_main_hand();
+        assert!(extra.main_hand.is_none());
+        assert!(extra.main_hand_stack().is_none());
     }
 }
