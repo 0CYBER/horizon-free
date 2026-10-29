@@ -5,7 +5,9 @@
 use super::Game;
 use horizon_client::entities::{ArmorStand, Cushion, ItemFrame, Painting};
 use horizon_client::mobs::leash::Holder;
+use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_core::geometry::Vec3;
+use horizon_core::random::RandomSource;
 use horizon_protocol::entity_data::Value;
 use std::sync::Arc;
 
@@ -197,6 +199,9 @@ impl Game<'_> {
                     (8, Value::Int(v)) => c.hurt_time = *v,
                     (9, Value::Int(v)) => c.hurt_dir = *v,
                     (10, Value::Float(v)) => c.damage = *v,
+                    (13, Value::Bool(lit)) if c.kind == super::minecarts::CartKind::Furnace => {
+                        c.fuel = i32::from(*lit);
+                    }
                     _ => {}
                 }
             }
@@ -258,6 +263,16 @@ impl Game<'_> {
             c.previous = c.position;
             c.previous_yaw = c.yaw;
             c.position = step(c.id, c.position);
+            if c.kind == super::minecarts::CartKind::Furnace
+                && c.fuel > 0
+                && self.world.random.next_int_bound(4).unwrap_or(1) == 0
+            {
+                self.particles.add(
+                    &ParticleOptions::simple(ParticleType::LargeSmoke),
+                    [c.position.x, c.position.y + 0.8, c.position.z],
+                    [0.0; 3],
+                );
+            }
         }
         // The boat the player drives moves here, not where the server says.
         let driven = self.riding;
