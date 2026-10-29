@@ -210,7 +210,11 @@ impl Projectile {
         let h = s * 0.5;
         Aabb::new(
             Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(self.position.x + h, self.position.y + s, self.position.z + h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + s,
+                self.position.z + h,
+            ),
         )
     }
     /// The arrow's own random from now on (`Entity.random`).
@@ -896,7 +900,13 @@ mod tests {
         let (keep, hit) = pearl.tick(&w);
         assert!(!keep, "ThrownEnderpearl.onHit discards the pearl");
         assert!(
-            matches!(hit, Hit::Entity { who: Who::Mob(1), .. }),
+            matches!(
+                hit,
+                Hit::Entity {
+                    who: Who::Mob(1),
+                    ..
+                }
+            ),
             "pearl collides with a pickable wind charge"
         );
     }
