@@ -715,6 +715,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn catalog_matches_hook_points() {
+        use std::collections::BTreeSet;
+
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../native-hooks.json")).unwrap();
+        let hooks = catalog["hooks"].as_array().unwrap();
+        let source = include_str!("native_hooks.rs");
+        let section = source
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        let declared: BTreeSet<_> = section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let mut names = BTreeSet::new();
+        let mut contracts = BTreeSet::new();
+        for hook in hooks {
+            let name = hook["name"].as_str().unwrap();
+            let version = hook["version"].as_u64().unwrap();
+            assert!(
+                version > 0 && contracts.insert((name, version)),
+                "invalid or duplicate hook: {name} v{version}"
+            );
+            names.insert(name);
+            assert_eq!(
+                hook["target"].as_str().unwrap(),
+                format!("horizon_client::game::native_hooks::Game<'_>::native_{name}")
+            );
+        }
+        assert_eq!(names, declared);
+    }
+
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left
     /// and right aligned), and its charts along the bottom.
     #[test]
