@@ -107,6 +107,11 @@ fn trash_stopped_server(
         .map_err(|e| e.to_string())?;
     lock.try_lock()
         .map_err(|_| "Stop the server before deleting it.".to_string())?;
+    // Windows can't move a folder while a file in it is open, the lock included: let it go
+    // first. Still safe: a supervisor starting in between opens the lock again, and then the
+    // move fails instead of taking a live server.
+    #[cfg(windows)]
+    drop(lock);
     trash(dir).map_err(|e| format!("Could not move the server to the trash: {e}"))
 }
 

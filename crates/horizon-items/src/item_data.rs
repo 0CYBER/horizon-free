@@ -62,6 +62,24 @@ pub struct StackData {
     /// Components Horizon does not model (lore, custom data, item name,
     /// max stack size...), kept as their saved values in key order.
     pub other: Vec<(String, Tag)>,
+    /// What the server sent for this stack, for sending it back unchanged.
+    pub wire: Wire,
+}
+/// The component patch a server sent for a stack, as the creative slot packet
+/// writes it, and the stack Horizon decoded from it, to tell whether anything
+/// changed since. Like vanilla's `BundleContents.selectedItem` it is left out
+/// when stacks are compared.
+#[derive(Clone, Debug, Default)]
+pub struct Wire(Option<Arc<(ItemStack, Arc<[u8]>)>>);
+impl Wire {
+    pub fn new(decoded: ItemStack, patch: Arc<[u8]>) -> Self {
+        Self(Some(Arc::new((decoded, patch))))
+    }
+}
+impl PartialEq for Wire {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 /// A bundle's selected item index (-1: none). Like vanilla's
 /// `BundleContents.equals` it is left out when stacks are compared.
@@ -119,6 +137,23 @@ impl StackData {
         let tag = horizon_client_core::scoreboard::json_to_tag(text);
         self.set_other(id, Some(tag));
     }
+    /// `SetComponentsFunction`: one component of a loot patch, in its JSON
+    /// form. Trim is modelled; the rest keep their saved components.
+    /// A null value removes the component.
+    pub fn set_loot_component(&mut self, id: &str, value: &serde_json::Value) {
+        let tag = (!value.is_null()).then(|| horizon_client_core::scoreboard::json_to_tag(value));
+        match id {
+            "minecraft:trim" => {
+                self.trim = match (value["material"].as_str(), value["pattern"].as_str()) {
+                    (Some(material), Some(pattern)) => {
+                        Some((Arc::from(material), Arc::from(pattern)))
+                    }
+                    _ => None,
+                };
+            }
+            _ => self.set_other(id, tag),
+        }
+    }
     /// Set (or with None remove) a preserved component.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
         self.other.retain(|(k, _)| k != id);
@@ -166,7 +201,7 @@ pub struct WrittenBook {
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        self.wire.0.is_none() && *self == Self::default()
     }
 }
 
@@ -181,6 +216,16 @@ impl ItemStack {
     }
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
+    }
+    /// The patch the server sent for this stack, while the stack is still what
+    /// it decoded to (its count aside); None once anything else changed.
+    pub fn wire_patch(&self) -> Option<Arc<[u8]>> {
+        let (decoded, patch) = &**self.data()?.wire.0.as_ref()?;
+        let none = StackData::default();
+        (decoded.item == self.item
+            && decoded.damage == self.damage
+            && decoded.data().unwrap_or(&none) == self.data().unwrap_or(&none))
+        .then(|| patch.clone())
     }
     pub fn data_mut(&mut self) -> &mut StackData {
         self.extra.get_or_insert_with(Box::default)
@@ -882,6 +927,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         }),
         bundle_selected: BundleSelected::default(),
         other: Vec::new(),
+        wire: Wire::default(),
     };
     let mut data = data;
     if let Tag::Compound(map) = c {
@@ -1025,6 +1071,27 @@ mod tests {
                 .get("minecraft:custom_name"),
             Some(&Tag::String("Changed".into()))
         );
+    }
+
+    #[test]
+    fn loot_component_keeps_a_styled_custom_name() {
+        let name = serde_json::json!({"text":"Prize","color":"#ff8800"});
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack
+            .data_mut()
+            .set_loot_component("minecraft:custom_name", &name);
+        assert_eq!(stack.custom_name().as_deref(), Some("Prize"));
+        let expected = horizon_client_core::scoreboard::json_to_tag(&name);
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&expected)
+        );
+        stack
+            .data_mut()
+            .set_loot_component("minecraft:custom_name", &serde_json::Value::Null);
+        assert!(stack.custom_name().is_none());
     }
 
     #[test]
