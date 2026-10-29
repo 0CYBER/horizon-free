@@ -759,6 +759,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         .into_iter()
         .enumerate()
         {
+            if slot == "mainhand"
+                && let Some(stack) = m.extra.main_hand_stack()
+            {
+                let mut stack = stack.clone();
+                if let Some(g) = crate::mobs::gear::gear(m) {
+                    stack.data_mut().enchantments = g.slots[index].clone();
+                    stack.data_mut().trim = g.trims[index].clone();
+                }
+                equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
+                continue;
+            }
             // Enchanted or trimmed gear is saved with its components.
             if let (Some(id), Some(g)) = (item, crate::mobs::gear::gear(m))
                 && (!g.slots[index].is_empty() || g.trims[index].is_some())
@@ -782,10 +793,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             match item {
                 Some(id) => {
-                    let keep = matches!(
-                        equipment.get(&slot.into()).and_then(|e| e.get("id")),
-                        Some(Tag::String(s)) if s.to_string_lossy() == **id
-                    );
+                    let keep = slot != "mainhand"
+                        && matches!(
+                            equipment.get(&slot.into()).and_then(|e| e.get("id")),
+                            Some(Tag::String(s)) if s.to_string_lossy() == **id
+                        );
                     if slot == "head"
                         && &**id == crate::mobs::raider::BANNER
                         && crate::mobs::raider::is_raider(m.species())
@@ -989,10 +1001,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
     // What it holds (equipment.mainhand / offhand), when saved.
     if let Some(eq) = tag.get("equipment") {
-        m.extra.main_hand = eq
-            .get("mainhand")
-            .and_then(|i| text(i.get("id")))
-            .map(Into::into);
+        m.extra
+            .set_main_hand_stack(eq.get("mainhand").and_then(crate::save::item_from_nbt));
         m.extra.off_hand = eq
             .get("offhand")
             .and_then(|i| text(i.get("id")))
@@ -1019,7 +1029,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     } else {
         // Registration hands out default weapons (finalizeSpawn does in
         // vanilla); a loaded mob holds only what its file lists.
-        m.extra.main_hand = None;
+        m.extra.set_main_hand(None);
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
     // Mob.readAdditionalSaveData overrides what the constructor set (copper
@@ -3131,5 +3141,53 @@ mod neutral_anger_tests {
         // The anger that is left when the mob comes back.
         assert_eq!(crate::mobs::anger_left(3000, 1000), 2000);
         assert_eq!(crate::mobs::anger_left(3000, 4000), 0);
+    }
+}
+
+#[cfg(test)]
+mod held_item_name_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_a_named_item_does_not_restore_its_old_name_on_save() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let types: HashMap<_, _> = data
+            .types
+            .into_iter()
+            .map(|(id, kind)| (id, Arc::new(kind)))
+            .collect();
+        let mut mob = Mob::new(1, Arc::clone(&types["minecraft:zombie"]), Vec3::ZERO, 0.0);
+        let mut sword = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
+        sword.data_mut().custom_name = Some("Old Sword".into());
+        mob.extra.set_main_hand_stack(Some(sword));
+        let raw = mob_to_nbt(&mob, [1, 2, 3, 4], None);
+        let mut loaded = mob_from_nbt(&raw, &types, 2).unwrap();
+        assert_eq!(
+            loaded.extra.main_hand_stack().unwrap().custom_name(),
+            Some("Old Sword")
+        );
+        loaded
+            .extra
+            .set_main_hand(Some("minecraft:diamond_sword".into()));
+        let saved = mob_to_nbt(&loaded, [1, 2, 3, 4], Some(&raw));
+        let restored = mob_from_nbt(&saved, &types, 3).unwrap();
+        assert_eq!(
+            restored.extra.main_hand.as_deref(),
+            Some("minecraft:diamond_sword")
+        );
+        assert!(
+            restored
+                .extra
+                .main_hand_stack()
+                .unwrap()
+                .custom_name()
+                .is_none()
+        );
     }
 }

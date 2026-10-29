@@ -2362,7 +2362,7 @@ impl Game<'_> {
                     for (slot, item, stack) in items {
                         let e = &mut m.extra;
                         match slot {
-                            0 => e.main_hand = item,
+                            0 => e.set_main_hand(item),
                             1 => e.off_hand = item,
                             2 => {
                                 e.feet = item;
