@@ -62,6 +62,19 @@ impl CartKind {
             _ => 0,
         }
     }
+    /// Whether this cart's `interact` passes on the client, so that
+    /// `Minecraft.startUseItem` uses the held item instead: `MinecartTNT` has
+    /// none of its own (`Entity.interact`), `MinecartCommandBlock.interact`
+    /// needs a game master, and `Minecart.interact` a player not sneaking at
+    /// an empty cart.
+    pub fn interact_passes(self, sneaking: bool, ridden: bool, game_master: bool) -> bool {
+        match self {
+            Self::Tnt => true,
+            Self::CommandBlock => !game_master,
+            Self::Rideable => sneaking || ridden,
+            Self::Chest | Self::Hopper | Self::Furnace => false,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub(super) struct Minecart {
@@ -1558,6 +1571,20 @@ impl Minecart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tnt_cart_lets_the_held_item_be_used() {
+        // Entity.interact passes: a crossbow aimed at it shoots.
+        assert!(CartKind::Tnt.interact_passes(false, false, true));
+        assert!(CartKind::CommandBlock.interact_passes(false, false, false));
+        assert!(!CartKind::CommandBlock.interact_passes(false, false, true));
+        assert!(!CartKind::Rideable.interact_passes(false, false, false));
+        assert!(CartKind::Rideable.interact_passes(true, false, false));
+        assert!(CartKind::Rideable.interact_passes(false, true, false));
+        for kind in [CartKind::Chest, CartKind::Hopper, CartKind::Furnace] {
+            assert!(!kind.interact_passes(true, true, false));
+        }
+    }
 
     #[test]
     fn display_offset_matches_vanilla_for_each_cart_kind() {

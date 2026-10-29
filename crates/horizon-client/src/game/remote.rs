@@ -4685,16 +4685,31 @@ impl Game<'_> {
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
-            // The main hand's turn takes it; there is no off hand turn.
-            if hand == Hand::Off {
+            // A cart whose interact passes (a TNT minecart) leaves each hand's
+            // turn to its item: a crossbow aimed at it shoots.
+            let passes = self
+                .carts
+                .iter()
+                .find(|c| c.id as i32 == hit.id)
+                .is_some_and(|c| {
+                    let ridden = self.riding == Some(c.id)
+                        || self.mobs.iter().any(|m| m.extra.mount == Some(c.id));
+                    c.kind
+                        .interact_passes(sneaking, ridden, self.can_use_game_master_blocks())
+                });
+            // Otherwise the main hand's turn takes it; there is no off hand turn.
+            if hand == Hand::Off && !passes {
                 return false;
             }
             self.send(S::Interact(play::Interact {
                 id: hit.id,
-                hand: 0,
+                hand: hand_id(hand),
                 location: hit.location,
                 secondary: sneaking,
             }));
+            if passes {
+                return false;
+            }
             self.swing_arm();
             return true;
         }
