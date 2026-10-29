@@ -54,16 +54,18 @@ fn selected(steps: usize, t: &Theme) -> Div {
 /// opacity.
 fn hovered(id: &SharedString, steps: usize, t: &Theme) -> gpui::AnyElement {
     let n = t.night;
-    let layer = cut(
-        night::PIXEL_CORNER,
-        steps,
-        Some(alpha(n.card_hi, n.card_hi_alpha * 0.5)),
-        None,
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full();
+    let layer = move || {
+        cut(
+            night::PIXEL_CORNER,
+            steps,
+            Some(alpha(n.card_hi, n.card_hi_alpha * 0.5)),
+            None,
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    };
     hover_fade(id, layer, |d, a| d.opacity(a))
 }
 

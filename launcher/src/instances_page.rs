@@ -192,13 +192,15 @@ impl Launcher {
             let (open, sub) = match i.kind {
                 InstanceKind::Default | InstanceKind::Own => (
                     self.page == Page::Play && selected.as_ref() == Some(&i.id),
-                    match (&tag, &i.version) {
-                        _ if i.java.is_some() => java_line(i.java.as_ref().unwrap()),
-                        (None, Some(own)) => trf("{version} is not installed", &[("version", own)]),
-                        (None, None) => tr("No version installed").into(),
-                        (Some(_), _) if !prepared => tr("Needs preparing").into(),
-                        (Some(tag), Some(_)) => format!("{} · {tag}", tr("Ready")),
-                        (Some(_), None) => tr("Ready").into(),
+                    match (&i.java, &tag, &i.version) {
+                        (Some(java), _, _) => java_line(java),
+                        (None, None, Some(own)) => {
+                            trf("{version} is not installed", &[("version", own)])
+                        }
+                        (None, None, None) => tr("No version installed").into(),
+                        (None, Some(_), _) if !prepared => tr("Needs preparing").into(),
+                        (None, Some(tag), Some(_)) => format!("{} · {tag}", tr("Ready")),
+                        (None, Some(_), None) => tr("Ready").into(),
                     },
                 ),
                 InstanceKind::Port => {

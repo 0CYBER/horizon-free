@@ -1333,21 +1333,24 @@ fn track_hover(el: Stateful<Div>, id: SharedString) -> Stateful<Div> {
 /// A layer under an element's content that fades `color` in while it is hovered. `bleed` lets
 /// it reach past the element on the left and right, as the hover plate of a list row does.
 fn hover_layer(id: &SharedString, color: Hsla, radius: f32, bleed: f32) -> AnyElement {
-    let layer = div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(-bleed))
-        .right(px(-bleed))
-        .rounded(px(radius));
+    let layer = || {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(-bleed))
+            .right(px(-bleed))
+            .rounded(px(radius))
+    };
     hover_fade(id, layer, move |d, a| d.bg(color.opacity(color.a * a)))
 }
 
-/// `layer` while the element `id` (see [`track_hover`]) is hovered, eased in and out: `paint`
-/// draws it at a strength from 0 (not shown) to 1.
+/// The `layer` made while the element `id` (see [`track_hover`]) is hovered, eased in and out:
+/// `paint` draws it at a strength from 0 (not shown) to 1. An element not hovered draws nothing,
+/// so a long list costs no layers.
 fn hover_fade(
     id: &SharedString,
-    layer: Div,
+    layer: impl FnOnce() -> Div,
     paint: impl Fn(Div, f32) -> Div + 'static,
 ) -> AnyElement {
     let state = HOVER.lock().unwrap();
@@ -1359,7 +1362,7 @@ fn hover_fade(
     };
     let ease = || Animation::new(theme::QUICK).with_easing(ease_out_quint());
     if let Some((_, at)) = state.on.as_ref().filter(|(h, _)| h == id) {
-        return layer
+        return layer()
             .with_animation(key("in", *at), ease(), paint)
             .into_any_element();
     }
@@ -1368,11 +1371,12 @@ fn hover_fade(
         .as_ref()
         .filter(|(h, at)| h == id && at.elapsed() < theme::QUICK)
     {
-        return layer
+        return layer()
             .with_animation(key("out", *at), ease(), move |d, t| paint(d, 1. - t))
             .into_any_element();
     }
-    paint(layer, 0.).into_any_element()
+    // Not hovered: nothing to draw (out of the flow, so it takes no gap either).
+    div().absolute().into_any_element()
 }
 
 /// Text set in one step of the type scale: headings (heading, title, display) in the pixel face.
