@@ -3247,6 +3247,7 @@ impl Renderer {
     /// player recalibrating the desktop): the settings' Auto values follow it then, so
     /// apply them again.
     pub fn display_changed(&mut self) -> bool {
+        flush_display_log();
         let Some(now) = self.display.changed() else {
             return false;
         };
@@ -5926,6 +5927,52 @@ impl DisplayWatch {
     }
 }
 
+/// The log of what the system reports about the display: one line per change. The
+/// renderer is made anew a few times while the game starts and each asks again, and a
+/// slider dragged in the desktop's settings changes the values many times a second, so
+/// a change within [`DISPLAY_LOG_QUIET`] of the last line waits until the values have
+/// held that long, and only the one they settled on is logged.
+struct DisplayLog {
+    last: String,
+    at: Option<std::time::Instant>,
+    pending: Option<(String, std::time::Instant)>,
+}
+static DISPLAY_LOG: std::sync::Mutex<DisplayLog> = std::sync::Mutex::new(DisplayLog {
+    last: String::new(),
+    at: None,
+    pending: None,
+});
+const DISPLAY_LOG_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+fn log_display(line: String) {
+    let now = std::time::Instant::now();
+    let mut log = DISPLAY_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if line == log.last {
+        log.pending = None;
+    } else if log.at.is_none_or(|at| now - at >= DISPLAY_LOG_QUIET) {
+        log::info!("{line}");
+        (log.last, log.at, log.pending) = (line, Some(now), None);
+    } else {
+        log.pending = Some((line, now));
+    }
+}
+/// Logs a change [`log_display`] held back, once the values have held for
+/// [`DISPLAY_LOG_QUIET`].
+fn flush_display_log() {
+    let now = std::time::Instant::now();
+    let mut log = DISPLAY_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, since)) = &log.pending
+        && now - *since >= DISPLAY_LOG_QUIET
+        && let Some((line, _)) = log.pending.take()
+    {
+        log::info!("{line}");
+        (log.last, log.at) = (line, Some(now));
+    }
+}
+
 /// What a compositor's luminances mean in HDR output's scale.
 ///
 /// KWin maps content's reference white (203 nits in PQ, BT.2408) onto its own, so the
@@ -5936,13 +5983,11 @@ impl DisplayWatch {
 #[cfg(target_os = "linux")]
 fn reported(l: horizon_hdr::wayland::Luminances) -> crate::graphics::Reported {
     let peak = (l.target_max * 203.0 / l.reference.max(1.0)).round() as u32;
-    log::info!(
+    log_display(format!(
         "Horizon renderer: the compositor shows this window with reference white {} nits, \
          {}..{} nits: peak {peak} nits in HDR output's scale",
-        l.reference,
-        l.target_min,
-        l.target_max,
-    );
+        l.reference, l.target_min, l.target_max,
+    ));
     crate::graphics::Reported {
         paper_white: 203,
         peak: peak.clamp(200, 10_000),
