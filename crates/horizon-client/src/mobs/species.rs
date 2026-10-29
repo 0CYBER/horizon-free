@@ -1331,6 +1331,7 @@ impl Def {
         let mut v = vec![base];
         let extra: &[&str] = match self.species {
             Species::Pig => &["pig_baby", "cold_pig"],
+            Species::Mannequin => &["player_slim"],
             Species::Cow => &[
                 "cow_baby",
                 "cold_cow",
@@ -1601,6 +1602,8 @@ impl Def {
     pub fn water_slowdown(&self) -> f32 {
         match self.species {
             Species::PolarBear => 0.98,
+            // SkeletonHorse.getWaterSlowDown.
+            Species::SkeletonHorse => 0.96,
             _ => 0.8,
         }
     }
