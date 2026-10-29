@@ -70,6 +70,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod animate;
 mod arena;
+pub mod compositor;
 mod cull;
 mod end_sky;
 mod flat;
