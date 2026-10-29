@@ -357,6 +357,14 @@ struct BorderUniform {
     color: [f32; 4],
     offset: [f32; 4],
 }
+/// A frame to save as a PNG: F2's screenshot, an agent's `game_screenshot`,
+/// or the icon the Select World list shows.
+pub struct ScreenshotRequest {
+    pub path: PathBuf,
+    /// `GameRenderer.takeAutoScreenshot`: centre-crop the frame to a square
+    /// and average it down to this size. `None` saves the frame as drawn.
+    pub size: Option<[u32; 2]>,
+}
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -581,8 +589,8 @@ pub struct Renderer {
     pub section_draw_calls: usize,
     pub uploaded_bytes: u64,
     started: Instant,
-    /// Write the next presented frame to this PNG path (control socket).
-    pub screenshot: Option<PathBuf>,
+    /// The next frame to write to a PNG path (control socket, F2, world icon).
+    pub screenshot: Option<ScreenshotRequest>,
     /// Outcome of the last screenshot: frame size, or the error.
     pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
     /// Brightness option (lightmap gamma), 0..1.
@@ -5235,6 +5243,13 @@ impl Renderer {
             &self.entity_group,
             &self.indices,
         );
+        // The world icon grabs here: after the level and the hand, before
+        // the effects and the HUD draw over them (`tryTakeScreenshotIfNeeded`
+        // runs right after `renderLevel`).
+        let readback = self
+            .screenshot
+            .take_if(|request| request.size.is_some())
+            .and_then(|request| self.take_readback(request, &mut encoder, &target_texture));
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5338,22 +5353,10 @@ impl Renderer {
                 (&view_target, self.config.format.remove_srgb_suffix()),
             );
         }
-        let readback = self.screenshot.take().and_then(|path| {
-            // The copy and PNG writer both assume 8-bit pixels; a float surface would make
-            // the row stride too small for the copy and abort in validation.
-            if self.config.format.block_copy_size(None) == Some(4) {
-                let size = [self.config.width, self.config.height];
-                Some((
-                    path,
-                    copy_frame(&self.device, &mut encoder, &target_texture, size),
-                ))
-            } else {
-                self.screenshot_result = Some(Err(format!(
-                    "screenshots need a 32-bit surface format, not {:?}",
-                    self.config.format
-                )));
-                None
-            }
+        let readback = readback.or_else(|| {
+            self.screenshot
+                .take()
+                .and_then(|request| self.take_readback(request, &mut encoder, &target_texture))
         });
         self.uploads.finish(&encoder);
         if has_section_copies {
@@ -5384,9 +5387,9 @@ impl Renderer {
         if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
             timer.submitted(&self.queue);
         }
-        if let Some((path, buffer)) = readback {
+        if let Some((request, buffer)) = readback {
             self.screenshot_result = Some(
-                self.write_screenshot(&path, &buffer)
+                self.write_screenshot(&request, &buffer)
                     .map_err(|e| e.to_string()),
             );
         }
@@ -5472,7 +5475,32 @@ fn copy_frame(
     buffer
 }
 impl Renderer {
-    fn write_screenshot(&self, path: &std::path::Path, buffer: &wgpu::Buffer) -> Result<[u32; 2]> {
+    /// Take a screenshot request: queue the frame's copy, or report why the
+    /// frame cannot be read back.
+    fn take_readback(
+        &mut self,
+        request: ScreenshotRequest,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) -> Option<(ScreenshotRequest, wgpu::Buffer)> {
+        // The copy and PNG writer both assume 8-bit pixels; a float surface would make
+        // the row stride too small for the copy and abort in validation.
+        if self.config.format.block_copy_size(None) == Some(4) {
+            let size = [self.config.width, self.config.height];
+            Some((request, copy_frame(&self.device, encoder, texture, size)))
+        } else {
+            self.screenshot_result = Some(Err(format!(
+                "screenshots need a 32-bit surface format, not {:?}",
+                self.config.format
+            )));
+            None
+        }
+    }
+    fn write_screenshot(
+        &self,
+        request: &ScreenshotRequest,
+        buffer: &wgpu::Buffer,
+    ) -> Result<[u32; 2]> {
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = sender.send(r);
@@ -5507,8 +5535,18 @@ impl Renderer {
             }
         }
         buffer.unmap();
+        // NativeImage.resizeSubRectTo on takeAutoScreenshot's grab: the icon
+        // is the frame's centre square averaged down to its size.
+        let (width, height, pixels) = match request.size {
+            Some(size) => (
+                size[0],
+                size[1],
+                square_downscale(&pixels, self.config.width, self.config.height, size),
+            ),
+            None => (self.config.width, self.config.height, pixels),
+        };
         let mut encoder = png::Encoder::new(
-            std::io::BufWriter::new(std::fs::File::create(path)?),
+            std::io::BufWriter::new(std::fs::File::create(&request.path)?),
             width,
             height,
         );
@@ -5517,6 +5555,42 @@ impl Renderer {
         encoder.write_header()?.write_image_data(&pixels)?;
         Ok([width, height])
     }
+}
+/// Centre-crop the frame to a square and average it down to `size`.
+pub(crate) fn square_downscale(pixels: &[u8], width: u32, height: u32, size: [u32; 2]) -> Vec<u8> {
+    let (side, cx, cy) = if width > height {
+        (height, (width - height) / 2, 0)
+    } else {
+        (width, 0, (height - width) / 2)
+    };
+    let [tw, th] = size;
+    let mut out = vec![0u8; (tw * th * 4) as usize];
+    for ty in 0..th {
+        let y0 = cy + ty * side / th;
+        let y1 = cy + (ty + 1) * side / th;
+        for tx in 0..tw {
+            let x0 = cx + tx * side / tw;
+            let x1 = cx + (tx + 1) * side / tw;
+            let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let p = ((y * width + x) * 4) as usize;
+                    r += u32::from(pixels[p]);
+                    g += u32::from(pixels[p + 1]);
+                    b += u32::from(pixels[p + 2]);
+                }
+            }
+            let count = (x1 - x0) * (y1 - y0);
+            let o = ((ty * tw + tx) * 4) as usize;
+            out[o..o + 4].copy_from_slice(&[
+                (r / count) as u8,
+                (g / count) as u8,
+                (b / count) as u8,
+                255,
+            ]);
+        }
+    }
+    out
 }
 /// Camera-relative clip planes (`Frustum`).
 #[derive(Clone, Copy, Debug)]

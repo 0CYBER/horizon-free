@@ -558,6 +558,8 @@ impl Game<'_> {
         self.titles.overlay_time = 0;
         // GameRenderer.resetData (Minecraft.disconnect).
         self.item_activation.reset();
+        // A world is leaving either way: its icon attempt goes with it.
+        self.world_icon = None;
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
