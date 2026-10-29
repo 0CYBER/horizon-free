@@ -6238,8 +6238,9 @@ impl DisplayWatch {
         let now = surface.and_then(|surface| os_reported(&surface.display_hdr_info(adapter)));
         log_os_reported(now);
         let watch = Self {
+            #[cfg(target_os = "linux")]
+            wayland: None,
             polled: Some((now, std::time::Instant::now() + DISPLAY_POLL)),
-            ..Self::default()
         };
         (watch, now)
     }
@@ -6284,8 +6285,6 @@ static DISPLAY_LOG: std::sync::Mutex<DisplayLog> = std::sync::Mutex::new(Display
     pending: None,
 });
 const DISPLAY_LOG_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
-// Only Wayland's HDR reports call it so far.
-#[cfg(target_os = "linux")]
 fn log_display(line: String) {
     let now = std::time::Instant::now();
     let mut log = DISPLAY_LOG
