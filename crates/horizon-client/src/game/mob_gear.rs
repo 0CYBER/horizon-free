@@ -182,13 +182,13 @@ impl Game<'_> {
                     0
                 };
                 if level > 0 {
-                    m.extra.main_hand = Some("minecraft:crossbow".into());
+                    m.extra.set_main_hand(Some("minecraft:crossbow".into()));
                     gear::set(m, MAIN, Vec::new());
                     gear::upgrade(m, MAIN, "minecraft:quick_charge", level);
                 }
             }
             RaiderType::Vindicator => {
-                m.extra.main_hand = Some("minecraft:iron_axe".into());
+                m.extra.set_main_hand(Some("minecraft:iron_axe".into()));
                 gear::set(m, MAIN, Vec::new());
                 if enchant {
                     let level = if wave > raid::num_groups(2) { 2 } else { 1 };

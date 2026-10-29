@@ -325,6 +325,7 @@ pub struct Flags {
     pub water_sensitive: bool,
     pub animal: bool,
 }
+
 #[derive(Clone, Debug)]
 pub struct MobType {
     pub id: String,
@@ -734,12 +735,17 @@ pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
+    /// The local player's `minecraft:scale`, which scales the whole model
+    /// (`LivingEntityRenderState.scale`); 0 is the default, 1.
+    pub model_scale: f32,
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
     /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
     /// sets its box (`Avatar.POSES`).
     pub avatar_pose: crate::pose::Pose,
-    /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
+    /// `Entity.isSprinting` (`Entity.DATA_SHARED_FLAGS_ID`'s flag 3): the dust a
+    /// player raises; a cat or ocelot dashing (`Cat/Ocelot.customServerAiStep`),
+    /// which `LivingEntity.setSprinting`'s speed modifier makes faster.
     pub sprinting: bool,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
@@ -803,6 +809,8 @@ pub struct Extra {
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
     pub main_hand: Option<Arc<str>>,
+    /// Components of the current held stack; setters clear these on replacement.
+    main_hand_stack: Option<crate::items::ItemStack>,
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     /// Worn armour below the head (humanoid mobs).
@@ -832,6 +840,8 @@ pub struct Extra {
     /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
     /// for the right arm.
     pub swing_right_arm: Option<bool>,
+    /// The current swing is a STAB (`SwingAnimationType` 2): a spear's jab.
+    pub swing_stab: bool,
     pub flag: bool,
     pub flag2: bool,
     /// Species scratch values (the wither's head targets and clocks).
@@ -932,6 +942,26 @@ pub struct Extra {
     /// A panda's flags, counters and amounts.
     pub panda: Option<Box<panda::State>>,
 }
+impl Extra {
+    pub fn set_main_hand(&mut self, item: Option<Arc<str>>) {
+        self.main_hand = item;
+        self.main_hand_stack = None;
+    }
+    pub fn set_main_hand_stack(&mut self, stack: Option<crate::items::ItemStack>) {
+        self.main_hand = stack.as_ref().map(|s| s.item.clone());
+        self.main_hand_stack = stack;
+    }
+    pub fn main_hand_stack(&self) -> Option<&crate::items::ItemStack> {
+        self.main_hand_stack
+            .as_ref()
+            .filter(|s| self.main_hand.as_ref() == Some(&s.item))
+    }
+    pub fn take_main_hand(&mut self) -> Option<Arc<str>> {
+        self.main_hand_stack = None;
+        self.main_hand.take()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Mob {
     pub id: u32,
@@ -2306,6 +2336,10 @@ impl Mob {
         {
             aquatic::spawn_ink(self);
         }
+        // AbstractHorse.hurtServer: the rear roll after the hurt.
+        if equine::is_equine(self.species()) {
+            equine::after_hurt_server(self);
+        }
         true
     }
     /// A splash or cloud's harming effect on this mob: the potion's
@@ -2414,6 +2448,10 @@ impl Mob {
             self,
             witch::speed(self, self.attrs.speed) + enderman::attacking_speed(self),
         ) * self.speed_bonus();
+        // LivingEntity.SPEED_MODIFIER_SPRINTING: 0.3F, ADD_MULTIPLIED_TOTAL.
+        if self.extra.sprinting {
+            v *= 1.0 + f64::from(0.3f32);
+        }
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
@@ -2437,6 +2475,7 @@ impl Mob {
         self.invisible || self.has_effect("minecraft:invisibility")
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
+        let effect = horizon_client_core::potions::namespaced(effect);
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
             // MobEffectInstance.update: a stronger effect replaces with its
             // own duration, an equal one only extends it; a weaker one is
@@ -3314,5 +3353,28 @@ mod push_tests {
             let after = t.elapsed().as_secs_f64() * 1e3;
             println!("{n} mobs pushing each other: {before:.3} ms -> {after:.3} ms");
         }
+    }
+}
+
+#[cfg(test)]
+mod held_stack_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_even_the_same_item_clears_its_old_components() {
+        let mut extra = Extra::default();
+        let mut named = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
+        named.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
+        extra.set_main_hand_stack(Some(named.clone()));
+        assert_eq!(
+            extra.main_hand_stack().unwrap().custom_name().as_deref(),
+            Some("Old Sword")
+        );
+        extra.set_main_hand(Some(named.item.clone()));
+        assert!(extra.main_hand_stack().is_none());
+        extra.set_main_hand_stack(Some(named));
+        extra.take_main_hand();
+        assert!(extra.main_hand.is_none());
+        assert!(extra.main_hand_stack().is_none());
     }
 }

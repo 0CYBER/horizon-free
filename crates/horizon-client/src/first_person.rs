@@ -12,6 +12,8 @@
 #[derive(Clone, Copy, Debug)]
 pub enum ItemPose {
     Swing,
+    /// A STAB swing (`SwingAnimationType` 2): a spear's jab.
+    Stab,
     Using,
     Eat {
         remaining: f32,
@@ -85,6 +87,9 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     {
         return Mat4::from_translation(Vec3::new(invert * 0.56, -0.52, -0.72))
             * crate::spear::first_person_use(&kinetic, ticks_since_hit, time_held, !left);
+    }
+    if matches!(pose, ItemPose::Stab) {
+        return m * crate::spear::first_person_attack(attack, !left);
     }
     if matches!(pose, ItemPose::SpinAttack) {
         return m

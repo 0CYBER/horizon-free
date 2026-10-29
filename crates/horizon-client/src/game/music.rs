@@ -4,7 +4,7 @@ use super::Game;
 use horizon_client::{
     blocks::Fluid,
     music::{BackgroundMusic, Music, MusicFrequency, Situation},
-    sound_engine::TickContext,
+    sound_engine::{SoundEngine, SoundInstance, Sounds, TickContext},
 };
 
 impl Game<'_> {
@@ -35,6 +35,22 @@ impl Game<'_> {
         }
         let (vehicle, carts) = self.start_cart_sounds();
         let mobs = self.start_mob_sounds();
+        let (player_position, player_speed_sqr, player_fall_flying) =
+            self.player.as_ref().map_or(([0.0; 3], 0.0, false), |p| {
+                let at = p.position;
+                (
+                    [at.x, at.y, at.z],
+                    p.velocity.length_squared(),
+                    p.fall_flying,
+                )
+            });
+        // LocalPlayer.onSyncedDataUpdated: starting to glide starts the
+        // elytra's flying sound.
+        if player_fall_flying && !self.was_fall_flying {
+            let instance = SoundInstance::elytra(player_position, SoundEngine::unseeded());
+            self.audio.play_instance(instance, false);
+        }
+        self.was_fall_flying = player_fall_flying;
         let ctx = TickContext {
             player_underwater: self.ambience.was_underwater(),
             player_removed: self.player.is_none(),
@@ -42,6 +58,9 @@ impl Game<'_> {
             carts,
             mobs,
             frozen: !self.clock.runs_normally(),
+            player_position,
+            player_speed_sqr,
+            player_fall_flying,
         };
         self.audio.tick(self.pause, &ctx);
     }
