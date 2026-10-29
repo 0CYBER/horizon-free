@@ -364,6 +364,10 @@ fn local_ids(state: BlockStateId) -> LocalIds {
     ids.insert(state, 0);
     ids
 }
+#[cold]
+fn out_of_bounds() -> io::Error {
+    invalid("section index out of bounds")
+}
 pub struct BlockSection<'r> {
     palette: Vec<BlockStateId>,
     local_ids: LocalIds,
@@ -421,12 +425,19 @@ impl<'r> BlockSection<'r> {
     pub fn bits(&self) -> u8 {
         self.storage.as_ref().map_or(0, PackedStorage::bits)
     }
+    #[inline]
     pub fn get(&self, index: usize) -> io::Result<BlockStateId> {
         if index >= 4096 {
-            return Err(invalid("section index out of bounds"));
+            return Err(out_of_bounds());
         }
+        Ok(self.state(index))
+    }
+    /// The state at `index`, which must be below 4096 (a `local_index`).
+    #[inline]
+    pub(crate) fn state(&self, index: usize) -> BlockStateId {
+        debug_assert!(index < 4096);
         let id = self.storage.as_ref().map_or(0, |s| s.read(index));
-        Ok(self.palette[id as usize])
+        self.palette[id as usize]
     }
     pub fn set(&mut self, index: usize, state: BlockStateId) -> io::Result<BlockStateId> {
         if index >= 4096 {
