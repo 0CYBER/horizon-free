@@ -696,7 +696,10 @@ impl Game<'_> {
                     continue;
                 }
                 self.pending.attach(pos, &mut stack);
-                add_or_append_stack(stacks, stack, pos);
+                let items = self.res.items();
+                add_or_append_stack(stacks, stack, pos, &|s| {
+                    items.get(&s.item).map_or(64, |i| i.max_stack)
+                });
             }
         }
         self.pending.clear(pos);
@@ -717,15 +720,23 @@ impl Game<'_> {
     }
 }
 
-/// `ServerExplosion.addOrAppendStack` with `ItemEntity.merge(.., 16)`.
+/// `ServerExplosion.addOrAppendStack`: `ItemEntity.areMergable` (same item and
+/// components, combined count within the item's max stack size), then
+/// `ItemEntity.merge(.., 16)`.
 fn add_or_append_stack(
     stacks: &mut Vec<([i32; 3], ItemStack)>,
     mut stack: ItemStack,
     pos: [i32; 3],
+    max_stack: &dyn Fn(&ItemStack) -> u32,
 ) {
+    let max = i64::from(max_stack(&stack));
     for (_, existing) in stacks.iter_mut() {
-        if existing.item == stack.item && existing.damage == stack.damage && existing.count < 16 {
-            let moved = (16 - existing.count).min(stack.count);
+        if existing.same_item_same_components(&stack)
+            && i64::from(existing.count) + i64::from(stack.count) <= max
+        {
+            let moved = (max.min(16) - i64::from(existing.count))
+                .min(i64::from(stack.count))
+                .max(0) as u32;
             existing.count += moved;
             stack.count -= moved;
             if stack.count == 0 {
@@ -763,12 +774,50 @@ mod tests {
             damage: 0,
             extra: None,
         };
+        let max = |s: &ItemStack| {
+            if &*s.item == "minecraft:diamond_sword" {
+                1
+            } else {
+                64
+            }
+        };
         let mut stacks = Vec::new();
         for _ in 0..20 {
-            add_or_append_stack(&mut stacks, stack("minecraft:dirt"), [0, 0, 0]);
+            add_or_append_stack(&mut stacks, stack("minecraft:dirt"), [0, 0, 0], &max);
         }
-        add_or_append_stack(&mut stacks, stack("minecraft:stone"), [1, 0, 0]);
+        add_or_append_stack(&mut stacks, stack("minecraft:stone"), [1, 0, 0], &max);
         let counts: Vec<u32> = stacks.iter().map(|(_, s)| s.count).collect();
         assert_eq!(counts, vec![16, 4, 1]);
+    }
+
+    #[test]
+    fn unstackable_drops_stay_separate() {
+        let sword = ItemStack {
+            item: "minecraft:diamond_sword".into(),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        let max = |_: &ItemStack| 1;
+        let mut stacks = Vec::new();
+        add_or_append_stack(&mut stacks, sword.clone(), [0, 0, 0], &max);
+        add_or_append_stack(&mut stacks, sword, [0, 0, 0], &max);
+        let counts: Vec<u32> = stacks.iter().map(|(_, s)| s.count).collect();
+        assert_eq!(counts, vec![1, 1]);
+    }
+
+    #[test]
+    fn drops_with_different_damage_stay_separate() {
+        let pick = |damage| ItemStack {
+            item: "minecraft:iron_pickaxe".into(),
+            count: 1,
+            damage,
+            extra: None,
+        };
+        let max = |_: &ItemStack| 64;
+        let mut stacks = Vec::new();
+        add_or_append_stack(&mut stacks, pick(0), [0, 0, 0], &max);
+        add_or_append_stack(&mut stacks, pick(5), [0, 0, 0], &max);
+        assert_eq!(stacks.len(), 2);
     }
 }
