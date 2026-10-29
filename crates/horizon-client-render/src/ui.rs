@@ -79,27 +79,31 @@ pub fn load_metadata(root: &Path) {
     }
     *NINE_SLICE.write().unwrap_or_else(|e| e.into_inner()) = Some(map);
 }
-/// The sprite's nine-slice metadata; without any (no resources loaded), its
-/// GUI size and the widgets' usual borders.
-fn scaling(sprite: &str, r: &Rect) -> NineSlice {
+/// The sprite's nine-slice metadata, when its `.png.mcmeta` has any.
+fn nine_slice_metadata(sprite: &str) -> Option<NineSlice> {
     NINE_SLICE
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .and_then(|m| m.get(sprite).copied())
-        .unwrap_or(NineSlice {
-            width: r.w,
-            height: r.h,
-            border: match sprite {
-                "gui/sprites/widget/button"
-                | "gui/sprites/widget/button_highlighted"
-                | "gui/sprites/widget/button_disabled" => [3; 4],
-                "gui/sprites/widget/slider_handle"
-                | "gui/sprites/widget/slider_handle_highlighted" => [2, 2, 2, 3],
-                _ => [1; 4],
-            },
-            stretch_inner: false,
-        })
+}
+/// The sprite's nine-slice metadata; without any (no resources loaded), its
+/// GUI size and the widgets' usual borders.
+fn scaling(sprite: &str, r: &Rect) -> NineSlice {
+    nine_slice_metadata(sprite).unwrap_or(NineSlice {
+        width: r.w,
+        height: r.h,
+        border: match sprite {
+            "gui/sprites/widget/button"
+            | "gui/sprites/widget/button_highlighted"
+            | "gui/sprites/widget/button_disabled" => [3; 4],
+            "gui/sprites/widget/slider_handle" | "gui/sprites/widget/slider_handle_highlighted" => {
+                [2, 2, 2, 3]
+            }
+            _ => [1; 4],
+        },
+        stretch_inner: false,
+    })
 }
 /// The region `[x, y, w, h]` of a sprite `size` GUI pixels large, in its
 /// own units (`TextureAtlasSprite.getU(x / width)`).
@@ -150,6 +154,35 @@ pub fn nine_slice(
 ) {
     if let Some(r) = atlas.sprites.get(sprite) {
         draw_nine_slice(batch, *r, scaling(sprite, r), [x, y, w, h], color);
+    }
+}
+/// `GuiGraphicsExtractor.blitSprite`: a sprite over `w` × `h` as its
+/// `gui.scaling` says, nine-sliced, or stretched when it has no metadata.
+/// (`tile`, which no vanilla sprite uses, isn't read yet: it stretches.)
+pub fn blit_sprite(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    sprite: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: u32,
+) {
+    if let Some(r) = atlas.sprites.get(sprite) {
+        draw_sprite(batch, *r, nine_slice_metadata(sprite), [x, y, w, h], color);
+    }
+}
+fn draw_sprite(
+    batch: &mut HudBatch,
+    r: Rect,
+    nine_slice: Option<NineSlice>,
+    [x, y, w, h]: [f32; 4],
+    color: u32,
+) {
+    match nine_slice {
+        Some(n) => draw_nine_slice(batch, r, n, [x, y, w, h], color),
+        None => batch.rect_uv(x, y, w, h, r, color),
     }
 }
 fn draw_nine_slice(
@@ -228,27 +261,32 @@ pub fn tiled(
     size: f32,
     color: u32,
 ) {
+    tiled_sized(batch, atlas, sprite, x, y, w, h, [size, size], color);
+}
+/// Repeat a texture using its width and height in GUI pixels.
+#[allow(clippy::too_many_arguments)]
+pub fn tiled_sized(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    sprite: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    size: [f32; 2],
+    color: u32,
+) {
     let Some(r) = atlas.sprites.get(sprite).copied() else {
         return;
     };
-    let mut yy = 0.0;
-    while yy < h {
-        let th = size.min(h - yy);
-        let mut xx = 0.0;
-        while xx < w {
-            let tw = size.min(w - xx);
-            batch.rect_uv(
-                x + xx,
-                y + yy,
-                tw,
-                th,
-                sub(r, [size, size], [0.0, 0.0, tw, th]),
-                color,
-            );
-            xx += size;
-        }
-        yy += size;
-    }
+    tile(
+        batch,
+        r,
+        size,
+        [0.0, 0.0, size[0], size[1]],
+        [x, y, w, h],
+        color,
+    );
 }
 /// Text drawn at `scale` times its size (a scaled pose).
 pub fn text_scaled(
@@ -434,7 +472,7 @@ pub fn separators(
         ("gui/header_separator", "gui/footer_separator")
     };
     let w = batch.width;
-    tiled(
+    tiled_sized(
         batch,
         atlas,
         header,
@@ -442,10 +480,10 @@ pub fn separators(
         header_bottom - 2.0,
         w,
         2.0,
-        32.0,
+        [32.0, 2.0],
         u32::MAX,
     );
-    tiled(
+    tiled_sized(
         batch,
         atlas,
         footer,
@@ -453,7 +491,7 @@ pub fn separators(
         footer_top,
         w,
         2.0,
-        32.0,
+        [32.0, 2.0],
         u32::MAX,
     );
 }
@@ -1291,6 +1329,22 @@ mod tests {
         parse_nine_slice(&serde_json::from_str(json).unwrap()).unwrap()
     }
     #[test]
+    fn separator_tiles_sample_both_rows_and_clip_the_last_column() {
+        let mut batch = HudBatch::new([640, 480]);
+        tile(
+            &mut batch,
+            sprite(32, 2),
+            [32.0, 2.0],
+            [0.0, 0.0, 32.0, 2.0],
+            [0.0, 5.0, 40.0, 2.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 2);
+        assert_quad(q[0], ([0.0, 5.0, 32.0, 7.0], [0.0, 0.0, 1.0, 1.0]));
+        assert_quad(q[1], ([32.0, 5.0, 40.0, 7.0], [0.0, 0.0, 0.25, 1.0]));
+    }
+    #[test]
     fn a_high_resolution_button_slices_in_its_gui_units() {
         // Faithful 32x's widget/button: 400x40 texels, gui.scaling 200x20.
         let n = faithful(
@@ -1355,6 +1409,40 @@ mod tests {
         let q = quads(&batch);
         assert_eq!(q.len(), 1);
         assert_quad(q[0], ([4.0, 4.0, 54.0, 54.0], [0.0, 0.0, 1.0, 1.0]));
+    }
+    #[test]
+    fn blit_sprite_nine_slices_a_sprite_whose_metadata_says_so() {
+        // Vanilla's tooltip/frame: 100x100, border 10, stretched centre.
+        let n = faithful(
+            r#"{"gui":{"scaling":{"type":"nine_slice","width":100,"height":100,"border":10,"stretch_inner":true}}}"#,
+        );
+        let mut batch = HudBatch::new([640, 480]);
+        draw_sprite(
+            &mut batch,
+            sprite(100, 100),
+            Some(n),
+            [10.0, 10.0, 160.0, 26.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 9);
+        // The corners keep their 10 pixels instead of stretching with the box.
+        assert_quad(q[0], ([10.0, 10.0, 20.0, 20.0], [0.0, 0.0, 0.1, 0.1]));
+        assert_quad(q[5], ([160.0, 26.0, 170.0, 36.0], [0.9, 0.9, 1.0, 1.0]));
+    }
+    #[test]
+    fn blit_sprite_stretches_a_sprite_without_metadata() {
+        let mut batch = HudBatch::new([640, 480]);
+        draw_sprite(
+            &mut batch,
+            sprite(9, 9),
+            None,
+            [0.0, 0.0, 27.0, 18.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 1);
+        assert_quad(q[0], ([0.0, 0.0, 27.0, 18.0], [0.0, 0.0, 1.0, 1.0]));
     }
     #[test]
     fn borders_shrink_to_half_the_drawn_size() {

@@ -626,7 +626,9 @@ impl Game<'_> {
             }) => Some(key),
             _ => None,
         };
-        self.command_block_screen = host_command_block;
+        // A command block the guest's use opened (Player.openCommandBlock).
+        let guest_command_block =
+            std::mem::replace(&mut self.command_block_screen, host_command_block).map(|s| s.pos());
         // A mount inventory the guest's action opened (shift + use, or the
         // inventory key while riding).
         let guest_mount = std::mem::replace(&mut self.mount_menu, host_mount_menu).opened_mob();
@@ -675,9 +677,7 @@ impl Game<'_> {
         let new_mode = self.mode_id();
         self.mode = mode;
         self.creative = creative;
-        self.selected = std::mem::replace(&mut g.selected, selected);
-        // `g.selected` now holds the host's value: swap the inventories back.
-        std::mem::swap(&mut self.selected, &mut g.selected);
+        g.selected = std::mem::replace(&mut self.selected, selected);
         std::mem::swap(&mut self.inventory, &mut g.inventory);
         std::mem::swap(&mut self.armor, &mut g.armor);
         std::mem::swap(&mut self.offhand, &mut g.offhand);
@@ -779,6 +779,9 @@ impl Game<'_> {
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
         }
+        if let Some(pos) = guest_command_block {
+            self.lan_open_command_block(host, conn, pos);
+        }
         if let Some(pos) = opened_table {
             self.lan_open_crafting(host, conn, pos);
         }
@@ -833,35 +836,23 @@ impl Game<'_> {
             .facts()
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name;
-        let (menu, title, slots) = if &**name == "minecraft:ender_chest" {
+        let (menu, slots) = if &**name == "minecraft:ender_chest" {
             // EnderChestBlock.useWithoutItem: the player's own inventory.
-            (
-                "minecraft:generic_9x3",
-                "container.enderchest",
-                Slots::Ender,
-            )
+            ("minecraft:generic_9x3", Slots::Ender)
         } else if let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get(&pos) {
             // AbstractFurnaceBlock.openContainer: FurnaceMenu, BlastFurnaceMenu, SmokerMenu.
-            let (menu, title) = match f.kind.recipe_type() {
-                "minecraft:blasting" => ("minecraft:blast_furnace", "container.blast_furnace"),
-                "minecraft:smoking" => ("minecraft:smoker", "container.smoker"),
-                _ => ("minecraft:furnace", "container.furnace"),
+            let menu = match f.kind.recipe_type() {
+                "minecraft:blasting" => "minecraft:blast_furnace",
+                "minecraft:smoking" => "minecraft:smoker",
+                _ => "minecraft:furnace",
             };
-            (menu, title, Slots::Block(pos))
+            (menu, Slots::Block(pos))
         } else if let Some(BlockEntity::Crafter(_)) = self.world.block_entities.get(&pos) {
             // CrafterBlock.useWithoutItem: CrafterMenu over the block entity.
-            (
-                "minecraft:crafter_3x3",
-                "container.crafter",
-                Slots::Block(pos),
-            )
+            ("minecraft:crafter_3x3", Slots::Block(pos))
         } else if let Some(BlockEntity::Brewing(_)) = self.world.block_entities.get(&pos) {
             // BrewingStandBlock.useWithoutItem: BrewingStandMenu.
-            (
-                "minecraft:brewing_stand",
-                "container.brewing",
-                Slots::Block(pos),
-            )
+            ("minecraft:brewing_stand", Slots::Block(pos))
         } else if let Some((other, right)) = self.chest_partner(pos) {
             // ChestBlock.combine: the right half's slots come first.
             let halves = if right {
@@ -869,24 +860,33 @@ impl Game<'_> {
             } else {
                 Slots::Double(other, pos)
             };
-            ("minecraft:generic_9x6", "container.chestDouble", halves)
+            ("minecraft:generic_9x6", halves)
         } else {
             let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
                 return false;
             };
-            let (menu, title) = match items.len() {
-                27 => ("minecraft:generic_9x3", "container.chest"),
-                9 => ("minecraft:generic_3x3", "container.dispenser"),
-                5 => ("minecraft:hopper", "container.hopper"),
+            let menu = match items.len() {
+                27 => "minecraft:generic_9x3",
+                9 => "minecraft:generic_3x3",
+                5 => "minecraft:hopper",
                 _ => return false,
             };
-            let title = match &**name {
-                "minecraft:barrel" => "container.barrel",
-                "minecraft:dropper" => "container.dropper",
-                n if n.ends_with("shulker_box") => "container.shulkerBox",
-                _ => title,
-            };
-            (menu, title, Slots::Block(pos))
+            (menu, Slots::Block(pos))
+        };
+        // The menu provider's getDisplayName: a container's custom name
+        // (BaseContainerBlockEntity.getName) or its default name.
+        let custom = |k: (i32, i32, i32)| self.world.block_names.get(&k).map(String::as_str);
+        let title = match slots {
+            Slots::Ender => horizon_protocol::text::translatable("container.enderchest", &[]),
+            Slots::Double(first, second) => {
+                horizon_client::containers::double_chest_name(custom(first), custom(second))
+            }
+            Slots::Block(k) => {
+                let Some(key) = horizon_client::containers::default_name_key(name) else {
+                    return false;
+                };
+                horizon_client::containers::display_name(custom(k), key)
+            }
         };
         let Some(items) = host
             .hub
@@ -895,17 +895,17 @@ impl Game<'_> {
         else {
             return false;
         };
+        // The block entity's createMenu: a shulker box opens a ShulkerBoxMenu
+        // (not a 9x3 ChestMenu), whose slots refuse shulker boxes.
+        let menu = match slots {
+            Slots::Block(_) => horizon_client::containers::block_menu_type(name).unwrap_or(menu),
+            _ => menu,
+        };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
-        host.hub.open_container(
-            conn,
-            menu,
-            horizon_protocol::text::translatable(title, &[]),
-            pos,
-            slots,
-            items,
-        );
+        host.hub
+            .open_container(conn, menu, title, pos, slots, items);
         true
     }
 
@@ -1186,9 +1186,6 @@ impl Game<'_> {
             }
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
-                if spectator {
-                    return;
-                }
                 // handleUseItemOn: within reach, and the hit point within the block.
                 let inside = p
                     .cursor
@@ -1331,6 +1328,9 @@ impl Game<'_> {
                 let g = &mut host.hub.guests[gi];
                 let old = g.menu_slot(slot);
                 g.set_menu_slot(slot, item.clone());
+                // InventoryMenu.setRemoteSlot: the client already has it, so broadcastChanges
+                // sends nothing back that could undo a click made since.
+                g.menu_sent[slot] = item.clone();
                 // InventoryMenu's ArmorSlot and off-hand slot: setByPlayer.
                 let equipment = match slot {
                     5..=8 => Some(["head", "chest", "legs", "feet"][slot - 5]),
@@ -1667,9 +1667,7 @@ impl Game<'_> {
         host.hub.teleport(gi, Some(at));
     }
     fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
-        let g = &mut host.hub.guests[gi];
-        g.death_time += 1;
-        if g.death_time >= 20 {
+        if host.hub.guests[gi].tick_death() {
             self.guest_drop_carried(host, gi);
         }
     }
@@ -1888,8 +1886,11 @@ impl Game<'_> {
         // ListPlayersCommand needs no permission and lists every player.
         let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
         if words[0] == "list" && (words.len() == 1 || words[1..] == ["uuids"]) {
-            let me = (self.options.dedicated.is_none() && self.player.is_some())
-                .then_some((host.host_uuid, host.host_name.as_str()));
+            // A single-player owner is a placed guest already: no host entry.
+            let me = (self.options.dedicated.is_none()
+                && self.player.is_some()
+                && host.hub.singleplayer_owner.is_none())
+            .then_some((host.host_uuid, host.host_name.as_str()));
             let content = host.hub.list_reply(me, words.len() == 2);
             host.hub.send_to(
                 conn,
@@ -1898,10 +1899,6 @@ impl Game<'_> {
                     overlay: false,
                 }),
             );
-            return;
-        }
-        // A server mod's command, for every player whatever their level.
-        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
             return;
         }
         // An integrated server runs every player's commands at their own
@@ -2043,8 +2040,11 @@ impl Game<'_> {
         let d = vanilla::game_dispatcher();
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let parse = d.parse(command, &self.ui.registries);
-        let ((start, end), suggestions) = d.suggestions(&parse, command.len(), &self.ui.registries);
+        let ((start, end), mut suggestions) =
+            d.suggestions(&parse, command.len(), &self.ui.registries);
         self.ui.registries.permission = level;
+        // ServerCommandSuggestionsProvider.limitSuggestionCount.
+        suggestions.truncate(1000);
         let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;
         let mut w = horizon_protocol::buf::Writer::new();
         w.varint(id);
@@ -2372,14 +2372,25 @@ impl Game<'_> {
                     None => self.guest_death_message(conn, me),
                 };
                 let message = horizon_client::lan::data::component_nbt(&text.component());
-                let team = self.score.board.players_team(&name);
-                if horizon_client::scoreboard::own_death_message_shown(team) {
-                    host.hub.system_message(message.clone());
-                    if self.options.dedicated.is_some() {
+                let board = &self.score.board;
+                host.hub.system_message_to(message.clone(), |other| {
+                    horizon_client::scoreboard::death_message_reaches(board, &name, other)
+                });
+                if self.options.dedicated.is_some() {
+                    // Only a message for everyone is logged (`broadcastSystemMessage`).
+                    if board.players_team(&name).is_none_or(|t| {
+                        t.death_message_visibility == horizon_client::scoreboard::Visibility::Always
+                    }) {
                         super::dedicated::log("INFO", &format!("System chat: {}", text.plain()));
-                    } else if self.player.is_some() {
-                        self.system_message(text);
                     }
+                } else if self.player.is_some()
+                    && horizon_client::scoreboard::death_message_reaches(
+                        board,
+                        &name,
+                        super::chat::PLAYER_NAME,
+                    )
+                {
+                    self.system_message(text);
                 }
                 message
             } else {

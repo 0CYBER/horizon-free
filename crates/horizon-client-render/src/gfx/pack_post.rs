@@ -476,10 +476,12 @@ fn sampler(
     })
 }
 
-/// Runs `create` and returns its validation error, if any.
+/// Runs `create` and returns its validation error, if any. A panic while it runs is an error
+/// too: naga's backends turn a module they cannot write into a panic as the driver gets the
+/// pipeline (#3525), which a pack's program must not turn into a crash.
 fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, String> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let value = create();
+    let value = crate::crash::contain(create);
     match pollster::block_on(scope.pop()) {
         Some(e) => {
             // The details are in the error's description or its sources.
@@ -494,7 +496,7 @@ fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, St
             }
             Err(message)
         }
-        None => Ok(value),
+        None => value.map_err(|panic| format!("the shader compiler failed: {panic}")),
     }
 }
 
@@ -2627,6 +2629,38 @@ mod tests {
             .filter_map(|(_, g)| g.binding.as_ref().map(|b| b.binding))
             .collect();
         assert_eq!(used, [1, 2, 3]);
+    }
+
+    /// #3525: naga's SPIR-V writer panicked on Photon's gbuffers programs as the pipeline was
+    /// made. Such a panic skips the pass, as a validation error does, and the device goes on.
+    #[test]
+    fn a_shader_compiler_panic_skips_the_pass() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+        else {
+            return;
+        };
+        let failed = checked(&device, || -> wgpu::Buffer {
+            panic!("internal error: entered unreachable code: Expression [89] is not cached!")
+        });
+        let error = failed.expect_err("the panic comes back as an error");
+        assert!(error.contains("Expression [89] is not cached!"), "{error}");
+        let buffer = |usage| {
+            checked(&device, || {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: 16,
+                    usage,
+                    mapped_at_creation: false,
+                })
+            })
+        };
+        // The device still makes things, and its errors still come back.
+        assert!(buffer(wgpu::BufferUsages::UNIFORM).is_ok());
+        assert!(buffer(wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE).is_err());
     }
 
     #[test]

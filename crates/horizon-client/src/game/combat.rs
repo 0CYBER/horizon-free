@@ -57,6 +57,10 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The exploding mob named itself (`MobEvent::ExplosionSource`), so the
+    /// blast leaves it out (`getEntities(source, box)`). A source guessed
+    /// from the mobs near the centre is still hurt: it may be a bystander.
+    pub(super) explosion_source_named: bool,
     /// The blast now going off comes from a primed TNT, creeper, wither
     /// skull, wither or TNT minecart, the sources that empty a hive they
     /// destroy (`BeehiveBlock.getDrops`).
