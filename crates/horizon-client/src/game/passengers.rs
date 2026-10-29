@@ -119,17 +119,31 @@ impl Game<'_> {
         // `LivingEntity.getPassengerRidingPosition`, the vehicle's passenger
         // attachment (the top of its box in its pose), less the display's own
         // vehicle attachment, which is 0 (Display's dimensions are 0 by 0).
+        // On the local player, the top of its box in its pose and scale (`Avatar.POSES`).
+        let me = self.remote.as_ref().map(|r| r.entity_id as u32);
+        let own_seat = self.player.as_ref().map(|p| {
+            p.position
+                .add_vector(Vec3::new(0.0, f64::from(p.dimensions.height), 0.0))
+        });
         for display in self.text_displays.values_mut() {
-            let Some(&j) = display.vehicle.and_then(|v| index.get(&v)) else {
+            let Some(vehicle) = display.vehicle else {
                 continue;
             };
-            let vehicle = &self.mobs[j];
-            let at = riders::seat(
-                riders::passenger_attachment(vehicle),
-                0.0,
-                vehicle.position,
-                vehicle.yaw,
-            );
+            let at = if Some(vehicle) == me {
+                let Some(at) = own_seat else { continue };
+                at
+            } else {
+                let Some(&j) = index.get(&vehicle) else {
+                    continue;
+                };
+                let vehicle = &self.mobs[j];
+                riders::seat(
+                    riders::passenger_attachment(vehicle),
+                    0.0,
+                    vehicle.position,
+                    vehicle.yaw,
+                )
+            };
             display.ride(glam::DVec3::new(at.x, at.y, at.z));
         }
     }
