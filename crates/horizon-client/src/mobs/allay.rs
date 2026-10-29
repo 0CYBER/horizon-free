@@ -14,8 +14,8 @@ use horizon_core::geometry::trig::Mth;
 
 // Allay state: `main_hand` the held item, `ints[1]` how many it carries,
 // `tame` a liked player, `point` the wanted item (set by the game),
-// `home` the liked note block with `ints[2]` its cooldown, `ints[3]` the
-// pickup cooldown, `flag` dancing with `ints[4]` the dance clock,
+// `State::noteblock` the liked note block with `ints[2]` its cooldown,
+// `ints[3]` the pickup cooldown, `flag` dancing with `ints[4]` the dance clock,
 // `egg_time` the duplication cooldown. AnimState slots: holding (0),
 // spinning (1).
 pub const HOLD: usize = 0;
@@ -23,10 +23,52 @@ pub const SPIN: usize = 1;
 /// `Allay.VibrationUser.VIBRATION_EVENT_LISTENER_RANGE`.
 const LISTENER_RADIUS: i64 = 16;
 
-/// An allay's vibration listener (`Allay.vibrationData`).
+/// `Allay.MAX_NOTEBLOCK_DISTANCE`.
+const MAX_NOTEBLOCK_DISTANCE: i32 = 1024;
+
+/// `GlobalPos`: a block position in a dimension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobalPos {
+    pub dimension: &'static str,
+    pub pos: [i32; 3],
+}
+impl GlobalPos {
+    /// `GlobalPos.isCloseEnough`: the same dimension and at most
+    /// `max_distance` blocks away on every axis (`Vec3i.distChessboard`).
+    pub fn is_close_enough(&self, dimension: &str, pos: [i32; 3], max_distance: i32) -> bool {
+        let chessboard = (0..3)
+            .map(|i| self.pos[i].wrapping_sub(pos[i]).wrapping_abs())
+            .max()
+            .unwrap_or(0);
+        self.dimension == dimension && chessboard <= max_distance
+    }
+}
+/// The identifier of a dimension as a `'static` string, for loading saves.
+pub fn dimension_id(id: &str) -> &'static str {
+    match id {
+        "minecraft:the_nether" => "minecraft:the_nether",
+        "minecraft:the_end" => "minecraft:the_end",
+        _ => "minecraft:overworld",
+    }
+}
+/// `Level.dimension` of the level the mob ticks in.
+pub fn dimension(w: &MobWorld) -> &'static str {
+    if w.nether {
+        "minecraft:the_nether"
+    } else if w.end {
+        "minecraft:the_end"
+    } else {
+        "minecraft:overworld"
+    }
+}
+
+/// An allay's vibration listener (`Allay.vibrationData`) and the brain
+/// memory `LIKED_NOTEBLOCK_POSITION`; `LIKED_NOTEBLOCK_COOLDOWN_TICKS` is
+/// `ints[2]`.
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub vibration: sculk::Data,
+    pub noteblock: Option<GlobalPos>,
 }
 
 pub fn register(m: &mut Mob) {
@@ -47,16 +89,44 @@ pub fn register(m: &mut Mob) {
     g.add(5, LookAtPlayer::new(6.0));
     g.add(6, RandomLookAround::default());
 }
-/// Where carried items go: the liked note block, else the player.
-fn deposit(m: &Mob, cx: &Cx) -> Option<[f64; 3]> {
-    if let Some(h) = m.extra.home
+/// `AllayAi.getItemDepositPosition` for the liked note block: the centre of
+/// the block above it while the allay is within 1024 blocks of it, it is
+/// still a note block and the cooldown runs (`shouldDepositItemsAtLikedNoteblock`),
+/// else the memory (`liked_noteblock_position`) is erased and the liked player
+/// is the target.
+pub fn noteblock_deposit(
+    m: &mut Mob,
+    dimension: &str,
+    is_note_block: impl Fn([i32; 3]) -> bool,
+) -> Option<[f64; 3]> {
+    let liked = m.extra.allay.as_ref()?.noteblock?;
+    let at = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
+    if liked.is_close_enough(dimension, at, MAX_NOTEBLOCK_DISTANCE)
+        && is_note_block(liked.pos)
         && m.extra.ints[2] > 0
     {
+        // `BlockPosTracker(pos.above())`: `Vec3.atCenterOf`.
         return Some([
-            f64::from(h[0]) + 0.5,
-            f64::from(h[1]) + 1.0,
-            f64::from(h[2]) + 0.5,
+            f64::from(liked.pos[0]) + 0.5,
+            f64::from(liked.pos[1]) + 1.5,
+            f64::from(liked.pos[2]) + 0.5,
         ]);
+    }
+    m.extra.allay.as_mut()?.noteblock = None;
+    None
+}
+/// `AllayAi.getItemDepositPosition`: the liked note block, else the player
+/// (`getLikedPlayerPositionTracker`).
+fn deposit(m: &mut Mob, cx: &Cx) -> Option<[f64; 3]> {
+    let dimension = dimension(cx.w);
+    if let Some(p) = noteblock_deposit(m, dimension, |p| {
+        cx.w.block_name(p[0], p[1], p[2]) == "minecraft:note_block"
+    }) {
+        return Some(p);
     }
     if !m.extra.tame {
         return None;

@@ -591,21 +591,41 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 "DuplicationCooldown".into(),
                 Tag::Long(i64::from(m.extra.egg_time)),
             );
+            let mut memories: Vec<(&str, Tag)> = Vec::new();
             if m.extra.tame {
-                map.insert(
-                    "Brain".into(),
+                memories.push((
+                    "minecraft:liked_player",
                     Tag::compound([(
-                        "memories",
-                        Tag::compound([(
-                            "minecraft:liked_player",
-                            Tag::compound([(
-                                "value",
-                                Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
-                            )]),
-                        )]),
+                        "value",
+                        Tag::IntArray(m.extra.owner.unwrap_or([0, 0, 0, 1]).to_vec()),
                     )]),
-                );
+                ));
             }
+            // GlobalPos.CODEC, and the cooldown while it runs.
+            if let Some(liked) = m.extra.allay.as_ref().and_then(|st| st.noteblock) {
+                memories.push((
+                    "minecraft:liked_noteblock",
+                    Tag::compound([(
+                        "value",
+                        Tag::compound([
+                            ("dimension", string(liked.dimension)),
+                            ("pos", Tag::IntArray(liked.pos.to_vec())),
+                        ]),
+                    )]),
+                ));
+            }
+            if m.extra.ints[2] > 0 {
+                memories.push((
+                    "minecraft:liked_noteblock_cooldown_ticks",
+                    Tag::compound([("value", Tag::Int(m.extra.ints[2]))]),
+                ));
+            }
+            // Always written, so a forgotten note block does not come back
+            // from the compound the allay was loaded with.
+            map.insert(
+                "Brain".into(),
+                Tag::compound([("memories", Tag::compound(memories))]),
+            );
         }
         "minecraft:camel" | "minecraft:camel_husk" => {
             // LastPoseTick: negative while sitting.
@@ -1260,6 +1280,26 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.owner = liked
             .and_then(|l| l.get("value"))
             .and_then(|v| crate::save::uuid_from_tag(Some(v)));
+        let memory = |key: &str| {
+            tag.get("Brain")
+                .and_then(|b| b.get("memories"))
+                .and_then(|b| b.get(key))
+                .and_then(|l| l.get("value"))
+        };
+        m.extra.ints[2] =
+            number(memory("minecraft:liked_noteblock_cooldown_ticks")).unwrap_or(0) as i32;
+        if let Some(st) = m.extra.allay.as_mut()
+            && let Some(noteblock) = memory("minecraft:liked_noteblock")
+            && let Some(Tag::IntArray(p)) = noteblock.get("pos")
+            && p.len() == 3
+        {
+            st.noteblock = Some(crate::mobs::allay::GlobalPos {
+                dimension: crate::mobs::allay::dimension_id(
+                    &text(noteblock.get("dimension")).unwrap_or_default(),
+                ),
+                pos: [p[0], p[1], p[2]],
+            });
+        }
     }
     if crate::mobs::camel::is_camel(m.species()) {
         let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
