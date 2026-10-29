@@ -343,10 +343,24 @@ mod tests {
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
+        /// Writes `bytes` as a person editing the pack would: a change lands on a later tick
+        /// of the filesystem's clock. On Unix the cache compares stamps (length, mtime, ctime,
+        /// inode), and Linux takes them from a coarse clock (a few milliseconds a tick), so a
+        /// same-length rewrite within one tick looked unchanged and the tests failed at random.
         fn write(&self, name: &str, bytes: &[u8]) {
             let path = self.0.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, bytes).unwrap();
+            let before = fs::read(&path)
+                .ok()
+                .filter(|old| old != bytes)
+                .and_then(|_| dependency_signature(&path, false).ok());
+            fs::write(&path, bytes).unwrap();
+            if let Some(before) = before {
+                while dependency_signature(&path, false).unwrap() == before {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    fs::write(&path, bytes).unwrap();
+                }
+            }
         }
         fn dir_pack(&self, name: &str) -> Pack {
             self.write(
