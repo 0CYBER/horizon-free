@@ -200,14 +200,25 @@ impl Game<'_> {
                 continue;
             }
             let pos = m.position;
+            // NearestItemSensor: the nearest wanted item within 32 that the piglin
+            // sees (eye to eye); GoToWantedItem then walks to it within 9 blocks.
+            let w = self.mob_world_base(&[]);
+            let eye = Vec3::new(pos.x, m.eye_y(), pos.z);
             let best = self
                 .dropped
                 .iter()
                 .enumerate()
                 .map(|(j, e)| (j, e.position.distance_squared(pos)))
-                .filter(|(_, d)| *d <= 81.0)
+                .filter(|(_, d)| *d < 32.0 * 32.0)
                 .filter(|&(j, _)| self.piglin_wants(m, &self.dropped[j].stack))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
+                .filter(|&(j, _)| {
+                    // ItemEntity's eye height is 0.2125.
+                    let e = &self.dropped[j];
+                    let at = Vec3::new(e.position.x, e.position.y + 0.2125, e.position.z);
+                    w.line_of_sight(eye, at)
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .filter(|(_, d)| *d <= 81.0);
             let Some((j, _)) = best else {
                 self.mobs[i].extra.point = None;
                 continue;
