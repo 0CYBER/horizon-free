@@ -34,23 +34,39 @@ impl Game<'_> {
             self.sound_paused = self.pause;
         }
         let (vehicle, carts) = self.start_cart_sounds();
+        let mobs = self.start_mob_sounds();
         let ctx = TickContext {
             player_underwater: self.ambience.was_underwater(),
             player_removed: self.player.is_none(),
             vehicle,
             carts,
+            mobs,
             frozen: !self.clock.runs_normally(),
         };
         self.audio.tick(self.pause, &ctx);
     }
+    /// `Minecraft.setLevel` -> `updateLevelInEngines`: `SoundManager.stop()`.
+    /// The music manager keeps its stopped track and, on its next tick, waits
+    /// the level's music delay before the next one.
+    pub(super) fn stop_sounds_for_new_level(&mut self) {
+        self.ambience.clear(&mut self.audio);
+        self.audio.stop_all();
+    }
     /// `getSituationalMusic` and `getMusicVolume`.
-    fn situational_music(&self) -> (Option<Music>, f32) {
+    pub(super) fn situational_music(&self) -> (Option<Music>, f32) {
         let empty = BackgroundMusic::default();
         // The title screen has no player (and no level for the camera probe).
+        // A server's client has its player from handleLogin on, before the
+        // first teleport makes it here: the camera is still at the origin.
         let eye = if self.title.is_some() {
             None
         } else {
-            self.eye_position()
+            self.eye_position().or_else(|| {
+                self.remote
+                    .as_ref()
+                    .is_some_and(|r| r.logged_in)
+                    .then_some([0.0; 3])
+            })
         };
         let (background, probe_volume) = match eye {
             Some(eye) => {

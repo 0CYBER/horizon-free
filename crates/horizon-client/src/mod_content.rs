@@ -673,36 +673,13 @@ const NBT_TABLES: [&str; 6] = [
     "worldgen/blocks/cached-support.nbt",
     "worldgen/blocks/cached-collision.nbt",
 ];
-/// In a root built here: the namespaces the content mods own (their ids and
-/// listed namespaces), which loaders read besides `minecraft`.
-const MARKER: &str = "horizon-mod-content.json";
+use horizon_items::content_namespaces::MARKER;
+pub use horizon_items::content_namespaces::{namespaces, tag_namespaces};
 /// Block states a world can hold. Chunk sections widen their global palette
 /// past vanilla's 16 bits to fit the registry (crate::chunk::set_block_states);
 /// this caps it at 20 bits, about 29 times vanilla's 35,723 states. Mods past
 /// it are refused, not wrapped onto other blocks.
 pub const MAX_STATES: u32 = 1 << 20;
-
-/// The content mods' namespaces in a root built by [`build`]; none in any
-/// other root, so vanilla's loaders read exactly what they did.
-pub fn namespaces(root: &Path) -> Vec<String> {
-    fs::read(root.join(MARKER))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
-}
-
-/// The namespaces whose tags loaders read in `root`: `minecraft`, and in a
-/// root built by [`build`] the convention tags (`c`, shared between mods as
-/// on NeoForge and Fabric) and the content mods' own.
-pub fn tag_namespaces(root: &Path) -> Vec<String> {
-    let mods = namespaces(root);
-    let mut out = vec!["minecraft".to_owned()];
-    if !mods.is_empty() {
-        out.push("c".to_owned());
-        out.extend(mods);
-    }
-    out
-}
 
 /// Bundles of block tag files (tag id → the tag file's text).
 const TAG_BUNDLES: [&str; 2] = ["block-tags.json", "worldgen/block_tags.json"];

@@ -623,6 +623,18 @@ impl Game<'_> {
             SculkKind::Shrieker => sculk::shrieker_can_listen(event),
             _ => sculk::is_vibration(event),
         };
+        // VibrationSystem.User.isValidVibration: a player sneaking past a
+        // sensor, whose step it ignores, is AVOID_VIBRATION (sensors only;
+        // a shrieker cannot trigger it).
+        if listens
+            && matches!(kind, SculkKind::Sensor | SculkKind::Calibrated)
+            && ctx.source == Some(Who::Player)
+            && !ctx.spectator
+            && ctx.stepping_carefully
+            && sculk::ignored_when_sneaking(event)
+        {
+            self.trigger_player("minecraft:avoid_vibration");
+        }
         if !sculk::valid_vibration(listens, event, ctx) {
             return;
         }
@@ -693,12 +705,15 @@ impl Game<'_> {
     fn warden_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
         let now = self.world.game_time;
         let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
-        warden::listen(&mut self.mobs[index], now, event, pos, ctx, |a, b| {
+        let avoided = warden::listen(&mut self.mobs[index], now, event, pos, ctx, |a, b| {
             sculk::is_occluded(a, b, |p| {
                 let state = world.block(p.x, p.y, p.z);
                 occludes.get(state.0 as usize).copied().unwrap_or(false)
             })
         });
+        if avoided {
+            self.trigger_player("minecraft:avoid_vibration");
+        }
     }
 
     // ---- ticking ----
@@ -876,17 +891,26 @@ impl Game<'_> {
     /// `SculkSensorBlock.stepOn` and `SculkShriekerBlock.stepOn`: standing on
     /// them is heard (or seen) every tick.
     fn sculk_step_on(&mut self) {
+        self.sculk_step_on_player();
         let mut standing: Vec<(Who, [f64; 3])> = Vec::new();
-        if let Some(p) = self.player.as_ref()
-            && p.ground.on_ground
-        {
-            standing.push((Who::Player, [p.position.x, p.position.y, p.position.z]));
-        }
         for m in &self.mobs {
             if m.alive() && m.on_ground {
                 standing.push((Who::Mob(m.id), [m.position.x, m.position.y, m.position.z]));
             }
         }
+        self.sculk_stand_on(standing);
+    }
+    /// `stepOn` for the player in place: the host, or a guest swapped in
+    /// (`guest_server_tick`), as a server has no player of its own.
+    pub(super) fn sculk_step_on_player(&mut self) {
+        if let Some(p) = self.player.as_ref()
+            && p.ground.on_ground
+        {
+            let at = [p.position.x, p.position.y, p.position.z];
+            self.sculk_stand_on(vec![(Who::Player, at)]);
+        }
+    }
+    fn sculk_stand_on(&mut self, standing: Vec<(Who, [f64; 3])>) {
         for (who, at) in standing {
             // getOnPosLegacy: 0.2 below the feet.
             let key = (
@@ -1108,23 +1132,10 @@ impl Game<'_> {
     /// in the way (`isUnobstructed`), and no block collision.
     fn warden_fits(&self, mob: &Mob) -> bool {
         let bounds = mob.bounds();
-        let player_blocks = !self.spectator()
-            && self.player.as_ref().is_some_and(|p| {
-                let w = f64::from(p.dimensions.width) / 2.0;
-                let b = horizon_core::geometry::Aabb::new(
-                    horizon_core::geometry::Vec3::new(
-                        p.position.x - w,
-                        p.position.y,
-                        p.position.z - w,
-                    ),
-                    horizon_core::geometry::Vec3::new(
-                        p.position.x + w,
-                        p.position.y + f64::from(p.dimensions.height),
-                        p.position.z + w,
-                    ),
-                );
-                !p.health.dead_or_dying() && b.intersects(bounds)
-            });
+        let player_blocks = self
+            .level_players()
+            .iter()
+            .any(|p| p.alive && !p.spectator && p.bounds.intersects(bounds));
         if player_blocks
             || self
                 .mobs
@@ -1515,6 +1526,16 @@ impl Game<'_> {
     fn tick_entity_events(&mut self) {
         self.tick_player_sculk_events();
         self.tick_mob_sculk_events();
+        // Dropped items are entities too: Entity.applyEffectsFromBlocks.
+        let items: Vec<[f64; 3]> = self
+            .dropped
+            .iter()
+            .filter(|i| i.on_ground)
+            .map(|i| [i.position.x, i.position.y, i.position.z])
+            .collect();
+        for at in items {
+            self.step_on_redstone_ore(at, false);
+        }
     }
 
     /// Entity.move emits on the authoritative server too, for each ServerPlayer.
@@ -1530,6 +1551,9 @@ impl Game<'_> {
         });
         if let Some((at, on_ground, health, flying)) = player {
             let crouch = self.keys.contains(&KeyCode::ShiftLeft);
+            if on_ground && !self.spectator() {
+                self.step_on_redstone_ore(at, crouch);
+            }
             let in_water = self.in_water_at(at);
             self.entity_motion_events(
                 Who::Player,
@@ -1546,6 +1570,50 @@ impl Game<'_> {
             }
             self.sculk.last_health = Some(health);
         }
+    }
+
+    /// `RedStoneOreBlock.stepOn`: standing on the ore lights it, unless the
+    /// entity is stepping carefully (`attack_block` only lights an unlit ore).
+    fn step_on_redstone_ore(&mut self, at: [f64; 3], carefully: bool) {
+        if carefully {
+            return;
+        }
+        // getOnPosLegacy: 0.2 below the feet.
+        let pos = [
+            at[0].floor() as i32,
+            (at[1] - 0.2).floor() as i32,
+            at[2].floor() as i32,
+        ];
+        if matches!(
+            &*self.block_name(pos),
+            "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+        ) {
+            let _ = self.attack_block(pos);
+        }
+    }
+
+    /// `RedStoneOreBlock.useItemOn`: a right-click lights the ore whatever the
+    /// hand holds. False (PASS) when the hand holds a block item, which goes on
+    /// to be placed; true (SUCCESS) otherwise.
+    pub(super) fn use_redstone_ore(
+        &mut self,
+        pos: [i32; 3],
+        held: Option<&horizon_client::items::ItemStack>,
+    ) -> Result<bool> {
+        if !matches!(
+            &*self.block_name(pos),
+            "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+        ) {
+            return Ok(false);
+        }
+        self.attack_block(pos)?;
+        let block_item = held.is_some_and(|s| {
+            self.res
+                .items()
+                .get(&s.item)
+                .is_some_and(|i| i.block.is_some())
+        });
+        Ok(!block_item)
     }
 
     fn tick_mob_sculk_events(&mut self) {
@@ -1565,6 +1633,9 @@ impl Game<'_> {
             })
             .collect();
         for (id, at, on_ground, in_water, species, damaged) in snapshot {
+            if on_ground {
+                self.step_on_redstone_ore(at, false);
+            }
             let emits = !matches!(species, Species::Shulker);
             if emits {
                 self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);

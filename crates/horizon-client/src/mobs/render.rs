@@ -14,12 +14,38 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
+/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
+/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
+/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
+/// the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 13;
+
+/// `RenderTypes.breezeWind`: the texture of the breeze's wind layer scrolls
+/// by 0.02 of the texture per tick.
+pub const BREEZE_WIND_SCROLL: f32 = 0.02;
+/// `WindChargeRenderer.xOffset`: the wind charge's texture scrolls by 0.03 of
+/// the texture per tick.
+pub const WIND_CHARGE_SCROLL: f32 = 0.03;
+/// The offset of a scrolling texture: `RenderTypes.breezeWind` takes the
+/// texture's age times the speed, modulo one.
+pub fn scroll_offset(age: f32, speed: f32) -> f32 {
+    (age * speed) % 1.0
+}
+/// The vertex's U with the scroll: the texture matrix of
+/// `RenderTypes.breezeWind` moves the texture under the model, so the U
+/// moves by the offset and wraps around the texture.
+fn scroll_u(u: f32, scroll: f32) -> f32 {
+    if scroll == 0.0 { u } else { (u + scroll) % 1.0 }
+}
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
     pub texture: String,
     pub color: u32,
     pub full_bright: bool,
+    /// `RenderTypes.breezeWind`: the texture scrolls with the entity's age.
+    pub scroll: f32,
 }
 /// DyeColor.getTextureDiffuseColor (RGB).
 pub const DYE: [u32; 16] = [
@@ -48,6 +74,21 @@ pub const DYE_NAMES: [&str; 16] = [
 pub fn abgr(rgb: u32) -> u32 {
     let (r, g, b) = ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
     0xFF00_0000 | b << 16 | g << 8 | r
+}
+
+/// `EquipmentLayerRenderer.getColorForLayer`: a dyeable layer takes the
+/// stack's dye colour (`minecraft:dyed_color`), the colour it has when
+/// undyed otherwise; a layer that is not dyeable is not tinted.
+pub fn armor_tint(undyed: Option<u32>, stack: Option<&crate::items::ItemStack>) -> u32 {
+    let Some(undyed) = undyed else {
+        return 0xFFFF_FFFF;
+    };
+    let dyed = stack
+        .and_then(|s| s.extra.as_ref())
+        .and_then(|e| e.dyed_color)
+        .map(|d| d as u32)
+        .unwrap_or(undyed);
+    abgr(dyed)
 }
 /// ColorLerper.Type.SHEEP colour: white is 0xE6E6E6, others 75% of the dye.
 pub fn sheep_wool_rgb(color: u8) -> u32 {
@@ -109,8 +150,9 @@ pub fn body(m: &Mob) -> (String, String) {
         }
     };
     if avatar(m) {
+        // AvatarRenderer: PlayerModel's slim layer for a slim skin.
         return (
-            "main".into(),
+            if m.slim { "player_slim#main" } else { "main" }.into(),
             m.skin.clone().unwrap_or_else(|| m.kind.texture.clone()),
         );
     }
@@ -136,6 +178,10 @@ pub fn body(m: &Mob) -> (String, String) {
         S::Wolf => (
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
+        ),
+        S::Panda => (
+            baby_or(m, "panda#main", "panda_baby#main"),
+            super::panda::texture(m),
         ),
         S::HappyGhast => (
             baby_or(m, "happy_ghast#main", "happy_ghast_baby#main"),
@@ -243,6 +289,20 @@ pub fn body(m: &Mob) -> (String, String) {
         S::Armadillo => (
             baby_or(m, "armadillo#main", "armadillo_baby#main"),
             b(&m.kind.texture),
+        ),
+        // FoxRenderer.getTextureLocation: snow variant, sleeping, baby.
+        S::Fox => (
+            baby_or(m, "fox#main", "fox_baby#main"),
+            format!(
+                "entity/fox/fox{}{}{}",
+                if m.extra.variant == 0 { "" } else { "_snow" },
+                if super::fox::flag(m, super::fox::SLEEPING) {
+                    "_sleep"
+                } else {
+                    ""
+                },
+                if baby { "_baby" } else { "" },
+            ),
         ),
         S::Pig => {
             let model = if baby {
@@ -412,16 +472,41 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             texture: texture.into(),
             color,
             full_bright,
+            scroll: 0.0,
         })
     };
     match m.species() {
-        // WolfCollarLayer.
+        // WolfArmorLayer, then WolfCollarLayer.
         S::Wolf if m.extra.tame => {
             let (model, texture) = if m.is_baby() {
                 ("wolf_baby#main", "entity/wolf/wolf_collar_baby")
             } else {
                 ("wolf#main", "entity/wolf/wolf_collar")
             };
+            // The armor, then the cracks of its damage (`Crackiness.WOLF_ARMOR`).
+            if !m.is_baby() && m.extra.head.as_deref() == Some("minecraft:wolf_armor") {
+                let left = (super::WOLF_ARMOR_DURABILITY - m.extra.body_damage) as f32
+                    / super::WOLF_ARMOR_DURABILITY as f32;
+                push(
+                    &mut v,
+                    "wolf_armor#main",
+                    "entity/equipment/wolf_body/armadillo_scute",
+                    white,
+                    false,
+                );
+                let crack = [(0.32, "high"), (0.69, "medium"), (0.95, "low")]
+                    .iter()
+                    .find(|(t, _)| left < *t);
+                if let Some((_, level)) = crack {
+                    push(
+                        &mut v,
+                        "wolf_armor#main",
+                        &format!("entity/wolf/wolf_armor_crackiness_{level}"),
+                        white,
+                        false,
+                    );
+                }
+            }
             push(
                 &mut v,
                 model,
@@ -441,16 +526,17 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 push(&mut v, "happy_ghast_harness#main", &texture, white, false);
             }
         }
-        // BreezeWindLayer (the scroll is not reproduced: atlas sprites do
-        // not wrap) and BreezeEyesLayer.
+        // BreezeWindLayer and BreezeEyesLayer. The wind layer's texture
+        // scrolls (`RenderTypes.breezeWind`): the offset is taken inside the
+        // sprite, so the atlas does not have to wrap.
         S::Breeze => {
-            push(
-                &mut v,
-                "breeze#wind",
-                "entity/breeze/breeze_wind",
-                white,
-                false,
-            );
+            v.push(Layer {
+                model: "breeze#wind".into(),
+                texture: "entity/breeze/breeze_wind".into(),
+                color: white,
+                full_bright: false,
+                scroll: scroll_offset(m.age as f32, BREEZE_WIND_SCROLL),
+            });
             push(
                 &mut v,
                 "breeze#eyes",
@@ -664,14 +750,6 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             false,
         ),
-        // EnergySwirlLayer (the scroll is not reproduced: atlas sprites do not wrap).
-        S::Creeper if m.extra.charged => push(
-            &mut v,
-            "creeper#armor",
-            "entity/creeper/creeper_armor",
-            0x80FF_FFFF,
-            true,
-        ),
         S::TropicalFish => {
             // TropicalFishPatternLayer: the pattern tinted with the pattern colour.
             let (model, letter, n) = if m.extra.variant < 6 {
@@ -744,7 +822,8 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
 /// `HumanoidArmorLayer`: the armour models of the mob's main model with the
 /// equipment textures (leather tinted, with its overlay).
 fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
-    if super::equine::is_equine(m.species()) {
+    // A player's or mannequin's armour is drawn by the game's armour layers.
+    if super::equine::is_equine(m.species()) || avatar(m) {
         return;
     }
     let (model, _) = body(m);
@@ -752,12 +831,12 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
         return;
     };
     let slots = [
-        (&m.extra.head, "helmet"),
-        (&m.extra.chest, "chestplate"),
-        (&m.extra.legs, "leggings"),
-        (&m.extra.feet, "boots"),
+        (&m.extra.head, &m.extra.armor[0], "helmet"),
+        (&m.extra.chest, &m.extra.armor[1], "chestplate"),
+        (&m.extra.legs, &m.extra.armor[2], "leggings"),
+        (&m.extra.feet, &m.extra.armor[3], "boots"),
     ];
-    for (item, layer) in slots {
+    for (item, stack, layer) in slots {
         let Some(name) = item.as_deref().and_then(|i| i.strip_prefix("minecraft:")) else {
             continue;
         };
@@ -775,8 +854,10 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
             "humanoid"
         };
         let model = format!("{base}#{layer}");
+        // EquipmentLayerRenderer.getColorForLayer: the leather layer takes
+        // the stack's dye colour, the colour it has when undyed otherwise.
         let tint = if asset == "leather" {
-            abgr(0xA06540)
+            armor_tint(Some(0xA06540), stack.as_ref())
         } else {
             0xFFFF_FFFF
         };
@@ -785,6 +866,7 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
             texture: format!("entity/equipment/{folder}/{asset}"),
             color: tint,
             full_bright: false,
+            scroll: 0.0,
         });
         if asset == "leather" {
             v.push(Layer {
@@ -792,6 +874,7 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
                 texture: format!("entity/equipment/{folder}/leather_overlay"),
                 color: 0xFFFF_FFFF,
                 full_bright: false,
+                scroll: 0.0,
             });
         }
     }
@@ -883,6 +966,17 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
                 (sign * horizon_core::jmath::acos(dot.abs().min(1.0))) as f32,
             );
         }
+    } else if m.species() == Species::Drowned {
+        // DrownedRenderer.setupRotations: tip toward the look pitch about
+        // the middle of the box while swimming.
+        let amount = m.extra.swim.amount(alpha);
+        if amount > 0.0 {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            let middle = glam::Vec3::new(0.0, m.height() / 2.0, 0.0);
+            base *= glam::Mat4::from_translation(middle)
+                * glam::Mat4::from_rotation_x((amount * (-10.0 - pitch)).to_radians())
+                * glam::Mat4::from_translation(-middle);
+        }
     } else if m.extra.swim.amount(alpha) > 0.0 {
         // AvatarRenderer.setupRotations: tip forward with the swim amount,
         // following the pitch in water, then lie along the swimming box.
@@ -929,7 +1023,13 @@ fn flip_degrees(m: &Mob) -> f32 {
 fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Cat => super::tame::cat_rotations(m, alpha),
+        Species::Panda => super::panda::rotations(m, alpha),
         Species::Shulker => super::shulker::rotations(m),
+        // FoxRenderer.setupRotations: the body follows a pounce's pitch.
+        Species::Fox if super::fox::flag(m, super::fox::POUNCING | super::fox::FACEPLANTED) => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x((-pitch).to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -988,12 +1088,30 @@ pub fn draw(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
+    draw_scrolled(part, base, poses, uv, 0.0, color, light, overlay, out);
+}
+/// `draw` for a texture that scrolls: the vertex's U is moved by the offset
+/// and wraps inside the texture, as the texture matrix of
+/// `RenderTypes.breezeWind` does.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_scrolled(
+    part: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    uv: [f32; 4],
+    scroll: f32,
+    color: u32,
+    light: u32,
+    overlay: u32,
+    out: &mut Vec<Vertex>,
+) {
     draw_normals(
         part,
         base,
         ModelNormals::new(base),
         poses,
         uv,
+        scroll,
         color,
         light,
         overlay,
@@ -1007,6 +1125,7 @@ fn draw_normals(
     normals: ModelNormals,
     poses: &Poses,
     uv: [f32; 4],
+    scroll: f32,
     color: u32,
     light: u32,
     overlay: u32,
@@ -1033,22 +1152,30 @@ fn draw_normals(
             let normal = poly.vertex_normal(normals);
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                // The armour glint scrolls the layer's model UV in the shader;
+                // the item path already passed its transformed UV.
+                let glint_uv = if overlay == ARMOR_GLINT {
+                    [v[3], v[4]]
+                } else {
+                    [0.0, 0.0]
+                };
                 out.push(Vertex {
                     normal,
                     pos: pos.to_array(),
                     uv: [
-                        uv[0] + (uv[2] - uv[0]) * v[3],
+                        uv[0] + (uv[2] - uv[0]) * scroll_u(v[3], scroll),
                         uv[1] + (uv[3] - uv[1]) * v[4],
                     ],
                     layer: overlay,
                     color,
                     light,
+                    glint_uv,
                 });
             }
         }
     }
     for c in &part.children {
-        draw_normals(c, m, normals, poses, uv, color, light, overlay, out);
+        draw_normals(c, m, normals, poses, uv, scroll, color, light, overlay, out);
     }
 }
 /// Render a mob with its variant model, texture and layers.
@@ -1169,6 +1296,7 @@ fn render_visible(
                     texture: texture.into(),
                     color: ((a.clamp(0.0, 1.0) * 255.0) as u32) << 24 | 0x00FF_FFFF,
                     full_bright: true,
+                    scroll: 0.0,
                 });
             }
         }
@@ -1203,18 +1331,19 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the glint (7) when enchanted.
+        // the hurt tint, the armour glint (13) when enchanted.
         let overlay = match armor_slot(&layer.model) {
-            Some(slot) if super::gear::enchanted(m, slot) => 7,
+            Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
             None => overlay,
         };
         let start = out.len();
-        draw(
+        draw_scrolled(
             &part,
             base,
             &layer_poses,
             uv,
+            layer.scroll,
             layer.color,
             light,
             overlay,
@@ -1226,8 +1355,48 @@ fn render_visible(
             }
         }
     }
+    // EnergySwirlLayer: the armour model, additive, scrolling over the sprite.
+    if let Some((model, texture, x_offset)) = energy_swirl(m, s.age)
+        && let Some(part) = m.kind.layer(model)
+        && let Some([u0, v0, u1, v1]) = atlas(texture)
+    {
+        layer_poses.reset(part);
+        anim::setup(m, &s, &mut layer_poses, &data.animations);
+        // `RenderTypes.energySwirl`'s texture offset, as the sprite-local UV.
+        let (du, dv) = (x_offset % 1.0, s.age * 0.01 % 1.0);
+        let start = out.len();
+        draw(
+            part,
+            base,
+            &layer_poses,
+            [du, dv, 1.0 + du, 1.0 + dv],
+            crate::breaking::stage_light([u1 - u0, v1 - v0]),
+            crate::breaking::stage_light([u0, v0]),
+            crate::gfx::ENERGY_SWIRL_OVERLAY,
+            out,
+        );
+        // No lighting: the colour bytes carry the sprite's size (fs_energy_swirl).
+        for vertex in &mut out[start..] {
+            vertex.normal = [0; 4];
+        }
+    }
     if shell_last {
         draw_body(out);
+    }
+}
+/// `EnergySwirlLayer`'s model, texture and `xOffset(t)` for a charged creeper
+/// (`CreeperPowerLayer`) or a powered wither (`WitherArmorLayer`); `t` is `ageInTicks`.
+fn energy_swirl(m: &Mob, t: f32) -> Option<(&'static str, &'static str, f32)> {
+    match m.species() {
+        Species::Creeper if m.extra.charged => {
+            Some(("creeper#armor", "entity/creeper/creeper_armor", t * 0.01))
+        }
+        Species::Wither if super::wither::powered(m) => Some((
+            "wither#armor",
+            "entity/wither/wither_armor",
+            (t * 0.02).mcos() * 3.0,
+        )),
+        _ => None,
     }
 }
 /// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).
@@ -1304,8 +1473,12 @@ fn hand_base(
             | Species::WitherSkeleton
     );
     let arm = if left { "left_arm" } else { "right_arm" };
+    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
+    // by 0.5 for slim arms: the hand is the middle of the arm.
     let offset = if skeleton {
         if left { -1.0 } else { 1.0 }
+    } else if avatar(m) && m.slim {
+        if left { -0.5 } else { 0.5 }
     } else {
         0.0
     };
@@ -1363,6 +1536,12 @@ pub fn held_item_transform(
     data: &MobData,
     left: bool,
 ) -> Option<glam::Mat4> {
+    // PandaHoldsItemLayer: the main hand's item in its mouth.
+    if m.species() == Species::Panda {
+        return super::panda::item_offset(m, alpha)
+            .filter(|_| !left)
+            .map(|offset| base_transform(m, alpha, camera) * offset);
+    }
     if !super::illager::shows_item(m) {
         return None;
     }
@@ -1376,7 +1555,23 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    hand_base(m, &model, base, &poses, left)
+    let mut t = hand_base(m, &model, base, &poses, left)?;
+    // ItemInHandLayer: a spear in use (ArmPose.SPEAR's animateUseItem).
+    let off_hand = left != m.main_arm_left();
+    if m.extra.using_item > 0
+        && m.extra.using_off_hand == off_hand
+        && let Some(kinetic) = (if off_hand {
+            &m.extra.off_hand
+        } else {
+            &m.extra.main_hand
+        })
+        .as_deref()
+        .and_then(crate::spear::Kinetic::of)
+    {
+        let time_held = m.extra.using_item as f32 + s.partial;
+        t *= crate::spear::third_person_use_item(&kinetic, time_held, s.swing, 0.0, !left);
+    }
+    Some(t)
 }
 
 #[cfg(test)]
@@ -1540,5 +1735,53 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn a_dyed_leather_armour_keeps_its_colour() {
+        // EquipmentLayerRenderer.getColorForLayer: a dyeable layer takes
+        // the stack's dye colour, the colour it has when undyed otherwise.
+        let mut stack = crate::items::ItemStack {
+            item: "minecraft:leather_helmet".into(),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        // Undyed leather: the colour the leather layer has when undyed.
+        assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0xA06540));
+        // Dyed: the stack's own colour.
+        stack.extra = Some(Box::new(crate::item_data::StackData {
+            dyed_color: Some(0x0000FF),
+            ..Default::default()
+        }));
+        assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
+        // A layer that is not dyeable is not tinted.
+        assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn the_scrolling_texture_wraps_around() {
+        // RenderTypes.breezeWind: the breeze's wind layer's texture scrolls
+        // by 0.02 of the texture per tick, the wind charge's by 0.03.
+        assert_eq!(scroll_offset(0.0, BREEZE_WIND_SCROLL), 0.0);
+        assert!((scroll_offset(25.0, BREEZE_WIND_SCROLL) - 0.5).abs() < 1e-6);
+        assert!((scroll_offset(50.0, BREEZE_WIND_SCROLL) - 0.0).abs() < 1e-6);
+        assert!((scroll_offset(50.0, WIND_CHARGE_SCROLL) - 0.5).abs() < 1e-6);
+        assert!((scroll_offset(100.0, WIND_CHARGE_SCROLL) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_scrolled_u_wraps_inside_the_texture() {
+        // Without a scroll the U is the vertex's own.
+        assert_eq!(scroll_u(0.25, 0.0), 0.25);
+        assert_eq!(scroll_u(1.0, 0.0), 1.0);
+        // With one, it moves and wraps around the texture.
+        assert!((scroll_u(0.25, 0.5) - 0.75).abs() < 1e-6);
+        assert!((scroll_u(0.75, 0.5) - 0.25).abs() < 1e-6);
+        assert!((scroll_u(1.0, 0.5) - 0.5).abs() < 1e-6);
     }
 }

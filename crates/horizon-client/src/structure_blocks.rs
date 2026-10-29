@@ -69,6 +69,12 @@ pub fn loot_item_with_components(s: &horizon_world::loot::LootStack) -> ItemStac
             .stew_effects
             .push((Arc::from(effect.as_str()), *duration));
     }
+    for (id, text) in &s.names {
+        item.data_mut().set_loot_name(id, text);
+    }
+    for (id, value) in &s.components {
+        item.data_mut().set_loot_component(id, value);
+    }
     item
 }
 
@@ -258,6 +264,23 @@ mod tests {
     use horizon_world::loot::{ExplorationMap, LootStack};
 
     #[test]
+    fn generated_end_gateway_keeps_its_exit() {
+        let Tag::Compound(nbt) = Tag::compound([
+            ("exit_portal", Tag::IntArray(vec![100, 50, 0])),
+            ("ExactTeleport", Tag::Byte(1)),
+        ]) else {
+            unreachable!()
+        };
+        let Some(BlockEntity::EndGateway(g)) =
+            generated_block_entity("minecraft:end_gateway", &nbt)
+        else {
+            panic!("gateway");
+        };
+        assert_eq!(g.exit_portal, Some([100, 50, 0]));
+        assert!(g.exact_teleport);
+    }
+
+    #[test]
     fn placed_chest_loot_keeps_its_enchantments_and_potions() {
         let stack =
             |item: &str, enchantments: Vec<(String, i32)>, potion: Option<&str>| LootStack {
@@ -270,6 +293,8 @@ mod tests {
                 exploration: None,
                 ominous_amplifier: None,
                 stew_effects: Vec::new(),
+                names: Vec::new(),
+                components: Vec::new(),
             };
         // An End city chest's enchant_with_levels roll.
         let boots = loot_item_with_components(&stack(
@@ -332,6 +357,8 @@ mod tests {
             })))),
             ominous_amplifier: None,
             stew_effects: Vec::new(),
+            names: Vec::new(),
+            components: Vec::new(),
         };
         let mut item = loot_item(&stack);
         assert!(has_pending_map(&item));

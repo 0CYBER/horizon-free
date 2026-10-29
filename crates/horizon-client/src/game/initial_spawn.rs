@@ -212,39 +212,58 @@ impl Game<'_> {
             )
             .is_ok_and(|shape| shape.is_empty())
     }
-    /// PlayerSpawnFinder.findSpawn around the world spawn: the feet of a
-    /// player who has no position yet. None while a candidate's chunk loads.
-    pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
-        let mut finder = match self.player_spawn {
-            Some(finder) => finder,
-            None => self.spawn_finder(suggestion),
-        };
-        let found = loop {
+    /// PlayerSpawnFinder.findSpawn around the world spawn, as far as the loaded
+    /// chunks allow: the feet of the first free column within the respawn
+    /// radius, else the suggestion's own column. The finder waits in `state`
+    /// (None to begin); Err gives the chunk of the candidate being waited for,
+    /// which the caller must have loaded (the finder tries at most 1024
+    /// columns).
+    pub(super) fn search_spawn(
+        &self,
+        suggestion: [i32; 3],
+        state: &mut Option<PlayerSpawnFinder>,
+    ) -> std::result::Result<Vec3, (i32, i32)> {
+        let mut finder = state
+            .take()
+            .unwrap_or_else(|| self.spawn_finder(suggestion));
+        let suggestion = finder.suggestion;
+        loop {
             let Some(candidate) = finder.next_candidate() else {
-                break Some(self.fixup_spawn_height(suggestion));
+                return Ok(self.fixup_spawn_height(suggestion));
             };
             let (x, z) = match candidate {
                 SpawnCandidate::Column(x, z) => (x, z),
                 SpawnCandidate::Suggestion => (suggestion[0], suggestion[2]),
             };
             if !self.streaming.is_lit(x >> 4, z >> 4) {
-                self.streaming.center = (x >> 4, z >> 4);
                 finder.retry();
-                break None;
+                *state = Some(finder);
+                return Err((x >> 4, z >> 4));
             }
             match candidate {
                 SpawnCandidate::Column(x, z) => {
                     if let Some(pos) = level_respawn_pos(&self.spawn_columns(), x, z)
                         && self.player_fits(pos)
                     {
-                        break Some(bottom_center(pos));
+                        return Ok(bottom_center(pos));
                     }
                 }
-                SpawnCandidate::Suggestion => break Some(self.fixup_spawn_height(suggestion)),
+                SpawnCandidate::Suggestion => return Ok(self.fixup_spawn_height(suggestion)),
             }
-        };
-        self.player_spawn = found.is_none().then_some(finder);
-        Ok(found)
+        }
+    }
+    /// PlayerSpawnFinder.findSpawn around the world spawn: the feet of a
+    /// player who has no position yet. None while a candidate's chunk loads.
+    pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
+        let mut state = self.player_spawn.take();
+        match self.search_spawn(suggestion, &mut state) {
+            Ok(feet) => Ok(Some(feet)),
+            Err(chunk) => {
+                self.streaming.center = chunk;
+                self.player_spawn = state;
+                Ok(None)
+            }
+        }
     }
     /// A new PlayerSpawnFinder around `suggestion`: the respawn radius, cut
     /// by the world border; the suggestion itself in adventure mode.

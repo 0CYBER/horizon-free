@@ -318,7 +318,11 @@ pub fn work_sound(profession: u8) -> Option<&'static str> {
 pub fn crop(w: &MobWorld, p: [i32; 3]) -> bool {
     matches!(
         w.block_name(p[0], p[1], p[2]),
-        "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" | "minecraft:beetroots"
+        "minecraft:wheat"
+            | "minecraft:carrots"
+            | "minecraft:potatoes"
+            | "minecraft:beetroots"
+            | "minecraft:torchflower_crop"
     )
 }
 /// `CropBlock.isMaxAge` for the block at `p`.
@@ -326,6 +330,8 @@ pub fn ripe_crop(w: &MobWorld, p: [i32; 3]) -> bool {
     let max = match w.block_name(p[0], p[1], p[2]) {
         "minecraft:wheat" | "minecraft:carrots" | "minecraft:potatoes" => "7",
         "minecraft:beetroots" => "3",
+        // TorchflowerCropBlock.getMaxAge is 2, past its age property (0-1):
+        // the crop is never at max age (age 2 is the torchflower itself).
         _ => return false,
     };
     w.prop(p[0], p[1], p[2], "age") == Some(max)
@@ -353,18 +359,14 @@ pub fn food_points(item: &str) -> i32 {
         _ => 0,
     }
 }
-/// The farmer's `requestedItems`.
+/// The farmer's `requestedItems` (`VillagerProfession.FARMER`). Food is picked
+/// up and traded separately, through its villager food value.
 pub fn farmer_items() -> &'static [&'static str] {
     &[
-        "minecraft:bread",
-        "minecraft:potato",
-        "minecraft:carrot",
         "minecraft:wheat",
         "minecraft:wheat_seeds",
-        "minecraft:beetroot",
         "minecraft:beetroot_seeds",
-        "minecraft:torchflower_seeds",
-        "minecraft:pitcher_pod",
+        "minecraft:bone_meal",
     ]
 }
 /// A villager's `requestedItems` by profession.

@@ -2,6 +2,7 @@
 //! textures, and a batch of textured quads in GUI pixels (vanilla's automatic
 //! GUI scale is applied when drawing).
 use crate::Result;
+use horizon_assets::animation::AnimationMetadata;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -64,9 +65,17 @@ pub struct HudAtlas {
     /// Sprites whose `.png.mcmeta` sets `blur` or `clamp`; the others
     /// sample as vanilla's defaults (nearest, repeat).
     pub flags: HashMap<String, TextureFlags>,
-    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
+    /// Every animated block or item sprite the atlas packs: its atlas rect
+    /// and the mcmeta-driven frame list, re-uploaded into the rect as the
+    /// frames turn (vanilla's stitched atlas animates all of these).
+    pub sprite_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
+    /// `misc/enchanted_glint_item` as its own image: vanilla's `GlintSampler`
+    /// repeats it per pixel, which one sprite inside this atlas cannot.
+    pub glint: (Vec<u8>, u32, u32),
+    /// `misc/enchanted_glint_armor`, the armour layers' `GlintSampler`.
+    pub glint_armor: (Vec<u8>, u32, u32),
     white: Rect,
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
@@ -142,6 +151,21 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 /// A packed atlas image: sprite name, size and RGBA pixels.
 type PackedImage = (String, u32, u32, Vec<u8>);
+/// A frame of an animated strip at `x, y`, nearest-resampled to the longer
+/// side of the frame: array layers are square, as `Sprites::load` keeps them
+/// for the world's sprite arrays.
+fn strip_frame(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+    let side = w.max(h);
+    let mut out = Vec::with_capacity((side * side * 4) as usize);
+    for row in 0..side {
+        let source_row = y + row * h / side;
+        for column in 0..side {
+            let at = ((source_row * stride + x + column * w / side) * 4) as usize;
+            out.extend_from_slice(&pixels[at..at + 4]);
+        }
+    }
+    out
+}
 /// `image` inside a one-texel border copied from its opposite edges, the
 /// texels repeat addressing reads past each edge.
 fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
@@ -373,7 +397,7 @@ impl HudAtlas {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
-        type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>);
+        type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>, bool);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
             let name = path
                 .strip_prefix(&textures)
@@ -381,12 +405,35 @@ impl HudAtlas {
                 .with_extension("")
                 .to_string_lossy()
                 .replace('\\', "/");
-            let (w, mut h, pixels) = decode(path).ok()?;
-            // Animated strips keep their first frame.
+            let (mut w, mut h, pixels) = decode(path).ok()?;
+            let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
+            let animation = mcmeta
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .and_then(|meta| {
+                    meta.get("animation")
+                        .and_then(|section| AnimationMetadata::from_json(&section.to_string()).ok())
+                });
+            // An animated strip keeps its first frame: the region the mcmeta's
+            // frame size picks (`AnimationMetadataSection.frameSize`), which is
+            // the top-left square unless it names other dimensions or the
+            // frames run along a row.
             let frames = name.starts_with("block/") || name.starts_with("item/");
-            let pixels = if frames && h > w {
-                h = w;
-                pixels[..(w * w * 4) as usize].to_vec()
+            let pixels = if frames {
+                let stride = w;
+                let [fw, fh] = animation.as_ref().map_or([w.min(h) as i32; 2], |meta| {
+                    meta.frame_size(w as i32, h as i32)
+                });
+                match (u32::try_from(fw), u32::try_from(fh)) {
+                    (Ok(fw), Ok(fh))
+                        if fw > 0 && fh > 0 && w % fw == 0 && h % fh == 0 && (fw, fh) != (w, h) =>
+                    {
+                        let side = fw.max(fh);
+                        (w, h) = (side, side);
+                        strip_frame(&pixels, stride, 0, 0, fw, fh)
+                    }
+                    _ => pixels,
+                }
             } else {
                 pixels
             };
@@ -394,16 +441,19 @@ impl HudAtlas {
             let gui_size = default_textures
                 .as_ref()
                 .and_then(|d| png_size(&d.join(format!("{name}.png"))))
-                .map(|(dw, dh)| (dw, if frames { dh.min(dw) } else { dh }))
+                .map(|(dw, dh)| {
+                    let side = dw.min(dh);
+                    if frames { (side, side) } else { (dw, dh) }
+                })
                 .filter(|&size| size != (w, h));
-            let flags = fs::read_to_string(path.with_extension("png.mcmeta"))
-                .ok()
-                .and_then(|json| TextureFlags::from_mcmeta(&json));
+            let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
+            let animated = frames && animation.is_some();
             let (gw, gh) = gui_size.unwrap_or((w, h));
             (gw <= 1024 && (gh <= 512 || name.starts_with("font/"))).then_some((
                 (name, w, h, pixels),
                 flags,
                 gui_size,
+                animated,
             ))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
@@ -422,13 +472,17 @@ impl HudAtlas {
         });
         let mut flags = HashMap::new();
         let mut gui_sizes = HashMap::new();
+        let mut animated: Vec<String> = Vec::new();
         let mut images: Vec<PackedImage> = Vec::with_capacity(decoded.len());
-        for (image, image_flags, gui_size) in decoded {
+        for (image, image_flags, gui_size, is_animated) in decoded {
             if let Some(f) = image_flags {
                 flags.insert(image.0.clone(), f);
             }
             if let Some(size) = gui_size {
                 gui_sizes.insert(image.0.clone(), size);
+            }
+            if is_animated {
+                animated.push(image.0.clone());
             }
             images.push(image);
         }
@@ -495,37 +549,36 @@ impl HudAtlas {
                 },
             );
         }
-        let mut fire_sprites = crate::sprites::Sprites::default();
-        let mut fire_animations = Vec::new();
-        for name in [
-            "block/fire_0",
-            "block/fire_1",
-            "block/soul_fire_0",
-            "block/soul_fire_1",
-        ] {
-            if let Some(rect) = sprites.get(name).copied() {
-                let layer = fire_sprites.insert(root, &format!("minecraft:{name}"))?;
-                if let Some(animation) = fire_sprites
-                    .animations
-                    .iter()
-                    .find(|a| a.layer == layer)
-                    .cloned()
-                {
-                    let (tw, th) = rect.texels((width, height));
-                    let image = animation.resized_pixels(animation.frame(0), tw, th);
-                    let x = (rect.u0 * width as f32).round() as usize;
-                    let y = (rect.v0 * height as f32).round() as usize;
-                    let row_bytes = tw as usize * 4;
-                    for row in 0..th as usize {
-                        let dst = ((y + row) * width as usize + x) * 4;
-                        let src = row * row_bytes;
-                        pixels[dst..dst + row_bytes].copy_from_slice(&image[src..src + row_bytes]);
-                    }
-                    fire_animations.push((rect, animation));
-                }
+        // Every animated sprite animates: the packed strip is the raw first
+        // frame, while the mcmeta's frame list may start anywhere, so each
+        // animation's frame(0) overwrites its atlas rect before drawing.
+        let mut loaded = crate::sprites::Sprites::default();
+        let mut sprite_animations = Vec::new();
+        animated.sort();
+        for name in animated {
+            let Some(rect) = sprites.get(&name).copied() else {
+                continue;
+            };
+            let layer = loaded.insert(root, &format!("minecraft:{name}"))?;
+            let Some(animation) = loaded.animations.iter().find(|a| a.layer == layer).cloned()
+            else {
+                continue;
+            };
+            let (tw, th) = rect.texels((width, height));
+            let image = animation.resized_pixels(animation.frame(0), tw, th);
+            let x = (rect.u0 * width as f32).round() as usize;
+            let y = (rect.v0 * height as f32).round() as usize;
+            let row_bytes = tw as usize * 4;
+            for row in 0..th as usize {
+                let dst = ((y + row) * width as usize + x) * 4;
+                let src = row * row_bytes;
+                pixels[dst..dst + row_bytes].copy_from_slice(&image[src..src + row_bytes]);
             }
+            sprite_animations.push((rect, animation));
         }
         let white = sprites["horizon/white"];
+        let glint = Self::glint_texture(root, defaults, "enchanted_glint_item");
+        let glint_armor = Self::glint_texture(root, defaults, "enchanted_glint_armor");
         let font = crate::font::Font::load(
             root,
             &sprites,
@@ -541,10 +594,22 @@ impl HudAtlas {
             sprites,
             translucent,
             flags,
-            fire_animations,
+            sprite_animations,
+            glint,
+            glint_armor,
             font,
             white,
         })
+    }
+    /// `misc/<name>.png` on its own, or a transparent texel if the resource
+    /// pack lacks it.
+    fn glint_texture(root: &Path, defaults: &Path, name: &str) -> (Vec<u8>, u32, u32) {
+        let relative = format!("assets/minecraft/textures/misc/{name}.png");
+        let mut path = root.join(&relative);
+        if !path.exists() && defaults != root {
+            path = defaults.join(&relative);
+        }
+        decode(&path).map_or((vec![0; 4], 1, 1), |(w, h, pixels)| (pixels, w, h))
     }
 }
 #[repr(C)]
@@ -554,6 +619,9 @@ pub struct HudVertex {
     pub uv: [f32; 2],
     pub color: u32,
     pub depth: f32,
+    /// The `GLINT_TEXTURING` UV into the repeating glint texture, unused
+    /// unless `uv.x >= 2`.
+    pub glint_uv: [f32; 2],
 }
 /// The GUI Scale option (0 = auto).
 pub static GUI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -569,6 +637,8 @@ pub struct HudBatch {
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
     /// The textures and time of the `Blend::EndPortal` runs.
     pub end_portal: EndPortalFill,
+    /// `options.glintStrength` for the glint pass (`GlintAlpha`).
+    pub glint_alpha: f32,
     /// Screen's first vertex: the preceding HUD is part of its blurred background.
     pub blur_at: u32,
 }
@@ -620,6 +690,7 @@ impl HudBatch {
             patches: Vec::new(),
             blends: Vec::new(),
             end_portal: EndPortalFill::default(),
+            glint_alpha: 0.75,
             blur_at: 0,
         }
     }
@@ -695,6 +766,26 @@ impl HudBatch {
                 uv: uv[i],
                 color,
                 depth: 0.0,
+                glint_uv: [0.0, 0.0],
+            });
+        }
+    }
+    /// A quad whose texture is the `GLINT_TEXTURING` sample at `glint_uv`;
+    /// `uv` is the item's atlas UV, which the shader masks by.
+    pub fn quad_glint(
+        &mut self,
+        p: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        glint_uv: [[f32; 2]; 4],
+        color: u32,
+    ) {
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: p[i],
+                uv: uv[i],
+                color,
+                depth: 0.0,
+                glint_uv: glint_uv[i],
             });
         }
     }
@@ -705,6 +796,7 @@ impl HudBatch {
                 uv: uv[i],
                 color,
                 depth: p[i][2],
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -875,6 +967,7 @@ impl HudBatch {
                 uv,
                 color: c[i],
                 depth: 0.0,
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -1035,7 +1128,7 @@ impl HudUniform {
     }
 }
 pub struct HudRenderer {
-    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation, usize)>,
+    pub sprite_animations: Vec<(Rect, crate::sprites::SpriteAnimation, (usize, usize, u32))>,
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
@@ -1055,6 +1148,8 @@ impl HudRenderer {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         view: &wgpu::TextureView,
+        glint_view: &wgpu::TextureView,
+        glint_sampler: &wgpu::Sampler,
     ) -> Result<Self> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon HUD"),
@@ -1099,6 +1194,22 @@ impl HudRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1117,6 +1228,14 @@ impl HudRenderer {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(glint_sampler),
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1124,7 +1243,8 @@ impl HudRenderer {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32];
+        let attributes =
+            wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32,4=>Float32x2];
         let create = |label, blend, fragment_entry, depth: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -1237,7 +1357,7 @@ impl HudRenderer {
         });
         Ok(Self {
             atlas_texture: None,
-            fire_animations: Vec::new(),
+            sprite_animations: Vec::new(),
             pipeline,
             invert_pipeline,
             additive_pipeline,
@@ -1250,7 +1370,7 @@ impl HudRenderer {
             capacity,
         })
     }
-    pub fn animate_fire(
+    pub fn animate_sprites(
         &mut self,
         uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
@@ -1259,13 +1379,31 @@ impl HudRenderer {
         let Some(texture) = &self.atlas_texture else {
             return;
         };
-        for (rect, animation, previous) in &mut self.fire_animations {
-            let frame = animation.frame(tick);
-            if frame == *previous {
+        for (rect, animation, previous) in &mut self.sprite_animations {
+            // `SpriteContents.AnimationState`: the frame from the mcmeta's
+            // list, blended into the next one by the sub-frame's thousandths
+            // when the sprite interpolates.
+            let blend = animation.blend(tick);
+            let state = (blend.frame, blend.next, blend.millis);
+            if state == *previous {
                 continue;
             }
             let (w, h) = rect.texels((texture.width(), texture.height()));
-            let pixels = animation.resized_pixels(frame, w, h);
+            let pixels = if blend.millis == 0 {
+                animation.resized_pixels(blend.frame, w, h)
+            } else {
+                let current = animation.resized_pixels(blend.frame, w, h);
+                let next = animation.resized_pixels(blend.next, w, h);
+                let millis = blend.millis;
+                current
+                    .iter()
+                    .zip(next)
+                    .map(|(&a, b)| {
+                        ((u32::from(a) * (1000 - millis) + u32::from(b) * millis + 500) / 1000)
+                            as u8
+                    })
+                    .collect()
+            };
             uploads.texture(
                 encoder,
                 wgpu::TexelCopyTextureInfo {
@@ -1282,7 +1420,7 @@ impl HudRenderer {
                 h,
                 &pixels,
             );
-            *previous = frame;
+            *previous = state;
         }
     }
     /// Stage the batch's atlas patches, vertices and uniform: before the
@@ -1339,7 +1477,12 @@ impl HudRenderer {
             &self.uniform,
             0,
             bytemuck::bytes_of(&HudUniform::new(
-                [size[0] as f32, size[1] as f32, batch.scale, 0.0],
+                [
+                    size[0] as f32,
+                    size[1] as f32,
+                    batch.scale,
+                    batch.glint_alpha,
+                ],
                 batch.end_portal,
             )),
         );
@@ -1443,6 +1586,80 @@ impl HudRenderer {
 mod tests {
     use super::*;
 
+    /// Write a PNG `width x height` whose `frames` stacked rows are solid
+    /// colours, then its mcmeta beside it.
+    fn write_strip(path: &Path, width: u32, height: u32, frames: &[[u8; 4]], mcmeta: Option<&str>) {
+        let file = std::io::BufWriter::new(fs::File::create(path).unwrap());
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for frame in frames {
+            let rows = height / frames.len() as u32;
+            pixels.extend((0..width * rows).flat_map(|_| *frame));
+        }
+        writer.write_image_data(&pixels).unwrap();
+        writer.finish().unwrap();
+        if let Some(mcmeta) = mcmeta {
+            let meta = path.with_extension("png.mcmeta");
+            fs::write(meta, mcmeta).unwrap();
+        }
+    }
+    /// A resource root holding one animated block texture: a strip of two
+    /// 16x16 frames, red then blue, whose mcmeta starts on the blue one.
+    fn animated_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("horizon-atlas-anim-{}", std::process::id()));
+        let block = root.join("assets/minecraft/textures/block");
+        fs::create_dir_all(&block).unwrap();
+        write_strip(
+            &block.join("test_anim.png"),
+            16,
+            32,
+            &[[255, 0, 0, 255], [0, 0, 255, 255]],
+            Some(r#"{"animation": {"frames": [1, 0]}}"#),
+        );
+        root
+    }
+    fn texel_at(atlas: &HudAtlas, rect: Rect, x: u32, y: u32) -> [u8; 4] {
+        let px = (rect.u0 * atlas.width as f32).round() as u32 + x;
+        let py = (rect.v0 * atlas.height as f32).round() as u32 + y;
+        let at = ((py * atlas.width + px) * 4) as usize;
+        atlas.pixels[at..at + 4].try_into().unwrap()
+    }
+    #[test]
+    fn animated_block_sprites_register_and_pack_their_first_mcmeta_frame() {
+        let root = animated_root();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let (rect, animation) = atlas
+            .sprite_animations
+            .iter()
+            .find(|(_, animation)| animation.frame_count() == 2)
+            .expect("the animated block sprite");
+        // The mcmeta's list starts on the strip's second (blue) frame.
+        assert_eq!(animation.frame(0), 1);
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, *rect, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(texel_at(&atlas, *rect, 15, 15), [0, 0, 255, 255]);
+    }
+    #[test]
+    fn a_strip_frames_size_comes_from_its_mcmeta() {
+        let root = animated_root();
+        let block = root.join("assets/minecraft/textures/block");
+        // A row of two frames with the animation's own frame size.
+        write_strip(
+            &block.join("test_row.png"),
+            32,
+            16,
+            &[[0, 255, 0, 255], [255, 255, 0, 255]],
+            Some(r#"{"animation": {"width": 16, "height": 16}}"#),
+        );
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["block/test_row"];
+        // The first frame is the left 16x16, not the whole row.
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, rect, 0, 0), [0, 255, 0, 255]);
+    }
     /// `count` images of `w x h`; layout reads only their sizes.
     fn sized(count: usize, w: u32, h: u32) -> Vec<PackedImage> {
         (0..count)
@@ -1789,6 +2006,7 @@ mod tests {
                 patches: Vec::new(),
                 blends: Vec::new(),
                 end_portal: EndPortalFill::default(),
+                glint_alpha: 0.75,
                 blur_at: 0,
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {

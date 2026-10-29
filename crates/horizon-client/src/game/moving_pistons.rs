@@ -14,7 +14,9 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let partial = alpha as f32;
-        for &(p, piston) in &self.world.moving_pistons {
+        let mut states = self.world.moving_pistons.clone();
+        states.extend(self.world.moving_piston_fallback.iter().copied());
+        for (p, piston) in states {
             let Some((block, base)) = self.moving_piston_blocks(piston, partial) else {
                 continue;
             };

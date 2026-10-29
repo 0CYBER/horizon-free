@@ -52,8 +52,8 @@ pub(super) struct Parked {
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
     cushions: Vec<horizon_client::entities::Cushion>,
     others: Vec<commands::OtherEntity>,
-    boats: Vec<boats::Boat>,
-    carts: Vec<minecarts::Minecart>,
+    pub(super) boats: Vec<boats::Boat>,
+    pub(super) carts: Vec<minecarts::Minecart>,
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
     bolts: Vec<lightning::Bolt>,
     crystals: Vec<dragon::Crystal>,
@@ -65,7 +65,9 @@ pub(super) struct Parked {
     ominous_spawners: Vec<ominous_item_spawner::OminousItemSpawner>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
-    mobs: Vec<Mob>,
+    pub(super) mobs: Vec<Mob>,
+    /// The entity ids of the level's fence knots (`knot_ids`).
+    knot_ids: HashMap<[i32; 3], u32>,
     projectiles: Vec<horizon_client::projectiles::Projectile>,
     dropped: Vec<ItemEntity>,
     orbs: Vec<ExperienceOrb>,
@@ -120,6 +122,12 @@ impl Levels {
             .iter_mut()
             .map(|(d, p)| (*d, &mut p.world.chunks))
     }
+
+    /// The level not in place, in `dim`.
+    pub(super) fn parked_mut(&mut self, dim: Dim) -> Option<&mut Parked> {
+        self.parked.get_mut(&dim)
+    }
+
     /// The levels that are not in place, by dimension.
     pub(super) fn parked_dims(&self) -> Vec<Dim> {
         self.parked.keys().copied().collect()
@@ -170,6 +178,7 @@ impl Game<'_> {
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             mobs: Vec::new(),
+            knot_ids: HashMap::new(),
             projectiles: Vec::new(),
             dropped: Vec::new(),
             orbs: Vec::new(),
@@ -223,6 +232,7 @@ impl Game<'_> {
         swap(&mut self.tnts, &mut p.tnts);
         swap(&mut self.hoppers, &mut p.hoppers);
         swap(&mut self.mobs, &mut p.mobs);
+        swap(&mut self.knot_ids, &mut p.knot_ids);
         swap(&mut self.creatures.projectiles, &mut p.projectiles);
         swap(&mut self.dropped, &mut p.dropped);
         swap(&mut self.orbs, &mut p.orbs);
@@ -291,6 +301,23 @@ impl Game<'_> {
             h.hub.set_dimension(target.id());
         }
         Ok(())
+    }
+
+    /// The entity's memory (its UUID and the compound it was loaded with)
+    /// moves with it from the level not in place to the level in place, so
+    /// it is saved in the other level as it was.
+    pub(super) fn move_entity_memory(&mut self, from: Dim, id: u32) {
+        let Some(p) = self.levels.parked.get_mut(&from) else {
+            return;
+        };
+        let uuid = p.persist.uuids.remove(&id);
+        let raw = p.persist.raw.remove(&id);
+        if let Some(u) = uuid {
+            self.persist.uuids.insert(id, u);
+        }
+        if let Some(r) = raw {
+            self.persist.raw.insert(id, r);
+        }
     }
 
     /// Put `dim`'s level in place for a command whose source is there
@@ -404,9 +431,9 @@ impl Game<'_> {
         }
         *next += self.clock.tick_duration();
         if *next > now {
-            // A `/pregen` task or force-loaded chunks keep the workers fed
-            // until the next tick.
-            self.pump_pregen(*next);
+            // The chunks loading (the players', force-loaded ones, a
+            // `/pregen` task) keep the workers fed until the next tick.
+            self.pump_chunks(*next, paused);
             let now = Instant::now();
             if *next > now {
                 std::thread::sleep(*next - now);
@@ -438,6 +465,9 @@ impl Game<'_> {
                 guests.iter().any(|g| g.dimension == d.id())
                     || forced
                     || self.pregen_level() == Some(*d)
+                    // A pending portal arrival keeps its destination level
+                    // running so it can land and tick (the portal ticket).
+                    || !self.arrival_chunks(*d).is_empty()
             })
             .collect();
         if dims.is_empty() {
@@ -450,9 +480,17 @@ impl Game<'_> {
     /// (other than the Overworld) nobody has been in for a while.
     pub(super) fn close_idle_levels(&mut self) -> Result<()> {
         let occupied = self.levels_to_tick();
+        // A vehicle waiting there for its rider's arrival in another level.
+        let waiting: Vec<Dim> = self
+            .levels
+            .parked
+            .keys()
+            .copied()
+            .filter(|d| self.vehicle_waits_in(*d))
+            .collect();
         let mut closing = Vec::new();
         for (dim, p) in &mut self.levels.parked {
-            if occupied.contains(dim) {
+            if occupied.contains(dim) || waiting.contains(dim) {
                 p.idle = 0;
                 continue;
             }
