@@ -3566,6 +3566,40 @@ mod tests {
         w.player.count_down_server_spin();
         assert_eq!(w.player.auto_spin_attack_ticks, 0);
     }
+    /// #3308: a swimmer who boards a boat stops swimming
+    /// (`Entity.updateSwimming` needs `!isPassenger()`) and `updatePlayerPose`
+    /// sits them up, eye at 1.62 instead of the swim's 0.4.
+    #[test]
+    fn a_passenger_stops_swimming_and_stands() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+        player.sprinting = true;
+        player.swimming = true;
+        player.set_pose(crate::pose::Pose::Swimming).unwrap();
+        assert_eq!(player.dimensions.eye_height, 0.4);
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.passenger_pose_tick().unwrap();
+        assert!(!w.player.swimming);
+        assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+        assert_eq!(w.player.dimensions.eye_height, 1.62);
+    }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
