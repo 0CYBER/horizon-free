@@ -25,8 +25,8 @@ const CONVERSION: i32 = 300;
 /// `DANCING` memories last.
 const CELEBRATION: i32 = 300;
 
-/// `Activity`: what a piglin's or hoglin's brain is busy with. `Admire` and
-/// `Celebrate` are a piglin's only; the others are both.
+/// `Activity`: what a piglin's or hoglin's brain is busy with. `Admire`,
+/// `Celebrate` and `Ride` are a piglin's only; the others are both.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Activity {
     #[default]
@@ -35,6 +35,7 @@ pub enum Activity {
     Avoid,
     Admire,
     Celebrate,
+    Ride,
 }
 /// `MemoryModuleType.AVOID_TARGET`: who to keep away from, where it was last
 /// seen (a target that is gone leaves its spot behind) and when the memory
@@ -45,12 +46,22 @@ pub struct AvoidTarget {
     pub at: Vec3,
     pub ttl: Ttl,
 }
+/// `MemoryModuleType.RIDE_TARGET`: the mob a baby piglin means to ride, when
+/// the memory expires and the block the walk to it was last aimed at.
+#[derive(Clone, Copy, Debug)]
+pub struct RideTarget {
+    pub vehicle: u32,
+    pub ttl: Ttl,
+    pub aimed: Option<[i32; 3]>,
+}
 /// What a piglin's or hoglin's brain remembers of its surroundings and of
 /// what it retreats from. None of it is saved: these memories have no codec.
 #[derive(Clone, Debug, Default)]
 pub struct Memories {
     /// `AVOID_TARGET`.
     pub avoid: Option<AvoidTarget>,
+    /// `RIDE_TARGET`.
+    pub ride: Option<RideTarget>,
     /// `Brain.getActiveNonCoreActivity` as `updateActivity` last left it.
     pub activity: Activity,
     /// The `last_hurt_by_time` of the hit `wasHurtBy` last reacted to.
@@ -192,8 +203,8 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
     b.sees_loved = loved;
 }
 /// `Brain.setActiveActivityToFirstValid`: the first valid activity of a
-/// piglin's list (admiring, fighting, avoiding, celebrating, idle) or of a
-/// hoglin's (fighting, avoiding, idle). An activity is valid while the
+/// piglin's list (admiring, fighting, avoiding, celebrating, riding, idle) or
+/// of a hoglin's (fighting, avoiding, idle). An activity is valid while the
 /// memory it requires is there.
 pub fn activity(m: &Mob) -> Activity {
     let b = &m.extra.piglin;
@@ -208,14 +219,17 @@ pub fn activity(m: &Mob) -> Activity {
         Activity::Avoid
     } else if piglin && m.extra.scratch[1] > 0 && m.extra.home.is_some() {
         Activity::Celebrate
+    } else if piglin && b.ride.is_some() {
+        Activity::Ride
     } else {
         Activity::Idle
     }
 }
-/// `Brain.forgetOutdatedMemories`: the avoid target expires (and keeps
-/// track of where it stands), then come the core activity's copies into it,
-/// the retreat activity's `EraseMemoryIf` and `updateActivity`, at the end of
-/// `customServerAiStep`'s brain.
+/// `Brain.forgetOutdatedMemories`: the avoid and ride targets expire (the
+/// avoid target keeps track of where it stands), then come the core
+/// activity's copies into the avoid target, the retreat activity's
+/// `EraseMemoryIf` and `updateActivity`, at the end of `customServerAiStep`'s
+/// brain.
 pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     let expired = match m.extra.piglin.avoid.as_mut() {
         Some(a) => {
@@ -226,6 +240,17 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     };
     if expired {
         m.extra.piglin.avoid = None;
+    }
+    // `RIDE_TARGET` expires the same way.
+    let ride_expired = match m.extra.piglin.ride.as_mut() {
+        Some(r) => {
+            r.ttl.tick();
+            !r.ttl.present()
+        }
+        None => false,
+    };
+    if ride_expired {
+        m.extra.piglin.ride = None;
     }
     if let Some(a) = m.extra.piglin.avoid.as_mut()
         && let Some(p) = cx.w.target_info(a.who)
