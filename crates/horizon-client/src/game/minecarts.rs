@@ -1231,6 +1231,7 @@ impl Game<'_> {
         let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
             return;
         };
+        let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
         for (_, model) in &models {
             for face in &model.faces {
                 let Some(s) = self
@@ -1256,7 +1257,7 @@ impl Game<'_> {
                 let tint = self.pack.context.tables.default_tint(
                     state,
                     face.quad.tint_index,
-                    self.pack.item_renderer.grass_color(0.5, 1.0) as u32,
+                    grass,
                 );
                 let color = if let Some(tint) = tint {
                     let tint = horizon_client::mobs::render::abgr(tint);
