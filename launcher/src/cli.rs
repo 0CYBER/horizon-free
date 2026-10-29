@@ -594,14 +594,16 @@ enum ModsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
+    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does;
+    /// in a Java instance, its file loses `.disabled`)
     Enable {
         project: String,
         /// The instance (default: the selected one)
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Turn off a mod the browser installed; it stays installed
+    /// Turn off a mod the browser installed; it stays installed (in a Java instance, as
+    /// `<file>.disabled`)
     Disable {
         project: String,
         /// The instance (default: the selected one)
@@ -2006,9 +2008,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 );
             }
             for e in list.iter().filter(|_| !as_json) {
+                let off = java.is_some() && !java_instance::is_on(&home, e);
                 println!(
-                    "{}  {}  ({}, {})\n  {}  {}",
+                    "{}{}  {}  ({}, {})\n  {}  {}",
                     e.title,
+                    if off { " (off)" } else { "" },
                     e.number,
                     e.source.label(),
                     e.slug,
@@ -2290,11 +2294,13 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             };
             println!("Removed {} ({}).", e.title, e.file);
         }
-        ModsCmd::Enable { .. } | ModsCmd::Disable { .. } if java.is_some() => {
-            return Err(
-                "A Java instance loads every mod in its mods/ folder: remove one to turn it off."
-                    .into(),
-            );
+        ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } if java.is_some() => {
+            let e = installed::Installed::load(&home)
+                .lookup(&project)
+                .cloned()
+                .ok_or_else(|| format!("{project} wasn't installed by the browser."))?;
+            java_instance::set_on(&home, &e, on)?;
+            println!("{} is {}.", e.title, if on { "on" } else { "off" });
         }
         ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
             let e = installed::Installed::load(&home)
