@@ -704,6 +704,11 @@ impl GameLevel<'_> {
                     .map(|s| s.bounds()),
             )
     }
+    /// `LilyPadBlock.entityInside`: the boxes of the boats that can break a pad.
+    fn boat_trigger_boxes(&self) -> impl Iterator<Item = Aabb> + '_ {
+        let b = self.blockers;
+        b.boats.iter().map(boats::Boat::bounds)
+    }
     /// The non-living entities that trigger plates and tripwires (boats,
     /// crystals, primed TNT, falling blocks, item entities, experience orbs and
     /// projectiles).
@@ -3251,6 +3256,21 @@ impl Game<'_> {
             }
         }
         self.with_level(|b, level, ticks| {
+            // LilyPadBlock.entityInside: a boat inside a lily pad breaks it.
+            let mut boat_cells: Vec<BlockPos> = Vec::new();
+            for bounds in level.boat_trigger_boxes() {
+                let (lo, hi) = (bounds.min_position(), bounds.max_position());
+                for x in (lo.x + 1e-7).floor() as i32..=(hi.x - 1e-7).floor() as i32 {
+                    for y in (lo.y + 1e-7).floor() as i32..=(hi.y - 1e-7).floor() as i32 {
+                        for z in (lo.z + 1e-7).floor() as i32..=(hi.z - 1e-7).floor() as i32 {
+                            boat_cells.push(BlockPos::new(x, y, z));
+                        }
+                    }
+                }
+            }
+            for pos in boat_cells {
+                b.boat_inside(level, ticks, pos);
+            }
             // The mobs and the other entities (items, orbs, projectiles...) too.
             let mut touched: Vec<BlockPos> = Vec::new();
             for bounds in level.mob_trigger_boxes().chain(level.other_trigger_boxes()) {
