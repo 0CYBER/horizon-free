@@ -108,14 +108,24 @@ fn library_key(library: &Value) -> String {
 /// parent's library it names again is left out), its arguments after the parent's, and the
 /// parent's client jar (`jar`).
 pub fn resolve(version: Value, minecraft: &Path) -> Result<Value, String> {
+    resolve_from(version, minecraft, &mut Vec::new())
+}
+
+/// `resolve`, with the ids already on the way down: a version met twice is a loop.
+fn resolve_from(version: Value, minecraft: &Path, seen: &mut Vec<String>) -> Result<Value, String> {
     let Some(parent) = version["inheritsFrom"].as_str() else {
         return Ok(version);
     };
+    let id = version["id"].as_str().unwrap_or_default();
+    seen.push(id.to_owned());
+    if seen.iter().any(|s| s == parent) {
+        return Err(format!("{id}: inheritsFrom loops"));
+    }
     let file = minecraft
         .join("versions")
         .join(mojang::relative(parent)?)
         .join(format!("{parent}.json"));
-    let mut merged = resolve(read(&file)?, minecraft)?;
+    let mut merged = resolve_from(read(&file)?, minecraft, seen)?;
     let jar = merged["jar"]
         .as_str()
         .or(merged["id"].as_str())
