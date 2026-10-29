@@ -611,6 +611,9 @@ impl Game<'_> {
                 json!({ "mode": "multiplayer", "disconnected": reason })
             }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
+            Mode::MultiplayerWarning { check } => {
+                json!({ "mode": "multiplayer-warning", "check": check })
+            }
         }
     }
 
@@ -1454,7 +1457,15 @@ impl Game<'_> {
                 self.playing()?;
                 let all = a.pos.first() == Some(&"all");
                 let before = self.held().map(|s| self.stack_value(s));
-                self.drop_held(all);
+                if self.remote.is_some() {
+                    // As Q does on a server (and on the single-player server
+                    // thread): the server throws the stack, the client predicts it.
+                    if !self.spectator() {
+                        self.remote_drop(all);
+                    }
+                } else {
+                    self.drop_held(all);
+                }
                 ok(
                     json!({ "ok": true, "dropped_from": before, "held": self.held().map(|s| self.stack_value(s)) }),
                 )

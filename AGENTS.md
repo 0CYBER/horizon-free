@@ -13,13 +13,15 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`, and, for the
   launcher, `HORIZON_LAUNCHER_TRASH`, `HORIZON_LAUNCHER_CLIPBOARD` and `HORIZON_LAUNCHER_DESKTOP` pointing into the scratch home. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
-- **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
-  Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
-  contributor's agent names its own person and tool (issues: "Filed by", reviews: "Review by"). Every
-  comment starts with `🤖 Agent:`. Never write as Ludovic or as anyone else.
+- **Mark what an agent posts.** A PR body starts with a line naming the person whose agent opened it and
+  the tool: `> 🤖 Opened by <login>'s AI agent (<tool, model>), not by <login> personally.`, where `<login>`
+  is the GitHub account the PR is opened from (`gh api user --jq .login`). Issues say "Filed by", reviews
+  "Review by". Every comment starts with `🤖 Agent:`. Write only as the person you work for: the lines on
+  this page that name Ludovic are for his own agents (account `ludovic111`), never for anyone else's.
 - **Attribution.** Commits end with a `Co-Authored-By:` line for the agent that wrote them, and PR bodies
-  with that agent's own "Generated with" line. Ludovic's agents use
-  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and
+  with that agent's own "Generated with" line. Example, Ludovic's agents (Claude Code on `ludovic111`):
+  first line `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, commits
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, last line
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
