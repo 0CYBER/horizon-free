@@ -3403,7 +3403,7 @@ impl Launcher {
             .child(tr("The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.").to_string())
             .children(self.native_update.as_ref().map(|newer| {
                 div().text_color(t.warn).child(trf(
-                    "Update moves this instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a rebuild: up to 30 minutes.",
+                    "This moves the instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a normal rebuild: up to 30 minutes.",
                     &[("version", &native_status::horizon_label(newer))],
                 ))
             }));

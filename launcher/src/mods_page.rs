@@ -1399,7 +1399,7 @@ impl Launcher {
                 button(
                     "native-update",
                     trf(
-                        "Update to Horizon {version}",
+                        "Rebuild on Horizon {version}",
                         &[("version", &native_status::horizon_label(&newer))],
                     ),
                     Kind::Secondary,

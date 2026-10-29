@@ -191,7 +191,7 @@
   "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "Les mods natifs ne sont pas isolés : ils ont un accès complet à votre ordinateur, comme n'importe quel programme. N'installez que des mods d'auteurs en qui vous avez confiance. Pour jouer avec, compilez le jeu depuis la page Mods ; la première compilation télécharge Rust et prend 20 à 30 minutes.",
   "No native mod is turned on.": "Aucun mod natif n'est activé.",
   "Up to date: {instance} plays these mods.": "À jour : {instance} joue avec ces mods.",
-  "Update moves this instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a rebuild: up to 30 minutes.": "La mise à jour passe cette instance à Horizon {version}. Elle recompile le jeu entièrement, donc elle prend plus de temps qu'une recompilation : jusqu'à 30 minutes.",
+  "This moves the instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a normal rebuild: up to 30 minutes.": "Cela passe cette instance à Horizon {version}. Le jeu est recompilé entièrement, donc cela prend plus de temps qu'une recompilation normale : jusqu'à 30 minutes.",
   "Installs into {instance}.": "S'installe dans {instance}.",
   "Installs into {instance}: pick another instance on the left.": "S'installe dans {instance} : choisissez une autre instance à gauche.",
   "Installed in {instance}": "Installé dans {instance}",
@@ -201,7 +201,7 @@
   "The native mods turned on changed since {instance} was built: build again to play them.": "Les mods natifs activés ont changé depuis la compilation de {instance} : compilez à nouveau pour jouer avec.",
   "Needs rebuild": "À recompiler",
   "{instance} is building: one build at a time.": "{instance} est en cours de compilation : une seule à la fois.",
-  "Update to Horizon {version}": "Mettre à jour vers Horizon {version}",
+  "Rebuild on Horizon {version}": "Recompiler avec Horizon {version}",
   "Native build of {instance}": "Compilation native de {instance}",
   "Native build · {version}": "Compilation native · {version}",
   "Plays {build}, built on Horizon {version}.": "Joue {build}, compilé sur Horizon {version}."

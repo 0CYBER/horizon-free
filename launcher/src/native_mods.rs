@@ -1151,7 +1151,7 @@ mod tests {
     }
 
     /// levzzz5154's decision (2026-10-29): a rebuild stays on the Horizon the instance plays;
-    /// only Update moves it to a newer one.
+    /// only "Rebuild on Horizon {version}" moves it to a newer one.
     #[test]
     fn a_rebuild_stays_on_the_instances_horizon_until_an_update() {
         let installed: Vec<String> = [
