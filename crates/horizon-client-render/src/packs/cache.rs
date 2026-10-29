@@ -3,7 +3,6 @@
 use super::{Pack, Source, build_overlay_uncached};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-#[cfg(any(test, not(unix)))]
 use std::io::Read;
 use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
@@ -60,7 +59,6 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update((bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
 }
-#[cfg(any(test, not(unix)))]
 fn content(hash: &mut Sha256, path: &Path) -> io::Result<()> {
     let mut file = fs::File::open(path)?;
     hash.update(file.metadata()?.len().to_le_bytes());
@@ -238,7 +236,10 @@ fn pack_signature(packs: &[Pack]) -> io::Result<String> {
             }
             Source::Zip(path) => {
                 field(&mut hash, absolute(path)?.as_os_str().as_encoded_bytes());
-                stamp(&mut hash, path)?;
+                // By its bytes, not its stamp: a server pack found in the download cache is
+                // marked used on every join (`HttpUtil.updateModificationTime`), and a new
+                // time rebuilt the whole overlay each time. One file reads in a moment.
+                content(&mut hash, path)?;
             }
         }
     }
@@ -645,6 +646,38 @@ mod tests {
             packs::resource_root(&f.0.join("vanilla"), &[pack], &f.0.join("selection-cache"))
                 .is_err()
         );
+    }
+
+    /// A ZIP whose bytes are the same keeps its overlay when only its time changes: a server
+    /// pack found in the download cache is marked used on every join
+    /// (`HttpUtil.updateModificationTime`), and rebuilding the overlay took most of a minute.
+    #[test]
+    fn a_zip_touched_but_unchanged_keeps_its_overlay() {
+        let f = Fixture::new();
+        f.write("vanilla/assets/minecraft/textures/b", b"vanilla");
+        let files = vec![
+            (
+                "pack.mcmeta",
+                br#"{"pack":{"description":"test","pack_format":97}}"#.to_vec(),
+            ),
+            ("assets/minecraft/textures/a", b"aaa".to_vec()),
+        ];
+        f.write("pack.zip", &archive(&files, false));
+        let zip = f.0.join("pack.zip");
+        let pack = packs::pack("zip".into(), Text::empty(), Source::Zip(zip.clone())).unwrap();
+        let (vanilla, out) = (f.0.join("vanilla"), f.0.join("cached"));
+        packs::build_overlay(&vanilla, std::slice::from_ref(&pack), &out).unwrap();
+        // A rebuild empties the output first: this file survives a cache hit only.
+        fs::write(out.join("kept"), b"").unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&zip)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        packs::build_overlay(&vanilla, std::slice::from_ref(&pack), &out).unwrap();
+        assert!(out.join("kept").exists(), "the overlay was rebuilt");
     }
 
     #[cfg(unix)]
