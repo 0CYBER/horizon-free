@@ -174,6 +174,9 @@ impl StartupMenu {
             PhysicalKey::Code(KeyCode::F5) => title.refresh_servers(),
             PhysicalKey::Code(KeyCode::Tab) => title.tab(),
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => return title.confirm_key(),
+            PhysicalKey::Code(KeyCode::Space) if title.list_focused() => {
+                return title.confirm_key();
+            }
             PhysicalKey::Code(
                 key @ (KeyCode::Backspace
                 | KeyCode::Delete

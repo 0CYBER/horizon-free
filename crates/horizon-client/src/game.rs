@@ -13790,12 +13790,20 @@ impl ApplicationHandler for Game<'_> {
                             return Ok(());
                         }
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                            // `WorldListEntry.keyPressed`: Space joins too, with the button click sound.
+                            PhysicalKey::Code(
+                                code @ (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space),
+                            ) if code != KeyCode::Space
+                                || self.title.as_ref().is_some_and(|t| t.list_focused()) =>
+                            {
                                 let action = self
                                     .title
                                     .as_mut()
                                     .map_or(Action::None, |t| t.confirm_key());
                                 self.save_title_options();
+                                if matches!(action, Action::Play { .. }) {
+                                    self.audio.play_button_click();
+                                }
                                 self.title_action(event_loop, action)?;
                             }
                             PhysicalKey::Code(
