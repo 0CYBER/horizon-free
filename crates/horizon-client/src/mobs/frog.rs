@@ -44,6 +44,10 @@ const JUMP_WIDTH: i32 = 4;
 const JUMP_HEIGHT: i32 = 2;
 const JUMP_VELOCITY_MULTIPLIER: f32 = 3.571_428_8;
 const PREFERRED_BLOCKS_CHANCE: f32 = 0.5;
+/// `GoatAi`'s `LongJumpToRandomPos`: `MAX_LONG_JUMP_WIDTH` and
+/// `MAX_LONG_JUMP_HEIGHT`.
+const GOAT_JUMP_WIDTH: i32 = 5;
+const GOAT_JUMP_HEIGHT: i32 = 5;
 /// `LongJumpToRandomPos.ALLOWED_ANGLES`, `FIND_JUMP_TRIES` and
 /// `PREPARE_JUMP_DURATION`.
 const ALLOWED_ANGLES: [i32; 4] = [65, 70, 75, 80];
@@ -524,12 +528,12 @@ impl LongJump {
     }
 }
 /// `LongJumpToRandomPos.start`'s candidates: every block of the box but the
-/// frog's own, weighted by the squared distance, in `betweenClosed` order.
-fn candidates([x, y, z]: [i32; 3]) -> Vec<Candidate> {
+/// mob's own, weighted by the squared distance, in `betweenClosed` order.
+fn candidates([x, y, z]: [i32; 3], width: i32, height: i32) -> Vec<Candidate> {
     let mut out = Vec::new();
-    for dz in -JUMP_WIDTH..=JUMP_WIDTH {
-        for dy in -JUMP_HEIGHT..=JUMP_HEIGHT {
-            for dx in -JUMP_WIDTH..=JUMP_WIDTH {
+    for dz in -width..=width {
+        for dy in -height..=height {
+            for dx in -width..=width {
                 if (dx, dy, dz) != (0, 0, 0) {
                     out.push(([x + dx, y + dy, z + dz], dx * dx + dy * dy + dz * dz));
                 }
@@ -593,14 +597,22 @@ impl Goal for LongJump {
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         );
+        let (width, height) = if m.species() == Species::Goat {
+            (GOAT_JUMP_WIDTH, GOAT_JUMP_HEIGHT)
+        } else {
+            (JUMP_WIDTH, JUMP_HEIGHT)
+        };
         *self = Self {
-            candidates: candidates([x, y, z]),
+            candidates: candidates([x, y, z], width, height),
             tries: FIND_JUMP_TRIES,
             initial: Some(m.position),
             ..Self::default()
         };
-        // LongJumpToPreferredBlock.start.
-        self.wanting_preferred = m.random.next_float() < PREFERRED_BLOCKS_CHANCE;
+        // LongJumpToPreferredBlock.start: the frog's; a goat's activity is a
+        // plain LongJumpToRandomPos, which draws nothing from the mob's random.
+        if m.species() != Species::Goat {
+            self.wanting_preferred = m.random.next_float() < PREFERRED_BLOCKS_CHANCE;
+        }
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.mid_jump {
@@ -681,7 +693,7 @@ mod tests {
     /// block, x fastest, then y, then z, each weighted by its squared distance.
     #[test]
     fn the_candidates_cover_the_jump_box_in_vanilla_order() {
-        let c = candidates([10, 64, -3]);
+        let c = candidates([10, 64, -3], JUMP_WIDTH, JUMP_HEIGHT);
         assert_eq!(c.len(), 9 * 5 * 9 - 1);
         assert_eq!(c[0], ([6, 62, -7], 16 + 4 + 16));
         assert_eq!(c[1], ([7, 62, -7], 9 + 4 + 16));
