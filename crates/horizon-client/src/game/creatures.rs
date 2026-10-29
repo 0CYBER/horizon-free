@@ -3966,8 +3966,7 @@ impl Game<'_> {
                 .get(&stack.item)
                 .map_or(0, |i| i.max_damage);
             if max > 0 {
-                self.trigger_item_durability(&stack);
-                let loss = self.durability_loss(&stack, 16);
+                let loss = self.wear(&stack, 16);
                 let slot = self.held_slot();
                 if let Some(held) = self.stack_in_mut(slot).as_mut() {
                     held.damage += loss;

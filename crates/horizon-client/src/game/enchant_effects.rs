@@ -71,6 +71,15 @@ impl Game<'_> {
         )
         .max(0.0) as u32
     }
+    /// `ItemStack.hurtAndBreak` for the player's `stack`: the wear Unbreaking
+    /// leaves, and `ItemDurabilityTrigger` when some is left (`applyDamage`).
+    pub(super) fn wear(&mut self, stack: &ItemStack, amount: u32) -> u32 {
+        let loss = self.durability_loss(stack, amount);
+        if loss > 0 {
+            self.trigger_item_durability(stack);
+        }
+        loss
+    }
     /// `getEnchantedDamage - base`: damage bonus of the held weapon against a mob type.
     pub(super) fn enchant_damage_bonus(&mut self, target: &str) -> f32 {
         let Some(held) = self.held().cloned() else {
@@ -456,8 +465,7 @@ impl Game<'_> {
             }
             hits.push(1.0 + self.world.random.next_float() * 4.0);
             // ChangeItemDamage -> ItemStack.hurtAndBreak: unbreaking applies.
-            self.trigger_item_durability(&stack);
-            let loss = self.durability_loss(&stack, 2);
+            let loss = self.wear(&stack, 2);
             if let Some(s) = self.armor[slot].as_mut() {
                 s.damage += loss;
                 if self
@@ -715,8 +723,7 @@ impl Game<'_> {
         let Some(stack) = self.armor[3].clone() else {
             return;
         };
-        self.trigger_item_durability(&stack);
-        let loss = self.durability_loss(&stack, amount);
+        let loss = self.wear(&stack, amount);
         let max = self
             .res
             .items()
