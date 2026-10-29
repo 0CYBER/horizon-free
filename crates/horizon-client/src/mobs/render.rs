@@ -75,6 +75,21 @@ pub fn abgr(rgb: u32) -> u32 {
     let (r, g, b) = ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
     0xFF00_0000 | b << 16 | g << 8 | r
 }
+
+/// `EquipmentLayerRenderer.getColorForLayer`: a dyeable layer takes the
+/// stack's dye colour (`minecraft:dyed_color`), the colour it has when
+/// undyed otherwise; a layer that is not dyeable is not tinted.
+pub fn armor_tint(undyed: Option<u32>, stack: Option<&crate::items::ItemStack>) -> u32 {
+    let Some(undyed) = undyed else {
+        return 0xFFFF_FFFF;
+    };
+    let dyed = stack
+        .and_then(|s| s.extra.as_ref())
+        .and_then(|e| e.dyed_color)
+        .map(|d| d as u32)
+        .unwrap_or(undyed);
+    abgr(dyed)
+}
 /// ColorLerper.Type.SHEEP colour: white is 0xE6E6E6, others 75% of the dye.
 pub fn sheep_wool_rgb(color: u8) -> u32 {
     if color == 0 {
@@ -816,12 +831,12 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
         return;
     };
     let slots = [
-        (&m.extra.head, "helmet"),
-        (&m.extra.chest, "chestplate"),
-        (&m.extra.legs, "leggings"),
-        (&m.extra.feet, "boots"),
+        (&m.extra.head, &m.extra.armor[0], "helmet"),
+        (&m.extra.chest, &m.extra.armor[1], "chestplate"),
+        (&m.extra.legs, &m.extra.armor[2], "leggings"),
+        (&m.extra.feet, &m.extra.armor[3], "boots"),
     ];
-    for (item, layer) in slots {
+    for (item, stack, layer) in slots {
         let Some(name) = item.as_deref().and_then(|i| i.strip_prefix("minecraft:")) else {
             continue;
         };
@@ -839,8 +854,10 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
             "humanoid"
         };
         let model = format!("{base}#{layer}");
+        // EquipmentLayerRenderer.getColorForLayer: the leather layer takes
+        // the stack's dye colour, the colour it has when undyed otherwise.
         let tint = if asset == "leather" {
-            abgr(0xA06540)
+            armor_tint(Some(0xA06540), stack.as_ref())
         } else {
             0xFFFF_FFFF
         };
@@ -899,7 +916,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             let eye = if avatar(m) {
                 m.kind.eye_height as f32
             } else {
-                (m.eye_y() - m.position.y) as f32
+                m.awake_dims().2 as f32
             };
             let head = eye - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
@@ -1718,6 +1735,27 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn a_dyed_leather_armour_keeps_its_colour() {
+        // EquipmentLayerRenderer.getColorForLayer: a dyeable layer takes
+        // the stack's dye colour, the colour it has when undyed otherwise.
+        let mut stack = crate::items::ItemStack {
+            item: "minecraft:leather_helmet".into(),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        // Undyed leather: the colour the leather layer has when undyed.
+        assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0xA06540));
+        // Dyed: the stack's own colour.
+        stack.extra = Some(Box::new(crate::item_data::StackData {
+            dyed_color: Some(0x0000FF),
+            ..Default::default()
+        }));
+        assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
+        // A layer that is not dyeable is not tinted.
+        assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
     }
 }
 

@@ -268,7 +268,7 @@ fn text(v: &Value, key: &str) -> Result<String, String> {
 }
 
 /// A path from the version file, refused if it could leave the folder.
-fn relative(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn relative(path: &str) -> Result<PathBuf, String> {
     let safe = !path.contains('\\')
         && Path::new(path)
             .components()
