@@ -21,7 +21,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::{
-    geometry::{Aabb, Direction, Vec3, traverse_blocks},
+    geometry::{Aabb, Direction, Vec3, traverse_blocks, trig::Mth},
     position::BlockPos,
     random::RandomSource,
 };
@@ -4657,10 +4657,28 @@ impl Game<'_> {
                 let m = glam::Mat4::from_translation(c)
                     * glam::Mat4::from_rotation_y((a.yaw - 90.0).to_radians())
                     * glam::Mat4::from_rotation_z(a.pitch.to_radians());
+                // ArrowRenderer: `state.shake = shakeTime - partialTicks`; ArrowModel.setupAnim
+                // rolls the root while the shake timer runs.
+                let shake = a
+                    .arrow
+                    .as_ref()
+                    .map_or(0.0, |s| s.shake as f32 - alpha as f32);
+                let roll = if shake > 0.0 {
+                    -(shake * 3.0).msin() * shake * (std::f32::consts::PI / 180.0)
+                } else {
+                    0.0
+                };
+                let pose_for = |part: &horizon_client::mobs::Part| {
+                    let mut pose = part.pose;
+                    if std::ptr::eq(part, model) {
+                        pose[5] += roll;
+                    }
+                    pose
+                };
                 horizon_client::mobs::render_model(
                     model,
                     m,
-                    &|part| part.pose,
+                    &pose_for,
                     [r.u0, r.v0, r.u1, r.v1],
                     packed,
                     0,
