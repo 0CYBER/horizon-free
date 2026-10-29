@@ -3584,18 +3584,20 @@ def fluid_pig_position(host, tag):
     return tuple(map(float, values))
 
 
-def clear_fluid_arena(host, x, y, z, tags):
+def clear_fluid_arena(host, x, y, z, tags, floor='minecraft:stone'):
+    """Kill the tagged pigs and empty the arena, up in the air at y 100 so its
+    walls never close around a player; the last clear takes the floor away too."""
     for tag in tags:
         host('command', command=f'kill @e[type=pig,tag={tag}]')
     host('command', command=f'fill {x-2} {y} {z-2} {x+9} {y+6} {z+7} minecraft:air')
-    host('command', command=f'fill {x-2} {y-1} {z-2} {x+9} {y-1} {z+7} minecraft:stone')
+    host('command', command=f'fill {x-2} {y-1} {z-2} {x+9} {y-1} {z+7} {floor}')
     host.wait(10)
 
 
 def check_flow_push(host, guest, out):
     """A current pushes a tagged pig farther than a pool of source blocks."""
-    hx, hy, hz = pos_of(host)
-    x, y, z = (int(hx // 16) * 16 + 8, int(hy), int(hz // 16) * 16 + 8)
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
     tags = ('horizon_flow_test', 'horizon_still_test')
     host('command', command='gamemode survival')
     try:
@@ -3617,13 +3619,13 @@ def check_flow_push(host, guest, out):
         assert flowing - still > 0.2, f'the current did not carry the mob: {flowing} vs {still}'
         return {'flowing': round(flowing, 3), 'still': round(still, 3)}
     finally:
-        clear_fluid_arena(host, x, y, z, tags)
+        clear_fluid_arena(host, x, y, z, tags, floor='minecraft:air')
 
 
 def check_bubble_column(host, guest, out):
     """A bubble column lifts a tagged pig farther than an ordinary water source."""
-    hx, hy, hz = pos_of(host)
-    x, y, z = (int(hx // 16) * 16 + 8, int(hy), int(hz // 16) * 16 + 8)
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
     tags = ('horizon_bubble_test', 'horizon_plain_test')
     host('command', command='gamemode survival')
     try:
@@ -3644,7 +3646,7 @@ def check_bubble_column(host, guest, out):
         assert column - plain > 0.2, f'the bubble column did not carry the pig up: {column} vs {plain}'
         return {'column': round(column-y, 3), 'plain': round(plain-y, 3)}
     finally:
-        clear_fluid_arena(host, x, y, z, tags)
+        clear_fluid_arena(host, x, y, z, tags, floor='minecraft:air')
 
 
 def check_border(host, guest, out):
@@ -7561,7 +7563,7 @@ def check_boat_dismount_pose(host, guest, out):
     host('command', command=f'fill {x - 2} {y} {z - 2} {x + 8} {y + 4} {z + 8} minecraft:air')
     host('command', command=f'summon minecraft:oak_boat {bx} {y} {bz} {{Tags:["{tag}"]}}')
     for _ in range(2):
-        host('command', command=f'summon minecraft:husk {bx} {y} {bz} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
+        host('command', command=f'summon minecraft:husk {bx} {y} {bz} {{NoAI:1b,Tags:["{tag}"]}}')
         host.wait(5)
     try:
         host.wait(20)
