@@ -1,13 +1,22 @@
 //! Blocks mobs carry: block items in a hand (`ItemInHandLayer`) and the
-//! block an enderman holds (`CarriedBlockLayer`), drawn as baked block models.
-//! Also the block models mobs wear (`SnowGolemHeadLayer`,
-//! `MushroomCowMushroomLayer`).
+//! block state an enderman holds (`CarriedBlockLayer`). Also the block
+//! models mobs wear (`SnowGolemHeadLayer`, `MushroomCowMushroomLayer`).
 use super::Game;
 use horizon_client::{
     items::ItemStack,
     mesher::Vertex,
     mobs::{Mob, Species, render},
 };
+
+/// `CarriedBlockLayer.submit`: block models use coordinates in [0, 1].
+fn carried_block_matrix(base: glam::Mat4) -> glam::Mat4 {
+    base * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.6875, -0.75))
+        * glam::Mat4::from_rotation_x(20.0f32.to_radians())
+        * glam::Mat4::from_rotation_y(45.0f32.to_radians())
+        * glam::Mat4::from_translation(glam::Vec3::new(0.25, 0.1875, 0.25))
+        * glam::Mat4::from_scale(glam::Vec3::new(-0.5, -0.5, 0.5))
+        * glam::Mat4::from_rotation_y(90.0f32.to_radians())
+}
 
 /// `CustomHeadLayer.translateToHead` and the banner's `head` display.
 fn banner_matrix(head: glam::Mat4) -> glam::Mat4 {
@@ -25,6 +34,41 @@ fn banner_matrix(head: glam::Mat4) -> glam::Mat4 {
 pub(super) const APPARITION_TICKS: i32 = 30;
 
 impl Game<'_> {
+    /// `CustomHeadLayer` for a pumpkin worn by a player.
+    pub(super) fn player_pumpkin_geometry(
+        &self,
+        mob: &Mob,
+        stack: Option<&ItemStack>,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        let Some(stack) = stack.filter(|s| &*s.item == "minecraft:carved_pumpkin") else {
+            return;
+        };
+        let Some(head) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        let pose = head
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.25, 0.0))
+            * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+            * glam::Mat4::from_scale(glam::Vec3::new(0.625, -0.625, -0.625));
+        let owner = super::item_draw::owner_at(
+            [mob.position.x, mob.position.y, mob.position.z],
+            mob.body_yaw,
+            &mob.kind.id,
+        );
+        let state = self.resolve_item(
+            stack,
+            horizon_assets::item_model::DisplayContext::Head,
+            Some(&owner),
+            mob.id as i32 + 5,
+        );
+        self.submit_item_world(&state, pose, light, out);
+    }
     /// Count the elder guardian's apparition down.
     pub(super) fn tick_apparition(&mut self) {
         self.creatures.elder_apparition = (self.creatures.elder_apparition - 1).max(0);
@@ -153,19 +197,13 @@ impl Game<'_> {
         self.golem_flower_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
-            && let Some((_, tint)) = self.block_face_sprite(state)
         {
             // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint;
             // the block's baked model (seed 42) on the unit cube, not centred.
             let base = render::base_transform(mob, alpha as f32, camera);
-            let t = base
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.6875, -0.75))
-                * glam::Mat4::from_rotation_x(20.0f32.to_radians())
-                * glam::Mat4::from_rotation_y(45.0f32.to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::new(0.25, 0.1875, 0.25))
-                * glam::Mat4::from_scale(glam::Vec3::new(-0.5, -0.5, 0.5))
-                * glam::Mat4::from_rotation_y(90.0f32.to_radians());
-            self.block_model_vertices_tinted(state, 42, t, light, true, tint, out);
+            let t = carried_block_matrix(base);
+            // Preserve cross models (flowers, fungi) and state properties (facing).
+            self.block_model_vertices(state, 42, t, light, true, out);
         }
     }
     /// `IronGolemFlowerLayer`: the poppy in the right arm while the golem
@@ -354,6 +392,42 @@ impl Game<'_> {
                 self.submit_item_world(&state, t, light, out);
             } else {
                 self.submit_item_unlit(&state, t, light, out);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{Mat4, Vec3};
+
+    #[test]
+    fn carried_block_vertices_match_vanilla_block_coordinates() {
+        // Captured from 26.3 CarriedBlockLayer.submit with an identity PoseStack:
+        // origin, three unit axes, opposite corner, and the block's center.
+        let samples = [
+            (Vec3::ZERO, Vec3::new(0.3535534, 0.8636924, -0.68587124)),
+            (Vec3::X, Vec3::new(0.0, 0.9846148, -1.0181028)),
+            (Vec3::Y, Vec3::new(0.3535534, 0.3938461, -0.8568813)),
+            (Vec3::Z, Vec3::new(0.0, 0.74277, -0.35363975)),
+            (Vec3::ONE, Vec3::new(-0.3535534, 0.3938461, -0.85688126)),
+            (Vec3::splat(0.5), Vec3::new(0.0, 0.6287693, -0.77137625)),
+        ];
+        for base in [
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(3.0, 2.0, -7.0))
+                * Mat4::from_rotation_y(1.2)
+                * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0)),
+        ] {
+            let block = carried_block_matrix(base);
+            for (point, expected) in samples {
+                let actual = block.transform_point3(point);
+                let expected = base.transform_point3(expected);
+                assert!(
+                    actual.abs_diff_eq(expected, 1e-6),
+                    "{actual:?} != {expected:?}"
+                );
             }
         }
     }
