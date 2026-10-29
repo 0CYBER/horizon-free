@@ -1325,11 +1325,10 @@ impl Title {
         }
         for b in self.buttons(w, h) {
             crate::widgets::record(&b.label, [b.x, b.y, b.w, 20.0], b.enabled);
-            let hover = b.enabled
-                && cursor.0 >= b.x
-                && cursor.0 < b.x + b.w
-                && cursor.1 >= b.y
-                && cursor.1 < b.y + 20.0;
+            let inside =
+                cursor.0 >= b.x && cursor.0 < b.x + b.w && cursor.1 >= b.y && cursor.1 < b.y + 20.0;
+            crate::widgets::widget_cursor(inside, b.enabled);
+            let hover = b.enabled && inside;
             let sprite = if !b.enabled {
                 "gui/sprites/widget/button_disabled"
             } else if hover {
