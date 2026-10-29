@@ -146,6 +146,9 @@ pub struct NetConfig {
     /// sent in configuration when non-empty
     /// (ServerConfigurationPacketListenerImpl.startConfiguration).
     pub server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
+    /// An integrated server's owner profile: the properties the window's own
+    /// (memory) connection logs in with.
+    pub owner_profile: Option<Arc<OwnerProfile>>,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -173,7 +176,49 @@ impl NetConfig {
             log: None,
             resource_pack: None,
             server_links: Vec::new(),
+            owner_profile: None,
         }
+    }
+}
+
+/// `IntegratedServer.getSingleplayerProfile` (`Minecraft.getGameProfile`):
+/// the signed-in account's profile properties, its signed `textures` among
+/// them, which the owner logs in with so the player list gives everyone on
+/// the world, LAN guests included, the owner's skin. Fetched in the
+/// background from startup and waited for by the owner's login, as
+/// `Minecraft.profileFuture` is, but never longer than `OWNER_PROFILE_WAIT`:
+/// past that the owner plays without properties (the default skin to others).
+pub struct OwnerProfile {
+    properties: std::sync::OnceLock<Vec<horizon_protocol::packets::login::Property>>,
+    fetch: Mutex<Option<Receiver<Vec<horizon_protocol::packets::login::Property>>>>,
+}
+
+const OWNER_PROFILE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl OwnerProfile {
+    pub fn new(
+        fetch: impl FnOnce() -> Vec<horizon_protocol::packets::login::Property> + Send + 'static,
+    ) -> Self {
+        let (send, receive) = channel();
+        let _ = std::thread::Builder::new()
+            .name("Profile fetcher".into())
+            .spawn(move || {
+                let _ = send.send(fetch());
+            });
+        Self {
+            properties: std::sync::OnceLock::new(),
+            fetch: Mutex::new(Some(receive)),
+        }
+    }
+    /// The owner's properties (none when the services couldn't be reached
+    /// in time).
+    pub fn properties(&self) -> &[horizon_protocol::packets::login::Property] {
+        self.properties.get_or_init(|| {
+            let receive = self.fetch.lock().ok().and_then(|mut r| r.take());
+            receive
+                .and_then(|r| r.recv_timeout(OWNER_PROFILE_WAIT).ok())
+                .unwrap_or_default()
+        })
     }
 }
 

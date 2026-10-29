@@ -703,7 +703,15 @@ fn serve_login(
                 return Err(err);
             }
         },
-        None => (offline_uuid(&hello.name), Vec::new()),
+        // handleHello: the singleplayer owner (the window's memory connection)
+        // logs in with its own profile, other players with no properties.
+        None => {
+            let properties = match &shared.config.owner_profile {
+                Some(owner) if c.is_memory() => owner.properties().to_vec(),
+                _ => Vec::new(),
+            };
+            (offline_uuid(&hello.name), properties)
+        }
     };
     // verifyLoginAndFinishConnectionSetup: PlayerList.canPlayerLogin, then
     // duplicates and a full server.
@@ -1193,6 +1201,88 @@ fn write_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Logs in through `c` and answers the `LoginFinished` profile.
+    fn login_profile(mut c: Connection, name: &str) -> login::GameProfile {
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: horizon_protocol::PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port: 0,
+                intent: handshake::LOGIN,
+            })
+            .encode(),
+        )
+        .unwrap();
+        c.send(
+            &login::Serverbound::Hello(login::ServerHello {
+                name: name.into(),
+                uuid: offline_uuid(name),
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            match login::Clientbound::decode(id, &payload).unwrap() {
+                login::Clientbound::Compression(p) => c.set_compression(p.threshold),
+                login::Clientbound::LoginFinished(p) => return p.profile,
+                other => panic!("unexpected login packet {other:?}"),
+            }
+        }
+    }
+
+    /// handleHello on an integrated server: the window's own (memory)
+    /// connection logs in with the signed-in account's properties, its skin
+    /// among them, so the player list gives everyone the owner's skin; a
+    /// LAN guest on the offline-mode world gets none.
+    #[test]
+    fn the_owner_logs_in_with_its_own_profile_properties() {
+        let textures = login::Property {
+            name: "textures".into(),
+            value: "e30=".into(),
+            signature: Some("c2lnbmVk".into()),
+        };
+        let fetched = textures.clone();
+        let config = crate::lan::NetConfig {
+            announce: false,
+            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(move || {
+                vec![fetched]
+            }))),
+            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert_eq!(owner.uuid, offline_uuid("Owner"));
+        assert_eq!(owner.properties, vec![textures]);
+        let guest = Connection::connect("127.0.0.1", lan.port, Duration::from_secs(5)).unwrap();
+        guest
+            .reader
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let guest = login_profile(guest, "Guest");
+        assert_eq!(guest.uuid, offline_uuid("Guest"));
+        assert!(guest.properties.is_empty());
+    }
+
+    /// Without a signed-in account (or an answer from the services) the
+    /// owner logs in with no properties, as before.
+    #[test]
+    fn an_owner_without_an_answer_logs_in_without_properties() {
+        let config = crate::lan::NetConfig {
+            announce: false,
+            listen: false,
+            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(Vec::new))),
+            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
+        };
+        let lan =
+            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
+                .unwrap();
+        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert!(owner.properties.is_empty());
+    }
 
     #[test]
     fn prompts_become_the_components_vanilla_sends() {

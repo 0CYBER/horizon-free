@@ -648,6 +648,7 @@ impl Game<'_> {
                 );
                 Vec::new()
             },
+            owner_profile: None,
         };
         let config = HubConfig {
             default_game_mode: game_mode,
