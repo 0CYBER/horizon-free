@@ -14,6 +14,7 @@
 //! Whatever has no faithful 26.3 form is kept as it is and listed in the
 //! report.
 mod density;
+mod features;
 mod noise;
 mod registries;
 mod settings;
@@ -84,6 +85,8 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
             "worldgen/density_function" => Some(ctx.named_function(&file.id(), v, &mut report)),
             "worldgen/noise_settings" => Some(ctx.settings(&file.id(), v, &mut report)),
             "worldgen/configured_carver" => Some(carver(v, &mut report)),
+            "worldgen/configured_feature" => Some(features::feature(v, &mut report)),
+            "worldgen/placed_feature" => Some(features::placed(v, &mut report)),
             "worldgen/biome" => Some(biome(v, &mut report)),
             "worldgen/structure" => Some(structure(v)),
             "worldgen/world_preset" => Some(ctx.world_preset(v, &mut report)),
@@ -98,6 +101,7 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
         };
         let path = match file.registry.as_str() {
             "worldgen/configured_carver" => file.with_registry("worldgen/carver"),
+            "worldgen/configured_feature" => file.with_registry("worldgen/feature"),
             _ => path.clone(),
         };
         match upgraded {
@@ -532,6 +536,28 @@ mod tests {
             s["noise_router"]["chunk_surface_level"],
             json!({"type": "minecraft:interpolated", "cell_size_xz": 16, "cell_size_y": 1,
                 "input": "x:s/upgraded/preliminary_surface_level"})
+        );
+    }
+
+    #[test]
+    fn features_lose_their_config_and_placements_their_spread() {
+        let (v, _) = up(
+            "data/x/worldgen/configured_feature/f.json",
+            json!({"type": "minecraft:disk", "config": {"state_provider": {"type":
+                "minecraft:simple_state_provider", "state": {"Name": "minecraft:clay"}}, "radius": 2}}),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "minecraft:disk", "state_provider": "minecraft:clay", "radius": 2})
+        );
+        let (v, _) = up(
+            "data/x/worldgen/placed_feature/p.json",
+            json!({"feature": "x:f", "placement": [{"type": "minecraft:random_offset",
+                "xz_spread": 0, "y_spread": -1}]}),
+        );
+        assert_eq!(
+            v,
+            json!({"feature": "x:f", "placement": [{"type": "minecraft:offset", "x": 0, "y": -1, "z": 0}]})
         );
     }
 
