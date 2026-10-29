@@ -508,7 +508,11 @@ impl Mob {
         for _ in 0..10 {
             let d = self.random_direction(h, v);
             let p = self.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !self.stable_destination(w, p) {
+            if p[1] < crate::chunk::MIN_Y
+                || p[1] >= 320
+                || self.restricted(f64::from(h), p)
+                || !self.stable_destination(w, p)
+            {
                 continue;
             }
             if let Some(p) = self.land_up_out_of_solid(w, p) {
