@@ -297,15 +297,19 @@ enum InstanceCmd {
         out: Option<PathBuf>,
     },
     /// Show or set what runs around an instance's game: a shell command before it (the game
-    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
-    /// variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode,
-    /// MangoHud and the dedicated graphics card, when the computer has them
+    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), environment
+    /// variables ("NAME=value NAME2=value") and a shell command after it exits. An empty value
+    /// clears one. The game and the commands also get INST_NAME, INST_ID, INST_DIR,
+    /// INST_MC_DIR and, for a Java instance, INST_JAVA. On Linux, also GameMode, MangoHud and
+    /// the dedicated graphics card, when the computer has them
     Launch {
         instance: String,
         #[arg(long)]
         pre_launch: Option<String>,
         #[arg(long)]
         wrapper: Option<String>,
+        #[arg(long)]
+        post_exit: Option<String>,
         #[arg(long)]
         env: Option<String>,
         /// Linux: run it through GameMode (gamemoderun), on or off
@@ -590,14 +594,16 @@ enum ModsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
+    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does;
+    /// in a Java instance, its file loses `.disabled`)
     Enable {
         project: String,
         /// The instance (default: the selected one)
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Turn off a mod the browser installed; it stays installed
+    /// Turn off a mod the browser installed; it stays installed (in a Java instance, as
+    /// `<file>.disabled`)
     Disable {
         project: String,
         /// The instance (default: the selected one)
@@ -734,7 +740,7 @@ enum Cmd {
     /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
     /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
     /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
-    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// system|en|fr|ru|de|zh|es|uk|pl (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
     Settings {
@@ -951,10 +957,9 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
             use horizon_launcher::i18n::Language;
             s.language = match value.trim() {
                 "system" | "default" => None,
-                code => Some(
-                    Language::parse(code)
-                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
-                ),
+                code => Some(Language::parse(code).ok_or_else(|| {
+                    format!("{value}: say system, en, fr, ru, de, zh, es, uk or pl")
+                })?),
             }
         }
         "proxy" => {
@@ -1209,12 +1214,18 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 });
                 let mut cmd =
                     backend::java_game(&instance, server.as_deref(), &|line| eprintln!("{line}"))?;
+                if let Some(e) = account::take_unsaved() {
+                    eprintln!("{e}");
+                }
                 cmd.args(arg);
+                let vars = instance.vars(cmd.get_program());
+                cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 let started = std::time::Instant::now();
                 let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
                 if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                     eprintln!("Play time not saved: {e}");
                 }
+                after_exit(&instance, &vars);
                 return played;
             }
             let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
@@ -1240,10 +1251,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 cmd.arg("--name").arg(name);
             }
             cmd.envs(accounts.look_env());
+            let vars = instance.vars(cmd.get_program());
+            cmd.envs(vars.iter().map(|(k, v)| (k, v)));
             let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }
+            after_exit(&instance, &vars);
             played?
         }
         Cmd::Server {
@@ -1660,8 +1674,8 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             accounts.add(account::store(), signed_in.clone(), &secrets)?;
             accounts.save()?;
             println!("Signed in as {}.", signed_in.name);
-            if !account::store().persistent() {
-                eprintln!("{}", account::NO_KEYCHAIN);
+            if let Some(said) = account::no_keychain() {
+                eprintln!("{said}");
             }
         }
         AccountCmd::SignOut { who } => {
@@ -1996,9 +2010,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 );
             }
             for e in list.iter().filter(|_| !as_json) {
+                let off = java.is_some() && !java_instance::is_on(&home, e);
                 println!(
-                    "{}  {}  ({}, {})\n  {}  {}",
+                    "{}{}  {}  ({}, {})\n  {}  {}",
                     e.title,
+                    if off { " (off)" } else { "" },
                     e.number,
                     e.source.label(),
                     e.slug,
@@ -2280,11 +2296,13 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             };
             println!("Removed {} ({}).", e.title, e.file);
         }
-        ModsCmd::Enable { .. } | ModsCmd::Disable { .. } if java.is_some() => {
-            return Err(
-                "A Java instance loads every mod in its mods/ folder: remove one to turn it off."
-                    .into(),
-            );
+        ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } if java.is_some() => {
+            let e = installed::Installed::load(&home)
+                .lookup(&project)
+                .cloned()
+                .ok_or_else(|| format!("{project} wasn't installed by the browser."))?;
+            java_instance::set_on(&home, &e, on)?;
+            println!("{} is {}.", e.title, if on { "on" } else { "off" });
         }
         ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
             let e = installed::Installed::load(&home)
@@ -2341,6 +2359,20 @@ fn other_json(f: &other_launchers::Found) -> serde_json::Value {
         "loader_version": f.loader.as_ref().map(|l| &l.version),
         "game": f.game, "shared": f.shared,
     })
+}
+
+/// Runs the instance's post-exit command in this terminal, if it has one, and waits for it.
+fn after_exit(instance: &instances::Instance, vars: &[(&'static str, std::ffi::OsString)]) {
+    let Some(mut cmd) =
+        horizon_launcher::launch::after_exit(&instance.launch, &instance.home, vars)
+    else {
+        return;
+    };
+    match cmd.status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("The post-exit command failed ({s})."),
+        Err(e) => eprintln!("The post-exit command didn't run: {e}"),
+    }
 }
 
 /// `1280x720` (or `1280×720`), or `default` for none.
@@ -2551,6 +2583,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             gamemode,
             mangohud,
             dedicated_gpu,
+            post_exit,
         } => {
             use horizon_launcher::launch;
             let env = env.as_deref().map(launch::parse_env).transpose()?;
@@ -2575,6 +2608,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             }
             let changing = pre_launch.is_some()
                 || wrapper.is_some()
+                || post_exit.is_some()
                 || env.is_some()
                 || gamemode.is_some()
                 || mangohud.is_some()
@@ -2587,6 +2621,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     }
                     if let Some(w) = wrapper {
                         m.launch.wrapper = w.trim().to_string();
+                    }
+                    if let Some(p) = post_exit {
+                        m.launch.post_exit = p.trim().to_string();
                     }
                     if let Some(e) = env {
                         m.launch.env = e;
@@ -2606,6 +2643,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::json!({
                     "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                    "post_exit": l.post_exit,
                     "gamemode": l.gamemode, "mangohud": l.mangohud, "dedicated_gpu": l.dedicated_gpu,
                     "found": {
                         "gamemode": found.gamemode, "mangohud": found.mangohud,
@@ -2621,6 +2659,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 println!("  pre-launch: {}", l.pre_launch);
                 println!("  wrapper:    {}", l.wrapper);
                 println!("  env:        {}", launch::env_line(&l.env));
+                println!("  post-exit:  {}", l.post_exit);
                 let yes = |b: bool| if b { "on" } else { "off" };
                 for (name, on, has) in [
                     ("gamemode:", l.gamemode, found.gamemode),
@@ -3181,6 +3220,22 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn settings_accepts_german_and_chinese() {
+        use crate::i18n::Language;
+        let mut settings = backend::Settings::default();
+        for (code, language) in [("de", Language::German), ("zh", Language::Chinese)] {
+            set_setting(&mut settings, "language", code).unwrap();
+            assert_eq!(settings.language, Some(language));
+        }
+        assert_eq!(
+            set_setting(&mut settings, "language", "xx").unwrap_err(),
+            "xx: say system, en, fr, ru, de, zh, es, uk or pl"
+        );
+        set_setting(&mut settings, "language", "system").unwrap();
+        assert_eq!(settings.language, None);
+    }
 
     #[test]
     fn play_takes_extra_arguments_that_start_with_hyphens() {
