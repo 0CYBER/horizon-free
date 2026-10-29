@@ -2123,8 +2123,10 @@ impl Game<'_> {
         if d.x * d.x + d.y * d.y + d.z * d.z >= 2500.0 || p.health.dead_or_dying() {
             return false;
         }
-        let active = self.potions.effects.get("minecraft:mining_fatigue");
-        if active.is_some_and(|e| e.amplifier >= 2 && e.duration >= 1200) {
+        // The player's effects are kept by their bare name. A curse as strong
+        // that won't end within the next minute stays (endsWithin(1199)).
+        let active = self.potions.effects.get("mining_fatigue");
+        if active.is_some_and(|e| e.amplifier >= 2 && !e.ends_within(1199)) {
             return false;
         }
         let at = [p.position.x, p.position.y, p.position.z];
