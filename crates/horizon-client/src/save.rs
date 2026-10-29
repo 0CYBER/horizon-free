@@ -155,6 +155,19 @@ impl SessionLock {
         file.flush()?;
         Ok(Self(file))
     }
+    /// `DirectoryLock.isLocked`: another copy holds the world's `session.lock`.
+    /// A world without the file is not locked; one whose file may not be opened
+    /// is.
+    pub fn is_locked(world: &Path) -> bool {
+        let file = match fs::OpenOptions::new()
+            .write(true)
+            .open(world.join("session.lock"))
+        {
+            Ok(file) => file,
+            Err(e) => return e.kind() == std::io::ErrorKind::PermissionDenied,
+        };
+        matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock))
+    }
 }
 /// Bring a world last saved by an older game version to the current format, as
 /// 26.3 does when it opens one: the file fixes and level.dat first
