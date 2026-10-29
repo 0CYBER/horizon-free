@@ -217,6 +217,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.on_ground = false;
                 m.sound("entity.tadpole.flop", events);
             }
+            // Tadpole.aiStep: the age lock's particles, after the age.
+            super::ai::make_age_locked_particle(m, events);
         }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             // AbstractFish.aiStep flops on land (applied before travel next tick).
