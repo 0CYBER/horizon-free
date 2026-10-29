@@ -470,6 +470,7 @@ impl Game<'_> {
         let shortcut = self.edit_shortcut(event);
         let ctrl = self.has_control_down();
         let shift = self.has_shift_down();
+        let types_text = self.types_text();
         let Some(search) = self.panel.search.as_mut() else {
             return;
         };
@@ -481,7 +482,7 @@ impl Game<'_> {
                 _ => false,
             };
             if !handled
-                && !ctrl
+                && types_text
                 && let Some(text) = &event.text
             {
                 let text: String = text.chars().filter(|c| !c.is_control()).collect();

@@ -16,6 +16,10 @@ struct Params {
     debug: f32,
     // 1 for an HDR10 swapchain, 0 for scRGB.
     pq: f32,
+    // The display's black level in nits; 0 leaves the picture as it is.
+    black: f32,
+    // The HUD and menus' brightness as a share of paper white.
+    ui: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 
@@ -56,20 +60,51 @@ fn pq(nits: vec3<f32>) -> vec3<f32> {
     return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), vec3(78.84375));
 }
 
+// ST 2084's inverse: the PQ signal to nits.
+fn pq_nits(e: vec3<f32>) -> vec3<f32> {
+    let p = pow(clamp(e, vec3(0.0), vec3(1.0)), vec3(1.0 / 78.84375));
+    let y = max(p - 0.8359375, vec3(0.0)) / (18.8515625 - 18.6875 * p);
+    return 10000.0 * pow(y, vec3(1.0 / 0.1593017578125));
+}
+
+// ITU-R BT.2390's black level lift (its EETF without the knee) on the PQ signal
+// `e`: black moves up to the display's black level, the peak stays, and the lift
+// fades out by the fourth power on the way up, so only the shadows move. A display
+// that can't go darker than its black level would crush everything below it.
+fn lift_black(e: vec3<f32>) -> vec3<f32> {
+    let top = pq(vec3(params.peak * params.paper * 80.0)).x;
+    let n = min(e / top, vec3(1.0));
+    return e + pq(vec3(params.black)).x * pow(vec3(1.0) - n, vec3(4.0));
+}
+
 @vertex fn vs_hdr(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
     return vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }
 
+// Hdr::keep_world: once the world is kept, the frame's alpha starts at 0 again.
+@fragment fn fs_clear_alpha() -> @location(0) vec4<f32> {
+    return vec4(0.0);
+}
+
 @fragment fn fs_hdr(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let at = vec2<i32>(pos.xy);
-    let c = textureLoad(frame, at, 0).rgb;
+    let f = textureLoad(frame, at, 0);
+    let c = f.rgb;
+    // What covers the world here (Hdr::keep_world): nothing at 0, the hand at
+    // 1/255 (Hdr::mark_hand: drawn at the world's brightness), else the HUD or a
+    // menu, by how much.
+    let covered = f.a > 0.0;
+    let ui = select(f.a, 0.0, f.a < 1.5 / 255.0);
     // Gamma 2.2, as SDR displays and the compositors' SDR paths decode it.
     var light = pow(max(c, vec3(0.0)), vec3(2.2));
     let w = textureLoad(world, at, 0);
     // The world's alpha is 0 on light-emitting blocks, the sun and the moon
-    // (terrain.wgsl, the celestial pipeline): only those shine.
-    if params.world > 0.5 && params.peak > 1.0 && w.a < 0.75 && shows_world(c, w.rgb) {
+    // (terrain.wgsl, the celestial pipeline): only those shine, and only where
+    // nothing was drawn over them since: grey text over the white sun still looks
+    // like the sun darkened, but it raised the frame's alpha.
+    if params.world > 0.5 && params.peak > 1.0 && w.a < 0.75 && !covered
+        && shows_world(c, w.rgb) {
         // Brightness of the world pixel, before the vignette darkens the frame
         // toward its edges: a light source shines the same anywhere on screen.
         let wl = pow(max(w.rgb, vec3(0.0)), vec3(2.2));
@@ -84,9 +119,15 @@ fn pq(nits: vec3<f32>) -> vec3<f32> {
             }
         }
     }
+    // The HUD and menus at their own brightness, by how much they cover.
+    light *= mix(1.0, params.ui, ui);
     let scrgb = light * params.paper;
     if params.pq > 0.5 {
-        return vec4(pq(BT709_TO_BT2020 * scrgb * 80.0), 1.0);
+        let e = pq(BT709_TO_BT2020 * scrgb * 80.0);
+        return vec4(select(e, lift_black(e), params.black > 0.0), 1.0);
+    }
+    if params.black > 0.0 {
+        return vec4(pq_nits(lift_black(pq(scrgb * 80.0))) / 80.0, 1.0);
     }
     return vec4(scrgb, 1.0);
 }
