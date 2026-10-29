@@ -379,11 +379,76 @@ pub fn receive_retreat(m: &mut Mob, from: Who, at: [f64; 3]) {
         .retreats
         .push((from, Vec3::new(at[0], at[1], at[2])));
 }
+/// `HoglinAi.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget`
+/// (`BehaviorUtils`) with 4 blocks: `other` is more than 4 blocks further
+/// away than the attack target.
+fn much_further_than_target(m: &Mob, w: &MobWorld, other: Vec3) -> bool {
+    let Some(current) =
+        m.ai.target
+            .and_then(|t| w.target_info(t).map(|i| i.position))
+    else {
+        return false;
+    };
+    m.distance_sqr(other) > m.distance_sqr(current) + 16.0
+}
+/// `Sensor.isEntityAttackable`, or `isEntityAttackableIgnoringLineOfSight`
+/// without `check_sight`: `TargetingConditions.forCombat()` within the
+/// follow range.
+fn attackable(m: &mut Mob, w: &MobWorld, who: Who, check_sight: bool) -> bool {
+    let range = m.attrs.follow_range;
+    match who {
+        Who::Player => m.can_target_player(w, range, check_sight),
+        Who::Mob(id) => {
+            let Some(s) = w.seen(id) else { return false };
+            s.alive
+                && !s.playing_dead
+                && m.distance_sqr(s.position) <= range * range
+                && (!check_sight || m.sees(w, who))
+        }
+    }
+}
+/// `HoglinAi.maybeRetaliate`'s tests for an adult: it does not take on a
+/// piglin while it retreats, nor a hoglin, nor an attacker more than 4
+/// blocks further away than its target, nor one it cannot attack.
+fn hoglin_retaliates(m: &mut Mob, w: &MobWorld, by: Who, at: Vec3) -> bool {
+    let species = species_of(w, by);
+    if m.extra.piglin.activity == Activity::Avoid && species == Some(Species::Piglin) {
+        return false;
+    }
+    species != Some(Species::Hoglin)
+        && !much_further_than_target(m, w, at)
+        && attackable(m, w, by, true)
+}
+/// `Hoglin.hurtServer`'s `HoglinAi.wasHurtBy`: a hit ends the pacified
+/// state; a baby retreats from the attacker, an adult retaliates when
+/// `maybeRetaliate` allows. The hurt-by goal does the retaliating, so a hit
+/// that does not get it is used up.
+fn hoglin_hurt(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, by: Who) {
+    m.extra.ints[0] = 0;
+    let Some(at) = w.target_info(by).map(|t| t.position) else {
+        return;
+    };
+    if m.is_baby() {
+        retreat_from_nearest(m, w, lr, by, at);
+        m.ai.last_hurt_by = None;
+    } else if !hoglin_retaliates(m, w, by, at) {
+        m.ai.last_hurt_by = None;
+    }
+}
 /// What a piglin or hoglin handles before its goals run: the retreats other
-/// mobs broadcast to it and, for a piglin, its celebration.
+/// mobs broadcast to it, the hit `wasHurtBy` reacts to and, for a piglin,
+/// its celebration.
 pub fn before_goals(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
     for (from, at) in std::mem::take(&mut m.extra.piglin.retreats) {
         retreat_from_nearest(m, w, lr, from, at);
+    }
+    if let Some(by) = m.ai.last_hurt_by
+        && m.ai.last_hurt_by_time != m.extra.piglin.hurt_seen
+    {
+        m.extra.piglin.hurt_seen = m.ai.last_hurt_by_time;
+        if m.species() == Species::Hoglin {
+            hoglin_hurt(m, w, lr, by);
+        }
     }
     if m.species() == Species::Piglin {
         celebrate(m, w);
@@ -909,16 +974,11 @@ fn find_hoglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
     ];
     w.nearest_block(at, 8, 4, |_, name| tag.contains(name))
 }
-/// The hoglin's repellent memories: the sensor (every 20 ticks), the end of
-/// `PACIFIED` (`ints[0]`), a hit ending it (`HoglinAi.wasHurtBy`, `ints[1]`
-/// remembers the hit seen) and `BecomePassiveIfMemoryPresent(NEAREST_REPELLENT, 200)`.
+/// The hoglin's repellent memories: the sensors (every 20 ticks), the end of
+/// `PACIFIED` (`ints[0]`) and `BecomePassiveIfMemoryPresent(NEAREST_REPELLENT, 200)`.
 fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
     if m.extra.ints[0] > 0 {
         m.extra.ints[0] -= 1;
-    }
-    if m.ai.last_hurt_by.is_some() && m.ai.last_hurt_by_time != m.extra.ints[1] {
-        m.extra.ints[1] = m.ai.last_hurt_by_time;
-        m.extra.ints[0] = 0;
     }
     if m.age.wrapping_add(m.id).is_multiple_of(20) {
         m.extra.repellent = find_hoglin_repellent(m, w);
