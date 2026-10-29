@@ -73,6 +73,17 @@ pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::RotateWithMinecarts,
     Opt::HighContrastBlockOutlines,
 ];
+
+/// `MouseSettingsScreen.options` in Java Edition 26.3, in vanilla order.
+pub(crate) const MOUSE_OPTIONS: &[Opt] = &[
+    Opt::Sensitivity,
+    Opt::WheelSensitivity,
+    Opt::DiscreteScroll,
+    Opt::InvertX,
+    Opt::InvertY,
+    Opt::AllowCursorChanges,
+];
+
 impl Opt {
     /// Keep controls visible while their underlying systems are still missing.
     pub(crate) fn available(self) -> bool {
@@ -89,7 +100,6 @@ impl Opt {
                 | Opt::DistortionEffects
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
-                | Opt::HighContrastBlockOutlines
                 // Saved, but nothing in rendering reads them yet.
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
@@ -129,8 +139,10 @@ impl Opt {
             Opt::SimulationDistance => "options.simulationDistance",
             Opt::Sensitivity => "options.sensitivity",
             Opt::WheelSensitivity => "options.mouseWheelSensitivity",
+            Opt::InvertX => "options.invertMouseX",
             Opt::InvertY => "options.invertMouseY",
             Opt::DiscreteScroll => "options.discrete_mouse_scroll",
+            Opt::AllowCursorChanges => "options.allowCursorChanges",
             Opt::Volume(_) => "soundCategory.master",
             Opt::GuiScale => "options.guiScale",
             Opt::ViewBobbing => "options.viewBobbing",
@@ -454,8 +466,10 @@ impl Opt {
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
+            Opt::InvertX => on_off(s.invert_x),
             Opt::InvertY => on_off(s.invert_y),
             Opt::DiscreteScroll => on_off(s.discrete_scroll),
+            Opt::AllowCursorChanges => on_off(s.allow_cursor_changes),
             Opt::ViewBobbing => on_off(s.view_bobbing),
             Opt::Vsync => on_off(s.vsync),
             Opt::Fullscreen => on_off(s.fullscreen),
@@ -652,6 +666,7 @@ impl Opt {
             Opt::TextBackground
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
+            | Opt::HighContrastBlockOutlines
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts => {
@@ -659,8 +674,10 @@ impl Opt {
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
             }
+            Opt::InvertX => s.invert_x = !s.invert_x,
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::DiscreteScroll => s.discrete_scroll = !s.discrete_scroll,
+            Opt::AllowCursorChanges => s.allow_cursor_changes = !s.allow_cursor_changes,
             Opt::ViewBobbing => s.view_bobbing = !s.view_bobbing,
             Opt::Vsync => s.vsync = !s.vsync,
             Opt::Fullscreen => s.fullscreen = !s.fullscreen,
@@ -803,6 +820,9 @@ pub fn apply_preset(s: &mut Settings) {
     }
 }
 
+/// `selected_key` while a native mod's key waits (`selected_native_key`).
+const NATIVE_KEY: &str = "horizon.nativeModKey";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Main,
@@ -817,6 +837,8 @@ pub enum Page {
     Font,
     Packs,
     Mods,
+    /// A native mod's settings page: its index in `mods.installed`.
+    NativeMod(usize),
     /// Horizon's shader packs, either kind (`shader_pack_list`).
     ShaderPacks,
     /// Horizon's graphics settings (`graphics_ui`).
@@ -855,6 +877,9 @@ enum Act {
     /// The installed mod's own settings page (capability `ui`), shown as a
     /// screen: `Event::ModSettings` has the game open it.
     ModSettings(usize),
+    /// A native mod's key (mod, key) waits for a key; a button of its page.
+    NativeKey(usize, usize),
+    NativeButton(usize, usize),
     OpenModFolder,
     /// Credits & Attribution's Credits button (WinScreen without the poem).
     Credits,
@@ -914,6 +939,9 @@ pub enum Event {
     /// Open the mod's own settings page (capability `ui`): the installed
     /// mod's index in `mods.installed`.
     ModSettings(usize),
+    /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
+    /// mod and refreshes the page.
+    NativeButton(usize, usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -946,8 +974,11 @@ pub struct OptionsUi {
     slider_value: Option<(Opt, f32, Instant)>,
     /// The pointer's last y while a scrollbar is held.
     pub(crate) scrollbar_drag_y: Option<f32>,
-    /// Key Binds: the mapping waiting for a key.
+    /// Key Binds: the mapping waiting for a key ([`NATIVE_KEY`]: a native
+    /// mod's, `selected_native_key`).
     pub selected_key: Option<&'static str>,
+    /// The native mod's key waiting: (mod, key) in `mods.installed`.
+    selected_native_key: Option<(usize, usize)>,
     /// Controller Binds: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
     /// The glyphs the binds list shows (the setting, else the pad's family).
@@ -985,6 +1016,7 @@ impl Default for OptionsUi {
             slider_value: None,
             scrollbar_drag_y: None,
             selected_key: None,
+            selected_native_key: None,
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
@@ -1150,6 +1182,7 @@ impl OptionsUi {
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
             Page::Mods => "Mods",
+            Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "Shader Packs",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
@@ -1206,6 +1239,43 @@ impl OptionsUi {
             }
         }
         filtered
+    }
+
+    /// A native mod's page: its name, its keys as Key Binds rows (the
+    /// player's choice, else the default), then its buttons.
+    fn native_rows(&self, s: &Settings, i: usize) -> Vec<Row> {
+        let Some(m) = s.mods.installed.get(i) else {
+            return Vec::new();
+        };
+        let mut rows = vec![Row::Note(m.title.clone())];
+        let Some(page) = &m.native else {
+            return rows;
+        };
+        let chosen = s.mods.keys.get(&m.id);
+        for (k, [name, label, default]) in page.keys.iter().enumerate() {
+            let key = chosen.and_then(|c| c.get(name)).unwrap_or(default);
+            let mut message = keybinds::display_name(key);
+            if self.selected_native_key == Some((i, k)) {
+                message = Text::literal("> ")
+                    .append(message.with_color(text::WHITE))
+                    .append(" <")
+                    .with_color(text::YELLOW);
+            }
+            let caption = button(0.0, 0.0, 150.0, Text::literal(label.clone()), Act::None);
+            let change = button(0.0, 0.0, 150.0, message, Act::NativeKey(i, k));
+            rows.push(Row::Buttons(inactive(caption), Some(change)));
+        }
+        for (b, label) in page.buttons.iter().enumerate() {
+            let widget = button(
+                0.0,
+                0.0,
+                310.0,
+                Text::literal(label.clone()),
+                Act::NativeButton(i, b),
+            );
+            rows.push(Row::Buttons(widget, None));
+        }
+        rows
     }
 
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
@@ -1434,12 +1504,7 @@ impl OptionsUi {
                 ]));
                 rows
             }
-            Page::Mouse => pairs(&[
-                Opt::Sensitivity,
-                Opt::WheelSensitivity,
-                Opt::DiscreteScroll,
-                Opt::InvertY,
-            ]),
+            Page::Mouse => pairs(MOUSE_OPTIONS),
             Page::Chat => pairs(&[
                 Opt::ChatVisibility,
                 Opt::ChatColors,
@@ -1494,7 +1559,7 @@ impl OptionsUi {
                         let dead = installed.dev || installed.id.is_empty();
                         // A running mod with a settings page (capability
                         // `ui`) gets its own button beside the toggle.
-                        if installed.has_settings {
+                        if installed.has_settings || installed.native.is_some() {
                             let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
                             let settings = button(
                                 0.0,
@@ -1514,6 +1579,7 @@ impl OptionsUi {
                     })
                     .collect()
             }
+            Page::NativeMod(i) => self.native_rows(s, i),
             Page::ShaderPacks => {
                 if s.shader_packs.is_empty() {
                     return vec![Row::Header(
@@ -2544,8 +2610,17 @@ impl OptionsUi {
                         }
                         Act::ModSettings(i) => {
                             events.push(Event::ButtonClick);
-                            events.push(Event::ModSettings(i));
+                            if s.mods.installed.get(i).is_some_and(|m| m.native.is_some()) {
+                                self.push(Page::NativeMod(i));
+                            } else {
+                                events.push(Event::ModSettings(i));
+                            }
                         }
+                        Act::NativeKey(i, k) => {
+                            self.selected_key = Some(NATIVE_KEY);
+                            self.selected_native_key = Some((i, k));
+                        }
+                        Act::NativeButton(i, b) => events.push(Event::NativeButton(i, b)),
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::PickShaderPack(i) => {
                             if let Some(pack) = s.shader_packs.get(i) {
@@ -2743,6 +2818,18 @@ impl OptionsUi {
         let Some(name) = self.selected_key.take() else {
             return Vec::new();
         };
+        if name == NATIVE_KEY {
+            let (i, k) = self.selected_native_key.take().unwrap_or_default();
+            let Some(m) = s.mods.installed.get(i) else {
+                return Vec::new();
+            };
+            let Some([key, ..]) = m.native.as_ref().and_then(|p| p.keys.get(k)) else {
+                return Vec::new();
+            };
+            let keys = s.mods.keys.entry(m.id.clone()).or_default();
+            keys.insert(key.clone(), value);
+            return vec![Event::Changed];
+        }
         if !s.extras.set_key(name, value.clone()) {
             s.keys.set(name, &value);
         }
@@ -2874,6 +2961,45 @@ mod tests {
         let chat_only = s.text_background(0.0);
         Opt::TextBackground.cycle(&mut s, false, [854, 480]);
         assert_ne!(s.text_background(0.0), chat_only);
+    }
+
+    #[test]
+    fn mouse_settings_match_java_26_3_option_order() {
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Mouse);
+        let mut options = Vec::new();
+        for row in ui.list_rows(&Settings::default()) {
+            if let Row::Pair(a, b) = row {
+                options.push(a);
+                if let Some(b) = b {
+                    options.push(b);
+                }
+            }
+        }
+        assert_eq!(
+            options,
+            vec![
+                Opt::Sensitivity,
+                Opt::WheelSensitivity,
+                Opt::DiscreteScroll,
+                Opt::InvertX,
+                Opt::InvertY,
+                Opt::AllowCursorChanges,
+            ]
+        );
+    }
+
+    #[test]
+    fn mouse_settings_round_trip_with_java_defaults() {
+        let mut settings = Settings::default();
+        assert!(!settings.invert_x);
+        assert!(settings.allow_cursor_changes);
+        Opt::InvertX.cycle(&mut settings, false, [854, 480]);
+        Opt::AllowCursorChanges.cycle(&mut settings, false, [854, 480]);
+        let loaded = Settings::parse(&settings.serialize());
+        assert!(loaded.invert_x);
+        assert!(!loaded.allow_cursor_changes);
+        assert!(!loaded.file.bool("allowCursorChanges"));
     }
 
     #[test]
@@ -3049,6 +3175,7 @@ mod tests {
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
                 has_settings: false,
+                native: None,
             });
         }
         let (widgets, ..) = ui.layout(&s, size.0, size.1);

@@ -78,6 +78,18 @@ impl Dimensions {
     }
 }
 impl PlayerMotion {
+    /// `LivingEntity.aiStep` counting down `autoSpinAttackTicks` for a
+    /// server's copy of a player, which runs no client tick: the spin ends
+    /// after its ticks and its damage goes with it, so the pose (and the eye
+    /// a bow or a trident is shot from) comes back to standing.
+    pub fn count_down_server_spin(&mut self) {
+        if self.auto_spin_attack_ticks > 0 {
+            self.auto_spin_attack_ticks -= 1;
+            if self.auto_spin_attack_ticks <= 0 {
+                self.auto_spin_attack_dmg = 0.0;
+            }
+        }
+    }
     pub fn dimensions_for_pose(&mut self, pose: Pose) -> Result<Dimensions> {
         Ok(pose.dimensions(self.attribute("minecraft:scale")? as f32))
     }
