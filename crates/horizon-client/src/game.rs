@@ -1943,6 +1943,10 @@ struct Game<'a> {
     /// have each chest open.
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
+    /// The block the acting player is breaking (`break_block`): its destroy
+    /// event, and the ones before it, are the player's own (`Level.levelEvent`
+    /// with the player excluded); the events after it are not.
+    lan_break_pos: Option<[i32; 3]>,
     /// The name of the guest `lan_acting` acts for (`Player.getName`).
     lan_acting_name: Option<String>,
     /// Their UUID (`Player.getUUID`).
@@ -4077,7 +4081,10 @@ impl Game<'_> {
         self.stats.add("used", &stack.item, 1);
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
-        self.with_player_actor(|game| game.break_block_as_player(pos))
+        self.lan_break_pos = Some(pos);
+        let broken = self.with_player_actor(|game| game.break_block_as_player(pos));
+        self.lan_break_pos = None;
+        broken
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
         if !self
@@ -14310,6 +14317,7 @@ impl<'a> Game<'a> {
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
+            lan_break_pos: None,
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
             guest_entity_events: Vec::new(),
