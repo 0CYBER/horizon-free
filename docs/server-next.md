@@ -107,8 +107,8 @@ area before it accepts players). The raw JSON comes with S-2.
 | Fluids (`slope_distance`, `Vec` allocations) | ~4.5 % | open |
 
 Everything above runs on **one thread**. The worker pool (generation, light, section encoding) has cores to
-spare: the whole server used 1.0 to 4.4 of the 14 cores. Pumpkin's real leads over Horizon are memory and start
-time (section 7). On scale the lesson is simple: the next 10× can't come from shaving one
+spare: the whole server used 1.0 to 4.4 of the 14 cores. Pumpkin leads on memory and start
+time today; section 7 is the plan to pass it there too. On scale the lesson is simple: the next 10× can't come from shaving one
 thread. It comes from running the tick on more cores without changing what vanilla would do.
 
 ## 2. Targets
@@ -121,12 +121,12 @@ machine), with `mixed` bots, view distance 10, and a pre-generated world plus a 
 | Players at 20 TPS (walking, one level) | 50 (13.6 TPS at 100) | **200** on 8 cores | parallel phases (4.2) + the hub off the tick thread (5) |
 | Players at 20 TPS spread over 3 dimensions | — | **300** | levels in parallel (4.1) |
 | MSPT p99 at 100 players | 231 ms (worst 5 s: 348) | **< 35 ms** (p50 < 15) | the same, plus saving off the tick thread (5.5) |
-| RSS idle, fresh world | 32 MB | **< 100 MB**. One of the two numbers where we may stay behind: vanilla's registries, worldgen and loot tables are loaded up front | headless engine (7) |
+| RSS idle, fresh world | 32 MB | **< 32 MB** | nothing loaded while empty, lazy data (7) |
 | RSS at 100 players | 1.42 GB | **< 1.0 GB** | per-player state measured and capped (7) |
 | Bandwidth, walking vanilla client | 3.6 KB per chunk | **≤ vanilla's bytes per chunk**, compression level picked by measurement | 5.3 |
 | Bandwidth, walking Horizon client | — | **−50 %** against vanilla clients on the same server | the fast path (8) |
 | Join to spawn, p99 | 43 ms p50, 494 ms max (4.1 s at 50) | **< 300 ms** on loopback, **< 2 s** for a full view | 5.2 |
-| Start to ready | 0.1–0.2 s (no spawn area generated first) | **< 1 s**, the other one | headless engine (7), spawn area on the workers |
+| Start to ready (status ping answered) | 0.1–0.2 s | **< 0.1 s**, fresh or existing world | nothing heavy before the listener opens (7) |
 | Vanilla parity | not checked | **every harness that covers server code passes** on every server PR | 4.3 |
 
 The 200-player target fits within one tick: at 100 bots, the tick thread's CPU time per tick was 31 ms
@@ -327,18 +327,48 @@ allow = "any"        # "any" (vanilla Java and Horizon) or "horizon" (Horizon cl
     a modified client can claim to be Horizon. It keeps vanilla players off a server they can't play fully,
     nothing more. Accounts (online mode), the whitelist and bans are the real gate.
 
-## 7. Memory and start
+## 7. Memory and start: below Pumpkin's 32 MB and 0.1 s
 
-- Pumpkin idles at 32 MB and Horizon at 760 MB. The difference is mostly what the dedicated path
-  loads only for a window: the HUD atlas, the item renderer, block-entity and entity models, the panorama,
-  the fog and music tables, and the mesh tables. [server.md](server.md) §2 already decided the headless
-  engine: the dedicated path skips all of them.
-- After that, every per-player and per-chunk structure gets a measured size in the bench report (bytes
-  per loaded chunk, per tracked entity, per player). The target is under 1 GB at 100 players.
-- A loaded chunk's lighting and heightmaps are kept packed (#3253's storage primitives, by hectoreccles, are
-  the base).
-- Start: resources load in 1.6 s today. Without the client's tables, and with the registries mapped from one
-  prepared file, the target is under 1 s.
+Today Horizon idles at 760 MB, and a fresh world is ready in 9–14 s. Pumpkin idles at 32 MB and is ready in
+0.1–0.2 s. The targets are **idle RSS < 32 MB** and **ready < 0.1 s**, on a fresh world and on an existing one.
+
+Each step below is one or more PRs. Each one is measured with the bench on three numbers:
+- RSS 10 s after ready, with nobody on;
+- the time from exec to the first answered status ping, timed the same way for Pumpkin;
+- a per-component memory table: `vmmap` summary, plus the engine's own counters for chunks, registries and
+  pools.
+
+1. **Nothing loaded while nobody is on** (#2608, FusselTV): no chunks, light, mobs or tickets around the spawn
+   on an empty server.
+   - On a fresh world, the initial spawn search (`MinecraftServer.setInitialSpawn`) runs on the workers after
+     the listener opens. Status pings are answered at once. A login waits until the spawn is found.
+   - The chosen spawn and every rule stay vanilla's. Only the moment changes: the first player's join pays for
+     it, not the start.
+2. **Headless engine** ([server.md](server.md) §2): the dedicated path skips everything only a window uses: the
+   HUD and block atlases, item and block-entity models, entity models, the panorama, fog and music tables, the
+   meshing tables, and client language files beyond the server's own messages.
+3. **One server data file, mapped, parsed on first use.** `horizon-prepare` writes a compact, versioned binary
+   `server.pack` from the owner's own files: block states, registries, tags, worldgen settings, loot tables,
+   recipes, advancements, structure templates.
+   - The engine maps it (`mmap`) and decodes an entry the first time it's needed: a loot table at the first
+     drop, a structure template when it's first placed, a recipe at the first craft.
+   - Pages nobody reads never count in RSS. Decoding goes through the same types as today, so parity doesn't
+     move.
+4. **World generation built per dimension, on first use.** The noise router, the density-function graph, the
+   biome source and the structure sets are built when a dimension's first chunk is generated. The Nether and the
+   End, already parked when empty (`levels.rs`), build nothing until a player goes there.
+5. **No idle threads or pools.** The worker pool and the hub's I/O threads start with the first player and
+   shrink back after the last one leaves. Their stacks are sized to what they use.
+6. **Give memory back.** After the last player leaves, unloaded chunks and caches are freed, and the allocator
+   returns pages to the OS. The bench checks that RSS drops back under the target 60 s after the last leave.
+7. **Start < 0.1 s.** With steps 1 to 4, nothing heavy runs before the listener opens: read `server.properties`
+   and the lists, map `server.pack`, read `level.dat`, bind. A startup span log times each step, and the bench
+   fails a PR that makes any of them slower.
+
+With players on, the target is **< 1 GB at 100 players** (Pumpkin: 1.42 GB). Every per-player and per-chunk
+structure gets a measured size in the bench report: bytes per loaded chunk, per tracked entity, per player.
+Chunk lighting and heightmaps are kept packed, on #3253's storage primitives (hectoreccles), and #3489 shares
+uniform sections.
 
 ## 8. The Horizon fast path
 
@@ -373,7 +403,7 @@ negotiation, so a Horizon client still plays on every vanilla server.
 | W1 | **Network front**: I/O pool, prepared login frames, chunk cache, compression level by measurement (with #3036) | join p99 < 300 ms, CPU per idle player halved | bench, `lan_e2e`, `dedicated_server` |
 | W2 | **Tracker deltas**: the engine's change log, encode once per entity | `tick_lan` share ÷ 3 at 100 bots | bench, `server_entities` |
 | W3 | **Parallel levels**, then the exact entity phase (4.2.1), then `tick = "regions"` | 200 players at 20 TPS on 8 cores | bench, the serial-against-parallel digest harness (4.3) |
-| W4 | **Headless memory and start** (with #2608) | idle < 100 MB, start < 1 s | bench |
+| W4 | **Memory and start** (section 7, steps 1–7, with #2608) | idle RSS < 32 MB, ready < 0.1 s, RSS back under 32 MB 60 s after the last player leaves | bench: idle RSS, time to first status ping, per-component table |
 | W5 | **Saving off the tick thread** | no autosave spike in p99 | bench with an autosave window |
 | W6 | **Fast path**: hello, `chunk-zstd`, `entity-batch`, `far-terrain` | −50 % bytes for Horizon clients | per-capability harness |
 | W7 | **Operations**: metrics endpoint (Prometheus text, loopback/tailnet only), scheduled restarts | the official server's checklist (9.2) | an hour-long soak with 100 bots |
