@@ -3060,7 +3060,8 @@ impl Game<'_> {
         );
     }
 
-    /// Dropped items touching a guest go into their inventory.
+    /// Dropped items touching a guest go into their inventory
+    /// (`ItemEntity.playerTouch`, then `ServerPlayer.onItemPickup`).
     fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) {
         let (conn, mode, position, id, uuid) = {
             let g = &host.hub.guests[gi];
@@ -3093,16 +3094,28 @@ impl Game<'_> {
         for i in near.into_iter().rev() {
             let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
             let before = stack.count;
+            let thrower = self.dropped[i].thrower;
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
                     let item = self.dropped.remove(i);
+                    if let Some(thrower) = thrower {
+                        self.as_guest(host, conn, |g| {
+                            g.trigger_thrown_picked_up_by_player(&item.stack, thrower);
+                        });
+                    }
                     self.guest_pickup(host, id, item);
                     taken.push((item_id, before));
                 }
                 Some(rest) if rest.count < before => {
                     self.guest_pickup(host, id, self.dropped[i].clone());
                     self.dropped[i].stack = rest;
+                    if let Some(thrower) = thrower {
+                        let left = self.dropped[i].stack.clone();
+                        self.as_guest(host, conn, |g| {
+                            g.trigger_thrown_picked_up_by_player(&left, thrower);
+                        });
+                    }
                     taken.push((item_id, before - self.dropped[i].stack.count));
                 }
                 Some(_) => {}
