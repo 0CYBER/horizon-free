@@ -70,6 +70,7 @@ pub mod skins;
 pub mod sound_engine;
 pub mod sound_events;
 pub mod spans;
+pub mod split_layout;
 mod sprite_cache;
 pub mod sprites;
 pub mod streaming;

@@ -7,11 +7,11 @@
 //! into its `IntegratedServer`.
 //!
 //! On by default. `--in-frame` (or `--no-server-thread`, or
-//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead, the
-//! escape hatch. LAN guests and dedicated servers use the same code either
-//! way.
+//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead. That path
+//! is DEPRECATED: never use it, it gets no fixes and will be removed soon.
+//! LAN guests and dedicated servers use the same code either way.
 use super::{
-    Game, Options, PackResources, Resources, UiResources,
+    Game, Options, PackResources, Resources, UiResources, WorldIcon,
     execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
     world_loading::WorldRequest,
@@ -177,6 +177,8 @@ pub(super) struct Starting {
     handle: Integrated,
     ready: Receiver<Ready>,
     player: String,
+    /// The save's folder in `saves/`, for the world icon once joined.
+    folder: String,
 }
 
 /// The world to open and the player who owns it.
@@ -287,6 +289,7 @@ impl Game<'_> {
             handle,
             ready,
             player,
+            folder: folder.to_owned(),
         });
         // Harnesses, control scripts and runs without a window go on with the world open.
         if self.window.is_none() || super::synchronous_startup(&self.options) {
@@ -318,13 +321,25 @@ impl Game<'_> {
             }
         };
         let Some(Starting {
-            mut handle, player, ..
+            mut handle,
+            player,
+            folder,
+            ..
         }) = self.integrated_starting.take()
         else {
             return Ok(());
         };
         handle.world_name = world_name;
         self.connect_local(pipe, &player)?;
+        // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
+        // the Select World list shows, and needs the save folder for it.
+        self.world_icon = Some(WorldIcon {
+            path: std::env::current_dir()?
+                .join("saves")
+                .join(&folder)
+                .join("icon.png"),
+            last_attempt: None,
+        });
         self.integrated = Some(handle);
         Ok(())
     }
@@ -425,6 +440,7 @@ impl Game<'_> {
             return result.and(stopped);
         }
         let mut next = Instant::now();
+        let mut was_paused = false;
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
             if self.agent.hold_server {
@@ -434,6 +450,14 @@ impl Game<'_> {
                 continue;
             }
             let paused = flags.paused.load(Ordering::Relaxed);
+            if paused && !was_paused {
+                // IntegratedServer.tickServer: the tick the game pauses saves
+                // everything (saveEverything, without flushing), as an
+                // autosave does.
+                log::info!("Saving and pausing game...");
+                self.save_game_with(false)?;
+            }
+            was_paused = paused;
             if paused {
                 // Only the connections run.
                 self.tick_server_timed(true)?;
