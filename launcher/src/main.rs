@@ -3342,7 +3342,7 @@ impl Launcher {
             .child(div().text_color(t.danger).child(tr("These mods will run with full access to your computer").to_string()))
             .child(tr("They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.").to_string())
             .child(trf("Mods: {mods}", &[("mods", &list)]))
-            .child(tr("The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.").to_string());
+            .child(tr("The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.").to_string());
         let mut buttons = div().flex().gap(px(8.)).mt(px(4.));
         if mods.is_ok() {
             buttons = buttons.child(

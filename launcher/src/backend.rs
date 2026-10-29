@@ -2931,10 +2931,14 @@ pub struct Settings {
     /// The window's language. Unset follows the system's (`i18n::Language::system`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<crate::i18n::Language>,
-    /// The player turned Native mods (experimental) on (`native_mods`): mixin mods compiled into
-    /// a game of their own. Off by default.
+    /// Native mods (experimental) are on (`native_mods`): mixin mods compiled into a game of
+    /// their own. Off until the player installs a native mod (`native_mods::turns_on`), or turns
+    /// them on in Settings.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_mods: bool,
+    /// The player has read what installing a native mod starts (`native_mods::needs_notice`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_mods_noticed: bool,
     /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
     /// offline names play without an account that owns the game, in the window only
     /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
