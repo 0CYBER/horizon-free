@@ -1823,10 +1823,13 @@ impl Game<'_> {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, anvil result sounds, or a
-                    // finished brushing (these levelEvent calls name no
+                    // finished brushing or an eye inserted in a portal frame (these calls name no
                     // excluded player), nor the digger's own crack and hit
                     // sound (2019, 2020).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020 | 3008) {
+                    let except = if matches!(
+                        *id,
+                        2015 | 1503 | 1505 | 1029 | 1030 | 1045 | 1052 | 2019 | 2020 | 3000 | 3008
+                    ) {
                         None
                     } else {
                         self.lan_acting

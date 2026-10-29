@@ -3401,6 +3401,32 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.destroy_particles([pos.x, pos.y, pos.z], BlockStateId(data as u32)),
+                // EnderDragonFight.spawnNewGateway: an always-visible burst
+                // and a sound at the gateway for every nearby player.
+                LevelEvent::LevelEvent { id: 3000, pos, .. } => {
+                    let at = [
+                        f64::from(pos.x) + 0.5,
+                        f64::from(pos.y) + 0.5,
+                        f64::from(pos.z) + 0.5,
+                    ];
+                    self.particles.add_with(
+                        &horizon_client::particles::ParticleOptions::simple(
+                            horizon_client::particles::ParticleType::ExplosionEmitter,
+                        ),
+                        at,
+                        [0.0; 3],
+                        true,
+                        true,
+                    );
+                    let random = self.particles.level_random();
+                    let pitch = (1.0 + (random.next_float() - random.next_float()) * 0.2) * 0.7;
+                    self.audio.play_unshared(
+                        "minecraft:block.end_gateway.spawn",
+                        Some(at),
+                        10.0,
+                        pitch,
+                    );
+                }
                 // LevelEventHandler 3009: a sniffer egg cracking.
                 LevelEvent::LevelEvent { id: 3009, pos, .. } => {
                     self.sniffer_egg_crack_particles(pos)
@@ -3417,11 +3443,14 @@ impl Game<'_> {
                         f64::from(pos.z) + 0.5,
                     ]);
                     let sound = match id {
+                        1503 => Some(("minecraft:block.end_portal_frame.fill", 1.0)),
                         1501 => Some(("minecraft:block.lava.extinguish", 0.5)),
                         1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
                         1033 => Some(("minecraft:block.chorus_flower.grow", 1.0)),
                         1034 => Some(("minecraft:block.chorus_flower.death", 1.0)),
+                        1045 => Some(("minecraft:block.pointed_dripstone.land", 2.0)),
+                        1052 => Some(("minecraft:block.sulfur_spike.land", 2.0)),
                         1046 => Some((
                             "minecraft:block.pointed_dripstone.drip_lava_into_cauldron",
                             2.0,
@@ -3457,7 +3486,9 @@ impl Game<'_> {
                                 let r = self.particles.level_random();
                                 2.6 + (r.next_float() - r.next_float()) * 0.8
                             }
-                            1046 | 1047 => self.particles.level_random().next_float() * 0.1 + 0.9,
+                            1045 | 1046 | 1047 | 1052 => {
+                                self.particles.level_random().next_float() * 0.1 + 0.9
+                            }
                             1029 | 1030 | 1042 | 1043 | 1044 | 1053 | 1054 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
@@ -3468,21 +3499,25 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        if matches!(id, 1019 | 1021 | 1029 | 1030 | 1053 | 1054) {
-                            // Clients play the anvil sound from its level event;
+                        if matches!(
+                            id,
+                            1019 | 1021 | 1029 | 1030 | 1045 | 1052 | 1053 | 1054 | 1503
+                        ) {
+                            // Clients play these sounds from their level events;
                             // capturing it also sends a duplicate sound packet.
                             self.audio.play_unshared(name, c, volume, pitch);
                         } else {
                             self.audio.play(name, c, volume, pitch);
                         }
                     }
-                    // LevelEventHandler 1501 and 1502 draw their smoke after the sound.
+                    // LevelEventHandler draws smoke after the sound.
                     match id {
                         1501 => self.puffs_above_block(
                             pos,
                             horizon_client::particles::ParticleType::LargeSmoke,
                         ),
                         1502 => self.torch_burnout_smoke(pos),
+                        1503 => self.end_portal_frame_smoke(pos),
                         _ => {}
                     }
                 }
@@ -3508,7 +3543,18 @@ impl Game<'_> {
                 LevelEvent::DropResources { pos, state } => {
                     self.with_level(|_, level, _| level.drop_resources_now(pos, state));
                 }
-                LevelEvent::FallingBlock { pos, state } => {
+                LevelEvent::FallingBlock {
+                    pos,
+                    state,
+                    hurt_per_distance,
+                } => {
+                    let mut damage = horizon_client::falling_block::Damage::falling(
+                        &self.res.facts().get(state).name,
+                    );
+                    if let Some(per_distance) = hurt_per_distance {
+                        damage.hurt_entities = true;
+                        damage.per_distance = per_distance;
+                    }
                     let p = Vec3::new(
                         f64::from(pos.x) + 0.5,
                         f64::from(pos.y),
@@ -3526,9 +3572,7 @@ impl Game<'_> {
                         drop_item: true,
                         fall_distance: 0.0,
                         stuck: Vec3::ZERO,
-                        damage: horizon_client::falling_block::Damage::falling(
-                            &self.res.facts().get(state).name,
-                        ),
+                        damage,
                         saved: None,
                     });
                 }

@@ -4789,6 +4789,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Explosion => "minecraft:explosion",
         K::Fall => "minecraft:fall",
         K::FallingBlock => "minecraft:falling_block",
+        K::FallingStalactite => "minecraft:falling_stalactite",
         K::OnFire => "minecraft:on_fire",
         K::InFire => "minecraft:in_fire",
         K::Lava => "minecraft:lava",

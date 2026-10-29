@@ -519,6 +519,7 @@ pub enum DamageKind {
     Explosion,
     Fall,
     FallingBlock,
+    FallingStalactite,
     OnFire,
     InFire,
     Lava,
@@ -2072,8 +2073,10 @@ impl Mob {
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
-        if source.kind == DamageKind::FallingBlock
-            && !species::body_slot(self.species())
+        if matches!(
+            source.kind,
+            DamageKind::FallingBlock | DamageKind::FallingStalactite
+        ) && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;
