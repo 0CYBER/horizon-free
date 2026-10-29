@@ -4884,6 +4884,17 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
         K::Cramming => "minecraft:cramming",
+        K::FallingAnvil => "minecraft:falling_anvil",
+        K::Fireworks => "minecraft:fireworks",
+        K::GenericKill => "minecraft:generic_kill",
+        K::LightningBolt => "minecraft:lightning_bolt",
+        K::OutsideBorder => "minecraft:outside_border",
+        K::Spit => "minecraft:spit",
+        K::Stalagmite => "minecraft:stalagmite",
+        K::Starve => "minecraft:starve",
+        K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
+        K::WindCharge => "minecraft:wind_charge",
+        K::Wither => "minecraft:wither",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).

@@ -1,6 +1,7 @@
-//! The launcher's languages: English (the strings in the code), French, Russian, German,
-//! Spanish and Simplified Chinese. A table per language (`launcher/lang/<code>.json`) maps
-//! each English string to its translation; a string the table lacks shows in English.
+//! The launcher's languages: English (the strings in the code), French, Russian, German and
+//! Spanish, the languages Horizon's own game menus have, Simplified Chinese and Ukrainian. A
+//! table per language (`launcher/lang/<code>.json`) maps each English string to its
+//! translation; a string the table lacks shows in English.
 //!
 //! The language follows the system's unless the player picks one in Settings
 //! (`Settings::language`). Translations are Horizon's own, written for this launcher.
@@ -24,6 +25,8 @@ pub enum Language {
     Chinese,
     #[serde(rename = "es")]
     Spanish,
+    #[serde(rename = "uk")]
+    Ukrainian,
 }
 
 impl Language {
@@ -34,6 +37,7 @@ impl Language {
         Self::German,
         Self::Chinese,
         Self::Spanish,
+        Self::Ukrainian,
     ];
 
     /// Its code in `settings.json` and on the command line.
@@ -45,6 +49,7 @@ impl Language {
             Self::German => "de",
             Self::Chinese => "zh",
             Self::Spanish => "es",
+            Self::Ukrainian => "uk",
         }
     }
 
@@ -57,6 +62,7 @@ impl Language {
             Self::German => "Deutsch",
             Self::Chinese => "简体中文",
             Self::Spanish => "Español",
+            Self::Ukrainian => "Українська",
         }
     }
 
@@ -90,6 +96,7 @@ impl Language {
             Self::German => include_str!("../lang/de.json"),
             Self::Chinese => include_str!("../lang/zh.json"),
             Self::Spanish => include_str!("../lang/es.json"),
+            Self::Ukrainian => include_str!("../lang/uk.json"),
         }
     }
 }

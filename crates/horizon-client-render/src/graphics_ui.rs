@@ -1,4 +1,4 @@
-//! Horizon's graphics settings screens, Simple and Advanced: which settings
+//! Horizon's graphics settings screens, Simple, Advanced and HDR: which settings
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
@@ -14,6 +14,8 @@ use crate::{
 pub enum Level {
     Simple,
     Advanced,
+    /// HDR output's own settings, opened from Advanced while HDR is on.
+    Hdr,
 }
 
 /// Horizon's own settings (`graphics::Graphics`).
@@ -38,8 +40,12 @@ pub enum H {
     Antialiasing,
     Upscaling,
     Hdr,
-    HdrPaperWhite,
+    /// Opens `Level::Hdr`.
+    HdrSettings,
+    HdrBlackLevel,
     HdrPeak,
+    HdrPaperWhite,
+    HdrUiBrightness,
     BatteryMode,
     GraphicsApi,
 }
@@ -120,6 +126,34 @@ pub fn rows(level: Level) -> Vec<Row> {
     );
     let mut rows = match level {
         Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui],
+        Level::Hdr => vec![
+            Row::Header("HDR"),
+            h(
+                H::Hdr,
+                None,
+                "Lava, fire and sunlight shine brighter than white. Needs an HDR display.",
+            ),
+            h(
+                H::HdrBlackLevel,
+                None,
+                "Your display's darkest black. 0 for OLED; LCDs glow a little.",
+            ),
+            h(
+                H::HdrPeak,
+                None,
+                "How bright the brightest highlights get. Your display's peak.",
+            ),
+            h(
+                H::HdrPaperWhite,
+                None,
+                "How bright white paper and menus look. Match your desktop.",
+            ),
+            h(
+                H::HdrUiBrightness,
+                None,
+                "How bright the HUD and menus are, against paper white.",
+            ),
+        ],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
@@ -230,19 +264,9 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "Renders the world smaller and rebuilds it with TAA. Faster, softer.",
             ),
             h(
-                H::Hdr,
+                H::HdrSettings,
                 None,
                 "HDR output on an HDR display: lava, fire and sunlight shine brighter.",
-            ),
-            h(
-                H::HdrPaperWhite,
-                None,
-                "HDR: how bright white paper and menus look. Match your desktop.",
-            ),
-            h(
-                H::HdrPeak,
-                None,
-                "HDR: how bright the brightest highlights get. Your display's peak.",
             ),
             h(
                 H::PresentMode,
@@ -353,6 +377,8 @@ impl H {
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
             H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
             H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
+            H::HdrBlackLevel => Some(g.hdr_black_level as f32 / 100.0),
+            H::HdrUiBrightness => Some((g.hdr_ui_brightness as f32 - 25.0) / 75.0),
             _ => None,
         }
     }
@@ -403,8 +429,14 @@ impl H {
             ),
             H::Upscaling => labelled("Upscaling", g.upscaling.label()),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
+            H::HdrSettings => Text::literal("HDR Settings..."),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
             H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
+            H::HdrBlackLevel => labelled(
+                "Black Level",
+                format!("{:.2} nits", g.hdr_black_level as f32 / 100.0),
+            ),
+            H::HdrUiBrightness => labelled("UI Brightness", format!("{}%", g.hdr_ui_brightness)),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -429,6 +461,8 @@ impl H {
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
             H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
             H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
+            H::HdrBlackLevel => g.hdr_black_level = (v * 100.0).round() as u32,
+            H::HdrUiBrightness => g.hdr_ui_brightness = (25.0 + (v * 15.0).round() * 5.0) as u32,
             _ => {}
         }
     }
@@ -503,6 +537,25 @@ impl Item {
     /// False for a setting whose system is not in Horizon yet (`Opt::available`).
     fn available(self) -> bool {
         !matches!(self, Item::Vanilla(o) if !o.available())
+    }
+    /// Why a control can't be used now, when it can't: HDR's screen opens only where
+    /// the display offers HDR output, whatever `horizon-graphics.txt` says (a copied game
+    /// folder, a display swapped for an SDR one: the renderer leaves HDR off there, and
+    /// the saved values wait for an HDR display), and its sliders do something only
+    /// while it is on.
+    fn blocked(self, s: &Settings) -> Option<&'static str> {
+        if !self.available() {
+            return Some("This feature is not yet available in Horizon.");
+        }
+        match self {
+            Item::Horizon(H::HdrSettings | H::Hdr) if !crate::graphics::hdr_offered() => {
+                Some("Your display or system doesn't offer HDR output.")
+            }
+            Item::Horizon(
+                H::HdrBlackLevel | H::HdrPeak | H::HdrPaperWhite | H::HdrUiBrightness,
+            ) if !s.horizon.hdr => Some("Turn HDR on to use it."),
+            _ => None,
+        }
     }
     /// On/off settings and their value.
     pub fn switch(self, s: &Settings) -> Option<bool> {
@@ -605,6 +658,7 @@ pub enum Action {
     SliderDrag,
     OpenAdvanced,
     OpenSimple,
+    OpenHdr,
     Done,
 }
 
@@ -624,14 +678,19 @@ struct Widget {
 
 #[derive(Default)]
 pub struct GraphicsUi {
-    scroll: f32,
+    /// The list's scroll amount and its held scrollbar (`AbstractScrollArea`).
+    scroll: ui::Scroll,
     dragging: Option<Item>,
 }
 
 impl GraphicsUi {
     pub fn reset(&mut self) {
-        self.scroll = 0.0;
+        self.scroll = ui::Scroll::default();
         self.dragging = None;
+    }
+    /// The scrollbar's column: right of the descriptions.
+    fn scrollbar_x(w: f32) -> f32 {
+        STYLE.row_x(w) + STYLE.control_width + STYLE.gap + STYLE.text_width(w) + 6.0
     }
     fn bounds(h: f32) -> (f32, f32) {
         (STYLE.band, h - STYLE.band)
@@ -657,7 +716,7 @@ impl GraphicsUi {
         self.clamp_scroll(h, content);
         let (top, _) = Self::bounds(h);
         let x = STYLE.row_x(w);
-        let mut y = top + 4.0 - self.scroll;
+        let mut y = top + 4.0 - self.scroll.amount;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
         for row in extra_rows(level, s) {
@@ -683,6 +742,17 @@ impl GraphicsUi {
         let other = match level {
             Level::Simple => Action::OpenAdvanced,
             Level::Advanced => Action::OpenSimple,
+            // One Done, back to Advanced.
+            Level::Hdr => {
+                widgets.push(Widget {
+                    x: cx - 100.0,
+                    y: by,
+                    w: 200.0,
+                    target: Target::Button(Action::Done),
+                    list: false,
+                });
+                return (widgets, headers, content);
+            }
         };
         widgets.push(Widget {
             x: cx - 155.0,
@@ -702,7 +772,7 @@ impl GraphicsUi {
     }
     fn clamp_scroll(&mut self, h: f32, content: f32) {
         let (top, bottom) = Self::bounds(h);
-        self.scroll = self.scroll.clamp(0.0, (content - (bottom - top)).max(0.0));
+        self.scroll.clamp(top, bottom, content);
     }
     pub fn draw(
         &mut self,
@@ -744,12 +814,10 @@ impl GraphicsUi {
                         continue;
                     }
                     let label = item.label(s);
-                    let live = item.available();
-                    if hover && !live {
-                        tooltip = Some(atlas.font.split(
-                            &Text::literal("This feature is not yet available in Horizon."),
-                            170.0,
-                        ));
+                    let blocked = item.blocked(s);
+                    let live = blocked.is_none();
+                    if hover && let Some(why) = blocked {
+                        tooltip = Some(atlas.font.split(&Text::literal(why), 170.0));
                     }
                     match item.slider(s) {
                         Some(value) => STYLE.slider(
@@ -759,6 +827,7 @@ impl GraphicsUi {
                             &label,
                             value,
                             hover || self.dragging == Some(item),
+                            live,
                         ),
                         None => STYLE.button(
                             batch,
@@ -799,15 +868,16 @@ impl GraphicsUi {
         ui::scrollbar(
             batch,
             atlas,
-            x + STYLE.control_width + STYLE.gap + STYLE.text_width(w) + 6.0,
+            Self::scrollbar_x(w),
             top,
             bottom,
             content,
-            self.scroll,
+            self.scroll.amount,
         );
         let title = match level {
             Level::Simple => "Graphics",
             Level::Advanced => "Graphics: Advanced",
+            Level::Hdr => "Graphics: HDR",
         };
         STYLE.title(batch, atlas, &Text::literal(title));
         if let Some(lines) = tooltip {
@@ -825,9 +895,14 @@ impl GraphicsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Action> {
-        let (widgets, _, _) = self.layout(level, s, w, h);
+        let (widgets, _, content) = self.layout(level, s, w, h);
         let (top, bottom) = Self::bounds(h);
         if drag {
+            // AbstractScrollArea.mouseDragged: the held scrollbar follows the pointer.
+            if self.scroll.held() {
+                self.scroll.drag(y, top, bottom, content);
+                return Vec::new();
+            }
             if let Some(item) = self.dragging
                 && let Some(wd) = widgets
                     .iter()
@@ -841,6 +916,13 @@ impl GraphicsUi {
         if right {
             return Vec::new();
         }
+        // AbstractScrollArea.updateScrolling: a press on the scrollbar holds it, silently.
+        if self
+            .scroll
+            .press((x, y), Self::scrollbar_x(w), top, bottom, content)
+        {
+            return Vec::new();
+        }
         for wd in widgets {
             if !ui::hovered((x, y), wd.x, wd.y, wd.w, 20.0) {
                 continue;
@@ -851,7 +933,10 @@ impl GraphicsUi {
             return match wd.target {
                 Target::Button(action) => vec![Action::ButtonClick, action],
                 // A disabled control does nothing: no sound, no preset change.
-                Target::Item(item) if !item.available() => Vec::new(),
+                Target::Item(item) if item.blocked(s).is_some() => Vec::new(),
+                Target::Item(Item::Horizon(H::HdrSettings)) => {
+                    vec![Action::ButtonClick, Action::OpenHdr]
+                }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
@@ -866,14 +951,16 @@ impl GraphicsUi {
         }
         Vec::new()
     }
+    /// Lets go of a slider (true: it plays its click) or the scrollbar.
     pub fn release(&mut self) -> bool {
+        self.scroll.release();
         self.dragging.take().is_some()
     }
     pub fn scroll(&mut self, level: Level, s: &Settings, h: f32, amount: f32) {
         let content = Self::content_height(level, s);
-        self.clamp_scroll(h, content);
-        self.scroll -= amount * 18.0;
-        self.clamp_scroll(h, content);
+        let (top, bottom) = Self::bounds(h);
+        self.scroll.clamp(top, bottom, content);
+        self.scroll.wheel(amount, 18.0, top, bottom, content);
     }
 }
 
@@ -881,6 +968,53 @@ impl GraphicsUi {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hdr_settings_open_where_hdr_is_offered() {
+        let mut s = Settings::default();
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 2000.0);
+        let at = |ui: &mut GraphicsUi, s: &Settings, level, item| {
+            let (widgets, _, _) = ui.layout(level, s, size.0, size.1);
+            let w = widgets
+                .iter()
+                .find(|w| matches!(w.target, Target::Item(i) if i == item))
+                .unwrap();
+            (w.x + 1.0, w.y + 1.0)
+        };
+        let button = at(&mut ui, &s, Level::Advanced, Item::Horizon(H::HdrSettings));
+        let click = |ui: &mut GraphicsUi, s: &mut Settings, level, point| {
+            ui.click(level, s, point, size, [480, 2000], false, false)
+        };
+        crate::graphics::offer_hdr(false);
+        assert!(click(&mut ui, &mut s, Level::Advanced, button).is_empty());
+        // Not even with HDR saved on, from another computer.
+        s.horizon.hdr = true;
+        assert!(click(&mut ui, &mut s, Level::Advanced, button).is_empty());
+        s.horizon.hdr = false;
+        crate::graphics::offer_hdr(true);
+        assert_eq!(
+            click(&mut ui, &mut s, Level::Advanced, button),
+            [Action::ButtonClick, Action::OpenHdr]
+        );
+        // On HDR's screen, the sliders wait for the switch above them.
+        let peak = at(&mut ui, &s, Level::Hdr, Item::Horizon(H::HdrPeak));
+        assert!(click(&mut ui, &mut s, Level::Hdr, peak).is_empty());
+        s.horizon.hdr = true;
+        assert_eq!(
+            click(&mut ui, &mut s, Level::Hdr, peak),
+            [Action::SliderDrag]
+        );
+        let on = |level, item| {
+            extra_rows(level, &s)
+                .iter()
+                .any(|r| matches!(r, Row::Setting(x) if x.item == Item::Horizon(item)))
+        };
+        assert!(on(Level::Hdr, H::Hdr) && !on(Level::Advanced, H::Hdr));
+        assert!(on(Level::Hdr, H::HdrPeak) && !on(Level::Advanced, H::HdrPeak));
+        for item in [H::HdrBlackLevel, H::HdrPaperWhite, H::HdrUiBrightness] {
+            assert!(on(Level::Hdr, item) && !on(Level::Advanced, item));
+        }
+    }
     #[test]
     fn graphics_buttons_sound_on_press_and_sliders_on_release() {
         let mut s = Settings::default();
@@ -960,18 +1094,57 @@ mod tests {
             assert!(max > 4.5);
             for _ in 0..3 {
                 ui.scroll(level, &s, h, 1000.0);
-                assert_eq!(ui.scroll, 0.0);
+                assert_eq!(ui.scroll.amount, 0.0);
             }
             for _ in 0..3 {
                 ui.scroll(level, &s, h, -1000.0);
-                assert_eq!(ui.scroll, max);
+                assert_eq!(ui.scroll.amount, max);
             }
             ui.scroll(level, &s, h, 0.25);
-            assert_eq!(ui.scroll, max - 4.5);
+            assert_eq!(ui.scroll.amount, max - 4.5);
             ui.scroll(level, &s, h, 1000.0);
             ui.scroll(level, &s, h, -0.25);
-            assert_eq!(ui.scroll, 4.5);
+            assert_eq!(ui.scroll.amount, 4.5);
         }
+    }
+
+    #[test]
+    fn the_scrollbar_can_be_held_and_dragged() {
+        // #3552: AbstractScrollArea.updateScrolling holds the scrollbar on a press over its
+        // column, mouseDragged moves the list with the pointer, onRelease lets go.
+        let mut s = Settings::default();
+        let size = (480.0, 2.0 * STYLE.band + 60.0);
+        let (top, bottom) = GraphicsUi::bounds(size.1);
+        // On the scrollbar column, as `draw` paints it.
+        let x =
+            STYLE.row_x(size.0) + STYLE.control_width + STYLE.gap + STYLE.text_width(size.0) + 8.0;
+        let first_row = |ui: &mut GraphicsUi| {
+            ui.layout(Level::Advanced, &Settings::default(), size.0, size.1)
+                .0[0]
+                .y
+        };
+        let mut ui = GraphicsUi::default();
+        let start = first_row(&mut ui);
+        let at = |y| (x, y);
+        let press = |ui: &mut GraphicsUi, s: &mut Settings, y, drag| {
+            ui.click(Level::Advanced, s, at(y), size, [854, 480], drag, false)
+        };
+        // The press itself makes no sound and changes nothing.
+        assert!(press(&mut ui, &mut s, top + 5.0, false).is_empty());
+        assert!(press(&mut ui, &mut s, top + 15.0, true).is_empty());
+        let moved = first_row(&mut ui);
+        assert!(moved < start, "dragging down scrolls the list down");
+        // Past the bottom of the list: the last row.
+        press(&mut ui, &mut s, bottom + 50.0, true);
+        let content = GraphicsUi::content_height(Level::Advanced, &s);
+        assert_eq!(first_row(&mut ui), start - (content - (bottom - top)));
+        // Above the list: the first row again.
+        press(&mut ui, &mut s, top - 50.0, true);
+        assert_eq!(first_row(&mut ui), start);
+        // Released: drags no longer scroll, and no slider click plays.
+        assert!(!ui.release());
+        press(&mut ui, &mut s, bottom + 50.0, true);
+        assert_eq!(first_row(&mut ui), start);
     }
 
     #[test]
@@ -980,9 +1153,9 @@ mod tests {
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
             ui.scroll(level, &s, 2.0 * STYLE.band + 10.0, -1000.0);
-            assert!(ui.scroll > 0.0);
+            assert!(ui.scroll.amount > 0.0);
             let (widgets, headers, _) = ui.layout(level, &s, 480.0, 4000.0);
-            assert_eq!(ui.scroll, 0.0);
+            assert_eq!(ui.scroll.amount, 0.0);
             if let Some((y, _)) = headers.first() {
                 assert_eq!(*y, STYLE.band + 4.0);
             }
@@ -992,7 +1165,7 @@ mod tests {
                 expected.iter().map(|w| w.y).collect::<Vec<_>>()
             );
             ui.scroll(level, &s, 4000.0, -1000.0);
-            assert_eq!(ui.scroll, 0.0);
+            assert_eq!(ui.scroll.amount, 0.0);
         }
     }
 
