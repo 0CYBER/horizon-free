@@ -7,9 +7,9 @@
 //! into its `IntegratedServer`.
 //!
 //! On by default. `--in-frame` (or `--no-server-thread`, or
-//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead, the
-//! escape hatch. LAN guests and dedicated servers use the same code either
-//! way.
+//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead. That path
+//! is DEPRECATED: never use it, it gets no fixes and will be removed soon.
+//! LAN guests and dedicated servers use the same code either way.
 use super::{
     Game, Options, PackResources, Resources, UiResources, WorldIcon,
     execution_role::ExecutionRole,
