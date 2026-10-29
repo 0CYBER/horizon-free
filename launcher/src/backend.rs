@@ -978,6 +978,9 @@ pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
     let versions = versions_dir();
     let reused = reuse_prepared_in(&versions);
     for tag in installed_in(&versions) {
+        // Here, on the start-up thread, and not in `complete_assets`, which Play also runs: a
+        // download of thousands of files is not for the moment the game is waited for.
+        refill_own_store(&tag);
         complete_assets(&tag);
     }
     reused
@@ -1120,16 +1123,15 @@ fn lacks_panorama(resources: &Path) -> bool {
 /// in any Minecraft folder, one line each in the log, once per launcher run, and the version plays
 /// as before. Nothing is prepared again.
 pub fn complete_assets(tag: &str) {
-    refill_own_store(tag);
     complete_assets_in(&versions_dir(), tag, minecraft_folders, &|line| {
         eprintln!("{line}")
     });
 }
 
 /// Horizon's own download (an owner's) may have stopped before the sounds and the languages,
-/// and the copies below read them from its store: asked again, once per run, through the same
-/// owner gate as any download from Mojang (`download_for_owner`), which keeps the files already
-/// whole.
+/// and the copies of `complete_assets` read them from its store: asked again, once per run, through
+/// the same owner gate as any download from Mojang (`download_for_owner`), which keeps the files
+/// already whole. Called where a download is expected (`reuse_prepared_everywhere`), never on Play.
 fn refill_own_store(tag: &str) {
     static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let own = data_dir().join("minecraft");
@@ -1154,7 +1156,7 @@ fn refill_own_store(tag: &str) {
         Ok(body)
     };
     if let Err(e) = download_for_owner(&pins, &own, &fetch, &|line| eprintln!("{line}")) {
-        eprintln!("{tag}: the missing assets were not downloaded:{e}");
+        eprintln!("{tag}: the missing assets were not downloaded: {e}");
     }
 }
 
@@ -3011,6 +3013,26 @@ mod tests {
         // Refilling an incomplete store asks the same gate and names no host or download itself.
         assert!(body("refill_own_store").contains("download_for_owner("));
         assert!(!body("refill_own_store").contains("mojang::"));
+        // It runs at start-up, never on Play, which also runs `complete_assets`.
+        let public = |f: &str| {
+            let start = backend
+                .find(&format!(
+                    "
+pub fn {f}("
+                ))
+                .unwrap();
+            &backend[start
+                ..start
+                    + backend[start + 1..]
+                        .find(
+                            "
+}
+",
+                        )
+                        .unwrap()]
+        };
+        assert!(public("reuse_prepared_everywhere").contains("refill_own_store("));
+        assert!(!public("complete_assets").contains("refill_own_store("));
         for host in [
             "piston-data",
             "libraries.minecraft.net",
