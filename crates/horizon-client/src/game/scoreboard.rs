@@ -49,6 +49,10 @@ impl Game<'_> {
     fn scoreboard_path(&self) -> std::path::PathBuf {
         self.world_root.join("data/minecraft/scoreboard.dat")
     }
+    fn border_path(&self) -> std::path::PathBuf {
+        save::dimension_dir(&self.world_root, "minecraft:overworld")
+            .join("data/minecraft/world_border.dat")
+    }
     /// `ScoreboardSaveData` read from `data/minecraft/scoreboard.dat`.
     pub(super) fn load_scoreboard(&mut self) {
         if self.score.loaded || self.remote.is_some() {
@@ -62,7 +66,12 @@ impl Game<'_> {
         }
         self.score.storage =
             horizon_client::command_storage::CommandStorage::load(&self.world_root);
-        if let Some(root) = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"))
+        // ServerLevel.getWorldBorder: each dimension's data/minecraft/world_border.dat. Horizon
+        // keeps one border, so the overworld's file stands for it; the root file is what
+        // older Horizon builds wrote.
+        let border_path = self.border_path();
+        if let Some(root) = save::read_dat(&border_path)
+            .or_else(|| save::read_dat(&self.world_root.join("data/minecraft/world_border.dat")))
             && let Some(data) = root.get("data")
         {
             self.border = horizon_client::worldborder::WorldBorder::unpack(data);
@@ -78,7 +87,7 @@ impl Game<'_> {
         self.score.stopwatches.save(&self.world_root);
         if self.border != horizon_client::worldborder::WorldBorder::default() {
             let _ = save::write_dat(
-                &self.world_root.join("data/minecraft/world_border.dat"),
+                &self.border_path(),
                 Tag::compound([
                     ("data", self.border.pack()),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
