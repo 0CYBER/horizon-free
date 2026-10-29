@@ -271,6 +271,15 @@ pub trait SpawnerExt: Sized {
         random: &mut impl RandomSource,
         events: &mut Vec<SpawnerEvent>,
     );
+    /// `setEntityData` (`TypedEntityData.loadInto`): an op's spawn egg with
+    /// entity data: the next data's `id`, then `data` merged into it.
+    fn set_entity_data(
+        &mut self,
+        id: &str,
+        data: &Compound,
+        random: &mut impl RandomSource,
+        events: &mut Vec<SpawnerEvent>,
+    );
     /// `isNearPlayer`.
     fn near_player<L: SpawnerLevel>(&self, l: &L, pos: [i32; 3]) -> bool;
     /// `delay`: the next delay, a new potential (when there are any) and the
@@ -413,6 +422,18 @@ impl SpawnerExt for Spawner {
         self.next_or_create(random, events);
         if let Some(d) = self.next_data_mut() {
             d.entity.insert("id".into(), Tag::String(id.into()));
+        }
+    }
+    fn set_entity_data(
+        &mut self,
+        id: &str,
+        data: &Compound,
+        random: &mut impl RandomSource,
+        events: &mut Vec<SpawnerEvent>,
+    ) {
+        self.set_entity_id(id, random, events);
+        if let Some(d) = self.next_data_mut() {
+            crate::data_cmd::merge_compound(&mut d.entity, data);
         }
     }
     fn near_player<L: SpawnerLevel>(&self, l: &L, pos: [i32; 3]) -> bool {
@@ -728,6 +749,37 @@ mod tests {
             s.potentials[0].0.id().as_deref(),
             Some("minecraft:skeleton")
         );
+    }
+
+    #[test]
+    fn entity_data_sets_the_id_and_merges_into_the_next_entity() {
+        let mut s = Spawner::load(&tag(
+            "{SpawnData:{entity:{id:\"zombie\",Health:5.0f,equipment:{head:{id:\"minecraft:iron_helmet\"}}}}}",
+        ));
+        let Tag::Compound(data) = tag(
+            "{id:\"minecraft:skeleton\",CustomName:\"Guard\",equipment:{mainhand:{id:\"minecraft:bow\"}}}",
+        ) else {
+            panic!("compound");
+        };
+        let mut events = Vec::new();
+        s.set_entity_data(
+            "minecraft:skeleton",
+            &data,
+            &mut LegacyRandom::new(0),
+            &mut events,
+        );
+        let entity = &s.next_data().unwrap().entity;
+        let get = |k: &str| entity.get(&JavaString::from(k)).cloned();
+        // CompoundTag.merge: the egg's keys over the old ones, nested
+        // compounds merged, the rest kept.
+        assert_eq!(get("id"), Some(Tag::String("minecraft:skeleton".into())));
+        assert_eq!(get("CustomName"), Some(Tag::String("Guard".into())));
+        assert_eq!(get("Health"), Some(tag("5.0f")));
+        let Some(Tag::Compound(equipment)) = get("equipment") else {
+            panic!("equipment");
+        };
+        assert!(equipment.contains_key(&JavaString::from("head")));
+        assert!(equipment.contains_key(&JavaString::from("mainhand")));
     }
 
     #[test]
