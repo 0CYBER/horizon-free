@@ -564,9 +564,6 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
     out
 }
 
-/// TranslatableContents.decomposeTemplate: `%s` takes the next argument,
-/// `%n$s` a numbered one and `%%` is a percent sign. Malformed templates are
-/// shown verbatim.
 /// `Style.applyLegacyFormat` for the code after a `§`, `§r` going back to
 /// `reset` (`StringDecomposer.iterateFormatted`); an unknown code changes nothing.
 pub fn legacy_format(style: &Style, code: char, reset: &Style) -> Style {
@@ -596,6 +593,9 @@ pub fn legacy_format(style: &Style, code: char, reset: &Style) -> Style {
     s
 }
 
+/// TranslatableContents.decomposeTemplate: `%s` takes the next argument,
+/// `%n$s` a numbered one and `%%` is a percent sign. Malformed templates are
+/// shown verbatim.
 pub fn format_translation(template: &str, args: &[Text]) -> Text {
     let mut out = Text::default();
     let mut literal = String::new();

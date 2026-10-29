@@ -1016,7 +1016,10 @@ impl Font {
             while i < contents.len() {
                 let c = contents[i];
                 if c == '§' {
-                    let &code = contents.get(i + 1)?;
+                    // A `§` that ends its part ends only that part.
+                    let Some(&code) = contents.get(i + 1) else {
+                        break;
+                    };
                     style = legacy_format(&style, code, &Style::default());
                     i += 2;
                     continue;
@@ -1334,6 +1337,37 @@ mod tests {
         assert_eq!(font.width_text(&text), 10.0);
         assert_eq!(font.random_glyph(&alt, 7.0).advance, 7.0);
         assert!(!font.take_patches().is_empty());
+    }
+
+    /// StringDecomposer.iterateFormatted: a `§` that ends a part stops that
+    /// part only; the next part is still measured and can break.
+    #[test]
+    fn a_section_sign_ending_a_part_still_breaks_the_next() {
+        let sheet = png(16, 8, |x, _| x < 2);
+        let default = br#"{"providers":[{"type":"space","advances":{" ":4}},{"type":"bitmap","file":"minecraft:font/a.png","ascent":7,"chars":["ab"]}]}"#;
+        let root = root(
+            "section-sign",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/minecraft/textures/font/a.png", &sheet),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let mut text = Text::default();
+        text.spans = ["a§", "a a"]
+            .map(|part| Span {
+                text: part.into(),
+                style: Style::default(),
+            })
+            .into();
+        // 3 + 3 + 4 + 3 is past 12: the line breaks at the space.
+        let lines: Vec<String> = font
+            .split_formatted(&text, 12.0)
+            .iter()
+            .map(Text::plain)
+            .collect();
+        assert_eq!(lines, ["a§a", "a"]);
     }
 
     /// A renderer rebuilt over the same font (the loading screen's handoff)
