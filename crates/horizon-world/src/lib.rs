@@ -94,6 +94,7 @@ pub mod nbt;
 pub mod object_open_map;
 pub mod object_open_set;
 pub mod piston_movement;
+pub mod piston_push;
 pub mod piston_shape;
 pub mod player_food;
 pub mod player_health;

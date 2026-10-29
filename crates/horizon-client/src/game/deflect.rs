@@ -51,8 +51,7 @@ impl Game<'_> {
     /// The redirectable projectile under the crosshair within the attack
     /// reach, and how far along the view it is.
     pub(super) fn redirectable_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         self.creatures
             .projectiles
@@ -120,6 +119,11 @@ impl Game<'_> {
         p.guest = guest;
         // Not into the one who turned it on its way out.
         p.left_owner = false;
+        // `AbstractHurtingProjectile.onDeflection` by an attack, and the
+        // `needsSync` that `AIM_DEFLECT` sets: a server's players see it turn
+        // at once, not at the fireball's next update ten ticks later.
+        p.acceleration = 0.1;
+        p.needs_sync = true;
         self.reset_attack_strength();
         self.swing_arm();
         let from = self

@@ -67,6 +67,17 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.player.burp", self.feet(), 0.5, pitch);
         }
+        // SuspiciousStewEffects.onConsume, a ConsumableListener: each entry is
+        // added as a `MobEffectInstance(effect, duration)` (amplifier 0).
+        if let Some(data) = stack.extra.as_deref() {
+            for (id, duration) in &data.stew_effects {
+                if let Some(def) = horizon_client::brewing::effect(id) {
+                    self.add_player_effect(horizon_client::effects::EffectInstance::new(
+                        def.id, *duration, 0,
+                    ));
+                }
+            }
+        }
         for effect in &consumable.effects {
             self.apply_consume_effect(effect);
         }

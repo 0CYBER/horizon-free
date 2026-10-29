@@ -269,6 +269,8 @@ impl Game<'_> {
                         light,
                         layer: if through { 2 } else { 0 },
                         normal: [0; 4],
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

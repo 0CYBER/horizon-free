@@ -82,11 +82,11 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 /// `DateTimeFormatter.ofPattern(pattern).format(now)` for the month, day,
-/// year and time letters item models use (UTC: no time zone database).
+/// year and time letters item models use, in the system time zone
+/// (`LocalTime` without a `time_zone`).
 pub(super) fn local_time(pattern: &str) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now = chrono::Local::now();
+    let secs = now.timestamp() + i64::from(now.offset().local_minus_utc());
     let (y, mo, d) = civil(secs.div_euclid(86_400));
     let s = secs.rem_euclid(86_400);
     let (h, mi, se) = (s / 3600, s / 60 % 60, s % 60);
@@ -129,6 +129,7 @@ pub(super) struct Host<'a> {
     banners: &'a horizon_client::banner::Banners,
     sprites: &'a HashMap<String, Rect>,
     skins: &'a RefCell<horizon_client::skins::Downloader>,
+    profiles: &'a RefCell<horizon_client::skins::Resolver>,
 }
 impl SpecialHost for Host<'_> {
     fn banner_texture(&self, pattern: &str) -> Option<String> {
@@ -144,14 +145,14 @@ impl SpecialHost for Host<'_> {
     fn player_skin(&self, profile: &Value) -> Option<String> {
         // SkullBlockRenderer.getPlayerSkin: SkinManager.getInsecureSkinInformation
         // accepts a texture property without a signature, unlike the tab list.
-        let url = horizon_client::skins::profile_skin_url(profile)?;
-        let location =
-            horizon_client::skins::skin_location(&horizon_client::skins::texture_hash(&url)?);
-        let _ = self
-            .skins
-            .borrow_mut()
-            .state(horizon_client::skins::Kind::Skin, &url);
-        self.sprites.contains_key(&location).then_some(location)
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services (`PlayerSkinRenderCache.getOrDefault`).
+        Some(horizon_client::skins::head_skin(
+            profile,
+            &mut self.profiles.borrow_mut(),
+            &mut self.skins.borrow_mut(),
+            |location| self.sprites.contains_key(location),
+        ))
     }
 }
 
@@ -164,11 +165,17 @@ pub(super) fn owner_at(position: [f64; 3], yaw: f32, entity_type: &str) -> Owner
         ..Default::default()
     }
 }
-/// `UseDuration` of a stack: 72000 for drawn items, the consume time for food.
+/// `UseDuration` of a stack (`Item.getUseDuration`): 72000 for drawn items
+/// and for `blocks_attacks` items (shields), the consume time for food.
 fn use_duration(components: &Components) -> i32 {
     if let Some(c) = components.get("minecraft:consumable") {
         let seconds = c["consume_seconds"].as_f64().unwrap_or(1.6);
         return (seconds * 20.0) as i32;
+    }
+    if components.get("minecraft:blocks_attacks").is_some()
+        || components.get("minecraft:kinetic_weapon").is_some()
+    {
+        return 72_000;
     }
     let item_model = components
         .get("minecraft:item_model")
@@ -179,8 +186,9 @@ fn use_duration(components: &Components) -> i32 {
         | "minecraft:crossbow"
         | "minecraft:trident"
         | "minecraft:spyglass"
-        | "minecraft:goat_horn"
-        | "minecraft:brush" => 72_000,
+        | "minecraft:goat_horn" => 72_000,
+        // BrushItem.USE_DURATION.
+        "minecraft:brush" => 200,
         _ => 0,
     }
 }
@@ -194,6 +202,7 @@ impl Game<'_> {
             banners: &self.res.stations().banners,
             sprites: &self.gui.atlas.sprites,
             skins: &self.skin_downloads,
+            profiles: &self.skin_profiles,
         }
     }
     /// The client level as item models read it: worked out once a frame (a
@@ -247,6 +256,11 @@ impl Game<'_> {
         owner.main_arm_left = self.settings.main_hand_left;
         owner.is_local_player = true;
         owner.is_view_entity = true;
+        owner.last_death_location = self
+            .level
+            .last_death
+            .clone()
+            .map(|(dimension, pos)| GlobalPos { dimension, pos });
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
             && self.stack_in(slot) == Some(stack)
         {
@@ -296,7 +310,31 @@ impl Game<'_> {
             x,
             y,
             self.started.elapsed().as_secs_f32(),
+            self.settings.file.double("glintSpeed") as f32,
+            self.settings.file.double("glintStrength") as f32,
         );
+    }
+    /// The `GLINT_TEXTURING` inputs the atlas and options provide.
+    pub(super) fn glint(&self) -> Option<item_render::Glint> {
+        self.gui
+            .atlas
+            .sprites
+            .get("misc/enchanted_glint_item")
+            .copied()
+            .map(|_| item_render::Glint {
+                speed: self.settings.file.double("glintSpeed") as f32,
+                alpha: self.settings.file.double("glintStrength") as f32,
+                millis: self.started.elapsed().as_secs_f32() * 1000.0,
+                scale: 0.5,
+            })
+    }
+    /// The glint scroll phase shared by world items and armour
+    /// (`item_render::Glint::scroll_ticks`).
+    pub(super) fn glint_ticks(&self) -> f32 {
+        item_render::Glint::scroll_ticks(
+            self.started.elapsed().as_secs_f32() * 1000.0,
+            self.settings.file.double("glintSpeed") as f32,
+        )
     }
     /// Submit a resolved item under `pose` (camera-relative) at `light`
     /// (packed lightmap coordinates).
@@ -311,6 +349,7 @@ impl Game<'_> {
             out,
             light,
             lights: Some(diffuse_lights(self.dim == Dim::Nether)),
+            glint: self.glint(),
         };
         state.submit(
             &self.pack.item_renderer,
@@ -332,6 +371,7 @@ impl Game<'_> {
             out,
             light,
             lights: None,
+            glint: self.glint(),
         };
         state.submit(
             &self.pack.item_renderer,
@@ -405,7 +445,12 @@ impl Game<'_> {
             ) {
                 self.submit_item_world(&state, copy, vertex_light(packed), out);
             }
-            self.cull_entity_vertices(out, entity_start);
+            if self.entity_glowing(item.id) {
+                let rgb = super::glowing::team_color(self.mob_team(item.id));
+                self.mark_outline(&out[entity_start..], rgb);
+            } else {
+                self.cull_entity_vertices(out, entity_start);
+            }
         }
     }
 }

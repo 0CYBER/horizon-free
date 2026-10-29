@@ -427,9 +427,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // A fresh shrieker has warning level 0 and so never responds,
                 // and no player is near enough for a portal to spawn a piglin.
                 // A fresh command block has no command and is neither powered
-                // nor always active: `CommandBlock.tick` changes nothing.
+                // nor always active: `CommandBlock.tick` changes nothing. A
+                // fresh suspicious block was never brushed, so
+                // `BrushableBlockEntity.checkReset` has nothing to reset.
                 LevelEvent::BlockEvent {
-                    kind: "shrieker_respond" | "portal_spawn" | "command_block",
+                    kind: "shrieker_respond" | "portal_spawn" | "command_block" | "brushable",
                     ..
                 } => {}
                 LevelEvent::BlockEvent { kind, .. } => {

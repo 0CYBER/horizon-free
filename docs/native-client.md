@@ -15,7 +15,7 @@ missing; [Rust rewrite status](rust-parity.md) has the details.
 ## Run from a checkout
 
 Use current stable Rust (1.90+) and JDK 25 (Python 3.10+ only for the development
-harnesses). Horizon never
+harnesses). A checkout never
 downloads the game: resource preparation imports **your own copy** (the 26.3
 client from your official launcher install, and the 26.3 server jar you
 downloaded yourself; see [Build from source](../README.md#build-from-source)),

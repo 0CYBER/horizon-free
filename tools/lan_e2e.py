@@ -24,7 +24,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, or on one
              team without friendly fire, nothing;
 - kills:     a pig the guest kills counts in the guest's killed statistic, not the host's (#484);
-
+- leave:     a guest who leaves has leave_game in their saved statistics, and again after the next leave;
 
 - arrows:    the guest and the host shoot each other with a bow; with the pvp game rule off, nothing (#484);
 - looks:     mobs look on both sides as the server has them (their synched data): a calf is a
@@ -102,6 +102,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              its crafting grid and gathers a stack with a double click; the server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
+- bed-occupied: the bed the host sleeps in is occupied and the guest cannot lie down in it; it is
+             free again after Escape, death, the bed broken and the sleeper leaving the game.
+- sleep-reload: (--server-thread) a villager asleep in its bed is still asleep there, its bed
+             occupied, after the host saves, quits and reopens; the guest's bed is saved free.
 - predict:   with the host frozen, the oak door the guest opens opens on the guest's screen at once (its
              prediction) and creaks there at once, stays open once the server answers, and each side hears
              it once; an iron door stays shut (#869).
@@ -176,6 +180,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - riding:    the host and the guest each saddle and ride a horse (walk, jump), a pig and a strider
              (with their sticks), a camel and a donkey, sit on a llama and fly a happy ghast, and
              get off by sneaking; the other side sees the animal move.
+- portal_rider: (--server-thread) a survival guest rides a horse into a Nether portal: the horse goes
+             through at once and carries it, so it arrives in the Nether still riding the same horse.
 - riding_teleport: the host and the guest each /tp through chat while riding a horse; after 60
              ticks each stays dismounted at the destination and both sides see the horse left
              behind. The host also teleports a mounted guest by name.
@@ -274,8 +280,8 @@ both sides go to --out (host-*.png, guest-*.png).
     python3 tools/lan_e2e.py --check chest --check tab
     python3 tools/lan_e2e.py --server-thread --check portals   # the host's world on its server thread
 
-Needs the prepared resources in .local/horizon-client and, on Linux, vscreen (the desktop); on
-macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
+Needs the prepared resources in .local/horizon-client. On Linux the games run on vscreen (the
+desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
 """
 import argparse
 import json
@@ -301,10 +307,10 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
-          'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
+          'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
-          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
-          'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
+          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
+          'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
@@ -1194,6 +1200,35 @@ def check_pvp(host, guest, out):
     for name in ('guest hits teammate', 'host hits teammate'):
         assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
     return hits
+
+
+def leave_game_total(host):
+    """The leave_game statistic summed over the stats files the host's world holds."""
+    total = 0
+    for path in (host.work / 'saves' / 'Lan' / 'players' / 'stats').glob('*.json'):
+        custom = json.loads(path.read_text()).get('stats', {}).get('minecraft:custom', {})
+        total += custom.get('minecraft:leave_game', 0)
+    return total
+
+
+def check_leave(host, guest, out):
+    # PlayerList.remove awards Stats.LEAVE_GAME before it saves the player: a guest who leaves has it in
+    # their saved statistics, and it counts again the next time they leave.
+    port = host.raw('lan', 'status')['port']
+    before = leave_game_total(host)
+    counts = []
+    for _ in range(2):
+        guest.raw('disconnect')
+        for _ in range(20):
+            time.sleep(0.5)
+            if leave_game_total(host) > (counts[-1] if counts else before):
+                break
+        counts.append(leave_game_total(host))
+        guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+        guest.raw('wait-for', 'loaded', '--timeout', 300)
+        guest.wait(20)
+    assert counts == [before + 1, before + 2], f'leave_game was {before}, then {counts} after two leaves'
+    return {'leave_game': counts}
 
 
 def check_kills(host, guest, out):
@@ -2410,6 +2445,168 @@ def wait_state(game, pos, key, want, ticks):
     return state_of(game, pos, key)
 
 
+def check_piston_push(host, guest, out):
+    """A moving piston pushes both players and a stationary mob on each host path."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
+    host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+    results = {}
+    for player, name in ((host, host.player), (guest, GUEST_NAME)):
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+        host.wait(10)
+        host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+        host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+        host('command', command=f'tp {"@s" if player is host else GUEST_NAME} {x+1.65} {y} {z+0.5}')
+        player.wait(15)
+        before = pos_of(player)
+        assert abs(before[0] - (x + 1.65)) < 0.1, f'{name} did not reach piston: {before}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+        player.wait(30)
+        after = pos_of(player)
+        results[name] = after[0] - before[0]
+        assert results[name] > 0.3, f'piston did not push {name}: {before} -> {after}'
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+    host.wait(10)
+    host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+    host('command', command=f'tp @s {x+1.65} {y} {z+0.5}')
+    host.wait(10)
+    host.raw('key', 'e', 'tap')
+    host.raw('wait-for', 'screen', 'inventory')
+    before = pos_of(host)
+    guest('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+    host.wait(30)
+    after = pos_of(host)
+    results['inventory'] = after[0] - before[0]
+    assert results['inventory'] > 0.3, f'piston did not push player with inventory open: {before} -> {after}'
+    host.raw('key', 'esc', 'tap')
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+    host.wait(10)
+    host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+    host('command', command=f'summon minecraft:pig {x+1.65} {y} {z+0.5} {{NoAI:1b}}')
+    host.wait(10)
+    pigs = host('entities', radius=16, type='pig')['entities']
+    pig = min(pigs, key=lambda p: abs(p['pos'][0] - (x + 1.65)) + abs(p['pos'][2] - (z + 0.5)))
+    before = pig['pos'][0]
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+    host.wait(30)
+    pigs = host('entities', radius=16, type='pig')['entities']
+    after = next(p['pos'][0] for p in pigs if p['id'] == pig['id'])
+    results['pig'] = after - before
+    assert results['pig'] > 0.3, f'piston did not push pig: {before} -> {after}'
+    results.update(piston_push_at_border(host, guest))
+    return results
+
+
+def piston_push_at_border(host, guest):
+    """A piston next to the world border: the border's wall stops the pushed
+    body, as it stops ordinary movement (`Entity.collectCollidersIgnoringWorldBorder`)."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
+    host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+    # The border's east wall stands at `x + 2`, the east face of the block the
+    # head extends into: a body pushed east stops there instead of being
+    # pushed out through the border. `worldborder center` centres integers on
+    # the block, so the centre is `x - 8.5` and the wall lands on `x + 2`.
+    wall = x + 2
+    center = [x - 8.5, z + 0.5]
+    results = {}
+    try:
+        host('command', command=f'worldborder center {x - 9} {z}')
+        host('command', command='worldborder set 20.5')
+        seen = None
+        for _ in range(10):
+            host.wait(2)
+            seen = [g('status').get('border') for g in (host, guest)]
+            if all(b and b['size'] == 20.5 and b['center'] == center for b in seen):
+                break
+        results['border'] = seen
+        for player, name in ((host, host.player), (guest, GUEST_NAME)):
+            host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+            host.wait(10)
+            host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+            host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+            host('command', command=f'tp {"@s" if player is host else GUEST_NAME} {x+1.65} {y} {z+0.5}')
+            player.wait(15)
+            before = pos_of(player)
+            assert abs(before[0] - (x + 1.65)) < 0.1, f'{name} did not reach the piston: {before}'
+            host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+            player.wait(30)
+            after = pos_of(player)
+            # The wall's inner face is at `wall`: the body's box stops there.
+            results[name] = round(after[0] - before[0], 3)
+            assert after[0] > before[0], f'the piston did not push {name}: {before} -> {after}'
+            assert after[0] <= wall - 0.3 + 0.01, f'the border did not stop {name}: {before} -> {after}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+        host.wait(10)
+    finally:
+        host('command', command='worldborder center 0 0')
+        host('command', command='worldborder set 59999968')
+    return results
+
+
+def check_piston_slime(host, guest, out):
+    """A piston pushing a slime block: the block pushes the body in front of
+    it and bounces it (`PistonMovingBlockEntity.moveCollidedEntities`)."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    results = {}
+
+    def setup():
+        # The previous case may have left a mob where the body stands.
+        host('command', command='kill @e[type=minecraft:pig]')
+        host('command', command=f'setblock {x} {y} {z} minecraft:air')
+        host.wait(10)
+        host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+        host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+        host.wait(5)
+
+    for player, name in ((host, host.player), (guest, GUEST_NAME)):
+        setup()
+        host('command', command=f'setblock {x+1} {y} {z} minecraft:slime_block')
+        host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+        host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+        host('command', command=f'tp {"@s" if player is host else GUEST_NAME} {x+2.5} {y} {z+0.5}')
+        player.wait(15)
+        before = pos_of(player)
+        assert abs(before[0] - (x + 2.5)) < 0.1, f'{name} did not reach the slime: {before}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+        # The bounce sets the velocity along the push axis; it decays fast, so
+        # sample it while the block is still moving.
+        speed = 0.0
+        for _ in range(6):
+            player.wait(2)
+            speed = max(speed, player('state')['player']['velocity'][0])
+        after = pos_of(player)
+        results[name] = round(after[0] - before[0], 3)
+        # The block pushes the body out of its way, and the bounce launches it.
+        assert results[name] > 1.5, f'the slime block did not push and bounce {name}: {before} -> {after}'
+        assert speed > 0.05, f'the slime block did not bounce {name}: {speed}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+        player.wait(10)
+    # A plain block only pushes: the body is not launched.
+    setup()
+    host('command', command=f'setblock {x+1} {y} {z} minecraft:stone')
+    host('command', command=f'tp @s {x+2.5} {y} {z+0.5}')
+    host.wait(15)
+    before = pos_of(host)
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+    speed = 0.0
+    for _ in range(6):
+        host.wait(2)
+        speed = max(speed, host('state')['player']['velocity'][0])
+    after = pos_of(host)
+    results['stone'] = round(after[0] - before[0], 3)
+    assert results['stone'] < 1.5, f'a plain block bounced the player: {before} -> {after}'
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+    host.wait(10)
+    return results
+
+
 def check_plates(host, guest, out):
     guest('command', command='gamemode survival')
     x, y, z = (int(v // 1) for v in pos_of(guest))
@@ -2529,6 +2726,215 @@ def check_sleep(host, guest, out):
     assert lying['host'] and lying['guest'], f'a sleeping player is drawn standing: {detail}'
     assert not lying['after'], f'a player up again is still drawn lying: {detail}'
     return detail
+
+
+def check_sleep_villager(host, guest, out):
+    """AbstractBedBlock.kickVillagerOutOfBed: using a bed a villager sleeps in wakes the villager and
+    leaves the player up; the next use lies down. The sleeper's own body is drawn in its bed, in first
+    person too (LevelExtractor skips the camera entity unless it sleeps)."""
+    guest('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, z = gx, gz + 3
+    guest('command', command=f'fill {x - 3} {gy - 1} {z - 2} {x + 4} {gy - 1} {z + 3} minecraft:stone')
+    guest('command', command=f'fill {x - 3} {gy} {z - 2} {x + 4} {gy + 3} {z + 3} minecraft:air')
+    bed = bed_at(guest, (x, gy, z))
+    guest('command', command=f'summon minecraft:villager {x - 1.5} {gy} {z + 1.5}')
+
+    def villager():
+        found = guest('entities', radius=12, type='villager')['entities']
+        return found[0]['pos'] if found else None
+
+    def in_bed(at):
+        # Lying at the head (setPosToBed), not standing beside it.
+        return at is not None and abs(at[0] - bed[0] - 0.5) < 0.5 and abs(at[2] - bed[2] - 0.5) < 0.5 \
+            and at[1] - gy > 0.4
+    seen = {}
+    try:
+        for _ in range(90):
+            if in_bed(villager()):
+                break
+            guest.wait(20)
+        seen['villager_asleep'] = villager()
+        assert in_bed(seen['villager_asleep']), f'the villager never lay down in the bed: {seen}'
+        guest.raw('interact', *bed)
+        guest.wait(10)
+        seen['villager_kicked'] = villager()
+        seen['up'] = guest('state').get('sleeping')
+        assert not in_bed(seen['villager_kicked']), f'the bed did not wake its villager: {seen}'
+        assert seen['up'] is None, f'the player lay down beside the villager: {seen}'
+        guest.raw('interact', *bed)
+        guest.wait(10)
+        seen['asleep'] = guest('state').get('sleeping')
+        seen['own_body_asleep'] = remote(guest).get('own_body')
+        guest.shot(out, 'sleep-villager')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+        seen['own_body_up'] = remote(guest).get('own_body')
+    finally:
+        guest('command', command='kill @e[type=minecraft:villager,distance=..16]')
+        guest('command', command=f'fill {bed[0] - 1} {bed[1]} {bed[2]} {bed[0]} {bed[1]} {bed[2]} minecraft:air')
+        host('command', command='time set day')
+    assert seen['asleep'] == bed, f'the emptied bed did not take the player: {seen}'
+    assert seen['own_body_asleep'] and not seen['own_body_up'], f'the sleeper\'s own body: {seen}'
+    return seen
+def check_bed_occupied(host, guest, out):
+    """BedBlock.OCCUPIED (LivingEntity.startSleeping / stopSleeping): the bed the host sleeps in is
+    occupied, head and foot, and the guest cannot lie down in it (AbstractBedBlock.useWithoutItem's
+    "This bed is occupied"); the bed is free again after each way out of it: Escape, death, the bed
+    broken, and the sleeper leaving the game. Then the guest sleeps in it."""
+    port = host.raw('lan', 'status')['port']
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, z = gx, gz + 3
+    guest('command', command=f'fill {x - 3} {gy - 1} {z - 2} {x + 4} {gy - 1} {z + 3} minecraft:stone')
+    guest('command', command=f'fill {x - 3} {gy} {z - 2} {x + 4} {gy + 3} {z + 3} minecraft:air')
+    bed = bed_at(guest, (x, gy, z))
+    foot = [bed[0] - 1, bed[1], bed[2]]
+    hx, hy, hz = pos_of(host)
+    beside = f'tp @s {x + 0.5} {gy} {z + 1.5}'
+
+    def occupied():
+        return [state_of(host, bed, 'occupied'), state_of(host, foot, 'occupied')]
+
+    def lie_down(game):
+        game('command', command=beside)
+        game.wait(10)
+        game.raw('interact', *bed)
+        game.wait(10)
+        return game('state').get('sleeping')
+    seen = {}
+    try:
+        host.wait(5)
+        seen['free'] = occupied()
+        seen['host_asleep'] = lie_down(host)
+        seen['occupied'] = occupied()
+        guest('command', command=f'tp @s {x + 0.5} {gy} {z - 0.5}')
+        guest.wait(10)
+        # The foot: the sleeper's body lies over the head.
+        guest.raw('interact', *foot)
+        guest.wait(5)
+        seen['refused'] = {'sleeping': guest('state').get('sleeping'), 'actionbar': guest.raw('messages', 1)['actionbar']}
+        guest.shot(out, 'bed-occupied')
+        host.raw('key', 'esc', 'tap')
+        host.wait(10)
+        seen['after_escape'] = occupied()
+        seen['asleep_again'] = lie_down(host)
+        host('command', command='kill @s')
+        host.wait(20)
+        respawn_when_ready(host)
+        host.wait(20)
+        seen['after_death'] = occupied()
+        seen['asleep_before_break'] = lie_down(host)
+        guest('command', command=f'setblock {foot[0]} {foot[1]} {foot[2]} minecraft:air')
+        guest.wait(10)
+        seen['up_after_break'] = host('state').get('sleeping')
+        host('command', command=f'tp @s {hx:.2f} {hy:.2f} {hz:.2f}')
+        bed_at(guest, (x, gy, z))
+        guest.wait(5)
+        seen['replaced'] = occupied()
+        seen['guest_asleep'] = lie_down(guest)
+        seen['occupied_by_guest'] = occupied()
+        guest.raw('disconnect')
+        time.sleep(2)
+        seen['after_leave'] = occupied()
+        guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+        guest.raw('wait-for', 'loaded', '--timeout', 300)
+        guest.wait(20)
+        seen['screen_back'] = guest('state').get('screen')
+        back_to_game(guest)
+        seen['guest_back'] = lie_down(guest)
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+    finally:
+        back_to_game(host)
+        back_to_game(guest)
+        host('command', command=f'tp @s {hx:.2f} {hy:.2f} {hz:.2f}')
+        guest('command', command=f'fill {foot[0]} {foot[1]} {foot[2]} {bed[0]} {bed[1]} {bed[2]} minecraft:air')
+        host('command', command='time set day')
+    free, taken = ['false', 'false'], ['true', 'true']
+    assert seen['free'] == free and seen['host_asleep'] == bed, f'the host did not lie down: {seen}'
+    assert seen['occupied'] == taken, f'the bed the host sleeps in is not occupied: {seen}'
+    assert seen['refused']['sleeping'] is None, f'two players share a bed: {seen}'
+    assert 'occupied' in (seen['refused']['actionbar'] or ''), f'no "This bed is occupied": {seen}'
+    for way in ('after_escape', 'after_death', 'replaced', 'after_leave'):
+        assert seen[way] == free, f'the bed stays occupied {way}: {seen}'
+    assert seen['asleep_again'] == bed and seen['asleep_before_break'] == bed, f'the host could not lie down again: {seen}'
+    assert seen['up_after_break'] is None, f'the host sleeps on in a broken bed: {seen}'
+    assert seen['guest_asleep'] == bed and seen['occupied_by_guest'] == taken, f'the guest\'s bed: {seen}'
+    assert seen['guest_back'] == bed, f'the bed the guest left is not free for it: {seen}'
+    return seen
+
+
+def check_sleep_reload(host, guest, out):
+    """LivingEntity's sleeping_pos is saved: a villager asleep in its bed when the host saves and quits
+    is still asleep in it, its bed still occupied, when the world opens again; the bed the guest slept
+    in is saved free (ServerPlayer.disconnect gets every player up before the last save)."""
+    if not SERVER_THREAD:
+        return {'skipped': 'the reopen is the server thread\'s'}
+    guest('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, z = gx, gz + 3
+    guest('command', command=f'fill {x - 3} {gy - 1} {z - 2} {x + 4} {gy - 1} {z + 6} minecraft:stone')
+    guest('command', command=f'fill {x - 3} {gy} {z - 2} {x + 4} {gy + 3} {z + 6} minecraft:air')
+    villager_bed = bed_at(guest, (x, gy, z))
+    guest_bed = bed_at(guest, (x, gy, z + 4))
+    guest('command', command=f'summon minecraft:villager {x - 1.5} {gy} {z + 1.5}')
+    sleeping_pos = lambda: host('command', command='data get entity @e[type=minecraft:villager,limit=1,sort=nearest] '
+                                                   'sleeping_pos')
+    seen = {}
+    try:
+        for _ in range(90):
+            seen['villager_asleep'] = sleeping_pos()
+            if str(villager_bed[0]) in json.dumps(seen['villager_asleep']):
+                break
+            guest.wait(20)
+        seen['villager_bed'] = state_of(guest, villager_bed, 'occupied')
+        guest('command', command=f'tp @s {x + 0.5} {gy} {z + 5.5}')
+        guest.wait(10)
+        guest.raw('interact', *guest_bed)
+        guest.wait(10)
+        seen['guest_asleep'] = guest('state').get('sleeping')
+        seen['guest_bed'] = state_of(guest, guest_bed, 'occupied')
+        host.raw('disconnect')
+        for attempt in range(60):
+            time.sleep(1)
+            try:
+                host.raw('open', 'Lan')
+                break
+            except Failed:
+                if attempt == 59:
+                    raise
+        host('wait_ready', seconds=400)
+        port = host.raw('lan', 'open', 0, 'commands')['port']
+        back_to_game(guest)
+        guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+        guest.raw('wait-for', 'loaded', '--timeout', 300)
+        guest.wait(20)
+        seen['reopened'] = {'sleeping_pos': sleeping_pos(), 'villager_bed': state_of(host, villager_bed, 'occupied'),
+                            'guest_bed': state_of(host, guest_bed, 'occupied'),
+                            'guest': guest('state').get('sleeping')}
+        guest.shot(out, 'sleep-reload')
+    finally:
+        back_to_game(guest)
+        guest('command', command='kill @e[type=minecraft:villager,distance=..16]')
+        for at in (villager_bed, guest_bed):
+            guest('command', command=f'fill {at[0] - 1} {at[1]} {at[2]} {at[0]} {at[1]} {at[2]} minecraft:air')
+        host('command', command='time set day')
+    pos = lambda reply: [int(v) for v in re.findall(r'-?\d+', json.dumps(reply).partition('[I;')[2].partition(']')[0])]
+    assert pos(seen['villager_asleep']) == villager_bed and seen['villager_bed'] == 'true', \
+        f'the villager never lay down in its bed: {seen}'
+    assert seen['guest_asleep'] == guest_bed and seen['guest_bed'] == 'true', f'the guest did not lie down: {seen}'
+    reopened = seen['reopened']
+    assert pos(reopened['sleeping_pos']) == villager_bed, f'the villager woke up with the reload: {seen}'
+    assert reopened['villager_bed'] == 'true', f'the sleeping villager\'s bed is free after the reload: {seen}'
+    assert reopened['guest_bed'] == 'false' and reopened['guest'] is None, f'the guest\'s bed stays occupied: {seen}'
+    return seen
+
+
 def check_predict(host, guest, out):
     # MultiPlayerGameMode.useItemOn under startPrediction (#869): the guest's door opens on its own screen
     # at once, with the host (the server) frozen, and the server's answer later agrees; an iron door
@@ -4769,13 +5175,16 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
-             'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push,
+             'clicks': check_clicks, 'sleep': check_sleep, 'sleep-villager': check_sleep_villager,
+             'bed-occupied': check_bed_occupied, 'sleep-reload': check_sleep_reload,
+             'push': check_push, 'piston-push': check_piston_push,
+             'piston-slime': check_piston_slime,
              'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
              'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
              'cracks': check_cracks, 'time': check_time, 'growth': check_growth, 'doors': check_doors,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
-             'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
+             'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'leave': check_leave,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
              'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
              'lightning': check_lightning, 'riding': check_riding, 'occupied_horse': check_occupied_horse, 'mounts': check_mounts,
@@ -4797,9 +5206,11 @@ def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
     # Either way explicitly: the game's default is the server thread.
     host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
-    # A headless run (HORIZON_E2E_HEADLESS) has no focused window to draw in: the games render
-    # offscreen and never pause on the focus loss, or the world would stand still.
-    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS'))
+    # A headless run (HORIZON_E2E_HEADLESS, or a Linux without vscreen) has no focused window to draw
+    # in: the games render offscreen and never pause on the focus loss, or the world would stand still
+    # (a host paused before its world loads waits at "Connecting to the server..." for ever).
+    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS')) or (
+        sys.platform.startswith('linux') and not shutil.which('vscreen'))
     launch = ['launch']
     if headless or sys.platform == 'darwin':
         launch.append('--offscreen')
@@ -6329,6 +6740,86 @@ CHECKS += ['riding_teleport']
 CHECK_FNS.update(riding_teleport=check_riding_teleport)
 
 
+def check_portal_rider(host, guest, out):
+    """#1486 (--server-thread): a survival guest rides a horse into a Nether portal. The horse goes
+    through at once (NetherPortalBlock.getPortalTransitionTime is 0 for an entity that isn't a
+    player; a passenger has no portal process of its own, Entity.canUsePortal) and carries its rider
+    (Entity.teleportCrossDimension): the guest leaves well before a player's own 80 ticks and
+    arrives in the Nether still on the same horse."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    x, y, z = apart(host, guest)['guest']
+    horse_at = (x + 1.0, y, z + 2.5)
+    # The portal's plane crosses the horse's box (z + 1.8 to z + 3.2), the rider's too.
+    pz = z + 2
+    tag = 'portal_rider'
+    home = 'execute in minecraft:overworld run'
+    try:
+        guest('command', command='clear @s')
+        guest('command', command='gamemode survival')
+        guest('command', command='gamerule players_nether_portal_default_delay 80')
+        guest('command', command='item replace entity @s weapon.mainhand with minecraft:saddle')
+        guest('command', command=f'summon minecraft:horse {horse_at[0]} {y} {horse_at[2]} '
+                                 f'{{Tame:1b,NoAI:1b,Tags:["{tag}"]}}')
+        guest.wait(5)
+        horses = [m for m in guest.raw('mobs', 16)['near'] if m['kind'] == 'minecraft:horse' and m['health'] > 0]
+        horse = next((m for m in horses if math.dist(m['pos'], horse_at) < 0.1), None)
+        assert horse, f'no live horse at {horse_at}: {horses}'
+        guest.raw('look-at', horse_at[0], y + 0.8, horse_at[2])
+        guest.raw('mouse', 'right', 'click')
+        guest.wait(5)
+        guest('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+        guest.wait(2)
+        guest.raw('mouse', 'right', 'click')
+        guest.wait(5)
+        assert guest('status').get('riding') == horse['id'], 'the guest is not riding the horse'
+        # The frame around the horse and its rider, then the portal inside it.
+        for corner in (f'{x - 1} {y - 1} {pz} {x + 2} {y - 1} {pz}', f'{x - 1} {y + 3} {pz} {x + 2} {y + 3} {pz}',
+                       f'{x - 1} {y} {pz} {x - 1} {y + 2} {pz}', f'{x + 2} {y} {pz} {x + 2} {y + 2} {pz}'):
+            guest('command', command=f'fill {corner} minecraft:obsidian')
+        guest('command', command=f'fill {x} {y} {pz} {x + 1} {y + 2} {pz} minecraft:nether_portal[axis=x]')
+        guest.shot(out, 'portal-rider-in')
+        left = None
+        for waited in range(0, 120, 5):
+            if guest('state').get('dimension') == NETHER:
+                left = waited
+                break
+            guest.wait(5)
+        assert left is not None, 'the guest on its horse did not go through the portal in 120 ticks'
+        assert left < 40, f'the guest left after {left} ticks: its own delay (80), not the horse\'s (0)'
+        # The server holds the guest until the chunks around the exit are lit, then places it there.
+        there = wait_dimension(guest, NETHER, 600)
+        seen = None
+        for _ in range(30):
+            guest.wait(20)
+            seen = {'riding': guest('status').get('riding'), 'horse': mob_seen(guest, horse['id']),
+                    'at': pos_of(guest)}
+            if seen['horse'] and math.dist(seen['horse']['pos'], seen['at']) < 3:
+                break
+        guest.wait(40)
+        seen = {'riding': guest('status').get('riding'), 'horse': mob_seen(guest, horse['id']), 'at': pos_of(guest)}
+        guest.shot(out, 'portal-rider-nether')
+        assert there.get('dimension') == NETHER, f'the guest is in {there.get("dimension")}'
+        assert seen['horse'], f'the horse {horse["id"]} did not come to the Nether with its rider: {seen}'
+        assert seen['riding'] == horse['id'], f'the guest arrived on foot: {seen}'
+        assert math.dist(seen['horse']['pos'], seen['at']) < 3, f'the horse is not under its rider: {seen}'
+        host_dim = host('state').get('dimension')
+        assert host_dim == OVERWORLD, f'the host went to {host_dim} with the guest'
+        return {'left_after_ticks': left, 'riding': seen['riding'], 'horse': seen['horse']['pos'], 'guest': seen['at']}
+    finally:
+        back_to_game(guest)
+        guest('command', command=f'kill @e[tag={tag}]')
+        guest('command', command=f'{home} fill {x - 1} {y - 1} {pz} {x + 2} {y + 3} {pz} minecraft:air')
+        guest('command', command=f'{home} fill {x - 1} {y - 1} {pz} {x + 2} {y - 1} {pz} minecraft:stone')
+        guest('command', command=f'{home} tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+        wait_dimension(guest, OVERWORLD, 600)
+        guest.wait(20)
+
+
+CHECKS += ['portal_rider']
+CHECK_FNS.update(portal_rider=check_portal_rider)
+
+
 def check_recipe_removal(host, guest, out):
     """ServerRecipeBook.removeRecipes sends ClientboundRecipeBookRemovePacket to the player:
     the open book updates immediately, reopening keeps it empty, and later grants still arrive."""
@@ -7656,6 +8147,46 @@ def check_dig_stop(host, guest, out):
 
 CHECKS += ['dig_stop']
 CHECK_FNS['dig_stop'] = check_dig_stop
+
+
+def check_dig_sounds(host, guest, out):
+    """#2277: the mining sound plays once per cadence, for everyone.
+
+    Vanilla plays the block's hit sound from the server's destroy progress
+    level events (2019 and 2020), so the digger and the players around hear
+    the same hits. Horizon's digger heard every hit twice: once from its own
+    client and once from the server, which is what the report called a sound
+    played too often.
+    """
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        other = guest if label == 'host' else host
+        x, y, z = spots[label]
+        cell = (x, y + 1, z + 2)
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 4} minecraft:air')
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+        player.wait(10)
+        before = {g.name: heard(g, 'minecraft:block.stone.hit') for g in (host, guest)}
+        player.raw('look-at', f'{cell[0] + 0.5:.2f}', f'{cell[1] + 0.5:.2f}', f'{cell[2] + 0.5:.2f}')
+        player.raw('mouse', 'left', 'down')
+        player.wait(40)
+        player.raw('mouse', 'left', 'up')
+        player.wait(5)
+        hits = {g.name: heard(g, 'minecraft:block.stone.hit') - before[g.name] for g in (host, guest)}
+        result[label] = hits
+        assert host.raw('block', *cell).get('block') == 'minecraft:stone', f'{label}: the stone broke: {result}'
+        assert hits[other.name] >= 3, f'{label}: the player nearby heard no mining sound: {result}'
+        assert hits[player.name] <= hits[other.name] + 3, \
+            f'{label}: the digger heard the mining sound twice: {result}'
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+    return result
+
+
+CHECKS += ['dig_sounds']
+CHECK_FNS['dig_sounds'] = check_dig_sounds
 
 
 if __name__ == '__main__':
