@@ -935,8 +935,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         // Shulker.playAmbientSound: silent while closed.
         Species::Shulker if m.extra.counter == 0 => return,
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
-        Species::Piglin if m.ai.target.is_some() => "entity.piglin.angry",
-        Species::Hoglin if m.ai.target.is_some() => "entity.hoglin.angry",
+        Species::Piglin => super::piglin::piglin_ambient(m, w),
+        Species::Hoglin => super::piglin::hoglin_ambient(m, w),
         _ => voice_sounds(m)[0],
     };
     let _ = w;

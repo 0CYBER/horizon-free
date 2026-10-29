@@ -260,6 +260,16 @@ fn update_activity(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 fn converting(m: &Mob, w: &MobWorld) -> bool {
     !w.nether && !m.extra.flag2 && !m.no_ai
 }
+/// `Hoglin.getAmbientSound`: the sound of the activity it is in
+/// (`HoglinAi.getSoundForCurrentActivity`).
+pub fn hoglin_ambient(m: &Mob, w: &MobWorld) -> &'static str {
+    hoglin_sound(m, w, m.extra.piglin.activity)
+}
+/// `Piglin.getAmbientSound`: the sound of the activity it is in
+/// (`PiglinAi.getSoundForCurrentActivity`).
+pub fn piglin_ambient(m: &Mob, w: &MobWorld) -> &'static str {
+    piglin_sound(m, w, m.extra.piglin.activity)
+}
 /// `HoglinAi.getSoundForActivity`: a retreat grunt while retreating,
 /// converting or near a repellent, an angry one while fighting.
 fn hoglin_sound(m: &Mob, w: &MobWorld, activity: Activity) -> &'static str {
