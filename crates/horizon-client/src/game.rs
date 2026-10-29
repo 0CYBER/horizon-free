@@ -9879,6 +9879,7 @@ impl Game<'_> {
             .damage
             .in_tag(source, "minecraft:is_fire");
         let mut broke = false;
+        let mut broken_items = Vec::new();
         let losses: Vec<u32> = (0..4)
             .map(|i| match self.armor[i].clone() {
                 Some(s)
@@ -9901,6 +9902,7 @@ impl Game<'_> {
             {
                 stack.damage += amount;
                 if stack.damage >= info.max_damage {
+                    broken_items.push(stack.clone());
                     *slot = None;
                     broke = true;
                 }
@@ -9914,6 +9916,10 @@ impl Game<'_> {
                     0.8,
                     0.8 + self.world.random.next_float() * 0.4,
                 );
+            }
+            // LivingEntity.breakItem for each armour piece that broke.
+            for stack in &broken_items {
+                self.eat_particles(stack, 5);
             }
             self.apply_equipment();
         }
@@ -10218,6 +10224,7 @@ impl Game<'_> {
             stack.damage += amount;
             if stack.damage >= max {
                 let broken = stack.item.clone();
+                let gone = stack.clone();
                 *cell = None;
                 self.stats.add("broken", &broken, 1);
                 if let Some(eye) = self.eye_position() {
@@ -10228,6 +10235,8 @@ impl Game<'_> {
                         0.8 + self.world.random.next_float() * 0.4,
                     );
                 }
+                // LivingEntity.breakItem: the broken item's five crumbs.
+                self.eat_particles(&gone, 5);
             }
         }
     }
