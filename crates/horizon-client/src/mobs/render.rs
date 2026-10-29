@@ -1537,6 +1537,24 @@ pub fn part_matrix(
         .iter()
         .find_map(|c| part_matrix(c, m, poses, name, x_offset))
 }
+fn find_part<'a>(part: &'a Part, name: &str) -> Option<&'a Part> {
+    if part.name == name {
+        return Some(part);
+    }
+    part.children.iter().find_map(|c| find_part(c, name))
+}
+/// `AllayModel.translateToHand`: the root and body, then the right arm's
+/// pitch, a 0.7 scale and a shift. Both hands use the right arm's pitch.
+fn allay_hand(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat4> {
+    let body = part_matrix(model, base, poses, "body", 0.0)?;
+    let x_rot = poses.pose(find_part(model, "right_arm")?)[3];
+    Some(
+        body * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0625, 0.1875))
+            * glam::Mat4::from_rotation_x(x_rot)
+            * glam::Mat4::from_scale(glam::Vec3::splat(0.7))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.0, 0.0)),
+    )
+}
 /// The hand of a mob in model space, up to the item's own transform
 /// (`ItemInHandLayer.submitArmWithItem`).
 fn hand_base(
@@ -1564,7 +1582,11 @@ fn hand_base(
     } else {
         0.0
     };
-    let mut t = part_matrix(model, base, poses, arm, offset)?;
+    let mut t = if m.species() == Species::Allay {
+        allay_hand(model, base, poses)?
+    } else {
+        part_matrix(model, base, poses, arm, offset)?
+    };
     if m.species() == Species::Vex {
         // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
         t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
