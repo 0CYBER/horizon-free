@@ -2243,9 +2243,17 @@ impl Goal for EatBlock {
         cx.w.has_tag("minecraft:edible_for_sheep", &here)
             || cx.w.block_name(x, y - 1, z) == "minecraft:grass_block"
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.tick = reduced(40);
         m.extra.anim_ticks = 40;
+        // EatBlockGoal.start: broadcastEntityEvent 10, so the head goes down
+        // on every client.
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events.push(MobEvent::EntityEvent {
+            mob: m.id,
+            event: 10,
+            at,
+        });
         m.nav_stop();
     }
     fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
