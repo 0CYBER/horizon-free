@@ -41,7 +41,6 @@ fn sampling_threads(cores: usize) -> usize {
 const HELD_SAMPLE_STEP: std::time::Duration = std::time::Duration::from_millis(500);
 /// The coarsest tile level: `Plan` roots cover at most 1024 chunks around.
 const MAX_LEVEL: u8 = 10;
-/// around (a level-22 tile is 67 million blocks wide: the whole world).
 /// Top solid face and optional fluid face, in absolute block coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Surface {
