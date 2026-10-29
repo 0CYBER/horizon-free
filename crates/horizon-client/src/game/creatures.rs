@@ -4824,6 +4824,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
         ominous_amplifier: None,
         stew_effects: Vec::new(),
         names: Vec::new(),
+        components: Vec::new(),
     }
 }
 /// A generated loot stack as a Horizon item stack.
@@ -4845,6 +4846,9 @@ fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
     }
     for (id, text) in &stack.names {
         item.data_mut().set_loot_name(id, text);
+    }
+    for (id, value) in &stack.components {
+        item.data_mut().set_loot_component(id, value);
     }
     item
 }

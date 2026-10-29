@@ -715,12 +715,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         .into_iter()
         .enumerate()
         {
-            // Enchanted gear is saved with its `minecraft:enchantments`.
+            // Enchanted or trimmed gear is saved with its components.
             if let (Some(id), Some(g)) = (item, crate::mobs::gear::gear(m))
-                && !g.slots[index].is_empty()
+                && (!g.slots[index].is_empty() || g.trims[index].is_some())
             {
                 let mut stack = crate::items::ItemStack::new(id, 1);
                 stack.data_mut().enchantments = g.slots[index].clone();
+                stack.data_mut().trim = g.trims[index].clone();
                 equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
                 continue;
             }
@@ -950,10 +951,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.legs = slot("legs");
             m.extra.feet = slot("feet");
         }
-        // Their enchantments.
+        // Their enchantments and trims.
         for (index, key) in crate::mobs::gear::KEYS.iter().enumerate() {
             if let Some(stack) = eq.get(key).and_then(crate::save::item_from_nbt) {
                 crate::mobs::gear::set(&mut m, index, stack.enchantments().to_vec());
+                let trim = stack.data().and_then(|d| d.trim.clone());
+                crate::mobs::gear::set_trim(&mut m, index, trim);
             }
         }
     } else {
