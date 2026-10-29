@@ -236,6 +236,8 @@ struct Launcher {
     quick_play: Option<(&'static str, String)>,
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
+    /// The running game's instance variables, for its post-exit command.
+    client_vars: horizon_launcher::launch::Vars,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
     args_input: line_edit::LineEdit,
     args_focused: bool,
@@ -442,6 +444,7 @@ impl Launcher {
             joining: None,
             quick_play: None,
             client_run: None,
+            client_vars: Vec::new(),
             collection: collection::Collection::load(),
             agents: agents_page::AgentsUi::default(),
             playing: None,
@@ -680,7 +683,11 @@ impl Launcher {
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::JavaGame(id, home, cmd) => {
                     self.starting_client = None;
-                    match cmd.and_then(|cmd| backend::spawn(Job::Client, cmd, self.tx.clone())) {
+                    let spawned = cmd.and_then(|(cmd, vars)| {
+                        self.client_vars = vars;
+                        backend::spawn(Job::Client, cmd, self.tx.clone())
+                    });
+                    match spawned {
                         Ok(r) => {
                             self.client = Some(r);
                             self.client_home = Some(home);
@@ -759,11 +766,15 @@ impl Launcher {
                         backend::append_game_args(&mut cmd);
                         // Last, around every argument: the instance's pre-launch command,
                         // wrapper and variables.
-                        let launch = run
+                        let instance = run
                             .as_ref()
-                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id))
-                            .map(|i| i.launch)
+                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id));
+                        self.client_vars = instance
+                            .as_ref()
+                            .map(|i| i.vars(cmd.get_program()))
                             .unwrap_or_default();
+                        cmd.envs(self.client_vars.iter().map(|(k, v)| (k, v)));
+                        let launch = instance.map(|i| i.launch).unwrap_or_default();
                         let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
@@ -923,9 +934,16 @@ impl Launcher {
                             self.multiplayer.stale();
                             self.screenshots.stale();
                             self.game_packs.stale();
+                            let vars = std::mem::take(&mut self.client_vars);
                             if let Some((id, started)) = self.client_run.take() {
                                 if let Err(e) = instances::record_play(&id, started.elapsed()) {
                                     eprintln!("Play time not saved: {e}");
+                                }
+                                if let Some(i) = instances::list().into_iter().find(|i| i.id == id)
+                                {
+                                    horizon_launcher::launch::run_after_exit(
+                                        &i.launch, &i.home, &vars,
+                                    );
                                 }
                                 self.reload_instances();
                             }
@@ -1168,8 +1186,11 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, None, &log)
-                .map(|cmd| horizon_launcher::launch::wrap(cmd, &instance.launch));
+            let cmd = backend::java_game(&instance, None, &log).map(|mut cmd| {
+                let vars = instance.vars(cmd.get_program());
+                cmd.envs(vars.iter().map(|(k, v)| (k, v)));
+                (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
+            });
             let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
         });
     }
