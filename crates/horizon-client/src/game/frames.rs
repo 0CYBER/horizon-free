@@ -429,7 +429,9 @@ impl Game<'_> {
             if let Some(id) = map {
                 // ItemFrameRenderer: the map fills the face, in 90-degree steps.
                 let depth = if f.invisible { 0.5 } else { 0.4375 };
-                let item_light = if f.glow { 240 | 240 << 8 } else { packed };
+                // A glow frame's map is 15728850 = 0xF000D2 (sky coordinate 240,
+                // block coordinate 210), not full bright.
+                let item_light = if f.glow { 240 | 210 << 8 } else { packed };
                 let m = pose
                     * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
                     * glam::DMat4::from_rotation_z(

@@ -269,6 +269,8 @@ impl Game<'_> {
         open.requests.push((p.id, p.url, p.hash));
         open.required = p.required;
         open.prompt = text;
+        // Gui.setScreen: KeyMapping.releaseAll, so no walking behind the prompt.
+        self.keys.clear();
         self.capture(false);
     }
     /// `handleResourcePackPop`: one pack, or all of them.
