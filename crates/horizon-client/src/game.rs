@@ -13631,8 +13631,15 @@ impl ApplicationHandler for Game<'_> {
                                 )?;
                             }
                             Err(button) => {
-                                if self.screen == Screen::Playing && !event.repeat {
-                                    self.play_mouse(button, event.state == ElementState::Pressed)?;
+                                let action = match (event.state, event.repeat) {
+                                    (ElementState::Released, _) => KeyAction::Release,
+                                    (_, false) => KeyAction::Press,
+                                    (_, true) => KeyAction::Repeat,
+                                };
+                                if let Some(pressed) =
+                                    keyboard_button(self.screen == Screen::Playing, action)
+                                {
+                                    self.play_mouse(button, pressed)?;
                                 }
                             }
                         }
@@ -15802,6 +15809,15 @@ fn tick_sleep_timer(timer: u32, sleeping: bool) -> u32 {
     }
 }
 
+/// `KeyboardHandler.keyPress` for a key bound to a mouse mapping (key.attack,
+/// key.use, key.pickItem): in game, a press and every repeat of the held key
+/// reach `KeyMapping.set(key, true)` and `KeyMapping.click` alike, so a held
+/// key keeps attacking; a release lets go. `None` behind a screen, which takes
+/// the key.
+fn keyboard_button(playing: bool, action: KeyAction) -> Option<bool> {
+    playing.then_some(action != KeyAction::Release)
+}
+
 fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Stats) {
     *adv = Default::default();
     *stats = Default::default();
@@ -15883,6 +15899,17 @@ mod tests {
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
 
+    /// A key bound to key.attack keeps attacking while it is held: each
+    /// repeat clicks like the press (#3243).
+    #[test]
+    fn a_held_key_bound_to_a_button_repeats_its_clicks() {
+        assert_eq!(keyboard_button(true, KeyAction::Press), Some(true));
+        assert_eq!(keyboard_button(true, KeyAction::Repeat), Some(true));
+        assert_eq!(keyboard_button(true, KeyAction::Release), Some(false));
+        for action in [KeyAction::Press, KeyAction::Repeat, KeyAction::Release] {
+            assert_eq!(keyboard_button(false, action), None);
+        }
+    }
     #[test]
     fn sleep_fade_lasts_ten_ticks_after_waking() {
         let alpha = |timer| match hud_overlays::sleep_overlay(320, 240, timer).first() {
