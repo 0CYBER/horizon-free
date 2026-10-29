@@ -67,7 +67,7 @@ impl Builder {
                 let generator = match OverworldGenerator::for_dimension(
                     terrain.generator.data().clone(),
                     terrain.seed,
-                    "minecraft:normal",
+                    &terrain.preset,
                     &terrain.dimension,
                 ) {
                     Ok(generator) => generator,

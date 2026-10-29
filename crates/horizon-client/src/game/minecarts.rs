@@ -4,7 +4,7 @@
 //! `MinecartItem` placement, `VehicleEntity` breaking, the chest, hopper,
 //! furnace and TNT variants, saving, and `AbstractMinecartRenderer`'s old
 //! rail-following render with the display block.
-use super::{Game, Hit, Keys, explosion::BlockInteraction};
+use super::{Game, Hit, Keys};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
@@ -202,7 +202,7 @@ impl Minecart {
         self.velocity.x.hypot(self.velocity.z)
     }
     /// `AbstractContainerMenu.getRedstoneSignalFromContainer` of `slots`.
-    fn container_signal(slots: &[Option<ItemStack>], items: &Items) -> i32 {
+    pub(super) fn container_signal(slots: &[Option<ItemStack>], items: &Items) -> i32 {
         let mut total = 0.0f32;
         for s in slots.iter().flatten() {
             let max = items.get(&s.item).map_or(64, |i| i.max_stack).min(64);
@@ -662,9 +662,9 @@ impl Game<'_> {
         // The cart is the explosion's source: it is gone before the blast
         // looks for entities, so it can't hit itself.
         self.carts.retain(|x| x.id != c.id);
-        let _ = self.with_hive_emptying_blast(|g| {
-            g.server_explode(at, power, BlockInteraction::Destroy, false)
-        });
+        // ExplosionInteraction.TNT: the tnt_explosion_drop_decay rule.
+        let interaction = self.destroy_type("tnt_explosion_drop_decay");
+        let _ = self.with_hive_emptying_blast(|g| g.server_explode(at, power, interaction, false));
     }
     /// `AbstractMinecart.push` from each player walking into a cart
     /// (`LivingEntity.pushEntities`): the window's player and every server
@@ -1027,22 +1027,6 @@ impl Game<'_> {
             }
         }
         best
-    }
-    /// Each cart's kind and comparator signal, for the detector rail
-    /// (`DetectorRailBlock.getAnalogOutputSignal`). A cart whose menu is open
-    /// counts the items in that menu.
-    pub(super) fn cart_signals(&self) -> Vec<(CartKind, i32)> {
-        self.carts
-            .iter()
-            .map(|c| {
-                let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
-                let slots = match self.world.block_entities.get(&key) {
-                    Some(BlockEntity::Chest(open)) => open,
-                    _ => &c.items,
-                };
-                (c.kind, Minecart::container_signal(slots, self.res.items()))
-            })
-            .collect()
     }
     /// `interact`: ride, open, fuel or ignite the cart under the crosshair.
     pub(super) fn interact_cart(&mut self) -> bool {
@@ -1474,6 +1458,7 @@ impl Game<'_> {
             banner: &|_| Vec::new(),
             skull: &|_| None,
             glyph: &|c| self.gui.atlas.glyph_cell(c),
+            glyphs: self.gui.atlas.font.epoch(),
         };
         self.res
             .block_entity_render()

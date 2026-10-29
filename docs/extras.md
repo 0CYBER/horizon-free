@@ -9,11 +9,11 @@ again restores vanilla's behaviour completely.
 
 | Part | Code |
 |---|---|
-| Settings, parsing and saving | `crates/horizon-client/src/extras.rs` |
+| Settings, parsing and saving | `crates/horizon-client-render/src/extras.rs` |
 | FPS and click counters (for mods) | `extras.rs` (pure logic, unit tested) |
-| Dynamic lights: item glow, nearest sources | `crates/horizon-client/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
+| Dynamic lights: item glow, nearest sources | `crates/horizon-client-render/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
 | HUD drawing (a mod's minimap, corner stacking) | `crates/horizon-client/src/extras_hud.rs` |
-| Minimap colours, tiles and image (for `render.set-minimap`) | `crates/horizon-client/src/minimap.rs` |
+| Minimap colours, tiles and image (for `render.set-minimap`) | `crates/horizon-client-render/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
 | Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/tweaks.rs` |

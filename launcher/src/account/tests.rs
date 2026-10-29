@@ -154,7 +154,11 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
             let body = String::from_utf8(body).unwrap();
             let (status, text) = {
                 let mut m = mock.lock().unwrap();
-                m.log.push((method.clone(), path.clone(), body.clone()));
+                // A bare `GET /` is a local tool probing every new port (T3 Code does, on the Mac
+                // mini), not the launcher: no endpoint here is the root.
+                if (method.as_str(), path.as_str()) != ("GET", "/") {
+                    m.log.push((method.clone(), path.clone(), body.clone()));
+                }
                 route(&mut m, &method, &path, &auth, &body)
             };
             let _ = write!(
@@ -434,6 +438,51 @@ fn offline_names_play_only_beside_an_owner() {
 }
 
 #[test]
+fn the_developer_option_off_is_the_owner_gate() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    let refused = accounts.play_as_with(&store, Player::Offline("Builder_1".into()), false);
+    assert_eq!(refused.unwrap_err(), OFFLINE_NEEDS_OWNER);
+    assert_eq!(accounts, Accounts::default());
+    let (_, ep) = mock(|m| m.owns_game = false);
+    let refused = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, false);
+    assert_eq!(refused.unwrap_err(), NoOwner);
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let refused = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, false);
+    assert_eq!(refused.unwrap_err(), NoOwner);
+}
+
+#[test]
+fn the_developer_option_plays_offline_names_without_an_owner() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts
+        .play_as_with(&store, Player::Offline("Builder_1".into()), true)
+        .unwrap();
+    assert_eq!(accounts.player(), Player::Offline("Builder_1".into()));
+    assert_eq!(accounts.name_arg(), Some("Builder_1"));
+    // The game starts offline: no request, no session, and no owner to download the game for.
+    let (m, ep) = mock(|_| {});
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, true).unwrap();
+    assert!(pass.session.is_none() && pass.owner.is_none() && pass.offline.is_none());
+    assert!(m.lock().unwrap().log.is_empty());
+    // Beside an account the services say doesn't own the game: the same, still no owner.
+    let (_, ep) = mock(|m| m.owns_game = false);
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    accounts
+        .play_as_with(&store, Player::Offline("Builder_1".into()), true)
+        .unwrap();
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, true).unwrap();
+    assert!(pass.session.is_none() && pass.owner.is_none());
+    assert!(!accounts.has_owner(&store));
+    // A real owner is still found and brings what it brings without the option.
+    let (_, ep) = mock(|_| {});
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts, true).unwrap();
+    assert_eq!(pass.owner.unwrap().0.name, "Notch");
+}
+
+#[test]
 fn refusals_have_messages() {
     let tokens = || MsTokens {
         access: "ms-access-1".into(),
@@ -627,9 +676,26 @@ fn offline_names_switch_with_accounts() {
     assert!(a.play_as(&store, Player::Microsoft("zzz".into())).is_err());
     a.play_as(&store, Player::Offline("Builder_1".into()))
         .unwrap();
-    a.remove_offline("BUILDER_1").unwrap();
+    // Forgetting drops the look and the name's skin and cape files too.
+    let dir = std::env::temp_dir().join(format!("horizon-accounts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (skin, cape) = crate::skins::files(&dir, "builder_1");
+    std::fs::write(&skin, b"skin").unwrap();
+    std::fs::write(&cape, b"cape").unwrap();
+    a.looks.insert(
+        "builder_1".into(),
+        crate::skins::Look {
+            skin: true,
+            cape: true,
+            ..crate::skins::Look::default()
+        },
+    );
+    a.remove_offline("BUILDER_1", &dir).unwrap();
     assert_eq!(a.player(), Player::GameName);
-    assert!(a.remove_offline("Builder_1").is_err());
+    assert!(a.looks.is_empty() && !skin.exists() && !cape.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(a.remove_offline("Builder_1", &dir).is_err());
     // An accounts.json from before offline names reads as it was, and writes nothing new.
     let old: Accounts = serde_json::from_str(r#"{"accounts":[],"selected":null}"#).unwrap();
     assert_eq!(old.player(), Player::GameName);

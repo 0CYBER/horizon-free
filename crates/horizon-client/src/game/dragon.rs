@@ -912,8 +912,9 @@ impl Game<'_> {
             // The blast's damage source carries the player, so the dragon
             // remembers them before the blast can kill it.
             self.fight.blast_by = by;
-            let _ =
-                self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
+            // EndCrystal.hurtServer: ExplosionInteraction.BLOCK.
+            let interaction = self.destroy_type("block_explosion_drop_decay");
+            let _ = self.server_explode(at, 6.0, interaction, false);
             self.fight.blast_by = None;
         }
         if respawn_crystal {
@@ -1083,7 +1084,7 @@ impl Game<'_> {
         self.stats.add("killed", "minecraft:ender_dragon", 1);
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(id));
-        self.trigger_entity("minecraft:player_killed_entity", "entity", view);
+        self.trigger_killed(view, None);
     }
     /// Player melee on the dragon's parts or a crystal under the crosshair.
     /// The dragon part under the crosshair within reach: its id and distance.
@@ -2103,6 +2104,7 @@ impl Game<'_> {
                 75,
                 (96.0 * a.sin()).floor() as i32,
             ];
+            self.level_event_at(3000, pos, 0);
             let _ = self.place_gateway_at(pos);
         }
         if !self.fight.previously_killed
@@ -2229,11 +2231,19 @@ impl Game<'_> {
             .filter(|p| p.alive && !p.creative && !p.spectator)
             .collect();
         let mut harmed: Vec<(FightWho, f32)> = Vec::new();
+        // DragonSittingFlamingPhase.end discards the flame cloud.
+        let flame_over = self
+            .dragon
+            .as_ref()
+            .is_some_and(|d| !matches!(d.phase, Phase::Flaming { .. }));
         let mut clouds = std::mem::take(&mut self.breath_clouds);
         clouds.retain_mut(|c| {
             // Lingering potions' clouds tick with the potions.
             if c.potion.is_some() {
                 return true;
+            }
+            if c.from_dragon && flame_over {
+                return false;
             }
             c.age += 1;
             if c.age >= c.duration {
@@ -3212,10 +3222,12 @@ impl Game<'_> {
                 }
             }
         }
+        // DragonRespawnStage.SUMMONING_PILLARS: ExplosionInteraction.BLOCK.
+        let interaction = self.destroy_type("block_explosion_drop_decay");
         let _ = self.server_explode(
             [f64::from(cx) + 0.5, f64::from(h), f64::from(cz) + 0.5],
             5.0,
-            super::explosion::BlockInteraction::Destroy,
+            interaction,
             false,
         );
         // EndSpikeFeature.placeSpike with crystal_invulnerable and the beam.
