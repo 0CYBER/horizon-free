@@ -7,7 +7,7 @@ use super::{
     control::MoveKind,
     goals::{
         Avoid, AvoidEntity, BreathAir, Cx, Goal, HurtByTarget, LookAtPlayer, MeleeAttack, Panic,
-        RandomLookAround, Stroll, TryFindWater, goal_clone,
+        RandomLookAround, Stroll, TryFindWater, goal_clone, reduced,
     },
     nav::NavKind,
 };
@@ -117,9 +117,12 @@ pub fn register(m: &mut Mob) {
             let g = &mut m.ai.goals;
             g.add(0, Panic::new(1.25));
             g.add(2, AvoidEntity::new(Avoid::Player, 8.0, 1.6, 1.4));
-            g.add(4, Stroll::swimming(1.0, 40));
+            g.add(4, FishSwim(Stroll::swimming(1.0, 40)));
             if puffer {
                 g.add(1, PufferfishPuff);
+            } else {
+                let next_start = FollowFlockLeader::next_start_tick(m);
+                m.ai.goals.add(5, FollowFlockLeader::new(next_start));
             }
             m.ai.mov.kind = MoveKind::Custom;
             m.ai.nav.kind = NavKind::Water { breach: false };
@@ -520,6 +523,201 @@ impl Goal for SquidFlee {
         }
     }
 }
+/// `AbstractSchoolingFish`: cod, salmon and tropical fish.
+fn schooling(s: Species) -> bool {
+    matches!(s, Species::Cod | Species::Salmon | Species::TropicalFish)
+}
+/// `getMaxSchoolSize`: `AbstractFish.getMaxSpawnClusterSize` (8), a salmon's
+/// own 5.
+fn max_school_size(s: Species) -> i32 {
+    if s == Species::Salmon { 5 } else { 8 }
+}
+/// `isFollower`: its leader is alive.
+fn follows(w: &MobWorld, leader: Option<u32>) -> bool {
+    leader.and_then(|l| w.seen(l)).is_some_and(|s| s.alive)
+}
+/// `canBeFollowed`: it has followers and room for more.
+fn can_be_followed(s: Species, followers: i32) -> bool {
+    followers > 0 && followers + 1 < max_school_size(s)
+}
+/// `startFollowing` on a recruit, applied after the recruiter's tick. A fish
+/// another leader took this tick (its snapshot was older) stays with it.
+pub fn start_following(mobs: &mut [Mob], fish: u32, leader: u32) {
+    let alive = |mobs: &[Mob], id: u32| mobs.iter().any(|m| m.id == id && m.alive() && !m.removed);
+    let Some(current) = mobs.iter().find(|m| m.id == fish).map(|m| m.extra.leader) else {
+        return;
+    };
+    if current.is_some_and(|l| alive(mobs, l)) {
+        return;
+    }
+    if let Some(m) = mobs.iter_mut().find(|m| m.id == fish) {
+        m.extra.leader = Some(leader);
+    }
+    if let Some(m) = mobs.iter_mut().find(|m| m.id == leader) {
+        m.extra.followers += 1;
+    }
+}
+/// `AbstractSchoolingFish.tick`: a leader with no fish of its kind within 8
+/// forgets its school, checked once in 200 ticks on the level's random.
+pub fn school_tick(m: &mut Mob, w: &MobWorld, level_random: &mut impl RandomSource) {
+    if !schooling(m.species()) || m.extra.followers <= 0 {
+        return;
+    }
+    if level_random.next_int_bound(200).unwrap_or(0) == 1 {
+        let area = m.bounds().inflate(Vec3::new(8.0, 8.0, 8.0));
+        let species = m.species();
+        let others = w
+            .others_near(area)
+            .filter(|s| {
+                s.id != m.id && s.species == species && s.alive && s.bounds.intersects(area)
+            })
+            .count();
+        if others == 0 {
+            m.extra.followers = 0;
+        }
+    }
+}
+/// `AbstractFish.FishSwimGoal`: random swimming, which a schooling fish
+/// that follows a leader leaves (`canRandomSwim`).
+#[derive(Clone, Debug)]
+pub struct FishSwim(Stroll);
+impl Goal for FishSwim {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "FishSwimGoal"
+    }
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if schooling(m.species()) && follows(cx.w, m.extra.leader) {
+            return false;
+        }
+        self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx);
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx);
+    }
+}
+/// `FollowFlockLeaderGoal`: a fish with no school, every ten seconds or so,
+/// joins a school nearby that has room, or gathers the fish around it that
+/// follow no one into a school of its own; a follower swims after its
+/// leader while it is within 11 blocks.
+#[derive(Clone, Debug)]
+pub struct FollowFlockLeader {
+    next_start: i32,
+    recalc: i32,
+}
+impl FollowFlockLeader {
+    pub fn new(next_start: i32) -> Self {
+        Self {
+            next_start,
+            recalc: 0,
+        }
+    }
+    /// `nextStartTick`, on the fish's random.
+    pub fn next_start_tick(m: &mut Mob) -> i32 {
+        reduced(200 + m.random.next_int_bound(200).unwrap_or(0) % 20)
+    }
+}
+impl Goal for FollowFlockLeader {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "FollowFlockLeaderGoal"
+    }
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.extra.followers > 0 {
+            return false;
+        }
+        if follows(cx.w, m.extra.leader) {
+            return true;
+        }
+        if self.next_start > 0 {
+            self.next_start -= 1;
+            return false;
+        }
+        self.next_start = Self::next_start_tick(m);
+        // The fish of its kind around it that lead a school with room or
+        // follow no one, in level order; itself as it is now.
+        let species = m.species();
+        let area = m.bounds().inflate(Vec3::new(8.0, 8.0, 8.0));
+        let candidates: Vec<(u32, Option<u32>, i32)> =
+            cx.w.others_near(area)
+                .filter(|s| s.species == species && s.alive && s.bounds.intersects(area))
+                .map(|s| {
+                    if s.id == m.id {
+                        (s.id, m.extra.leader, m.extra.followers)
+                    } else {
+                        (s.id, s.school.0, s.school.1)
+                    }
+                })
+                .filter(|&(_, leader, followers)| {
+                    can_be_followed(species, followers) || !follows(cx.w, leader)
+                })
+                .collect();
+        let (leader, school_size) = candidates
+            .iter()
+            .find(|c| can_be_followed(species, c.2))
+            .map_or((m.id, m.extra.followers + 1), |c| (c.0, c.2 + 1));
+        // addFollowers: the limit counts the leader before it is skipped.
+        let room = (max_school_size(species) - school_size).max(0) as usize;
+        for &(id, ..) in candidates
+            .iter()
+            .filter(|c| !follows(cx.w, c.1))
+            .take(room)
+            .filter(|c| c.0 != leader)
+        {
+            if id == m.id {
+                m.extra.leader = Some(leader);
+                cx.events.push(MobEvent::SchoolSize { leader, by: 1 });
+            } else {
+                cx.events
+                    .push(MobEvent::StartFollowing { fish: id, leader });
+            }
+        }
+        follows(cx.w, m.extra.leader)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra
+            .leader
+            .and_then(|l| cx.w.seen(l))
+            .is_some_and(|l| l.alive && m.distance_sqr(l.position) <= 121.0)
+    }
+    fn start(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.recalc = 0;
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(leader) = m.extra.leader.take() {
+            cx.events.push(MobEvent::SchoolSize { leader, by: -1 });
+        }
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.recalc -= 1;
+        if self.recalc > 0 {
+            return;
+        }
+        self.recalc = reduced(10);
+        // pathToLeader
+        if let Some(l) = m
+            .extra
+            .leader
+            .and_then(|l| cx.w.seen(l))
+            .filter(|l| l.alive)
+        {
+            let at = [l.position.x, l.position.y, l.position.z];
+            m.nav_move_to_entity(cx.w, at, 1, 1.0);
+        }
+    }
+}
 /// Pufferfish.PufferfishPuffGoal: inflate when a mob or player is within 2.
 #[derive(Clone, Debug)]
 pub struct PufferfishPuff;
@@ -708,5 +906,51 @@ pub fn rotations(m: &Mob, alpha: f32, body: f32) -> Option<glam::Mat4> {
                 * glam::Mat4::from_rotation_y((180.0 - body).to_radians()),
         ),
         _ => None,
+    }
+}
+#[cfg(test)]
+mod school_tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use std::sync::Arc;
+
+    fn cod(id: u32) -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:cod".into();
+        k.species = Species::Cod;
+        Mob::new(id, kind, Vec3::ZERO, 0.0)
+    }
+    #[test]
+    fn school_sizes() {
+        assert_eq!(max_school_size(Species::Cod), 8);
+        assert_eq!(max_school_size(Species::TropicalFish), 8);
+        assert_eq!(max_school_size(Species::Salmon), 5);
+        // canBeFollowed: followers and room (schoolSize below the maximum).
+        assert!(!can_be_followed(Species::Cod, 0));
+        assert!(can_be_followed(Species::Cod, 6));
+        assert!(!can_be_followed(Species::Cod, 7));
+        assert!(!can_be_followed(Species::Salmon, 4));
+    }
+    #[test]
+    fn a_recruit_another_leader_took_stays_with_it() {
+        let mut mobs = vec![cod(1), cod(2), cod(3)];
+        start_following(&mut mobs, 3, 1);
+        assert_eq!(mobs[2].extra.leader, Some(1));
+        assert_eq!(mobs[0].extra.followers, 1);
+        start_following(&mut mobs, 3, 2);
+        assert_eq!(mobs[2].extra.leader, Some(1));
+        assert_eq!(mobs[1].extra.followers, 0);
+        // A dead leader's follower is free again.
+        mobs[0].health = 0.0;
+        start_following(&mut mobs, 3, 2);
+        assert_eq!(mobs[2].extra.leader, Some(2));
+        assert_eq!(mobs[1].extra.followers, 1);
+    }
+    #[test]
+    fn schooling_fish_draw_their_start_delay() {
+        let mut m = cod(1);
+        let start = FollowFlockLeader::next_start_tick(&mut m);
+        assert!((100..=110).contains(&start));
     }
 }

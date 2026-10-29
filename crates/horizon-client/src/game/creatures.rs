@@ -1743,6 +1743,8 @@ impl Game<'_> {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
                     }
                 }
+                // Applied after the fish's tick (`apply_brain_events`).
+                MobEvent::StartFollowing { .. } | MobEvent::SchoolSize { .. } => {}
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)

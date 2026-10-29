@@ -863,6 +863,8 @@ pub struct Extra {
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
+    /// The fish that follow this one (`AbstractSchoolingFish.schoolSize` - 1).
+    pub followers: i32,
     /// A breeze's or creaking's brain (`monster_brain`).
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
@@ -1065,6 +1067,17 @@ pub enum MobEvent {
     LockGaze {
         mob: u32,
         partner: u32,
+    },
+    /// `AbstractSchoolingFish.startFollowing` on a fish a leader recruits:
+    /// it follows the leader, whose school grows by one.
+    StartFollowing {
+        fish: u32,
+        leader: u32,
+    },
+    /// `addFollower` / `removeFollower`: a leader's school grows or shrinks.
+    SchoolSize {
+        leader: u32,
+        by: i32,
     },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
@@ -1501,6 +1514,8 @@ pub struct Seen {
     pub leash: Option<leash::Holder>,
     /// A llama's caravan head (its id plus one, 0 when not in a caravan).
     pub caravan: u32,
+    /// A schooling fish's leader and how many fish follow it.
+    pub school: (Option<u32>, i32),
     /// A wandering trader's despawn delay.
     pub delay: i32,
     /// `getLastHurtByMob` and its timestamp.
@@ -1608,6 +1623,7 @@ impl Mob {
             velocity: m.velocity,
             leash: m.extra.leash,
             caravan: caravan::head_of(m),
+            school: (m.extra.leader, m.extra.followers),
             delay: m.extra.ints[5],
             hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
             active_raid: raider::has_active_raid(m),
@@ -1742,6 +1758,16 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
                     villager_brain::lock_gaze_half(m, Who::Mob(partner));
+                }
+                events.remove(i);
+            }
+            MobEvent::StartFollowing { fish, leader } => {
+                aquatic::start_following(mobs, fish, leader);
+                events.remove(i);
+            }
+            MobEvent::SchoolSize { leader, by } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == leader) {
+                    m.extra.followers += by;
                 }
                 events.remove(i);
             }
