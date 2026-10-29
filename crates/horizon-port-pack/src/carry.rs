@@ -720,6 +720,8 @@ pub fn carry(
     let mut report = Report::default();
     let mut blockstates: BTreeMap<String, Value> = BTreeMap::new();
     let mut item_models = BTreeSet::new();
+    // Models another item model's `overrides` switch to (trim looks, a bow's pull): variants, not items.
+    let mut variant_models = BTreeSet::new();
     let mut convention = BTreeSet::new();
     let mut block_loot = BTreeSet::new();
     let mut biome_conventions = BTreeSet::new();
@@ -907,6 +909,14 @@ pub fn carry(
                 .filter(|_| own)
             {
                 item_models.insert(m.to_owned());
+                let model: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+                for o in model["overrides"].as_array().into_iter().flatten() {
+                    let target = o["model"].as_str().unwrap_or_default();
+                    let path = target.split_once(':').map_or(target, |(_, p)| p);
+                    if let Some(v) = path.strip_prefix("item/").filter(|v| *v != m) {
+                        variant_models.insert(v.to_owned());
+                    }
+                }
             }
         }
         write(&dest, &bytes)?;
@@ -940,6 +950,7 @@ pub fn carry(
             &serde_json::to_vec_pretty(&v).unwrap_or_default(),
         )?;
     }
+    item_models.retain(|m| !variant_models.contains(m));
     // 1.21.4 moved item models behind `items/<name>.json` definitions.
     for m in &item_models {
         let def = inside.join(format!("assets/{id}/items/{m}.json"));
@@ -1540,7 +1551,13 @@ mod tests {
             ),
             (
                 "assets/gem/models/item/gem.json",
-                r#"{"parent": "minecraft:item/generated", "textures": {"layer0": "gem:item/gem"}}"#,
+                r#"{"parent": "minecraft:item/generated", "textures": {"layer0": "gem:item/gem"},
+                    "overrides": [{"predicate": {"minecraft:trim_type": 0.1}, "model": "gem:item/gem_glowing"}]}"#,
+            ),
+            // A look the gem's model switches to, not an item of its own.
+            (
+                "assets/gem/models/item/gem_glowing.json",
+                r#"{"parent": "gem:item/gem"}"#,
             ),
             (
                 "assets/gem/models/item/gem_block.json",
@@ -1613,7 +1630,7 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
-        assert_eq!(report.copied, 15);
+        assert_eq!(report.copied, 16);
         let unreadable: Vec<&str> = report.unreadable.keys().map(String::as_str).collect();
         assert_eq!(
             unreadable,
