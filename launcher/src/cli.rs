@@ -4,10 +4,12 @@ use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use horizon_launcher::instances;
+use horizon_launcher::loaders;
 use horizon_launcher::native_mods;
+use horizon_launcher::other_launchers;
 use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Parser)]
@@ -216,6 +218,12 @@ enum InstanceCmd {
         /// latest-snapshot) instead of a Horizon one
         #[arg(long, conflicts_with = "copy")]
         minecraft: Option<String>,
+        /// With this mod loader: fabric or quilt
+        #[arg(long, requires = "minecraft")]
+        loader: Option<String>,
+        /// The loader's version (default: its newest stable one)
+        #[arg(long, requires = "loader")]
+        loader_version: Option<String>,
     },
     /// The versions of Minecraft: Java Edition a Java instance can play, the newest first
     Versions {
@@ -241,6 +249,20 @@ enum InstanceCmd {
         /// Extra JVM arguments (one string; "" clears them)
         #[arg(long, allow_hyphen_values = true)]
         args: Option<String>,
+        /// The game window's size, as 1280x720; "default" goes back to the game's own
+        #[arg(long)]
+        window: Option<String>,
+    },
+    /// A Java instance's mod loader: fabric or quilt, or none. --list shows its versions
+    Loader {
+        instance: String,
+        loader: String,
+        /// The loader's version (default: its newest stable one)
+        #[arg(long)]
+        version: Option<String>,
+        /// List the loader's versions for the instance's Minecraft instead
+        #[arg(long, conflicts_with = "version")]
+        list: bool,
     },
     /// Rename an instance (its folder stays)
     Rename { instance: String, name: String },
@@ -275,15 +297,19 @@ enum InstanceCmd {
         out: Option<PathBuf>,
     },
     /// Show or set what runs around an instance's game: a shell command before it (the game
-    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
-    /// variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode,
-    /// MangoHud and the dedicated graphics card, when the computer has them
+    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), environment
+    /// variables ("NAME=value NAME2=value") and a shell command after it exits. An empty value
+    /// clears one. The game and the commands also get INST_NAME, INST_ID, INST_DIR,
+    /// INST_MC_DIR and, for a Java instance, INST_JAVA. On Linux, also GameMode, MangoHud and
+    /// the dedicated graphics card, when the computer has them
     Launch {
         instance: String,
         #[arg(long)]
         pre_launch: Option<String>,
         #[arg(long)]
         wrapper: Option<String>,
+        #[arg(long)]
+        post_exit: Option<String>,
         #[arg(long)]
         env: Option<String>,
         /// Linux: run it through GameMode (gamemoderun), on or off
@@ -314,6 +340,29 @@ enum InstanceCmd {
         /// The instance a pack goes into
         #[arg(long)]
         instance: Option<String>,
+    },
+    /// List the instances other launchers keep (Prism Launcher, MultiMC, the official
+    /// launcher, the CurseForge app, the Modrinth App), read without changing anything there
+    Others {
+        /// Look in this folder instead: a launcher's folder, its instances/ or one instance
+        #[arg(long)]
+        folder: Option<PathBuf>,
+    },
+    /// Copy another launcher's instance into a new Java instance: its Minecraft version and its
+    /// game folder (worlds, mods, packs, options); the other launcher's copy stays as it is
+    CopyFrom {
+        /// Its name, as `instance others` lists it
+        name: String,
+        /// Look in this folder instead: a launcher's folder, its instances/ or one instance
+        #[arg(long)]
+        folder: Option<PathBuf>,
+        /// The new instance's name (default: the same)
+        #[arg(long = "as")]
+        new_name: Option<String>,
+        /// The Minecraft version it plays, when its launcher doesn't say (the CurseForge app,
+        /// the Modrinth App)
+        #[arg(long)]
+        minecraft: Option<String>,
     },
 }
 
@@ -485,7 +534,8 @@ enum ModsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Search for packs Horizon loads
+    /// Search for packs Horizon loads, or for what a Java instance runs (made for its
+    /// Minecraft version and loader)
     Search {
         text: Vec<String>,
         #[arg(long, value_enum, default_value_t = KindArg::Resource)]
@@ -495,6 +545,9 @@ enum ModsCmd {
         everything: bool,
         #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
         source: SourceArg,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
     },
     /// Say how well a Java mod runs in Horizon: its jar is downloaded (checksum checked),
     /// carried over and read; the answer is kept
@@ -507,8 +560,9 @@ enum ModsCmd {
         source: SourceArg,
     },
     /// Install a pack and what it needs into an instance, by its id or slug (checksums
-    /// checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as
-    /// an instance of its own; a data pack goes into the world `--world` names
+    /// checked); a Java mod is ported into horizon-mods and turned on (a Java instance gets the
+    /// jar made for its version and loader in mods/); a modpack is imported as an instance of
+    /// its own; a data pack goes into the world `--world` names
     Install {
         project: String,
         /// Install the project's data pack into this world of the instance (its name or folder)
@@ -540,14 +594,16 @@ enum ModsCmd {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
+    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does;
+    /// in a Java instance, its file loses `.disabled`)
     Enable {
         project: String,
         /// The instance (default: the selected one)
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Turn off a mod the browser installed; it stays installed
+    /// Turn off a mod the browser installed; it stays installed (in a Java instance, as
+    /// `<file>.disabled`)
     Disable {
         project: String,
         /// The instance (default: the selected one)
@@ -1146,25 +1202,28 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 None => instances::selected(),
             };
             if instance.java.is_some() {
-                if version.is_some()
-                    || world.is_some()
-                    || join.is_some()
-                    || server.is_some()
-                    || creative
-                {
+                if version.is_some() || world.is_some() || join.is_some() || creative {
                     return Err(format!(
-                        "{} plays Minecraft: Java Edition: --version, --world, --creative, --join \
-                         and --server are for Horizon instances.",
+                        "{} plays Minecraft: Java Edition: --version, --world, --creative and \
+                         --join are for Horizon instances.",
                         instance.name
                     ));
                 }
-                let mut cmd = backend::java_game(&instance, &|line| eprintln!("{line}"))?;
+                let server = server.map(|server| {
+                    let list = server_list::List::load(&instance.home);
+                    server_list::find(&list, &server).map_or(server, |(_, s)| s.ip)
+                });
+                let mut cmd =
+                    backend::java_game(&instance, server.as_deref(), &|line| eprintln!("{line}"))?;
                 cmd.args(arg);
+                let vars = instance.vars(cmd.get_program());
+                cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 let started = std::time::Instant::now();
                 let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
                 if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                     eprintln!("Play time not saved: {e}");
                 }
+                after_exit(&instance, &vars);
                 return played;
             }
             let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
@@ -1190,10 +1249,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 cmd.arg("--name").arg(name);
             }
             cmd.envs(accounts.look_env());
+            let vars = instance.vars(cmd.get_program());
+            cmd.envs(vars.iter().map(|(k, v)| (k, v)));
             let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }
+            after_exit(&instance, &vars);
             played?
         }
         Cmd::Server {
@@ -1895,21 +1957,31 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::browser::{horizon, installed, Kind, Query, SourceId};
+    use horizon_launcher::browser::{horizon, installed, java_instance, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
     // What the browser installs goes into an instance's game folder; Java mods' checks are kept
     // in the default one, shared by all.
-    let home = match &action {
+    let instance = match &action {
         ModsCmd::List { instance }
+        | ModsCmd::Search { instance, .. }
         | ModsCmd::Install { instance, .. }
         | ModsCmd::Update { instance, .. }
         | ModsCmd::Remove { instance, .. }
         | ModsCmd::Enable { instance, .. }
         | ModsCmd::Disable { instance, .. } => match instance {
-            Some(name) => instances::find(name)?.home,
-            None => instances::selected().home,
+            Some(name) => Some(instances::find(name)?),
+            None => Some(instances::selected()),
         },
-        ModsCmd::Search { .. } | ModsCmd::Check { .. } => backend::game_home(),
+        ModsCmd::Check { .. } => None,
+    };
+    // A Java instance gets the source's own files, for its version and loader.
+    let java = instance
+        .as_ref()
+        .and_then(|i| i.java.as_ref())
+        .map(|j| j.target());
+    let home = match (&action, instance) {
+        (ModsCmd::Search { .. }, _) | (_, None) => backend::game_home(),
+        (_, Some(i)) => i.home,
     };
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
@@ -1936,9 +2008,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 );
             }
             for e in list.iter().filter(|_| !as_json) {
+                let off = java.is_some() && !java_instance::is_on(&home, e);
                 println!(
-                    "{}  {}  ({}, {})\n  {}  {}",
+                    "{}{}  {}  ({}, {})\n  {}  {}",
                     e.title,
+                    if off { " (off)" } else { "" },
                     e.number,
                     e.source.label(),
                     e.slug,
@@ -1952,6 +2026,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             kind,
             everything,
             source,
+            ..
         } => {
             let kind = match kind {
                 KindArg::Resource => Kind::ResourcePack,
@@ -1960,6 +2035,23 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 KindArg::Shader => Kind::Shader,
                 KindArg::Datapack => Kind::DataPack,
             };
+            if let Some(target) = &java {
+                let found = source.get()?.search(&target.query(&text.join(" "), kind))?;
+                if as_json {
+                    json(found.iter().map(|p| serde_json::json!({
+                        "id": p.id, "slug": p.slug, "title": p.title, "summary": p.summary,
+                        "author": p.author, "downloads": p.downloads, "page": p.page,
+                        "license": p.license,
+                    })).collect());
+                }
+                for p in found.iter().filter(|_| !as_json) {
+                    println!(
+                        "{}  ({})  {} downloads\n  {}",
+                        p.title, p.slug, p.downloads, p.summary
+                    );
+                }
+                return Ok(());
+            }
             let query = Query {
                 everything,
                 ..Query::new(&text.join(" "), kind)
@@ -2125,7 +2217,10 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 println!("Play it: horizon-launcher modpack play {}", pack.slug);
                 return Ok(());
             }
-            let done = installed::install(&*source, &p, everything, &home, &line)?;
+            let done = match &java {
+                Some(target) => java_instance::install(&*source, target, &p, &home, &line)?,
+                None => installed::install(&*source, &p, everything, &home, &line)?,
+            };
             if as_json {
                 json(done.iter().map(entry_json).collect());
             }
@@ -2168,14 +2263,24 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     println!("{}: {} isn't available here.", e.title, e.source.label());
                     continue;
                 };
-                match installed::update_for(&*source, e)? {
+                let newer = match &java {
+                    Some(target) => java_instance::update_for(&*source, target, e)?,
+                    None => installed::update_for(&*source, e)?,
+                };
+                match newer {
                     None => println!("{} {}: up to date.", e.title, e.number),
                     Some(v) if check => {
                         println!("{} {}: {} is available.", e.title, e.number, v.number)
                     }
                     Some(_) => {
                         let p = source.project(&e.project)?;
-                        for done in installed::install(&*source, &p, true, &home, &line)? {
+                        let done = match &java {
+                            Some(target) => {
+                                java_instance::install(&*source, target, &p, &home, &line)?
+                            }
+                            None => installed::install(&*source, &p, true, &home, &line)?,
+                        };
+                        for done in done {
                             println!("{} {}: {}", done.title, done.number, done.file);
                         }
                     }
@@ -2183,8 +2288,19 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             }
         }
         ModsCmd::Remove { project, .. } => {
-            let e = installed::remove(&home, &project)?;
+            let e = match java {
+                Some(_) => java_instance::remove(&home, &project)?,
+                None => installed::remove(&home, &project)?,
+            };
             println!("Removed {} ({}).", e.title, e.file);
+        }
+        ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } if java.is_some() => {
+            let e = installed::Installed::load(&home)
+                .lookup(&project)
+                .cloned()
+                .ok_or_else(|| format!("{project} wasn't installed by the browser."))?;
+            java_instance::set_on(&home, &e, on)?;
+            println!("{} is {}.", e.title, if on { "on" } else { "off" });
         }
         ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
             let e = installed::Installed::load(&home)
@@ -2213,6 +2329,68 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The other launchers' instances in `folder`, else in their default folders.
+fn other_instances(folder: Option<&Path>) -> Result<Vec<other_launchers::Found>, String> {
+    use horizon_launcher::sources::{Folders, Os};
+    Ok(match folder {
+        Some(dir) if !dir.is_dir() => return Err(format!("{} isn't a folder.", dir.display())),
+        Some(dir) => other_launchers::in_folder(dir, None),
+        None => {
+            let folders = Folders::current().ok_or("No home folder.")?;
+            other_launchers::scan(Os::current(), &folders)
+        }
+    })
+}
+
+fn other_plays(f: &other_launchers::Found) -> String {
+    match (&f.minecraft, &f.loader) {
+        (None, _) => "Minecraft version not recorded: copy-from --minecraft <version>".into(),
+        (Some(v), Some(l)) => format!("Minecraft {v} with {} {}", l.name, l.version),
+        (Some(v), None) => format!("Minecraft {v}"),
+    }
+}
+
+fn other_json(f: &other_launchers::Found) -> serde_json::Value {
+    serde_json::json!({
+        "launcher": f.launcher, "name": f.name, "minecraft": f.minecraft,
+        "loader": f.loader.as_ref().map(|l| l.name),
+        "loader_version": f.loader.as_ref().map(|l| &l.version),
+        "game": f.game, "shared": f.shared,
+    })
+}
+
+/// Runs the instance's post-exit command in this terminal, if it has one, and waits for it.
+fn after_exit(instance: &instances::Instance, vars: &[(&'static str, std::ffi::OsString)]) {
+    let Some(mut cmd) =
+        horizon_launcher::launch::after_exit(&instance.launch, &instance.home, vars)
+    else {
+        return;
+    };
+    match cmd.status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("The post-exit command failed ({s})."),
+        Err(e) => eprintln!("The post-exit command didn't run: {e}"),
+    }
+}
+
+/// `1280x720` (or `1280×720`), or `default` for none.
+fn parse_window(text: &str) -> Result<Option<(u32, u32)>, String> {
+    let text = text.trim();
+    if text.eq_ignore_ascii_case("default") {
+        return Ok(None);
+    }
+    let size = text
+        .split_once(['x', 'X', '×'])
+        .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+        .filter(|&(w, h): &(u32, u32)| (1..=16384).contains(&w) && (1..=16384).contains(&h));
+    match size {
+        Some(size) => Ok(Some(size)),
+        None => Err(format!(
+            "{text:?} isn't a window size: 1280x720, or default."
+        )),
+    }
+}
+
 fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
     use instances::Icon;
     let value = |i: &instances::Instance, selected: bool| {
@@ -2231,7 +2409,15 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .map(|g| format!("  [{g}]"))
             .unwrap_or_default();
         let pinned = match (&i.java, &i.version) {
-            (Some(java), _) => format!("  Minecraft {} (Java Edition)", java.minecraft),
+            (Some(java), _) => match &java.loader {
+                Some(l) => format!(
+                    "  Minecraft {} (Java Edition) with {} {}",
+                    java.minecraft,
+                    l.kind.name(),
+                    l.version
+                ),
+                None => format!("  Minecraft {} (Java Edition)", java.minecraft),
+            },
             (None, Some(v)) => format!("  {v}"),
             (None, None) => String::new(),
         };
@@ -2267,14 +2453,59 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             name,
             copy,
             minecraft: None,
+            ..
         } => changed(instances::create(&name, copy.as_deref())?),
         InstanceCmd::Create {
             name,
             minecraft: Some(version),
+            loader,
+            loader_version,
             ..
         } => {
             let versions = horizon_launcher::minecraft_versions::load()?;
-            changed(instances::create_java(&name, &versions.find(&version)?.id)?)
+            let id = &versions.find(&version)?.id;
+            // The loader first: a version it doesn't have makes no instance.
+            let loader = loader
+                .map(|kind| loaders::choose(&kind, id, loader_version.as_deref()))
+                .transpose()?;
+            let made = instances::create_java(&name, id)?;
+            match loader {
+                Some(loader) => changed(instances::edit(&made.id, |m| {
+                    m.java.get_or_insert_with(Default::default).loader = Some(loader)
+                })?),
+                None => changed(made),
+            }
+        }
+        InstanceCmd::Loader {
+            instance,
+            loader,
+            version,
+            list,
+        } => {
+            let Some(java) = instances::find(&instance)?.java else {
+                return Err(format!(
+                    "{instance} is a Horizon instance: mod loaders are for Java instances."
+                ));
+            };
+            if list {
+                let kind = loaders::Kind::parse(&loader)?;
+                let listed = loaders::versions(kind, &java.minecraft, &backend::get_bytes)?;
+                if as_json {
+                    json(serde_json::json!(listed));
+                } else {
+                    for l in listed {
+                        println!("{}{}", l.version, if l.stable { "" } else { "  (beta)" });
+                    }
+                }
+                return Ok(());
+            }
+            let loader = match loader.trim() {
+                "none" => None,
+                kind => Some(loaders::choose(kind, &java.minecraft, version.as_deref())?),
+            };
+            changed(instances::edit(&instance, |m| {
+                m.java.get_or_insert_with(Default::default).loader = loader
+            })?)
         }
         InstanceCmd::Versions { snapshots, old } => {
             let versions = horizon_launcher::minecraft_versions::load()?;
@@ -2294,7 +2525,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             auto,
             memory,
             args,
+            window,
         } => {
+            let window = window.as_deref().map(parse_window).transpose()?;
             if instances::find(&instance)?.java.is_none() {
                 return Err(format!(
                     "{instance} is a Horizon instance: Horizon is not a Java program."
@@ -2309,6 +2542,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 java.memory_mb = memory.or(java.memory_mb);
                 if let Some(args) = args {
                     java.jvm_args = args.trim().to_string();
+                }
+                if let Some(window) = window {
+                    java.window = window;
                 }
             })?)
         }
@@ -2345,6 +2581,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             gamemode,
             mangohud,
             dedicated_gpu,
+            post_exit,
         } => {
             use horizon_launcher::launch;
             let env = env.as_deref().map(launch::parse_env).transpose()?;
@@ -2369,6 +2606,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             }
             let changing = pre_launch.is_some()
                 || wrapper.is_some()
+                || post_exit.is_some()
                 || env.is_some()
                 || gamemode.is_some()
                 || mangohud.is_some()
@@ -2381,6 +2619,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     }
                     if let Some(w) = wrapper {
                         m.launch.wrapper = w.trim().to_string();
+                    }
+                    if let Some(p) = post_exit {
+                        m.launch.post_exit = p.trim().to_string();
                     }
                     if let Some(e) = env {
                         m.launch.env = e;
@@ -2400,6 +2641,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::json!({
                     "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                    "post_exit": l.post_exit,
                     "gamemode": l.gamemode, "mangohud": l.mangohud, "dedicated_gpu": l.dedicated_gpu,
                     "found": {
                         "gamemode": found.gamemode, "mangohud": found.mangohud,
@@ -2415,6 +2657,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 println!("  pre-launch: {}", l.pre_launch);
                 println!("  wrapper:    {}", l.wrapper);
                 println!("  env:        {}", launch::env_line(&l.env));
+                println!("  post-exit:  {}", l.post_exit);
                 let yes = |b: bool| if b { "on" } else { "off" };
                 for (name, on, has) in [
                     ("gamemode:", l.gamemode, found.gamemode),
@@ -2446,6 +2689,60 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     println!("{did}: {}", path.display());
                 }
             }
+        }
+        InstanceCmd::Others { folder } => {
+            let found = other_instances(folder.as_deref())?;
+            if as_json {
+                json(found.iter().map(other_json).collect());
+            } else if found.is_empty() {
+                println!("No other launcher's instance found.");
+            }
+            for f in found.iter().filter(|_| !as_json) {
+                println!(
+                    "{}  ({}, {})\n    {}",
+                    f.name,
+                    f.launcher,
+                    other_plays(f),
+                    f.game.display()
+                );
+            }
+        }
+        InstanceCmd::CopyFrom {
+            name,
+            folder,
+            new_name,
+            minecraft,
+        } => {
+            let found = other_instances(folder.as_deref())?;
+            let matching: Vec<_> = found.iter().filter(|f| f.name == name).collect();
+            let f = match matching[..] {
+                [one] => one,
+                [] => {
+                    return Err(format!(
+                        "No other launcher has an instance called {name}: \
+                         horizon-launcher instance others"
+                    ))
+                }
+                _ => {
+                    return Err(format!(
+                        "More than one launcher has an instance called {name}: say which \
+                         with --folder."
+                    ))
+                }
+            };
+            let made = other_launchers::import(
+                f,
+                new_name.as_deref().unwrap_or(&f.name),
+                minecraft.as_deref(),
+            )?;
+            let unsupported = other_launchers::loader(f).is_none();
+            if let Some(l) = f.loader.as_ref().filter(|_| unsupported && !as_json) {
+                println!(
+                    "{} {} isn't installed for it yet: its mods are copied and wait for it.",
+                    l.name, l.version
+                );
+            }
+            changed(made);
         }
         InstanceCmd::Import { file, instance } => {
             use horizon_launcher::import::{self, Dropped};
@@ -2959,6 +3256,15 @@ mod tests {
     }
 
     #[test]
+    fn window_sizes() {
+        assert_eq!(parse_window("1280x720"), Ok(Some((1280, 720))));
+        assert_eq!(parse_window(" 1920 × 1080 "), Ok(Some((1920, 1080))));
+        assert_eq!(parse_window("Default"), Ok(None));
+        assert!(parse_window("0x720").is_err());
+        assert!(parse_window("big").is_err());
+    }
+
+    #[test]
     fn mods_commands_name_their_instance() {
         let parse = |args: &[&str]| {
             let cli = Cli::try_parse_from([&["horizon-launcher", "mods"], args].concat()).unwrap();
@@ -2981,15 +3287,15 @@ mod tests {
             Some(ModsCmd::List { instance: None })
         ));
         assert!(parse(&[]).is_none());
-        // Search and Check read no instance: checks are shared.
-        assert!(Cli::try_parse_from([
-            "horizon-launcher",
-            "mods",
-            "search",
-            "x",
-            "--instance",
-            "A"
-        ])
-        .is_err());
+        // Search names one for a Java instance's version and loader; Check reads none: checks
+        // are shared.
+        assert!(matches!(
+            parse(&["search", "x", "--instance", "A"]),
+            Some(ModsCmd::Search { instance: Some(i), .. }) if i == "A"
+        ));
+        assert!(
+            Cli::try_parse_from(["horizon-launcher", "mods", "check", "x", "--instance", "A"])
+                .is_err()
+        );
     }
 }
