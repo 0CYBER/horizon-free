@@ -85,27 +85,31 @@ impl Game<'_> {
         }
         self.score.storage.save(&self.world_root);
         self.score.stopwatches.save(&self.world_root);
-        if self.border != horizon_client::worldborder::WorldBorder::default() {
-            let _ = save::write_dat(
+        if self.border != horizon_client::worldborder::WorldBorder::default()
+            && let Err(e) = save::write_dat(
                 &self.border_path(),
                 Tag::compound([
                     ("data", self.border.pack()),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                 ]),
-            );
+            )
+        {
+            log::warn!("the world border was not written: {e}");
         }
         let path = self.scoreboard_path();
         let board = &self.score.board;
         if board == &Scoreboard::default() && !path.exists() {
             return;
         }
-        let _ = save::write_dat(
+        if let Err(e) = save::write_dat(
             &path,
             Tag::compound([
                 ("data", board.pack()),
                 ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
             ]),
-        );
+        ) {
+            log::warn!("the scoreboard was not written: {e}");
+        }
     }
     /// The names commands complete: objectives, teams and tracked holders.
     pub(super) fn sync_score_registries(&mut self) {
@@ -462,10 +466,18 @@ impl Game<'_> {
 
     // ---- teams in gameplay -----------------------------------------------------
 
-    /// `Entity.getTeam` of a mob (a mob joins a team by its UUID).
+    /// `Entity.getScoreboardName`: another player's profile name
+    /// (`Player.getScoreboardName`), any other entity's UUID.
+    fn scoreboard_name(&self, id: u32, uuid: [i32; 4]) -> String {
+        self.remote_player_name(id)
+            .map_or_else(|| uuid_text(uuid), str::to_owned)
+    }
+    /// `Entity.getTeam` of a mob or another player.
     pub(super) fn mob_team(&self, id: u32) -> Option<&sb::Team> {
         let uuid = self.persist.uuids.get(&id)?;
-        self.score.board.players_team(&uuid_text(*uuid))
+        self.score
+            .board
+            .players_team(&self.scoreboard_name(id, *uuid))
     }
     pub(super) fn player_team(&self) -> Option<&sb::Team> {
         self.score.board.players_team(self.acting_player_name())
@@ -482,7 +494,9 @@ impl Game<'_> {
                 .persist
                 .uuids
                 .iter()
-                .filter_map(|(id, uuid)| Some((*id, board.players_team(&uuid_text(*uuid))?)))
+                .filter_map(|(id, uuid)| {
+                    Some((*id, board.players_team(&self.scoreboard_name(*id, *uuid))?))
+                })
                 .collect(),
         }
     }
@@ -494,7 +508,7 @@ impl Game<'_> {
         self.persist
             .uuids
             .iter()
-            .filter(|(_, uuid)| team.players.contains(&uuid_text(**uuid)))
+            .filter(|(id, uuid)| team.players.contains(&self.scoreboard_name(**id, **uuid)))
             .map(|(id, _)| *id)
             .collect()
     }

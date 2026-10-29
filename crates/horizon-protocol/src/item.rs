@@ -43,10 +43,12 @@ pub mod component {
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
     pub const TRIM: i32 = 58;
+    pub const INSTRUMENT: i32 = 63;
     pub const LODESTONE_TRACKER: i32 = 69;
     pub const FIREWORK_EXPLOSION: i32 = 70;
     pub const FIREWORKS: i32 = 71;
     pub const BLOCK_ENTITY_DATA: i32 = 62;
+    pub const OMINOUS_BOTTLE_AMPLIFIER: i32 = 65;
     pub const CONTAINER: i32 = 77;
     pub const PAINTING_VARIANT: i32 = 109;
 }
@@ -118,6 +120,9 @@ pub enum Component {
         material: i32,
         pattern: i32,
     },
+    /// `InstrumentComponent` naming its instrument by `minecraft:instrument`
+    /// registry id; a direct instrument stays [`Component::Raw`].
+    Instrument(i32),
     /// `BannerPatternLayers`: each layer's `banner_pattern` registry id and
     /// its dye id (`DyeColor.getId`). A layer with a direct pattern has no
     /// registry name: that value stays [`Component::Raw`].
@@ -187,8 +192,14 @@ impl Component {
     pub(crate) fn read(kind: i32, r: &mut Reader) -> Result<Self> {
         use component::*;
         Ok(match kind {
-            MAX_STACK_SIZE | MAX_DAMAGE | DAMAGE | RARITY | REPAIR_COST | MAP_ID
-            | MAP_POST_PROCESSING => Self::Int(r.varint()?),
+            MAX_STACK_SIZE
+            | MAX_DAMAGE
+            | DAMAGE
+            | RARITY
+            | REPAIR_COST
+            | MAP_ID
+            | MAP_POST_PROCESSING
+            | OMINOUS_BOTTLE_AMPLIFIER => Self::Int(r.varint()?),
             WRITABLE_BOOK_CONTENT => {
                 let n = r.count(100)?;
                 Self::WritableBook(
@@ -362,6 +373,18 @@ impl Component {
                     _ => Self::Raw(bytes.to_vec()),
                 }
             }
+            // InstrumentComponent.STREAM_CODEC: a holder, a reference's id plus one.
+            // A direct instrument has no registry name: read past.
+            INSTRUMENT => {
+                let start = r.position();
+                skip::component(INSTRUMENT, r)?;
+                let bytes = r.since(start);
+                let mut ids = Reader::new(bytes);
+                match ids.varint() {
+                    Ok(id @ 1..) if ids.remaining() == 0 => Self::Instrument(id - 1),
+                    _ => Self::Raw(bytes.to_vec()),
+                }
+            }
             // Holder<PaintingVariant>: a reference's id plus one, or 0 and
             // the variant itself (no registry name: read past).
             PAINTING_VARIANT => {
@@ -424,6 +447,7 @@ impl Component {
                 w.varint(material + 1);
                 w.varint(pattern + 1);
             }
+            Self::Instrument(id) => w.varint(id + 1),
             Self::PaintingVariant(id) => w.varint(id + 1),
             Self::Int(v) if kind == component::DYED_COLOR => w.i32(*v),
             Self::Int(v) => w.varint(*v),
@@ -879,6 +903,15 @@ mod tests {
         book.added
             .push((component::MAP_POST_PROCESSING, Component::Int(1)));
         round::<Option<Stack>, Slot>(Some(book));
+        // OminousBottleAmplifier.STREAM_CODEC: a VarInt.
+        let mut bottle = Stack::new(1200, 1);
+        bottle
+            .added
+            .push((component::OMINOUS_BOTTLE_AMPLIFIER, Component::Int(3)));
+        let mut w = Writer::new();
+        Slot::write(&Some(bottle.clone()), &mut w);
+        assert_eq!(w.data, [1, 0xb0, 0x09, 1, 0, 65, 3]);
+        round::<Option<Stack>, Slot>(Some(bottle));
         let mut quill = Stack::new(1099, 1);
         quill.added.push((
             component::WRITABLE_BOOK_CONTENT,
@@ -1044,6 +1077,8 @@ mod tests {
             ("01890b01004a02200e000b6d696e6563726166743a7801790b", 74),
             ("01880301004c01f60801000001be0c0100000001d30c010000", 76),
             ("01a408010037020f6412a001", 55),
+            // A goat horn's instrument by reference (InstrumentComponent's holder).
+            ("01bd0801003f02", 63),
         ] {
             let bytes: Vec<u8> = (0..hex.len())
                 .step_by(2)
@@ -1059,6 +1094,7 @@ mod tests {
                         pattern: 1,
                     }
                 }
+                63 => *c == Component::Instrument(1),
                 _ => matches!(c, Component::Raw(_)),
             };
             assert!(
