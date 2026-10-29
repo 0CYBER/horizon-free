@@ -1877,6 +1877,11 @@ impl Game<'_> {
         if event == 21 && self.options.execution_role.is_client() {
             self.start_guardian_sound(id as u32);
         }
+        // Event 53: a mob sliding down a honey block sheds honey particles
+        // (HoneyBlock.showSlideParticles), drawn by the client that runs the world.
+        if event == 53 && self.options.execution_role.is_client() {
+            self.honey_slide_particles(at);
+        }
     }
     /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
     /// emitter, and an animation for the attacker's client and observers once
