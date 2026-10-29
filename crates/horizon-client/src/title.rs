@@ -465,7 +465,7 @@ impl Title {
         } = mode
         {
             if apply {
-                options.flat = true;
+                options.world_type = crate::save::WorldPreset::Flat;
                 options.flat_settings = Some(flat.settings);
             }
             self.mode = Mode::Create {
