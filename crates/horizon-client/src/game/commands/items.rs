@@ -432,7 +432,7 @@ impl Game<'_> {
                         } else {
                             let t = horizon_client::packs::component(&m["name"]);
                             stack.extra.get_or_insert_with(Default::default).custom_name =
-                                Some(t.plain());
+                                Some(horizon_client::scoreboard::json_to_tag(&t.component()));
                         }
                     }
                     "minecraft:set_enchantments" => {
