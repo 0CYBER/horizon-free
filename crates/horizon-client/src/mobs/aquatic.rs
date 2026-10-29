@@ -195,7 +195,12 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.extra.age += 1;
                 if m.extra.age >= 24_000 && !m.removed {
                     m.removed = true;
-                    m.sound("entity.tadpole.grow_up", events);
+                    // Tadpole.ageUp: playSound at its feet, volume 0.15 (not
+                    // when silent: Entity.playSound).
+                    if !m.silent {
+                        let at = [m.position.x, m.position.y, m.position.z];
+                        events.push(MobEvent::Sound("entity.tadpole.grow_up", at, 0.15, 1.0));
+                    }
                     events.push(MobEvent::SpawnKind {
                         kind: "minecraft:frog".into(),
                         at: [m.position.x, m.position.y, m.position.z],
