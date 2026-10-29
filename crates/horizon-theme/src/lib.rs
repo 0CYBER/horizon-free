@@ -616,9 +616,8 @@ pub fn css() -> String {
         ("index", INDEX),
         ("plate-bleed", PLATE_BLEED),
         ("rise", RISE),
-        ("night-radius-plate", night::RADIUS_PLATE),
-        ("night-radius-control", night::RADIUS_CONTROL),
         ("night-pixel-corner", night::PIXEL_CORNER),
+        ("night-radius-control", night::RADIUS_CONTROL),
         ("night-play", night::PLAY),
     ] {
         let _ = writeln!(s, "  --{name}: {}px;", num(v));

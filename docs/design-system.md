@@ -201,15 +201,18 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   icons, their skin's head, mods and counts. No ornaments, no empty cards.
 - **Plates only where text needs them.** A plate is `card` at its opacity with a 1 px `stroke`;
   `card_hi` for a selected or raised one. Text sits on the bare sky only over its upper stops
-  (`UNCARDED_STOPS`): the sunset is too bright for light text. Corners are 12 for plates and 8 for
-  controls; a plate can instead cut its corners in two 4 px steps, like the art.
+  (`UNCARDED_STOPS`): the sunset is too bright for light text. A plate cuts each corner in two 4 px
+  steps (`PIXEL_CORNER`), like the art, and its stroke follows the steps. The main action cuts one
+  step; other controls round at 8 (at 1x a step vanishes on a pale fill and looks notched on a thin
+  ring: compared in the specimen).
 - **One accent.** `accent` fills the one main action (Play, Create, Install) and progress;
   `accent_hi` is the accent as text and the 2 px focus ring. Everything else is ink on plates.
 - **Bricolage Grotesque** (SIL OFL 1.1, `fonts/OFL-BricolageGrotesque.txt`), cut from upstream's
   variable font by `tools/bake_bricolage.py`: the UI family at optical size 14 (Regular, Medium,
   SemiBold, Bold) and `Bricolage Grotesque Display` (Bold at optical size 72) for instance and page
-  names. Geist Mono stays for paths, codes and counts. Upstream has no Cyrillic: Russian falls back
-  to the system's face.
+  names. Geist Mono stays for paths, codes and counts. Upstream has no Cyrillic, so the bake merges
+  Geist's (OFL, `fonts/OFL-Geist.txt`) into every cut: the letters drawn like Latin ones reuse
+  Bricolage's, the others are Geist's scaled to Bricolage's cap and x-heights at a matching weight.
 - **Two or three sizes per screen**, from `night::TYPE`:
 
 | Token           | App px | Line | Tracking (web) | Weight | Use |
