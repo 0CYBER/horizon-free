@@ -2087,6 +2087,15 @@ impl Hub {
         d > f64::from(1.0E-5_f32)
     }
 
+    /// A move still queued for guest `i`, which a packet the game handles
+    /// after this pass must not overtake.
+    fn move_queued(&self, i: usize) -> bool {
+        self.guests[i]
+            .inbox
+            .iter()
+            .any(|p| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
+    }
+
     fn process_inbox(&mut self, i: usize, ctx: &mut TickCtx, events: &mut Vec<HostEvent>) {
         // ServerGamePacketListenerImpl.tickPlayer ran between the last
         // tick's packets and these: resetPosition, and the moves it counted.
@@ -2226,11 +2235,19 @@ impl Hub {
                 // and the move.
                 S::PlayerAction(p) if p.action <= 3 => {
                     events.push(HostEvent::Packet(conn, Box::new(S::PlayerAction(p))));
-                    if self.guests[i]
-                        .inbox
-                        .iter()
-                        .any(|p| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
-                    {
+                    if self.move_queued(i) {
+                        break;
+                    }
+                }
+                // handleUseItemOn is the game's too, and BlockItem.canPlace checks
+                // the player's box where they clicked from (Level.isUnobstructed), as
+                // their client's prediction did. After the move behind it, a player
+                // jumping up a pillar was already clear of the cell their client had
+                // refused: the block went down without the place sound that only the
+                // placer's client plays (BlockItem.place's playSound(player, ...)).
+                S::UseItemOn(p) => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::UseItemOn(p))));
+                    if self.move_queued(i) {
                         break;
                     }
                 }
