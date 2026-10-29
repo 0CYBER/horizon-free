@@ -3351,12 +3351,16 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
-                // LevelEventHandler 1010 and 1011: the parrots nearby dance or stop.
+                // LevelEventHandler 1010 and 1011: a jukebox's song starts
+                // (`playJukeboxSong`) or stops, and the parrots nearby dance or stop.
                 LevelEvent::LevelEvent {
-                    id: id @ (1010 | 1011),
+                    id: 1010,
                     pos,
-                    ..
-                } => self.notify_record_playing([pos.x, pos.y, pos.z], id == 1010),
+                    data,
+                } => self.jukebox_song_event([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent { id: 1011, pos, .. } => {
+                    self.jukebox_stop_event([pos.x, pos.y, pos.z])
+                }
                 // LevelEventHandler 2019 and 2020: the crack on a face of the
                 // block being mined, with its hit sound for 2020.
                 LevelEvent::LevelEvent {
