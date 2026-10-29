@@ -1195,6 +1195,9 @@ pub fn encode_with(
     let mut block_entities: Vec<Tag> = chunk
         .block_entities
         .iter()
+        // A mod block entity a native mod is ticking right now
+        // (`tick_mod_block_entity`): its data is out of the world.
+        .filter(|(_, e)| !matches!(e, crate::containers::BlockEntity::Mod(m) if m.id.is_empty()))
         .map(|(p, e)| {
             let block = block_name(p);
             let mut current = encode_block_entity(*p, e, &block);

@@ -346,8 +346,10 @@ impl Game<'_> {
     }
     /// A server tick of block entity `id` at `pos`, in vanilla's order among
     /// the others (`Level.tickBlockEntities`): read and change its saved
-    /// compound `nbt`. It is out of the world during the call; if the call
-    /// removes or replaces it, `nbt` is dropped. API 3.
+    /// compound `nbt`. It is out of the world during the call (the block
+    /// entity at `pos` reads as a `Mod` with an empty id, and a save leaves
+    /// it out); if the call removes or replaces it, `nbt` is dropped. Clients,
+    /// the window's own in single player included, don't get it yet. API 3.
     pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], id: &str, nbt: &mut Compound) {
         let _ = (pos, id, nbt);
     }
