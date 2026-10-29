@@ -337,6 +337,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.entry(key.into()).or_insert(value);
             }
         }
+        // MushroomCow.addAdditionalSaveData: the Variant codec's name (stew
+        // effects are not modelled).
+        "minecraft:mooshroom" => {
+            let kind = if m.extra.variant == 1 { "brown" } else { "red" };
+            map.insert("Type".into(), string(kind));
+        }
         // Rabbit.addAdditionalSaveData (the legacy id; 99 is the killer bunny).
         "minecraft:rabbit" => {
             map.insert("RabbitType".into(), Tag::Int(i32::from(m.extra.variant)));
@@ -1158,6 +1164,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     match m.species() {
         crate::mobs::Species::Fox => {
             m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("snow"));
+        }
+        // MushroomCow.readAdditionalSaveData: a missing or unknown name is
+        // Variant.DEFAULT, red.
+        crate::mobs::Species::Mooshroom => {
+            m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("brown"));
         }
         crate::mobs::Species::Rabbit => {
             // Rabbit.Variant.byId: an unknown id is brown.
@@ -2961,7 +2972,7 @@ mod sheep_nbt_tests {
     }
 
     #[test]
-    fn foxes_rabbits_and_goats_keep_their_kind() {
+    fn foxes_mooshrooms_rabbits_and_goats_keep_their_kind() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
@@ -2985,6 +2996,17 @@ mod sheep_nbt_tests {
         assert_eq!(text(tag.get("Type")).as_deref(), Some("snow"));
         assert_eq!(number(tag.get("Sleeping")), Some(0));
         assert_eq!(back.extra.variant, 1);
+        // MushroomCow: a brown mooshroom stays brown, and a save without (or
+        // with an unknown) Type reads as red.
+        let mut mooshroom = new("minecraft:mooshroom");
+        mooshroom.extra.variant = 1;
+        let (back, tag) = round_trip(&mooshroom);
+        assert_eq!(text(tag.get("Type")).as_deref(), Some("brown"));
+        assert_eq!(back.extra.variant, 1);
+        mooshroom.extra.variant = 0;
+        let (back, tag) = round_trip(&mooshroom);
+        assert_eq!(text(tag.get("Type")).as_deref(), Some("red"));
+        assert_eq!(back.extra.variant, 0);
         let mut rabbit = new("minecraft:rabbit");
         rabbit.extra.variant = 4;
         let (back, tag) = round_trip(&rabbit);

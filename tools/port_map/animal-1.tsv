@@ -134,8 +134,8 @@ MushroomCow.checkMushroomSpawnRules	port	crates/horizon-client/src/mobs/spawn_ru
 MushroomCow.thunderHit	port	crates/horizon-client/src/game/lightning.rs::Game::thunder_hit	swaps colour once per bolt, convert sound
 MushroomCow.defineSynchedData	port	crates/horizon-client/src/game/lan.rs::mob_meta	the type entry
 MushroomCow.mobInteract	port	crates/horizon-client/src/game/creatures.rs::Game::interact_mob	gap: bowl stew and shearing are done; feeding a flower to a brown mooshroom (suspicious stew) is missing
-MushroomCow.addAdditionalSaveData	missing		Type and stew_effects are not written from the live mob: a colour change (lightning) is not saved
-MushroomCow.readAdditionalSaveData	missing		Type is not read: a saved brown mooshroom loads red
+MushroomCow.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	Type; gap: stew_effects (not modelled) is not written
+MushroomCow.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	Type, red when missing; gap: stew_effects (not modelled) is not read
 MushroomCow.getEffectsFromItemStack	missing		no suspicious stew effects from flowers: a brown mooshroom never takes a flower
 MushroomCow.get	missing		mooshroom/variant component is not reported; species_variant_component has no mooshroom
 MushroomCow.applyImplicitComponent	missing		mooshroom/variant component on a spawn egg is ignored
