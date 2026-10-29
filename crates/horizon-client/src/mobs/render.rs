@@ -1747,6 +1747,32 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
+    // WitchItemLayer.applyTranslation: a potion is held at the nose, any other
+    // item as CrossedArmsItemLayer holds it; only the main hand's item is drawn.
+    if m.species() == Species::Witch {
+        let item = m.extra.main_hand.as_deref()?;
+        if left != m.main_arm_left() {
+            return None;
+        }
+        if super::witch::holds_potion(item) {
+            let nose = part_matrix(&model, base, &poses, "nose", 0.0)?;
+            return Some(
+                nose * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.25, 0.0))
+                    * glam::Mat4::from_rotation_z(180.0f32.to_radians())
+                    * glam::Mat4::from_rotation_x(140.0f32.to_radians())
+                    * glam::Mat4::from_rotation_z(10.0f32.to_radians())
+                    * glam::Mat4::from_rotation_x(180.0f32.to_radians()),
+            );
+        }
+        // CrossedArmsItemLayer.applyTranslation: translateToArms, then this.
+        let arms = part_matrix(&model, base, &poses, "arms", 0.0)?;
+        return Some(
+            arms * glam::Mat4::from_rotation_x(0.75)
+                * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
+                * glam::Mat4::from_rotation_x(std::f32::consts::PI),
+        );
+    }
     let mut t = hand_base(m, &model, base, &poses, left)?;
     // ItemInHandLayer: a STAB swing of this arm thrusts its item out
     // (SpearAnimations.thirdPersonAttackItem, the main hand's forward
