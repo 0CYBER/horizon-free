@@ -169,6 +169,16 @@ enum Publish {
 /// of the connection and the world's name, or why it failed.
 type Ready = std::result::Result<(Pipe, String), String>;
 
+/// An integrated server loading its world: the window keeps drawing its
+/// loading screen and joins once the server is ready, as vanilla's client
+/// does while its server prepares (`Minecraft.doWorldLoad`), instead of
+/// waiting for it frozen for the whole load.
+pub(super) struct Starting {
+    handle: Integrated,
+    ready: Receiver<Ready>,
+    player: String,
+}
+
 /// The world to open and the player who owns it.
 struct Launch {
     folder: String,
@@ -197,8 +207,8 @@ impl Game<'_> {
                 .as_ref()
                 .is_some_and(|s| s.published().is_some())
     }
-    /// `Minecraft.doWorldLoad`: start the server thread on the world, wait
-    /// until it can be joined, then join it through memory.
+    /// `Minecraft.doWorldLoad`: start the server thread on the world; the
+    /// window joins it through memory once it is ready (`poll_integrated_start`).
     pub(super) fn open_integrated(
         &mut self,
         folder: &str,
@@ -267,20 +277,53 @@ impl Game<'_> {
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
-        let mut handle = Integrated {
+        let handle = Integrated {
             flags,
             thread: Some(thread),
             tasks,
             world_name: String::new(),
         };
-        let pipe = match ready.recv() {
-            Ok(Ok((pipe, world_name))) => {
-                handle.world_name = world_name;
-                pipe
+        self.integrated_starting = Some(Starting {
+            handle,
+            ready,
+            player,
+        });
+        // Harnesses, control scripts and runs without a window go on with the world open.
+        if self.window.is_none() || super::synchronous_startup(&self.options) {
+            while self.integrated_starting.is_some() {
+                self.poll_integrated_start()?;
+                if self.integrated_starting.is_some() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
-            Ok(Err(e)) => return Err(e.into()),
-            Err(_) => return Err("the integrated server stopped".into()),
+        }
+        Ok(())
+    }
+
+    /// The starting server's answer, polled each frame: joined once it is ready.
+    pub(super) fn poll_integrated_start(&mut self) -> Result<()> {
+        let Some(starting) = &self.integrated_starting else {
+            return Ok(());
         };
+        let (pipe, world_name) = match starting.ready.try_recv() {
+            Ok(Ok(ready)) => ready,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+            Ok(Err(e)) => {
+                self.integrated_starting = None;
+                return Err(e.into());
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.integrated_starting = None;
+                return Err("the integrated server stopped".into());
+            }
+        };
+        let Some(Starting {
+            mut handle, player, ..
+        }) = self.integrated_starting.take()
+        else {
+            return Ok(());
+        };
+        handle.world_name = world_name;
         self.connect_local(pipe, &player)?;
         self.integrated = Some(handle);
         Ok(())
@@ -435,6 +478,8 @@ impl Game<'_> {
             self.lan = Some(host);
         }
         std::thread::sleep(Duration::from_millis(100));
+        // ServerPlayer.disconnect: nobody is left in a bed.
+        self.free_player_beds()?;
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;

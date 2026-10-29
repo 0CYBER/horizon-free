@@ -315,16 +315,40 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&game, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(server.join("server.toml"), "").unwrap();
-        let status = spawn(
-            &std::path::absolute(&game).unwrap(),
-            &root.join("res"),
-            &server,
-        )
-        .unwrap()
-        .wait();
+        // ETXTBSY: see `check_written`.
+        let mut tries = 0;
+        let status = loop {
+            match spawn(
+                &std::path::absolute(&game).unwrap(),
+                &root.join("res"),
+                &server,
+            ) {
+                Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                child => break child.unwrap().wait(),
+            }
+        };
         std::fs::remove_dir_all(&root).unwrap();
         let status = status.unwrap();
         assert!(status.success(), "{status}");
+    }
+
+    /// `check_starts` on a script this test process just wrote. Another test's spawn can fork while the
+    /// script's write handle is still open, and its child keeps that handle until it execs: running the
+    /// script meanwhile fails with ETXTBSY (Linux), so that one error is retried.
+    #[cfg(unix)]
+    fn check_written(program: &Path) -> Result<(), String> {
+        for _ in 0..50 {
+            match check_starts(program) {
+                Err(e) if e.contains("Text file busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                other => return other,
+            }
+        }
+        check_starts(program)
     }
 
     #[cfg(unix)]
@@ -340,10 +364,10 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
             path
         };
-        assert_eq!(check_starts(&script("starts", "exit 0")), Ok(()));
+        assert_eq!(check_written(&script("starts", "exit 0")), Ok(()));
         let fails = script("fails", "echo 'no luck' >&2; exit 3");
         assert_eq!(
-            check_starts(&fails),
+            check_written(&fails),
             Err(format!(
                 "the game ({}) can't start (exit status 3): no luck",
                 fails.display()

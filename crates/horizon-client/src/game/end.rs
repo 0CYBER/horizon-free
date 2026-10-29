@@ -12,6 +12,7 @@ use horizon_client::{
     motion::PlayerMotion,
     particles::{ParticleOptions, ParticleType},
     vanillagen::VanillaTerrain,
+    world_spawn::PlayerSpawnFinder,
 };
 use horizon_core::{
     geometry::Vec3,
@@ -375,14 +376,8 @@ impl Game<'_> {
         }
         self.consume_held();
         self.swing_arm();
-        let center = hit.pos.map(|v| f64::from(v) + 0.5);
-        // LevelEvent 1503: END_PORTAL_FRAME_FILL.
-        self.audio.play(
-            "minecraft:block.end_portal_frame.fill",
-            Some(center),
-            1.0,
-            1.0,
-        );
+        // EnderEyeItem.useOn emits this event for all nearby players.
+        self.level_event_at(1503, hit.pos, 0);
         if let Some(c) = self.portal_ring_center(hit.pos) {
             for dz in -1..=1 {
                 for dx in -1..=1 {
@@ -581,7 +576,15 @@ impl Game<'_> {
         let position = if let Some(job) = self.end.job.take() {
             self.resolve_gateway(job, target)?
         } else {
-            let (position, yaw) = self.end_arrival(target)?;
+            let mut finder = self.player_spawn.take();
+            let arrival = self.end_arrival(target, &mut finder);
+            self.player_spawn = finder;
+            let Some((position, yaw)) = arrival? else {
+                // A spawn candidate's chunk is loading: try again next tick.
+                self.travelling = Some((player, target));
+                self.end_travel = true;
+                return Ok(());
+            };
             if let Some(yaw) = yaw {
                 self.yaw = yaw;
                 player.yaw = yaw;
@@ -606,7 +609,13 @@ impl Game<'_> {
     /// Where an End portal's traveller lands once `target` has loaded, and
     /// the yaw it faces there: the platform below the End's spawn point,
     /// facing west, or the top of the Overworld's spawn column.
-    pub(super) fn end_arrival(&mut self, target: Vec3) -> Result<(Vec3, Option<f32>)> {
+    /// None while a candidate of the world spawn's search loads (`finder`
+    /// keeps it, see `search_spawn`).
+    pub(super) fn end_arrival(
+        &mut self,
+        target: Vec3,
+        finder: &mut Option<PlayerSpawnFinder>,
+    ) -> Result<Option<(Vec3, Option<f32>)>> {
         if self.dim == Dim::End {
             // EndPlatformFeature.createEndPlatform below the spawn point.
             let origin = [END_SPAWN[0], END_SPAWN[1] - 1, END_SPAWN[2]];
@@ -626,22 +635,32 @@ impl Game<'_> {
                 }
             }
             // Direction.WEST.toYRot().
-            return Ok((target, Some(90.0)));
+            return Ok(Some((target, Some(90.0))));
         }
         // ServerPlayer.findRespawnPositionAndUseSpawnBlock: where the bed or
         // anchor puts the player, facing it; else onto the spawn column.
         let mut target = target;
         if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
             if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
-                return Ok((at, Some(yaw)));
+                return Ok(Some((at, Some(yaw))));
             }
             let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
             target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
         }
-        let y = self
-            .land_column(target.x.floor() as i32, target.z.floor() as i32)
-            .map_or(target.y, f64::from);
-        Ok((Vec3::new(target.x, y, target.z), None))
+        let (x, z) = (target.x.floor() as i32, target.z.floor() as i32);
+        // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder around
+        // the world spawn.
+        if let Some(world) = self.level.world_spawn.filter(|w| w[0] == x && w[2] == z) {
+            return Ok(match self.search_spawn(world, finder) {
+                Ok(at) => Some((at, None)),
+                Err(chunk) => {
+                    self.spawn_wait.push(chunk);
+                    None
+                }
+            });
+        }
+        let y = self.land_column(x, z).map_or(target.y, f64::from);
+        Ok(Some((Vec3::new(target.x, y, target.z), None)))
     }
 
     /// Dying away from the Overworld respawns at the world spawn there.
@@ -659,7 +678,9 @@ impl Game<'_> {
 
     /// EnderDragonFight without a dragon: once the centre of the main island
     /// is loaded, place the active exit portal (EndPodiumFeature) and the
-    /// first gateway (spawnNewGateway) if the portal is not there yet.
+    /// first gateway (spawnNewGateway) if the portal is not there yet. Like
+    /// scanState and spawnExitPortal, only while the fight has no exit portal
+    /// location: a podium that is later broken stays broken.
     fn ensure_exit_portal(&mut self) -> Result<()> {
         if self.travelling.is_some()
             || !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
@@ -669,8 +690,14 @@ impl Game<'_> {
         }
         let won = self.fight.previously_killed;
         let gateway = self.first_gateway();
-        if (0..256).any(|y| &*self.block_name([0, y, 0]) == "minecraft:bedrock") {
-            // The podium exists; the gateway may have been out of range when it was placed.
+        if self.exit_portal().is_none() {
+            // findExitPortal remembers the location of a podium that is already there.
+            if let Some(level) = self.podium_level() {
+                self.set_exit_portal([0, level, 0]);
+            }
+        }
+        if self.exit_portal().is_some() {
+            // The gateway may have been out of range when it was placed.
             if won
                 && self.world.loaded(gateway[0], gateway[2])
                 && &*self.block_name(gateway) != "minecraft:end_gateway"
@@ -701,17 +728,40 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// The portal level of the podium around the centre column, read from the
+    /// bedrock that EndPodiumFeature places (rim at the portal level, disc
+    /// below it, the torch column) so a broken column does not hide it.
+    fn podium_level(&self) -> Option<i32> {
+        let mut offsets: Vec<[i32; 3]> = (0..4).map(|dy| [0, dy, 0]).collect();
+        for z in -4..=4i32 {
+            for x in -4..=4i32 {
+                let flat = f64::from(x * x + z * z);
+                if (6.25..12.25).contains(&flat) {
+                    offsets.push([x, 0, z]);
+                } else if flat + 1.0 < 6.25 {
+                    offsets.push([x, -1, z]);
+                }
+            }
+        }
+        (1..253)
+            .map(|y| {
+                let score = offsets
+                    .iter()
+                    .filter(|o| &*self.block_name([o[0], y + o[1], o[2]]) == "minecraft:bedrock")
+                    .count();
+                (score, y)
+            })
+            .filter(|&(score, _)| score >= 3)
+            .max()
+            .map(|(_, y)| y)
+    }
     /// `spawnExitPortal(true)` after the dragon dies.
     pub(super) fn activate_exit_portal(&mut self) -> Result<()> {
         let origin = match self.exit_portal() {
             Some(o) => o,
             None => {
-                // The rim's level: the top of the bedrock column minus three.
-                let top = (0..256)
-                    .rev()
-                    .find(|&y| &*self.block_name([0, y, 0]) == "minecraft:bedrock")
-                    .unwrap_or(64);
-                [0, top - 3, 0]
+                // The rim's level, found without assuming the centre column is intact.
+                [0, self.podium_level().unwrap_or(61), 0]
             }
         };
         self.place_podium(origin, true)
