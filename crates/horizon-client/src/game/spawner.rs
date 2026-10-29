@@ -369,9 +369,15 @@ impl Game<'_> {
         };
         self.res.mob_types().contains_key(&id).then_some(id)
     }
-    /// `SpawnEggItem.useOn` on a spawner: the egg sets its mob. None when the
-    /// clicked block has no spawner.
-    pub(super) fn use_spawn_egg_on_spawner(&mut self, pos: [i32; 3], kind: &str) -> Option<bool> {
+    /// `SpawnEggItem.useOn` on a spawner: the egg sets its mob, and an op's
+    /// egg its entity `data` too (`block_entity_item::spawn_egg_on_spawner`).
+    /// None when the clicked block has no spawner.
+    pub(super) fn use_spawn_egg_on_spawner(
+        &mut self,
+        pos: [i32; 3],
+        kind: &str,
+        data: Option<&horizon_world::nbt::Compound>,
+    ) -> Option<bool> {
         let key = (pos[0], pos[1], pos[2]);
         let trial = match self.world.block_entities.get(&key) {
             Some(BlockEntity::Spawner(_)) => false,
@@ -400,15 +406,56 @@ impl Game<'_> {
                 horizon_core::random::LegacyRandom::new(0),
             );
             if let Some(BlockEntity::Spawner(s)) = self.world.block_entities.get_mut(&key) {
-                s.set_entity_id(kind, &mut random, &mut events);
+                match data {
+                    Some(data) => s.set_entity_data(kind, data, &mut random, &mut events),
+                    None => s.set_entity_id(kind, &mut random, &mut events),
+                }
             }
             self.world.random = random;
             let _ = self.apply_spawner_events(key, events, &HashMap::new());
         }
         // sendBlockUpdated(3) and the player's block_change game event.
         self.spawner_block_updated(key);
+        self.update_spawner_display(key);
         self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
         Some(true)
+    }
+    /// `PlayerList.isOp` for the player acting now: a server's guest by their
+    /// own level, else the window's player.
+    pub(super) fn acting_player_is_op(&self) -> bool {
+        self.lan_acting_permission
+            .unwrap_or(self.ui.registries.permission)
+            > 0
+    }
+    /// Ticks spawners and trial spawners near the player on a remote client (`tick_remote`).
+    pub(super) fn tick_remote_spawners(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let center = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        let mut keys = Vec::new();
+        let mut trial_keys = Vec::new();
+        for (&pos, be) in &self.world.block_entities {
+            let d = (pos.0 - center[0])
+                .abs()
+                .max((pos.1 - center[1]).abs())
+                .max((pos.2 - center[2]).abs());
+            if d <= 64 {
+                match be {
+                    BlockEntity::Spawner(_) => keys.push(pos),
+                    BlockEntity::TrialSpawner(_) => trial_keys.push(pos),
+                    _ => {}
+                }
+            }
+        }
+        self.client_tick_spawners(&keys);
+        for key in trial_keys {
+            self.client_tick_trial_spawner(key);
+        }
     }
     /// `SpawnerRenderer` and `TrialSpawnerRenderer`: the next mob of every
     /// spawner near the camera, small and turning.

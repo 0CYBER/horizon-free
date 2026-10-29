@@ -27,7 +27,7 @@ impl Ingredient {
     pub fn of(items: Vec<String>) -> Self {
         Self(items.iter().cloned().collect(), items)
     }
-    fn parse(v: &Value, items: &Items) -> Option<Self> {
+    pub(crate) fn parse(v: &Value, items: &Items) -> Option<Self> {
         let mut list: Vec<String> = Vec::new();
         let mut add = |s: &str| {
             let more: Vec<String> = match s.strip_prefix('#') {
@@ -43,14 +43,6 @@ impl Ingredient {
         match v {
             Value::String(s) => add(s),
             Value::Array(a) => a.iter().filter_map(Value::as_str).for_each(&mut add),
-            Value::Object(o) => {
-                if let Some(s) = o.get("item").and_then(Value::as_str) {
-                    add(s);
-                }
-                if let Some(t) = o.get("tag").and_then(Value::as_str) {
-                    add(&format!("#{t}"));
-                }
-            }
             _ => return None,
         }
         (!list.is_empty()).then(|| Self::of(list))
@@ -101,6 +93,18 @@ pub struct Template {
     pub damage: u32,
     pub extra: Option<Box<StackData>>,
 }
+/// `ItemStackTemplate.CODEC` count: absent means 1, present must be an
+/// integer in `1..=99` (`ExtraCodecs.intRange(1, 99)`), else the recipe is
+/// not loaded.
+pub(crate) fn template_count(v: &Value) -> Option<u32> {
+    match v.get("count") {
+        None => Some(1),
+        Some(c) => c
+            .as_u64()
+            .filter(|n| (1..=99).contains(n))
+            .map(|n| n as u32),
+    }
+}
 impl Template {
     fn parse(v: &Value) -> Option<Self> {
         let (damage, extra) = match v.get("components") {
@@ -109,7 +113,7 @@ impl Template {
         };
         Some(Self {
             item: v["id"].as_str().map(Arc::from),
-            count: v["count"].as_u64().unwrap_or(1) as u32,
+            count: template_count(v)?,
             damage,
             extra,
         })
@@ -1647,6 +1651,27 @@ impl Recipes {
 mod tests {
     use super::*;
     use crate::banner::BannerLayer;
+
+    #[test]
+    fn result_count_is_bounded_like_vanilla() {
+        let parse = |s: &str| Template::parse(&serde_json::from_str(s).unwrap());
+        assert_eq!(parse(r#"{"id":"minecraft:stone"}"#).unwrap().count, 1);
+        let top = parse(r#"{"id":"minecraft:stone","count":99}"#);
+        assert_eq!(top.unwrap().count, 99);
+        for bad in [
+            "0",
+            "100",
+            "2147483648",
+            "4294967295",
+            "4294967296",
+            "-1",
+            "1.5",
+            "\"2\"",
+        ] {
+            let json = format!(r#"{{"id":"minecraft:stone","count":{bad}}}"#);
+            assert!(parse(&json).is_none(), "count {bad} must be rejected");
+        }
+    }
 
     fn ingredient(items: &[&str]) -> Ingredient {
         Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
