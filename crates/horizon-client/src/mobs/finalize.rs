@@ -821,6 +821,27 @@ fn age_boundary_reached(m: &mut Mob) {
         _ => {}
     }
 }
+/// `Goat.finalizeSpawn` on a natural spawn (the spawn path in spawning.rs): the ram
+/// cooldowns (`GoatAi.initMemories`), screaming 2 percent of the time and a
+/// horn lost 10 percent of the time, adults only.
+pub fn goat_spawn(m: &mut Mob) {
+    let jump = m
+        .random
+        .next_int_between_inclusive(600, 1200)
+        .unwrap_or(600);
+    set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+    let ram = m
+        .random
+        .next_int_between_inclusive(600, 6000)
+        .unwrap_or(600);
+    set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+    m.extra.screaming = m.random.next_double() < 0.02;
+    age_boundary_reached(m);
+    if !m.is_baby() && m.random.next_float() < 0.1 {
+        let left = m.random.next_boolean();
+        m.extra.lost_horns[usize::from(!left)] = true;
+    }
+}
 /// `SpawnEggItem.spawnsEntity`: the spawn egg is for the mob's own kind, so
 /// it is used on it (`Mob.checkAndHandleImportantInteractions`).
 pub fn spawn_egg_is_for(egg: &str, kind: &str) -> bool {

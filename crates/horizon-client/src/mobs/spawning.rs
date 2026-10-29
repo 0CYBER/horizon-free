@@ -306,6 +306,7 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
             m.extra.pick_up_loot = true;
         }
         S::Fox | S::Panda | S::Dolphin => m.extra.pick_up_loot = true,
+        S::Goat => super::finalize::goat_spawn(m),
         S::TropicalFish => super::aquatic::finalize(m),
         // Salmon.finalizeSpawn: a weighted size (small 30, medium 50, large 15).
         S::Salmon => {
