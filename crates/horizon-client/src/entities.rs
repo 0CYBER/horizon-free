@@ -872,11 +872,28 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// LivingEntity.travelInAir (armor stands have no other movement): move
-    /// by the velocity (a landing stops the fall,
-    /// `Block.updateEntityMovementAfterFallOn`), then gravity 0.08 and the
-    /// 0.98 drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
-    pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
+    /// Whether the stand's box holds water (`isInWater`, from its fluid blocks).
+    pub fn in_water(&self, world: &World, facts: &BlockFacts) -> bool {
+        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
+            (lo.y.floor() as i32..hi.y.ceil() as i32).any(|y| {
+                (lo.z.floor() as i32..=hi.z.floor() as i32)
+                    .any(|z| facts.get(world.block(x, y, z)).fluid == Fluid::Water)
+            })
+        })
+    }
+    /// LivingEntity.travel (armor stands have no other movement): move by
+    /// the velocity (a landing stops the fall,
+    /// `Block.updateEntityMovementAfterFallOn`), let the blocks it is inside
+    /// push it (`push`: a bubble column), then in water the 0.8 slowdown and
+    /// `getFluidFallingAdjustedMovement`, in air gravity 0.08 and the 0.98
+    /// drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
+    pub fn tick(
+        &mut self,
+        scene: &mut crate::collisions::SceneCollisions,
+        in_water: bool,
+        push: &mut dyn FnMut(Aabb, &mut Vec3),
+    ) {
         if self.marker {
             return;
         }
@@ -893,7 +910,24 @@ impl ArmorStand {
                 y = 0.0;
             }
         }
-        self.velocity = Vec3::new(0.0, (y - 0.08) * f64::from(0.98f32), 0.0);
+        let mut velocity = Vec3::new(0.0, y, 0.0);
+        push(self.bounds(), &mut velocity);
+        self.velocity = if in_water {
+            // travelInWater: slowDown 0.8, then `getFluidFallingAdjustedMovement`
+            // with gravity / 16 (the stand is falling while its fall is not
+            // already nearly stopped).
+            let y = velocity.y * f64::from(0.8f32);
+            let falling = velocity.y <= 0.0;
+            let adjusted =
+                if falling && (y - 0.005).abs() >= 0.003 && (y - 0.08 / 16.0).abs() < 0.003 {
+                    -0.003
+                } else {
+                    y - 0.08 / 16.0
+                };
+            Vec3::new(0.0, adjusted, 0.0)
+        } else {
+            Vec3::new(0.0, (velocity.y - 0.08) * f64::from(0.98f32), 0.0)
+        };
     }
 }
 
