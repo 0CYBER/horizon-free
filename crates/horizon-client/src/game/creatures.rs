@@ -13,7 +13,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobWorld, PlayerView, Seen, SpawnSetup, Species, Who,
-        ai::{eating_sound, feed_animal},
+        ai::{eating_sound, feed_animal, takes_food},
         farm::Climate,
         spawning::{self, BiomeFacts},
     },
@@ -3838,10 +3838,11 @@ impl Game<'_> {
                 }
                 consume = true;
             }
+            // Wolf.mobInteract: Animal.mobInteract first breeds an adult or
+            // grows a baby with the food; only when it did not does the owner
+            // make the pet sit or stand.
             Species::Wolf
-                if m.extra.tame
-                    && m.extra.owner == Some(acting)
-                    && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+                if m.extra.tame && m.extra.owner == Some(acting) && !(is_food && takes_food(m)) =>
             {
                 m.extra.sitting = !m.extra.sitting;
                 m.ai.jumping = false;
@@ -3922,10 +3923,11 @@ impl Game<'_> {
                 consume = true;
                 eat = eating_sound(m, &mut self.world.random);
             }
+            // Cat.mobInteract: Animal.mobInteract first breeds an adult or
+            // grows a baby with the food; only when it did not does the owner
+            // make the pet sit or stand.
             Species::Cat
-                if m.extra.tame
-                    && m.extra.owner == Some(acting)
-                    && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+                if m.extra.tame && m.extra.owner == Some(acting) && !(is_food && takes_food(m)) =>
             {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
