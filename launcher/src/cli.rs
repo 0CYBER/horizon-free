@@ -249,6 +249,9 @@ enum InstanceCmd {
         /// Extra JVM arguments (one string; "" clears them)
         #[arg(long, allow_hyphen_values = true)]
         args: Option<String>,
+        /// The game window's size, as 1280x720; "default" goes back to the game's own
+        #[arg(long)]
+        window: Option<String>,
     },
     /// A Java instance's mod loader: fabric or quilt, or none. --list shows its versions
     Loader {
@@ -1193,19 +1196,19 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 None => instances::selected(),
             };
             if instance.java.is_some() {
-                if version.is_some()
-                    || world.is_some()
-                    || join.is_some()
-                    || server.is_some()
-                    || creative
-                {
+                if version.is_some() || world.is_some() || join.is_some() || creative {
                     return Err(format!(
-                        "{} plays Minecraft: Java Edition: --version, --world, --creative, --join \
-                         and --server are for Horizon instances.",
+                        "{} plays Minecraft: Java Edition: --version, --world, --creative and \
+                         --join are for Horizon instances.",
                         instance.name
                     ));
                 }
-                let mut cmd = backend::java_game(&instance, &|line| eprintln!("{line}"))?;
+                let server = server.map(|server| {
+                    let list = server_list::List::load(&instance.home);
+                    server_list::find(&list, &server).map_or(server, |(_, s)| s.ip)
+                });
+                let mut cmd =
+                    backend::java_game(&instance, server.as_deref(), &|line| eprintln!("{line}"))?;
                 cmd.args(arg);
                 let started = std::time::Instant::now();
                 let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
@@ -2340,6 +2343,24 @@ fn other_json(f: &other_launchers::Found) -> serde_json::Value {
     })
 }
 
+/// `1280x720` (or `1280×720`), or `default` for none.
+fn parse_window(text: &str) -> Result<Option<(u32, u32)>, String> {
+    let text = text.trim();
+    if text.eq_ignore_ascii_case("default") {
+        return Ok(None);
+    }
+    let size = text
+        .split_once(['x', 'X', '×'])
+        .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+        .filter(|&(w, h): &(u32, u32)| (1..=16384).contains(&w) && (1..=16384).contains(&h));
+    match size {
+        Some(size) => Ok(Some(size)),
+        None => Err(format!(
+            "{text:?} isn't a window size: 1280x720, or default."
+        )),
+    }
+}
+
 fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
     use instances::Icon;
     let value = |i: &instances::Instance, selected: bool| {
@@ -2474,7 +2495,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             auto,
             memory,
             args,
+            window,
         } => {
+            let window = window.as_deref().map(parse_window).transpose()?;
             if instances::find(&instance)?.java.is_none() {
                 return Err(format!(
                     "{instance} is a Horizon instance: Horizon is not a Java program."
@@ -2489,6 +2512,9 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 java.memory_mb = memory.or(java.memory_mb);
                 if let Some(args) = args {
                     java.jvm_args = args.trim().to_string();
+                }
+                if let Some(window) = window {
+                    java.window = window;
                 }
             })?)
         }
@@ -3190,6 +3216,15 @@ mod tests {
             }
             _ => panic!("expected game-args"),
         }
+    }
+
+    #[test]
+    fn window_sizes() {
+        assert_eq!(parse_window("1280x720"), Ok(Some((1280, 720))));
+        assert_eq!(parse_window(" 1920 × 1080 "), Ok(Some((1920, 1080))));
+        assert_eq!(parse_window("Default"), Ok(None));
+        assert!(parse_window("0x720").is_err());
+        assert!(parse_window("big").is_err());
     }
 
     #[test]
