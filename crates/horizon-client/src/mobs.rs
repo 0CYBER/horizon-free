@@ -2199,6 +2199,8 @@ impl Mob {
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
+        // IronGolem.hurtServer: the crack level before the damage, compared after.
+        let crackiness = (self.species() == Species::IronGolem).then(|| golem::crackiness(self));
         let mut amount = if reflected { 1000.0 } else { amount };
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
@@ -2326,6 +2328,15 @@ impl Mob {
                         .push(MobEvent::Sound(sound, at, ai::sound_volume(self), pitch));
                 }
             }
+        }
+        // IronGolem.hurtServer: a new crack level plays the damage sound.
+        if let Some(before) = crackiness
+            && before != golem::crackiness(self)
+            && !self.silent
+        {
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox
+                .push(MobEvent::Sound("entity.iron_golem.damage", at, 1.0, 1.0));
         }
         if self.has_effect("minecraft:infested") {
             self.outbox.push(MobEvent::Infested { mob: self.id });
