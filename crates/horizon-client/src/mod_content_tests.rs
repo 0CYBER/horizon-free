@@ -1080,3 +1080,116 @@ fn a_replacing_mod_tag_reaches_the_root() {
     );
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[test]
+#[ignore = "full content root: needs prepared vanilla data"]
+fn content_shapes_drive_outline_and_collision() {
+    use horizon_core::{
+        geometry::{Aabb, Axis, Vec3},
+        position::BlockPos,
+    };
+    use horizon_world::{collision::CachedCollisionRegistry, registry::BlockStateId};
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch =
+        std::env::temp_dir().join(format!("horizon-content-shapes-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let m = folder_mod(
+        &scratch.join("mod"),
+        &[
+            ("horizon-mod.toml", &manifest("shapetest", "")),
+            (
+                "data/shapetest/horizon/block/rod.json",
+                r#"{"template":"minecraft:oak_log","shapes":{"property":"axis","values":{"x":[[0,0.25,0.25,1,0.75,0.75]],"y":[[0.25,0,0.25,0.75,1,0.75]],"z":[[0.25,0.25,0,0.75,0.75,1]]}}}"#,
+            ),
+            (
+                "data/shapetest/horizon/block/plain.json",
+                r#"{"template":"minecraft:oak_log"}"#,
+            ),
+        ],
+    );
+    let root = resource_root(&base, &[m], &scratch.join("cache")).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let registry = assets.registry;
+    let facts = BlockFacts::load(&root, registry).unwrap();
+    let (named, _) = nbt::read_named(
+        &fs::read(root.join("cached-collision.nbt")).unwrap(),
+        Limits::tables(),
+    )
+    .unwrap();
+    let collision = CachedCollisionRegistry::from_nbt(&named.tag, registry).unwrap();
+    for axis in ["x", "y", "z"] {
+        let state = (0..registry.len())
+            .map(|i| BlockStateId(i as u32))
+            .find(|id| {
+                let s = registry.state(*id).unwrap();
+                s.name == "shapetest:rod" && s.properties.get("axis").is_some_and(|v| v == axis)
+            })
+            .unwrap();
+        let shape = collision.cached_shape(state).unwrap().unwrap();
+        let f = facts.get(state);
+        assert_eq!(shape.boxes().len(), 1);
+        assert_eq!(f.outline.len(), 1);
+        assert_eq!(f.outline_edges.len(), 12);
+        let expected = match axis {
+            "x" => [0., 0.25, 0.25, 1., 0.75, 0.75],
+            "y" => [0.25, 0., 0.25, 0.75, 1., 0.75],
+            _ => [0.25, 0.25, 0., 0.75, 0.75, 1.],
+        };
+        assert_eq!(f.outline[0], expected);
+        let start = Vec3::new(-1., 0.5, 0.5);
+        let end = Vec3::new(2., 0.5, 0.5);
+        let target = BlockPos::new(0, 0, 0);
+        assert!(shape.clip(start, end, target).is_some());
+        let bounds = f.outline[0];
+        let outline = Aabb::new(
+            Vec3::new(bounds[0], bounds[1], bounds[2]),
+            Vec3::new(bounds[3], bounds[4], bounds[5]),
+        );
+        assert_eq!(
+            shape.clip(start, end, target),
+            Aabb::clip_boxes([outline], start, end, target)
+        );
+        let player = Aabb::new(Vec3::new(-1., 0.4, 0.4), Vec3::new(-0.2, 0.6, 0.6));
+        assert!((shape.collide(Axis::X, player, 2.) - (expected[0] + 0.2)).abs() < 1e-9);
+        let miss = Aabb::new(Vec3::new(-1., 0.05, 0.05), Vec3::new(-0.2, 0.15, 0.15));
+        assert_eq!(shape.collide(Axis::X, miss, 2.), 2.);
+    }
+    let plain = registry.default_state("shapetest:plain").unwrap();
+    let oak = registry.default_state("minecraft:oak_log").unwrap();
+    assert_eq!(facts.get(plain).outline, facts.get(oak).outline);
+    assert_eq!(
+        collision.cached_shape(plain).unwrap().unwrap().boxes(),
+        collision.cached_shape(oak).unwrap().unwrap().boxes()
+    );
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn shapes_reject_unknown_or_missing_template_values() {
+    let Some(base) = prepared() else { return };
+    let scratch =
+        std::env::temp_dir().join(format!("horizon-shape-invalid-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    for declaration in [
+        r#"{"template":"minecraft:oak_log","shapes":{"property":"typo","values":{"x":[]}}}"#,
+        r#"{"template":"minecraft:oak_log","shapes":{"property":"axis","values":{"x":[]}}}"#,
+        r#"{"template":"minecraft:oak_log","shapes":{"property":"axis","values":{"x":[],"y":[],"z":[],"bad":[]}}}"#,
+    ] {
+        let m = folder_mod(
+            &scratch.join("mod"),
+            &[
+                ("horizon-mod.toml", &manifest("shapetest", "")),
+                ("data/shapetest/horizon/block/rod.json", declaration),
+            ],
+        );
+        let mods = [m];
+        let e = match Plan::new(&base, &mods) {
+            Ok(_) => panic!("accepted {declaration}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(e.contains("shapetest:rod"), "{e}");
+    }
+    fs::remove_dir_all(scratch).unwrap();
+}
