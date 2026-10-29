@@ -373,7 +373,8 @@ impl Game<'_> {
         };
         let at = [destination.x, destination.y, destination.z];
         let ctx = self.server_ctx();
-        // TeleportTransition.PLAY_PORTAL_SOUND, and the cooldown
+        // Through a portal: the client waits on its loading screen until
+        // the exit is found (`arrive_server_trips`). The cooldown is the one
         // Entity.handlePortal set before the teleport.
         host.hub
             .change_level(i, at, yaw, None, true, PLAYER_DELAY, &ctx);
@@ -545,6 +546,8 @@ impl Game<'_> {
             if trip.placed {
                 continue;
             }
+            // A portal's trip (`start_server_trip`): its client waits to land.
+            let portal = trip.end || trip.plan.is_some();
             self.resolve_arrivals();
             let yaw = host.hub.guests[i].yaw;
             let (position, yaw) = if let Some(config) = trip.respawn {
@@ -623,8 +626,12 @@ impl Game<'_> {
             g.yaw = yaw;
             // A new body at the exit: no fall distance or motion carried over.
             g.motion = None;
-            host.hub
-                .teleport(i, Some([position.x, position.y, position.z]));
+            let at = [position.x, position.y, position.z];
+            if portal {
+                host.hub.land(i, at);
+            } else {
+                host.hub.teleport(i, Some(at));
+            }
         }
     }
 
