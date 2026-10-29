@@ -528,14 +528,21 @@ impl LongJump {
             }
         }
     }
-    /// `LongJumpMidJump.stop`, or the end of a search.
+    /// `LongJumpMidJump.stop` (a goat lands with `entity.goat.step`, a frog
+    /// with `entity.frog.step`), or the end of a search.
     fn end(&mut self, m: &mut Mob, cx: &mut Cx) {
         if self.mid_jump {
             if m.on_ground {
-                m.velocity = m.velocity.multiply(Vec3::new(0.1, 1.0, 0.1));
+                // multiply(0.1F, 1.0, 0.1F): the float widened.
+                let slow = f64::from(0.1_f32);
+                m.velocity = m.velocity.multiply(Vec3::new(slow, 1.0, slow));
                 let at = [m.position.x, m.position.y, m.position.z];
-                cx.events
-                    .push(MobEvent::Sound("entity.frog.step", at, 2.0, 1.0));
+                let landing = if m.species() == Species::Goat {
+                    "entity.goat.step"
+                } else {
+                    "entity.frog.step"
+                };
+                cx.events.push(MobEvent::Sound(landing, at, 2.0, 1.0));
             }
             set_jump_pose(m, cx.w, sync::STANDING);
             sample_cooldown(m, cx.lr, 1);
@@ -639,8 +646,9 @@ impl Goal for LongJump {
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.mid_jump {
             // LongJumpMidJump starts the tick after the leap and runs until
-            // the frog is on the ground again, for 100 ticks at most; water
-            // switches the brain to the swim activity, which stops it too.
+            // the mob is on the ground again, for 100 ticks at most; water
+            // switches a frog's brain to the swim activity, which stops it
+            // too (a goat has none).
             match self.in_air {
                 None => {
                     self.in_air = Some(0);
@@ -650,7 +658,7 @@ impl Goal for LongJump {
                 Some(t) => self.in_air = Some(t + 1),
             }
             return !m.on_ground
-                && !m.fluids.in_water
+                && (m.species() == Species::Goat || !m.fluids.in_water)
                 && self.in_air.is_some_and(|t| t <= MID_JUMP_DURATION);
         }
         let valid = self.initial == Some(m.position)
