@@ -290,6 +290,11 @@ impl Game<'_> {
             let brightness = self.eye_brightness(e);
             let inside_portal = self.client_portal_effect();
             self.screen_fx.tick(brightness, inside_portal);
+            // LocalPlayer.aiStep: processPortalCooldown after the transition
+            // effect (a local world's player counts down in handlePortal).
+            if self.remote.is_some() && self.portals.player.cooldown > 0 {
+                self.portals.player.cooldown -= 1;
+            }
             let nausea = self
                 .potions
                 .effects

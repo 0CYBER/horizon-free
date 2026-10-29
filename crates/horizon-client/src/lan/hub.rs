@@ -629,7 +629,8 @@ impl Hub {
 
     // ---- joining -------------------------------------------------------
 
-    fn spawn_info(&self, i: usize) -> play::SpawnInfo {
+    /// `CommonPlayerSpawnInfo`, with the player's `portalCooldown`.
+    fn spawn_info(&self, i: usize, portal_cooldown: i32) -> play::SpawnInfo {
         let g = &self.guests[i];
         play::SpawnInfo {
             dimension_type: self.dimension_type,
@@ -647,7 +648,7 @@ impl Hub {
                     dimension: dimension.clone(),
                     pos: *pos,
                 }),
-            portal_cooldown: 0,
+            portal_cooldown,
             sea_level: 63,
         }
     }
@@ -715,7 +716,7 @@ impl Hub {
             reduced_debug_info: false,
             show_death_screen: !self.immediate_respawn,
             limited_crafting: false,
-            spawn: self.spawn_info(i),
+            spawn: self.spawn_info(i, 0),
             // MinecraftServer.usesAuthentication, enforceSecureProfile.
             online_mode: self.lan.shared.config.online.is_some(),
             enforces_secure_chat: self.enforces_secure_chat(),
@@ -2567,7 +2568,7 @@ impl Hub {
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
     pub fn respawn(&mut self, i: usize, at: [f64; 3], ctx: &TickCtx) {
-        let info = self.spawn_info(i);
+        let info = self.spawn_info(i, 0);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         // PlayerList.respawn: into the level in place (the respawn level).
@@ -2682,9 +2683,10 @@ impl Hub {
         yaw: f32,
         pitch: Option<f32>,
         portal_sound: bool,
+        portal_cooldown: i32,
         ctx: &TickCtx,
     ) {
-        let info = self.spawn_info(i);
+        let info = self.spawn_info(i, portal_cooldown);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         g.dimension = self.config.dimension.clone();

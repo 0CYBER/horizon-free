@@ -727,6 +727,11 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     assert host_dim == 'minecraft:overworld', f'the host went to {host_dim} with the guest'
     below = guest.raw('block', arrived[0], arrived[1] - 1, arrived[2])
     assert below.get('loaded') and below.get('block') != 'minecraft:air', f'under the guest in the Nether: {below}'
+    # handleRespawn's LocalPlayer.setPortalCooldown: standing in the arrival portal keeps the cooldown
+    # going, so the overlay fades out (20 ticks from full) instead of building up again.
+    guest.wait(40)
+    effect = guest('state')['player'].get('portal_effect')
+    assert effect == 0, f'the portal overlay is at {effect} in the arrival portal'
     # The host takes an End portal while the guest is in the Nether: three levels at once.
     host('command', command=f'setblock {hx} {hy} {hz} minecraft:end_portal')
     end = wait_dimension(host, 'minecraft:the_end', 600)
