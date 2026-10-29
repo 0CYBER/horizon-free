@@ -4767,7 +4767,9 @@ impl Game<'_> {
             self.tick_crossbow(slot, ticks, &stack);
             return;
         }
-        if &*stack.item == "minecraft:trident" {
+        // TridentItem and EnderEyeItem: used until released (an eye's
+        // getUseDuration 0 never counts down to finishUsingItem).
+        if matches!(&*stack.item, "minecraft:trident" | "minecraft:ender_eye") {
             self.using = Some((slot, ticks + 1));
             return;
         }
