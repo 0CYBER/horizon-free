@@ -1578,6 +1578,13 @@ pub enum MobEvent {
     PandaSneezed {
         mob: u32,
     },
+    /// `Entity.propagateFallToPassengers`: the mob landed and what rides it
+    /// (a player or a mob) takes `causeFallDamage` of the same fall.
+    FallToPassengers {
+        mob: u32,
+        distance: f64,
+        modifier: f32,
+    },
 }
 /// How a spawned-by-kind mob should be set up.
 #[derive(Clone, Debug, Default)]

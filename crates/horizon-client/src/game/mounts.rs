@@ -7,6 +7,7 @@ use horizon_client::{
     hud::HudBatch,
     items::ItemStack,
     mobs::{MobEvent, Species, equine},
+    motion::MotionWorld,
     sprint::Keys,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -540,6 +541,62 @@ impl Game<'_> {
             }
             _ => {}
         }
+    }
+    /// `Entity.propagateFallToPassengers`: whoever rides the mob `mob` takes
+    /// `causeFallDamage` of its fall, as the mount's own damage does. The local
+    /// player, the server players and the mob on its back each get it, with
+    /// their own safe distance and armour.
+    pub(super) fn fall_to_passengers(&mut self, mob: u32, distance: f64, modifier: f32) {
+        if self.riding == Some(mob) {
+            self.rider_fall_damage(distance, modifier);
+        }
+        let guests: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+            h.hub
+                .guests
+                .iter()
+                .filter(|g| g.vehicle == Some(mob) && Some(g.conn) != self.lan_acting)
+                .map(|g| g.conn)
+                .collect()
+        });
+        if !guests.is_empty()
+            && let Some(mut host) = self.lan.take()
+        {
+            for conn in guests {
+                self.guest_hit_by(&mut host, conn, |g| g.rider_fall_damage(distance, modifier));
+            }
+            self.lan = Some(host);
+        }
+        let rider = self
+            .mobs
+            .iter()
+            .find(|m| m.id == mob)
+            .and_then(|m| m.extra.rider);
+        if let Some(rider) = rider
+            && let Some(r) = self.mobs.iter_mut().find(|m| m.id == rider)
+        {
+            let mut events = Vec::new();
+            r.cause_fall_damage_from(distance, modifier, &mut events);
+            let _ = self.handle_mob_events(events);
+        }
+    }
+    /// The player this game runs (the local one, or the server player it acts
+    /// as) takes the fall of the mount under it. `cause_mount_fall` runs the
+    /// landing code's own fall damage for the player: creative flight is
+    /// exempt, and the statistic, the sounds and the damage records wait in the
+    /// player's events for its next tick, as a landing of its own leaves them.
+    fn rider_fall_damage(&mut self, distance: f64, modifier: f32) {
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        let _ = MotionWorld {
+            entities: &[],
+            player,
+            scene: &mut self.world,
+            assets: &self.pack.assets,
+            collision_binding: self.collision,
+            resources: self.motion,
+        }
+        .cause_mount_fall(distance, modifier);
     }
     /// `PlayerRideableJumping`: horses, camels and nautili (the dash).
     fn jumps(species: Species) -> bool {
