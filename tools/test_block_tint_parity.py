@@ -30,7 +30,7 @@ def make_input(build):
 def main():
     harness.differential("block-tint-parity", "VanillaBlockTintOracle", "block_tint_probe",
         make_input, "BlockTintSource.color(state), all states of tinted blocks and untinted carried blocks; per-face tint indices, no level/biome. Not model or framebuffer parity.",
-        sources=[lab.ROOT / "tools/test_block_tint_parity.py", lab.ROOT / "crates/horizon-client/src/mesher.rs",
+        sources=[lab.ROOT / "tools/test_block_tint_parity.py", lab.ROOT / "crates/horizon-client-render/src/mesher.rs",
                  lab.ROOT / "crates/horizon-client/src/item_render.rs"])
 
 

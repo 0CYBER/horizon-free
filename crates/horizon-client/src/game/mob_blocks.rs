@@ -159,15 +159,50 @@ impl Game<'_> {
         self.captain_banner_geometry(mob, camera, alpha, light, out);
         self.held_item_geometry(mob, camera, alpha, light, true, out);
         self.worn_block_geometry(mob, camera, alpha, light, out);
+        self.golem_flower_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
         {
-            // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint.
+            // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint;
+            // the block's baked model (seed 42) on the unit cube, not centred.
             let base = render::base_transform(mob, alpha as f32, camera);
             let t = carried_block_matrix(base);
             // Preserve cross models (flowers, fungi) and state properties (facing).
             self.block_model_vertices(state, 42, t, light, true, out);
         }
+    }
+    /// `IronGolemFlowerLayer`: the poppy in the right arm while the golem
+    /// offers it (`getOfferFlowerTick() > 0`), drawn with `NO_OVERLAY`.
+    fn golem_flower_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        use glam::{Mat4, Vec3};
+        if mob.species() != Species::IronGolem
+            || mob.extra.counter <= 0
+            || horizon_client::mobs::trader::is_invisible(mob)
+        {
+            return;
+        }
+        let Some(state) = self.pack.assets.registry.default_state("minecraft:poppy") else {
+            return;
+        };
+        let Some(arm) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "right_arm")
+        else {
+            return;
+        };
+        let t = arm
+            * Mat4::from_translation(Vec3::new(-1.1875, 1.0625, -0.9375))
+            * Mat4::from_translation(Vec3::splat(0.5))
+            * Mat4::from_scale(Vec3::splat(0.5))
+            * Mat4::from_rotation_x((-90.0f32).to_radians())
+            * Mat4::from_translation(Vec3::splat(-0.5));
+        self.block_model_vertices(state, 42, t, light, true, out);
     }
     /// `SnowGolemHeadLayer` and `MushroomCowMushroomLayer`: the carved pumpkin
     /// on a snow golem's head, and the mushrooms on an adult mooshroom's back
@@ -308,9 +343,10 @@ impl Game<'_> {
                 owner.crossbow_charge_duration = 25;
             }
             use horizon_assets::item_model::DisplayContext as Context;
-            // PandaHoldsItemLayer shows the item as it lies on the ground.
+            // PandaHoldsItemLayer and FoxHeldItemLayer show the item as it lies
+            // on the ground.
             let (context, ordinal) = match (mob.species(), left) {
-                (Species::Panda, _) => (Context::Ground, 7),
+                (Species::Panda | Species::Fox, _) => (Context::Ground, 7),
                 (_, true) => (Context::ThirdPersonLeftHand, 1),
                 (_, false) => (Context::ThirdPersonRightHand, 2),
             };

@@ -328,7 +328,7 @@ fn mob_meta(
     // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, swimming 0x10 (a drowned
     // under water, `Drowned.setSwimming`), invisible 0x20 (the effect's flag)
     // and glowing 0x40 (LivingEntity.updateGlowingStatus).
-    let shared = i8::from(m.fire_ticks > 0)
+    let shared = i8::from(m.is_on_fire())
         | i8::from(m.species() == Species::Drowned && m.extra.flag) << 4
         | i8::from(m.invisible || horizon_client::mobs::trader::is_invisible(m)) << 5
         | i8::from(m.is_currently_glowing()) << 6;
@@ -342,9 +342,7 @@ fn mob_meta(
         meta.push((6, serializer::POSE, Value::Id(i32::from(pose))));
     }
     // LivingEntity.DATA_SLEEPING_POS_ID: the bed a sleeping villager lies in.
-    if horizon_client::mobs::villager::sleeping(m)
-        && let Some(bed) = m.extra.bed
-    {
+    if let Some(bed) = horizon_client::mobs::villager::sleeping_pos(m) {
         meta.push((14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(Some(bed))));
     }
     if let Some(name) = &m.custom_name {
@@ -803,6 +801,14 @@ fn mob_meta(
             }
             defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // Skeleton.DATA_STRAY_CONVERSION_ID (the first entry after Mob's):
+        // the shaking of the freezing conversion.
+        "minecraft:skeleton" => {
+            if e.counter2 > 0 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
         "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
         // Hoglin.DATA_IMMUNE_TO_ZOMBIFICATION (after AgeableMob's two) and
@@ -909,16 +915,23 @@ fn mob_equipment(
     // slot's item (6) in `head`.
     let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
-        (0u8, &e.main_hand),
-        (1, &e.off_hand),
-        (2, &e.feet),
-        (3, &e.legs),
-        (4, &e.chest),
-        (if body { 6 } else { 5 }, &e.head),
+        (0u8, &e.main_hand, None),
+        (1, &e.off_hand, None),
+        (2, &e.feet, e.armor[3].as_ref()),
+        (3, &e.legs, e.armor[2].as_ref()),
+        (4, &e.chest, e.armor[1].as_ref()),
+        // The body slot's item is no worn armour.
+        (
+            if body { 6 } else { 5 },
+            &e.head,
+            e.armor[0].as_ref().filter(|_| !body),
+        ),
     ];
-    for (slot, item) in slots {
+    for (slot, item, worn) in slots {
         if let Some(item) = item {
-            let stack = ItemStack {
+            // The worn armour keeps its stack: a dyed leather piece keeps
+            // its colour.
+            let stack = worn.cloned().unwrap_or_else(|| ItemStack {
                 item: item.clone(),
                 count: 1,
                 // A wolf's armor shows its cracks.
@@ -932,7 +945,7 @@ fn mob_equipment(
                 } else {
                     None
                 },
-            };
+            });
             out.push((slot, hub.stack(&Some(stack))));
         }
     }
@@ -1816,10 +1829,13 @@ impl Game<'_> {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, anvil result sounds, or a
-                    // finished brushing (these levelEvent calls name no
+                    // finished brushing or an eye inserted in a portal frame (these calls name no
                     // excluded player), nor the digger's own crack and hit
                     // sound (2019, 2020).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020 | 3008) {
+                    let except = if matches!(
+                        *id,
+                        2015 | 1503 | 1505 | 1029 | 1030 | 1045 | 1052 | 2019 | 2020 | 3000 | 3008
+                    ) {
                         None
                     } else {
                         self.lan_acting
@@ -2040,6 +2056,14 @@ impl Game<'_> {
             .iter()
             .filter(|g| host.hub.here(g))
             .map(|g| (g.chunk(), radius))
+            .chain(
+                self.arrival_chunks(self.dim)
+                    .into_iter()
+                    // An arrival keeps only its landing spot lit enough to
+                    // resolve (the 3x3 `resolve_arrivals` checks), where it
+                    // then ticks without a player.
+                    .map(|chunk| (chunk, 1)),
+            )
             .collect();
     }
 
@@ -2136,6 +2160,7 @@ impl Game<'_> {
                 .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
             // ClientInformation.mainHand (HumanoidArm: 0 left, 1 right).
             m.extra.main_hand_left = g.info.main_hand == 0;
+            m.extra.hidden_model_parts = !g.info.model_customisation & 0x7F;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
