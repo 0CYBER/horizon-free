@@ -1,7 +1,8 @@
 //! Particles a server sends its players and its clients draw:
 //! `ClientboundLevelParticlesPacket` (`ServerLevel.sendParticles`, which
 //! `/particle` uses) and `ClientboundExplodePacket` (`ServerLevel.explode`).
-use super::Game;
+use super::{Game, lan::LanHost};
+use horizon_client::lan::hub::Hub;
 use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
@@ -24,7 +25,157 @@ fn rgb(c: [f32; 4]) -> [f32; 3] {
     [c[0], c[1], c[2]]
 }
 
+/// `ServerLevel.sendParticles` of one soul particle moving by `velocity`
+/// (Soul Speed's `spawn_particles`): sent to the players within 32 blocks.
+pub(super) fn send_soul_particle(host: &super::lan::LanHost, at: [f64; 3], velocity: [f64; 3]) {
+    let Some(id) = host
+        .hub
+        .registry_id("minecraft:particle_type", "minecraft:soul")
+    else {
+        return;
+    };
+    let packet = C::LevelParticles(play::LevelParticles {
+        particle: Particle { id, data: None },
+        override_limiter: false,
+        always_show: false,
+        pos: at,
+        dist: velocity.map(|v| v as f32),
+        max_speed: [1.0; 3],
+        count: 0,
+        randomization: 0,
+    });
+    for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+        let distance: f64 = (0..3)
+            .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+            .sum();
+        if distance < 32.0 * 32.0 {
+            g.send(&packet);
+        }
+    }
+}
+
 impl Game<'_> {
+    /// `SonicBoom.tick` uses `ServerLevel.sendParticles` for each ray point.
+    /// Keep the local event's rendering; connected players receive one at rest.
+    pub(super) fn lan_sonic_boom(&self, options: &ParticleOptions, at: [f64; 3]) {
+        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, None)) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: [0.0; 3],
+            max_speed: [0.0; 3],
+            count: 0,
+            randomization: 0,
+        });
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
+    /// `ServerLevel.sendParticles` of a mob's particles: a packet to each
+    /// player within 32 blocks. The window draws its own copy.
+    pub(super) fn lan_level_particles(
+        &self,
+        options: &ParticleOptions,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    ) {
+        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, None)) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: spread.map(|d| d as f32),
+            max_speed: [speed as f32; 3],
+            count: count as i32,
+            randomization: 0,
+        });
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
+    /// `LivingEntity.checkFallDamage`'s `ServerLevel.sendParticles` of the
+    /// landing block's crumbs: drawn in this window, when it has one, and
+    /// sent to each player within 32 blocks. `host` is the hub of a guest's
+    /// turn, which is out of `self.lan` meanwhile.
+    pub(super) fn landing_dust(
+        &mut self,
+        host: Option<&LanHost>,
+        state: BlockStateId,
+        at: Vec3,
+        count: i32,
+        speed: f64,
+    ) {
+        let at = [at.x, at.y, at.z];
+        if self.serving.is_none() && self.options.dedicated.is_none() {
+            let block = [
+                at[0].floor() as i32,
+                (at[1] - 0.2).floor() as i32,
+                at[2].floor() as i32,
+            ];
+            if let Some((sprite, tint)) = self.particle_sprite(state, block) {
+                self.particles.send_particles(
+                    &ParticleOptions::block(ParticleType::Block, sprite, tint),
+                    at,
+                    [0.0; 3],
+                    speed,
+                    count as u32,
+                );
+            }
+        }
+        let Some(hub) = host.or(self.lan.as_ref()).map(|h| &h.hub) else {
+            return;
+        };
+        let Some(particle) = Self::hub_particle(
+            hub,
+            &ParticleOptions::simple(ParticleType::Block),
+            Some(state),
+        ) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: [0.0; 3],
+            max_speed: [speed as f32; 3],
+            count,
+            randomization: 0,
+        });
+        for g in hub.guests.iter().filter(|g| hub.here(g)) {
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
     /// `ParticleTypes.STREAM_CODEC`'s value for `options`: the type's
     /// network id and the data it carries (`state` for the block particles).
     /// None while not serving, or for a particle whose data isn't sent from
@@ -34,12 +185,18 @@ impl Game<'_> {
         options: &ParticleOptions,
         state: Option<BlockStateId>,
     ) -> Option<Particle> {
+        Self::hub_particle(&self.lan.as_ref()?.hub, options, state)
+    }
+
+    /// `network_particle` for a hub that is out of `self.lan` meanwhile (a
+    /// guest's turn).
+    pub(super) fn hub_particle(
+        hub: &Hub,
+        options: &ParticleOptions,
+        state: Option<BlockStateId>,
+    ) -> Option<Particle> {
         let name = format!("minecraft:{}", options.ty.name());
-        let id = self
-            .lan
-            .as_ref()?
-            .hub
-            .registry_id("minecraft:particle_type", &name)?;
+        let id = hub.registry_id("minecraft:particle_type", &name)?;
         use ParticleType as T;
         let c = options.color;
         let data = match options.ty {
@@ -68,7 +225,11 @@ impl Game<'_> {
 
     /// The options a server's particle stands for (None for a type or data
     /// this client doesn't draw).
-    fn received_particle(&mut self, p: &Particle, at: [f64; 3]) -> Option<ParticleOptions> {
+    pub(super) fn received_particle(
+        &mut self,
+        p: &Particle,
+        at: [f64; 3],
+    ) -> Option<ParticleOptions> {
         let name = self
             .remote
             .as_ref()?
@@ -120,14 +281,10 @@ impl Game<'_> {
             return;
         };
         let (d, s) = (p.dist.map(f64::from), p.max_speed.map(f64::from));
-        // ClientLevel.addParticle: the camera's 32 blocks unless the packet
-        // (`force`) or the type overrides the limiter.
+        // ClientLevel.addParticle: the camera's 32 blocks and the Particles
+        // option, unless the packet or the type overrides the limiter.
         let add = |particles: &mut horizon_client::particles::ParticleEngine, at, v| {
-            if p.override_limiter {
-                particles.create(&options, at, v);
-            } else {
-                particles.add(&options, at, v);
-            }
+            particles.add_with(&options, at, v, p.override_limiter, p.always_show);
         };
         if p.count == 0 {
             add(
@@ -191,11 +348,87 @@ impl Game<'_> {
         }
     }
 
+    /// `ServerLevel.sendParticles` for the players a server serves: one
+    /// `ClientboundLevelParticlesPacket` to each player in the level whose
+    /// block is within 32 blocks of `at`. The window's own player is not
+    /// sent it (the caller draws it in this window). While the host holds
+    /// the players (a guest's turn through `as_guest`, a host's hit on a
+    /// guest) the packet waits for the turn to end so that it reaches every
+    /// player, the guest too.
+    pub(super) fn lan_send_particles(
+        &mut self,
+        options: &ParticleOptions,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    ) {
+        if self.lan.is_none() {
+            // The server is running (its sounds are captured for the guests).
+            if self.audio.capture.is_some() {
+                self.creatures
+                    .lan_particles
+                    .push((options.clone(), at, spread, speed, count));
+            }
+            return;
+        }
+        let Some(particle) = self.network_particle(options, None) else {
+            return;
+        };
+        let Some(host) = self.lan.as_ref() else {
+            return;
+        };
+        let body = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: spread.map(|d| d as f32),
+            max_speed: [speed as f32; 3],
+            count: count as i32,
+            randomization: 0,
+        })
+        .encode();
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            // BlockPos.closerToCenterThan(at, 32): from the centre of the
+            // player's block.
+            let d: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if d < 32.0 * 32.0 {
+                g.sender.send(body.clone());
+            }
+        }
+    }
+
+    /// The particles guests' turns put off.
+    pub(super) fn flush_lan_particles(&mut self) {
+        for (options, at, spread, speed, count) in std::mem::take(&mut self.creatures.lan_particles)
+        {
+            self.lan_send_particles(&options, at, spread, speed, count);
+        }
+    }
+
     /// `ServerLevel.explode`'s packet to each player within 64 blocks. The
     /// sound and the push reach them on their own (the level's sounds, the
     /// motion a hurt player is sent), so the packet carries neither.
-    pub(super) fn lan_explode(&self, center: [f64; 3], radius: f32, block_count: usize) {
-        let emitter = if radius < 2.0 {
+    pub(super) fn lan_explode(
+        &mut self,
+        center: [f64; 3],
+        small: bool,
+        radius: f32,
+        block_count: usize,
+    ) {
+        // In a guest's turn (their hit on an end crystal or a minecart) the
+        // host holds the players (`as_guest`): the packet waits for the turn
+        // to end so that it reaches every player, the guest too.
+        if self.lan_acting.is_some() && self.lan.is_none() {
+            self.creatures
+                .lan_explosions
+                .push((center, small, radius, block_count));
+            return;
+        }
+        let emitter = if small {
             "minecraft:explosion"
         } else {
             "minecraft:explosion_emitter"
@@ -205,6 +438,15 @@ impl Game<'_> {
             self.explosion_packet(center, radius, block_count, emitter, sound, true)
         {
             self.send_explosion(packet, &[]);
+        }
+    }
+
+    /// The explosions guests' turns put off.
+    pub(super) fn flush_lan_explosions(&mut self) {
+        for (center, small, radius, block_count) in
+            std::mem::take(&mut self.creatures.lan_explosions)
+        {
+            self.lan_explode(center, small, radius, block_count);
         }
     }
 

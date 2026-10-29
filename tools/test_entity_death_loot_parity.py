@@ -31,7 +31,7 @@ SKIPPED = {'player', 'mannequin', 'armor_stand', 'ender_dragon', 'giant'}
 # Types Horizon keeps body armour for in the head slot: their corpus wears
 # body items instead of helmets.
 BODY = {'horse', 'donkey', 'mule', 'skeleton_horse', 'zombie_horse', 'camel', 'camel_husk', 'llama', 'trader_llama',
-        'happy_ghast', 'nautilus', 'zombie_nautilus', 'sulfur_cube'}
+        'happy_ghast', 'nautilus', 'zombie_nautilus', 'sulfur_cube', 'wolf'}
 WEAPONS = ['minecraft:iron_sword', 'minecraft:diamond_sword;looting:1', 'minecraft:diamond_sword;looting:2',
            'minecraft:netherite_sword;looting:3', 'minecraft:golden_sword;fire_aspect:2', 'minecraft:diamond_axe;looting:3;fire_aspect:1']
 ARMOUR = {'head': 'minecraft:iron_helmet', 'chest': 'minecraft:chainmail_chestplate', 'legs': 'minecraft:golden_leggings',
@@ -139,9 +139,9 @@ def main():
          '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx2G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]),
          'dev.horizonlab.parity.VanillaEntityDeathLootOracle', inputs, build / 'server.txt'], 'server')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples/client_probe'
+    binary = Path(metadata['target_directory']) / 'fast/examples/client_probe'
     run([binary, 'entity_death_loot_fixture', resources, inputs, build / 'rust.txt'], 'rust')
     errors = [l for l in (build / 'server.txt').read_text().splitlines() if l.startswith('error ')]
     if errors:

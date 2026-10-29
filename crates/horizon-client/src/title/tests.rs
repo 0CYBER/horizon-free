@@ -31,6 +31,7 @@ impl Fixture {
                     "Data",
                     Tag::compound([
                         ("LevelName", Tag::String(name.into())),
+                        ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                         ("GameType", Tag::Int(1)),
                         ("allowCommands", Tag::Byte(1)),
                         (
@@ -115,6 +116,32 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     f.title.escape();
     f.click("Direct Connection");
     assert!(f.title.focused_field().unwrap().1.is_empty());
+}
+
+#[test]
+fn f5_reloads_the_server_list() {
+    let mut f = Fixture::new();
+    f.click("Multiplayer");
+    let file = crate::multiplayer::servers_file(&f.title.saves);
+    horizon_protocol::servers::save(
+        &file,
+        &[horizon_protocol::servers::ServerEntry::new(
+            "Local",
+            "127.0.0.1:1",
+        )],
+    )
+    .unwrap();
+    let listed = |f: &Fixture| match &f.title.mode {
+        Mode::Multiplayer(crate::multiplayer::Screen::List { servers, .. }) => servers.len(),
+        _ => usize::MAX,
+    };
+    assert_eq!(listed(&f), 0);
+    f.title.refresh_servers();
+    assert_eq!(listed(&f), 1);
+    // Only the list refreshes.
+    f.title.mode = Mode::Main;
+    f.title.refresh_servers();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
@@ -288,10 +315,35 @@ fn delete_requires_confirmation_and_both_cancel_paths_preserve_world() {
     assert_eq!((delete.x, delete.y, delete.w), (88.0, 146.0, 150.0));
     f.click("Delete");
     assert!(!f.title.saves.join("World").exists());
-    assert!(matches!(&f.title.mode, Mode::Select { worlds, selected: None } if worlds.is_empty()));
-    f.click("Back");
+    // The last world gone, vanilla opens a fresh Create New World, not an empty list.
+    assert!(matches!(&f.title.mode, Mode::Create { name, .. } if name == "New World"));
+    f.click("Cancel");
+    assert!(matches!(f.title.mode, Mode::Main));
     f.click("Singleplayer");
     assert!(matches!(f.title.mode, Mode::Create { .. }));
+}
+
+#[test]
+fn deleting_one_of_two_worlds_keeps_the_list() {
+    let mut f = Fixture::new();
+    f.world("One", "One");
+    f.world("Two", "Two");
+    f.select();
+    f.click("Delete");
+    f.click("Delete");
+    assert!(matches!(&f.title.mode, Mode::Select { worlds, .. } if worlds.len() == 1));
+}
+
+#[test]
+fn a_list_emptied_elsewhere_opens_create_world() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    world_management::delete(&f.title.saves, "World").unwrap();
+    f.title.worlds_changed();
+    assert!(matches!(f.title.mode, Mode::Create { .. }));
+    f.title.escape();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
@@ -353,7 +405,7 @@ fn backup_screen_blocks_navigation_and_returns_to_the_selected_world() {
         matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
     );
     assert!(
-        matches!(&f.title.toast, Some((_, BackupToast::Created { folder, bytes })) if folder == "World" && *bytes > 0)
+        matches!(&f.title.toast, Some((_, WorldToast::Created { folder, bytes })) if folder == "World" && *bytes > 0)
     );
     assert_eq!(
         Level::read(&f.title.saves.join("World")).unwrap().name,
@@ -375,7 +427,7 @@ fn failed_backup_returns_to_the_selected_world_with_an_error_toast() {
     assert!(
         matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
     );
-    let Some((_, BackupToast::Failed(error))) = &f.title.toast else {
+    let Some((_, WorldToast::Failed(error))) = &f.title.toast else {
         panic!("backup failures should produce an error toast");
     };
     assert!(!error.is_empty());
@@ -404,7 +456,7 @@ fn stopped_backup_worker_returns_to_the_list_with_an_error_toast() {
         matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
     );
     assert!(
-        matches!(&f.title.toast, Some((_, BackupToast::Failed(error))) if error == "Backup worker stopped")
+        matches!(&f.title.toast, Some((_, WorldToast::Failed(error))) if error == "Backup worker stopped")
     );
 }
 
@@ -551,6 +603,34 @@ fn classic_world_selection_is_silent_until_the_entry_launches() {
 }
 
 #[test]
+fn a_world_open_elsewhere_stays_closed_behind_a_toast() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    let open = crate::save::SessionLock::acquire(&f.title.saves.join("World")).unwrap();
+    let (icon_x, icon_y) = (240.0 - 135.0 + 2.0, LIST_TOP + 4.0);
+    assert_eq!(
+        f.title
+            .click(icon_x + 16.0, icon_y + 16.0, (480.0, 262.0))
+            .0,
+        Action::None
+    );
+    assert!(
+        matches!(&f.title.toast, Some((_, WorldToast::AccessFailure(folder))) if folder == "World")
+    );
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
+    drop(open);
+    assert_eq!(
+        f.title
+            .click(icon_x + 16.0, icon_y + 16.0, (480.0, 262.0))
+            .0,
+        Action::Play {
+            folder: "World".into()
+        }
+    );
+}
+
+#[test]
 fn clicking_a_world_icon_joins_it_at_once() {
     let mut f = Fixture::new();
     f.world("World", "World");
@@ -600,7 +680,7 @@ fn world_management_buttons_sound_when_enabled() {
     assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
     assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
     assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
-    assert!(matches!(f.title.mode, Mode::Select { .. }));
+    assert!(matches!(f.title.mode, Mode::Create { .. }));
 }
 
 #[test]
@@ -770,9 +850,12 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
             bonus_chest: true
         }
     );
-    // The More tab's screens don't exist yet.
+    // The More tab's Experiments and Data Packs screens don't exist yet.
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
-    assert!(labels(&f)[..3].iter().all(|b| !b.3));
+    assert_eq!(
+        labels(&f)[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
+        [true, false, false]
+    );
 }
 
 #[test]
@@ -823,4 +906,96 @@ fn world_fields_edit_at_their_cursor() {
     f.title.field_key(KeyCode::ArrowRight, false, false);
     f.title.field_key(KeyCode::Backspace, false, false);
     assert_eq!(f.title.search, "world");
+}
+
+#[test]
+fn server_fields_edit_at_their_cursor() {
+    use winit::keyboard::KeyCode;
+    let mut f = Fixture::new();
+    f.title.mode = Mode::Multiplayer(crate::multiplayer::Screen::Edit {
+        index: None,
+        name: "Minecraft Server".into(),
+        address: String::new(),
+        focus: 1,
+        packs: None,
+    });
+    f.title.type_text("localhost");
+    for _ in 0..4 {
+        assert!(f.title.field_key(KeyCode::ArrowLeft, false, false));
+    }
+    f.title.type_text("X");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { address, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(address, "localXhost");
+    // Shift+Home selects back to the start; typing replaces the selection.
+    f.title.field_key(KeyCode::Home, false, true);
+    f.title.type_text("Y");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { address, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(address, "Yhost");
+    // Tab moves to the name, which edits at its own cursor.
+    f.title.tab();
+    f.title.field_key(KeyCode::ArrowLeft, false, false);
+    f.title.type_text("X");
+    let Mode::Multiplayer(crate::multiplayer::Screen::Edit { name, .. }) = &f.title.mode else {
+        panic!("add server");
+    };
+    assert_eq!(name, "Minecraft ServeXr");
+    f.title.mode = Mode::Multiplayer(crate::multiplayer::Screen::Direct {
+        address: String::new(),
+    });
+    f.title.type_text("one two");
+    // Ctrl+Backspace deletes the word before the caret.
+    f.title.field_key(KeyCode::Backspace, true, false);
+    let Mode::Multiplayer(crate::multiplayer::Screen::Direct { address }) = &f.title.mode else {
+        panic!("direct");
+    };
+    assert_eq!(address, "one ");
+}
+#[test]
+fn world_list_names_every_game_mode_and_hardcore_in_red() {
+    let f = Fixture::new();
+    f.world("Creative", "Creative");
+    let level = |folder: &str, game_type: i32, hardcore: bool| {
+        crate::save::write_dat(
+            &f.title.saves.join(folder).join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("LevelName", Tag::String(folder.into())),
+                    ("GameType", Tag::Int(game_type)),
+                    (
+                        "difficulty_settings",
+                        Tag::compound([
+                            ("difficulty", Tag::String("hard".into())),
+                            ("hardcore", Tag::Byte(i8::from(hardcore))),
+                        ]),
+                    ),
+                    (
+                        "Version",
+                        Tag::compound([("Name", Tag::String("26.3".into()))]),
+                    ),
+                ]),
+            )]),
+        )
+        .unwrap();
+    };
+    level("Hardcore", 0, true);
+    level("Adventure", 2, false);
+    level("Spectator", 3, false);
+    let worlds = list_worlds(&f.title.saves);
+    let info = |folder: &str| world_info(worlds.iter().find(|w| w.folder == folder).unwrap());
+
+    let hardcore = info("Hardcore");
+    assert_eq!(hardcore.plain(), "Hardcore Mode, Version: 26.3");
+    assert_eq!(hardcore.spans[0].text, "Hardcore Mode");
+    assert_eq!(hardcore.spans[0].style.color, Some(0xFF0000));
+    assert!(hardcore.spans[1..].iter().all(|s| s.style.color.is_none()));
+    assert_eq!(info("Adventure").plain(), "Adventure Mode, Version: 26.3");
+    assert_eq!(info("Spectator").plain(), "Spectator Mode, Version: 26.3");
+    let creative = info("Creative");
+    assert_eq!(creative.plain(), "Creative Mode, Commands, Version: 26.3");
+    assert!(creative.spans.iter().all(|s| s.style.color.is_none()));
 }

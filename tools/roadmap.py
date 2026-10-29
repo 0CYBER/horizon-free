@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Horizon's roadmap: roadmap/roadmap.toml is the source, ROADMAP.md is generated from it.
 
-    python3 tools/roadmap.py build              write ROADMAP.md and website/data/roadmap.json
+    python3 tools/roadmap.py build              write ROADMAP.md and roadmap/roadmap.json
     python3 tools/roadmap.py build --check      fail when either is out of date (CI)
     python3 tools/roadmap.py check --offline    the file's own rules (CI)
     python3 tools/roadmap.py check              the same, then GitHub: links resolve, no stale Now item
@@ -28,12 +28,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "roadmap" / "roadmap.toml"
 OUTPUT = ROOT / "ROADMAP.md"
-# What the website's hub reads (website/build.mjs), and serves at /data/roadmap.json for Kira and others.
-SITE_DATA = ROOT / "website" / "data" / "roadmap.json"
+# What the website's hub reads from main at build time (horizon-rust/horizon-site), and serves at /data/roadmap.json
+# for Kira and others.
+SITE_DATA = ROOT / "roadmap" / "roadmap.json"
 # The journal's weekly summaries, one file per ISO week: roadmap/journal/2026-43.md (roadmap/README.md).
 JOURNAL = ROOT / "roadmap" / "journal"
 WEEK = re.compile(r"(\d{4})-(\d{2})\.md$")
-REPO = "ludovic111/horizon"
+REPO = "horizon-rust/horizon"
 SITE = "https://playhorizon.dev/hub"
 
 STATUSES = {
@@ -259,7 +260,7 @@ def weeks(directory=JOURNAL):
 
 
 def site_data(data):
-    """website/data/roadmap.json: the items as the hub and Kira read them, in the file's order."""
+    """roadmap/roadmap.json: the items as the hub and Kira read them, in the file's order."""
     keys = ("id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post",
             "announce")
     out = {
@@ -375,7 +376,9 @@ def online_problems(data, states, now):
 # --- sync -----------------------------------------------------------------------------------------------------
 
 def family(paths):
-    """Which releases carry a change: the launcher's, the website (deployed from main) or the game's."""
+    """Which releases carry a change: the launcher's, the website (deployed when merged) or the game's. The site
+    left this repository on 2026-10-26 (horizon-rust/horizon-site), so only older pull requests are website-only;
+    an item the site alone ships takes shipped_in = "website" by hand."""
     if paths and all(path.startswith("launcher/") for path in paths):
         return "launcher"
     if paths and all(path.startswith("website/") for path in paths):
@@ -563,7 +566,7 @@ def command_sync(args):
     SOURCE.write_text(text)
     for path, content in outputs(new).items():
         path.write_text(content)
-    print("roadmap: wrote roadmap/roadmap.toml, ROADMAP.md and website/data/roadmap.json")
+    print("roadmap: wrote roadmap/roadmap.toml, ROADMAP.md and roadmap/roadmap.json")
     return 0
 
 

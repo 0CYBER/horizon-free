@@ -97,6 +97,9 @@ impl Report {
         for r in &f.requires {
             out += &format!("  needs {} {} ({})\n", r.id, r.version, &r.sha256[..12]);
         }
+        if self.kind == Kind::NativeMod {
+            out += "  native source: unsandboxed; not executed by the registry check. Compile and test against the exact pinned Horizon and Mixins revisions before review.\n";
+        }
         if self.kind == Kind::Mod && !self.code {
             out += "  no code: content only, nothing to run\n";
         } else if self.kind == Kind::Mod {
@@ -118,6 +121,7 @@ impl Report {
 pub fn kind_of(path: &Path) -> Option<Kind> {
     match path.extension()?.to_str()? {
         "hmod" => Some(Kind::Mod),
+        "hnmod" => Some(Kind::NativeMod),
         "hpack" => Some(Kind::Modpack),
         "zip" => Some(Kind::ResourcePack),
         "hshader" => Some(Kind::Shader),
@@ -200,7 +204,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
         return Err(format!("it didn't start: {reason}"));
     }
     let client: Vec<String> = mods.commands().map(str::to_owned).collect();
-    let server: Vec<String> = mods.server_commands().map(str::to_owned).collect();
+    let server: Vec<String> = mods.server_commands().map(|c| c.name.clone()).collect();
     report.commands = [client.clone(), server.clone()].concat();
     // A server mod plays with one player on, who joins, chats and leaves.
     let steve = ServerPlayer {
@@ -262,9 +266,21 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
             Output::Command { line } => format!("command: /{line}"),
+            Output::QuietCommands { lines, .. } => {
+                format!("{} quiet command(s)", lines.len())
+            }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
+            Output::SetBlocks {
+                dimension, blocks, ..
+            } => {
+                format!("set {} block(s) in {dimension}", blocks.len())
+            }
             Output::OpenScreen { .. } => "opened a screen".to_string(),
             Output::CloseScreen { .. } => "closed its screen".to_string(),
+            Output::PlaceRecipe { book_id, all } => {
+                format!("placed recipe {book_id}{}", if all { " (all)" } else { "" })
+            }
+            Output::Give { item, count, .. } => format!("gave {count} {item}"),
             Output::Shake { strength, seconds } => {
                 format!("shook the camera: {strength:.2} for {seconds:.1} s")
             }

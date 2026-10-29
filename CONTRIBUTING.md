@@ -4,8 +4,8 @@ Thanks for helping. Horizon is Minecraft: Java Edition 26.3 rewritten in Rust, a
 everything is that **it plays exactly like vanilla**. This page is the short version of how we work; questions are
 welcome on [Discord](https://discord.gg/HcTeMZxe5E).
 
-This repository holds the game, the launcher and the website, plus the tools, tests and docs that build, check and
-release them. Anything else (videos, Discord and other community material) lives elsewhere.
+This repository holds the game and the launcher, plus the tools, tests and docs that build, check and release them.
+The website (playhorizon.dev) is built in a separate repository from this one's README, `docs/api/` and roadmap. Anything else (videos, Discord and other community material) lives elsewhere.
 
 **Where to start: [playhorizon.dev/hub](https://playhorizon.dev/hub).** It shows what is being done now and next
 ([ROADMAP.md](ROADMAP.md) in the repository), the work board, good first tasks, and the forms to report a bug or
@@ -86,6 +86,9 @@ configuration and toolchain changes select the whole workspace; CI also keeps it
   release notes), `skip-release` when players see no change (tooling, docs, tests), nothing for a fix.
   `release-now` is for crash fixes that shouldn't wait. pr_ready suggests one.
 
+Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; risky ones (saves, network, world
+generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).
+
 Every merge to main is released automatically ([release flow](docs/release-flow.md)), so main always stays playable.
 How agents, checks, releases and signed updates keep this safe: [security](docs/security.md).
 
@@ -98,5 +101,5 @@ new pushes, we add it again.
 
 ## Talk to us
 
-[Discord](https://discord.gg/HcTeMZxe5E) for questions and ideas, [issues](https://github.com/ludovic111/horizon/issues)
+[Discord](https://discord.gg/HcTeMZxe5E) for questions and ideas, [issues](https://github.com/horizon-rust/horizon/issues)
 for bugs. If you want to take something on, say so in its issue so nobody else starts the same work.

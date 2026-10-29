@@ -34,8 +34,14 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
         [Capability::GameRead, Capability::Hud, Capability::Chat]
     );
     // What CI writes reads back the same.
-    let again = Index::parse(&serde_json::to_string(&index).unwrap()).unwrap();
+    let text = serde_json::to_string(&index).unwrap();
+    let again = Index::parse(&text).unwrap();
     assert_eq!(again, index);
+    // Download counts: the publish job adds them; none is left out.
+    assert_eq!(hud.downloads, 0);
+    assert!(!text.contains("downloads"));
+    let counted = text.replacen("\"versions\"", "\"downloads\":12345,\"versions\"", 1);
+    assert_eq!(Index::parse(&counted).unwrap().projects[0].downloads, 12345);
 }
 
 #[test]
@@ -125,7 +131,7 @@ fn refuses_broken_indexes() {
     assert!(e.contains("https"), "{e}");
     // A local test registry may list files on disk; the published one may not.
     let local = text.replace(
-        "https://github.com/ludovic111/horizon-mods/releases/download/coords_hud-0.1.0/",
+        "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/",
         "file:///tmp/",
     );
     assert!(Index::parse(&local).unwrap_err().contains("https"));

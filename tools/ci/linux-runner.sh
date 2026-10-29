@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # A Horizon CI runner (labels self-hosted, Linux, X64, horizon-game and the host's name) on a Linux machine of the
-# maintainer's (NixOS: ludodesktop, ludothinkpad), as a systemd user service of the account that holds his
-# Minecraft files, like the Mac mini's runners (docs/release-flow.md). Run it on that machine, as that user:
+# maintainer's (NixOS: ludodesktop; Ubuntu: playhorizon, a partner's server), as a systemd user service
+# of the account that holds his Minecraft files, like the Mac mini's runners (docs/release-flow.md). Run it on that
+# machine, as that user:
 #
 #   bash tools/ci/linux-runner.sh install    # register (gh login), install, start; again to update the scripts
 #   bash tools/ci/linux-runner.sh status     # the services, the runner's state, the pause watcher's last lines
@@ -12,12 +13,18 @@
 # never runs as the service). horizon-runner-pause.service (runner_pause.py) starts the runner only while nobody
 # uses the machine (screen locked or untouched for 15 min, no game), and stops it otherwise. The runner runs nice,
 # in horizon-ci.slice (low CPU and I/O weight, memory capped), on its own virtual screen: vscreen (a headless sway)
-# where it is installed, else Xvfb from nixpkgs with Mesa's Vulkan drivers.
+# where it is installed, else Xvfb with Mesa's Vulkan drivers (from nixpkgs on NixOS, from the system elsewhere).
 # HORIZON_SHARED_SOURCE: the imported vanilla data (default ~/horizon-local/shared-local, else
 # ~/code/horizon/.local); RUNNER_JOBS: cargo jobs and harnesses at once (default a third of the threads, at most 8:
 # ludodesktop froze under ~7 cold cargo builds on 2026-10-14, and it is the maintainer's own machine).
+# RUNNER_CPUS and RUNNER_MEMORY (GB): the slice's CPU quota and memory cap (default half the threads, two thirds of
+# the memory), for a machine that does nothing else. RUNNER_TOKEN: the registration (or, for uninstall, removal)
+# token, made with gh on another machine, where gh must not be logged in (a machine someone else also runs):
+#   RUNNER_TOKEN=$(gh api -X POST repos/horizon-rust/horizon/actions/runners/registration-token --jq .token)
+# Without Nix (Debian, Ubuntu), the packages come from apt (the list in system_packages) and python3.13 from the
+# PATH (uv python install 3.13, linked into ~/.local/bin).
 set -euo pipefail
-repo=ludovic111/horizon
+repo=horizon-rust/horizon
 dir=$HOME/.actions-runners/horizon
 units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 version=2.338.0
@@ -27,9 +34,16 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Nix packages the jobs need, kept alive by GC roots in $dir/nix. nix-build prints the store path; the root's name
 # gets the output's suffix (alsa-dev-dev for alsa-lib.dev), so it is not read back from the link.
 nix_out() { nix-build '<nixpkgs>' -A "$1" -o "$dir/nix/$2" | tail -1; }
+nixos() { [ -d /run/current-system/sw ]; }
+system_packages="build-essential pkg-config cmake libasound2-dev libudev-dev sccache mesa-vulkan-drivers libvulkan1 xvfb
+  libx11-6 libxcursor1 libxrandr2 libxi6 libxinerama1 libxkbcommon0 libxkbcommon-x11-0 libgl1 libegl1 rsync git curl"
 
 # The runner is a .NET program: on NixOS its native libraries (libstdc++, ICU, OpenSSL) come from nix-ld.
-export LD_LIBRARY_PATH=/run/current-system/sw/share/nix-ld/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+if nixos; then export LD_LIBRARY_PATH=/run/current-system/sw/share/nix-ld/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}; fi
+
+token() {
+  if [ -n "${RUNNER_TOKEN:-}" ]; then echo "$RUNNER_TOKEN"; else gh api -X POST "repos/$repo/actions/runners/$1" --jq .token; fi
+}
 # NixOS has no /bin/bash: the runner's scripts (again after each of its self-updates) get a portable one.
 fix_shebangs() { sed -i '1s|^#!/bin/bash|#!/usr/bin/env bash|' "$dir"/*.sh "$dir"/bin/*.sh; }
 
@@ -77,32 +91,59 @@ install() {
     fi
     tar xzf "$cache" -C "$dir"
     fix_shebangs
-    gh api -X POST "repos/$repo/actions/runners/registration-token" --jq .token |
+    token registration-token |
       (cd "$dir" && bash ./config.sh --unattended --replace --url "https://github.com/$repo" --token "$(cat)" \
         --name "$name" --labels "${RUNNER_LABELS:-horizon-game,$(hostname)}" --work _work > /dev/null)
   fi
 
   # Libraries for building (pkg-config) and running (dlopen) the game, the JDK pinned by research-lock.json, sccache.
-  local alsa udev java
-  alsa=$(nix_out alsa-lib.dev alsa-dev)
-  udev=$(nix_out systemd.dev systemd-dev)
-  java=$(nix_out "jdk$(sed -n 's/.*"java_major": *\([0-9]*\).*/\1/p' "$here/../../research-lock.json" | head -1)_headless" jdk)/lib/openjdk
-  nix_out sccache sccache > /dev/null  # on the PATH below: runner-env.sh hands it to cargo
-  local libs=/run/opengl-driver/lib:/run/current-system/sw/share/nix-ld/lib
-  if ! command -v vscreen > /dev/null; then
-    local mesa x
-    mesa=$(nix_out mesa mesa)
-    x=$(nix_out xvfb-run xvfb-run)
-    for lib in libx11 libxcursor libxrandr libxi libxext libxinerama libxrender libxxf86vm libxcb libxkbcommon \
-        vulkan-loader libGL; do
-      libs=$libs:$(nix_out "$lib" "$lib")/lib
-    done
-    libs=$mesa/lib:$libs
-    echo "VK_DRIVER_FILES=$mesa/share/vulkan/icd.d/intel_icd.x86_64.json:$mesa/share/vulkan/icd.d/lvp_icd.x86_64.json" \
-      > "$dir/.env.display"
-    echo "$x/bin" > "$dir/.path.display"
+  local major java platform_env path
+  major=$(sed -n 's/.*"java_major": *\([0-9]*\).*/\1/p' "$here/../../research-lock.json" | head -1)
+  if nixos; then
+    local alsa udev libs=/run/opengl-driver/lib:/run/current-system/sw/share/nix-ld/lib display_path=""
+    alsa=$(nix_out alsa-lib.dev alsa-dev)
+    udev=$(nix_out systemd.dev systemd-dev)
+    java=$(nix_out "jdk${major}_headless" jdk)/lib/openjdk
+    nix_out sccache sccache > /dev/null  # on the PATH below: runner-env.sh hands it to cargo
+    platform_env="PKG_CONFIG_PATH=$alsa/lib/pkgconfig:$udev/lib/pkgconfig
+C_INCLUDE_PATH=$udev/include
+NIX_LD=/run/current-system/sw/share/nix-ld/lib/ld.so
+NIX_LD_LIBRARY_PATH=/run/current-system/sw/share/nix-ld/lib"
+    if ! command -v vscreen > /dev/null; then
+      local mesa x
+      mesa=$(nix_out mesa mesa)
+      x=$(nix_out xvfb-run xvfb-run)
+      for lib in libx11 libxcursor libxrandr libxi libxext libxinerama libxrender libxxf86vm libxcb libxkbcommon \
+          vulkan-loader libGL; do
+        libs=$libs:$(nix_out "$lib" "$lib")/lib
+      done
+      libs=$mesa/lib:$libs
+      platform_env="$platform_env
+VK_DRIVER_FILES=$mesa/share/vulkan/icd.d/intel_icd.x86_64.json:$mesa/share/vulkan/icd.d/lvp_icd.x86_64.json"
+      display_path=$x/bin:
+    fi
+    platform_env="$platform_env
+LD_LIBRARY_PATH=$libs"
+    path="$dir/cargo/bin:$display_path$dir/nix/sccache/bin:$java/bin:$HOME/.local/bin:/run/wrappers/bin:/etc/profiles/per-user/$USER/bin:/run/current-system/sw/bin"
+  else
+    # apt's packages (installed here when sudo needs no password), its JDK, and Mesa's software Vulkan (lavapipe):
+    # a server has no GPU.
+    local missing
+    missing=$(dpkg-query -W -f='${Package} ${Status}\n' $system_packages "openjdk-$major-jdk-headless" 2>&1 |
+      awk '/^dpkg-query: no packages found matching/ {print $NF; next} !/ installed$/ {print $1}' | tr '\n' ' ')
+    if [ -n "${missing// /}" ]; then
+      sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $missing > /dev/null ||
+        { echo "Install first: sudo apt-get install $missing"; exit 1; }
+    fi
+    command -v python3.13 > /dev/null || [ -x "$HOME/.local/bin/python3.13" ] ||
+      { echo "No python3.13: uv python install 3.13, then link it into ~/.local/bin"; exit 1; }
+    java=$(ls -d /usr/lib/jvm/java-"$major"-openjdk-* | head -1)
+    platform_env=""
+    command -v vscreen > /dev/null || platform_env="VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+    path="$dir/cargo/bin:$java/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
   fi
-  cat > "$dir/.env" <<EOF
+  {
+    cat <<EOF
 LANG=C.UTF-8
 RUSTUP_HOME=$dir/rustup
 CARGO_HOME=$dir/cargo
@@ -115,25 +156,26 @@ HORIZON_NO_AUDIO=1
 HORIZON_NO_HEARTBEAT=1
 HORIZON_TELEMETRY_URL=off
 HORIZON_LAUNCHER_NO_SELF_UPDATE=1
-PKG_CONFIG_PATH=$alsa/lib/pkgconfig:$udev/lib/pkgconfig
-C_INCLUDE_PATH=$udev/include
-LD_LIBRARY_PATH=$libs
-NIX_LD=/run/current-system/sw/share/nix-ld/lib/ld.so
-NIX_LD_LIBRARY_PATH=/run/current-system/sw/share/nix-ld/lib
 EOF
-  if [ -f "$dir/.env.display" ]; then cat "$dir/.env.display" >> "$dir/.env"; else echo "VSCREEN=ci-horizon" >> "$dir/.env"; fi
-  echo "$dir/cargo/bin:$(cat "$dir/.path.display" 2>/dev/null || true)${dir}/nix/sccache/bin:$java/bin:$HOME/.local/bin:/run/wrappers/bin:/etc/profiles/per-user/$USER/bin:/run/current-system/sw/bin" \
-    | sed 's/::/:/g' > "$dir/.path"
+    [ -n "$platform_env" ] && echo "$platform_env"
+    command -v vscreen > /dev/null && echo "VSCREEN=ci-horizon"
+    true
+  } > "$dir/.env"
+  echo "$path" > "$dir/.path"
+  rm -f "$dir/.env.display" "$dir/.path.display"  # written by older versions of this script
 
+  local memory cpus
+  memory=${RUNNER_MEMORY:-$(( $(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo) * 2 / 3 ))}
+  cpus=${RUNNER_CPUS:-$(( threads / 2 > 1 ? threads / 2 : 1 ))}
   cat > "$units/horizon-ci.slice" <<EOF
 [Unit]
 Description=Horizon CI: the runner's jobs and parity workers sent from other machines
 [Slice]
 CPUWeight=20
 IOWeight=20
-CPUQuota=$(( threads * 50 ))%
-MemoryHigh=$(( $(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo) / 2 ))G
-MemoryMax=$(( $(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo) * 2 / 3 ))G
+CPUQuota=$(( cpus * 100 ))%
+MemoryHigh=$(( memory * 3 / 4 ))G
+MemoryMax=${memory}G
 EOF
   cat > "$units/horizon-runner.service" <<EOF
 [Unit]
@@ -156,6 +198,7 @@ EOF
 Description=Runs the Horizon CI runner only while nobody uses the machine or plays on it
 [Service]
 ExecStart=$(command -v python3) $dir/runner_pause.py
+Environment=NORMAL_CPUS=$cpus
 Restart=always
 RestartSec=10
 [Install]
@@ -201,7 +244,7 @@ status() {
 
 uninstall() {
   systemctl --user disable --now horizon-runner-pause.service horizon-runner.service 2>/dev/null || true
-  gh api -X POST "repos/$repo/actions/runners/remove-token" --jq .token |
+  token remove-token |
     (cd "$dir" && bash ./config.sh remove --token "$(cat)")
   rm -f "$units/horizon-runner.service" "$units/horizon-runner-pause.service" "$units/horizon-ci.slice"
   systemctl --user daemon-reload

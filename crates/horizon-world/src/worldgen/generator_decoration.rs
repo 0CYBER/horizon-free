@@ -26,7 +26,7 @@ use super::{
     generator::{
         DecorateStats, GenBlockStates, GeneratorData, GeneratorError, ProtoChunk, WorkerState,
     },
-    placement::{LayerBlock, PlacementContext, PlacementQueryError},
+    placement::{FeaturePlacer, LayerBlock, PlacementContext, PlacementQueryError},
     tags::TagDefinitions,
     terrain::PreLightChunkStage,
     write_zone::GenerationWriteZone,
@@ -252,6 +252,56 @@ impl Decoration {
             })
             .clone()
     }
+    /// Vanilla's feature identity and the step-local index/step mixed into
+    /// `set_feature_seed`.
+    pub(super) fn seed(&self, name: &str) -> Option<(u32, i32, i32)> {
+        let identity = self.names.iter().position(|candidate| candidate == name)? as u32;
+        let (index, step) = self.plan.seed(FeatureIdentity(identity))?;
+        Some((identity, index as i32, step as i32))
+    }
+    /// Replays a feature's placement chain and the feature itself on a no-op
+    /// world. This advances vanilla's random stream but writes no blocks, so a
+    /// caller can reproduce the exact origins without generating terrain.
+    pub(super) fn origins(
+        &self,
+        world_seed: i64,
+        chunk: ChunkPos,
+        mut biome_allows: impl FnMut([i32; 3]) -> bool,
+    ) -> Vec<[i32; 3]> {
+        let Some((identity, index, step)) = self.seed("minecraft:end_island_decorated") else {
+            return Vec::new();
+        };
+        let Ok(feature) = &self.features[identity as usize] else {
+            return Vec::new();
+        };
+        let blocks = self.blocks;
+        let mut random = WorldgenRandom::new(XoroshiroRandom::new(0));
+        let seed = random.set_decoration_seed(world_seed, chunk.x * 16, chunk.z * 16);
+        random.set_feature_seed(seed, index, step);
+        let mut world = OriginWorld {
+            air: blocks.air,
+            generation: WorldGenerationContext::new(0, 256, 0),
+            biome_allows: &mut biome_allows,
+        };
+        let mut origins = Vec::new();
+        let mut placer = FeaturePlacer::new();
+        let _ = placer.place_with_biome_check(
+            &feature.placement,
+            &mut world,
+            &mut random,
+            [chunk.x * 16, 0, chunk.z * 16],
+            FeatureIdentity(identity),
+            |world, random, position| {
+                origins.push(position);
+                feature
+                    .feature
+                    .place(world, random, position, blocks)
+                    .map(|_| true)
+                    .map_err(|_| ())
+            },
+        );
+        origins
+    }
     /// Placed-feature roots that cannot run, with their decode errors.
     pub(super) fn unsupported(&self) -> Vec<(String, String)> {
         self.names
@@ -310,6 +360,7 @@ impl Decoration {
             Err(e) => return Err(resource(e.to_string())),
         };
         let structures_only = worker.structures_only;
+        let references = region[4].structure_starts.clone();
         let mut block_entities = Vec::new();
         for chunk in region.iter_mut() {
             block_entities.append(&mut chunk.block_entities);
@@ -318,6 +369,9 @@ impl Decoration {
             block_entities,
             entities: Vec::new(),
             level_random,
+            structure_mobs: worker.structure_mobs.clone(),
+            starts: references.clone(),
+            biome_names: data.biome_names(),
             blocks: data
                 .feature_resources
                 .as_ref()
@@ -334,7 +388,12 @@ impl Decoration {
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
-        let references = region[4].structure_starts.clone();
+        // The blocks' facts: `BlockState.isSolidRender` and the rest, the
+        // structure pieces ask them of the blocks around them.
+        let tree_blocks = self
+            .bindings
+            .tree_blocks()
+            .map_err(|e| resource(e.to_string()))?;
         // ChunkGenerator.getWritableArea: the chunk's minimum Y + 1 to its maximum Y.
         let chunk_box = BoundingBox::new(
             [center.x * 16, min_y + 1, center.z * 16],
@@ -372,6 +431,7 @@ impl Decoration {
                             start,
                             world,
                             &structures.resources,
+                            &tree_blocks,
                             random,
                             chunk_box,
                             &mut place_feature,
@@ -419,15 +479,11 @@ impl Decoration {
         }
         // WorldGenRegion.addFreshEntity: into the chunk holding the position.
         for nbt in std::mem::take(&mut world.entities) {
-            let Some(crate::nbt::Tag::List(p)) = nbt.get(&"Pos".into()) else {
+            let Some(at) = block_of(&nbt) else {
                 continue;
             };
-            let coord = |i: usize| match p.get(i) {
-                Some(crate::nbt::Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
-                _ => 0,
-            };
-            let index = ((coord(2) >> 4).wrapping_sub(center.z) + 1) * 3
-                + (coord(0) >> 4).wrapping_sub(center.x)
+            let index = ((at[2] >> 4).wrapping_sub(center.z) + 1) * 3
+                + (at[0] >> 4).wrapping_sub(center.x)
                 + 1;
             if let Some(chunk) = usize::try_from(index).ok().and_then(|i| region.get_mut(i)) {
                 chunk.entities.push(nbt);
@@ -448,12 +504,53 @@ impl Decoration {
     }
 }
 
+/// Advances a feature's random stream with no block storage; every write is
+/// discarded. Placement modifiers still see the real biome and build bounds.
+struct OriginWorld<'a> {
+    air: BlockStateId,
+    generation: WorldGenerationContext,
+    biome_allows: &'a mut dyn FnMut([i32; 3]) -> bool,
+}
+impl FeatureWorld for OriginWorld<'_> {
+    type Error = ();
+    fn block(&mut self, _: [i32; 3]) -> Result<BlockStateId, ()> {
+        Ok(self.air)
+    }
+    fn set_block(&mut self, _: [i32; 3], _: BlockStateId, _: i32) -> Result<bool, ()> {
+        Ok(false)
+    }
+}
+impl PlacementContext for OriginWorld<'_> {
+    fn generation(&self) -> WorldGenerationContext {
+        self.generation
+    }
+    fn min_y(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(self.generation.min_y)
+    }
+    fn height(&mut self, _: HeightmapType, _: i32, _: i32) -> Result<i32, PlacementQueryError> {
+        Ok(self.generation.min_y + self.generation.height)
+    }
+    fn max_y(&mut self) -> Result<i32, PlacementQueryError> {
+        Ok(self.generation.min_y + self.generation.height - 1)
+    }
+    fn biome_allows_feature(
+        &mut self,
+        position: [i32; 3],
+        _: FeatureIdentity,
+    ) -> Result<bool, PlacementQueryError> {
+        Ok((self.biome_allows)(position))
+    }
+}
+
 /// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
     block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
     entities: Vec<crate::nbt::Compound>,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
+    structure_mobs: Option<Arc<dyn super::generator::StructureMobs>>,
+    starts: Vec<Arc<super::structure::start::StructureStart>>,
+    biome_names: &'a [Arc<str>],
     blocks: Option<&'a BlockBehavior>,
     region: TerrainRegion<'static, GenBlockStates>,
     biomes: BiomeRegion<BiomeId>,
@@ -847,9 +944,56 @@ impl PlacementContext for World<'_> {
                 (0..ny).all(|y| (0..nz).all(|z| shape.is_full(x as i32, y as i32, z as i32)))
             }))
     }
-    fn add_entity(&mut self, nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+    fn add_entity(&mut self, mut nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+        if let Some(mobs) = self.structure_mobs.clone()
+            && nbt.contains_key(&"horizon:finalize".into())
+        {
+            let at = block_of(&nbt).unwrap_or([0; 3]);
+            let biome = self
+                .biome_identity(at)
+                .ok()
+                .and_then(|b| self.biome_names.get(b.0 as usize))
+                .map_or("", |n| &**n)
+                .to_owned();
+            let structures: Vec<String> = self
+                .starts
+                .iter()
+                .filter(|s| s.pieces.iter().any(|p| p.bounding_box().is_inside(at)))
+                .map(|s| s.name.clone())
+                .collect();
+            if mobs.finalize(&mut nbt, &biome, &structures, self.level_random) {
+                nbt.remove(&"horizon:finalize".into());
+            }
+        }
         self.entities.push(nbt);
         Ok(())
+    }
+    /// SpikeFeature.placeSpike: the crystal is a fresh entity of the region,
+    /// saved with the chunk.
+    fn spawn_end_crystal(
+        &mut self,
+        position: [f64; 3],
+        yaw: f32,
+        beam_target: Option<[i32; 3]>,
+        invulnerable: bool,
+    ) -> Result<(), PlacementQueryError> {
+        use crate::nbt::Tag;
+        let mut nbt = crate::nbt::Compound::new();
+        nbt.insert("id".into(), Tag::String("minecraft:end_crystal".into()));
+        nbt.insert(
+            "Pos".into(),
+            Tag::List(position.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        );
+        nbt.insert(
+            "Rotation".into(),
+            Tag::List(vec![Tag::Float(yaw.to_bits()), Tag::Float(0)]),
+        );
+        nbt.insert("Invulnerable".into(), Tag::Byte(i8::from(invulnerable)));
+        nbt.insert("ShowBottom".into(), Tag::Byte(1));
+        if let Some(b) = beam_target {
+            nbt.insert("beam_target".into(), Tag::IntArray(b.to_vec()));
+        }
+        self.add_entity(nbt)
     }
     fn set_block_entity(
         &mut self,
@@ -1166,4 +1310,15 @@ impl PlacementContext for World<'_> {
         }
         Ok(Some(false))
     }
+}
+
+/// The block an entity's `Pos` is in.
+fn block_of(nbt: &crate::nbt::Compound) -> Option<[i32; 3]> {
+    let Some(crate::nbt::Tag::List(p)) = nbt.get(&"Pos".into()) else {
+        return None;
+    };
+    Some(std::array::from_fn(|i| match p.get(i) {
+        Some(crate::nbt::Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
+        _ => 0,
+    }))
 }

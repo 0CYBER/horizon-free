@@ -1,9 +1,14 @@
 //! Creative inventory (CreativeModeInventoryScreen): vanilla's tabs and their
 //! contents as built by the game's own display generators
 //! (`creative-inventory.json`), a 9x5 scrolling grid and the search tab.
-use crate::{Result, items::ItemStack};
+use crate::{Result, items::ItemStack, ui::EditBox};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Clone, Debug)]
 pub struct Tab {
@@ -35,13 +40,22 @@ pub struct Creative {
     pub scroll: f32,
     /// The scrollbar is held (scrolling): dragging moves it.
     pub scrolling: bool,
-    pub search: String,
-    /// When the search box took the focus (`EditBox.setFocused`): its
-    /// cursor blinks from then.
-    pub search_focused: std::time::Instant,
+    /// CreativeModeInventoryScreen's search box: an unbordered `EditBox` of 50.
+    pub search: EditBox,
     /// The search tab's stacks, in its display order.
     search_items: Vec<ItemStack>,
     search_index: Vec<SearchEntry>,
+    /// ItemPickerMenu.items: what the grid shows, filled when the tab or the
+    /// search changes (selectTab, refreshSearchResults), not on every frame.
+    shown: Mutex<Option<Shown>>,
+}
+/// The grid's stacks for one tab, search text and language.
+struct Shown {
+    tab: usize,
+    search: String,
+    /// A display name, so a language change refills the search results.
+    language: String,
+    items: Arc<[ItemStack]>,
 }
 /// Display names from the pinned en_us language file.
 #[derive(Default)]
@@ -284,10 +298,16 @@ impl Creative {
             selected: 0,
             scroll: 0.0,
             scrolling: false,
-            search: String::new(),
-            search_focused: std::time::Instant::now(),
+            search: {
+                let mut search = EditBox::new(0.0, 0.0, 80.0, 9.0);
+                search.bordered = false;
+                search.max_length = 50;
+                search.text_color = u32::MAX;
+                search
+            },
             search_items,
             search_index,
+            shown: Mutex::new(None),
         }
     }
     /// Where a stack comes in the creative tabs (the search tab lists them
@@ -300,23 +320,53 @@ impl Creative {
             .position(|s| s.same_item_same_components(stack))
             .or_else(|| items.iter().position(|s| s.item == stack.item))
     }
+    /// The tabs without their stacks: what the screen draws of them each frame.
+    pub fn tab_headers(&self) -> Vec<Tab> {
+        self.tabs
+            .iter()
+            .map(|t| Tab {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                icon: t.icon.clone(),
+                items: Vec::new(),
+                top: t.top,
+                column: t.column,
+                search: t.search,
+                inventory: t.inventory,
+            })
+            .collect()
+    }
     pub fn tab(&self) -> &Tab {
         &self.tabs[self.selected.min(self.tabs.len() - 1)]
     }
     /// selectTab: a different tab empties the search box; the scrollbar goes to the top.
     pub fn select(&mut self, tab: usize) {
         if tab != self.selected {
-            self.search.clear();
+            self.search.set_value("");
         }
         self.selected = tab;
         self.scroll = 0.0;
         if self.tab().search {
-            self.search_focused = std::time::Instant::now();
+            self.search.focused = true;
+            self.search.reset_blink();
         }
     }
     /// The search tab's stacks.
     pub fn search_items(&self) -> &[ItemStack] {
         &self.search_items
+    }
+    /// Opening the screen: vanilla rebuilds CreativeModeInventoryScreen, whose
+    /// init() makes a fresh search box and a zeroed scrollbar; only the tab
+    /// persists (its static selectedTab). selectTab on the reopened screen
+    /// takes the oldTab != tab branch, so it empties and refocuses the box.
+    pub fn reopen(&mut self) {
+        self.search.set_value("");
+        self.release();
+        self.scroll = 0.0;
+        self.search.focused = self.tab().search;
+        if self.search.focused {
+            self.search.reset_blink();
+        }
     }
     /// Indices into `search_items` that CreativeModeInventoryScreen.refreshSearchResults
     /// shows for `term`: the whole tab when empty, the tag tree after `#`, else
@@ -380,17 +430,44 @@ impl Creative {
         })
         .collect()
     }
-    /// Items shown by the selected tab (the search tab filters by `search`).
-    pub fn items(&self, names: &Names) -> Vec<ItemStack> {
-        let tab = self.tab();
-        if tab.search {
-            return self
-                .search_results(&self.search, names)
+    /// Items shown by the selected tab (the search tab filters by `search`),
+    /// worked out again only when the tab, the search or the language changed.
+    pub fn items(&self, names: &Names) -> Arc<[ItemStack]> {
+        let tab = self.selected.min(self.tabs.len() - 1);
+        let search = if self.tab().search {
+            self.search.value.as_str()
+        } else {
+            ""
+        };
+        let language = names.display_get("itemGroup.search").unwrap_or_default();
+        let mut shown = self.shown.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = shown.as_ref()
+            && s.tab == tab
+            && s.search == search
+            && s.language == language
+        {
+            return s.items.clone();
+        }
+        let items: Arc<[ItemStack]> = if self.tab().search {
+            self.search_results(search, names)
                 .into_iter()
                 .map(|i| self.search_items[i].clone())
-                .collect();
-        }
-        tab.items.clone()
+                .collect()
+        } else {
+            self.tab().items.as_slice().into()
+        };
+        *shown = Some(Shown {
+            tab,
+            search: search.to_owned(),
+            language,
+            items: items.clone(),
+        });
+        items
+    }
+    /// Drop the shown items, so the next `items` works them out again: a
+    /// reload can rename items without changing the Search label.
+    pub fn forget_items(&self) {
+        *self.shown.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
     pub fn rows(&self, names: &Names) -> usize {
         self.items(names).len().div_ceil(9)
@@ -450,6 +527,53 @@ impl Creative {
     pub fn scroller_offset(&self) -> f32 {
         ((Self::SCROLL_HEIGHT - 17.0) * self.scroll) as i32 as f32
     }
+    /// The tabs whose `CreativeModeTab.contains(stack)` holds, in
+    /// `CreativeModeTabs.tabs()` order, the search tab left out: the stack is
+    /// among the tab's search-tab items, by item and components. The export
+    /// lists each tab's own items; the search tab's stacks that no tab shows
+    /// (the enchanted books below their top level, `SEARCH_TAB_ONLY`) belong
+    /// to the tabs that show their item.
+    pub fn tabs_containing(&self, stack: &ItemStack) -> Vec<usize> {
+        let category = |t: &Tab| !t.search && !t.inventory;
+        let tabs_where = |shows: &dyn Fn(&ItemStack) -> bool| -> Vec<usize> {
+            (0..self.tabs.len())
+                .filter(|&i| category(&self.tabs[i]) && self.tabs[i].items.iter().any(shows))
+                .collect()
+        };
+        let found = tabs_where(&|s| same_components(s, stack));
+        if found.is_empty() && self.search_items.iter().any(|s| same_components(s, stack)) {
+            return tabs_where(&|s| s.item == stack.item);
+        }
+        found
+    }
+    /// The `#namespace:path` lines `getTooltipFromContainerItem` adds for a
+    /// search tab stack while the search is a `#` query: the item tags
+    /// `updateVisibleTags` keeps for the text after `#` (the path contains it;
+    /// with a colon, the namespace and the path each contain their part) that
+    /// the stack has.
+    pub fn search_tag_lines(&self, stack: &ItemStack) -> Vec<String> {
+        let Some(text) = self.search.value.strip_prefix('#') else {
+            return Vec::new();
+        };
+        let Some(entry) = self
+            .search_items
+            .iter()
+            .position(|s| same_components(s, stack))
+            .and_then(|i| self.search_index.get(i))
+        else {
+            return Vec::new();
+        };
+        let visible = |(ns, path): &(String, String)| match text.split_once(':') {
+            None => path.contains(text),
+            Some((n, p)) => ns.contains(java_trim(n)) && path.contains(java_trim(p)),
+        };
+        entry
+            .tags
+            .iter()
+            .filter(|t| visible(t))
+            .map(|(ns, path)| format!("#{ns}:{path}"))
+            .collect()
+    }
     /// Tab button position relative to the screen origin (CreativeModeInventoryScreen.getTabX/Y).
     pub fn tab_position(tab: &Tab) -> (f32, f32) {
         let mut x = tab.column as f32 * 27.0;
@@ -465,6 +589,21 @@ impl Creative {
 /// some string contains it (none for no strings, even when `text` is empty).
 fn any<'a>(strings: impl IntoIterator<Item = &'a str>, text: &str) -> bool {
     strings.into_iter().any(|s| s.contains(text))
+}
+/// `ItemStack.isSameItemSameComponents`, the count left out, as the
+/// tabs' `ItemStackLinkedSet` compares: no components and empty ones match.
+fn same_components(a: &ItemStack, b: &ItemStack) -> bool {
+    let none = crate::item_data::StackData::default();
+    a.item == b.item
+        && a.damage == b.damage
+        && a.data().unwrap_or(&none) == b.data().unwrap_or(&none)
+}
+/// `CreativeModeInventoryScreen.getTooltipFromContainerItem`: the plain
+/// tooltip only for a category tab's own grid slots (`CustomCreativeSlot`);
+/// everywhere else in the screen the tab names (and, on the search tab's
+/// grid, the tag lines) follow the item's name.
+pub fn tooltip_lists_tabs(category_tab: bool, grid_slot: bool) -> bool {
+    !(category_tab && grid_slot)
 }
 /// String.toLowerCase(Locale.ROOT).
 fn java_lower(s: &str) -> String {
@@ -511,6 +650,8 @@ pub enum DisplayClick {
     Nothing,
     /// SWAP: the hotbar slot gets a full stack of the item.
     Hotbar(usize, ItemStack),
+    /// SWAP with button 40 (Key F): the off-hand gets a full stack of the item.
+    Offhand(ItemStack),
     /// THROW: a copy of the item is dropped.
     Drop(ItemStack),
 }
@@ -532,8 +673,11 @@ pub fn click_display(
     match input {
         Input::Swap => {
             return match shown {
-                Some(s) => DisplayClick::Hotbar(button as usize, copy(s, max(s))),
-                None => DisplayClick::Nothing,
+                Some(s) if button == 40 => DisplayClick::Offhand(copy(s, max(s))),
+                Some(s) if (0..9).contains(&button) => {
+                    DisplayClick::Hotbar(button as usize, copy(s, max(s)))
+                }
+                Some(_) | None => DisplayClick::Nothing,
             };
         }
         Input::Clone => {
@@ -608,6 +752,109 @@ mod tests {
         (carried, effect)
     }
 
+    /// Tabs as the export lists them: two block tabs sharing the oak log,
+    /// ingredients with the top-level book only, the search tab with every
+    /// stack (a level 1 book only there) and its tags, the inventory.
+    fn tooltip_tabs() -> Creative {
+        let book = |level: u8| {
+            format!(
+                r#"{{components:{{"minecraft:stored_enchantments":{{"minecraft:sharpness":{level}}}}},count:1,id:"minecraft:enchanted_book"}}"#
+            )
+        };
+        let log = r#"{count:1,id:"minecraft:oak_log"}"#;
+        let dirt = r#"{count:1,id:"minecraft:dirt"}"#;
+        let tab = |id: &str, kind: &str, items: Vec<String>| serde_json::json!({"id": id, "type": kind, "title": id, "icon": log, "items": items});
+        let mut search = tab(
+            "minecraft:search",
+            "SEARCH",
+            vec![log.into(), dirt.into(), book(1), book(5)],
+        );
+        search["lines"] = serde_json::json!([[], [], [], []]);
+        search["tags"] = serde_json::json!([
+            [
+                "minecraft:logs",
+                "minecraft:oak_logs",
+                "minecraft:logs_that_burn"
+            ],
+            ["minecraft:dirt"],
+            [],
+            []
+        ]);
+        Creative::from_json(&serde_json::json!({"tabs": [
+            tab("minecraft:building_blocks", "CATEGORY", vec![log.into()]),
+            tab("minecraft:natural_blocks", "CATEGORY", vec![log.into(), dirt.into()]),
+            tab("minecraft:hotbar", "HOTBAR", vec![]),
+            search,
+            tab("minecraft:ingredients", "CATEGORY", vec![book(5)]),
+            tab("minecraft:inventory", "INVENTORY", vec![]),
+        ]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn tooltip_lists_the_tabs_that_contain_the_stack() {
+        let c = tooltip_tabs();
+        let ids = |s: &ItemStack| -> Vec<&str> {
+            c.tabs_containing(s)
+                .into_iter()
+                .map(|i| c.tabs[i].id.as_str())
+                .collect()
+        };
+        // In tab order, the search and inventory tabs left out; the count
+        // doesn't matter.
+        assert_eq!(
+            ids(&stack("oak_log", 37)),
+            ["minecraft:building_blocks", "minecraft:natural_blocks"]
+        );
+        assert_eq!(ids(&stack("dirt", 1)), ["minecraft:natural_blocks"]);
+        // A stack no tab holds: other components, or no creative item.
+        let mut damaged = stack("oak_log", 1);
+        damaged.damage = 3;
+        assert!(ids(&damaged).is_empty());
+        assert!(ids(&stack("barrier", 1)).is_empty());
+        // A level 1 book is a search-tab-only stack of the ingredients tab.
+        let books: Vec<&ItemStack> = c
+            .search_items()
+            .iter()
+            .filter(|s| &*s.item == "minecraft:enchanted_book")
+            .collect();
+        assert_eq!(ids(books[0]), ["minecraft:ingredients"]);
+        assert_eq!(ids(books[1]), ["minecraft:ingredients"]);
+    }
+
+    #[test]
+    fn tooltip_tab_names_skip_only_a_category_tab_grid() {
+        assert!(!tooltip_lists_tabs(true, true));
+        // The hotbar row of a category tab, the search tab's grid and hotbar,
+        // the inventory tab.
+        assert!(tooltip_lists_tabs(true, false));
+        assert!(tooltip_lists_tabs(false, true));
+        assert!(tooltip_lists_tabs(false, false));
+    }
+
+    #[test]
+    fn tag_search_lists_the_matching_tags_of_the_stack() {
+        let mut c = tooltip_tabs();
+        let log = stack("oak_log", 1);
+        assert!(c.search_tag_lines(&log).is_empty());
+        c.search.set_value("logs");
+        assert!(c.search_tag_lines(&log).is_empty());
+        c.search.set_value("#logs");
+        assert_eq!(
+            c.search_tag_lines(&log),
+            [
+                "#minecraft:logs",
+                "#minecraft:oak_logs",
+                "#minecraft:logs_that_burn"
+            ]
+        );
+        c.search.set_value("#oak");
+        assert_eq!(c.search_tag_lines(&log), ["#minecraft:oak_logs"]);
+        c.search.set_value("#mine : burn");
+        assert_eq!(c.search_tag_lines(&log), ["#minecraft:logs_that_burn"]);
+        assert!(c.search_tag_lines(&stack("dirt", 1)).is_empty());
+    }
+
     #[test]
     fn search_tab_number_keys_swap_over_a_slot_before_typing() {
         let filled = Hover::Display { filled: true };
@@ -656,10 +903,14 @@ mod tests {
             display(Some(stack("ender_pearl", 9)), 1, Pickup).0,
             Some(stack("ender_pearl", 8))
         );
-        // Number keys fill a hotbar slot, Q drops copies, pick block clones.
+        // Number keys fill a hotbar slot, F fills off-hand, Q drops copies, pick block clones.
         assert_eq!(
             display(None, 3, Swap).1,
             DisplayClick::Hotbar(3, stack("stone", 64))
+        );
+        assert_eq!(
+            display(None, 40, Swap).1,
+            DisplayClick::Offhand(stack("stone", 64))
         );
         assert_eq!(
             display(None, 0, Throw).1,
@@ -754,13 +1005,13 @@ mod tests {
             (1, false, true),
             (2, true, false),
         ] {
-            c.search = "anvil".into();
+            c.search.set_value("anvil");
             c.scroll = 0.5;
             c.select(selected);
             assert_eq!(c.selected, selected);
             assert_eq!(c.tab().inventory, inventory);
             assert_eq!(c.tab().search, search);
-            assert!(c.search.is_empty());
+            assert!(c.search.value.is_empty());
             assert_eq!(c.scroll, 0.0);
         }
     }
@@ -780,12 +1031,12 @@ mod tests {
         assert_eq!(c.tabs[0].items[0].item.as_ref(), "minecraft:anvil");
         let mut c = c;
         c.select(1);
-        c.search = "anvil".into();
+        c.search.set_value("anvil");
         c.scroll = 0.5;
         c.select(1);
-        assert_eq!((c.search.as_str(), c.scroll), ("anvil", 0.0));
+        assert_eq!((c.search.value.as_str(), c.scroll), ("anvil", 0.0));
         c.select(0);
-        assert_eq!(c.search, "");
+        assert_eq!(c.search.value, "");
     }
 
     #[test]
@@ -898,5 +1149,26 @@ mod tests {
         assert_eq!(c.scroller_offset(), 0.0);
         c.scroll = 1.0;
         assert_eq!(c.scroller_offset(), 95.0);
+    }
+
+    #[test]
+    fn search_edits_at_its_cursor() {
+        use winit::keyboard::KeyCode;
+        let mut c = creative(0);
+        c.select(1);
+        c.search.insert_text("hello world");
+        for _ in 0..5 {
+            assert!(c.search.key(KeyCode::ArrowLeft, false, false));
+        }
+        c.search.insert_text("X");
+        assert_eq!(c.search.value, "hello Xworld");
+        c.search.key(KeyCode::Home, false, true);
+        c.search.insert_text("Y");
+        assert_eq!(c.search.value, "Yworld");
+        // Ctrl+Left jumps a word; one step right and Backspace deletes before the cursor.
+        c.search.key(KeyCode::ArrowLeft, true, false);
+        c.search.key(KeyCode::ArrowRight, false, false);
+        c.search.key(KeyCode::Backspace, false, false);
+        assert_eq!(c.search.value, "world");
     }
 }

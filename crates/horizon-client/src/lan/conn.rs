@@ -381,7 +381,7 @@ fn serve_legacy(mut stream: TcpStream, shared: &Shared) -> Result<(), String> {
     let body = if data.len() == 1 {
         format!("{motd}\u{a7}{online}\u{a7}{max}")
     } else {
-        if data[1] != 1 {
+        if data.get(1) != Some(&1) {
             return Ok(());
         }
         if data.len() > 2 {
@@ -791,6 +791,16 @@ fn login_and_configure(
             },
         }),
     )?;
+    // ServerConfigurationPacketListenerImpl.startConfiguration: links, only
+    // when there are any (MinecraftServer.serverLinks is empty elsewhere).
+    if !shared.config.server_links.is_empty() {
+        send(
+            c,
+            cfg::Clientbound::ServerLinks(cfg::ServerLinks {
+                links: shared.config.server_links.clone(),
+            }),
+        )?;
+    }
     send(
         c,
         cfg::Clientbound::UpdateEnabledFeatures(cfg::UpdateEnabledFeatures {
@@ -823,6 +833,17 @@ fn login_and_configure(
             _ => {}
         }
     };
+    // A Horizon client hears that this server runs its mods' quiet commands
+    // (horizon_protocol::quiet); a vanilla one is told nothing.
+    if brand == "horizon" {
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: horizon_protocol::quiet::CHANNEL.into(),
+                data: Vec::new(),
+            }),
+        )?;
+    }
     for packet in sync.registry_packets(known_pack) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }

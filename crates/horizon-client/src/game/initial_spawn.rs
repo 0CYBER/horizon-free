@@ -20,7 +20,8 @@ use horizon_core::{
 };
 use horizon_world::{
     block_collision::BlockCollisionRegistry, collision_context::CollisionContext,
-    heightmap::HeightmapType, worldgen::terrain::TerrainBlockStates,
+    heightmap::HeightmapType, level::flags::UPDATE_CLIENTS, registry::BlockStateId,
+    worldgen::terrain::TerrainBlockStates,
 };
 
 /// The loaded world as the spawn searches query it.
@@ -121,60 +122,200 @@ impl Game<'_> {
         }
         Ok(Some([ox * 16 + 8, height, oz * 16 + 8]))
     }
-    /// PlayerSpawnFinder.findSpawn around the world spawn: the feet of a
-    /// player who has no position yet. None while a candidate's chunk loads.
-    pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
-        let mut finder = match self.player_spawn {
-            Some(finder) => finder,
-            None if self.level.game_mode == 2 => {
-                // Adventure mode: the suggestion itself.
-                let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
-                finder.next_candidate();
-                finder
-            }
-            None => {
-                let mut radius = self.ui.rules.int("respawn_radius").max(0);
-                let to_border = self
-                    .border
-                    .distance(f64::from(suggestion[0]), f64::from(suggestion[2]))
-                    .floor() as i32;
-                if to_border < radius {
-                    radius = to_border;
-                }
-                if to_border <= 1 {
-                    radius = 1;
-                }
-                PlayerSpawnFinder::new(suggestion, radius, |n| {
-                    entity_random().next_int_bound(n).unwrap_or(0)
-                })
-            }
+    /// MinecraftServer.setInitialSpawn's bonus chest: BonusChestFeature.place
+    /// in the spawn chunk, a chest with the spawn bonus loot and a torch on
+    /// each side that can hold one, on the first free column of a shuffled
+    /// walk over the chunk. Skipped while the chunk is not loaded.
+    pub(super) fn place_bonus_chest(&mut self, origin: [i32; 3]) -> Result<()> {
+        use horizon_client::containers::BlockEntity;
+        let (cx, cz) = (origin[0] >> 4, origin[2] >> 4);
+        let registry = &self.pack.assets.registry;
+        let (Some(chest), Some(torch)) = (
+            registry.default_state("minecraft:chest"),
+            registry.default_state("minecraft:torch"),
+        ) else {
+            return Ok(());
         };
-        let found = loop {
+        if !self.streaming.is_lit(cx, cz) {
+            return Ok(());
+        }
+        // `level.getRandom()`. Util.toShuffledList of the chunk's x and z.
+        let random = &mut self.world.random;
+        let mut shuffled = |min: i32| -> [i32; 16] {
+            let mut values: [i32; 16] = std::array::from_fn(|i| min + i as i32);
+            for end in (2..=16usize).rev() {
+                let other = random.next_int_bound(end as i32).unwrap_or(0) as usize;
+                values.swap(end - 1, other);
+            }
+            values
+        };
+        let (xs, zs) = (shuffled(cx * 16), shuffled(cz * 16));
+        for x in xs {
+            for z in zs {
+                let y = self
+                    .spawn_columns()
+                    .height(HeightmapType::MotionBlockingNoLeaves, x, z);
+                if self.world.block(x, y, z) != self.world.air && !self.collision_empty([x, y, z]) {
+                    continue;
+                }
+                self.set_block_clients([x, y, z], chest)?;
+                let seed = self.world.random.next_long();
+                self.world
+                    .block_entities
+                    .insert((x, y, z), BlockEntity::Chest(Vec::new()));
+                self.load_block_entity_nbt(
+                    [x, y, z],
+                    &format!(
+                        "{{LootTable:\"minecraft:chests/spawn_bonus_chest\",LootTableSeed:{seed}L}}"
+                    ),
+                );
+                for [dx, dz] in [[0, -1], [1, 0], [0, 1], [-1, 0]] {
+                    let at = [x + dx, y, z + dz];
+                    let survives = self.with_level(|b, level, ticks| {
+                        b.can_survive(level, ticks, BlockPos::new(at[0], at[1], at[2]), torch)
+                    });
+                    if survives {
+                        self.set_block_clients(at, torch)?;
+                    }
+                }
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+    /// `Level.setBlock(pos, state, UPDATE_CLIENTS)`: no neighbour updates.
+    fn set_block_clients(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.set_block(
+                level,
+                ticks,
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                state,
+                UPDATE_CLIENTS,
+            );
+        });
+        self.process_level_events()
+    }
+    /// The block at `pos` has no collision shape.
+    fn collision_empty(&self, pos: [i32; 3]) -> bool {
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        self.collision
+            .collision_shape_with_context(
+                &mut scene,
+                self.world.block(pos[0], pos[1], pos[2]),
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                &CollisionContext::empty(false),
+            )
+            .is_ok_and(|shape| shape.is_empty())
+    }
+    /// PlayerSpawnFinder.findSpawn around the world spawn, as far as the loaded
+    /// chunks allow: the feet of the first free column within the respawn
+    /// radius, else the suggestion's own column. The finder waits in `state`
+    /// (None to begin); Err gives the chunk of the candidate being waited for,
+    /// which the caller must have loaded (the finder tries at most 1024
+    /// columns).
+    pub(super) fn search_spawn(
+        &self,
+        suggestion: [i32; 3],
+        state: &mut Option<PlayerSpawnFinder>,
+    ) -> std::result::Result<Vec3, (i32, i32)> {
+        let mut finder = state
+            .take()
+            .unwrap_or_else(|| self.spawn_finder(suggestion));
+        let suggestion = finder.suggestion;
+        loop {
             let Some(candidate) = finder.next_candidate() else {
-                break Some(self.fixup_spawn_height(suggestion));
+                return Ok(self.fixup_spawn_height(suggestion));
             };
             let (x, z) = match candidate {
                 SpawnCandidate::Column(x, z) => (x, z),
                 SpawnCandidate::Suggestion => (suggestion[0], suggestion[2]),
             };
             if !self.streaming.is_lit(x >> 4, z >> 4) {
-                self.streaming.center = (x >> 4, z >> 4);
                 finder.retry();
-                break None;
+                *state = Some(finder);
+                return Err((x >> 4, z >> 4));
             }
             match candidate {
                 SpawnCandidate::Column(x, z) => {
                     if let Some(pos) = level_respawn_pos(&self.spawn_columns(), x, z)
                         && self.player_fits(pos)
                     {
-                        break Some(bottom_center(pos));
+                        return Ok(bottom_center(pos));
                     }
                 }
-                SpawnCandidate::Suggestion => break Some(self.fixup_spawn_height(suggestion)),
+                SpawnCandidate::Suggestion => return Ok(self.fixup_spawn_height(suggestion)),
             }
-        };
-        self.player_spawn = found.is_none().then_some(finder);
-        Ok(found)
+        }
+    }
+    /// PlayerSpawnFinder.findSpawn around the world spawn: the feet of a
+    /// player who has no position yet. None while a candidate's chunk loads.
+    pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
+        let mut state = self.player_spawn.take();
+        match self.search_spawn(suggestion, &mut state) {
+            Ok(feet) => Ok(Some(feet)),
+            Err(chunk) => {
+                self.streaming.center = chunk;
+                self.player_spawn = state;
+                Ok(None)
+            }
+        }
+    }
+    /// A new PlayerSpawnFinder around `suggestion`: the respawn radius, cut
+    /// by the world border; the suggestion itself in adventure mode.
+    fn spawn_finder(&self, suggestion: [i32; 3]) -> PlayerSpawnFinder {
+        if self.level.game_mode == 2 {
+            let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
+            finder.next_candidate();
+            return finder;
+        }
+        let mut radius = self.ui.rules.int("respawn_radius").max(0);
+        let to_border = self
+            .border
+            .distance(f64::from(suggestion[0]), f64::from(suggestion[2]))
+            .floor() as i32;
+        if to_border < radius {
+            radius = to_border;
+        }
+        if to_border <= 1 {
+            radius = 1;
+        }
+        PlayerSpawnFinder::new(suggestion, radius, |n| {
+            entity_random().next_int_bound(n).unwrap_or(0)
+        })
+    }
+    /// ServerPlayer.adjustSpawnLocation for a server's new player: where
+    /// PlayerSpawnFinder.findSpawn puts their feet around the world spawn
+    /// (`spawn`, the feet there), so that players new to a world don't all
+    /// stand in one spot. Vanilla waits for each candidate's chunk; a server
+    /// tick can't, so a candidate in a chunk not loaded yet is passed over,
+    /// and `spawn` stays when the search never reaches a loaded column.
+    pub(super) fn server_player_spawn(&self, spawn: [f64; 3]) -> [f64; 3] {
+        let suggestion = spawn.map(|v| v.floor() as i32);
+        let mut finder = self.spawn_finder(suggestion);
+        while let Some(candidate) = finder.next_candidate() {
+            let (x, z) = match candidate {
+                SpawnCandidate::Column(x, z) => (x, z),
+                SpawnCandidate::Suggestion => (suggestion[0], suggestion[2]),
+            };
+            if !self.streaming.is_lit(x >> 4, z >> 4) {
+                continue;
+            }
+            let feet = match candidate {
+                SpawnCandidate::Column(x, z) => level_respawn_pos(&self.spawn_columns(), x, z)
+                    .filter(|&pos| self.player_fits(pos))
+                    .map(bottom_center),
+                SpawnCandidate::Suggestion => Some(self.fixup_spawn_height(suggestion)),
+            };
+            if let Some(feet) = feet {
+                return [feet.x, feet.y, feet.z];
+            }
+        }
+        spawn
     }
     /// PlayerSpawnFinder.noCollisionNoLiquid: a player's box standing at the
     /// block's bottom centre touches no block or liquid.

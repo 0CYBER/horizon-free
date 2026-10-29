@@ -267,7 +267,7 @@ impl Launcher {
         )
         .bg(self.theme.plate)
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+            copy_to_clipboard(cx, gpui::ClipboardItem::new_string(text.clone()));
             this.internet.copied = Some((text.clone(), Instant::now()));
             cx.notify();
         }))

@@ -4,7 +4,8 @@
 //! `thunderHit` (damage and burning, charged creepers, zombified piglins,
 //! witches, mooshroom colours, turtles, burnt items), lightning rods, the sky
 //! flash, the sounds and the branching additive bolt.
-use super::Game;
+use super::{Game, commands::Target};
+use horizon_client::advancements::EntityView;
 use horizon_client::mobs::{Damage, DamageKind, MobEvent, SpawnSetup, Species};
 use horizon_core::{position::BlockPos, random::RandomSource};
 
@@ -16,8 +17,15 @@ pub(super) struct Bolt {
     flashes: i32,
     seed: i64,
     visual_only: bool,
-    /// Mooshrooms switch colour once per bolt.
+    /// Mooshrooms and copper golems change once per bolt.
     converted: Vec<u32>,
+    /// The mobs it has struck (`hitEntities`).
+    hit: Vec<u32>,
+    /// Blocks it set on fire (`blocksSetOnFire`).
+    fires: i32,
+    /// The player who channelled it (`LightningBolt.cause`): `Some(None)` for
+    /// the host, `Some(Some(conn))` for a guest.
+    pub cause: Option<Option<u32>>,
 }
 impl Game<'_> {
     /// `ServerChunkCache.tickSpawningChunk`: one `tickThunder` roll per
@@ -29,10 +37,13 @@ impl Game<'_> {
         if rain <= 0.2 || thunder <= 0.9 || self.dim != super::Dim::Overworld {
             return;
         }
-        let (_, mut chunks) = self.spawning_chunks(&self.level_players());
+        let mut scratch = std::mem::take(&mut self.spawn_scratch);
+        self.spawning_chunks(&self.level_players(), &mut scratch);
         let levels = self.tickets.levels();
-        chunks.retain(|&(x, z)| levels.random_ticking(x, z));
-        for (cx, cz) in chunks {
+        scratch
+            .candidates
+            .retain(|&(x, z)| levels.random_ticking(x, z));
+        for (cx, cz) in scratch.candidates.drain(..) {
             if self.world.random.next_int_bound(100_000).unwrap_or(1) != 0 {
                 continue;
             }
@@ -46,8 +57,12 @@ impl Game<'_> {
             if !self.with_level(|b, level, _| b.is_raining_at(level, p)) {
                 continue;
             }
-            // Skeleton trap: effective difficulty / 100 (regional difficulty approximated).
-            let difficulty = f64::from(self.ui.difficulty) * 0.75;
+            // Skeleton trap: the local effective difficulty / 100
+            // (`getCurrentDifficultyAt(pos)`).
+            let difficulty = f64::from(
+                self.local_difficulty([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])])
+                    .effective,
+            );
             let below = &self
                 .res
                 .facts()
@@ -73,15 +88,76 @@ impl Game<'_> {
             ];
             self.spawn_bolt(at, trap);
         }
+        self.spawn_scratch = scratch;
     }
-    /// `findLightningTargetAround`: a living entity under open sky in the
-    /// column (3 blocks around), else the top of the column.
+    /// `ServerLevel.findLightningRod`: `PoiManager.findClosest` over the
+    /// lightning rod points of interest within 128 blocks of `center` whose
+    /// block is the top (`WORLD_SURFACE`) of its column; the strike lands one
+    /// above it. Horizon keeps no point-of-interest index, so this scans the
+    /// loaded chunks the way `/locate poi` does.
+    fn find_lightning_rod(&self, center: [i32; 3]) -> Option<[i32; 3]> {
+        const RANGE: i32 = 128;
+        let facts = self.res.facts();
+        let mut is_rod: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+        let mut best: Option<(i64, [i32; 3])> = None;
+        let (cx0, cz0) = ((center[0] - RANGE) >> 4, (center[2] - RANGE) >> 4);
+        let (cx1, cz1) = ((center[0] + RANGE) >> 4, (center[2] + RANGE) >> 4);
+        for cx in cx0..=cx1 {
+            for cz in cz0..=cz1 {
+                let Some(chunk) = self.world.chunks.get(&(cx, cz)) else {
+                    continue;
+                };
+                for (i, section) in chunk.sections.iter().enumerate() {
+                    let mut rod = |state: u32| {
+                        *is_rod.entry(state).or_insert_with(|| {
+                            facts
+                                .get(horizon_world::registry::BlockStateId(state))
+                                .name
+                                .ends_with("lightning_rod")
+                        })
+                    };
+                    if !section.blocks.maybe_has(&mut rod) {
+                        continue;
+                    }
+                    let base_y = horizon_client::chunk::MIN_Y + 16 * i as i32;
+                    for j in 0..4096 {
+                        if !rod(section.get(j)) {
+                            continue;
+                        }
+                        let p = [
+                            cx * 16 + (j & 15) as i32,
+                            base_y + (j >> 8) as i32,
+                            cz * 16 + ((j >> 4) & 15) as i32,
+                        ];
+                        let d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]]
+                            .map(|d| i64::from(d) * i64::from(d))
+                            .iter()
+                            .sum::<i64>();
+                        if d > i64::from(RANGE * RANGE) || best.is_some_and(|(b, _)| d >= b) {
+                            continue;
+                        }
+                        let surface = self.world.world_surface(p[0], p[2], |s| facts.is_air(s));
+                        if p[1] == surface - 1 {
+                            best = Some((d, p));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| [p[0], p[1] + 1, p[2]])
+    }
+    /// `findLightningTargetAround`: the closest lightning rod, else a living
+    /// entity under open sky in the column (3 blocks around), else the top of
+    /// the column.
     fn lightning_target(&mut self, x: i32, z: i32) -> Option<[i32; 3]> {
         if !self.world.loaded(x, z) {
             return None;
         }
         let top =
             self.with_level(|b, level, _| b.motion_blocking_top(level, BlockPos::new(x, 0, z)));
+        if let Some(rod) = self.find_lightning_rod([x, top.y, z]) {
+            return Some(rod);
+        }
         let sees_sky = |g: &Self, p: [i32; 3]| g.world.light(p[0], p[1], p[2]) >> 4 == 15;
         let mut candidates: Vec<[i32; 3]> = self
             .mobs
@@ -142,6 +218,9 @@ impl Game<'_> {
             seed,
             visual_only,
             converted: Vec::new(),
+            hit: Vec::new(),
+            fires: 0,
+            cause: None,
         });
     }
     /// `ClientLevel.addEntity` for a server's lightning bolt: on a client it
@@ -160,13 +239,16 @@ impl Game<'_> {
             seed,
             visual_only: true,
             converted: Vec::new(),
+            hit: Vec::new(),
+            fires: 0,
+            cause: None,
         });
     }
-    /// `spawnFire`: fire at the strike point and `extra` random neighbours.
-    fn bolt_fire(&mut self, at: [f64; 3], extra: i32) {
-        if self.ui.difficulty < 2 {
-            return;
-        }
+    /// `spawnFire`: fire at the strike point and `extra` random neighbours,
+    /// wherever `BaseFireBlock.getState` fire can survive. Returns how many
+    /// blocks it set on fire.
+    fn bolt_fire(&mut self, at: [f64; 3], extra: i32) -> i32 {
+        let mut set = 0;
         let base = [
             at[0].floor() as i32,
             at[1].floor() as i32,
@@ -183,21 +265,18 @@ impl Game<'_> {
             if !self.res.facts().is_air(state) {
                 continue;
             }
-            // BaseFireBlock.getState: soul fire on soul soil and sand.
-            let below = self.res.facts().get(self.world.block(p[0], p[1] - 1, p[2]));
-            let name = if matches!(&*below.name, "minecraft:soul_soil" | "minecraft:soul_sand") {
-                "minecraft:soul_fire"
-            } else {
-                "minecraft:fire"
-            };
-            // FireBlock.canSurvive: a sturdy floor (flammable neighbours aside).
-            if below.sturdy_full >> 1 & 1 == 0 {
-                continue;
-            }
-            if let Some(fire) = self.pack.assets.registry.default_state(name) {
+            // BaseFireBlock.getState and FireBlock/SoulFireBlock.canSurvive.
+            let at = BlockPos::new(p[0], p[1], p[2]);
+            let fire = self.with_level(|b, level, ticks| {
+                let fire = b.fire_state_for(level, ticks, at);
+                b.can_survive(level, ticks, at, fire).then_some(fire)
+            });
+            if let Some(fire) = fire {
                 let _ = self.level_set(p, fire);
+                set += 1;
             }
         }
+        set
     }
     /// `LightningBolt.tick` for every bolt.
     pub(super) fn tick_bolts(&mut self) {
@@ -219,13 +298,24 @@ impl Game<'_> {
                     pitch,
                 );
                 if !b.visual_only {
-                    self.bolt_fire(b.at, 4);
+                    // Only Normal and Hard start fires with the strike itself.
+                    if self.ui.difficulty >= 2 {
+                        b.fires += self.bolt_fire(b.at, 4);
+                    }
                     self.strike_rod(b.at);
+                }
+                // LightningBolt.tick runs clearCopperOnLightningStrike for
+                // every server bolt, a skeleton trap's visual one included;
+                // a client's copy of a server bolt (spawn_remote_bolt) only
+                // flashes.
+                if self.remote.is_none() {
+                    self.bolt_clear_copper(b.at);
                 }
             }
             b.life -= 1;
             if b.life < 0 {
                 if b.flashes == 0 {
+                    self.lightning_strike_triggers(b);
                     return false;
                 }
                 if b.life < -self.world.random.next_int_bound(10).unwrap_or(0) {
@@ -233,7 +323,7 @@ impl Game<'_> {
                     b.life = 1;
                     b.seed = self.world.random.next_long();
                     if !b.visual_only {
-                        self.bolt_fire(b.at, 0);
+                        b.fires += self.bolt_fire(b.at, 0);
                     }
                 }
             }
@@ -243,7 +333,11 @@ impl Game<'_> {
                 }
                 self.flash = 2;
                 if !b.visual_only {
-                    self.thunder_hit(b);
+                    let struck = self.thunder_hit(b);
+                    if let Some(cause) = b.cause {
+                        let who = cause.map_or(Target::Player, Target::Guest);
+                        self.for_player(who, |g| g.trigger_channeled_lightning(&struck));
+                    }
                 }
             }
             true
@@ -278,8 +372,51 @@ impl Game<'_> {
             self.level_event_at(3002, p, axis);
         }
     }
-    /// `thunderHit` for entities within 3 blocks (up to 9 above).
-    fn thunder_hit(&mut self, b: &mut Bolt) {
+    /// `LightningBolt.clearCopperOnLightningStrike` at the block the bolt struck.
+    fn bolt_clear_copper(&mut self, at: [f64; 3]) {
+        let p = BlockPos::new(
+            at[0].floor() as i32,
+            (at[1] - 1.0e-6).floor() as i32,
+            at[2].floor() as i32,
+        );
+        self.with_level(|b, level, ticks| b.lightning_clear_copper(level, ticks, p));
+        let _ = self.process_level_events();
+    }
+    /// `LightningStrikeTrigger` at the bolt's discard: every player within 256
+    /// blocks, with the mobs in its 30-block box that it did not hit.
+    fn lightning_strike_triggers(&mut self, b: &Bolt) {
+        let at = b.at;
+        let bolt = EntityView {
+            kind: "minecraft:lightning_bolt".into(),
+            position: at,
+            blocks_set_on_fire: b.fires,
+            ..Default::default()
+        };
+        let viewers: Vec<EntityView> = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive() && !b.hit.contains(&m.id))
+            .filter(|m| {
+                (m.position.x - at[0]).abs() <= 15.0
+                    && (m.position.z - at[2]).abs() <= 15.0
+                    && m.position.y >= at[1] - 15.0
+                    && m.position.y <= at[1] + 21.0
+            })
+            .map(|m| self.mob_entity(m))
+            .collect();
+        self.for_each_player(|g| {
+            let Some(p) = g.player.as_ref().map(|p| p.position) else {
+                return;
+            };
+            let d2 = (p.x - at[0]).powi(2) + (p.y - at[1]).powi(2) + (p.z - at[2]).powi(2);
+            if d2 < 256.0 * 256.0 {
+                g.trigger_lightning_strike(&bolt, &viewers);
+            }
+        });
+    }
+    /// `thunderHit` for entities within 3 blocks (up to 9 above). Returns the
+    /// mobs in that box before the hit, as `CHANNELED_LIGHTNING` counts them.
+    fn thunder_hit(&mut self, b: &mut Bolt) -> Vec<EntityView> {
         let at = b.at;
         let inside = move |p: [f64; 3]| {
             (p[0] - at[0]).abs() <= 3.0
@@ -287,6 +424,13 @@ impl Game<'_> {
                 && p[1] >= at[1] - 3.0
                 && p[1] <= at[1] + 9.0
         };
+        let struck: Vec<(u32, EntityView)> = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive() && inside([m.position.x, m.position.y, m.position.z]))
+            .map(|m| (m.id, self.mob_entity(m)))
+            .collect();
+        b.hit.extend(struck.iter().map(|(id, _)| *id));
         let damage = Damage {
             kind: DamageKind::Generic,
             attacker: None,
@@ -337,6 +481,17 @@ impl Game<'_> {
                     continue;
                 }
                 Species::Creeper => m.extra.charged = true,
+                // CopperGolem.thunderHit (after Entity.thunderHit's fire and
+                // damage): once per bolt, an oxidized golem goes back one step
+                // and its weathering timer (or wax, -2) is reset to -1.
+                Species::CopperGolem if !b.converted.contains(&m.id) => {
+                    b.converted.push(m.id);
+                    if m.extra.variant > 0 {
+                        m.extra.vector[0] = -1.0;
+                        m.extra.variant =
+                            horizon_client::mobs::copper_golem::weather_previous(m.extra.variant);
+                    }
+                }
                 _ => {}
             }
             // Entity.thunderHit: burning (8 seconds) and 5 lightning damage.
@@ -373,6 +528,7 @@ impl Game<'_> {
             !inside([e.position.x, e.position.y, e.position.z])
                 || e.stack.item.contains("netherite")
         });
+        struck.into_iter().map(|(_, view)| view).collect()
     }
     /// Simulation-order render inputs; seeded geometry lives in the renderer.
     pub(super) fn bolt_instances(&self) -> Vec<horizon_client::gfx::lightning::Bolt> {

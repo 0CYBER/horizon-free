@@ -52,7 +52,7 @@ Whoever moves the work (the orchestrator on each heartbeat, or anyone in their p
    removed items are listed, never deleted.
 5. Once a week, write the week's summary in `roadmap/journal/<year>-<ISO week>.md` (for example
    `2026-43.md`): `# Title`, a paragraph or two for players, then `## Technical` and the same week for
-   contributors, with its pull requests. `build` puts it into website/data/roadmap.json; the hub's Journal tab
+   contributors, with its pull requests. `build` puts it into roadmap/roadmap.json, which the website reads from main; the hub's Journal tab
    shows it among the releases, and `/data/journal.json` carries it to Kira's #updates and to X.
 6. Suggestions from the website and Discord reach the maintainers' private channel through Kira (below). A good
    one becomes an item in a normal pull request; none is published automatically.
@@ -63,7 +63,7 @@ or when the file breaks a rule; `python3 tools/roadmap.py check --offline` runs 
 ## The journal
 
 The hub's Journal tab and `https://playhorizon.dev/data/journal.json` are built with each deploy of the website
-(`website/src/hub.js`). The tab shows every game and launcher release with its notes' changes, each placed under
+(`src/hub.js` in horizon-rust/horizon-site). The tab shows every game and launcher release with its notes' changes, each placed under
 the roadmap item it moves (the pull request's `roadmap:<id>` label, else the item that links it), the merged pull
 requests no release has yet, and the weekly summaries above.
 

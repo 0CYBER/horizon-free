@@ -338,6 +338,23 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
+    /// Every entry of the book, in its order (capability `recipes`).
+    pub(super) fn recipe_book_entries(&mut self) -> Vec<Entry> {
+        self.ensure_book();
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.entries.clone())
+    }
+    /// The display ids the player's book holds, and a number that changes
+    /// whenever they do (capability `recipes`).
+    pub(super) fn recipe_book_displays(&mut self) -> (u64, Vec<i32>) {
+        self.sync_client_book();
+        (
+            self.recipe_ui.client_version,
+            self.recipe_ui.client.displays(),
+        )
+    }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
             let mut book = Book::build(self.res.recipes(), self.res.items());
@@ -590,6 +607,7 @@ impl Game<'_> {
         if inside(cursor, bx, by, 20.0, 18.0) {
             let open = !self.book_open(book_type);
             self.level.recipe_book.open[book_type.index()] = open;
+            self.send_book_settings(book_type);
             if !open {
                 self.recipe_ui.overlay = None;
             }
@@ -675,6 +693,7 @@ impl Game<'_> {
         if inside(cursor, xo + 110.0, yo + 12.0, 26.0, 16.0) {
             let filtering = !self.book_filtering(book_type);
             self.level.recipe_book.filtering[book_type.index()] = filtering;
+            self.send_book_settings(book_type);
             self.recipe_ui.page = 0;
             self.audio
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
@@ -694,6 +713,22 @@ impl Game<'_> {
             }
         }
         false
+    }
+    /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
+    fn send_book_settings(&self, book_type: BookType) {
+        self.send(
+            horizon_protocol::packets::play::Serverbound::RecipeBookChangeSettings(
+                horizon_protocol::packets::recipes::RecipeBookChangeSettings {
+                    book_type: book_type.index() as i32,
+                    open: self.book_open(book_type),
+                    filtering: self.book_filtering(book_type),
+                },
+            ),
+        );
+    }
+    pub(super) fn recipe_book_flags(&self) -> Option<(bool, bool)> {
+        let book = self.active_book()?;
+        Some((self.book_open(book), self.book_filtering(book)))
     }
     /// How many displays the client's book holds.
     pub(super) fn recipe_book_known(&self) -> usize {
@@ -825,6 +860,32 @@ impl Game<'_> {
         self.recipe_ui.last_placed = Some(id);
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
+    }
+    /// Whether the open screen takes `recipes.place`: a crafting grid's
+    /// book (the inventory's or a crafting table's).
+    pub(super) fn mod_recipe_screen(&self) -> bool {
+        self.screen == Screen::Inventory
+            && self.active_book() == Some(BookType::Crafting)
+            && !self.spectator()
+    }
+    /// `recipes.place`: the book's click on the recipe with this display
+    /// id, refused as `handlePlaceRecipe` refuses it (no crafting screen,
+    /// not in the player's book; an impossible one in `place_recipe`).
+    pub(super) fn mod_place_recipe(&mut self, display_id: i32, all: bool) {
+        if !self.mod_recipe_screen() || !self.recipe_ui.client.displays().contains(&display_id) {
+            return;
+        }
+        self.ensure_book();
+        let Some(index) = self
+            .recipe_ui
+            .book
+            .as_ref()
+            .and_then(|b| b.entries.iter().position(|e| e.display_id == display_id))
+        else {
+            return;
+        };
+        self.recipe_ui.ghost.clear();
+        self.place_recipe(BookType::Crafting, index, all);
     }
     /// `ServerboundPlaceRecipePacket`: the server places the recipe
     /// (`ServerPlaceRecipe` on the menu engine) and answers with a ghost

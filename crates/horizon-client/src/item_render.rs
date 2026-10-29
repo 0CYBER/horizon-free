@@ -12,7 +12,7 @@ mod special;
 use crate::{
     block_entity_render::{ModelPart, diffuse},
     hud::Rect,
-    mesher::Vertex,
+    mesher::{CULL_BACK, Vertex},
 };
 use glam::{Mat3, Mat4, Vec3};
 use horizon_assets::{
@@ -41,11 +41,60 @@ use std::{
 pub struct ItemQuad {
     pub pos: [Vec3; 4],
     pub uv: [[f32; 2]; 4],
+    /// The model UVs `GLINT_TEXTURING` scrolls for the glint (vanilla's UV0,
+    /// or UV3 for a special model).
+    pub foil_uv: [[f32; 2]; 4],
     pub normal: Vec3,
     pub color: u32,
     pub foil: Foil,
     /// `MaterialInfo.lightEmission` (block light floor).
     pub light_emission: u8,
+    /// The render type culls back faces (`entitySolid`): world drawing discards them.
+    pub cull_back: bool,
+    /// The quad's sprite has translucent pixels (`MaterialInfo.itemRenderType`
+    /// is a translucent sheet): drawn with the translucent entities.
+    pub translucent: bool,
+}
+/// `TextureTransform.setupGlintTexturing`'s inputs.
+#[derive(Clone, Copy, Debug)]
+pub struct Glint {
+    /// `options.glintSpeed` (vanilla default 0.5).
+    pub speed: f32,
+    /// `options.glintStrength` / shader `GlintAlpha` (vanilla default 0.75).
+    pub alpha: f32,
+    /// `Util.getMillis()`.
+    pub millis: f32,
+    /// The transform's scale: `GLINT_TEXTURING`'s 8.0 for GUI items,
+    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for items in the world and
+    /// `ARMOR_ENTITY_GLINT_TEXTURING`'s 0.16 for armour (entity.wgsl).
+    pub scale: f32,
+}
+impl Glint {
+    /// `Util.getMillis() * glintSpeed * 8.0` as vanilla's long.
+    fn ticks(millis: f32, speed: f32) -> i64 {
+        (f64::from(millis) * f64::from(speed) * 8.0) as i64
+    }
+    /// The scroll clock modulo the common period of both offsets (110000 and
+    /// 30000 divide 330000), for `globals.time.w`: the entity shader derives
+    /// `ARMOR_ENTITY_GLINT_TEXTURING` from it.
+    pub fn scroll_ticks(millis: f32, speed: f32) -> f32 {
+        (Self::ticks(millis, speed) % 330_000) as f32
+    }
+    /// `TextureTransform.setupGlintTexturing(scale)` applied to the model UV:
+    /// translation(-o0, o1) * rotateZ(PI/18) * scale. The result repeats:
+    /// the shader samples the dedicated glint texture with vanilla's
+    /// repeating `GlintSampler`, so the UVs stay unwrapped.
+    pub fn uv(&self, model: [f32; 2]) -> [f32; 2] {
+        let ticks = Self::ticks(self.millis, self.speed);
+        let offset0 = (ticks % 110_000) as f32 / 110_000.0;
+        let offset1 = (ticks % 30_000) as f32 / 30_000.0;
+        let angle = std::f32::consts::PI / 18.0;
+        let (sin, cos) = angle.sin_cos();
+        [
+            model[0] * self.scale * cos - model[1] * self.scale * sin - offset0,
+            model[0] * self.scale * sin + model[1] * self.scale * cos + offset1,
+        ]
+    }
 }
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +208,7 @@ impl ItemRenderState {
             let m = pose * layer.matrix;
             match &layer.geometry {
                 LayerGeometry::Quads(baked) => {
-                    submit_quads(baked, layer, self.display, m, sprites, sink);
+                    submit_quads(renderer, baked, layer, self.display, m, sprites, sink);
                 }
                 LayerGeometry::Special { model, argument } => special::submit(
                     renderer,
@@ -203,6 +252,7 @@ pub fn argb(color: i32) -> u32 {
 
 /// `ItemFeatureRenderer.prepareMainSubmit` for one cuboid layer.
 fn submit_quads(
+    renderer: &ItemRenderer,
     baked: &BakedItemModel,
     layer: &LayerRender,
     display: DisplayContext,
@@ -216,6 +266,8 @@ fn submit_quads(
         FoilType::Special => Foil::Special,
     };
     let _ = display;
+    // Quads of one layer mostly share a sprite: look its translucency up once.
+    let mut last: Option<(&str, bool)> = None;
     for q in &baked.quads {
         let Some(r) = sprites
             .get(sprite_name(&q.material.sprite))
@@ -239,13 +291,26 @@ fn submit_quads(
         let pos = q.positions.map(|p| m.transform_point3(Vec3::from(p)));
         let uv =
             q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v]);
+        let translucent = match last {
+            Some((sprite, translucent)) if sprite == q.material.sprite => translucent,
+            _ => {
+                let translucent = renderer
+                    .sprites
+                    .translucent(sprite_name(&q.material.sprite));
+                last = Some((&q.material.sprite, translucent));
+                translucent
+            }
+        };
         sink.quad(ItemQuad {
             pos,
             uv,
+            foil_uv: q.uv,
             normal: transform_normal(m, direction_vector(q.facing)),
             color: argb(color),
             foil,
             light_emission: q.light_emission,
+            cull_back: false,
+            translucent: translucent || q.material.force_translucent,
         });
     }
 }
@@ -260,6 +325,9 @@ struct FileSprites {
     root: PathBuf,
     permutations: Vec<PalettedPermutations>,
     cache: Mutex<HashMap<String, Option<SpriteMask>>>,
+    /// Sprites with a pixel that is neither fully transparent nor opaque
+    /// (`Transparency.hasTranslucent`), filled in as sprites load.
+    translucent: Mutex<HashMap<String, bool>>,
 }
 impl SpriteLookup for FileSprites {
     fn mask(&self, sprite: &str) -> Option<SpriteMask> {
@@ -283,6 +351,13 @@ fn argb_pixels(rgba: &[u8]) -> Vec<u32> {
         .collect()
 }
 impl FileSprites {
+    fn translucent(&self, sprite: &str) -> bool {
+        let known = |this: &Self| this.translucent.lock().ok()?.get(sprite).copied();
+        known(self).unwrap_or_else(|| {
+            self.mask(sprite);
+            known(self).unwrap_or(false)
+        })
+    }
     fn png(&self, sprite: &str, directory: &str) -> PathBuf {
         crate::atlas_sources::texture_path(&self.root, sprite, directory)
     }
@@ -303,6 +378,10 @@ impl FileSprites {
                 (w, h, pixels)
             }
         };
+        let translucent = argb.iter().any(|p| matches!(p >> 24, 1..=254));
+        if let Ok(mut cache) = self.translucent.lock() {
+            cache.insert(sprite.to_owned(), translucent);
+        }
         let alpha: Vec<u8> = argb.iter().map(|p| (p >> 24) as u8).collect();
         let animation = fs::read_to_string(png.with_extension("png.mcmeta"))
             .ok()
@@ -363,6 +442,9 @@ pub struct ItemRenderer {
     sprites: FileSprites,
     baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
     extents: Mutex<HashMap<String, Arc<Vec<Vec3>>>>,
+    /// GUI items already drawn: the HUD vertices of a static item at a GUI position
+    /// (`gui::draw`), which are the same every frame it stays there.
+    pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<[crate::hud::HudVertex]>>>,
     /// Entity model layers of the special renderers.
     parts: HashMap<String, ModelPart>,
     /// `colormap/grass.png` as ARGB.
@@ -449,9 +531,11 @@ impl ItemRenderer {
                 root: root.to_path_buf(),
                 permutations,
                 cache: Mutex::default(),
+                translucent: Mutex::default(),
             },
             baked: Mutex::default(),
             extents: Mutex::default(),
+            gui_drawn: Mutex::default(),
             parts,
             grass,
         })
@@ -649,6 +733,7 @@ pub fn tag_json(tag: &Tag) -> Value {
 /// The resolver's view of a client stack: its item, count and component patch.
 pub fn stack_view(stack: &crate::items::ItemStack) -> StackView {
     let mut view = StackView::new(&stack.item, stack.count as i32);
+    view.bundle_selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
     if let Some(Tag::Compound(c)) = crate::item_data::components_tag(stack.damage, stack.data()) {
         for (k, v) in &c {
             let key = k.to_string_lossy();
@@ -675,6 +760,8 @@ pub struct WorldSink<'a> {
     pub light: u32,
     /// The level's diffuse lights; `None` leaves the colour unshaded.
     pub lights: Option<(Vec3, Vec3)>,
+    /// The `GLINT_TEXTURING` sample for foil quads (`None` leaves them unglinted).
+    pub glint: Option<Glint>,
 }
 impl ItemSink for WorldSink<'_> {
     fn quad(&mut self, q: ItemQuad) {
@@ -689,15 +776,27 @@ impl ItemSink for WorldSink<'_> {
         } else {
             self.light
         };
-        let overlay = if q.foil == Foil::None { 0 } else { 7 };
-        for (p, uv) in q.pos.iter().zip(q.uv) {
+        let glint = if q.foil == Foil::None {
+            None
+        } else {
+            self.glint
+        };
+        let overlay = match (glint.is_some(), q.translucent) {
+            (false, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
+            (false, false) => 0,
+            (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
+            (true, false) => 7,
+        };
+        for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
+            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
-                normal: [0; 4],
+                normal: if q.cull_back { CULL_BACK } else { [0; 4] },
                 pos: p.to_array(),
                 uv,
                 layer: overlay,
                 color,
                 light,
+                glint_uv,
             });
         }
     }
@@ -753,6 +852,33 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bad item model surfaces only once items.json has loaded, so a broken
+    /// items.json still reports itself first.
+    #[test]
+    fn item_model_errors_wait_for_the_item_definitions() -> crate::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("horizon-item-model-errors-{}", std::process::id()));
+        let model = root.join("assets/horizon/models/INVALID.json");
+        fs::create_dir_all(model.parent().unwrap())?;
+        fs::write(model, "{}")?;
+        let library = crate::model_library::ParsedModels::load(&root).into_item_library();
+        assert!(library.is_err());
+        fs::write(root.join("items.json"), "{")?;
+        let load = || {
+            ItemRenderer::load_with_library(&root, library.clone())
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        let broken_items = load();
+        fs::write(root.join("items.json"), "{}")?;
+        let bad_model = load();
+        let _ = fs::remove_dir_all(&root);
+        assert!(!broken_items.starts_with("item models:"));
+        assert!(bad_model.starts_with("item models:"));
+        Ok(())
+    }
 
     #[test]
     fn rendered_amounts_follow_the_count_bands() {

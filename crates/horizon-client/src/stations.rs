@@ -14,7 +14,8 @@ use std::{fs, path::Path, sync::Arc};
 
 /// Everything the workstation menus read, loaded once with the resources.
 pub struct StationData {
-    pub enchantments: Enchantments,
+    /// The same registry `Items` carries (`Items::enchantments`).
+    pub enchantments: std::sync::Arc<Enchantments>,
     pub recipes: StationRecipes,
     pub brewing: crate::brewing::Brewing,
     pub trades: crate::merchant::Trades,
@@ -25,7 +26,7 @@ pub struct StationData {
 impl StationData {
     pub fn load(root: &Path, items: &Items) -> Self {
         Self {
-            enchantments: Enchantments::load(root),
+            enchantments: std::sync::Arc::clone(&items.enchantments),
             recipes: StationRecipes::load(root, items),
             brewing: crate::brewing::Brewing::load(root, items),
             trades: crate::merchant::Trades::load(root),
@@ -150,8 +151,12 @@ pub struct AnvilResult {
     pub repair_item_count_cost: u32,
     pub only_renaming: bool,
 }
+/// `ItemStack.isDamageableItem`: durability, and not `minecraft:unbreakable`.
 pub fn is_damageable(items: &Items, stack: &ItemStack) -> bool {
     items.get(&stack.item).is_some_and(|i| i.max_damage > 0)
+        && stack
+            .data()
+            .is_none_or(|d| d.other("minecraft:unbreakable").is_none())
 }
 fn max_damage(items: &Items, stack: &ItemStack) -> i32 {
     items.get(&stack.item).map_or(0, |i| i.max_damage as i32)
@@ -174,7 +179,9 @@ pub fn increased_repair_cost(cost: u32) -> u32 {
 pub fn hover_name(names: &dyn Fn(&str) -> String, stack: &ItemStack) -> String {
     stack
         .custom_name()
-        .map_or_else(|| names(&stack.item), str::to_owned)
+        .map(str::to_owned)
+        .or_else(|| stack.item_name())
+        .unwrap_or_else(|| names(&stack.item))
 }
 /// `AnvilMenu.createResult`. `name` is the rename box text (None = untouched).
 pub fn anvil_result(
@@ -445,6 +452,7 @@ pub fn grindstone_experience(
 #[derive(Clone, Debug)]
 pub enum Smithing {
     Transform {
+        id: String,
         template: Ingredient,
         base: Ingredient,
         addition: Ingredient,
@@ -524,6 +532,7 @@ impl StationRecipes {
             );
             match v["type"].as_str().unwrap_or("") {
                 "minecraft:smithing_transform" => smithing.push(Smithing::Transform {
+                    id,
                     template: ingredient(&v["template"], items),
                     base: ingredient(&v["base"], items),
                     addition: ingredient(&v["addition"], items),
@@ -627,6 +636,7 @@ impl StationRecipes {
                     base: b,
                     addition: a,
                     result,
+                    ..
                 } => {
                     if t.test(template) && b.test(base) && a.test(addition) {
                         // SmithingTransformRecipe: transmute the base keeping its components.

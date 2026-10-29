@@ -52,6 +52,8 @@ struct Flags {
     /// server follows while it runs (IntegratedServer.tickServer).
     render_distance: AtomicI32,
     simulation_distance: AtomicI32,
+    /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
+    saving: AtomicBool,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -68,6 +70,10 @@ pub(super) struct Integrated {
 impl Integrated {
     pub fn smoothed_tick_ms(&self) -> f32 {
         f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
+    }
+    /// `MinecraftServer.isCurrentlySaving`.
+    pub fn is_saving(&self) -> bool {
+        self.flags.saving.load(Ordering::Relaxed)
     }
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
@@ -148,6 +154,12 @@ pub(super) struct Serving {
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
 }
+impl Serving {
+    /// The window reads this as `MinecraftServer.isCurrentlySaving`.
+    pub(super) fn set_saving(&self, saving: bool) {
+        self.flags.saving.store(saving, Ordering::Relaxed);
+    }
+}
 enum Publish {
     Open(TcpListener, LanSettings),
     Close,
@@ -156,6 +168,16 @@ enum Publish {
 /// What the server thread hands the window once the world is open: its end
 /// of the connection and the world's name, or why it failed.
 type Ready = std::result::Result<(Pipe, String), String>;
+
+/// An integrated server loading its world: the window keeps drawing its
+/// loading screen and joins once the server is ready, as vanilla's client
+/// does while its server prepares (`Minecraft.doWorldLoad`), instead of
+/// waiting for it frozen for the whole load.
+pub(super) struct Starting {
+    handle: Integrated,
+    ready: Receiver<Ready>,
+    player: String,
+}
 
 /// The world to open and the player who owns it.
 struct Launch {
@@ -185,8 +207,8 @@ impl Game<'_> {
                 .as_ref()
                 .is_some_and(|s| s.published().is_some())
     }
-    /// `Minecraft.doWorldLoad`: start the server thread on the world, wait
-    /// until it can be joined, then join it through memory.
+    /// `Minecraft.doWorldLoad`: start the server thread on the world; the
+    /// window joins it through memory once it is ready (`poll_integrated_start`).
     pub(super) fn open_integrated(
         &mut self,
         folder: &str,
@@ -222,7 +244,6 @@ impl Game<'_> {
         options.report = None;
         options.server = None;
         options.world = None;
-        options.dev_mods.clear();
         self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
@@ -256,20 +277,53 @@ impl Game<'_> {
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
-        let mut handle = Integrated {
+        let handle = Integrated {
             flags,
             thread: Some(thread),
             tasks,
             world_name: String::new(),
         };
-        let pipe = match ready.recv() {
-            Ok(Ok((pipe, world_name))) => {
-                handle.world_name = world_name;
-                pipe
+        self.integrated_starting = Some(Starting {
+            handle,
+            ready,
+            player,
+        });
+        // Harnesses, control scripts and runs without a window go on with the world open.
+        if self.window.is_none() || super::synchronous_startup(&self.options) {
+            while self.integrated_starting.is_some() {
+                self.poll_integrated_start()?;
+                if self.integrated_starting.is_some() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
-            Ok(Err(e)) => return Err(e.into()),
-            Err(_) => return Err("the integrated server stopped".into()),
+        }
+        Ok(())
+    }
+
+    /// The starting server's answer, polled each frame: joined once it is ready.
+    pub(super) fn poll_integrated_start(&mut self) -> Result<()> {
+        let Some(starting) = &self.integrated_starting else {
+            return Ok(());
         };
+        let (pipe, world_name) = match starting.ready.try_recv() {
+            Ok(Ok(ready)) => ready,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+            Ok(Err(e)) => {
+                self.integrated_starting = None;
+                return Err(e.into());
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.integrated_starting = None;
+                return Err("the integrated server stopped".into());
+            }
+        };
+        let Some(Starting {
+            mut handle, player, ..
+        }) = self.integrated_starting.take()
+        else {
+            return Ok(());
+        };
+        handle.world_name = world_name;
         self.connect_local(pipe, &player)?;
         self.integrated = Some(handle);
         Ok(())
@@ -292,6 +346,9 @@ impl Game<'_> {
             launch.create.as_ref(),
         )?)?;
         let saved = Box::new(self.level.clone());
+        // IntegratedServer runs the server mods; the window the client mods.
+        self.mods.dev = self.options.dev_mods.clone();
+        self.start_mods();
         // Math.max(2, options.renderDistance): past vanilla's 32 when the
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);
@@ -368,6 +425,7 @@ impl Game<'_> {
             return result.and(stopped);
         }
         let mut next = Instant::now();
+        let mut was_paused = false;
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
             if self.agent.hold_server {
@@ -377,6 +435,14 @@ impl Game<'_> {
                 continue;
             }
             let paused = flags.paused.load(Ordering::Relaxed);
+            if paused && !was_paused {
+                // IntegratedServer.tickServer: the tick the game pauses saves
+                // everything (saveEverything, without flushing), as an
+                // autosave does.
+                log::info!("Saving and pausing game...");
+                self.save_game_with(false)?;
+            }
+            was_paused = paused;
             if paused {
                 // Only the connections run.
                 self.tick_server_timed(true)?;
@@ -406,6 +472,8 @@ impl Game<'_> {
             s.flags.published.store(0, Ordering::Relaxed);
         }
         if let Some(mut host) = self.lan.take() {
+            // PlayerList.removeAll: the owner and every guest leave the game.
+            host.award_leave_game_to_all();
             for g in &host.hub.guests {
                 self.save_guest(&host, g);
             }
@@ -419,6 +487,8 @@ impl Game<'_> {
             self.lan = Some(host);
         }
         std::thread::sleep(Duration::from_millis(100));
+        // ServerPlayer.disconnect: nobody is left in a bed.
+        self.free_player_beds()?;
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;

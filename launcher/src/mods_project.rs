@@ -419,12 +419,7 @@ impl Launcher {
         let icon = self.mods_icon(&p, 72.);
         let busy = self.mods.busy.as_ref().map(|b| b.0.clone());
         let installed = self.mods.entry(&p).is_some();
-        let checking = matches!(
-            self.mods.checks.get(&(p.source, p.id.clone())),
-            None | Some(Checking::Running)
-        ) && p.kind == PackKind::Mod
-            && p.source != SourceId::Horizon
-            && p.support().installable();
+        let checking = self.mods.checking(&p);
         let mut action = div().flex().items_center().gap(px(8.)).child(
             caps(if checking {
                 "Checking"
@@ -491,6 +486,21 @@ impl Launcher {
             .gap(px(24.))
             .child(div().flex().child(back))
             .child(head);
+        // Registry projects are rated on the site, signed in with GitHub (one rating per account).
+        if p.source == SourceId::Horizon {
+            let url = browser::horizon::rate_url(&p.id);
+            page = page.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .children(super::mods_page::stars(&p.id, &t).map(|s| text(theme::UI).child(s)))
+                    .child(
+                        button("mods-rate", "Sign in with GitHub to rate", Kind::Ghost, &t)
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    ),
+            );
+        }
         if let Some(why) = support.reason() {
             page = page.child(
                 text(theme::UI)

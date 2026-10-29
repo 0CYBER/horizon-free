@@ -15,8 +15,10 @@
 //! `level.dat`) are migrated on open.
 use crate::{
     Result,
+    beehive::BeehiveExt,
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -36,7 +38,7 @@ use horizon_world::{
     worldgen::terrain::TerrainBlockStates,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -104,34 +106,8 @@ pub fn chunks_with_block_entities<'a>(
         .collect()
 }
 
-fn string(s: &str) -> Tag {
-    Tag::String(s.into())
-}
-pub fn text(tag: Option<&Tag>) -> Option<String> {
-    match tag {
-        Some(Tag::String(s)) => Some(s.to_string_lossy()),
-        _ => None,
-    }
-}
-/// Any numeric tag as i64 (vanilla's `getIntOr` etc. accept every number type).
-pub fn number(tag: Option<&Tag>) -> Option<i64> {
-    Some(match tag? {
-        Tag::Byte(v) => i64::from(*v),
-        Tag::Short(v) => i64::from(*v),
-        Tag::Int(v) => i64::from(*v),
-        Tag::Long(v) => *v,
-        Tag::Float(b) => f32::from_bits(*b) as i64,
-        Tag::Double(b) => f64::from_bits(*b) as i64,
-        _ => return None,
-    })
-}
-pub(crate) fn float(tag: Option<&Tag>) -> Option<f64> {
-    Some(match tag? {
-        Tag::Float(b) => f64::from(f32::from_bits(*b)),
-        Tag::Double(b) => f64::from_bits(*b),
-        other => number(Some(other))? as f64,
-    })
-}
+use horizon_client_core::nbt_value::string;
+pub use horizon_client_core::nbt_value::{float, number, text};
 /// Insert or replace a key of a compound tag.
 pub(crate) fn put(tag: &mut Tag, key: &str, value: Tag) {
     if let Tag::Compound(map) = tag {
@@ -209,6 +185,19 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
         .map_err(|e| format!("upgrading {}: {e}", world.display()))?;
     Ok(())
 }
+/// Whether opening the world runs file fixes, which vanilla asks for a backup
+/// first (`BackupStatus.FILE_FIXING_REQUIRED`). Saves of 1.8 and before have no
+/// DataVersion, read as -1.
+pub fn needs_file_fixes(world: &Path) -> bool {
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return false;
+    };
+    let Some(data) = root.get("Data") else {
+        return false;
+    };
+    let version = number(data.get("DataVersion")).unwrap_or(-1);
+    i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
@@ -247,6 +236,44 @@ pub struct SaveTables {
     block_entity: Vec<bool>,
     heightmaps: crate::assets::Properties,
     air: u32,
+    /// The POI type and its max tickets of each state (`PoiTypes`).
+    poi: Vec<Option<(&'static str, i32)>>,
+}
+/// `PoiTypes.register`: the POI type of a block state and its max tickets.
+pub fn poi_type(state: &horizon_world::chunk::BlockState) -> Option<(&'static str, i32)> {
+    let name = state.name.strip_prefix("minecraft:")?;
+    Some(match name {
+        "blast_furnace" => ("minecraft:armorer", 1),
+        "smoker" => ("minecraft:butcher", 1),
+        "cartography_table" => ("minecraft:cartographer", 1),
+        "brewing_stand" => ("minecraft:cleric", 1),
+        "composter" => ("minecraft:farmer", 1),
+        "barrel" => ("minecraft:fisherman", 1),
+        "fletching_table" => ("minecraft:fletcher", 1),
+        "cauldron" | "lava_cauldron" | "water_cauldron" | "powder_snow_cauldron" => {
+            ("minecraft:leatherworker", 1)
+        }
+        "lectern" => ("minecraft:librarian", 1),
+        "stonecutter" => ("minecraft:mason", 1),
+        "loom" => ("minecraft:shepherd", 1),
+        "smithing_table" => ("minecraft:toolsmith", 1),
+        "grindstone" => ("minecraft:weaponsmith", 1),
+        "bell" => ("minecraft:meeting", 32),
+        "beehive" => ("minecraft:beehive", 0),
+        "bee_nest" => ("minecraft:bee_nest", 0),
+        "nether_portal" => ("minecraft:nether_portal", 0),
+        "lodestone" => ("minecraft:lodestone", 0),
+        "test_instance_block" => ("minecraft:test_instance", 0),
+        // PoiTypes.BEDS is the sixteen colours: no straw bed.
+        bed if bed.ends_with("_bed") && bed != "straw_bed" => {
+            if state.properties.get("part").map(String::as_str) != Some("head") {
+                return None;
+            }
+            ("minecraft:home", 1)
+        }
+        rod if rod.ends_with("lightning_rod") => ("minecraft:lightning_rod", 0),
+        _ => return None,
+    })
 }
 impl SaveTables {
     pub fn new(assets: &crate::assets::Assets) -> Self {
@@ -275,6 +302,9 @@ impl SaveTables {
             block_entity: Vec::new(),
             heightmaps: assets.properties.clone(),
             air: registry.default_state("minecraft:air").map_or(0, |s| s.0),
+            poi: (0..registry.len())
+                .map(|id| registry.state(BlockStateId(id as u32)).and_then(poi_type))
+                .collect(),
         }
     }
     /// Tables with only the heightmaps' state facts, for tests.
@@ -287,6 +317,7 @@ impl SaveTables {
             block_entity: Vec::new(),
             heightmaps,
             air: 0,
+            poi: Vec::new(),
         }
     }
     /// Which states carry a block entity (`BlockFacts`), to drop entries for
@@ -297,28 +328,7 @@ impl SaveTables {
     }
 }
 
-/// Save data loaded with a chunk that Horizon keeps but does not simulate.
-#[derive(Clone, Debug, Default)]
-pub struct ChunkExtras {
-    /// Chunk root keys written back as loaded (structures, PostProcessing,
-    /// InhabitedTime, blending data, ...).
-    pub root: Compound,
-    /// Block entities Horizon does not model.
-    pub block_entities: Vec<Tag>,
-    /// The NBT of the modelled block entities as loaded, to restore the fields and
-    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
-    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
-    /// Every saved block entity's position in the order of the save's list,
-    /// the order `SerializableChunkData` puts them in the chunk's maps.
-    pub block_entity_order: Vec<(i32, i32, i32)>,
-    /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
-    /// save time. Registered with the level's tick scheduler on arrival and
-    /// replaced with the scheduler's pending ticks when saving.
-    pub block_ticks: Vec<SavedTick>,
-    pub fluid_ticks: Vec<SavedTick>,
-    /// Game time written as `LastUpdate`.
-    pub last_update: i64,
-}
+pub use crate::chunk::{ChunkExtras, RolledLoot, SavedProto};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -391,62 +401,9 @@ fn fluid_id(name: &str) -> Option<u32> {
     } as u32)
 }
 
-fn encode_item(stack: &crate::items::ItemStack) -> Vec<(&'static str, Tag)> {
-    let mut entries = vec![
-        ("id", string(&stack.item)),
-        ("count", Tag::Int(stack.count as i32)),
-    ];
-    if let Some(components) = crate::item_data::encode_components(stack) {
-        entries.push(("components", components));
-    }
-    entries
-}
-/// ItemStack.CODEC (id, count, components).
-pub fn item_to_nbt(stack: &crate::items::ItemStack) -> Tag {
-    Tag::compound(encode_item(stack))
-}
-pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
-    let id = text(tag.get("id"))?;
-    if id == "minecraft:air" {
-        return None;
-    }
-    let count = number(tag.get("count"))
-        .or_else(|| number(tag.get("Count")))
-        .unwrap_or(1)
-        .max(1) as u32;
-    let (damage, extra) = crate::item_data::decode_components(tag.get("components"));
-    Some(crate::items::ItemStack {
-        item: Arc::from(id.as_str()),
-        count,
-        damage,
-        extra,
-    })
-}
-pub fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
-    Tag::List(
-        slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let mut entries = vec![("Slot", Tag::Byte(i as i8))];
-                entries.extend(encode_item(s.as_ref()?));
-                Some(Tag::compound(entries))
-            })
-            .collect(),
-    )
-}
-pub fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::ItemStack>> {
-    let mut slots = vec![None; size];
-    if let Some(Tag::List(items)) = tag {
-        for it in items {
-            let slot = number(it.get("Slot")).unwrap_or(0) as u8 as usize;
-            if let Some(cell) = slots.get_mut(slot) {
-                *cell = item_from_nbt(it);
-            }
-        }
-    }
-    slots
-}
+pub use horizon_items::item_nbt::{
+    decode_items, encode_item, encode_items, item_from_nbt, item_to_nbt,
+};
 /// The block entity type ID for the block it sits in (a chest-like container
 /// is a chest, trapped chest or barrel).
 fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
@@ -526,6 +483,17 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // ChiseledBookShelfBlockEntity.saveAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("last_interacted_slot", Tag::Int(b.last_slot)));
+        }
+        // CampfireBlockEntity.saveAdditional.
+        BlockEntity::Campfire(c) => {
+            entries.push(("Items", encode_items(&c.items)));
+            entries.push(("CookingTimes", Tag::IntArray(c.progress.to_vec())));
+            entries.push(("CookingTotalTimes", Tag::IntArray(c.total.to_vec())));
+        }
         BlockEntity::Crafter(c) => {
             entries.push(("Items", encode_items(&c.items)));
             entries.push((
@@ -564,11 +532,22 @@ pub fn encode_block_entity(
                 entries.push(("custom_name", name.clone()));
             }
         }
+        // TheEndGatewayBlockEntity.saveAdditional.
+        BlockEntity::EndGateway(g) => {
+            entries.push(("Age", Tag::Long(g.age)));
+            if let Some(exit) = g.exit_portal {
+                entries.push(("exit_portal", Tag::IntArray(exit.to_vec())));
+            }
+            if g.exact_teleport {
+                entries.push(("ExactTeleport", Tag::Byte(1)));
+            }
+        }
         BlockEntity::Spawner(s) => entries.extend(s.save()),
         BlockEntity::TrialSpawner(s) => entries.extend(s.save()),
         BlockEntity::Vault(v) => entries.extend(v.save()),
         BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
         BlockEntity::CommandBlock(c) => entries.extend(c.save()),
+        BlockEntity::DaylightDetector => {}
     }
     Tag::compound(entries)
 }
@@ -594,11 +573,52 @@ pub fn decode_banner(tag: &Tag) -> crate::containers::Banner {
         },
     }
 }
+/// A loaded container with a loot table and no items yet, rolled as
+/// generation rolls it (Horizon does not unpack on first open).
+fn roll_loaded_loot(
+    chunk: &Chunk,
+    biomes: &Biomes,
+    tag: &Tag,
+    be: &mut ((i32, i32, i32), crate::containers::BlockEntity),
+) -> Option<RolledLoot> {
+    let crate::containers::BlockEntity::Chest(slots) = &mut be.1 else {
+        return None;
+    };
+    let table = text(tag.get("LootTable"))?;
+    if slots.iter().any(Option::is_some) {
+        return None;
+    }
+    let loot = crate::structure_blocks::loaded_loot_data()?;
+    let (x, y, z) = be.0;
+    let biome = &biomes.get(chunk.biome(x & 15, y, z & 15)).name;
+    let seed = crate::structure_blocks::loot_seed(tag);
+    Some(crate::structure_blocks::roll_container(
+        slots,
+        Some(&loot),
+        table,
+        seed,
+        be.0,
+        biome,
+    ))
+}
+/// `TheEndGatewayBlockEntity.loadAdditional`.
+pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
+    crate::containers::EndGateway {
+        age: number(tag.get("Age")).unwrap_or(0),
+        exit_portal: tag
+            .get("exit_portal")
+            .and_then(crate::block_entity_nbt::gateway_exit),
+        exact_teleport: number(tag.get("ExactTeleport")).unwrap_or(0) != 0,
+    }
+}
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id == "minecraft:end_gateway" {
+        return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
+    }
     if id == "minecraft:jukebox" {
         let record = tag.get("RecordItem").and_then(item_from_nbt);
         let ticks = number(tag.get("ticks_since_song_started")).unwrap_or(0);
@@ -676,8 +696,10 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                         Tag::Int(n) => *n,
                         _ => continue,
                     };
-                    f.recipes_used
-                        .insert(id.to_string_lossy(), count.max(0) as u32);
+                    // Saves from before the key was namespaced hold both forms of an id.
+                    *f.recipes_used
+                        .entry(crate::containers::recipe_used_key(&id.to_string_lossy()))
+                        .or_insert(0) += count.max(0) as u32;
                 }
             }
         }
@@ -704,6 +726,25 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // ChiseledBookShelfBlockEntity.loadAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            for (slot, item) in decode_items(tag.get("Items"), 6).into_iter().enumerate() {
+                b.items[slot] = item;
+            }
+            b.last_slot = int("last_interacted_slot").unwrap_or(-1);
+        }
+        // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
+        BlockEntity::Campfire(c) => {
+            for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {
+                c.items[slot] = item;
+            }
+            let ints = |key: &str| match tag.get(key) {
+                Some(Tag::IntArray(v)) => std::array::from_fn(|i| v.get(i).copied().unwrap_or(0)),
+                _ => [0; 4],
+            };
+            c.progress = ints("CookingTimes");
+            c.total = ints("CookingTotalTimes");
+        }
         BlockEntity::Crafter(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
                 c.items[slot] = item;
@@ -724,7 +765,9 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_)
-        | BlockEntity::Skull(_) => {}
+        | BlockEntity::EndGateway(_)
+        | BlockEntity::Skull(_)
+        | BlockEntity::DaylightDetector => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
@@ -734,18 +777,164 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     Some((pos, entity))
 }
 
+/// The chunk's points of interest as `PoiManager` saves them: each section
+/// with POI blocks, valid, with a record per block at its max tickets (a
+/// freshly made world). None when the chunk has none.
+pub fn encode_poi(chunk: &Chunk, tables: &SaveTables) -> Option<NamedTag> {
+    let kind = |v: u32| tables.poi.get(v as usize).copied().flatten();
+    let mut sections = Compound::new();
+    let mut states = [0u32; 4096];
+    for (si, section) in chunk.sections.iter().enumerate() {
+        if !section.blocks.maybe_has(|v| kind(v).is_some()) {
+            continue;
+        }
+        section.unpack(&mut states);
+        let y = (MIN_Y >> 4) + si as i32;
+        let records: Vec<Tag> = states
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| {
+                let (id, tickets) = kind(v)?;
+                let i = i as i32;
+                let pos = [
+                    chunk.x * 16 + (i & 15),
+                    y * 16 + (i >> 8),
+                    chunk.z * 16 + ((i >> 4) & 15),
+                ];
+                let mut record = vec![("pos", Tag::IntArray(pos.to_vec())), ("type", string(id))];
+                // PoiRecord.CODEC: free_tickets defaults to 0 and is then left out.
+                if tickets != 0 {
+                    record.push(("free_tickets", Tag::Int(tickets)));
+                }
+                Some(Tag::compound(record))
+            })
+            .collect();
+        if !records.is_empty() {
+            sections.insert(
+                y.to_string().as_str().into(),
+                Tag::compound([("Valid", Tag::Byte(1)), ("Records", Tag::List(records))]),
+            );
+        }
+    }
+    (!sections.is_empty()).then(|| poi_root(sections))
+}
+/// A record's `free_tickets` from the POI file the chunk had, while the same
+/// POI is still there: a bed or job site a villager claimed stays claimed.
+fn keep_claims(saved: &mut NamedTag, old: &NamedTag) {
+    let key = |r: &Tag| match (r.get("pos"), text(r.get("type"))) {
+        (Some(Tag::IntArray(pos)), Some(kind)) => Some((pos.clone(), kind)),
+        _ => None,
+    };
+    let mut claims = HashMap::new();
+    if let Some(Tag::Compound(sections)) = old.tag.get("Sections") {
+        for section in sections.values() {
+            if let Some(Tag::List(records)) = section.get("Records") {
+                for r in records {
+                    if let Some(k) = key(r) {
+                        claims.insert(k, number(r.get("free_tickets")).unwrap_or(0) as i32);
+                    }
+                }
+            }
+        }
+    }
+    let Tag::Compound(root) = &mut saved.tag else {
+        return;
+    };
+    let Some(Tag::Compound(sections)) = root.get_mut(&"Sections".into()) else {
+        return;
+    };
+    for section in sections.values_mut() {
+        let Tag::Compound(section) = section else {
+            continue;
+        };
+        let Some(Tag::List(records)) = section.get_mut(&"Records".into()) else {
+            continue;
+        };
+        for r in records {
+            let Some(&tickets) = key(r).and_then(|k| claims.get(&k)) else {
+                continue;
+            };
+            if let Tag::Compound(r) = r {
+                if tickets == 0 {
+                    r.remove(&"free_tickets".into());
+                } else {
+                    r.insert("free_tickets".into(), Tag::Int(tickets));
+                }
+            }
+        }
+    }
+}
+fn poi_root(sections: Compound) -> NamedTag {
+    NamedTag {
+        name: "".into(),
+        tag: Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("Sections", Tag::Compound(sections)),
+        ]),
+    }
+}
+
+/// What a dimension's saved chunks depend on: skylight and the build height
+/// (`DimensionType.minY` and `height`). `Chunk` always holds the Overworld's
+/// sections; a level saves only the ones inside its own height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelShape {
+    pub sky_light: bool,
+    pub min_y: i32,
+    pub height: i32,
+}
+impl LevelShape {
+    pub const OVERWORLD: Self = Self {
+        sky_light: true,
+        min_y: MIN_Y,
+        height: SECTIONS as i32 * 16,
+    };
+    pub const NETHER: Self = Self {
+        sky_light: false,
+        min_y: 0,
+        height: 256,
+    };
+    pub const END: Self = Self {
+        sky_light: true,
+        min_y: 0,
+        height: 256,
+    };
+    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
+    /// old `DIM-1` and `DIM1`).
+    pub fn for_dir(root: &Path) -> Self {
+        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
+            Self::NETHER
+        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
+            Self::END
+        } else {
+            Self::OVERWORLD
+        }
+    }
+    fn min_section(self) -> i32 {
+        self.min_y >> 4
+    }
+    fn section_count(self) -> usize {
+        (self.height >> 4) as usize
+    }
+    fn has_section(self, y: i32) -> bool {
+        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
+    }
+}
+
 /// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
     sections: &'a [Arc<Section>],
     tables: &'a SaveTables,
+    min_y: i32,
+    height: i32,
 }
 impl HeightmapChunk for HeightmapView<'_> {
     type State = crate::assets::StateFacts;
     fn min_y(&self) -> i32 {
-        MIN_Y
+        self.min_y
     }
     fn height(&self) -> i32 {
-        SECTIONS as i32 * 16
+        self.height
     }
     fn highest_section_y(&self) -> i32 {
         let top = self
@@ -765,7 +954,7 @@ impl HeightmapChunk for HeightmapView<'_> {
     }
 }
 /// Heightmaps kept after world generation (`ChunkStatus.FULL.heightmapsAfter`).
-fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
+fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
     let kinds = [
         HeightmapType::WorldSurface,
         HeightmapType::OceanFloor,
@@ -774,11 +963,13 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
     ];
     let mut maps: Vec<Heightmap> = kinds
         .iter()
-        .filter_map(|k| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok())
+        .filter_map(|k| Heightmap::new(*k, shape.min_y, shape.height).ok())
         .collect();
     let view = HeightmapView {
         sections: &chunk.sections,
         tables,
+        min_y: shape.min_y,
+        height: shape.height,
     };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
@@ -808,7 +999,12 @@ pub fn client_heightmaps_in(
         .iter()
         .filter_map(|(id, k)| Heightmap::new(*k, min_y, height).ok().map(|m| (*id, m)))
         .collect();
-    let view = HeightmapView { sections, tables };
+    let view = HeightmapView {
+        sections,
+        tables,
+        min_y,
+        height,
+    };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Vec::new();
@@ -834,17 +1030,18 @@ fn nibbles(light: &Light, sky: bool) -> Vec<u8> {
 }
 
 pub fn encode(chunk: &Chunk, registry: &BlockRegistry, biomes: &Biomes) -> NamedTag {
-    encode_with(chunk, registry, biomes, None, true)
+    encode_with(chunk, registry, biomes, None, LevelShape::OVERWORLD)
 }
 /// The chunk NBT vanilla's `SerializableChunkData.write` produces for a full
-/// chunk. `sky_light` is false in dimensions without skylight.
+/// chunk in a level of `shape`.
 pub fn encode_with(
     chunk: &Chunk,
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
-    sky_light: bool,
+    shape: LevelShape,
 ) -> NamedTag {
+    let sky_light = shape.sky_light;
     let mut sections = Vec::new();
     let air = tables.map_or(0, |t| t.air);
     // Sky layers below the highest section with light other than 15 are
@@ -856,6 +1053,9 @@ pub fn encode_with(
     });
     for (si, section) in chunk.sections.iter().enumerate() {
         let y = (MIN_Y >> 4) + si as i32;
+        if !shape.has_section(y) {
+            continue;
+        }
         // PalettedContainer.pack: distinct states in index order, indices at
         // the saved width.
         let packed = section.blocks.pack();
@@ -959,7 +1159,16 @@ pub fn encode_with(
                 }
                 None => current,
             };
-            crate::block_entity_nbt::canonical(&merged).unwrap_or(merged)
+            let mut saved = crate::block_entity_nbt::canonical(&merged).unwrap_or(merged);
+            if let Some(r) = extras.and_then(|x| x.rolled_loot.iter().find(|r| r.pos == *p))
+                && let Tag::Compound(map) = &mut saved
+                && !r.restore(map)
+            {
+                // A loaded source still carries the table; kept, it rolls again on load.
+                map.remove(&"LootTable".into());
+                map.remove(&"LootTableSeed".into());
+            }
+            saved
         })
         .collect();
     if let Some(extras) = extras {
@@ -985,7 +1194,7 @@ pub fn encode_with(
         ("DataVersion", Tag::Int(DATA_VERSION)),
         ("xPos", Tag::Int(chunk.x)),
         ("zPos", Tag::Int(chunk.z)),
-        ("yPos", Tag::Int(MIN_Y >> 4)),
+        ("yPos", Tag::Int(shape.min_section())),
         ("Status", string("minecraft:full")),
         ("LastUpdate", Tag::Long(extras.map_or(0, |e| e.last_update))),
         ("isLightOn", Tag::Byte(i8::from(chunk.lit))),
@@ -1017,11 +1226,30 @@ pub fn encode_with(
                 .collect();
             s.insert("References".into(), Tag::Compound(refs));
         }
+        let starts: Compound = chunk
+            .structure_starts
+            .iter()
+            .filter_map(|start| match start.save() {
+                Some(tag) => Some((start.name.as_str().into(), tag)),
+                None => {
+                    log::warn!(
+                        "Horizon: structure start {} not saved: one of its pieces cannot be",
+                        start.name
+                    );
+                    None
+                }
+            })
+            .collect();
+        if !starts.is_empty()
+            && let Some(Tag::Compound(s)) = map.get_mut(&"structures".into())
+        {
+            s.insert("starts".into(), Tag::Compound(starts));
+        }
         map.entry("PostProcessing".into())
-            .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); SECTIONS]));
+            .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); shape.section_count()]));
     }
     if let Some(t) = tables {
-        put(&mut root, "Heightmaps", heightmaps(chunk, t));
+        put(&mut root, "Heightmaps", heightmaps(chunk, t, shape));
         let names = |k: u32| t.block_names.get(k as usize).cloned();
         let (blocks, fluids) = extras.map_or((&[][..], &[][..]), |e| {
             (&e.block_ticks[..], &e.fluid_ticks[..])
@@ -1189,9 +1417,12 @@ fn decode_column(
                 extras.block_entity_order.push((x, y, z));
             }
             match decode_block_entity(e) {
-                Some(be) => {
+                Some(mut be) => {
                     if let Some(name) = text(e.get("CustomName")) {
                         chunk.block_names.push((be.0, name));
+                    }
+                    if let Some(rolled) = roll_loaded_loot(&chunk, biomes, e, &mut be) {
+                        extras.rolled_loot.push(rolled);
                     }
                     extras.block_entity_sources.push((be.0, e.clone()));
                     chunk.block_entities.push(be);
@@ -1217,38 +1448,24 @@ fn decode_column(
     Some(chunk)
 }
 
-/// A proto chunk saved before it became final. Decoration writes into a
-/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
-/// past the finished ones hold writes that generating them again would lose
-/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
-pub struct SavedProto {
-    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
-    pub column: Chunk,
-    /// Decorated itself (`features`), not only written to by its neighbours
-    /// (`terrain`).
-    pub decorated: bool,
-    /// Block entity data in placement order, with `x`, `y` and `z`.
-    pub block_entities: Vec<Tag>,
-    /// Entities placed by structures, with absolute `Pos`.
-    pub entities: Vec<Tag>,
-}
 pub fn encode_proto(
     proto: &SavedProto,
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
-    sky_light: bool,
+    shape: LevelShape,
 ) -> NamedTag {
-    let mut root = encode_with(&proto.column, registry, biomes, tables, sky_light);
+    let mut root = encode_with(&proto.column, registry, biomes, tables, shape);
     let status = if proto.decorated {
         ChunkStatus::Features
     } else {
         ChunkStatus::Terrain
     };
     // ProtoChunk.postProcessing: one list per section, packed section offsets.
-    let mut marks = vec![Vec::new(); SECTIONS];
+    let mut marks = vec![Vec::new(); shape.section_count()];
     for &[x, y, z] in &proto.column.postprocess {
-        if let Some(list) = marks.get_mut(((y - MIN_Y) >> 4) as usize) {
+        let section = usize::try_from((y - shape.min_y) >> 4).ok();
+        if let Some(list) = section.and_then(|s| marks.get_mut(s)) {
             list.push(Tag::Short(
                 ((x & 15) | (y & 15) << 4 | (z & 15) << 8) as i16,
             ));
@@ -1510,7 +1727,7 @@ fn compress_records(
     let compress = |record: &Record| {
         record
             .tag()
-            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
+            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::saved()))
             .transpose()
     };
     let helpers = std::thread::available_parallelism()
@@ -1555,6 +1772,9 @@ enum Record {
     Tag(Arc<NamedTag>),
     /// A chunk to encode on the writer thread.
     Chunk(Arc<Chunk>, Arc<Encoding>),
+    /// A chunk's points of interest, made on the writer thread against the
+    /// saved ones (`resolve_poi`).
+    Poi(Arc<Chunk>, Arc<SaveTables>),
     Delete,
 }
 /// What encoding a chunk needs, captured when it is queued.
@@ -1562,7 +1782,7 @@ struct Encoding {
     registry: &'static BlockRegistry,
     biomes: Arc<Biomes>,
     tables: Option<Arc<SaveTables>>,
-    sky_light: bool,
+    shape: LevelShape,
 }
 impl Record {
     fn tag(&self) -> Option<Arc<NamedTag>> {
@@ -1573,16 +1793,88 @@ impl Record {
                 e.registry,
                 &e.biomes,
                 e.tables.as_deref(),
-                e.sky_light,
+                e.shape,
             ))),
+            Record::Poi(c, t) => encode_poi(c, t).map(Arc::new),
             Record::Delete => None,
         }
     }
 }
+/// A queued POI record as it is written: claims kept from the saved one, and
+/// a chunk that lost its last POI gets an empty one, as vanilla trusts a
+/// saved section. None when the chunk never had any.
+fn resolve_poi(
+    root: &Path,
+    cache: &RegionCache,
+    (x, z): (i32, i32),
+    record: &Record,
+) -> Option<Record> {
+    let Record::Poi(chunk, tables) = record else {
+        return Some(record.clone());
+    };
+    let old = read_region_record(root, cache, "poi", x, z).unwrap_or_else(|e| {
+        log::warn!("Horizon: could not read the poi record of chunk {x} {z}: {e}");
+        None
+    });
+    let tag = match (encode_poi(chunk, tables), old) {
+        (Some(mut tag), Some(old)) => {
+            keep_claims(&mut tag, &old);
+            tag
+        }
+        (Some(tag), None) => tag,
+        (None, Some(_)) => poi_root(Compound::new()),
+        (None, None) => return None,
+    };
+    Some(Record::Tag(Arc::new(tag)))
+}
+fn read_region_record(
+    root: &Path,
+    cache: &RegionCache,
+    folder: &str,
+    x: i32,
+    z: i32,
+) -> Result<Option<NamedTag>> {
+    let key = (x >> 5, z >> 5);
+    let path = region_path(root, folder, key.0, key.1);
+    let Some(region) = cached_region(cache, key, &path, false)? else {
+        return Ok(None);
+    };
+    let record = region
+        .lock()
+        .map_err(|_| "region file poisoned")?
+        .read(ChunkPos::new(x, z))?;
+    Ok(match record {
+        Some(r) => Some(r.nbt(Limits::saved())?),
+        None => None,
+    })
+}
 /// Chunk and entity records waiting for the writer thread, by (entities?,
 /// x, z): reads see them before the region files do.
-type PendingWrites = Mutex<HashMap<(bool, i32, i32), (u64, Record)>>;
-type WriteBatch = (bool, Vec<((i32, i32), Record, u64)>);
+type PendingWrites = Mutex<HashMap<(Folder, i32, i32), (u64, Record)>>;
+type WriteBatch = (Folder, Vec<((i32, i32), Record, u64)>);
+/// The region folders of a dimension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Folder {
+    Region,
+    Entities,
+    Poi,
+}
+impl Folder {
+    fn of(name: &str) -> Self {
+        match name {
+            "entities" => Self::Entities,
+            "poi" => Self::Poi,
+            _ => Self::Region,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Region => "region",
+            Self::Entities => "entities",
+            Self::Poi => "poi",
+        }
+    }
+}
 
 /// The background thread that encodes chunks and writes them into the region files, in
 /// submission order.
@@ -1604,29 +1896,78 @@ pub struct SaveDir {
     pub root: PathBuf,
     regions: Arc<RegionCache>,
     entity_regions: Arc<RegionCache>,
+    poi_regions: Arc<RegionCache>,
     pending: Arc<PendingWrites>,
     sequence: AtomicU64,
     writer: Mutex<Option<Writer>>,
     outstanding: Arc<Outstanding>,
     /// Set by `Persistent` before the first load.
     pub tables: OnceLock<Arc<SaveTables>>,
-    /// False in dimensions without skylight (no SkyLight layers are written).
-    pub sky_light: bool,
+    /// The dimension's skylight and height, from its folder name.
+    pub shape: LevelShape,
+}
+fn is_forced_ticket(ticket: &Tag) -> bool {
+    matches!(ticket.get("type"), Some(Tag::String(t)) if *t == JavaString::from("minecraft:forced"))
 }
 impl SaveDir {
     pub fn new(root: PathBuf) -> Self {
-        let sky_light = !root.ends_with("the_nether") && !root.ends_with("DIM-1");
+        let shape = LevelShape::for_dir(&root);
         Self {
             root,
             regions: Default::default(),
             entity_regions: Default::default(),
+            poi_regions: Default::default(),
             pending: Default::default(),
             sequence: AtomicU64::new(0),
             writer: Mutex::new(None),
             outstanding: Default::default(),
             tables: OnceLock::new(),
-            sky_light,
+            shape,
         }
+    }
+    /// 26.3's TicketStorage: persistent tickets live in each dimension's
+    /// data/minecraft/chunk_tickets.dat, with ChunkPos.CODEC's [x, z] int array.
+    pub fn load_forced_chunks(&self) -> HashSet<(i32, i32)> {
+        let Some(data) = read_saved_data(&self.root, "chunk_tickets") else {
+            return HashSet::new();
+        };
+        let Some(Tag::List(tickets)) = data.get("tickets") else {
+            return HashSet::new();
+        };
+        tickets
+            .iter()
+            .filter(|t| is_forced_ticket(t))
+            .filter_map(|t| match t.get("chunk_pos")? {
+                Tag::IntArray(pos) if pos.len() == 2 => Some((pos[0], pos[1])),
+                _ => None,
+            })
+            .collect()
+    }
+    pub fn save_forced_chunks(&self, forced: &HashSet<(i32, i32)>) -> Result<()> {
+        if forced.is_empty() && !saved_data_path(&self.root, "chunk_tickets").exists() {
+            return Ok(());
+        }
+        let mut data = compound_or_empty(read_saved_data(&self.root, "chunk_tickets"));
+        // Preserve persistent tickets Horizon does not simulate.
+        let mut tickets = match data.get("tickets") {
+            Some(Tag::List(tickets)) => tickets
+                .iter()
+                .filter(|t| !is_forced_ticket(t))
+                .cloned()
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        let mut chunks: Vec<_> = forced.iter().copied().collect();
+        chunks.sort_unstable();
+        tickets.extend(chunks.into_iter().map(|(x, z)| {
+            Tag::compound([
+                ("type", Tag::String("minecraft:forced".into())),
+                ("level", Tag::Int(31)), // ChunkMap.FORCED_TICKET_LEVEL: ENTITY_TICKING.
+                ("chunk_pos", Tag::IntArray(vec![x, z])),
+            ])
+        }));
+        put(&mut data, "tickets", Tag::List(tickets));
+        write_saved_data(&self.root, "chunk_tickets", data)
     }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
         region_path(&self.root, folder, rx, rz)
@@ -1636,27 +1977,23 @@ impl SaveDir {
             .pending
             .lock()
             .ok()?
-            .get(&(folder != "region", x, z))
+            .get(&(Folder::of(folder), x, z))
             .map(|(_, r)| r.clone());
         if let Some(record) = pending {
             return record.tag().map(|t| (*t).clone());
         }
-        let key = (x >> 5, z >> 5);
-        let cache = if folder == "region" {
-            &self.regions
-        } else {
-            &self.entity_regions
+        let cache = match Folder::of(folder) {
+            Folder::Region => &self.regions,
+            Folder::Entities => &self.entity_regions,
+            Folder::Poi => &self.poi_regions,
         };
-        let path = self.region_path(folder, key.0, key.1);
-        let region = cached_region(cache, key, &path, false).ok()??;
-        let record = region.lock().ok()?.read(ChunkPos::new(x, z)).ok()??;
-        record.nbt(Limits::default()).ok()
+        read_region_record(&self.root, cache, folder, x, z).ok()?
     }
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
         let mut chunk = decode_with(&root, registry, biomes, tables)?;
-        load_light(&root.tag, &mut chunk, self.sky_light);
+        load_light(&root.tag, &mut chunk, self.shape.sky_light);
         Some(chunk)
     }
     /// A proto chunk saved before it became final (`decode_proto`).
@@ -1681,7 +2018,7 @@ impl SaveDir {
         let records = protos
             .iter()
             .map(|p| {
-                let tag = encode_proto(p, registry, biomes, tables, self.sky_light);
+                let tag = encode_proto(p, registry, biomes, tables, self.shape);
                 ((p.column.x, p.column.z), Some(tag))
             })
             .collect();
@@ -1710,16 +2047,16 @@ impl SaveDir {
             .into_iter()
             .map(|(k, t)| (k, t.map_or(Record::Delete, |t| Record::Tag(Arc::new(t)))))
             .collect();
-        self.queue(folder != "region", records, wait)
+        self.queue(Folder::of(folder), records, wait)
     }
-    fn queue(&self, entities: bool, records: Vec<((i32, i32), Record)>, wait: bool) -> Result<()> {
+    fn queue(&self, folder: Folder, records: Vec<((i32, i32), Record)>, wait: bool) -> Result<()> {
         if !records.is_empty() {
             let mut batch = Vec::with_capacity(records.len());
             {
                 let mut pending = self.pending.lock().map_err(|_| "pending writes poisoned")?;
                 for (key, record) in records {
                     let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
-                    pending.insert((entities, key.0, key.1), (seq, record.clone()));
+                    pending.insert((folder, key.0, key.1), (seq, record.clone()));
                     batch.push((key, record, seq));
                 }
             }
@@ -1730,7 +2067,7 @@ impl SaveDir {
                 .map_err(|_| "writer poisoned")? += 1;
             let mut writer = self.writer.lock().map_err(|_| "writer poisoned")?;
             let writer = writer.get_or_insert_with(|| self.start_writer());
-            if writer.send.send((entities, batch)).is_err() {
+            if writer.send.send((folder, batch)).is_err() {
                 *self
                     .outstanding
                     .error
@@ -1753,30 +2090,36 @@ impl SaveDir {
     fn start_writer(&self) -> Writer {
         let (send, receive) = mpsc::channel::<WriteBatch>();
         let root = self.root.clone();
-        let (regions, entity_regions) = (self.regions.clone(), self.entity_regions.clone());
+        let (regions, entity_regions, poi_regions) = (
+            self.regions.clone(),
+            self.entity_regions.clone(),
+            self.poi_regions.clone(),
+        );
         let pending = self.pending.clone();
         let outstanding = self.outstanding.clone();
         let thread = std::thread::Builder::new()
             .name("horizon-region-writer".into())
             .spawn(move || {
-                for (entities, batch) in receive {
-                    let (folder, cache) = if entities {
-                        ("entities", &entity_regions)
-                    } else {
-                        ("region", &regions)
+                for (kind, batch) in receive {
+                    let cache = match kind {
+                        Folder::Region => &regions,
+                        Folder::Entities => &entity_regions,
+                        Folder::Poi => &poi_regions,
                     };
+                    let folder = kind.name();
                     // IOWorker.pendingWrites: a chunk queued again since is
                     // written once, by its newest batch.
                     let newest = |k: &(i32, i32), seq: u64| {
                         pending.lock().map_or(true, |p| {
-                            p.get(&(entities, k.0, k.1)).is_none_or(|p| p.0 <= seq)
+                            p.get(&(kind, k.0, k.1)).is_none_or(|p| p.0 <= seq)
                         })
                     };
-                    let records: Vec<_> = batch
+                    let resolved: Vec<_> = batch
                         .iter()
                         .filter(|(k, _, seq)| newest(k, *seq))
-                        .map(|(k, r, _)| (*k, r))
+                        .filter_map(|(k, r, _)| Some((*k, resolve_poi(&root, cache, *k, r)?)))
                         .collect();
+                    let records: Vec<_> = resolved.iter().map(|(k, r)| (*k, r)).collect();
                     let result = write_region_records(&root, cache, folder, &records);
                     if let Err(e) = &result {
                         let message = format!("failed to write {folder} files: {e}");
@@ -1788,11 +2131,8 @@ impl SaveDir {
                         && let Ok(mut pending) = pending.lock()
                     {
                         for (k, _, seq) in &batch {
-                            if pending
-                                .get(&(entities, k.0, k.1))
-                                .is_some_and(|p| p.0 == *seq)
-                            {
-                                pending.remove(&(entities, k.0, k.1));
+                            if pending.get(&(kind, k.0, k.1)).is_some_and(|p| p.0 == *seq) {
+                                pending.remove(&(kind, k.0, k.1));
                             }
                         }
                     }
@@ -1856,12 +2196,23 @@ impl SaveDir {
             .map(|c| {
                 (
                     (c.x, c.z),
-                    Some(encode_with(c, registry, biomes, tables, self.sky_light)),
+                    Some(encode_with(c, registry, biomes, tables, self.shape)),
                 )
             })
             .collect();
         self.write_records("region", records, true)?;
+        self.save_poi(chunks, true)?;
         Ok(chunks.len())
+    }
+    fn save_poi(&self, chunks: &[Arc<Chunk>], wait: bool) -> Result<()> {
+        let Some(tables) = self.tables.get() else {
+            return Ok(());
+        };
+        let records = chunks
+            .iter()
+            .map(|c| ((c.x, c.z), Record::Poi(c.clone(), tables.clone())))
+            .collect();
+        self.queue(Folder::Poi, records, wait)
     }
     /// `save` on the writer thread: returns before the files are written;
     /// loads see the chunks meanwhile.
@@ -1875,13 +2226,14 @@ impl SaveDir {
             registry,
             biomes: biomes.clone(),
             tables: self.tables.get().cloned(),
-            sky_light: self.sky_light,
+            shape: self.shape,
         });
         let records = chunks
             .iter()
             .map(|c| ((c.x, c.z), Record::Chunk(c.clone(), encoding.clone())))
             .collect();
-        self.queue(false, records, false)?;
+        self.queue(Folder::Region, records, false)?;
+        self.save_poi(chunks, false)?;
         Ok(chunks.len())
     }
     /// Write the entity chunks (`EntityStorage`): an empty list deletes it.
@@ -1923,11 +2275,51 @@ impl Drop for SaveDir {
 
 pub fn read_dat(path: &Path) -> Option<Tag> {
     let bytes = fs::read(path).ok()?;
-    let raw = match Compression::Gzip.decode(&bytes, 64 << 20) {
+    let raw = match Compression::Gzip.decode(&bytes, Limits::saved().max_bytes) {
         Ok(raw) => raw,
         Err(_) => bytes,
     };
-    Some(nbt::read_named(&raw, Limits::default()).ok()?.0.tag)
+    Some(nbt::read_named(&raw, Limits::saved()).ok()?.0.tag)
+}
+/// `FileNameDateFormatter`: the time in the names of backed-up unreadable files.
+fn backup_stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+}
+/// `LevelStorageSource.readLevelDataTagFixed`: level.dat, else level.dat_old.
+fn read_level_dat(dir: &Path) -> Option<Tag> {
+    read_dat(&dir.join("level.dat")).or_else(|| read_dat(&dir.join("level.dat_old")))
+}
+/// `restoreLevelDataFromOld`: an unreadable level.dat is kept as
+/// `level.dat_corrupted_<time>` and level.dat_old takes its place, so the next
+/// write does not bury either file.
+fn restore_level_dat(dir: &Path) {
+    let path = dir.join("level.dat");
+    if read_dat(&path).is_some() {
+        return;
+    }
+    if path.exists() {
+        let _ = fs::rename(
+            &path,
+            dir.join(format!("level.dat_corrupted_{}", backup_stamp())),
+        );
+    }
+    let old = dir.join("level.dat_old");
+    if read_dat(&old).is_some() {
+        let _ = fs::rename(old, path);
+    }
+}
+/// `PlayerDataStorage.backup`: a player file that fails to load is copied to
+/// `<uuid>_corrupted_<time>.dat` before it is written over.
+fn back_up_unreadable_player(path: &Path) {
+    if path.is_file()
+        && read_dat(path).is_none()
+        && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+    {
+        let _ = fs::copy(
+            path,
+            path.with_file_name(format!("{stem}_corrupted_{}.dat", backup_stamp())),
+        );
+    }
 }
 /// Write a gzip NBT file the way vanilla does (`<name>_new`, keep `_old`).
 pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
@@ -1939,7 +2331,7 @@ pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
             name: "".into(),
             tag,
         },
-        Limits::default(),
+        Limits::saved(),
     )
     .map_err(|e| e.to_string())?;
     let compressed = Compression::Gzip.encode(&bytes)?;
@@ -1988,28 +2380,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-pub fn uuid_text(u: [i32; 4]) -> String {
-    let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
-}
-pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
-    let mut out = [0i32; 4];
-    for (i, v) in out.iter_mut().enumerate() {
-        *v = u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16).ok()? as i32;
-    }
-    Some(out)
-}
+pub use horizon_client_core::uuid::{uuid_from_text, uuid_text};
 /// A random (version 4) UUID as vanilla's four-int form.
 pub fn random_uuid() -> [i32; 4] {
     let t = std::time::SystemTime::now()
@@ -2159,6 +2530,30 @@ impl WorldGen {
             bonus_chest: flag("bonus_chest", false),
         })
     }
+    /// The bundled world preset a saved world's overworld was generated
+    /// with, from its generator: `minecraft:amplified` and
+    /// `minecraft:large_biomes` by their noise settings, and
+    /// `minecraft:single_biome_surface` by a fixed biome source. Anything
+    /// else (and any world without settings) is `minecraft:normal`.
+    pub fn preset(world: &Path) -> &'static str {
+        let settings = world_gen_settings(world);
+        let generator = settings
+            .as_ref()
+            .and_then(|s| s.get("dimensions"))
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"));
+        let noise = text(generator.and_then(|g| g.get("settings")));
+        let fixed_biome = generator
+            .and_then(|g| g.get("biome_source"))
+            .and_then(|b| text(b.get("type")))
+            .is_some_and(|t| t == "minecraft:fixed");
+        match noise.as_deref() {
+            Some("minecraft:amplified") => "minecraft:amplified",
+            Some("minecraft:large_biomes") => "minecraft:large_biomes",
+            Some("minecraft:overworld") if fixed_biome => "minecraft:single_biome_surface",
+            _ => "minecraft:normal",
+        }
+    }
 }
 impl Default for WorldGen {
     fn default() -> Self {
@@ -2292,6 +2687,9 @@ pub struct Level {
     /// The game mode id (0 survival, 1 creative, 2 adventure, 3 spectator);
     /// `creative` wins when the two disagree.
     pub game_mode: i32,
+    /// `previousPlayerGameType`: the mode the player left last (the F3+F4 switcher's
+    /// return mode), when it has one.
+    pub previous_game_mode: Option<i32>,
     pub time: i64,
     pub day_time: i64,
     /// Where the player respawns when it has no bed or anchor: its forced
@@ -2316,7 +2714,9 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
-    /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
+    /// Player.lastDeathLocation: the dimension and block of the last death.
+    pub last_death: Option<(String, [i32; 3])>,
+    /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
@@ -2355,6 +2755,21 @@ pub struct Level {
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// `PrimaryLevelData.setDifficulty`: the level data holds the world's
+    /// difficulty, so the game and the file follow each other and a world
+    /// that was set to hard is hard when it is opened again.
+    pub fn set_difficulty(&mut self, difficulty: u8) {
+        self.difficulty = crate::title::DIFFICULTIES[difficulty as usize % 4].to_owned();
+    }
+
+    /// `PrimaryLevelData.getDifficulty`: the id of the level data's
+    /// difficulty (peaceful 0 .. hard 3), normal when it is not one of them.
+    pub fn difficulty_id(&self) -> u8 {
+        crate::title::DIFFICULTIES
+            .iter()
+            .position(|d| *d == self.difficulty)
+            .map_or(2, |i| i as u8)
+    }
     /// Initialize the offline single-player identity before saving or dropping items.
     pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
         *self.player_uuid.get_or_insert_with(|| {
@@ -2383,7 +2798,7 @@ impl Level {
         }
     }
     pub fn read(dir: &Path) -> Option<Self> {
-        let root = read_dat(&dir.join("level.dat"))?;
+        let root = read_level_dat(dir)?;
         let data = root.get("Data")?;
         let n = |t: Option<&Tag>| number(t).unwrap_or(0);
         let mut level = Self {
@@ -2471,7 +2886,12 @@ impl Level {
         // file of a server world, or the legacy Data.Player.
         let uuid = uuid_from_tag(data.get("singleplayer_uuid"));
         let player_dir = dir.join("players").join("data");
-        let owner = uuid.and_then(|u| read_dat(&player_dir.join(format!("{}.dat", uuid_text(u)))));
+        // PlayerDataStorage.load: the player's file, else its .dat_old.
+        let owner = uuid.and_then(|u| {
+            let name = uuid_text(u);
+            read_dat(&player_dir.join(format!("{name}.dat")))
+                .or_else(|| read_dat(&player_dir.join(format!("{name}.dat_old"))))
+        });
         let player = owner
             .or_else(|| {
                 fs::read_dir(&player_dir)
@@ -2516,10 +2936,20 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.last_death = p.get("LastDeathLocation").and_then(|d| {
+            let Some(Tag::IntArray(pos)) = d.get("pos") else {
+                return None;
+            };
+            Some((
+                text(d.get("dimension"))?,
+                [*pos.first()?, *pos.get(1)?, *pos.get(2)?],
+            ))
+        });
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
         }
+        self.previous_game_mode = n("previousPlayerGameType").map(|m| m as i32);
         self.flying = p
             .get("abilities")
             .and_then(|a| number(a.get("flying")))
@@ -2596,7 +3026,7 @@ impl Level {
                         get("duration").unwrap_or(0) as i32,
                         get("amplifier").unwrap_or(0) as i32,
                         get("ambient").unwrap_or(0) != 0,
-                        get("show_icon").is_none_or(|v| v != 0),
+                        get("show_particles").is_none_or(|v| v != 0),
                     ))
                 })
                 .collect(),
@@ -2616,6 +3046,8 @@ impl Level {
                 "Pos",
                 "respawn",
                 "recipeBook",
+                "LastDeathLocation",
+                "previousPlayerGameType",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -2698,14 +3130,14 @@ impl Level {
                 Tag::List(
                     self.active_effects
                         .iter()
-                        .map(|(id, duration, amplifier, ambient, icon)| {
+                        .map(|(id, duration, amplifier, ambient, particles)| {
                             Tag::compound([
                                 ("id", string(id)),
                                 ("duration", Tag::Int(*duration)),
                                 ("amplifier", Tag::Byte(*amplifier as i8)),
                                 ("ambient", Tag::Byte(i8::from(*ambient))),
-                                ("show_particles", Tag::Byte(1)),
-                                ("show_icon", Tag::Byte(i8::from(*icon))),
+                                ("show_particles", Tag::Byte(i8::from(*particles))),
+                                ("show_icon", Tag::Byte(i8::from(*particles))),
                             ])
                         })
                         .collect(),
@@ -2742,6 +3174,15 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        if let Some((dimension, pos)) = &self.last_death {
+            entries.push((
+                "LastDeathLocation",
+                Tag::compound([
+                    ("dimension", string(dimension)),
+                    ("pos", Tag::IntArray(pos.to_vec())),
+                ]),
+            ));
+        }
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![
@@ -2775,6 +3216,10 @@ impl Level {
                 ));
             }
         }
+        // ServerPlayer.storeGameTypes: storeNullable, so absent without one.
+        if let Some(mode) = self.previous_game_mode {
+            entries.push(("previousPlayerGameType", Tag::Int(mode)));
+        }
         for (key, value) in entries {
             put(&mut p, key, value);
         }
@@ -2800,6 +3245,7 @@ impl Level {
     /// Write every file; a world without a player UUID gets a random one.
     pub fn write(&mut self, dir: &Path) -> Result<()> {
         fs::create_dir_all(dir)?;
+        restore_level_dat(dir);
         let existing = read_dat(&dir.join("level.dat")).and_then(|r| r.get("Data").cloned());
         let legacy = existing
             .as_ref()
@@ -2990,12 +3436,12 @@ impl Level {
             }
             write_saved_data(dir, "game_rules", rules)?;
         }
-        write_dat(
-            &dir.join("players")
-                .join("data")
-                .join(format!("{}.dat", uuid_text(uuid))),
-            self.player_tag(),
-        )?;
+        let player_file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(uuid)));
+        back_up_unreadable_player(&player_file);
+        write_dat(&player_file, self.player_tag())?;
         write_dat(&dir.join("level.dat"), Tag::compound([("Data", data)]))?;
         Ok(())
     }
@@ -3229,7 +3675,16 @@ fn decode_lod_surfaces(
                             descriptor.name.as_str(),
                             "minecraft:water" | "minecraft:lava"
                         );
-                        (state, fluid, properties.blocks_motion_in_heightmap())
+                        // Chorus is thin and non-solid but still far-End detail.
+                        let chorus = matches!(
+                            descriptor.name.as_str(),
+                            "minecraft:chorus_plant" | "minecraft:chorus_flower"
+                        );
+                        (
+                            state,
+                            fluid,
+                            fluid || properties.blocks_motion_in_heightmap() || chorus,
+                        )
                     }))
                 })
                 .collect::<Option<_>>()?;
@@ -3253,10 +3708,10 @@ fn decode_lod_surfaces(
                     for y in (0..16).rev() {
                         let index = y * 256 + cell;
                         let palette_index = lod_palette_index(blocks, index, 4096, 4)?;
-                        let Some((state, fluid, solid)) = palette[palette_index] else {
+                        let Some((state, fluid, kept)) = palette[palette_index] else {
                             continue;
                         };
-                        if !solid && !fluid {
+                        if !kept {
                             continue;
                         }
                         let biome = section
@@ -3326,7 +3781,7 @@ impl SaveDir {
             .pending
             .lock()
             .ok()?
-            .get(&(false, x, z))
+            .get(&(Folder::Region, x, z))
             .map(|(_, record)| record.clone());
         let root = if let Some(record) = pending {
             record.tag().map(|tag| (*tag).clone())?
@@ -3345,7 +3800,7 @@ impl SaveDir {
         {
             return None;
         }
-        decode_lod_surfaces(&root, assets, biomes, self.sky_light)
+        decode_lod_surfaces(&root, assets, biomes, self.shape.sky_light)
     }
 }
 
@@ -3394,6 +3849,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn is_decorated(&self, proto: &crate::streaming::Proto) -> bool {
         self.inner.is_decorated(proto)
     }
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        self.inner.light_view(proto)
+    }
     fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
         self.save
             .tables
@@ -3436,6 +3894,279 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    use crate::mobs::spawner::SpawnDataExt;
+
+    #[test]
+    fn points_of_interest_save_as_poi_sections() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let assets = crate::assets::Assets::load(&PathBuf::from(root)).expect("assets");
+        let tables = SaveTables::new(&assets);
+        let state = |name: &str, props: &[(&str, &str)]| {
+            let mut s = assets
+                .registry
+                .state(assets.registry.default_state(name).unwrap())
+                .unwrap()
+                .clone();
+            for (k, v) in props {
+                s.properties.insert((*k).into(), (*v).into());
+            }
+            assets.registry.id(&s).unwrap().0
+        };
+        let mut chunk = Chunk::empty(2, -1);
+        chunk.set(1, 70, 1, state("minecraft:red_bed", &[("part", "head")]));
+        chunk.set(1, 70, 2, state("minecraft:red_bed", &[("part", "foot")]));
+        chunk.set(5, 71, 5, state("minecraft:bell", &[]));
+        chunk.set(6, 71, 5, state("minecraft:stone", &[]));
+        chunk.set(9, 70, 9, state("minecraft:straw_bed", &[("part", "head")]));
+        assert!(encode_poi(&Chunk::empty(0, 0), &tables).is_none());
+        let saved = encode_poi(&chunk, &tables).expect("records");
+        let Some(Tag::Compound(sections)) = saved.tag.get("Sections") else {
+            panic!("no sections");
+        };
+        assert_eq!(sections.len(), 1);
+        let section = &sections[&"4".into()];
+        assert_eq!(section.get("Valid"), Some(&Tag::Byte(1)));
+        let Some(Tag::List(records)) = section.get("Records") else {
+            panic!("no records");
+        };
+        let records: Vec<_> = records
+            .iter()
+            .map(|r| {
+                (
+                    text(r.get("type")).unwrap(),
+                    r.get("pos").cloned(),
+                    number(r.get("free_tickets")),
+                )
+            })
+            .collect();
+        assert_eq!(
+            records,
+            [
+                (
+                    "minecraft:home".into(),
+                    Some(Tag::IntArray(vec![33, 70, -15])),
+                    Some(1)
+                ),
+                (
+                    "minecraft:meeting".into(),
+                    Some(Tag::IntArray(vec![37, 71, -11])),
+                    Some(32)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chunk_that_loses_its_last_poi_saves_empty_sections() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Arc::new(Biomes::load(&root).expect("biomes"));
+        let bell = assets.registry.default_state("minecraft:bell").unwrap().0;
+        let dir = std::env::temp_dir().join(format!("horizon-poi-save-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let save = SaveDir::new(dir.clone());
+        let _ = save.tables.set(Arc::new(SaveTables::new(&assets)));
+        let mut chunk = Chunk::empty(0, 0);
+        chunk.set(5, 71, 5, bell);
+        let sections = |save: &SaveDir| match save.read_record("poi", 0, 0)?.tag.get("Sections") {
+            Some(Tag::Compound(s)) => Some(s.len()),
+            _ => None,
+        };
+        save.save_later(&[Arc::new(chunk.clone())], assets.registry, &biomes)
+            .unwrap();
+        save.flush().unwrap();
+        assert_eq!(sections(&save), Some(1));
+        chunk.set(5, 71, 5, 0);
+        save.save_later(&[Arc::new(chunk)], assets.registry, &biomes)
+            .unwrap();
+        save.flush().unwrap();
+        assert_eq!(sections(&SaveDir::new(dir.clone())), Some(0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_poi_records_keep_their_claims() {
+        let record = |pos: [i32; 3], kind: &str, tickets: Option<i32>| {
+            let mut r = vec![("pos", Tag::IntArray(pos.to_vec())), ("type", string(kind))];
+            if let Some(t) = tickets {
+                r.push(("free_tickets", Tag::Int(t)));
+            }
+            Tag::compound(r)
+        };
+        let poi = |records: Vec<Tag>| {
+            let mut sections = Compound::new();
+            sections.insert(
+                "4".into(),
+                Tag::compound([("Valid", Tag::Byte(1)), ("Records", Tag::List(records))]),
+            );
+            poi_root(sections)
+        };
+        let old = poi(vec![
+            record([1, 70, 1], "minecraft:home", None),
+            record([5, 71, 5], "minecraft:meeting", Some(30)),
+        ]);
+        let mut saved = poi(vec![
+            record([1, 70, 1], "minecraft:home", Some(1)),
+            record([5, 71, 5], "minecraft:meeting", Some(32)),
+            record([9, 71, 9], "minecraft:home", Some(1)),
+        ]);
+        keep_claims(&mut saved, &old);
+        let expected = poi(vec![
+            record([1, 70, 1], "minecraft:home", None),
+            record([5, 71, 5], "minecraft:meeting", Some(30)),
+            record([9, 71, 9], "minecraft:home", Some(1)),
+        ]);
+        assert_eq!(saved.tag, expected.tag);
+    }
+
+    #[test]
+    fn unopened_rolled_containers_save_their_loot_table() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tables = SaveTables::new(&assets);
+        let chest = assets.registry.default_state("minecraft:chest").unwrap();
+        let mut slots = vec![None; 27];
+        slots[3] = Some(crate::items::ItemStack::new("minecraft:bone", 2));
+        let mut chunk = Chunk::empty(0, 0);
+        chunk.set(1, 64, 2, chest.0);
+        chunk.block_entities.push((
+            (1, 64, 2),
+            crate::containers::BlockEntity::Chest(slots.clone()),
+        ));
+        let rolled = RolledLoot {
+            pos: (1, 64, 2),
+            table: "minecraft:chests/simple_dungeon".into(),
+            seed: Some(42),
+            items: encode_items(&slots),
+        };
+        chunk.saved = Some(Arc::new(ChunkExtras {
+            rolled_loot: vec![rolled],
+            ..ChunkExtras::default()
+        }));
+        let saved_chest = |chunk: &Chunk| -> Tag {
+            let saved = encode_with(
+                chunk,
+                assets.registry,
+                &biomes,
+                Some(&tables),
+                LevelShape::OVERWORLD,
+            );
+            let Some(Tag::List(list)) = saved.tag.get("block_entities") else {
+                panic!("no block entities");
+            };
+            list[0].clone()
+        };
+        let unopened = saved_chest(&chunk);
+        assert_eq!(
+            text(unopened.get("LootTable")).as_deref(),
+            Some("minecraft:chests/simple_dungeon")
+        );
+        assert_eq!(number(unopened.get("LootTableSeed")), Some(42));
+        assert!(unopened.get("Items").is_none());
+        // Taking an item makes the items the container's own.
+        if let crate::containers::BlockEntity::Chest(s) = &mut chunk.block_entities[0].1 {
+            s[3] = None;
+            s[4] = Some(crate::items::ItemStack::new("minecraft:bone", 1));
+        }
+        let opened = saved_chest(&chunk);
+        assert!(opened.get("LootTable").is_none());
+        assert!(opened.get("Items").is_some());
+        // Loaded with its table, rolled, then emptied: no table, or it refills on load.
+        let mut extras = ChunkExtras::clone(chunk.saved.as_ref().unwrap());
+        extras.block_entity_sources = vec![(
+            (1, 64, 2),
+            Tag::compound([
+                ("id", string("minecraft:chest")),
+                ("x", Tag::Int(1)),
+                ("y", Tag::Int(64)),
+                ("z", Tag::Int(2)),
+                ("LootTable", string("minecraft:chests/simple_dungeon")),
+                ("LootTableSeed", Tag::Long(42)),
+            ]),
+        )];
+        chunk.saved = Some(Arc::new(extras));
+        if let crate::containers::BlockEntity::Chest(s) = &mut chunk.block_entities[0].1 {
+            s.fill(None);
+        }
+        let emptied = saved_chest(&chunk);
+        assert!(emptied.get("LootTable").is_none());
+        assert!(emptied.get("LootTableSeed").is_none());
+    }
+
+    #[test]
+    fn nether_and_end_chunks_save_with_their_own_height() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tables = SaveTables::new(&assets);
+        let rack = assets
+            .registry
+            .default_state("minecraft:netherrack")
+            .unwrap();
+        let mut chunk = Chunk::empty(0, 0);
+        for y in 0..128 {
+            chunk.set(0, y, 0, rack.0);
+        }
+        let saved = encode_with(
+            &chunk,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            LevelShape::NETHER,
+        );
+        assert_eq!(number(saved.tag.get("yPos")), Some(0));
+        let Some(Tag::List(sections)) = saved.tag.get("sections") else {
+            panic!("no sections");
+        };
+        let ys: Vec<i32> = sections
+            .iter()
+            .filter_map(|s| number(s.get("Y")).map(|y| y as i32))
+            .collect();
+        assert_eq!(ys, (0..16).collect::<Vec<_>>());
+        let Some(Tag::List(post)) = saved.tag.get("PostProcessing") else {
+            panic!("no PostProcessing");
+        };
+        assert_eq!(post.len(), 16);
+        // Heightmap values count from the level's minimum: the column's top
+        // block at y=127 reads 128 (vanilla), not 192 (from the Overworld's -64).
+        let Some(Tag::LongArray(surface)) = saved
+            .tag
+            .get("Heightmaps")
+            .and_then(|h| h.get("WORLD_SURFACE"))
+        else {
+            panic!("no WORLD_SURFACE");
+        };
+        assert_eq!(surface[0] & 0x1ff, 128);
+        let overworld = encode_with(
+            &chunk,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            LevelShape::OVERWORLD,
+        );
+        assert_eq!(number(overworld.tag.get("yPos")), Some(-4));
+        assert_eq!(
+            LevelShape::for_dir(Path::new("w/dimensions/minecraft/the_end")),
+            LevelShape::END
+        );
+        assert_eq!(
+            LevelShape::for_dir(Path::new("w/DIM-1")),
+            LevelShape::NETHER
+        );
+    }
+
     #[test]
     fn saved_far_surface_reads_builds_and_water_without_gameplay_chunks() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
@@ -3451,6 +4182,18 @@ mod tests {
         let leaves = assets
             .registry
             .default_state("minecraft:oak_leaves")
+            .unwrap();
+        let end_stone = assets
+            .registry
+            .default_state("minecraft:end_stone")
+            .unwrap();
+        let chorus = assets
+            .registry
+            .default_state("minecraft:chorus_plant")
+            .unwrap();
+        let flower = assets
+            .registry
+            .default_state("minecraft:chorus_flower")
             .unwrap();
         let mut chunk = Chunk::empty(-2, 3);
         chunk.set(0, 109, 0, stone.0);
@@ -3478,6 +4221,10 @@ mod tests {
         for y in 55..64 {
             chunk.set(4, y, 4, water.0);
         }
+        // Chorus is thin and non-solid but still part of the far End.
+        chunk.set(12, 100, 2, end_stone.0);
+        chunk.set(12, 101, 2, chorus.0);
+        chunk.set(12, 102, 2, flower.0);
         let mut saved = encode(&chunk, assets.registry, &biomes);
         put(
             &mut saved.tag,
@@ -3535,6 +4282,25 @@ mod tests {
         let underwater = surfaces[4 * 16 + 4].surface.unwrap();
         assert_eq!((underwater.height, underwater.state), (55, sand));
         assert_eq!(underwater.water, Some((64, water)));
+        let chorus_column = &surfaces[2 * 16 + 12];
+        assert_eq!(
+            chorus_column
+                .surface
+                .map(|surface| (surface.height, surface.state)),
+            Some((103, flower))
+        );
+        assert_eq!(
+            chorus_column
+                .spans
+                .iter()
+                .map(|span| (span.min, span.max, span.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (100, 101, end_stone),
+                (101, 102, chorus),
+                (102, 103, flower)
+            ]
+        );
         assert!(surfaces[15].surface.is_none(), "saved void stays empty");
         assert!(
             reopened.regions.lock().unwrap().is_empty(),
@@ -3554,7 +4320,7 @@ mod tests {
             "unfinished proto saves must not suppress complete decoration"
         );
         let mut nether = SaveDir::new(dir.clone());
-        nether.sky_light = false;
+        nether.shape = LevelShape::NETHER;
         let dark = nether.lod_surfaces(-2, 3, &assets, &biomes).unwrap();
         assert!(
             dark.iter()
@@ -3828,11 +4594,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("horizon-lock-{}", std::process::id()));
         let first = super::SessionLock::acquire(&dir).expect("first lock");
         assert!(super::SessionLock::acquire(&dir).is_err());
+        drop(first);
+        // Windows refuses a read through another handle while the file is
+        // locked, so the bytes are read once the lock is released.
         assert_eq!(
             std::fs::read(dir.join("session.lock")).unwrap(),
             [0x26, 0x03]
         );
-        drop(first);
         assert!(super::SessionLock::acquire(&dir).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3871,6 +4639,31 @@ mod tests {
         assert!(back.triggered);
         assert_eq!(back.crafting_ticks, 3);
         assert_eq!(back.redstone_signal(), 2);
+    }
+    #[test]
+    fn campfire_block_entity_round_trips() {
+        let mut c = crate::containers::Campfire::default();
+        c.items[1] = Some(crate::items::ItemStack::new("minecraft:beef", 1));
+        c.progress[1] = 120;
+        c.total[1] = 600;
+        let tag = encode_block_entity(
+            (3, 64, -2),
+            &crate::containers::BlockEntity::Campfire(Box::new(c.clone())),
+            "minecraft:soul_campfire",
+        );
+        // One block entity type for both campfires.
+        assert_eq!(text(tag.get("id")).as_deref(), Some("minecraft:campfire"));
+        let (pos, back) = decode_block_entity(&tag).expect("campfire");
+        assert_eq!(pos, (3, 64, -2));
+        let crate::containers::BlockEntity::Campfire(back) = back else {
+            panic!("not a campfire");
+        };
+        assert_eq!(*back, c);
+        // The update tag a server's clients get: the items alone.
+        let update =
+            crate::lan::chunks::entity_tag(&crate::containers::BlockEntity::Campfire(Box::new(c)))
+                .expect("update tag");
+        assert!(update.get("Items").is_some() && update.get("CookingTimes").is_none());
     }
     #[test]
     fn spawner_block_entity_round_trips() {
@@ -3916,6 +4709,79 @@ mod tests {
         assert_eq!(back.components, banner.components);
     }
     use super::*;
+
+    #[test]
+    fn end_gateway_block_entity_round_trips() {
+        use crate::containers::{BlockEntity, EndGateway};
+        let plain = BlockEntity::for_block("minecraft:end_gateway").expect("gateway");
+        assert!(matches!(&plain, BlockEntity::EndGateway(g) if *g == EndGateway::default()));
+        for exit in [None, Some([8, 100, 0])] {
+            for exact in [false, true] {
+                let gateway = EndGateway {
+                    age: 201,
+                    exit_portal: exit,
+                    exact_teleport: exact,
+                };
+                let tag = encode_block_entity(
+                    (702, 100, 0),
+                    &BlockEntity::EndGateway(gateway.clone()),
+                    "minecraft:end_gateway",
+                );
+                assert_eq!(
+                    text(tag.get("id")).as_deref(),
+                    Some("minecraft:end_gateway")
+                );
+                assert_eq!(tag.get("Age"), Some(&Tag::Long(201)));
+                assert_eq!(
+                    tag.get("exit_portal"),
+                    exit.map(|p| Tag::IntArray(p.to_vec())).as_ref()
+                );
+                assert_eq!(
+                    tag.get("ExactTeleport"),
+                    exact.then_some(Tag::Byte(1)).as_ref()
+                );
+                let (pos, back) = decode_block_entity(&tag).expect("gateway");
+                assert_eq!(pos, (702, 100, 0));
+                assert!(matches!(back, BlockEntity::EndGateway(g) if g == gateway));
+            }
+        }
+    }
+
+    #[test]
+    fn end_gateway_exit_requires_spawnable_bounds() {
+        for (exit, valid) in [
+            (vec![-30_000_000, -20_000_000, -30_000_000], true),
+            (vec![29_999_999, 19_999_999, 29_999_999], true),
+            (vec![30_000_000, 0, 0], false),
+            (vec![0, 0, 30_000_000], false),
+            (vec![-30_000_001, 0, 0], false),
+            (vec![0, 0, -30_000_001], false),
+            (vec![0, 20_000_000, 0], false),
+            (vec![0, -20_000_001, 0], false),
+            (vec![i32::MIN, 0, 0], false),
+            (vec![0, 100], false),
+        ] {
+            let tag = Tag::compound([
+                ("id", string("minecraft:end_gateway")),
+                ("x", Tag::Int(702)),
+                ("y", Tag::Int(100)),
+                ("z", Tag::Int(0)),
+                ("exit_portal", Tag::IntArray(exit)),
+            ]);
+            let (_, crate::containers::BlockEntity::EndGateway(g)) =
+                decode_block_entity(&tag).unwrap()
+            else {
+                panic!("gateway");
+            };
+            assert_eq!(g.exit_portal.is_some(), valid);
+            let canonical = crate::block_entity_nbt::canonical(&tag).expect("gateway NBT");
+            assert_eq!(canonical.get("exit_portal").is_some(), valid);
+        }
+        assert_eq!(
+            decode_end_gateway(&Tag::Compound(Compound::new())),
+            crate::containers::EndGateway::default()
+        );
+    }
 
     #[test]
     fn skull_block_entity_keeps_its_profile() {
@@ -4207,6 +5073,36 @@ mod tests {
             section(Tag::Byte(0), None, Some(Tag::ByteArray(varied))),
         ]));
     }
+    /// #2571: the difficulty is a property of the world: the level data
+    /// holds it, so a world that was set to hard is hard when it is opened
+    /// again, and a world that was downloaded keeps the difficulty it was
+    /// made with.
+    #[test]
+    fn the_level_data_holds_the_difficulty() {
+        let dir = std::env::temp_dir().join(format!("horizon-difficulty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut level = Level {
+            name: "Test".into(),
+            ..Level::default()
+        };
+        // The world's difficulty is the level data's.
+        level.set_difficulty(3);
+        assert_eq!(level.difficulty, "hard");
+        assert_eq!(level.difficulty_id(), 3);
+        // It survives the save, so the world comes back with it.
+        level.write(&dir).unwrap();
+        let back = Level::read(&dir).unwrap();
+        assert_eq!(back.difficulty, "hard");
+        assert_eq!(back.difficulty_id(), 3);
+        // A world whose difficulty is not one of ours is normal.
+        let other = Level {
+            difficulty: "extreme".into(),
+            ..Level::default()
+        };
+        assert_eq!(other.difficulty_id(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn level_round_trips_through_the_vanilla_files() {
         let dir = std::env::temp_dir().join(format!("horizon-level-{}", std::process::id()));
@@ -4381,5 +5277,109 @@ mod tests {
             panic!("a furnace back");
         };
         assert_eq!(back.recipes_used.get("minecraft:cooked_porkchop"), Some(&3));
+    }
+    /// The world's save (Level.write) writes the rules as they are now, and a
+    /// world opened again reads them back (#74).
+    #[test]
+    fn level_save_keeps_changed_rules() {
+        use crate::gamerules::{GameRules, Value};
+        let dir =
+            std::env::temp_dir().join(format!("horizon-gamerules-level-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut level = super::Level::default();
+        level.write(&dir).unwrap();
+        // Rules changed while playing, then saved and loaded again.
+        let mut rules = GameRules::load(&dir);
+        assert_eq!(rules, GameRules::default());
+        assert!(rules.set("advance_time", Value::Bool(false)));
+        assert!(rules.set("advance_weather", Value::Bool(false)));
+        assert!(rules.set("random_tick_speed", Value::Int(0)));
+        level.game_rules = rules.by_name();
+        level.write(&dir).unwrap();
+        assert_eq!(GameRules::load(&dir), rules);
+        let read = super::Level::read(&dir).unwrap();
+        assert_eq!(read.game_rules, rules.by_name());
+        assert_eq!(read.game_rule("advance_time"), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A save written before the key was namespaced holds an id twice, once bare: vanilla
+    /// refuses such a furnace, so a load merges them under the full id.
+    #[test]
+    fn a_furnaces_recipes_used_merges_bare_and_full_ids() {
+        use crate::containers::BlockEntity;
+        let Some(BlockEntity::Furnace(mut f)) = BlockEntity::for_block("minecraft:furnace") else {
+            panic!("a furnace");
+        };
+        f.recipes_used
+            .insert("iron_ingot_from_smelting_iron_ore".to_owned(), 2);
+        f.recipes_used
+            .insert("minecraft:iron_ingot_from_smelting_iron_ore".to_owned(), 3);
+        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
+            panic!("a furnace back");
+        };
+        assert_eq!(back.recipes_used.len(), 1);
+        assert_eq!(
+            back.recipes_used
+                .get("minecraft:iron_ingot_from_smelting_iron_ore"),
+            Some(&5)
+        );
+    }
+
+    #[test]
+    fn forced_chunks_survive_dimension_restarts_and_removals() {
+        let root = std::env::temp_dir().join(format!("horizon-forced-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dimensions = [
+            "minecraft:overworld",
+            "minecraft:the_nether",
+            "minecraft:the_end",
+        ];
+        for (i, dim) in dimensions.iter().enumerate() {
+            let save = SaveDir::new(dimension_dir(&root, dim));
+            assert!(save.load_forced_chunks().is_empty());
+            let forced = HashSet::from([(i as i32, -17), (-23, i as i32), (-1, -1)]);
+            save.save_forced_chunks(&forced).unwrap();
+        }
+        for (i, dim) in dimensions.iter().enumerate() {
+            let path = dimension_dir(&root, dim);
+            let save = SaveDir::new(path.clone());
+            let mut forced = save.load_forced_chunks();
+            assert_eq!(
+                forced,
+                HashSet::from([(i as i32, -17), (-23, i as i32), (-1, -1)])
+            );
+            let mut data = read_saved_data(&path, "chunk_tickets").unwrap();
+            let other = Tag::compound([
+                ("type", Tag::String("minecraft:portal".into())),
+                ("level", Tag::Int(30)),
+                ("chunk_pos", Tag::IntArray(vec![7, -8])),
+                ("ticks_left", Tag::Long(42)),
+            ]);
+            if let Some(Tag::List(tickets)) = data.get_mut("tickets") {
+                assert!(
+                    tickets
+                        .iter()
+                        .all(|t| t.get("level") == Some(&Tag::Int(31)))
+                );
+                tickets.push(other.clone());
+            }
+            write_saved_data(&path, "chunk_tickets", data).unwrap();
+            forced.remove(&(-1, -1));
+            save.save_forced_chunks(&forced).unwrap();
+            drop(save);
+            let reopened = SaveDir::new(path.clone());
+            assert_eq!(reopened.load_forced_chunks(), forced);
+            reopened.save_forced_chunks(&HashSet::new()).unwrap();
+            assert!(SaveDir::new(path.clone()).load_forced_chunks().is_empty());
+            assert_eq!(
+                read_saved_data(&path, "chunk_tickets")
+                    .unwrap()
+                    .get("tickets"),
+                Some(&Tag::List(vec![other]))
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

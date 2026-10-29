@@ -153,6 +153,8 @@ pub struct StructureSet {
     rings: Option<RingSections>,
     /// `"horizon:avoid_biomes"`: no start with one of these biomes near.
     avoid_biomes: Option<AvoidBiomes>,
+    /// `placement.locate_offset` (buried treasure's [9, 0, 9]).
+    locate_offset: [i32; 3],
 }
 
 /// `"horizon:exclusion_zone"`: no start within `chunk_count` chunks of a
@@ -275,16 +277,15 @@ fn terrain(name: Option<&str>) -> TerrainAdjustment {
         _ => TerrainAdjustment::None,
     }
 }
-fn pair(value: Option<&Value>, a: &str, b: &str, default: i32) -> [i32; 2] {
+/// A jigsaw field given as one number or as an object of two. In the object a
+/// missing `a` is 0 and a missing `b` is `missing_b` (`JigsawStructure.MaxDistance`
+/// and `DimensionPadding` default their second value, not copy the first).
+fn pair(value: Option<&Value>, a: &str, b: &str, default: i32, missing_b: i32) -> [i32; 2] {
     match value {
         Some(Value::Number(n)) => [n.as_i64().unwrap_or(0) as i32; 2],
         Some(Value::Object(o)) => {
-            let get = |k: &str| o.get(k).and_then(Value::as_i64).unwrap_or(0) as i32;
-            let first = get(a);
-            [
-                first,
-                o.get(b).and_then(Value::as_i64).map_or(first, |v| v as i32),
-            ]
+            let get = |k: &str| o.get(k).and_then(Value::as_i64).map(|v| v as i32);
+            [get(a).unwrap_or(0), get(b).unwrap_or(missing_b)]
         }
         _ => [default; 2],
     }
@@ -326,9 +327,11 @@ impl StructureRegistry {
                         "horizontal",
                         "vertical",
                         80,
+                        // DimensionType.Y_SIZE.
+                        4064,
                     ),
                     aliases: v["pool_aliases"].as_array().cloned().unwrap_or_default(),
-                    padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
+                    padding: pair(v.get("dimension_padding"), "bottom", "top", 0, 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                     checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
                     piece_limited: v
@@ -428,6 +431,10 @@ impl StructureRegistry {
                 placement,
                 salt: p["salt"].as_i64().unwrap_or(0) as i32,
                 frequency: p["frequency"].as_f64().unwrap_or(1.) as f32,
+                locate_offset: {
+                    let at = |i: usize| p["locate_offset"][i].as_i64().unwrap_or(0) as i32;
+                    [at(0), at(1), at(2)]
+                },
                 reduction: match p["frequency_reduction_method"].as_str() {
                     Some("legacy_type_1") => Reduction::Legacy1,
                     Some("legacy_type_2") => Reduction::Legacy2,
@@ -648,6 +655,12 @@ impl StructureSet {
             _ => None,
         }
     }
+    /// StructurePlacement.getLocatePos: the chunk's corner at y 0, moved by
+    /// the set's `locate_offset`.
+    pub fn locate_pos(&self, chunk: ChunkPos) -> [i32; 3] {
+        let o = self.locate_offset;
+        [chunk.x * 16 + o[0], o[1], chunk.z * 16 + o[2]]
+    }
 }
 fn reduce(method: Reduction, seed: i64, salt: i32, x: i32, z: i32, probability: f32) -> bool {
     let mut random = WorldgenRandom::new(LegacyRandom::new(0));
@@ -694,6 +707,13 @@ impl Piece {
             Self::Legacy(p) => p.type_name(),
         }
     }
+    /// `StructurePiece.createTag`; None for a type Horizon cannot save yet.
+    pub fn save(&self) -> Option<crate::nbt::Compound> {
+        match self {
+            Self::Pool(p) => Some(p.save()),
+            Self::Legacy(p) => p.save(),
+        }
+    }
 }
 fn legacy(pieces: Vec<impl LegacyPiece + 'static>) -> Vec<Piece> {
     pieces
@@ -734,6 +754,26 @@ pub struct StructureStart {
     pub pieces: Vec<Piece>,
     /// Piece union, inflated by 12 for terrain-adapting structures.
     pub bounding_box: BoundingBox,
+}
+impl StructureStart {
+    /// `StructureStart.createTag` in its own chunk; None while one of its
+    /// pieces cannot be saved. `references` counts `addReference` calls,
+    /// which only locating structures makes: 0 in a freshly made world.
+    pub fn save(&self) -> Option<crate::nbt::Tag> {
+        use crate::nbt::Tag;
+        let children: Option<Vec<Tag>> = self
+            .pieces
+            .iter()
+            .map(|p| p.save().map(Tag::Compound))
+            .collect();
+        Some(Tag::compound([
+            ("id", Tag::String(self.name.as_str().into())),
+            ("ChunkX", Tag::Int(self.chunk.x)),
+            ("ChunkZ", Tag::Int(self.chunk.z)),
+            ("references", Tag::Int(0)),
+            ("Children", Tag::List(children?)),
+        ]))
+    }
 }
 
 /// A block of a noise column (ChunkGenerator.getBaseColumn), by what
@@ -935,6 +975,7 @@ fn try_generate(
             let stub = top_of_chunk_center(context, chunk, HeightmapType::OceanFloorWg)?;
             let piece = super::simple::BuriedTreasurePiece {
                 position: [chunk.x * 16 + 9, 90, chunk.z * 16 + 9],
+                found: std::sync::Mutex::new(None),
             };
             (stub, legacy(vec![piece]))
         }
@@ -1348,6 +1389,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
     start: &StructureStart,
     world: &mut W,
     resources: &StructureResources,
+    blocks: &dyn crate::worldgen::structure::legacy::SolidRender,
     random: &mut R,
     chunk_box: BoundingBox,
     place_feature: &mut PlaceFeature<'_, W, R>,
@@ -1375,6 +1417,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
                     let mut context = PieceContext {
                         world,
                         resources,
+                        blocks,
                         random,
                         chunk_box,
                         chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),
@@ -1390,6 +1433,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
         let mut context = PieceContext {
             world,
             resources,
+            blocks,
             random,
             chunk_box,
             chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),

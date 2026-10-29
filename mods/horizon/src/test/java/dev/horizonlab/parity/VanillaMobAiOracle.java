@@ -60,6 +60,7 @@ import net.minecraft.util.debugchart.SampleLogger;
 import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntitySpawnRequest;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.monster.creaking.Creaking;
@@ -159,6 +160,7 @@ public final class VanillaMobAiOracle {
     static final class Scenario {
         String name;
         int ticks;
+        int difficulty = 2;
         long time = 6000;
         boolean rain, thunder;
         int originX, originZ;
@@ -184,8 +186,8 @@ public final class VanillaMobAiOracle {
         boolean spawning;
         /** The player hits a mob for 1 at the start of a tick: {tick, mob index}. */
         List<int[]> hurts = new ArrayList<>();
-        /** The player feeds an animal at the start of a tick (Animal.mobInteract with the item in
-         *  its main hand): {tick, mob index, item id}. */
+        /** The player feeds an animal, or uses another item on it, at the start of a tick
+         *  (Animal.mobInteract with the item in its main hand): {tick, mob index, item id}. */
         List<Object[]> feeds = new ArrayList<>();
     }
 
@@ -204,6 +206,7 @@ public final class VanillaMobAiOracle {
                         switch (kv[0]) {
                             case "ticks" -> s.ticks = Integer.parseInt(kv[1]);
                             case "time" -> s.time = Long.parseLong(kv[1]);
+                            case "difficulty" -> s.difficulty = Integer.parseInt(kv[1]);
                             case "rain" -> s.rain = true;
                             case "thunder" -> s.thunder = true;
                             case "levelseed" -> s.levelSeed = Long.parseLong(kv[1]);
@@ -223,7 +226,7 @@ public final class VanillaMobAiOracle {
                 }
                 case "heart" -> s.hearts.add(f);
                 case "hurt" -> s.hurts.add(new int[] {Integer.parseInt(f[1]), Integer.parseInt(f[2])});
-                case "feed" -> s.feeds.add(new Object[] {Integer.parseInt(f[1]), Integer.parseInt(f[2]), f[3]});
+                case "feed", "interact" -> s.feeds.add(new Object[] {Integer.parseInt(f[1]), Integer.parseInt(f[2]), f[3]});
                 case "player" -> {
                     s.player = new double[] {Double.parseDouble(f[1]), Double.parseDouble(f[2]), Double.parseDouble(f[3])};
                     for (int i = 4; i < f.length; i++) {
@@ -494,6 +497,7 @@ public final class VanillaMobAiOracle {
         }
 
         void run(Scenario s, ServerLevel level) throws Exception {
+            this.setDifficulty(net.minecraft.world.Difficulty.byId(s.difficulty), true);
             out.println("== " + s.name);
             var clock = level.registryAccess().lookupOrThrow(Registries.WORLD_CLOCK).getOrThrow(WorldClocks.OVERWORLD);
             this.clockManager().setTotalTicks(clock, s.time);
@@ -537,7 +541,9 @@ public final class VanillaMobAiOracle {
             int id = 100000;
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
-                Mob mob = (Mob) type.create(level, EntitySpawnReason.COMMAND);
+                // Ignore canSpawn: a Peaceful scenario's hostile mob is one that was already
+                // in the world when the difficulty changed (create returns null at Peaceful).
+                Mob mob = (Mob) type.create(level, new EntitySpawnRequest(EntitySpawnReason.COMMAND, true));
                 if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, ENTS.size()));
                 mob.setId(id++);
                 mob.snapTo(spec.x, spec.y, spec.z, spec.yaw, 0.0F);
@@ -553,6 +559,10 @@ public final class VanillaMobAiOracle {
                     String v = kv.length > 1 ? kv[1] : "";
                     switch (kv[0]) {
                         case "persistent" -> mob.setPersistenceRequired();
+                        case "named" -> {
+                            mob.setCustomName(net.minecraft.network.chat.Component.literal("Peaceful regression"));
+                            mob.setPersistenceRequired();
+                        }
                         case "ridden" -> mob.setItemSlot(net.minecraft.world.entity.EquipmentSlot.BODY,
                             new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.getValue(
                                 net.minecraft.resources.Identifier.parse("minecraft:red_harness"))));

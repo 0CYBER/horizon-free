@@ -56,6 +56,13 @@ impl Game<'_> {
             let (lo, hi) = corners(a.bounds());
             return Some((lo, hi, at(a.position)));
         }
+        if let Some(c) = self.cushions.iter().find(|c| c.id == id) {
+            let (lo, hi) = corners(Aabb::new(
+                Vec3::new(c.position.x - 0.5, c.position.y, c.position.z - 0.5),
+                Vec3::new(c.position.x + 0.5, c.position.y + 0.25, c.position.z + 0.5),
+            ));
+            return Some((lo, hi, at(c.position)));
+        }
         if let Some(f) = self.item_frames.iter().find(|f| f.id == id) {
             let (lo, hi) = f.bounds();
             return Some((lo, hi, centre(f.pos)));
@@ -83,6 +90,14 @@ impl Game<'_> {
                 .any(|g| Some(g.conn) != self.lan_acting && g.vehicle == Some(vehicle))
         })
     }
+    /// Whether a server player rides `vehicle` (`Entity.isPassenger`: a
+    /// passenger does not use a portal on its own, the vehicle carries it
+    /// across, `Entity.teleportCrossDimension`).
+    pub(super) fn guest_rides(&self, vehicle: u32) -> bool {
+        self.lan
+            .as_ref()
+            .is_some_and(|h| h.hub.guests.iter().any(|g| g.vehicle == Some(vehicle)))
+    }
 
     /// `Player.rideTick` for a server player, before its moves this tick:
     /// it stays in its seat, steers its minecart, or gets out.
@@ -98,9 +113,10 @@ impl Game<'_> {
         let boat = self.boats.iter().position(|b| b.id == vehicle);
         let cart = self.carts.iter().any(|c| c.id == vehicle);
         let mount = self.mobs.iter().any(|m| m.id == vehicle);
+        let cushion = self.cushions.iter().any(|c| c.id == vehicle);
         // The vehicle is gone (broken, in another level) or the rider died:
         // its client drops it with the entity or the death screen.
-        if dead || (boat.is_none() && !cart && !mount) {
+        if dead || (boat.is_none() && !cart && !mount && !cushion) {
             let g = &mut host.hub.guests[gi];
             (g.vehicle, g.vehicle_good) = (None, None);
             return;
@@ -115,6 +131,17 @@ impl Game<'_> {
         // Getting out goes through leave_guest, which tells the client and
         // teleports it (ServerPlayer.dismountTo).
         let seat = self.as_guest(host, conn, |game| {
+            // A cushion does not move: the rider sits on it until it sneaks
+            // (`Cushion.removePassenger` plays the get-up sound).
+            if game.cushions.iter().any(|c| Some(c.id) == game.riding) {
+                if keys.shift {
+                    game.tick_cushion_riding(keys);
+                    return None;
+                }
+                let c = game.cushions.iter().find(|c| Some(c.id) == game.riding)?;
+                let p = c.seat();
+                return Some([p.x, p.y, p.z]);
+            }
             if let Some(i) = game.boats.iter().position(|b| Some(b.id) == game.riding) {
                 if keys.shift {
                     game.dismount(i);
@@ -168,6 +195,12 @@ impl Game<'_> {
                     .iter()
                     .find(|c| c.id == vehicle)
                     .map(|c| (c.position, c.position.add_vector(Vec3::new(0.0, SEAT, 0.0))))
+            })
+            .or_else(|| {
+                self.cushions
+                    .iter()
+                    .find(|c| c.id == vehicle)
+                    .map(|c| (c.position, c.seat()))
             });
         if let Some((p, seat)) = at {
             let g = &mut host.hub.guests[gi];

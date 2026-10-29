@@ -241,6 +241,12 @@ def world_blocks():
         cmd('/clone 0 205 0 4 207 4 6 205 6 masked'),
         cmd('/execute if blocks 0 205 0 4 207 4 6 205 6 all'),
         cmd('/setblock 3 206 3 minecraft:air'),
+        # A container keeps its loot table and seed until its items change
+        # (RandomizableContainer.tryLoadLootTable / trySaveLootTable).
+        cmd('/setblock 7 206 7 minecraft:chest{LootTable:"minecraft:chests/simple_dungeon",LootTableSeed:42L}'),
+        cmd('/data get block 7 206 7'),
+        cmd('/data get block 7 206 7 LootTableSeed'),
+        cmd('/setblock 7 206 7 minecraft:air'),
         # A hopper placed into power turns `enabled=false` and keeps its block entity.
         cmd('/setblock 5 205 5 minecraft:redstone_block'),
         cmd('/setblock 5 206 5 minecraft:hopper'),
@@ -321,9 +327,46 @@ def entities():
         cmd('/data get entity @e[tag=attr,limit=1] Health'),
         cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
         cmd('/kill @e[tag=attr]'),
+        # A summoned mob is not persistent: vanilla never calls
+        # `Mob.setPersistenceRequired` for a mob it spawns (#2787).
+        cmd('/summon minecraft:zombie 4.5 210 12.5'),
+        cmd('/execute if entity @e[type=minecraft:zombie,nbt={PersistenceRequired:1b}]'),
+        cmd('/kill @e[type=minecraft:zombie]'),
+        # An End crystal is an entity of its own: a type selector finds it,
+        # reads it and kills it (#1531).
+        cmd('/summon minecraft:end_crystal 4.5 210 8.5'),
+        cmd('/execute if entity @e[type=minecraft:end_crystal]'),
+        cmd('/data get entity @e[type=minecraft:end_crystal,limit=1] Pos'),
+        cmd('/kill @e[type=minecraft:end_crystal]'),
+        cmd('/execute if entity @e[type=minecraft:end_crystal]'),
+        cmd('/summon minecraft:ender_dragon 4.5 210 8.5'),
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd('/data get entity @e[type=minecraft:ender_dragon,limit=1] Pos'),
+        cmd('/kill @e[type=minecraft:ender_dragon]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
+    ]
+
+
+def wither_spawn():
+    """A wither charging up (`Invul`) neither moves toward its target nor is hurt by
+    the blast that ends the charge (#3322): `WitherBoss.customServerAiStep` sets no
+    alternative target while invulnerable, and `ServerLevel.explode`'s entity query
+    skips the source."""
+    wither = '@e[type=minecraft:wither,limit=1]'
+    return [
+        *setup('/fill 0 209 4 9 209 20 minecraft:stone',
+               '/summon minecraft:pig 4.5 210 18.5 {NoAI:1b,Tags:["wither_prey"]}',
+               '/summon minecraft:wither 4.5 210 8.5 {Invul:20}'),
+        {'op': 'tick', 'n': 10},
+        cmd(f'/data get entity {wither} Pos'),
+        cmd(f'/data get entity {wither} Invul'),
+        {'op': 'tick', 'n': 12},
+        cmd(f'/data get entity {wither} Invul'),
+        cmd(f'/data get entity {wither} Health'),
+        *setup('/kill @e[type=minecraft:wither]', '/kill @e[tag=wither_prey]', '/fill 0 200 0 15 228 20 air'),
+        {'op': 'tick', 'n': 5},
     ]
 
 
@@ -527,13 +570,21 @@ def execute():
 
 def levels():
     """A nether portal round trip: on the way back the Overworld's entities (the
-    pig left by `entities`) are found and a summon names what it summoned."""
+    pig left by `entities`) are found and a summon names what it summoned. An
+    unbounded selector also reaches the level the player is not in, while a
+    bounded one does not."""
     return [
         *setup('/fill 2 231 12 5 236 12 minecraft:obsidian', '/fill 3 232 12 4 235 12 minecraft:nether_portal[axis=x]',
-               '/tp @s 3.5 232 12.5 0 0'),
+               '/tp @s 3.5 232 12.5 0 0',
+               # A cow in the Overworld, in a chunk that stays loaded while the
+               # player is in the nether.
+               '/forceload add 0 0',
+               '/summon minecraft:cow 10.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["remote_cow"]}'),
         {'op': 'portal'},
         {'op': 'settle'},
         cmd('/execute if dimension minecraft:the_nether run say through the portal'),
+        cmd('/data get entity @e[tag=remote_cow,limit=1] Pos'),
+        cmd('/data get entity @e[tag=remote_cow,distance=..128,limit=1] Pos'),
         {'op': 'portal'},
         {'op': 'settle'},
         cmd('/execute if dimension minecraft:overworld run say back through the portal'),
@@ -1092,6 +1143,7 @@ def groups():
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
+        ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('mob riding', mob_riding()),
         ('scores, teams and bossbars', scores()),

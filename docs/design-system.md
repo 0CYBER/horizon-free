@@ -8,8 +8,8 @@ Horizon's own settings are pages built from vanilla's widgets, the way mods add 
 The tokens live in one place, `crates/horizon-theme`. The launcher (`launcher/src/theme.rs`)
 and the game (`crates/horizon-client/src/ui_theme.rs`) read them as Rust constants, and the
 website reads them as CSS custom properties generated from the same crate
-(`cargo run -p xtask -- tokens` writes `website/src/tokens.css`; a test fails when the file is
-out of date). Change a value in the crate and all three follow.
+(`cargo run -p xtask -- tokens` writes `crates/horizon-theme/tokens.css`, which the website's build
+reads from main; a test fails when the file is out of date). Change a value in the crate and all three follow.
 
 ## Where it comes from
 
@@ -140,7 +140,7 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
   landscape banner with the hero, the version picker and Play; Mods holds the mod, resource pack
   and modpack tabs; Versions and Patch notes are lists of panels; Settings is
   grouped panels of rows. Dark by default, Light or System in Settings (Appearance).
-- **Website** (`website/`): the Blocks look below. The same page structure as before (what it
+- **Website** (horizon-rust/horizon-site): the Blocks look below. The same page structure as before (what it
   is, screenshots, parity, launcher, patch notes, community), headings in Pixelify Sans, lists as
   stacks of panels, the stone texture behind the page and Horizon's pixel landscape (a dawn or a
   sunset) behind the hero. Light and dark follow the system, with a toggle. A giant wordmark in
@@ -158,7 +158,9 @@ of the main action. The game's menus keep `LIGHT` and `DARK`.
 
 - **Pixel type for what names and what you act on.** Headings, navigation, buttons and the
   wordmark use Pixelify Sans (OFL; Medium, SemiBold, Bold); paragraphs and numbers stay in Geist
-  and Geist Mono so long text reads easily.
+  and Geist Mono so long text reads easily. The bundled copies add the two uppercase Cyrillic
+  letters upstream leaves out, О and П: the Latin O's glyph and the lowercase п lifted to that
+  weight's cap height, so a Russian heading stays in the pixel face.
 - **Blocks, not rounded cards.** Every surface is square: a 2 px dark outline, a 2 px light bevel
   along the top and a darker lip along the bottom. The main action is the violet face with its own
   bevel and a 4 px lip; it sinks a pixel when pressed. Code and fields are sunk wells.
@@ -168,11 +170,19 @@ of the main action. The game's menus keep `LIGHT` and `DARK`.
   ships no third-party pictures. The Horizon instance shows a grass block drawn from the player's
   own prepared Minecraft textures. Sources are named in text ("from Modrinth"): Modrinth's logo is
   all rights reserved, so it is not shown.
+- **Partner banner**: the one exception to shipping no third-party pictures. Sculk, a server host,
+  sponsors Horizon: its banner (`launcher/assets/sculk-banner.webp`, `launcher/src/partner.rs`) sits
+  under a muted mono "Partner" label at the end of the Servers page and opens Sculk's page in the
+  browser. The sidebar of the other pages shows a card made for its width instead: Sculk's characters
+  and logo cropped from the same banner, and the text drawn by the launcher in its language, so it
+  stays readable; it keeps Sculk's dark card, cyan and rounded corners in both themes, as an ad does,
+  and turns compact (characters beside the text) when the window is too short. The website shows the
+  banner the same way on Home and the hosting docs, as a `rel="sponsored"` link.
 - **Pixel art drawn in code.** The stone behind the pages is close shades of the page colour
   (`TILE_SHADES`), never Minecraft's stone; the landscape is a banded sky, a sun cut in slices like
   the mark, hills and square trees (a sunset in dark, a dawn in light). The launcher bakes them in
   `launcher/src/art.rs` at the window's scale so each texel covers whole device pixels; the website
-  draws them in `website/scripts/art.mjs`.
+  draws them in its `scripts/art.mjs`.
 - **Icons**: Pixelarticons (MIT), 24 unit pixel SVGs in `crates/horizon-theme/icons/pixel/`, tinted
   with the text colour.
 - **Contrast**: every text colour meets WCAG AA (4.5:1) on the panels, the page and the lightest

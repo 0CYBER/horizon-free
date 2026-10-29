@@ -2,13 +2,15 @@
 //! `playhorizon.dev/api/mods/*` (docs/api/mod-index.md). A creator signs in
 //! with GitHub, sends a file and its page; the service runs the file's own
 //! checks, uploads it to the registry's `staging` release and opens a pull
-//! request with the entry. Reviewers decide; merging publishes. It keeps no
-//! data: sessions are signed cookies, and GitHub holds everything else.
+//! request with the entry. Reviewers decide; merging publishes. Signed-in
+//! players also rate published projects (`ratings`, its only data: sessions
+//! are signed cookies, and GitHub holds everything else).
 pub mod github;
+pub mod ratings;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Path as UrlPath, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -20,6 +22,7 @@ use horizon_mods::index::{
     self, Kind,
     registry::{self, Entry, EntryVersion, Sources},
 };
+use ratings::Ratings;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::Sha256;
@@ -37,6 +40,12 @@ const PER_ACCOUNT: usize = 6;
 const PER_HOUR: usize = 60;
 /// The page's JSON.
 const MAX_FORM: usize = 64 << 10;
+/// Ratings set per account per hour, and by everyone.
+const RATINGS_PER_ACCOUNT: usize = 30;
+const RATINGS_PER_HOUR: usize = 600;
+/// How long the ratings' totals are served from memory (and cached by
+/// browsers and the launcher).
+const TOTALS_FOR: Duration = Duration::from_secs(60);
 
 pub struct Config {
     /// `https://playhorizon.dev`: where the form is, and the only origin it
@@ -47,11 +56,14 @@ pub struct Config {
     pub github: GitHub,
     /// Where files wait during a submission.
     pub scratch: PathBuf,
+    /// The ratings' SQLite file (a volume): `:memory:` keeps them in memory.
+    pub database: PathBuf,
 }
 
 impl Config {
     /// `REGISTRY_PUBLIC_URL`, `REGISTRY_SESSION_KEY`, `REGISTRY_REPO`,
-    /// `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_BOT_TOKEN`.
+    /// `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_BOT_TOKEN`,
+    /// `REGISTRY_DB` (default `/data/registry.sqlite3`).
     pub fn from_env() -> Result<Config, String> {
         let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is not set"));
         let key = var("REGISTRY_SESSION_KEY")?;
@@ -63,12 +75,15 @@ impl Config {
             session_key: key.into_bytes(),
             github: GitHub::new(
                 github::Endpoints::default(),
-                std::env::var("REGISTRY_REPO").unwrap_or_else(|_| "ludovic111/horizon-mods".into()),
+                std::env::var("REGISTRY_REPO")
+                    .unwrap_or_else(|_| "horizon-rust/horizon-mods".into()),
                 var("GITHUB_CLIENT_ID")?,
                 var("GITHUB_CLIENT_SECRET")?,
                 var("GITHUB_BOT_TOKEN")?,
             ),
             scratch: std::env::temp_dir().join("horizon-mod-registry"),
+            database: std::env::var_os("REGISTRY_DB")
+                .map_or_else(|| PathBuf::from("/data/registry.sqlite3"), PathBuf::from),
         })
     }
 
@@ -80,17 +95,31 @@ impl Config {
 #[derive(Clone)]
 pub struct App(Arc<Inner>);
 
+type Windows = Mutex<HashMap<String, VecDeque<Instant>>>;
+
 struct Inner {
     config: Config,
-    recent: Mutex<HashMap<String, VecDeque<Instant>>>,
+    /// Submissions in the last hour, by account ("" for everyone's).
+    recent: Windows,
+    /// Ratings set in the last hour, the same way.
+    rated: Windows,
+    ratings: Mutex<Ratings>,
+    /// `GET /api/mods/ratings`' body, and when it was made.
+    totals: Mutex<Option<(Instant, String)>>,
 }
 
 impl App {
-    pub fn new(config: Config) -> App {
-        App(Arc::new(Inner {
+    /// Fails when the ratings' file can't be opened.
+    pub fn new(config: Config) -> Result<App, String> {
+        let ratings = Ratings::open(&config.database)
+            .map_err(|e| format!("{}: {e}", config.database.display()))?;
+        Ok(App(Arc::new(Inner {
             config,
-            recent: Mutex::new(HashMap::new()),
-        }))
+            recent: Mutex::default(),
+            rated: Mutex::default(),
+            ratings: Mutex::new(ratings),
+            totals: Mutex::default(),
+        })))
     }
 }
 
@@ -101,6 +130,8 @@ pub fn router(app: App) -> Router {
         .route("/api/mods/auth/callback", get(callback))
         .route("/api/mods/auth/logout", post(logout))
         .route("/api/mods/me", get(me))
+        .route("/api/mods/ratings", get(totals))
+        .route("/api/mods/{id}/rating", get(my_rating).post(rate))
         .route(
             "/api/mods/submit",
             post(submit).layer(DefaultBodyLimit::max(
@@ -203,9 +234,29 @@ fn csrf(app: &Inner, headers: &HeaderMap) -> Option<String> {
     Some(signed.rsplit('.').next()?.chars().take(32).collect())
 }
 
-async fn login(State(app): State<App>) -> Response {
+#[derive(Deserialize)]
+struct Login {
+    /// The site's page to come back to: `/mods`, `/mods/submit` (the
+    /// default) or `/mods/<id>`.
+    back: Option<String>,
+}
+
+/// Whether `path` is a registry page a sign-in may come back to.
+fn registry_page(path: &str) -> bool {
+    match path.strip_prefix("/mods") {
+        Some("") => true,
+        Some(rest) => rest.strip_prefix('/').is_some_and(index::valid_id) || rest == "/submit",
+        None => false,
+    }
+}
+
+async fn login(State(app): State<App>, Query(q): Query<Login>) -> Response {
     let state = random_hex();
-    let signed = sign(&app.0.config.session_key, &state);
+    let back = q
+        .back
+        .filter(|b| registry_page(b))
+        .unwrap_or_else(|| "/mods/submit".into());
+    let signed = sign(&app.0.config.session_key, &format!("{state}\n{back}"));
     let url = app
         .0
         .config
@@ -229,13 +280,17 @@ async fn callback(
     headers: HeaderMap,
     Query(q): Query<Callback>,
 ) -> Result<Response, Refusal> {
-    let expected = cookie(&headers, "hm_state").and_then(|v| unsign(&app.0.config.session_key, &v));
-    if expected.as_deref() != Some(q.state.as_str()) {
+    let started = cookie(&headers, "hm_state").and_then(|v| unsign(&app.0.config.session_key, &v));
+    let Some((_, back)) = started
+        .as_deref()
+        .and_then(|s| s.split_once('\n'))
+        .filter(|(state, _)| *state == q.state)
+    else {
         return Err(Refusal::new(
             StatusCode::FORBIDDEN,
             "the sign-in expired or didn't start here: try again",
         ));
-    }
+    };
     let inner = app.0.clone();
     let (login, id) = tokio::task::spawn_blocking(move || {
         inner
@@ -250,7 +305,7 @@ async fn callback(
         &app.0.config.session_key,
         &format!("{login}\n{id}\n{}", now() + SESSION),
     );
-    let back = format!("{}/mods/submit", app.0.config.public_url);
+    let back = format!("{}{back}", app.0.config.public_url);
     let mut response = Redirect::to(&back).into_response();
     let headers = response.headers_mut();
     headers.append(
@@ -280,6 +335,131 @@ async fn me(
         .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "not signed in"))?;
     Ok(Json(
         json!({"login": login, "csrf": csrf(&app.0, &headers)}),
+    ))
+}
+
+fn database(e: rusqlite::Error) -> Refusal {
+    eprintln!("horizon-mod-registry: ratings: {e}");
+    Refusal::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the ratings can't be read right now",
+    )
+}
+
+/// A mean as the pages show it: two decimals.
+fn rounded(average: f64) -> f64 {
+    (average * 100.0).round() / 100.0
+}
+
+/// `GET /api/mods/ratings`: `{"projects": {"<id>": {"average", "count"}}}` for
+/// every rated project. Totals only: never who rated.
+async fn totals(State(app): State<App>) -> Result<Response, Refusal> {
+    let mut cached = app.0.totals.lock().unwrap();
+    let body = match cached.as_ref().filter(|(at, _)| at.elapsed() < TOTALS_FOR) {
+        Some((_, body)) => body.clone(),
+        None => {
+            let all = app
+                .0
+                .ratings
+                .lock()
+                .unwrap()
+                .summaries()
+                .map_err(database)?;
+            let projects: serde_json::Map<String, serde_json::Value> = all
+                .into_iter()
+                .map(|(id, s)| (id, json!({"average": rounded(s.average), "count": s.count})))
+                .collect();
+            let body = json!({ "projects": projects }).to_string();
+            *cached = Some((Instant::now(), body.clone()));
+            body
+        }
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "public, max-age=60"),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// `GET /api/mods/{id}/rating`: the signed-in account's own rating,
+/// `{"stars": 1..5}` or `{"stars": null}`.
+async fn my_rating(
+    State(app): State<App>,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<serde_json::Value>, Refusal> {
+    let (_, account) = session(&app.0, &headers)
+        .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "not signed in"))?;
+    let stars = app
+        .0
+        .ratings
+        .lock()
+        .unwrap()
+        .mine(&id, account)
+        .map_err(database)?;
+    Ok(Json(json!({ "stars": stars })))
+}
+
+#[derive(Deserialize)]
+struct Rating {
+    stars: u8,
+}
+
+/// `POST /api/mods/{id}/rating` with `{"stars": 1..5}`: sets or changes the
+/// signed-in account's rating of a published project, not its own. Answers
+/// the project's new totals and `stars`.
+async fn rate(
+    State(app): State<App>,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+    Json(rating): Json<Rating>,
+) -> Result<Json<serde_json::Value>, Refusal> {
+    let inner = app.0.clone();
+    let (login, account) = signed_in_here(&inner, &headers)?;
+    if !(1..=5).contains(&rating.stars) {
+        return Err(bad("a rating is 1 to 5 stars"));
+    }
+    if !index::valid_id(&id) {
+        return Err(Refusal::new(StatusCode::NOT_FOUND, "no such project"));
+    }
+    if !allow(&inner.rated, &login, RATINGS_PER_ACCOUNT, RATINGS_PER_HOUR) {
+        return Err(Refusal::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many ratings this hour: try again later",
+        ));
+    }
+    let lookup = inner.clone();
+    let wanted = id.clone();
+    let entry = tokio::task::spawn_blocking(move || lookup.config.github.entry(&wanted))
+        .await
+        .map_err(|_| Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, "the check crashed"))?
+        .map_err(github_down)?;
+    let Some((entry, _)) = entry else {
+        return Err(Refusal::new(
+            StatusCode::NOT_FOUND,
+            format!("{id} isn't published in the registry"),
+        ));
+    };
+    if entry.owners.iter().any(|o| o.eq_ignore_ascii_case(&login)) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "you publish this project: its players rate it",
+        ));
+    }
+    let summary = {
+        let ratings = inner.ratings.lock().unwrap();
+        ratings
+            .rate(&id, account, rating.stars, now())
+            .map_err(database)?;
+        ratings.summary(&id).map_err(database)?
+    };
+    *inner.totals.lock().unwrap() = None;
+    let (average, count) = summary.map_or((0.0, 0), |s| (rounded(s.average), s.count));
+    Ok(Json(
+        json!({"stars": rating.stars, "average": average, "count": count}),
     ))
 }
 
@@ -322,44 +502,55 @@ fn take(window: &mut VecDeque<Instant>, max: usize) -> bool {
     window.len() < max
 }
 
+/// A change sent by the site's own pages: from its origin, signed in, with
+/// the session's CSRF token. The account: (login, id).
+fn signed_in_here(app: &Inner, headers: &HeaderMap) -> Result<(String, u64), Refusal> {
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    if origin != Some(app.config.public_url.as_str()) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "send it from the registry's pages",
+        ));
+    }
+    let account = session(app, headers)
+        .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "sign in with GitHub first"))?;
+    let sent = headers.get("x-csrf-token").and_then(|v| v.to_str().ok());
+    if sent.is_none() || sent.map(str::to_owned) != csrf(app, headers) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "reload the page and try again",
+        ));
+    }
+    Ok(account)
+}
+
+/// Counts one more for `login` and for everyone, unless either is at its
+/// hourly limit.
+fn allow(windows: &Windows, login: &str, per_account: usize, per_hour: usize) -> bool {
+    let mut windows = windows.lock().unwrap();
+    let account = login.to_lowercase();
+    let ok = take(windows.entry(String::new()).or_default(), per_hour)
+        && take(windows.entry(account.clone()).or_default(), per_account);
+    if ok {
+        let at = Instant::now();
+        windows.entry(String::new()).or_default().push_back(at);
+        windows.entry(account).or_default().push_back(at);
+    }
+    ok
+}
+
 async fn submit(
     State(app): State<App>,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, Refusal> {
     let inner = app.0.clone();
-    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
-    if origin != Some(inner.config.public_url.as_str()) {
+    let (login, user_id) = signed_in_here(&inner, &headers)?;
+    if !allow(&inner.recent, &login, PER_ACCOUNT, PER_HOUR) {
         return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "submit from the registry's form",
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many submissions this hour: try again later",
         ));
-    }
-    let (login, user_id) = session(&inner, &headers)
-        .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "sign in with GitHub first"))?;
-    let sent = headers.get("x-csrf-token").and_then(|v| v.to_str().ok());
-    if sent.is_none() || sent.map(str::to_owned) != csrf(&inner, &headers) {
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "reload the form and try again",
-        ));
-    }
-    {
-        let mut recent = inner.recent.lock().unwrap();
-        let ok = take(recent.entry(String::new()).or_default(), PER_HOUR)
-            && take(recent.entry(login.to_lowercase()).or_default(), PER_ACCOUNT);
-        if !ok {
-            return Err(Refusal::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "too many submissions this hour: try again later",
-            ));
-        }
-        let at = Instant::now();
-        recent.entry(String::new()).or_default().push_back(at);
-        recent
-            .entry(login.to_lowercase())
-            .or_default()
-            .push_back(at);
     }
     let dir = inner.config.scratch.join(random_hex());
     std::fs::create_dir_all(&dir)

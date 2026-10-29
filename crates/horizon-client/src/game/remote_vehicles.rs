@@ -9,7 +9,7 @@
 //! server (`LocalPlayer.tick`: `ServerboundMoveVehiclePacket`,
 //! `AbstractBoat.tick`: `ServerboundPaddleBoatPacket`). A minecart moves on
 //! the server with the rider's input, and the rider sits in it.
-use super::{Game, Keys, ray_box, view_vector};
+use super::{Game, Keys, ray_box};
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
@@ -26,8 +26,7 @@ impl Game<'_> {
     /// The nearest boat, minecart, item frame, armor stand or painting the
     /// view hits within reach; also End crystals when attacking.
     pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let at = |d: f64| {
             [
                 eye[0] + dir[0] * d,
@@ -56,6 +55,11 @@ impl Game<'_> {
             let p = a.position;
             hits.push((a.id as i32, d, [p.x, p.y, p.z]));
         }
+        if let Some((i, d, _)) = self.cushion_hit() {
+            let c = &self.cushions[i];
+            let p = c.position;
+            hits.push((c.id as i32, d, [p.x, p.y, p.z]));
+        }
         if let Some((i, d)) = self.boat_hit() {
             let p = self.boats[i].position;
             hits.push((self.boats[i].id as i32, d, [p.x, p.y, p.z]));
@@ -79,6 +83,8 @@ impl Game<'_> {
                     hits.push((c.id as i32, d, [p.x, p.y, p.z]));
                 }
             }
+            // EnderDragonPart.isPickable: the server's dragon hurts by part.
+            hits.extend(self.remote_dragon_part_hit(eye, dir, reach));
         }
         let (id, distance, origin) = hits.into_iter().min_by(|a, b| a.1.total_cmp(&b.1))?;
         let point = at(distance);
@@ -121,6 +127,17 @@ impl Game<'_> {
         } else if self.riding == Some(vehicle_id) {
             // The server takes the player out, then teleports it.
             self.riding = None;
+            // HappyGhast.removePassenger: a still timeout of 10 (the server's
+            // STAYS_STILL confirms it), and the rider lands on top of the ghast
+            // (`place_ghast_under`).
+            if let Some(m) = self.mobs.iter_mut().find(|m| {
+                m.id == vehicle_id && m.species() == horizon_client::mobs::Species::HappyGhast
+            }) {
+                m.extra.counter = 10;
+                if let Some(r) = self.remote.as_mut() {
+                    r.ghast_dismount = Some(vehicle_id);
+                }
+            }
         }
     }
 
@@ -138,7 +155,10 @@ impl Game<'_> {
             self.position_rider();
             return true;
         }
-        let seat = if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+        let seat = if let Some(c) = self.cushions.iter().find(|c| c.id == id) {
+            // The seat does not move; the rider sits on the cushion.
+            Some(c.seat())
+        } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             // AbstractBoat.tick on the controlling client: steer and move.
             let mut b = self.boats[i].clone();
             b.input = [keys.left, keys.right, keys.forward, keys.backward];
