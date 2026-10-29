@@ -36,7 +36,7 @@ def data_get(cli, selector, path):
         reply = cli('events', since=since)
         for event in reply['events']:
             text = event.get('text', '')
-            if event.get('event') == 'chat' and 'entity data' in text:
+            if event.get('event') == 'chat' and ('entity data' in text or 'No entity was found' in text):
                 return text
         time.sleep(0.1)
     raise AssertionError(f'no answer for /data get entity {selector} {path}')
@@ -83,8 +83,8 @@ def run(bin_dir, resources, in_frame):
                 cli('command', command=(
                     f'execute in minecraft:the_end run setblock {x} {y} {z} minecraft:end_gateway'))
                 cli('command', command=(
-                    f'execute in minecraft:the_end run summon minecraft:cow {x}.5 {y}.5 {z}.5 {{NoAI:1b}}'))
-                nbt = '{Item:{id:"minecraft:diamond",count:' + str(DIAMONDS) + '}}'
+                    f'execute in minecraft:the_end run summon minecraft:cow {x}.5 {y}.5 {z}.5 {{NoAI:1b,Tags:["horizon_gateway_cow"]}}'))
+                nbt = '{Tags:["horizon_gateway_item"],Item:{id:"minecraft:diamond",count:' + str(DIAMONDS) + '}}'
                 cli('command', command=(
                     'execute in minecraft:the_end run summon minecraft:item '
                     + f'{x}.5 {y}.5 {z}.5 ' + nbt))
@@ -98,13 +98,13 @@ def run(bin_dir, resources, in_frame):
                 cli('command', command=f'execute in minecraft:the_end run tp @s {ex:.1f} 80 {ez:.1f}')
                 for _ in range(60):
                     cli('wait', ticks=20)
-                    cow = data_get(cli, '@e[type=cow,limit=1]', 'Pos')
+                    cow = data_get(cli, '@e[type=cow,tag=horizon_gateway_cow,limit=1]', 'Pos')
                     if 'entity data' in cow:
                         break
                 else:
                     raise AssertionError('the cow never arrived')
-                item = data_get(cli, '@e[type=item,limit=1]', 'Pos')
-                count = numbers(data_get(cli, '@e[type=item,limit=1]', 'Item.count'))
+                item = data_get(cli, '@e[type=item,tag=horizon_gateway_item,limit=1]', 'Pos')
+                count = numbers(data_get(cli, '@e[type=item,tag=horizon_gateway_item,limit=1]', 'Item.count'))
                 cow_at, item_at = numbers(cow), numbers(item)
                 print(f'cow at {cow_at}, item at {item_at}, count {count}')
                 assert len(cow_at) == 3, f'the cow has no position: {cow_at}'
