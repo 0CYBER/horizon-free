@@ -184,6 +184,13 @@ pub fn puff_scale(state: i32) -> f64 {
         _ => 1.0,
     }
 }
+/// `Tadpole.setAgeLockedData`: a golden dandelion flips the lock, puts the
+/// age back to 0 and starts the particle timer (40 ticks).
+pub fn set_age_locked_data(m: &mut Mob) {
+    m.extra.age_locked = !m.extra.age_locked;
+    m.extra.age = 0;
+    m.extra.age_lock_particle_timer = 40;
+}
 /// Species aiStep additions.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     use Species as S;
