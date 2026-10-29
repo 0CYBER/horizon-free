@@ -134,6 +134,24 @@ impl StackData {
             self.set_other(id, Some(tag));
         }
     }
+    /// `SetComponentsFunction`: one component of a loot patch, in its JSON
+    /// form. Trim is modelled, a custom name is text, the rest are kept as
+    /// saved. A null value removes the component.
+    pub fn set_loot_component(&mut self, id: &str, value: &serde_json::Value) {
+        let tag = (!value.is_null()).then(|| horizon_client_core::scoreboard::json_to_tag(value));
+        match id {
+            "minecraft:trim" => {
+                self.trim = match (value["material"].as_str(), value["pattern"].as_str()) {
+                    (Some(material), Some(pattern)) => {
+                        Some((Arc::from(material), Arc::from(pattern)))
+                    }
+                    _ => None,
+                };
+            }
+            "minecraft:custom_name" => self.custom_name = tag.as_ref().and_then(read_text),
+            _ => self.set_other(id, tag),
+        }
+    }
     /// Set (or with None remove) an unmodelled component.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
         self.other.retain(|(k, _)| k != id);
