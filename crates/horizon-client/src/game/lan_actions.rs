@@ -173,7 +173,7 @@ pub(super) struct GuestSwap {
     /// The guest's own damage record, in place while they act.
     combat: super::combat::CombatTracker,
     /// The guest whose turn this one nests in, if any.
-    acting: (Option<u32>, Option<String>, Option<u128>),
+    acting: (Option<u32>, Option<String>, Option<u128>, Option<u8>),
     /// That turn's `known_movement`.
     known_movement: Vec3,
     /// The packets queued for that guest.
@@ -409,6 +409,7 @@ impl Game<'_> {
             self.lan_acting.replace(conn),
             self.lan_acting_name.replace(g.name.clone()),
             self.lan_acting_uuid.replace(g.uuid),
+            self.lan_acting_permission.replace(g.permission),
         );
         let packets = std::mem::take(&mut self.guest_packets);
         let entity_events = std::mem::take(&mut self.guest_entity_events);
@@ -587,7 +588,12 @@ impl Game<'_> {
                 }),
             );
         }
-        (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
+        (
+            self.lan_acting,
+            self.lan_acting_name,
+            self.lan_acting_uuid,
+            self.lan_acting_permission,
+        ) = acting;
         self.known_movement = known_movement;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
         // An ender chest the guest opened: the menu shows their inventory
@@ -745,7 +751,8 @@ impl Game<'_> {
             // LivingEntity.startSleeping: in the bed, still.
             let at = [
                 f64::from(head[0]) + 0.5,
-                f64::from(head[1]) + 0.5625,
+                // setPosToBed: the bed's top (getSleepHeight) and 0.125 above it.
+                f64::from(head[1]) + 0.5625 + 0.125,
                 f64::from(head[2]) + 0.5,
             ];
             g.position = at;
