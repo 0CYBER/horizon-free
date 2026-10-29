@@ -297,3 +297,64 @@ pub fn anim(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::{leash::Holder, world::with_test_world};
+    use horizon_core::geometry::Vec3;
+
+    /// `CamelAi.RandomSitting.checkExtraStartConditions`: a camel sits down
+    /// only with no controlling passenger and no lead. A husk on its back
+    /// controls it (`Mob.getControllingPassenger`), a slime does not
+    /// (`#non_controlling_rider`), so a camel carrying a husk never sits
+    /// with it floating above (#3199).
+    #[test]
+    fn a_camel_with_a_husk_on_its_back_never_sits_down() {
+        // Whether the goal starts in 64 tries (each passes 1 in 4).
+        let sits = |rider: Option<&str>, leashed: bool| {
+            let mut seen = Vec::new();
+            let mut camel = None;
+            with_test_world(&[], |_, types| {
+                let mob = |id: u32, name: &str| {
+                    let kind = std::sync::Arc::new(types.types[name].clone());
+                    Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+                };
+                let mut m = mob(1, "minecraft:camel");
+                if let Some(name) = rider {
+                    let mut r = mob(2, name);
+                    r.extra.mount = Some(m.id);
+                    m.extra.rider = Some(r.id);
+                    seen.push(r.seen(None));
+                }
+                if leashed {
+                    m.extra.leash = Some(Holder::Mob(3));
+                }
+                camel = Some(m);
+            });
+            let mut m = camel?;
+            m.age = 1000;
+            m.extra.egg_time = 0;
+            m.on_ground = true;
+            let mut started = false;
+            with_test_world(&seen, |w, _| {
+                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    lr: &mut lr,
+                    events: &mut events,
+                };
+                started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
+            });
+            Some(started)
+        };
+        let Some(alone) = sits(None, false) else {
+            return;
+        };
+        assert!(alone, "a camel with nothing on its back sits down");
+        assert_eq!(sits(Some("minecraft:husk"), false), Some(false));
+        assert_eq!(sits(Some("minecraft:slime"), false), Some(true));
+        assert_eq!(sits(None, true), Some(false), "a leashed camel");
+    }
+}
