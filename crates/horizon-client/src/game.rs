@@ -5310,6 +5310,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let entity_collisions = self.player_entity_collisions();
         let spin_targets = self.spin_targets();
+        let sprint_window = self.settings.sprint_window;
         self.sync_player_body();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
@@ -5362,7 +5363,7 @@ impl Game<'_> {
                 collision_binding: self.collision,
                 resources: self.motion,
             }
-            .controlled_simulation_tick(keys)?;
+            .controlled_simulation_tick_with_sprint_window(keys, sprint_window)?;
             // Player.jumpFromGround: the jump statistic.
             if grounded && keys.jump && !player.flying && player.velocity.y > 0.2 {
                 self.stats.custom("jump", 1);
