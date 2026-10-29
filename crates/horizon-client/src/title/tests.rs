@@ -31,6 +31,7 @@ impl Fixture {
                     "Data",
                     Tag::compound([
                         ("LevelName", Tag::String(name.into())),
+                        ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                         ("GameType", Tag::Int(1)),
                         ("allowCommands", Tag::Byte(1)),
                         (
@@ -115,6 +116,32 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     f.title.escape();
     f.click("Direct Connection");
     assert!(f.title.focused_field().unwrap().1.is_empty());
+}
+
+#[test]
+fn f5_reloads_the_server_list() {
+    let mut f = Fixture::new();
+    f.click("Multiplayer");
+    let file = crate::multiplayer::servers_file(&f.title.saves);
+    horizon_protocol::servers::save(
+        &file,
+        &[horizon_protocol::servers::ServerEntry::new(
+            "Local",
+            "127.0.0.1:1",
+        )],
+    )
+    .unwrap();
+    let listed = |f: &Fixture| match &f.title.mode {
+        Mode::Multiplayer(crate::multiplayer::Screen::List { servers, .. }) => servers.len(),
+        _ => usize::MAX,
+    };
+    assert_eq!(listed(&f), 0);
+    f.title.refresh_servers();
+    assert_eq!(listed(&f), 1);
+    // Only the list refreshes.
+    f.title.mode = Mode::Main;
+    f.title.refresh_servers();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
@@ -288,10 +315,35 @@ fn delete_requires_confirmation_and_both_cancel_paths_preserve_world() {
     assert_eq!((delete.x, delete.y, delete.w), (88.0, 146.0, 150.0));
     f.click("Delete");
     assert!(!f.title.saves.join("World").exists());
-    assert!(matches!(&f.title.mode, Mode::Select { worlds, selected: None } if worlds.is_empty()));
-    f.click("Back");
+    // The last world gone, vanilla opens a fresh Create New World, not an empty list.
+    assert!(matches!(&f.title.mode, Mode::Create { name, .. } if name == "New World"));
+    f.click("Cancel");
+    assert!(matches!(f.title.mode, Mode::Main));
     f.click("Singleplayer");
     assert!(matches!(f.title.mode, Mode::Create { .. }));
+}
+
+#[test]
+fn deleting_one_of_two_worlds_keeps_the_list() {
+    let mut f = Fixture::new();
+    f.world("One", "One");
+    f.world("Two", "Two");
+    f.select();
+    f.click("Delete");
+    f.click("Delete");
+    assert!(matches!(&f.title.mode, Mode::Select { worlds, .. } if worlds.len() == 1));
+}
+
+#[test]
+fn a_list_emptied_elsewhere_opens_create_world() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    world_management::delete(&f.title.saves, "World").unwrap();
+    f.title.worlds_changed();
+    assert!(matches!(f.title.mode, Mode::Create { .. }));
+    f.title.escape();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
@@ -600,7 +652,7 @@ fn world_management_buttons_sound_when_enabled() {
     assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
     assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
     assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
-    assert!(matches!(f.title.mode, Mode::Select { .. }));
+    assert!(matches!(f.title.mode, Mode::Create { .. }));
 }
 
 #[test]
