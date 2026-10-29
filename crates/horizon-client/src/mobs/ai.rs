@@ -1639,6 +1639,17 @@ pub fn feed_animal(
 pub fn can_age_up(m: &Mob) -> bool {
     m.is_baby() && !m.extra.age_locked
 }
+/// `AgeableMob.canUseGoldenDandelion`: a golden dandelion in hand, a baby
+/// whose particle timer has run out, and a type outside
+/// `#minecraft:cannot_be_age_locked`.
+pub fn can_use_golden_dandelion(
+    item: &str,
+    baby: bool,
+    cooldown: i32,
+    cannot_be_age_locked: bool,
+) -> bool {
+    item == "minecraft:golden_dandelion" && baby && cooldown == 0 && !cannot_be_age_locked
+}
 /// `AgeableMob.setAgeLockedData`: a golden dandelion flips the lock, puts the
 /// age back to a baby's starting age (`getBabyStartAge`) and starts the
 /// particle timer (40 ticks).
