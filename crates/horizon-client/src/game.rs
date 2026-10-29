@@ -178,6 +178,7 @@ mod spawner;
 mod spear;
 mod spectator;
 mod spill;
+mod splash_water;
 mod startup_menu;
 mod station_control;
 mod stations;
