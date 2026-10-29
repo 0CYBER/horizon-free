@@ -1335,6 +1335,8 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Bat => super::bat::server_ai_step(m, cx.w, cx.events),
         Species::Bee => super::bee::server_ai_step(m, cx),
         Species::Frog => super::frog::server_ai_step(m, cx.w),
+        // Hoglin and Piglin.customServerAiStep: the brain, then updateActivity.
+        Species::Piglin | Species::Hoglin => super::piglin::brain_step(m, cx),
         _ => {}
     }
 }

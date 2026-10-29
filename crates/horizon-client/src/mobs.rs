@@ -938,6 +938,9 @@ pub struct Extra {
     pub frog: frog::State,
     /// A panda's flags, counters and amounts.
     pub panda: Option<Box<panda::State>>,
+    /// What a piglin's or hoglin's brain remembers: its avoid target, the
+    /// adults its sensor sees and the activity it is in.
+    pub piglin: piglin::Memories,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {

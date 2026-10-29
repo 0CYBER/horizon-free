@@ -4,6 +4,7 @@
 use super::{
     Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
+    brain::{Ttl, living_near},
     goals::{
         Avoid, AvoidEntity, Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, Prey, RandomLookAround, Stroll, TARGET, TargetState, goal_clone,
@@ -24,6 +25,215 @@ const CONVERSION: i32 = 300;
 /// `PiglinAi.CELEBRATION_TIME`: how long the `CELEBRATE_LOCATION` and
 /// `DANCING` memories last.
 const CELEBRATION: i32 = 300;
+
+/// `Activity`: what a piglin's or hoglin's brain is busy with. `Admire` and
+/// `Celebrate` are a piglin's only; the others are both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Activity {
+    #[default]
+    Idle,
+    Fight,
+    Avoid,
+    Admire,
+    Celebrate,
+}
+/// `MemoryModuleType.AVOID_TARGET`: who to keep away from, where it was last
+/// seen (a target that is gone leaves its spot behind) and when the memory
+/// expires.
+#[derive(Clone, Copy, Debug)]
+pub struct AvoidTarget {
+    pub who: Who,
+    pub at: Vec3,
+    pub ttl: Ttl,
+}
+/// What a piglin's or hoglin's brain remembers of its surroundings and of
+/// what it retreats from. None of it is saved: these memories have no codec.
+#[derive(Clone, Debug, Default)]
+pub struct Memories {
+    /// `AVOID_TARGET`.
+    pub avoid: Option<AvoidTarget>,
+    /// `Brain.getActiveNonCoreActivity` as `updateActivity` last left it.
+    pub activity: Activity,
+    /// The `last_hurt_by_time` of the hit `wasHurtBy` last reacted to.
+    pub hurt_seen: i32,
+    /// `VISIBLE_ADULT_PIGLIN_COUNT`: a piglin's counts its brutes too, a
+    /// hoglin's only the piglins.
+    pub piglins: i32,
+    /// `VISIBLE_ADULT_HOGLIN_COUNT`.
+    pub hoglins: i32,
+    /// A hoglin's `NEAREST_VISIBLE_ADULT_PIGLIN`.
+    pub nearest_piglin: Option<u32>,
+    /// A hoglin's `NEAREST_VISIBLE_ADULT_HOGLINS` and a piglin's
+    /// `NEAREST_VISIBLE_ADULT_PIGLINS` (brutes too), nearest first.
+    pub adults: Vec<u32>,
+    /// A piglin's `NEAREST_VISIBLE_ZOMBIFIED`.
+    pub zombified: Option<Who>,
+    /// A piglin's `NEAREST_VISIBLE_NEMESIS`: a wither skeleton or a wither.
+    pub nemesis: Option<Who>,
+    /// A piglin's `NEAREST_PLAYER_HOLDING_WANTED_ITEM` is set.
+    pub sees_loved: bool,
+    /// Retreats other mobs' `broadcastRetreat` asked of this one, which its
+    /// next tick starts with: who to retreat from and where it stands.
+    pub retreats: Vec<(Who, Vec3)>,
+}
+/// `Sensor.isEntityTargetable`: `TargetingConditions.forNonCombat()` within
+/// the follow range and in sight, which a `NearestVisibleLivingEntities`
+/// applies to every entity it lists.
+fn visible(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
+    let range = m.attrs.follow_range;
+    match who {
+        Who::Player => {
+            let Some(p) = &w.player else { return false };
+            let r = (range * p.visibility_percent()).max(2.0);
+            p.alive && !p.spectator && m.distance_sqr(p.position) <= r * r && m.sees(w, who)
+        }
+        Who::Mob(id) => {
+            let Some(s) = w.seen(id) else { return false };
+            s.alive && m.distance_sqr(s.position) <= range * range && m.sees(w, who)
+        }
+    }
+}
+/// `PiglinAi.isPlayerHoldingLovedItem`: gold or anything else in
+/// `#piglin_loved`, in either hand.
+fn holds_loved(w: &MobWorld, p: &super::PlayerView) -> bool {
+    let Some(tag) = w
+        .items
+        .and_then(|i| i.item_tags.get("minecraft:piglin_loved"))
+    else {
+        return false;
+    };
+    [&p.main_hand, &p.off_hand]
+        .into_iter()
+        .flatten()
+        .any(|item| tag.contains(&**item))
+}
+/// `HoglinSpecificSensor.doTick`: the adult piglins and hoglins in sight,
+/// counted, with the nearest piglin and the hoglins themselves. (The sensor
+/// also looks up the nearest repellent; `hoglin_repellent` does that.)
+fn hoglin_sense(m: &mut Mob, w: &MobWorld) {
+    let mut piglins = 0;
+    let mut nearest = None;
+    let mut hoglins = Vec::new();
+    for who in living_near(m, w) {
+        let Who::Mob(id) = who else { continue };
+        let Some(s) = w.seen(id) else { continue };
+        if s.baby || !matches!(s.species, Species::Piglin | Species::Hoglin) || !visible(m, w, who)
+        {
+            continue;
+        }
+        if s.species == Species::Piglin {
+            piglins += 1;
+            nearest = nearest.or(Some(id));
+        } else {
+            hoglins.push(id);
+        }
+    }
+    let b = &mut m.extra.piglin;
+    b.piglins = piglins;
+    b.hoglins = hoglins.len() as i32;
+    b.nearest_piglin = nearest;
+    b.adults = hoglins;
+}
+/// `PiglinSpecificSensor.doTick`: what a piglin sees: adult piglins (brutes
+/// too) and hoglins counted, the nearest zombified piglin or zoglin, the
+/// nearest wither skeleton or wither, and a player holding gold.
+fn piglin_sense(m: &mut Mob, w: &MobWorld) {
+    let mut adults = Vec::new();
+    let mut hoglins = 0;
+    let mut zombified = None;
+    let mut nemesis = None;
+    let mut loved = false;
+    for who in living_near(m, w) {
+        match who {
+            Who::Player => {
+                if !loved
+                    && w.player
+                        .as_ref()
+                        .is_some_and(|p| !p.spectator && holds_loved(w, p))
+                    && visible(m, w, who)
+                {
+                    loved = true;
+                }
+            }
+            Who::Mob(id) => {
+                let Some(s) = w.seen(id) else { continue };
+                let (species, baby) = (s.species, s.baby);
+                match species {
+                    Species::Hoglin if !baby => {
+                        if visible(m, w, who) {
+                            hoglins += 1;
+                        }
+                    }
+                    Species::Piglin | Species::PiglinBrute if !baby => {
+                        if visible(m, w, who) {
+                            adults.push(id);
+                        }
+                    }
+                    Species::WitherSkeleton | Species::Wither if nemesis.is_none() => {
+                        if visible(m, w, who) {
+                            nemesis = Some(who);
+                        }
+                    }
+                    Species::ZombifiedPiglin | Species::Zoglin if zombified.is_none() => {
+                        if visible(m, w, who) {
+                            zombified = Some(who);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let b = &mut m.extra.piglin;
+    b.piglins = adults.len() as i32;
+    b.adults = adults;
+    b.hoglins = hoglins;
+    b.zombified = zombified;
+    b.nemesis = nemesis;
+    b.sees_loved = loved;
+}
+/// `Brain.getActiveNonCoreActivity` after `setActiveActivityToFirstValid`:
+/// a piglin's list is admiring, fighting, avoiding, celebrating and idle, a
+/// hoglin's fighting, avoiding and idle. An activity is valid while the
+/// memory it requires is there.
+pub fn activity(m: &Mob) -> Activity {
+    let b = &m.extra.piglin;
+    let piglin = m.species() == Species::Piglin;
+    // `ADMIRING_ITEM`: a gold item in the off hand being admired (a charging
+    // crossbow counts `using_item` up too).
+    if piglin && m.extra.off_hand.is_some() && m.extra.using_item > 0 {
+        Activity::Admire
+    } else if m.ai.target.is_some() {
+        Activity::Fight
+    } else if b.avoid.is_some() {
+        Activity::Avoid
+    } else if piglin && m.extra.scratch[1] > 0 && m.extra.home.is_some() {
+        Activity::Celebrate
+    } else {
+        Activity::Idle
+    }
+}
+/// `Brain.forgetOutdatedMemories` for the avoid target, which also keeps
+/// track of where it stands, and `updateActivity`'s record of the activity,
+/// at the end of `customServerAiStep`'s brain.
+pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
+    let expired = match m.extra.piglin.avoid.as_mut() {
+        Some(a) => {
+            a.ttl.tick();
+            !a.ttl.present()
+        }
+        None => false,
+    };
+    if expired {
+        m.extra.piglin.avoid = None;
+    }
+    if let Some(a) = m.extra.piglin.avoid.as_mut()
+        && let Some(p) = cx.w.target_info(a.who)
+    {
+        a.at = p.position;
+    }
+    m.extra.piglin.activity = activity(m);
+}
 
 fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     if m.is_baby() {
@@ -413,6 +623,7 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
     }
     if m.age.wrapping_add(m.id).is_multiple_of(20) {
         m.extra.repellent = find_hoglin_repellent(m, w);
+        hoglin_sense(m, w);
     }
     if m.extra.ints[0] <= 0 && m.extra.repellent.is_some() {
         m.extra.ints[0] = 200;
@@ -550,6 +761,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // PiglinSpecificSensor (every 20 ticks): the nearest repelling block.
     if m.species() == Species::Piglin && m.alive() && m.age.wrapping_add(m.id).is_multiple_of(20) {
         m.extra.repellent = find_piglin_repellent(m, w);
+        piglin_sense(m, w);
     }
 }
 /// `PiglinSpecificSensor.findNearestRepellent`: the nearest `#piglin_repellents`
