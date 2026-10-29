@@ -735,7 +735,7 @@ impl Screen {
                                     motd.resolve_legacy(),
                                     Ping::player_count(*players),
                                     format!(
-                                        "server_list/ping_{}",
+                                        "gui/sprites/server_list/ping_{}",
                                         match ms {
                                             0..150 => 5,
                                             150..300 => 4,
@@ -749,7 +749,7 @@ impl Screen {
                                     Text::translate("multiplayer.status.cannot_connect", &[])
                                         .with_color(0xFF0000),
                                     Text::empty(),
-                                    "server_list/unreachable".to_owned(),
+                                    "gui/sprites/server_list/unreachable".to_owned(),
                                 ),
                                 _ => {
                                     // The pinging bars bounce, offset by the row.
@@ -758,7 +758,7 @@ impl Screen {
                                     (
                                         Text::translate("multiplayer.status.pinging", &[]),
                                         Text::empty(),
-                                        format!("server_list/pinging_{}", frame + 1),
+                                        format!("gui/sprites/server_list/pinging_{}", frame + 1),
                                     )
                                 }
                             };
@@ -779,15 +779,7 @@ impl Screen {
                                 );
                             }
                             let icon_x = cx + ROW_WIDTH - 4.0 - 15.0;
-                            batch.sprite_scaled(
-                                atlas,
-                                &format!("gui/sprites/{sprite}"),
-                                icon_x,
-                                cy,
-                                10.0,
-                                8.0,
-                                u32::MAX,
-                            );
+                            batch.sprite_scaled(atlas, &sprite, icon_x, cy, 10.0, 8.0, u32::MAX);
                             let sw = atlas.font.width_text(&status).ceil();
                             batch.text_styled(
                                 atlas,

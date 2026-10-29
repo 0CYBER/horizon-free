@@ -136,6 +136,35 @@ pub fn draw_progress(batch: &mut HudBatch, atlas: &HudAtlas, line: &str, progres
     batch.fill(atlas, left, top, done, 2.0, opaque(0x00FF00));
 }
 
+/// `ConnectScreen`'s Cancel button corner on a GUI `w` x `h`:
+/// (width / 2 - 100, height / 4 + 120 + 12), 200 x 20.
+pub fn connect_cancel(w: f32, h: f32) -> (f32, f32) {
+    ((w / 2.0).trunc() - 100.0, (h / 4.0).trunc() + 132.0)
+}
+
+/// `ConnectScreen.extractRenderState` over the menu background: the status
+/// centred at (width / 2, height / 2 - 50) and, while the connection can
+/// still be cancelled, Cancel.
+pub fn draw_connecting(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    status: &Text,
+    cursor: (f32, f32),
+    cancel: bool,
+) {
+    let (w, h) = (batch.width, batch.height);
+    crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+    let tw = atlas.font.width_text(status);
+    let (x, y) = (((w - tw) / 2.0).trunc(), (h / 2.0).trunc() - 50.0);
+    batch.text_styled(atlas, status, x, y, u32::MAX, true);
+    if cancel {
+        let (x, y) = connect_cancel(w, h);
+        let hover = crate::ui::hovered(cursor, x, y, 200.0, 20.0);
+        let label = Text::translate("gui.cancel", &[]);
+        crate::ui::button(batch, atlas, x, y, 200.0, 20.0, &label, true, hover);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -773,6 +773,8 @@ pub struct Stroll {
     pub water_avoiding: Option<f32>,
     /// RandomSwimmingGoal: BehaviorUtils.getRandomSwimmablePos.
     pub swim: bool,
+    /// WaterAvoidingRandomFlyingGoal: a hover spot, else an air or water pos.
+    pub flying: bool,
     pub force: bool,
     wanted: [f64; 3],
 }
@@ -784,6 +786,7 @@ impl Stroll {
             check_no_action: true,
             water_avoiding: None,
             swim: false,
+            flying: false,
             force: false,
             wanted: [0.0; 3],
         }
@@ -800,7 +803,10 @@ impl Stroll {
     }
     /// WaterAvoidingRandomFlyingGoal (a nearby air position).
     pub fn flying(speed: f64) -> Self {
-        Self::new(speed)
+        Self {
+            flying: true,
+            ..Self::new(speed)
+        }
     }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
@@ -860,6 +866,21 @@ impl Goal for Stroll {
                     p = m.default_random_pos(cx.w, 10, 7);
                 }
                 p
+            }
+            None if self.flying => {
+                // WaterAvoidingRandomFlyingGoal.getPosition.
+                let [xd, _, zd] = m.view_vector();
+                m.hover_random_pos(
+                    cx.w,
+                    8,
+                    7,
+                    xd,
+                    zd,
+                    f64::from(std::f32::consts::FRAC_PI_2),
+                    3,
+                    1,
+                )
+                .or_else(|| m.air_and_water_random_pos(cx.w, 8, 4, -2, xd, zd))
             }
             None => m.default_random_pos(cx.w, 10, 7),
         };
@@ -1065,6 +1086,8 @@ pub struct MeleeAttack {
     raise_arm: i32,
     /// Ticks between attacks (20 unless set).
     pub interval: i32,
+    /// Ticks between attacks for a baby, when they differ.
+    pub baby_interval: Option<i32>,
 }
 impl MeleeAttack {
     pub fn new(speed: f64, follow_unseen: bool) -> Self {
@@ -1079,6 +1102,7 @@ impl MeleeAttack {
             last_check: 0,
             raise_arm: 0,
             interval: 20,
+            baby_interval: None,
         }
     }
     pub fn zombie(mut self) -> Self {
@@ -1091,6 +1115,12 @@ impl MeleeAttack {
     }
     pub fn interval(mut self, ticks: i32) -> Self {
         self.interval = ticks;
+        self
+    }
+    /// `MeleeAttack.create(adult)` for adults, `create(baby)` for babies.
+    pub fn intervals(mut self, adult: i32, baby: i32) -> Self {
+        self.interval = adult;
+        self.baby_interval = Some(baby);
         self
     }
 }
@@ -1191,7 +1221,11 @@ impl Goal for MeleeAttack {
                 cx,
             );
         } else if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
-            self.until_attack = adjusted(true, self.interval);
+            let interval = match self.baby_interval {
+                Some(baby) if m.is_baby() => baby,
+                _ => self.interval,
+            };
+            self.until_attack = adjusted(true, interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
         }
@@ -1891,6 +1925,10 @@ impl Goal for Breed {
         // Wolf.canMate: both tame and standing.
         let tamable = matches!(species, Species::Wolf | Species::Cat);
         if tamable && (!m.extra.tame || m.extra.sitting) {
+            return false;
+        }
+        // AbstractHorse.canMate is false and Mule keeps it: mules never breed.
+        if species == Species::Mule {
             return false;
         }
         // TurtleBreedGoal.canUse: not while carrying an egg.

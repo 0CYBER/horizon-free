@@ -1,17 +1,20 @@
-//! `browser.set-recipes` (docs/mods.md): a mod's recipes shown in its item
-//! panel's place, laid out by the game with its own slots, arrows and
+//! A mod's recipes shown in its item panel's place (`native_panel_recipes`,
+//! or `browser.set-recipes` of a WebAssembly mod, docs/mods.md), laid out by the game with its own slots, arrows and
 //! buttons, paged to the panel's height, under a title and a back button.
 //! The mod hears clicks on their slots, their action buttons, the back
 //! button and page turns.
 use super::{
     Game,
-    mod_browser::{Layout, browser_stack, inside},
+    native_hooks::{
+        NativePanelEvent as BrowserEvent, NativeRecipeLayout as BrowserLayout,
+        NativeRecipeView as BrowserRecipe, NativeStack as BrowserStack,
+    },
+    native_panel::{Layout, Owner, browser_stack, inside},
 };
 use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
 };
-use horizon_mods::{BrowserEvent, BrowserLayout, BrowserSlotClick, BrowserStack, RecipePage};
 use std::time::Instant;
 
 const SLOT: f32 = 18.0;
@@ -20,6 +23,54 @@ const TITLE: f32 = 18.0;
 /// A tab's step: an 18 px slot and a gap.
 const TAB: f32 = 20.0;
 const GAP: f32 = 6.0;
+
+/// Recipes a page may show, slots in one, stacks a slot cycles, and tabs.
+const RECIPES: usize = 256;
+const RECIPE_SLOTS: usize = 9;
+const SLOT_STACKS: usize = 64;
+const TABS: usize = 16;
+
+/// What the panel shows instead of its items: a title, tabs (`tab` the
+/// selected one) and the recipes.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct RecipePage {
+    pub(super) title: String,
+    pub(super) tabs: Vec<BrowserStack>,
+    pub(super) tab: u32,
+    pub(super) recipes: Vec<BrowserRecipe>,
+}
+impl RecipePage {
+    /// `native_panel_recipes`' page, cut as `set-recipes` cuts one; none
+    /// without recipes (the items again).
+    pub(super) fn new(
+        title: &str,
+        tabs: Vec<BrowserStack>,
+        tab: u32,
+        recipes: Vec<BrowserRecipe>,
+    ) -> Option<Self> {
+        let cycle = |mut list: Vec<BrowserStack>| {
+            list.truncate(SLOT_STACKS);
+            list
+        };
+        let recipes: Vec<BrowserRecipe> = recipes
+            .into_iter()
+            .take(RECIPES)
+            .map(|r| BrowserRecipe {
+                width: r.width.clamp(1, 3),
+                height: r.height.clamp(1, 3),
+                slots: r.slots.into_iter().take(RECIPE_SLOTS).map(cycle).collect(),
+                results: cycle(r.results),
+                ..r
+            })
+            .collect();
+        (!recipes.is_empty()).then(|| Self {
+            title: title.to_owned(),
+            tabs: tabs.into_iter().take(TABS).collect(),
+            tab,
+            recipes,
+        })
+    }
+}
 
 /// One recipe as the game draws it.
 pub(super) struct Shown {
@@ -180,7 +231,7 @@ impl Game<'_> {
     }
     /// The recipes on the open page, each with its corner.
     fn recipes_shown(&self, layout: &Layout) -> Vec<(usize, (f32, f32))> {
-        let Some(pages) = &self.mods.browser.recipes else {
+        let Some(pages) = &self.panel.recipes else {
             return Vec::new();
         };
         let starts = Self::recipe_pages(pages, layout);
@@ -202,7 +253,7 @@ impl Game<'_> {
     }
     /// What a slot of a shown recipe holds now: its stacks cycle once a second.
     fn recipe_slot_now(&self, recipe: usize, slot: usize) -> Option<&(BrowserStack, ItemStack)> {
-        let pages = self.mods.browser.recipes.as_ref()?;
+        let pages = self.panel.recipes.as_ref()?;
         let stacks = pages.recipes.get(recipe)?.slots.get(slot)?;
         let n = pages.since.elapsed().as_secs() as usize;
         stacks.get(n % stacks.len().max(1))
@@ -212,7 +263,7 @@ impl Game<'_> {
         &self,
         layout: &Layout,
     ) -> Option<(usize, BrowserStack, ItemStack)> {
-        let pages = self.mods.browser.recipes.as_ref()?;
+        let pages = self.panel.recipes.as_ref()?;
         let places = tab_places(pages, layout);
         places.iter().enumerate().find_map(|(i, &(x, y))| {
             if !inside(self.cursor, [x, y, SLOT, SLOT]) {
@@ -227,7 +278,7 @@ impl Game<'_> {
         &self,
         layout: &Layout,
     ) -> Option<(usize, usize, BrowserStack, ItemStack)> {
-        let pages = self.mods.browser.recipes.as_ref()?;
+        let pages = self.panel.recipes.as_ref()?;
         self.recipes_shown(layout)
             .into_iter()
             .find_map(|(i, (x, y))| {
@@ -244,7 +295,7 @@ impl Game<'_> {
 
     /// Draws the title row, the page's recipes and the page arrows.
     pub(super) fn draw_browser_recipes(&mut self, batch: &mut HudBatch, layout: &Layout) {
-        let Some(pages) = &self.mods.browser.recipes else {
+        let Some(pages) = &self.panel.recipes else {
             return;
         };
         let cursor = self.cursor;
@@ -324,7 +375,7 @@ impl Game<'_> {
             batch.text(atlas, &text, x, layout.arrows_y + 5.0, u32::MAX, true);
         }
         for (i, (x, y)) in self.recipes_shown(layout) {
-            let Some(r) = self.mods.browser.recipes.as_ref().map(|p| &p.recipes[i]) else {
+            let Some(r) = self.panel.recipes.as_ref().map(|p| &p.recipes[i]) else {
                 break;
             };
             let (at, arrow, action) = r.places(layout.width());
@@ -405,7 +456,7 @@ impl Game<'_> {
 
     /// The tabs, on slots; the selected one framed.
     fn draw_recipe_tabs(&mut self, batch: &mut HudBatch, layout: &Layout) {
-        let Some(pages) = &self.mods.browser.recipes else {
+        let Some(pages) = &self.panel.recipes else {
             return;
         };
         let places = tab_places(pages, layout);
@@ -451,10 +502,10 @@ impl Game<'_> {
     pub(super) fn browser_recipes_press(
         &mut self,
         layout: &Layout,
-        owner: usize,
+        owner: &Owner,
         right: bool,
     ) -> bool {
-        let Some(pages) = &self.mods.browser.recipes else {
+        let Some(pages) = &self.panel.recipes else {
             return false;
         };
         let cursor = self.cursor;
@@ -469,38 +520,34 @@ impl Game<'_> {
             None
         };
         if let Some(to) = turn {
-            if let Some(p) = self.mods.browser.recipes.as_mut() {
+            if let Some(p) = self.panel.recipes.as_mut() {
                 p.page = to;
             }
             self.audio
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
-            self.mods
-                .mods
-                .browser_event(owner, BrowserEvent::Page(starts[to] as u32));
+            self.panel_event(owner, BrowserEvent::Page(starts[to] as u32));
             return true;
         }
         if let Some((tab, _, _)) = self.recipe_tab_hovered(layout) {
             self.audio
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
-            self.mods
-                .mods
-                .browser_event(owner, BrowserEvent::Tab(tab as u32));
+            self.panel_event(owner, BrowserEvent::Tab(tab as u32));
             return true;
         }
         if inside(cursor, self.back_button(layout).0) {
             self.audio
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
-            self.mods.mods.browser_event(owner, BrowserEvent::Back);
+            self.panel_event(owner, BrowserEvent::Back);
             return true;
         }
         if let Some((recipe, slot, stack, _)) = self.recipe_slot_hovered(layout) {
-            let event = BrowserEvent::SlotClicked(BrowserSlotClick {
+            let event = BrowserEvent::SlotClicked {
                 recipe: recipe as u32,
                 slot: slot as u32,
                 stack,
                 right,
-            });
-            self.mods.mods.browser_event(owner, event);
+            };
+            self.panel_event(owner, event);
             return true;
         }
         let action = self.recipes_shown(layout).into_iter().find(|&(i, (x, y))| {
@@ -512,9 +559,7 @@ impl Game<'_> {
             if pages.recipes[i].action == Some(true) {
                 self.audio
                     .play("minecraft:ui.button.click", None, 0.25, 1.0);
-                self.mods
-                    .mods
-                    .browser_event(owner, BrowserEvent::Action(i as u32));
+                self.panel_event(owner, BrowserEvent::Action(i as u32));
             }
             return true;
         }
