@@ -91,7 +91,7 @@ fn format_double(v: f64) -> String {
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
-        if self.mod_command(command) {
+        if self.client_mod_command(command) {
             return true;
         }
         let d = vanilla::game_dispatcher();
@@ -1376,7 +1376,8 @@ impl Game<'_> {
             self.player = Some(player);
             return Err(err("command.failed", &[]));
         }
-        self.trigger_dimension(from, dimension);
+        let at = player.position;
+        self.trigger_dimension(from, dimension, [at.x, at.y, at.z]);
         let target = Vec3::new(pos[0], pos[1], pos[2]);
         player.position = target;
         player.velocity = Vec3::ZERO;
@@ -1851,7 +1852,7 @@ impl Game<'_> {
             if self.ui.difficulty == 0 && t.category == "monster" {
                 return Err(err("commands.summon.failed.peaceful", &[]));
             }
-            self.spawn_mob(&short, pos, true);
+            self.spawn_mob_spawned(&short, pos);
             name = Text::translate(&format!("entity.minecraft.{short}"), &[]);
         } else {
             match short.as_str() {
@@ -2573,6 +2574,9 @@ impl Game<'_> {
             )));
         }
         self.ui.difficulty = i;
+        // The level data holds the world's difficulty: it survives the
+        // reopen, so it follows the command.
+        self.level.set_difficulty(i);
         self.sync_rules();
         if i == 0 {
             // Peaceful removes hostile mobs.
