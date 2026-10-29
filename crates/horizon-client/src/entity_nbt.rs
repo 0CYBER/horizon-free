@@ -3167,12 +3167,17 @@ mod held_item_name_tests {
             .collect();
         let mut mob = Mob::new(1, Arc::clone(&types["minecraft:zombie"]), Vec3::ZERO, 0.0);
         let mut sword = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
-        sword.data_mut().custom_name = Some("Old Sword".into());
+        sword.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
         mob.extra.set_main_hand_stack(Some(sword));
         let raw = mob_to_nbt(&mob, [1, 2, 3, 4], None);
         let mut loaded = mob_from_nbt(&raw, &types, 2).unwrap();
         assert_eq!(
-            loaded.extra.main_hand_stack().unwrap().custom_name(),
+            loaded
+                .extra
+                .main_hand_stack()
+                .unwrap()
+                .custom_name()
+                .as_deref(),
             Some("Old Sword")
         );
         loaded

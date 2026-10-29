@@ -3364,10 +3364,10 @@ mod held_stack_tests {
     fn replacing_even_the_same_item_clears_its_old_components() {
         let mut extra = Extra::default();
         let mut named = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
-        named.data_mut().custom_name = Some("Old Sword".into());
+        named.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
         extra.set_main_hand_stack(Some(named.clone()));
         assert_eq!(
-            extra.main_hand_stack().unwrap().custom_name(),
+            extra.main_hand_stack().unwrap().custom_name().as_deref(),
             Some("Old Sword")
         );
         extra.set_main_hand(Some(named.item.clone()));
