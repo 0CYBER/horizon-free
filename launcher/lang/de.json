@@ -181,5 +181,16 @@
   "These mods will run with full access to your computer": "Diese Mods erhalten vollen Zugriff auf deinen Computer",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Sie können deine Dateien lesen, ändern oder löschen und deine Konten sowie dein Netzwerk nutzen wie jedes andere Programm, das du ausführst. Kompiliere sie nur, wenn du ihren Autoren vertraust: Die Mods-Seite nennt sie.",
   "Mods: {mods}": "Mods: {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "Der Build kompiliert das Spiel: beim ersten Mal etwa zehn Minuten und einige GB Speicherplatz, danach einige Minuten."
+  "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "Der Build kompiliert das Spiel: beim ersten Mal 20 bis 30 Minuten und einige GB Speicherplatz (er lädt Rust herunter), danach wenige Minuten.",
+  "Delete old versions automatically": "Alte Versionen automatisch löschen",
+  "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Behält die {count} neuesten, die verwendete und die von deinen Instanzen genutzten. Gelöschte Versionen lassen sich auf der Seite Versionen wieder installieren.",
+  "Installed versions use {size}.": "Installierte Versionen belegen {size}.",
+  "{size} on disk": "{size} auf dem Datenträger",
+  "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version} (Java Edition). Beim ersten Mal lädt „Spielen“ es für dein Konto von Mojang herunter, mit dem Java, das es braucht.",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "{name} mit seinen Welten und Einstellungen in den Papierkorb verschieben? Von dort kannst du es zurückholen.",
+  "Delete…": "Löschen…",
+  "Keep": "Behalten",
+  "Move to Trash": "In den Papierkorb",
+  "Install and turn on native mods": "Installieren und native Mods einschalten",
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller."
 }

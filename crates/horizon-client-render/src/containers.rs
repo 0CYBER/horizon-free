@@ -42,6 +42,45 @@ pub fn recipe_used_key(id: &str) -> String {
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
 
+/// `getDefaultName` of the `BaseContainerBlockEntity` that `block` holds: the
+/// translation key of its menu's title when it has no custom name. Copper
+/// chests hold a `ChestBlockEntity`, shulker boxes of every colour a
+/// `ShulkerBoxBlockEntity`.
+pub fn default_name_key(block: &str) -> Option<&'static str> {
+    Some(match block {
+        "minecraft:chest" | "minecraft:trapped_chest" => "container.chest",
+        n if n.ends_with("copper_chest") => "container.chest",
+        "minecraft:barrel" => "container.barrel",
+        n if n.ends_with("shulker_box") => "container.shulkerBox",
+        "minecraft:dispenser" => "container.dispenser",
+        "minecraft:dropper" => "container.dropper",
+        "minecraft:hopper" => "container.hopper",
+        "minecraft:furnace" => "container.furnace",
+        "minecraft:smoker" => "container.smoker",
+        "minecraft:blast_furnace" => "container.blast_furnace",
+        "minecraft:brewing_stand" => "container.brewing",
+        "minecraft:crafter" => "container.crafter",
+        _ => return None,
+    })
+}
+
+/// `BaseContainerBlockEntity.getDisplayName` (`getName`), the title of the
+/// `ClientboundOpenScreenPacket` that opens it: the block entity's custom
+/// name (`CustomName`, a literal), else its default name.
+pub fn display_name(custom: Option<&str>, default_key: &str) -> horizon_world::nbt::Tag {
+    match custom {
+        Some(name) => horizon_protocol::text::literal(name),
+        None => horizon_protocol::text::translatable(default_key, &[]),
+    }
+}
+
+/// `ChestBlock.MENU_PROVIDER_COMBINER`'s `getDisplayName` for a double chest:
+/// the first half's custom name (the right half, `DoubleBlockCombiner`'s
+/// `FIRST`), else the second's, else `container.chestDouble`.
+pub fn double_chest_name(first: Option<&str>, second: Option<&str>) -> horizon_world::nbt::Tag {
+    display_name(first.or(second), "container.chestDouble")
+}
+
 impl Campfire {
     /// `placeFood`'s slot: the first empty one, given the item's
     /// `campfire_cooking` time; it takes one item of `held`.
@@ -377,6 +416,58 @@ impl BlockEntity {
     }
 }
 pub use crate::providers::Providers;
+
+/// A `ChestBlock`, which `ChestBlock.combine` can join into a double chest:
+/// chests, trapped chests and copper chests in every weathering state, waxed
+/// or not (`CopperChestBlock` extends `ChestBlock`). Ender chests are
+/// `EnderChestBlock`s and always single.
+pub fn is_chest_block(name: &str) -> bool {
+    matches!(name, "minecraft:chest" | "minecraft:trapped_chest") || name.ends_with("copper_chest")
+}
+
+/// A chest block's name with its `type` and `facing` properties.
+#[derive(Clone, Copy, Debug)]
+pub struct ChestHalf<'a> {
+    pub block: &'a str,
+    pub kind: &'a str,
+    pub facing: &'a str,
+}
+
+impl ChestHalf<'_> {
+    /// `ChestBlock.getConnectedDirection` as an (x, z) step to the other
+    /// half: clockwise from the facing for a left half, counter-clockwise for
+    /// a right one. None for a single chest.
+    pub fn connected_step(&self) -> Option<(i32, i32)> {
+        let step = |facing: &str| match facing {
+            "north" => Some((0, -1)),
+            "south" => Some((0, 1)),
+            "west" => Some((-1, 0)),
+            "east" => Some((1, 0)),
+            _ => None,
+        };
+        let (x, z) = step(self.facing)?;
+        // Turning clockwise seen from above takes (x, z) to (-z, x).
+        match self.kind {
+            "left" => Some((-z, x)),
+            "right" => Some((z, -x)),
+            _ => None,
+        }
+    }
+
+    /// `DoubleBlockCombiner.combineWithNeigbour` as `ChestBlock.combine` calls
+    /// it: `other`, the block in this half's connected direction, is its other
+    /// half when it is the same block, a half of the other side and faces the
+    /// same way. Copper chests in different weathering states never join
+    /// (`CopperChestBlock` keeps both halves in one state instead).
+    pub fn pairs_with(&self, other: &ChestHalf) -> bool {
+        is_chest_block(self.block)
+            && self.kind != "single"
+            && other.block == self.block
+            && other.kind != "single"
+            && other.kind != self.kind
+            && other.facing == self.facing
+    }
+}
 
 /// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
 /// more with the chance of what is left over (a level random draw only when there is some).
