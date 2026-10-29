@@ -5,6 +5,7 @@ use crate::{
     chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::BlockEntity,
     fast_hash::FxHashMap,
+    mobs::spawner::{SpawnDataExt, SpawnerExt},
     section_mask::SectionMask,
 };
 use horizon_protocol::{
