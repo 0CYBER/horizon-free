@@ -164,7 +164,51 @@ pub fn install(
 ) -> Result<Vec<Entry>, String> {
     let steps = plan(source, target, project)?;
     let folder = |kind| target.folder(kind).expect("plan checks every kind");
-    installed::put(source, steps, home, &folder, progress)
+    let was = Installed::load(home).entries;
+    let done = installed::put(source, steps, home, &folder, progress)?;
+    // A mod the player turned off stays off through an update, and its old file goes.
+    for e in &done {
+        let Some(old) = was
+            .iter()
+            .find(|o| o.source == e.source && o.project == e.project && !is_on(home, o))
+        else {
+            continue;
+        };
+        if old.file != e.file {
+            let _ = fs::remove_file(off(home, old));
+        }
+        set_on(home, e, false)?;
+    }
+    Ok(done)
+}
+
+/// A mod turned off keeps its file under this suffix, which the loaders don't read: they load
+/// the `.jar` files in `mods/`.
+const OFF: &str = ".disabled";
+
+fn off(home: &Path, entry: &Entry) -> std::path::PathBuf {
+    home.join(format!("{}{OFF}", entry.file))
+}
+
+/// Whether the game loads `entry`: everything but a mod turned off.
+pub fn is_on(home: &Path, entry: &Entry) -> bool {
+    entry.kind != Kind::Mod || !off(home, entry).is_file()
+}
+
+/// Turns the mod `entry` on or off by renaming its file; it stays installed.
+pub fn set_on(home: &Path, entry: &Entry, on: bool) -> Result<(), String> {
+    if entry.kind != Kind::Mod {
+        return Err(format!(
+            "{} isn't a mod: only mods turn on and off.",
+            entry.title
+        ));
+    }
+    let (jar, off) = (home.join(&entry.file), off(home, entry));
+    let (from, to) = if on { (off, jar) } else { (jar, off) };
+    if !from.exists() && to.is_file() {
+        return Ok(());
+    }
+    fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))
 }
 
 /// The newer version `entry` can be updated to, if any.
@@ -188,10 +232,12 @@ pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
         .lookup(name)
         .cloned()
         .ok_or_else(|| format!("{name} wasn't installed by the browser."))?;
-    match fs::remove_file(home.join(&entry.file)) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("{}: {e}", entry.file)),
+    for path in [home.join(&entry.file), off(home, &entry)] {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
     }
     installed
         .entries

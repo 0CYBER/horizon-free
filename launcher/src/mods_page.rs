@@ -463,9 +463,21 @@ impl Launcher {
         });
     }
 
-    /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does.
+    /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does;
+    /// in a Java instance, renames its file.
     fn mods_switch(&mut self, e: &installed::Entry) {
         let home = self.mods.home();
+        if self.mods.java.is_some() {
+            let on = !java_instance::is_on(&home, e);
+            self.mods.message = Some(java_instance::set_on(&home, e, on).map(|()| {
+                format!(
+                    "{} is {}. The game reads this when it starts.",
+                    e.title,
+                    if on { "on" } else { "off" }
+                )
+            }));
+            return;
+        }
         let Some(id) = horizon::mod_id(e) else {
             return;
         };
@@ -1184,9 +1196,15 @@ impl Launcher {
                 }
                 cx.notify();
             }));
-            if e.source == SourceId::Horizon && e.kind == PackKind::Mod {
-                let on =
-                    horizon::mod_id(e).is_some_and(|id| java::is_enabled(&self.mods.home(), id));
+            let on = match &self.mods.java {
+                _ if e.kind != PackKind::Mod => None,
+                Some(_) => Some(java_instance::is_on(&self.mods.home(), e)),
+                None if e.source == SourceId::Horizon => Some(
+                    horizon::mod_id(e).is_some_and(|id| java::is_enabled(&self.mods.home(), id)),
+                ),
+                None => None,
+            };
+            if let Some(on) = on {
                 let entry = e.clone();
                 right = right.child(
                     div()
