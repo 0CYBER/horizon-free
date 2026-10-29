@@ -23,6 +23,8 @@ pub mod component {
     pub const LORE: i32 = 11;
     pub const RARITY: i32 = 12;
     pub const ENCHANTMENTS: i32 = 13;
+    /// `AdventureModePredicate`: the blocks an adventure player may break.
+    pub const CAN_BREAK: i32 = 15;
     pub const CUSTOM_MODEL_DATA: i32 = 17;
     pub const TOOLTIP_DISPLAY: i32 = 18;
     pub const REPAIR_COST: i32 = 19;
@@ -536,6 +538,27 @@ impl Component {
 /// edited goes back byte for byte. It is no part of a stack's equality.
 #[derive(Clone, Debug, Default)]
 pub struct WirePatch(pub Option<Arc<[u8]>>);
+impl WirePatch {
+    /// Whether a patch in this form sets component `kind`.
+    pub fn adds(patch: &[u8], kind: i32) -> bool {
+        let mut r = Reader::new(patch);
+        let Ok(positive) = r.count(65536) else {
+            return false;
+        };
+        if r.count(65536).is_err() {
+            return false;
+        }
+        (0..positive).any(|_| {
+            let Ok(k) = r.varint() else {
+                return false;
+            };
+            let Ok(len) = r.count(r.remaining()) else {
+                return false;
+            };
+            r.bytes(len).is_ok() && k == kind
+        })
+    }
+}
 impl PartialEq for WirePatch {
     fn eq(&self, _: &Self) -> bool {
         true
@@ -779,6 +802,24 @@ mod tests {
         let mut r = Reader::new(&w.data);
         assert_eq!(C::read(&mut r).unwrap(), v);
         assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn a_wire_patch_tells_what_it_adds() {
+        // Two added components (damage 3, then can_break's bytes as read)
+        // and one removed.
+        let mut w = Writer::new();
+        w.varint(2);
+        w.varint(1);
+        w.varint(component::DAMAGE);
+        w.byte_array(&[3]);
+        w.varint(component::CAN_BREAK);
+        w.byte_array(&[1, 0, 0, 0, 0, 0]);
+        w.varint(component::ENCHANTMENTS);
+        assert!(WirePatch::adds(&w.data, component::DAMAGE));
+        assert!(WirePatch::adds(&w.data, component::CAN_BREAK));
+        assert!(!WirePatch::adds(&w.data, component::ENCHANTMENTS));
+        assert!(!WirePatch::adds(&[], component::CAN_BREAK));
     }
 
     #[test]

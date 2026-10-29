@@ -4520,6 +4520,11 @@ impl Game<'_> {
         if self.res.facts().is_air(state) {
             return;
         }
+        // startDestroyBlock refuses a restricted break before predicting it.
+        if self.remote_break_restricted() {
+            self.mining = None;
+            return;
+        }
         if self.creative {
             let seq = self.next_sequence();
             self.predict_break(hit.pos, state, seq);
@@ -4658,6 +4663,19 @@ impl Game<'_> {
             self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
         }
         self.mining = None;
+    }
+    /// `Player.blockActionRestricted` as far as this client reads it: a
+    /// spectator never breaks, an adventure player only with a main-hand
+    /// item the server gave `can_break`. Whether its predicate matches the
+    /// block is left to the server, which sends the block back if not.
+    fn remote_break_restricted(&self) -> bool {
+        use horizon_protocol::item::{WirePatch, component::CAN_BREAK};
+        self.spectator()
+            || (!self.may_build()
+                && !self
+                    .held()
+                    .and_then(|s| s.wire_patch())
+                    .is_some_and(|p| WirePatch::adds(&p, CAN_BREAK)))
     }
     /// Minecraft.startUseItem: use one crosshair target, then the item itself.
     fn remote_use(&mut self) {
@@ -5453,7 +5471,9 @@ impl Game<'_> {
             && let Some(hit) = self.pick()
         {
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            if !self.res.facts().is_air(state) {
+            if self.remote_break_restricted() {
+                // continueDestroyBlock returned false: no swing.
+            } else if !self.res.facts().is_air(state) {
                 self.remote_mining(false);
                 self.swing_arm();
                 self.send(S::Punch(Empty));
