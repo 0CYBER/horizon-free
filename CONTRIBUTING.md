@@ -74,6 +74,15 @@ including examples. The dependency scope includes optional, platform, build and 
 Tests run library, binary, integration and doc tests without building unrelated example executables. Shared Cargo
 configuration and toolchain changes select the whole workspace; CI also keeps its workspace-wide checks.
 
+## Claim before you start
+
+Work is tracked in GitHub issues, and an issue that is assigned is taken: pick another, or ask its holder in the
+thread. Before you start, comment **`/claim`** on the issue; you are assigned at once, no role needed. No issue for
+your work yet? Open one (a line is enough), then claim it. `/unclaim` gives it back.
+
+A claim with no open pull request linking the issue (`Fixes #123` in the description, or a draft) is released after
+5 days, with a comment: open a draft early. You can hold 5 open issues at a time. Agents claim the same way.
+
 ## Pull requests
 
 - **Small.** One change per pull request, under about 500 lines of code where you can; split bigger work into
@@ -102,4 +111,4 @@ new pushes, we add it again.
 ## Talk to us
 
 [Discord](https://discord.gg/HcTeMZxe5E) for questions and ideas, [issues](https://github.com/horizon-rust/horizon/issues)
-for bugs. If you want to take something on, say so in its issue so nobody else starts the same work.
+for bugs. To take something on, `/claim` its issue ([above](#claim-before-you-start)).
