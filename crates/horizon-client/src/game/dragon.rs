@@ -3022,10 +3022,17 @@ impl Game<'_> {
     }
     /// `EnderDragon.kill` (`/kill`): `Entity.kill` removes the entity, it
     /// does not hurt it (the dragon flies its death flight when its health
-    /// runs out).
+    /// runs out). The fight's dragon ends the fight there and then
+    /// (`dragonFight.setDragonKilled`): the exit portal, a gateway and the
+    /// first dragon's egg, and no new dragon. No experience: `tickDeath`
+    /// drops it, and a killed dragon never gets there.
     pub(super) fn kill_dragon(&mut self, id: u32) {
         if self.dragon.as_ref().is_some_and(|d| d.id == id) {
             self.dragon = None;
+            // ServerLevel.getDragonFight: only the End has a fight.
+            if self.dim == Dim::End {
+                self.dragon_killed();
+            }
         }
     }
     /// Any entity touching `room` (`Level.getEntities(null, box)`).
