@@ -88,6 +88,21 @@ impl Game<'_> {
                 Tag::compound([("copper_golem_pose", Tag::String(pose.as_str().into()))]),
             );
         }
+        // LightBlock.getCloneItemStack, setLightOnStack: the light's level as
+        // the item's block state, whether or not the block data is picked.
+        if let Some(level) = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .filter(|s| s.name.as_str() == "minecraft:light")
+            .and_then(|s| s.properties.get("level"))
+        {
+            patch.insert(
+                "minecraft:block_state".into(),
+                Tag::compound([("level", Tag::String(level.as_str().into()))]),
+            );
+        }
         // AbstractBannerBlock.getCloneItemStack: the banner's own item
         // (BannerBlockEntity.getItem), data or not.
         let banner = matches!(
