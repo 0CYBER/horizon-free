@@ -150,6 +150,123 @@ fn player_uuid() -> [i32; 4] {
         u as u32 as i32,
     ]
 }
+/// `ResolvableProfile.CODEC`: the name, id and properties of a profile, then the
+/// skin's texture ids and model (`PlayerSkin.Patch`: "texture", "cape", "elytra", "model").
+fn profile_nbt(p: &horizon_protocol::entity_data::Profile) -> Tag {
+    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
+    if let Some(name) = &p.name {
+        entries.push(("name", string(name)));
+    }
+    if let Some(id) = p.uuid {
+        entries.push((
+            "id",
+            Tag::IntArray(vec![
+                (id >> 96) as i32,
+                (id >> 64) as i32,
+                (id >> 32) as i32,
+                id as i32,
+            ]),
+        ));
+    }
+    if !p.properties.is_empty() {
+        let properties = p
+            .properties
+            .iter()
+            .map(|property| {
+                let mut entries: Vec<(&'static str, Tag)> = vec![
+                    ("name", string(&property.name)),
+                    ("value", string(&property.value)),
+                ];
+                if let Some(signature) = &property.signature {
+                    entries.push(("signature", string(signature)));
+                }
+                Tag::compound(entries)
+            })
+            .collect();
+        entries.push(("properties", Tag::List(properties)));
+    }
+    for (key, texture) in [
+        ("texture", &p.body),
+        ("cape", &p.cape),
+        ("elytra", &p.elytra),
+    ] {
+        if let Some(texture) = texture {
+            entries.push((key, string(texture)));
+        }
+    }
+    if let Some(slim) = p.slim {
+        entries.push(("model", string(if slim { "slim" } else { "wide" })));
+    }
+    Tag::compound(entries)
+}
+/// `ResolvableProfile.CODEC` read back: the compound `profile_nbt` writes, or a
+/// bare player name (`Codec.withAlternative(FULL_CODEC, PLAYER_NAME, ...)`).
+fn profile_from_nbt(tag: &Tag) -> Option<horizon_protocol::entity_data::Profile> {
+    if let Tag::String(name) = tag {
+        return Some(horizon_protocol::entity_data::Profile {
+            name: Some(name.to_string_lossy()),
+            uuid: None,
+            properties: Vec::new(),
+            body: None,
+            cape: None,
+            elytra: None,
+            slim: None,
+        });
+    }
+    let property = |name: String, value: &Tag, signature: Option<String>| match value {
+        Tag::String(v) => Some(horizon_protocol::packets::login::Property {
+            name,
+            value: v.to_string_lossy(),
+            signature,
+        }),
+        _ => None,
+    };
+    let properties: Vec<horizon_protocol::packets::login::Property> = match tag.get("properties") {
+        // `ExtraCodecs.PROPERTY_MAP`: a list of properties ...
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|p| {
+                let name = match p.get("name")? {
+                    Tag::String(s) => s.to_string_lossy(),
+                    _ => return None,
+                };
+                let signature = match p.get("signature") {
+                    Some(Tag::String(s)) => Some(s.to_string_lossy()),
+                    _ => None,
+                };
+                property(name, p.get("value")?, signature)
+            })
+            .collect(),
+        // ... or a map from a name to its values.
+        Some(Tag::Compound(map)) => map
+            .iter()
+            .flat_map(|(name, values)| match values {
+                Tag::List(values) => values
+                    .iter()
+                    .filter_map(|v| property(name.to_string_lossy(), v, None))
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let text = |key: &str| match tag.get(key) {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()),
+        _ => None,
+    };
+    Some(horizon_protocol::entity_data::Profile {
+        name: text("name"),
+        uuid: uuid_from_tag(tag.get("id")).map(|a| {
+            a.iter()
+                .fold(0u128, |u, &x| (u << 32) | u128::from(x as u32))
+        }),
+        properties,
+        body: text("texture"),
+        cape: text("cape"),
+        elytra: text("elytra"),
+        slim: text("model").map(|model| model == "slim"),
+    })
+}
 pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let base = Base {
         id: &m.kind.id,
@@ -195,6 +312,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         if m.extra.angry_at == Some(crate::mobs::Who::Player) {
             put(&mut tag, "angry_at", Tag::IntArray(player_uuid().to_vec()));
         }
+    }
+    // `Mannequin.addAdditionalSaveData`: the profile whose skin it wears.
+    if m.species() == crate::mobs::Species::Mannequin
+        && let Some(profile) = &m.profile
+    {
+        put(&mut tag, "profile", profile_nbt(profile));
     }
     // `Entity.saveWithoutId` writes the flag only when set.
     if m.name_visible {
@@ -1045,6 +1168,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         {
             m.extra.angry_at = Some(crate::mobs::Who::Player);
         }
+    }
+    // `Mannequin.readAdditionalSaveData`: the profile comes back with the skin.
+    if m.species() == crate::mobs::Species::Mannequin {
+        m.profile = tag.get("profile").and_then(profile_from_nbt);
     }
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
