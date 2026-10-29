@@ -971,6 +971,16 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
             * glam::Mat4::from_rotation_z(PI);
     }
+    // IronGolemRenderer.setupRotations, after LivingEntityRenderer's: the body
+    // tilts side to side while it walks.
+    if m.species() == Species::IronGolem {
+        let s = anim::state(m, alpha);
+        if s.speed >= 0.01 {
+            let wp = s.pos + 6.0;
+            let triangle_wave = ((wp % 13.0 - 6.5).abs() - 3.25) / 3.25;
+            base *= glam::Mat4::from_rotation_z((6.5 * triangle_wave).to_radians());
+        }
+    }
     // AvatarRenderer.setupRotations, after LivingEntityRenderer's.
     if m.extra.fall_flying {
         let ticks = m.extra.fall_fly_ticks as f32 + alpha;
