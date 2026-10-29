@@ -3,7 +3,8 @@ use super::{
     Mob, MobEvent, MobWorld, Species,
     control::Operation,
     goals::{
-        Avoid, AvoidEntity, Breed, Cx, Float, Goal, LookAtPlayer, Panic, Stroll, Tempt, goal_clone,
+        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, LookAtPlayer, Panic,
+        Stroll, Tempt, goal_clone,
     },
 };
 use horizon_core::{
@@ -34,6 +35,7 @@ pub fn register(m: &mut Mob) {
         .collect::<Vec<Species>>();
     let g = &mut m.ai.goals;
     g.add(1, Float);
+    g.add(1, ClimbOnTopOfPowderSnow);
     g.add(1, Panic::new(2.2));
     g.add(2, Breed::new(0.8));
     g.add(3, Tempt::new(1.0, food, false));
