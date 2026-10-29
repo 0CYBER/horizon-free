@@ -586,6 +586,11 @@ impl Game<'_> {
             at.z.floor() as i32,
         );
         let up = BlockPos::new(p.x, top.floor() as i32, p.z);
+        // A server's client has no live biome features to ask: it answers from
+        // the chunks and the weather it was sent.
+        if self.remote.is_some() {
+            return self.raining_at(p) || self.raining_at(up);
+        }
         self.with_level(|b, level, _| b.is_raining_at(level, p) || b.is_raining_at(level, up))
     }
     /// `ConduitBlockEntity.updateAndAttackTarget`: while the conduit hunts
