@@ -4996,6 +4996,12 @@ impl Game<'_> {
                 (result, DryUse::default())
             };
             let reacts = result.consumes_action();
+            // ArmorStandItem.useOn runs in startPrediction before the packet
+            // goes out (the server may spawn the stand at once).
+            let stand_fits = held
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:armor_stand")
+                && self.armor_stand_spawn(&hit).is_some();
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -5047,6 +5053,12 @@ impl Game<'_> {
                         g.using = Some((g.held_slot(), 0));
                     }
                 });
+                return true;
+            } else if stand_fits {
+                // ArmorStandItem.useOn on a client level: SUCCESS once the
+                // stand fits, before the server spawns it. This hand swings
+                // and the click ends.
+                self.with_hand(hand, Game::swing_arm);
                 return true;
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
