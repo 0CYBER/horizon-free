@@ -5399,7 +5399,11 @@ impl Game<'_> {
         if self.with_hand(hand, |g| g.remote_use_book(&held)) {
             return true;
         }
-        self.with_hand(hand, |g| g.remote_start_held_use(&held));
+        // BowItem.use and CrossbowItem.use FAIL with nothing to shoot: no
+        // itemUsed (the hand doesn't dip) and the other hand's turn comes.
+        if !self.with_hand(hand, |g| g.remote_start_held_use(&held)) {
+            return false;
+        }
         let gliding = self.player.as_ref().is_some_and(|p| p.fall_flying);
         use_ends_click(&info, gliding)
     }
@@ -5465,9 +5469,11 @@ impl Game<'_> {
     /// the server ends the use: a bow or a trident is let go, a crossbow's
     /// charge ends, a shield is lowered, a spyglass stops scoping. Their
     /// sounds, loaded arrows and thrown tridents come from the server.
-    fn remote_start_held_use(&mut self, held: &ItemStack) {
+    /// False when the use FAILs here: a bow or an uncharged crossbow with
+    /// nothing to shoot.
+    fn remote_start_held_use(&mut self, held: &ItemStack) -> bool {
         if self.using.is_some() {
-            return;
+            return true;
         }
         let bundle = self.res.items().get(&held.item).is_some_and(|i| i.bundle);
         let start = match &*held.item {
@@ -5478,13 +5484,15 @@ impl Game<'_> {
             // CrossbowItem.use: charging when not charged and with ammunition;
             // a charged one shoots on the server.
             "minecraft:crossbow" => {
-                held.data().is_none_or(|d| d.charged.is_empty())
-                    && (self.creative || self.projectile_slot("minecraft:crossbow").is_some())
+                if held.data().is_some_and(|d| !d.charged.is_empty()) {
+                    return true;
+                }
+                self.creative || self.projectile_slot("minecraft:crossbow").is_some()
             }
             // TridentItem.use: not about to break, Riptide only in water or rain.
             "minecraft:trident" => {
                 self.use_trident(held);
-                return;
+                return true;
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
@@ -5496,12 +5504,13 @@ impl Game<'_> {
             // ShieldItem.use: anything that blocks attacks, off cooldown.
             _ => {
                 self.raise_shield(self.held_slot());
-                return;
+                return true;
             }
         };
         if start {
             self.using = Some((self.held_slot(), 0));
         }
+        start || !matches!(&*held.item, "minecraft:bow" | "minecraft:crossbow")
     }
     /// Whether `stack` stays in use until the button lets go (bows,
     /// crossbows, tridents, spyglasses, shields, eyes of ender, whose
