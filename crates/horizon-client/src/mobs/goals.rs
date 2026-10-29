@@ -1633,6 +1633,18 @@ impl Goal for HurtByTarget {
             let species = m.species();
             let id = m.id;
             let pos = m.position;
+            // TamableAnimal: its owner (`getOwner`, none for a wild one) and
+            // whether it is a pet at all.
+            let tamable = matches!(
+                species,
+                Species::Wolf
+                    | Species::Cat
+                    | Species::Parrot
+                    | Species::Nautilus
+                    | Species::ZombieNautilus
+            );
+            let owner = m.extra.tame.then_some(m.extra.owner).flatten();
+            let player = cx.w.player.as_ref().map(|p| p.uuid);
             let ids: Vec<u32> =
                 cx.w.others
                     .iter()
@@ -1650,6 +1662,18 @@ impl Goal for HurtByTarget {
                     // PolarBearHurtByTargetGoal.alertOther: adults only.
                     .filter(|s| !(self.polar_bear && s.baby))
                     .filter(|s| Who::Mob(s.id) != by)
+                    // HurtByTargetGoal.alertOthers: a pet is only called by a
+                    // pet with the same owner.
+                    .filter(|s| !tamable || s.tame.then_some(s.owner).flatten() == owner)
+                    // TamableAnimal.considersEntityAsAlly: a pet tamed by the
+                    // player who hurt it is allied with them, so it is not called.
+                    .filter(|s| {
+                        !(tamable
+                            && by == Who::Player
+                            && s.tame
+                            && s.owner.is_some()
+                            && s.owner == player)
+                    })
                     .map(|s| s.id)
                     .collect();
             // Bee.BeeHurtByOtherGoal.alertOther: only with the attacker in sight.
