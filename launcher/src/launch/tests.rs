@@ -202,7 +202,8 @@ fn the_post_exit_command_runs_with_the_instance_variables() {
     assert!(after_exit(&Launch::default(), &dir, &[]).is_none());
     let launch = Launch {
         post_exit: if cfg!(windows) {
-            "echo %INST_NAME% %INST_ID% %INST_JAVA% %MINE%> after.txt".into()
+            // The redirection first: `1> after.txt` would redirect stdout and drop the 1.
+            "> after.txt echo %INST_NAME% %INST_ID% %INST_JAVA% %MINE%".into()
         } else {
             "echo \"$INST_NAME $INST_ID $INST_JAVA $MINE\" > after.txt".into()
         },
