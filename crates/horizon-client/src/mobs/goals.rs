@@ -580,10 +580,17 @@ impl Mob {
         let b = self.bounds().inflate(Vec3::new(reach, 0.0, reach));
         b.intersects(t.bounds)
     }
+    /// `IronGolem.canAttack`: a golem a player built never attacks players.
+    pub fn spares_players(&self) -> bool {
+        self.species() == Species::IronGolem && self.extra.player_created
+    }
     /// TargetingConditions.forCombat().test for the player: alive, not
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
+        if self.spares_players() {
+            return false;
+        }
         // TargetingConditions.isCombat: never an ally.
         if p.creative || p.allies.contains(&self.id) {
             return false;
@@ -594,6 +601,9 @@ impl Mob {
     /// a target the mob already has, which ignores the visibility scaling.
     pub fn can_keep_target_player(&mut self, w: &MobWorld, range: f64) -> bool {
         let Some(p) = &w.player else { return false };
+        if self.spares_players() {
+            return false;
+        }
         if p.creative || p.allies.contains(&self.id) {
             return false;
         }
@@ -675,6 +685,9 @@ pub struct Panic {
     pub speed: f64,
     /// Only the damage of `#panic_environmental_causes` (an armadillo).
     pub environmental: bool,
+    /// `TurtlePanicGoal`: always look for water this far away, not only
+    /// when on fire.
+    pub water_range: Option<i32>,
     pos: [f64; 3],
 }
 impl Panic {
@@ -682,8 +695,14 @@ impl Panic {
         Self {
             speed,
             environmental: false,
+            water_range: None,
             pos: [0.0; 3],
         }
+    }
+    /// `TurtlePanicGoal`.
+    pub fn looking_for_water(mut self, range: i32) -> Self {
+        self.water_range = Some(range);
+        self
     }
 }
 pub fn should_panic(m: &Mob) -> bool {
@@ -707,18 +726,19 @@ impl Goal for Panic {
         if !wanted {
             return false;
         }
-        if m.fire_ticks > 0 {
+        let range = self.water_range.or((m.fire_ticks > 0).then_some(5));
+        if let Some(range) = range {
             let (bx, by, bz) = (
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             );
             if cx.w.data.state(cx.w.world.block(bx, by, bz)).top == 0.0 {
-                // findBlocksInBoxByManhattanDistance(pos, 5, 1) for water.
+                // findBlocksInBoxByManhattanDistance(pos, range, 1) for water.
                 let mut best: Option<([i32; 3], i32)> = None;
                 for dy in -1i32..=1 {
-                    for dx in -5i32..=5 {
-                        for dz in -5i32..=5 {
+                    for dx in -range..=range {
+                        for dz in -range..=range {
                             let d = dx.abs() + dy.abs() + dz.abs();
                             if cx.w.fluid(bx + dx, by + dy, bz + dz) == crate::blocks::Fluid::Water
                                 && best.is_none_or(|b| d < b.1)
@@ -763,6 +783,8 @@ pub struct Stroll {
     pub water_avoiding: Option<f32>,
     /// RandomSwimmingGoal: BehaviorUtils.getRandomSwimmablePos.
     pub swim: bool,
+    /// WaterAvoidingRandomFlyingGoal: a hover spot, else an air or water pos.
+    pub flying: bool,
     pub force: bool,
     wanted: [f64; 3],
 }
@@ -774,6 +796,7 @@ impl Stroll {
             check_no_action: true,
             water_avoiding: None,
             swim: false,
+            flying: false,
             force: false,
             wanted: [0.0; 3],
         }
@@ -790,7 +813,10 @@ impl Stroll {
     }
     /// WaterAvoidingRandomFlyingGoal (a nearby air position).
     pub fn flying(speed: f64) -> Self {
-        Self::new(speed)
+        Self {
+            flying: true,
+            ..Self::new(speed)
+        }
     }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
@@ -850,6 +876,21 @@ impl Goal for Stroll {
                     p = m.default_random_pos(cx.w, 10, 7);
                 }
                 p
+            }
+            None if self.flying => {
+                // WaterAvoidingRandomFlyingGoal.getPosition.
+                let [xd, _, zd] = m.view_vector();
+                m.hover_random_pos(
+                    cx.w,
+                    8,
+                    7,
+                    xd,
+                    zd,
+                    f64::from(std::f32::consts::FRAC_PI_2),
+                    3,
+                    1,
+                )
+                .or_else(|| m.air_and_water_random_pos(cx.w, 8, 4, -2, xd, zd))
             }
             None => m.default_random_pos(cx.w, 10, 7),
         };
@@ -1055,6 +1096,8 @@ pub struct MeleeAttack {
     raise_arm: i32,
     /// Ticks between attacks (20 unless set).
     pub interval: i32,
+    /// Ticks between attacks for a baby, when they differ.
+    pub baby_interval: Option<i32>,
 }
 impl MeleeAttack {
     pub fn new(speed: f64, follow_unseen: bool) -> Self {
@@ -1069,6 +1112,7 @@ impl MeleeAttack {
             last_check: 0,
             raise_arm: 0,
             interval: 20,
+            baby_interval: None,
         }
     }
     pub fn zombie(mut self) -> Self {
@@ -1081,6 +1125,12 @@ impl MeleeAttack {
     }
     pub fn interval(mut self, ticks: i32) -> Self {
         self.interval = ticks;
+        self
+    }
+    /// `MeleeAttack.create(adult)` for adults, `create(baby)` for babies.
+    pub fn intervals(mut self, adult: i32, baby: i32) -> Self {
+        self.interval = adult;
+        self.baby_interval = Some(baby);
         self
     }
 }
@@ -1181,7 +1231,11 @@ impl Goal for MeleeAttack {
                 cx,
             );
         } else if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
-            self.until_attack = adjusted(true, self.interval);
+            let interval = match self.baby_interval {
+                Some(baby) if m.is_baby() => baby,
+                _ => self.interval,
+            };
+            self.until_attack = adjusted(true, interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
         }
@@ -1363,7 +1417,7 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
-    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && t.creative {
+    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && (t.creative || m.spares_players()) {
         return false;
     }
     let follow = m.attrs.follow_range * st.follow_scale;
@@ -1554,7 +1608,7 @@ impl Goal for HurtByTarget {
         let Some(t) = cx.w.target_info(by) else {
             return false;
         };
-        t.alive && t.can_be_seen_as_enemy && !(t.is_player && t.creative)
+        t.alive && t.can_be_seen_as_enemy && !(t.is_player && (t.creative || m.spares_players()))
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.bee && !super::bee::angry(m, cx.w) {
@@ -1881,6 +1935,10 @@ impl Goal for Breed {
         // Wolf.canMate: both tame and standing.
         let tamable = matches!(species, Species::Wolf | Species::Cat);
         if tamable && (!m.extra.tame || m.extra.sitting) {
+            return false;
+        }
+        // AbstractHorse.canMate is false and Mule keeps it: mules never breed.
+        if species == Species::Mule {
             return false;
         }
         // TurtleBreedGoal.canUse: not while carrying an egg.

@@ -27,6 +27,17 @@ def method(source, name):
     return source[start:end]
 
 
+def function(source, name):
+    start = source.index(f"pub fn {name}(")
+    opening = source.index("{", start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
 class WorldInputCaptureTests(unittest.TestCase):
     def test_loading_completion_wiring(self):
         game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
@@ -44,6 +55,7 @@ class WorldInputCaptureTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_capture_lifecycle(self):
         source = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        mouse = (ROOT / "crates/horizon-client-input/src/mouse.rs").read_text(encoding="utf-8")
         fixture = r'''
 use std::cell::Cell;
 #[derive(Clone, Copy, PartialEq)]
@@ -86,25 +98,40 @@ impl Window {
 struct Mouse { ignore_first: bool }
 impl Mouse { fn set_ignore_first_move(&mut self) { self.ignore_first = true; } }
 struct Remote;
+#[derive(Default)]
+struct ServerPacks { prompt: Option<()> }
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
     captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
     mining: bool, lan_acting: Option<u32>, renderer: Option<Renderer>, cursor: (f32, f32),
+    server_packs: ServerPacks,
 }
 impl Default for Game {
     fn default() -> Self {
         Self { focused: true, agent_pointer: false, window: Some(Window::default()),
             mouse: Mouse::default(), captured: false, title: None,
             screen: Screen::Playing, remote: None, mining: false, lan_acting: None,
-            renderer: None, cursor: (0.0, 0.0) }
+            renderer: None, cursor: (0.0, 0.0), server_packs: ServerPacks::default() }
     }
 }
+HELPER
 impl Game {
     fn stop_mining(&mut self) { self.mining = false; }
     fn reset_inventory_clicks(&mut self) {}
+    fn dialog_open(&self) -> bool { false }
 METHODS
 }
 fn main() {
+    // The server pack prompt keeps the pointer: nothing grabs it while it is open.
+    {
+        let mut game = Game::default();
+        game.server_packs.prompt = Some(());
+        game.capture(true);
+        assert!(!game.captured);
+        game.server_packs.prompt = None;
+        game.capture(true);
+        assert!(game.captured);
+    }
     // New and existing worlds, returning to title, and reopening a world.
     for remote in [false, true] {
         let mut game = Game::default();
@@ -150,6 +177,7 @@ fn main() {
         assert!(!game.captured); // Focus alone does not resume gameplay.
         game.capture(true); // Click or resume action.
         assert!(game.captured);
+        assert_eq!(game.cursor, (213.5, 120.0)); // The grab puts the mouse at the centre.
     }
     let mut game = Game::default();
     // On a server the chat is ChatScreen (#708): loading never grabs over it.
@@ -183,7 +211,11 @@ fn main() {
     assert!(game.window.as_ref().unwrap().visible.get());
 }
 '''
-        fixture = fixture.replace("METHODS", method(source, "capture") + "\n" +
+        capture = method(source, "capture").replace(
+            "horizon_client::mouse::mouse_position_after_grab_change",
+            "mouse_position_after_grab_change")
+        fixture = fixture.replace("HELPER", function(mouse, "mouse_position_after_grab_change"))
+        fixture = fixture.replace("METHODS", capture + "\n" +
                                   method(source, "capture_loaded_world"))
         with tempfile.TemporaryDirectory(prefix="horizon-input-") as folder:
             folder = Path(folder)

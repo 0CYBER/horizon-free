@@ -251,9 +251,16 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         1
     };
     let mut stack = loot_stack(item?, count as i32);
+    if slot == "body" && m.species() == Species::Wolf {
+        stack.damage = m.extra.body_damage;
+    }
     if let (Some(index), Some(g)) = (index, gear::gear(m)) {
         for (e, l) in &g.slots[index] {
             stack.enchantments.push((e.to_string(), *l as i32));
+        }
+        if let Some((material, pattern)) = &g.trims[index] {
+            let trim = serde_json::json!({ "material": &**material, "pattern": &**pattern });
+            stack.components.push(("minecraft:trim".to_owned(), trim));
         }
     }
     Some(stack)
@@ -288,6 +295,8 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
         }
         "body" if body => {
             m.extra.head = None;
+            m.extra.body_damage = 0;
+            m.extra.body_extra = None;
             return;
         }
         "saddle" => {
@@ -312,6 +321,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         ominous_amplifier: None,
         stew_effects: Vec::new(),
         names: Vec::new(),
+        components: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the
