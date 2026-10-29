@@ -2,7 +2,7 @@
 //! left alone, gold is admired and bartered, piglins and hoglins zombify
 //! outside the Nether, hoglins headbutt their targets into the air.
 use super::{
-    Mob, MobEvent, MobWorld, Species, Who,
+    Mob, MobEvent, MobWorld, Seen, Species, Who,
     anim::{Poses, State},
     brain::{Ttl, living_near},
     goals::{
@@ -62,6 +62,9 @@ pub struct Memories {
     pub avoid: Option<AvoidTarget>,
     /// `RIDE_TARGET`.
     pub ride: Option<RideTarget>,
+    /// A piglin's `HURT_BY` is set: the `HurtBySensor` saw damage taken
+    /// within the last 40 ticks.
+    pub hurt: bool,
     /// A piglin's `NEAREST_VISIBLE_BABY_HOGLIN`.
     pub baby_hoglin: Option<u32>,
     /// `SetEntityLookTargetSometimes.Ticker.ticksUntilNextStart` of
@@ -206,7 +209,12 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
             }
         }
     }
+    // `HurtBySensor.doTick`, on the piglin sensor's schedule: damage is
+    // forgotten 40 ticks after it was taken.
+    let age = i64::from(m.age);
+    let hurt = m.last_damage.as_ref().is_some_and(|(_, at)| age - at <= 40);
     let b = &mut m.extra.piglin;
+    b.hurt = hurt;
     b.piglins = adults.len() as i32;
     b.adults = adults;
     b.hoglins = hoglins;
@@ -283,6 +291,7 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     // The ride activity's behaviours.
     if m.species() == Species::Piglin && m.extra.piglin.activity == Activity::Ride {
         mount(m, cx);
+        dismount_or_skip_mounting(m, cx.w);
     }
     update_activity(m, cx.w, cx.events);
 }
@@ -495,6 +504,44 @@ fn aim_at_ride_target(m: &mut Mob, cx: &mut Cx, at: Vec3) {
     {
         r.aimed = Some(block_of(at));
     }
+}
+/// `PiglinAi.wantsToStopRiding`: a piglin wants off a mob that is not a baby
+/// or not alive any more, when it was hurt recently, or when it is a piglin
+/// that is not riding anything itself. (`wasHurtRecently` of the mob it rides
+/// is `HURT_BY` in that mob's brain, which a hoglin's does not have.)
+fn wants_to_stop_riding(m: &Mob, vehicle: &Seen) -> bool {
+    !vehicle.baby
+        || !vehicle.alive
+        || m.extra.piglin.hurt
+        || vehicle.hurt_recently
+        || (vehicle.species == Species::Piglin && !vehicle.passenger)
+}
+/// `DismountOrSkipMounting.create(8, wantsToStopRiding)`: the vehicle it sits
+/// on, or else the ride target, stays only while it is alive, closer than 8
+/// blocks and the piglin does not want off it; if not, the piglin gets off
+/// and forgets the ride target. A vehicle gone from the level counts as dead.
+fn dismount_or_skip_mounting(m: &mut Mob, w: &MobWorld) {
+    let Some(vehicle) = m.extra.mount.or(m.extra.piglin.ride.map(|r| r.vehicle)) else {
+        return;
+    };
+    let keep = match w.seen(vehicle) {
+        Some(s) => s.alive && m.distance_sqr(s.position) < 64.0 && !wants_to_stop_riding(m, s),
+        None => false,
+    };
+    if keep {
+        return;
+    }
+    dismount(m, w);
+    m.extra.piglin.ride = None;
+}
+/// `LivingEntity.stopRiding`: get off the vehicle, onto the spot
+/// `Animal.getDismountLocationForPassenger` finds beside it.
+fn dismount(m: &mut Mob, w: &MobWorld) {
+    let Some(vehicle) = m.extra.mount else { return };
+    let at = w
+        .seen(vehicle)
+        .map(|s| super::riders::dismount_location(w, s, m.width(), m.height()));
+    super::riders::stop_riding(m, at);
 }
 /// `HoglinAi.piglinsOutnumberHoglins`: an adult hoglin counts itself and
 /// sees more adult piglins than hoglins.
