@@ -24,6 +24,8 @@ horizon-threads = { path = "../horizon-threads" }
 horizon-world = { path = "../horizon-world" }
 ab_glyph = "0.2.32"
 bytemuck = { version = "1.24", features = ["derive"] }
+# Sound (ALSA on Linux); the `audio` feature.
+cpal = { version = "0.16", optional = true }
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 glam = "0.30"
@@ -35,6 +37,7 @@ pollster = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 sha2 = "0.10.9"
+symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 unicode-bidi = "0.3.18"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
@@ -51,6 +54,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
+# Sound output: horizon-client's `audio` feature.
+audio = ["dep:cpal"]
 # Helpers horizon-client's tests build their fixtures with.
 test-support = []
 

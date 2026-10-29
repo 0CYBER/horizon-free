@@ -6,20 +6,19 @@ pub mod ambience;
 pub mod animate_tick;
 pub mod arrows;
 pub use horizon_client_render::{
-    assets, atlas_sources, auth, bidi, biome, block_entities, block_entity_anim,
+    assets, atlas_sources, audio, auth, bidi, biome, block_entities, block_entity_anim,
     block_entity_render, border_render, breaking, brewing, camera, chat, chunk, chunk_map, clouds,
-    collisions, command_block, containers, crash, dynamic_light, effects, environment, extras,
+    collisions, command_block, containers, crash, datapack, dynamic_light, effects, environment, extras,
     fast_hash, fog, font, gfx, graphics, graphics_style, graphics_ui, hud, hud_layout,
     hud_overlays, inventory_effects, java_text, level_loading, light, lod, logging, menu_blur,
     mesher, minimap, mipmap, mod_list, model_library, models, options_file, options_fixes,
     options_ui, overlay, pack_screen, packs, par, particles, poi_sections, providers, screen_draw,
-    screen_effects, sculk, settings, shader_pack_list, signs, skins, sound_events, spans, sprites,
+    screen_effects, sculk, settings, shader_pack_list, signs, skins, sound_engine, sound_events, spans, sprites,
     streaming, tab_list, telemetry, testgen, title_edition, trims, ui, vault, weather, widgets,
     world, worldborder, zip,
 };
 pub mod attack_strength;
 pub mod attribute_updates;
-pub mod audio;
 pub mod auto_jump;
 pub mod banner;
 pub mod beehive;
@@ -37,7 +36,6 @@ pub mod crafting;
 pub mod creative;
 pub mod cushion;
 pub mod data_cmd;
-pub mod datapack;
 pub mod debug_chart;
 pub mod debug_keys;
 pub mod debug_overlay;
@@ -101,7 +99,6 @@ pub mod screen_layout;
 pub use horizon_server_files as server;
 pub mod server_packs;
 pub mod shadows;
-pub mod sound_engine;
 pub mod spear;
 pub mod spectator_menu;
 pub mod sprint;

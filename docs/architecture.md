@@ -52,7 +52,7 @@ file selects ~103.
 | 33 | Protocol and packets (44) | `crates/horizon-protocol/src/` (`packets/play.rs`, `entity_data.rs`, `connection.rs`) | dedicated_server, online_mode, secure_chat; `cargo test -p horizon-protocol` |
 | 34 | Multiplayer and LAN screens, friends (44) | `L/multiplayer.rs`, `G/lan_screen.rs`, `G/friends.rs`, `L/friends_screen.rs`, `crates/horizon-friends/`, `crates/horizon-relay/` | lan, world_options; `python3 tools/test_friends.py` |
 | 35 | Dispensers (43) | `G/dispenser.rs`, `G/dispense_fixture.rs` (the harness side) | dispenser |
-| 36 | Audio and music (38) | `L/audio.rs`, `L/sound_engine.rs`, `R/sound_events.rs`, `L/music.rs`, `G/music.rs`, `L/ambience.rs`, `G/subtitle_hud.rs` | sound_engine, sound_event, music, situational_music, ambient_sound, subtitle |
+| 36 | Audio and music (38) | `R/audio.rs`, `R/sound_engine.rs`, `R/sound_events.rs`, `L/music.rs`, `G/music.rs`, `L/ambience.rs`, `G/subtitle_hud.rs` | sound_engine, sound_event, music, situational_music, ambient_sound, subtitle |
 | 37 | Integrated server and levels (34) | `G/integrated.rs`, `G/levels.rs`, `G/server_travel.rs` | server_dimension_players, `lan_e2e` (server-thread by default; portals, levels, distance, lava) |
 | 38 | Command parsing (34) | `C/` (`args.rs`, `selector.rs`, `tree_*.rs`, `vanilla.rs`); `cargo test -p horizon-command` | command_parse (corpus `tools/command_parse_corpus.py`) |
 | 39 | Benchmarks and telemetry (34) | `L/benchmark.rs`, `tools/perf_bench.py`, `R/telemetry.rs`, `crates/horizon-telemetry*/`, `crates/horizon-bench/` | `python3 -m unittest tests.test_perf_bench`; [benchmark.md](benchmark.md) |
