@@ -401,6 +401,9 @@ impl<'a> Plan<'a> {
                 });
             }
         }
+        // Block items and standalone items share the same registry. Sort
+        // them together by mod ID and entry name before assigning IDs.
+        items.sort_by(|a, b| a.rename.to.cmp(&b.rename.to));
         Ok(Plan {
             blocks,
             items,
