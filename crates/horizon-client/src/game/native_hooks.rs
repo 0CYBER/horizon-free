@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 6 adds neighbour-change observations (`native_neighbor_changed`).
+//!
 //! API 5 adds read-only server block queries (`native_server_block`).
 //!
 //! API 4 adds authoritative server tick hooks (`native_server_tick`).
@@ -26,7 +28,10 @@
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
 use super::native_lifecycle::{NativeLifecycleContext, ServerTickPhase, WorldPhase};
-use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use super::{
+    Game, GameLevel, LevelDimension, Screen, execution_role::ExecutionRole,
+    native_panel_recipes::RecipePage,
+};
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -36,13 +41,31 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_core::position::BlockPos;
+use horizon_world::{level::BlockId, registry::BlockStateId};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 5;
+pub(crate) const NATIVE_HOOKS_API: u32 = 6;
+
+impl GameLevel<'_> {
+    /// An authoritative server is about to deliver `neighborChanged`.
+    /// State and block IDs are valid in this level's registries for this call.
+    #[inline(always)]
+    pub(super) fn native_neighbor_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+        moved: bool,
+    ) {
+        let _ = (dimension, pos, state, changed, moved);
+    }
+}
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -706,8 +729,25 @@ mod tests {
             .split("/// Helpers for native mods")
             .next()
             .unwrap();
+        let level_section = source
+            .split("impl GameLevel<'_> {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        let level_hooks: BTreeSet<_> = level_section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
         let declared: BTreeSet<_> = section
             .lines()
+            .chain(level_section.lines())
             .filter_map(|line| {
                 line.trim()
                     .strip_prefix("pub(super) fn native_")?
@@ -725,9 +765,14 @@ mod tests {
                 "invalid or duplicate hook: {name} v{version}"
             );
             names.insert(name);
+            let owner = if level_hooks.contains(name) {
+                "GameLevel"
+            } else {
+                "Game"
+            };
             assert_eq!(
                 hook["target"].as_str().unwrap(),
-                format!("horizon_client::game::native_hooks::Game<'_>::native_{name}")
+                format!("horizon_client::game::native_hooks::{owner}<'_>::native_{name}")
             );
         }
         assert_eq!(names, declared);

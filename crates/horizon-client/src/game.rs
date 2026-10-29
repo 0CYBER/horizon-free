@@ -685,6 +685,8 @@ struct GameLevel<'w> {
     /// `Level.isClientSide`: a client's copy of the level (a guest of a LAN
     /// world, a window on its server thread, a dedicated server's client).
     client_side: bool,
+    /// Only the integrated or dedicated server dispatches native observations.
+    native_authoritative: bool,
 }
 struct PlayerCollision {
     y: f64,
@@ -871,6 +873,17 @@ impl GameLevel<'_> {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn observe_neighbor_changed(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: horizon_world::level::BlockId,
+        moved: bool,
+    ) {
+        if self.native_authoritative {
+            self.native_neighbor_changed(self.dimension, pos, state, changed, moved);
+        }
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
@@ -3184,6 +3197,7 @@ impl Game<'_> {
             random_tick_sections: &mut self.random_tick_sections,
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
+            native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
