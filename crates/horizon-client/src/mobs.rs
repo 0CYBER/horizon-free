@@ -1185,6 +1185,12 @@ pub enum MobEvent {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
     },
+    /// `LivingEntity.startSleeping` / `stopSleeping`: the bed head at `pos`
+    /// gets `occupied` (`setBlockAndUpdate`; the foot follows it).
+    BedOccupied {
+        pos: [i32; 3],
+        occupied: bool,
+    },
     /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
     /// closes, both halves, with its sound and game event.
     SetDoorOpen {

@@ -8,6 +8,7 @@ mod allays;
 mod armor_stands;
 mod banners;
 mod beacon;
+mod beds;
 mod beehives;
 mod block_entity_anims;
 mod block_entity_ticks;
@@ -1673,6 +1674,9 @@ struct Game<'a> {
     /// The head of the bed while sleeping; the visual timer also survives waking.
     sleeping: Option<[i32; 3]>,
     sleep_timer: u32,
+    /// The beds players sleep in that this game marked `occupied`, by level
+    /// (game/beds.rs).
+    player_beds: Vec<(Dim, [i32; 3])>,
     /// `SleepStatus`'s active and sleeping players at the last announcement.
     sleep_seen: (i64, i64),
     dim: Dim,
@@ -5609,6 +5613,7 @@ impl Game<'_> {
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
         self.announce_sleep_status();
+        self.free_left_beds();
         horizon_client::spans::time("tick_portal", || self.tick_nether_portal())?;
         if running {
             horizon_client::spans::time("tick_end", || self.tick_end())?;
@@ -8065,7 +8070,7 @@ impl Game<'_> {
                 );
             }
         }
-        if !self.camera_type.first_person()
+        if self.own_body_in_view()
             && let Some(p) = &self.player
             && p.fire_ticks > 0
             && !p.spectator
@@ -8145,7 +8150,7 @@ impl Game<'_> {
         // Mobs and their projectiles (a span each).
         self.mob_geometry(camera, alpha, &mut out);
         // In first person only a shader pack's shadow pass draws the player.
-        self.mark_player(out.len(), self.camera_type.first_person());
+        self.mark_player(out.len(), !self.own_body_in_view());
         self.player_model_geometry(camera, self.clock.camera_fraction(), &mut out);
         self.mark_entity(out.len(), "minecraft:player");
         self.guest_model_geometry(camera, alpha, &mut out);
@@ -9220,6 +9225,7 @@ impl Game<'_> {
         self.player = None;
         self.sleeping = None;
         self.sleep_timer = 0;
+        self.player_beds.clear();
         self.spawn = None;
         self.respawn_travel = None;
         self.respawn_config = self
@@ -9516,6 +9522,7 @@ impl Game<'_> {
             self.stats.custom("leave_game", 1);
         }
         self.lan_close(false);
+        self.free_player_beds()?;
         self.save_game()?;
         if let Some(mut remote) = self.remote.take() {
             // Minecraft.disconnect closes the connection, so the host sees a clean leave.
@@ -9548,6 +9555,7 @@ impl Game<'_> {
         self.player = None;
         self.sleeping = None;
         self.sleep_timer = 0;
+        self.player_beds.clear();
         self.clear_entities();
         self.screen = Screen::Playing;
         self.clear_lod();
@@ -11042,6 +11050,22 @@ impl Game<'_> {
         } else {
             (pos, [pos[0] - d[0], pos[1], pos[2] - d[2]])
         };
+        // AbstractBedBlock.useWithoutItem: in an occupied bed a villager
+        // asleep there is woken (kickVillagerOutOfBed), else someone else
+        // sleeps in it; the player stays up either way.
+        let head_state = self.world.block(head[0], head[1], head[2]);
+        let occupied = self
+            .pack
+            .assets
+            .registry
+            .state(head_state)
+            .is_some_and(|s| s.properties.get("occupied").is_some_and(|v| v == "true"));
+        if occupied {
+            if !self.kick_villager_out_of_bed(head) {
+                self.tell_sleeper("block.minecraft.bed.occupied", "This bed is occupied", true);
+            }
+            return;
+        }
         // ServerPlayer.bedInRange / isReachableBedBlock: within 3 blocks
         // sideways and 2 vertically of the head or the foot.
         let reachable = |bed: [i32; 3]| {
@@ -11146,6 +11170,7 @@ impl Game<'_> {
         self.using = None;
         self.sleeping = Some(head);
         self.sleep_timer = 0;
+        self.occupy_bed(head);
         self.stats.custom("sleep_in_bed", 1);
         self.trigger_player("minecraft:slept_in_bed");
         self.stats.reset("custom", "minecraft:time_since_rest");
@@ -11162,9 +11187,14 @@ impl Game<'_> {
     fn tick_sleep(&mut self) {
         self.sleep_timer = tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         if let Some(head) = self.sleeping {
+            // LivingEntity.tick's checkBedExists: a sleeper whose bed is
+            // gone gets up.
+            let bed = self.world.block(head[0], head[1], head[2]);
+            let bed_gone = !self.res.facts().get(bed).name.ends_with("_bed");
             // Vanilla has no Shift wake-up: the chat screen's capitals must
             // not get the sleeper up.
             if (self.screen != Screen::Chat && self.keys.contains(&KeyCode::ShiftLeft))
+                || bed_gone
                 || self
                     .player
                     .as_ref()
@@ -14042,6 +14072,7 @@ impl<'a> Game<'a> {
             lightning_seen: [0; 2],
             sleeping: None,
             sleep_timer: 0,
+            player_beds: Vec::new(),
             sleep_seen: (0, 0),
             dim: Dim::Overworld,
             world_root: PathBuf::new(),

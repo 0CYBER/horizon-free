@@ -797,6 +797,12 @@ impl Game<'_> {
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
+        // LivingEntity.die: a sleeper gets up, and its bed is free again.
+        if let Some(bed) = horizon_client::mobs::villager::sleeping_pos(m) {
+            self.wake_villager(m.id);
+            // The body may be gone already.
+            self.set_bed_occupied(bed, false);
+        }
         let killer = self.last_hurt_by_player.remove(&m.id);
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
@@ -1473,6 +1479,7 @@ impl Game<'_> {
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
                 // above trampled farmland breaks and drops.
                 MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,
+                MobEvent::BedOccupied { pos, occupied } => self.set_bed_occupied(pos, occupied),
                 MobEvent::SetDoorOpen { pos, open } => {
                     let pos = BlockPos::new(pos[0], pos[1], pos[2]);
                     self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
