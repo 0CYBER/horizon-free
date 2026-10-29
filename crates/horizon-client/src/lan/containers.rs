@@ -604,6 +604,8 @@ impl Hub {
                 .chain([&c.triggered])
                 .map(|&d| i32::from(d))
                 .collect(),
+            // A mod's menu: the data slots its tick set.
+            Some(BlockEntity::Mod(m)) if !m.data.is_empty() => m.data.clone(),
             _ => return,
         }
         .into_iter()

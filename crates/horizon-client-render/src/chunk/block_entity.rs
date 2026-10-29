@@ -85,13 +85,16 @@ pub enum BlockEntity {
     Mod(Box<ModBlockEntity>),
 }
 /// A mod's block entity: its type id (`mymod:machine`), its saved
-/// compound without `id`, `x`, `y`, `z` and `Items`, and its item slots
-/// (`Items`) when its block has a container (`ModContainer`).
+/// compound without `id`, `x`, `y`, `z` and `Items`, its item slots
+/// (`Items`) when its block has a container (`ModContainer`), and the data
+/// slots its menu shows (`ContainerData`: a furnace menu's flame and arrow),
+/// which the mod sets and nothing saves.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModBlockEntity {
     pub id: String,
     pub nbt: Compound,
     pub items: Vec<Option<ItemStack>>,
+    pub data: Vec<i32>,
 }
 /// The container of a mod block's block entity, as a `WorldlyContainer`
 /// says it: its slot count, the slots each face reaches
@@ -108,8 +111,13 @@ pub struct ModContainer {
     pub menu: Option<String>,
 }
 /// The vanilla menus a mod container can open, with the slot count each
-/// shows: plain slot grids, whose clicks need nothing of the block entity.
-pub const MOD_MENUS: [(&str, usize); 8] = [
+/// shows: slot grids, and the furnaces' (input, fuel, result), whose four
+/// data slots draw the flame (`data[0]` of `data[1]`) and the arrow
+/// (`data[2]` of `data[3]`), as `AbstractFurnaceBlockEntity.dataAccess`.
+pub const MOD_MENUS: [(&str, usize); 11] = [
+    ("minecraft:furnace", 3),
+    ("minecraft:blast_furnace", 3),
+    ("minecraft:smoker", 3),
     ("minecraft:hopper", 5),
     ("minecraft:generic_3x3", 9),
     ("minecraft:generic_9x1", 9),

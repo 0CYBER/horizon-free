@@ -34,7 +34,6 @@ use horizon_client::{
     extras_hud::Corners,
     fast_hash::FxHashMap,
     hud::{HudBatch, rgba},
-    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
     text::Text,
@@ -362,20 +361,17 @@ impl Game<'_> {
     ) {
         let _ = (block, container);
     }
-    /// A server tick of block entity `id` at `pos`, in vanilla's order among
-    /// the others (`Level.tickBlockEntities`): read and change its saved
-    /// compound `nbt` and its item `slots` (none without a container). It is out of the world during the call (the block
-    /// entity at `pos` reads as a `Mod` with an empty id, and a save leaves
-    /// it out); if the call removes or replaces it, `nbt` is dropped. Clients,
-    /// the window's own in single player included, don't get it yet. API 3.
-    pub(super) fn native_block_entity_tick(
-        &mut self,
-        pos: [i32; 3],
-        id: &str,
-        nbt: &mut Compound,
-        slots: &mut [Option<ItemStack>],
-    ) {
-        let _ = (pos, id, nbt, slots);
+    /// A server tick of the block entity at `pos`, in vanilla's order among
+    /// the others (`Level.tickBlockEntities`), when its `id` is yours: read
+    /// and change its saved compound `nbt`, its item slots `items` (keep
+    /// their count: as many as its container has, none without one) and the
+    /// data slots its menu shows (`data`). It is out of the world during the
+    /// call (the block entity at `pos` reads as a `Mod` with an empty id, and
+    /// a save leaves it out); if the call removes or replaces it, `entity` is
+    /// dropped. Clients, the window's own in single player included, don't
+    /// get it yet. API 3.
+    pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], entity: &mut ModBlockEntity) {
+        let _ = (pos, entity);
     }
 }
 
@@ -569,11 +565,10 @@ impl Game<'_> {
         let mut entity = None;
         self.native_block_entity(name, &mut entity);
         let (id, nbt) = entity?;
-        let items = Vec::new();
         Some(BlockEntity::Mod(Box::new(ModBlockEntity {
             id,
             nbt,
-            items,
+            ..ModBlockEntity::default()
         })))
     }
     /// The containers of the mod blocks' block entities, by block state
@@ -658,8 +653,7 @@ impl Game<'_> {
         if taken.items.len() < slots {
             taken.items.resize(slots, None);
         }
-        let ModBlockEntity { id, nbt, items } = &mut taken;
-        self.native_block_entity_tick([pos.0, pos.1, pos.2], id, nbt, items);
+        self.native_block_entity_tick([pos.0, pos.1, pos.2], &mut taken);
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
             && m.id.is_empty()
         {
@@ -861,13 +855,15 @@ mod tests {
         assert_eq!(names, declared);
     }
 
-    /// A mod container opens only a plain slot grid, by its slot count.
+    /// A mod container opens a slot grid or a furnace's menu, by its slot
+    /// count; no menu with rules of its own (a brewing stand's, a crafter's).
     #[test]
-    fn mod_menus_are_plain_slot_grids() {
+    fn mod_menus_are_slot_grids_and_furnaces() {
         use super::mod_menu;
         assert_eq!(mod_menu("minecraft:hopper"), Some(("minecraft:hopper", 5)));
         assert_eq!(mod_menu("minecraft:generic_9x3").map(|m| m.1), Some(27));
-        assert_eq!(mod_menu("minecraft:furnace"), None);
+        assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
+        assert_eq!(mod_menu("minecraft:brewing_stand"), None);
         assert_eq!(mod_menu("hopper"), None);
     }
 
