@@ -1359,6 +1359,25 @@ impl Game<'_> {
             host.settings.force_game_mode = force;
             host.hub.config.guest_commands = effective;
             host.hub.config.force_game_mode = force;
+            // MinecraftServer.enforceGameTypeForPlayers: the guests online
+            // take the default mode (`setGameMode` does nothing when it is
+            // already theirs). A world open to LAN is an IntegratedServer,
+            // whose `updateGameModeBasedOnPermission` leaves out the players
+            // who have game master permission; a dedicated server does not.
+            if force {
+                let mode = host.hub.config.default_game_mode;
+                let spares_operators = !host.hub.config.dedicated || host.hub.config.integrated;
+                let stale: Vec<u32> = host
+                    .hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.game_mode != mode && !(spares_operators && g.permission >= 2))
+                    .map(|g| g.conn)
+                    .collect();
+                for conn in stale {
+                    host.hub.set_game_mode(conn, mode);
+                }
+            }
             host.hub.resend_commands();
         }
     }
