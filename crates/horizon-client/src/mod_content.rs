@@ -698,6 +698,29 @@ const WORLDGEN_BUNDLES: [(&str, &str); 6] = [
     ("placed_feature", "worldgen/placed_features.json"),
 ];
 
+/// The registry of `command-registries.json` that each bundle's ids join,
+/// for the commands that suggest them (`/locate`, `/place`).
+const COMMAND_REGISTRIES: [(&str, &str); 6] = [
+    ("worldgen/structures.json", "minecraft:worldgen/structure"),
+    (
+        "worldgen/structure_sets.json",
+        "minecraft:worldgen/structure_set",
+    ),
+    (
+        "worldgen/template_pools.json",
+        "minecraft:worldgen/template_pool",
+    ),
+    (
+        "worldgen/processor_lists.json",
+        "minecraft:worldgen/processor_list",
+    ),
+    ("worldgen/features.json", "minecraft:worldgen/feature"),
+    (
+        "worldgen/placed_features.json",
+        "minecraft:worldgen/placed_feature",
+    ),
+];
+
 /// A mod file that adds to a worldgen bundle: (bundle, id).
 fn worldgen_entry(file: &str) -> Option<(&'static str, String)> {
     let (ns, rest) = file.strip_prefix("data/")?.split_once("/worldgen/")?;
@@ -837,6 +860,9 @@ impl Overlay<'_> {
         fs::write(path, bytes)?;
         Ok(())
     }
+}
+fn out_path(overlay: &Overlay<'_>, rel: &str) -> PathBuf {
+    overlay.out.join(rel)
 }
 #[cfg(unix)]
 fn link(target: &Path, at: &Path) -> std::io::Result<()> {
@@ -1090,6 +1116,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
     let mut warnings = Vec::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
+    let mut templates: Vec<J> = Vec::new();
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
         let mut reader = m.content.reader()?;
@@ -1122,6 +1149,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
                 {
                     // The worldgen loader's templates: worldgen/structure/<ns>/<path>.nbt.
                     let (ns, path) = template;
+                    templates.push(J::Str(format!("{ns}:{}", path.trim_end_matches(".nbt"))));
                     overlay.write(&format!("worldgen/structure/{ns}/{path}"), &bytes)?;
                 }
             }
@@ -1207,6 +1235,33 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
                 .map_err(|e| format!("{bundle}: {e}"))?;
         }
         overlay.write(bundle, &serde_json::to_vec(&doc)?)?;
+    }
+    // The commands suggest ids from `command-registries.json`: add the
+    // structures, pools, sets and templates the mods bring.
+    let registries = out_path(&overlay, "command-registries.json");
+    if let Ok(mut doc) = read_json(&registries) {
+        // Registry names hold `/`, so each key is looked up by itself.
+        let mut add = |keys: &[&str], new: &[J]| {
+            let found = keys.iter().try_fold(&mut doc, |j, k| j.get_mut(k));
+            if let Some(J::Arr(ids)) = found {
+                for id in new {
+                    if !ids.contains(id) {
+                        ids.push(id.clone());
+                    }
+                }
+            }
+        };
+        for (bundle, registry) in COMMAND_REGISTRIES {
+            let new: Vec<J> = worldgen
+                .get(bundle)
+                .into_iter()
+                .flatten()
+                .map(|(id, _)| J::Str(id.clone()))
+                .collect();
+            add(&["by_registry", registry, "ids"], &new);
+        }
+        add(&["templates"], &templates);
+        overlay.write("command-registries.json", &serde_json::to_vec(&doc)?)?;
     }
     // A block without its own blockstate looks like its template, so every
     // state still has a model.
