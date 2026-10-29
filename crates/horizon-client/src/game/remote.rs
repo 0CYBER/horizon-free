@@ -325,7 +325,9 @@ impl Game<'_> {
                     &self.options.resources,
                 ));
             }
+            let skip = self.settings.file.bool("skipMultiplayerWarning");
             if let Some(title) = &mut self.title {
+                title.skip_multiplayer_warning = skip;
                 title.failed(error);
             }
             self.capture(false);
@@ -556,6 +558,8 @@ impl Game<'_> {
         self.titles.overlay_time = 0;
         // GameRenderer.resetData (Minecraft.disconnect).
         self.item_activation.reset();
+        // A world is leaving either way: its icon attempt goes with it.
+        self.world_icon = None;
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -608,6 +612,7 @@ impl Game<'_> {
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
         title.last_server = self.settings.file.string("lastServer");
+        title.skip_multiplayer_warning = self.settings.file.bool("skipMultiplayerWarning");
         if single_player && reason.is_none() {
             self.title = Some(title);
             self.capture(false);
@@ -1012,7 +1017,12 @@ impl Game<'_> {
         if self.remote.is_none() {
             return;
         }
-        let Some((id, command)) = self.ui.chat_screen.as_mut().and_then(|s| s.take_request())
+        let Some((id, command)) = self
+            .ui
+            .chat_screen
+            .as_mut()
+            .and_then(|s| s.take_request())
+            .or_else(|| self.command_block_suggestion_request())
         else {
             return;
         };
@@ -1052,7 +1062,8 @@ impl Game<'_> {
         })();
         if let Ok((id, start, length, list)) = decoded {
             let range = (start.max(0) as usize, length.max(0) as usize);
-            self.chat_server_suggestions(id, range, list);
+            self.chat_server_suggestions(id, range, list.clone());
+            self.command_block_server_suggestions(id, range, list);
         }
     }
     fn set_registries(&mut self, registries: Arc<Dynamic>) {
@@ -1247,10 +1258,15 @@ impl Game<'_> {
                 }
                 _ => {}
             }
+            let command_block = matches!(loaded, BlockEntity::CommandBlock(_));
             self.world.block_entities.insert(key, loaded);
+            self.update_spawner_display(key);
             // The section is drawn again with what the block entity shows.
             let state = self.world.block(pos[0], pos[1], pos[2]);
             let _ = self.world.set(pos[0], pos[1], pos[2], state);
+            if command_block {
+                self.command_block_data_arrived(key);
+            }
         }
     }
     /// `handleAnimate`: a player wakes up, or an entity gets the critical
@@ -3802,6 +3818,7 @@ impl Game<'_> {
         // and the moving pistons a block event's client-side moveBlocks made
         // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.tick_remote_spawners();
         self.client_tick_beacons();
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
@@ -3820,6 +3837,7 @@ impl Game<'_> {
         self.tick_subtitles();
         let entity_collisions = self.player_entity_collisions();
         let pushed = self.remote_pushes();
+        let sprint_window = self.settings.sprint_window;
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -3918,7 +3936,7 @@ impl Game<'_> {
                 collision_binding: self.collision,
                 resources: self.motion,
             }
-            .controlled_simulation_tick(keys)?;
+            .controlled_simulation_tick_with_sprint_window(keys, sprint_window)?;
         } else {
             // LivingEntity.baseTick counts hurtTime down for a dead or riding
             // player too (controlled_simulation_tick does it otherwise): left
@@ -5883,22 +5901,23 @@ impl Game<'_> {
             .iter()
             .map(|&(slot, button, input)| (slot, button, input, Vec::new(), self.carried.clone()))
             .collect();
+        let mut threw = false;
         // The engine's slot indices are the menu's own, as on the network.
         self.menu_session(|m, env, _| {
-            let mut predicted = Vec::with_capacity(clicks.len());
-            for &(slot, button, input) in &clicks {
-                let before = menu_items(m);
-                if m.click(env, i32::from(slot), button, input).is_err() {
-                    // The server throws on it too: nothing is predicted.
-                    return Some(false);
-                }
-                let changed = changed_slots(&before, m);
-                predicted.push((slot, button, input, changed, m.carried.clone()));
-            }
+            let Some((predicted, dropped)) = predict_clicks(m, env, &clicks) else {
+                // The server throws on it too: nothing is predicted.
+                return Some(false);
+            };
             sent = predicted;
+            threw = dropped;
             Some(true)
         });
         self.send_clicks(container, sent);
+        // LivingEntity.drop(.., Prediction.PREDICTED): the client swings its own
+        // main hand; the server shows the swing only to the other players.
+        if threw {
+            self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
+        }
         true
     }
     /// A Shift double click on a server (`AbstractContainerScreen.mouseReleased`):
@@ -6447,8 +6466,9 @@ impl Game<'_> {
                 .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).
             "player_model": self.player_model.is_some(),
-            // The world view draws it now (third person, or lying in a bed).
-            "own_body": self.player_model_shown(),
+            // The world view draws its body now (third person, or lying in a bed;
+            // not while invisible).
+            "own_body": self.player_model_shown() && self.own_body_visible(),
             "text_display_vertices": self.text_display_vertices,
             "text_displays": self.text_displays.len(),
             "health": r.health.0,
@@ -6548,6 +6568,30 @@ fn creative_sync_slot(i: usize) -> i16 {
         37.. => 5 + (i - 37),
         _ => i,
     }) as i16
+}
+
+/// `MultiPlayerGameMode.handleContainerInput` for each click on the engine's
+/// copy of the menu: the click with the slots it changed and the carried
+/// stack after it, and whether a click dropped a stack. Every drop of
+/// `AbstractContainerMenu.doClick` (a THROW, a click outside the window, a
+/// swap or a result move with no room left) is `Prediction.PREDICTED`.
+/// None when the engine refuses a click.
+fn predict_clicks(
+    m: &mut horizon_client::menu::Menu,
+    env: &horizon_client::menu::Env,
+    clicks: &[(i16, i32, Input)],
+) -> Option<(Vec<Predicted>, bool)> {
+    let mut predicted = Vec::with_capacity(clicks.len());
+    let mut dropped = false;
+    for &(slot, button, input) in clicks {
+        let before = menu_items(m);
+        let thrown = m.dropped.len();
+        m.click(env, i32::from(slot), button, input).ok()?;
+        dropped |= m.dropped.len() > thrown;
+        let changed = changed_slots(&before, m);
+        predicted.push((slot, button, input, changed, m.carried.clone()));
+    }
+    Some((predicted, dropped))
 }
 
 fn menu_items(m: &horizon_client::menu::Menu) -> Vec<Option<ItemStack>> {
@@ -6844,6 +6888,66 @@ impl Remote {
 #[cfg(test)]
 mod tests {
     use super::Game;
+
+    /// Q over a slot of the inventory on a server (#3357): the predicted THROW
+    /// drops the stack, so the player's hand swings, as `LivingEntity.drop`
+    /// does for `Prediction.PREDICTED`; a plain pick up drops nothing.
+    #[test]
+    fn a_predicted_throw_from_a_slot_swings_the_hand() {
+        use horizon_client::{
+            banner::Banners,
+            brewing::Brewing,
+            crafting::Recipes,
+            creative::Names,
+            enchant::Enchantments,
+            items::{ItemStack, Items},
+            menu::{Env, Input, Kind, Menu},
+            stations::StationRecipes,
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let items = Items::catalog(&root).unwrap();
+        let recipes = Recipes::load(&root, &items).unwrap();
+        let brewing = Brewing::load(&root, &items);
+        let banners = Banners::load(&root);
+        let station_recipes = StationRecipes::load(&root, &items);
+        let enchantments = Enchantments::default();
+        let names = Names::default();
+        let env = Env {
+            items: &items,
+            recipes: &recipes,
+            brewing: &brewing,
+            banners: &banners,
+            station_recipes: &station_recipes,
+            enchantments: &enchantments,
+            names: &names,
+            trade: None,
+            maps: None,
+        };
+        let mut menu = Menu::new(Kind::Inventory);
+        let cobblestone = ItemStack {
+            item: "minecraft:cobblestone".into(),
+            count: 16,
+            damage: 0,
+            extra: None,
+        };
+        // The first hotbar slot of InventoryMenu.
+        menu.set_slot(&env, 36, Some(cobblestone));
+        let (sent, threw) =
+            super::predict_clicks(&mut menu, &env, &[(36, 0, Input::Throw)]).unwrap();
+        assert!(threw, "Q over a slot drops one and swings");
+        assert_eq!(menu.slot(36).map(|s| s.count), Some(15));
+        assert_eq!(sent.len(), 1);
+        let (_, threw) = super::predict_clicks(&mut menu, &env, &[(36, 0, Input::Pickup)]).unwrap();
+        assert!(!threw, "picking the stack up drops nothing");
+        let (_, threw) =
+            super::predict_clicks(&mut menu, &env, &[(-999, 1, Input::Pickup)]).unwrap();
+        assert!(threw, "one of the carried stack outside the window");
+    }
 
     #[test]
     fn placement_preview_checks_obstruction_without_changing_the_level() {
