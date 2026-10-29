@@ -310,12 +310,19 @@ impl Game<'_> {
             None => (0, None),
         };
         let count = Self::int(ctx, "count").unwrap_or(1).max(1) as u32;
-        Ok(Some(ItemStack {
+        let stack = ItemStack {
             item: id.as_str().into(),
             count,
             damage,
             extra,
-        }))
+        };
+        // ItemInput.createItemStack: a count above the stack's max (its
+        // max_stack_size component, else the item's) is refused.
+        let max_stack = self.stack_max_size(&stack);
+        if count > max_stack {
+            return Err(err("arguments.item.overstacked", &[&id, &max_stack]));
+        }
+        Ok(Some(stack))
     }
     /// One item modifier (a typed object, a list or a datapack reference)
     /// applied to a stack; `None` when the stack ends up empty.
