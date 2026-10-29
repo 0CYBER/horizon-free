@@ -6081,6 +6081,11 @@ impl Game<'_> {
             self.draw_options(&mut batch);
             return batch;
         }
+        // A mod's settings page opened from Options > Mods at the title.
+        if self.screen == Screen::Mod && self.title.is_some() {
+            self.draw_mod_screen(&mut batch);
+            return batch;
+        }
         if let Some(title) = &mut self.title {
             title.poll_backup();
             if let Some(sound) = title.update_toast(self.settings.notification_display_time) {
@@ -12230,7 +12235,7 @@ impl Game<'_> {
             || self.remote_loading();
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
-                matches!(self.screen, Screen::Options | Screen::Win)
+                matches!(self.screen, Screen::Options | Screen::Mod | Screen::Win)
                     || !matches!(t.mode, horizon_client::title::Mode::Main)
             })
             || (self.title.is_none()
@@ -13122,6 +13127,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
+                WindowEvent::MouseInput { state, button, .. }
+                    if self.screen == Screen::Mod && self.title.is_some() =>
+                {
+                    if state == ElementState::Pressed {
+                        self.mod_screen_click(button);
+                    }
+                }
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
                         self.options_bind_mouse(button)?;
@@ -13483,6 +13495,16 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if let PhysicalKey::Code(key) = event.physical_key {
                         self.options_key(key, event.text.as_deref())?;
+                    }
+                }
+                // A mod's settings page at the title takes its keys like Options.
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Mod && self.title.is_some() =>
+                {
+                    if event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                    {
+                        self.key_pressed(key)?;
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {

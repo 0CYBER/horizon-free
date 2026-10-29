@@ -907,7 +907,9 @@ impl Game<'_> {
     /// A mod pushes its screen (`ui.open-screen`), or Options > Mods opens
     /// its settings page (`settings`, the mod's `installed` index).
     pub(super) fn open_mod_screen(&mut self, owner: usize, settings: bool) {
-        if self.title.is_some() {
+        // Only the settings page is drawn at the title (Options > Mods); a
+        // mod's own screen waits for a world.
+        if self.title.is_some() && !settings {
             return;
         }
         if settings {
