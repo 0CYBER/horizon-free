@@ -177,9 +177,6 @@
   "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Оставляет {count} самых новых, используемую и те, что нужны вашим сборкам. Удалённую версию можно снова установить на странице «Версии».",
   "Installed versions use {size}.": "Установленные версии занимают {size}.",
   "{size} on disk": "{size} на диске",
-  "Native mods (experimental)": "Нативные моды (экспериментально)",
-  "Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.": "Нативные моды со страницы «Моды» компилируются в игру собственным Rust лаунчера. Без песочницы: они могут делать на этом компьютере всё, что можете вы.",
-  "{version} plays in this instance.": "В этой сборке запускается {version}.",
   "Install Horizon first.": "Сначала установите Horizon.",
   "Starting the build": "Начало сборки",
   "These mods will run with full access to your computer": "Эти моды получат полный доступ к вашему компьютеру",
@@ -187,10 +184,13 @@
   "Mods: {mods}": "Моды: {mods}",
   "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version} (Java Edition). При первом запуске «Играть» скачает его у Mojang для вашего аккаунта вместе с нужной ему Java.",
   "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "Сборка компилирует игру: 20–30 минут и несколько ГБ на диске в первый раз (она скачивает Rust), затем несколько минут.",
-  "Install and turn on native mods": "Установить и включить нативные моды",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативные моды компилируются в отдельную игру. Установка такого мода включает нативные моды: затем вы собираете с ним игру в «Настройки > Нативные моды». Первая сборка скачивает Rust и может занять 20–30 минут; следующие быстрее.",
   "Delete…": "Удалить…",
   "Keep": "Оставить",
   "Move to Trash": "В корзину",
-  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть."
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть.",
+  "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "Нативные моды не изолированы: у них полный доступ к вашему компьютеру, как у любой программы. Устанавливайте только моды авторов, которым доверяете. Чтобы играть с модом, соберите игру на странице «Моды»; первая сборка скачивает Rust и занимает 20–30 минут.",
+  "Native build": "Нативная сборка",
+  "No native mod is turned on.": "Ни один нативный мод не включён.",
+  "Build the game to play with the native mods turned on.": "Соберите игру, чтобы играть с включёнными нативными модами.",
+  "Up to date: {instance} plays these mods.": "Актуально: {instance} играет с этими модами."
 }

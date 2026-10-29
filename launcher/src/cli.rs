@@ -5,7 +5,7 @@ use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use horizon_launcher::instances;
 use horizon_launcher::loaders;
-use horizon_launcher::native_mods;
+use horizon_launcher::native_status;
 use horizon_launcher::other_launchers;
 use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
@@ -706,7 +706,7 @@ enum Cmd {
         #[arg(long)]
         accept_eula: bool,
     },
-    /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
+    /// Native mods (docs/native-mods.md): compile mixin bundles on the Horizon
     /// revision they pin, with the launcher's own Rust, as the version the "Native mods" instance
     /// plays. Not sandboxed: the mods' code runs with your rights
     NativeBuild {
@@ -2233,14 +2233,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     println!("  not ported: {s}");
                 }
             }
-            // A native mod turns Native mods on, with the window's notice, once.
+            // The first native mod: the window's trust notice, once.
             let mut settings = backend::Settings::load();
-            let list = installed::Installed::load(&home).entries;
-            if !settings.native_mods && native_mods::turns_on(false, &list) {
-                if !settings.native_mods_noticed {
-                    eprintln!("{}", native_mods::NOTICE);
-                }
-                settings.native_mods = true;
+            let native = done.iter().any(|e| native_status::is_native_file(&e.file));
+            if native && !settings.native_mods_noticed {
+                eprintln!("{}", native_status::NOTICE);
                 settings.native_mods_noticed = true;
                 settings.save();
             }
