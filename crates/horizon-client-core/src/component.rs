@@ -237,9 +237,11 @@ pub(crate) fn shadow_color(value: &Value) -> Option<u32> {
     let channels = rgba
         .iter()
         .map(|channel| {
-            let value = channel.as_f64()?;
+            // ExtraCodecs.ARGB_COLOR_CODEC reads floats; ARGB.as8BitChannel
+            // floors each normalized channel multiplied by 255.
+            let value = channel.as_f64()? as f32;
             (value.is_finite() && (0.0..=1.0).contains(&value))
-                .then_some((value * 255.0).round() as u32)
+                .then_some((value * 255.0_f32).floor() as u32)
         })
         .collect::<Option<Vec<_>>>()?;
     Some(channels[3] << 24 | channels[0] << 16 | channels[1] << 8 | channels[2])
@@ -347,7 +349,10 @@ mod tests {
         assert_eq!(text.component()["shadow_color"], -16711936);
         let rgba = serde_json::json!({"text": "A", "shadow_color": [1, 0, 0.5, 1]});
         let text = to_text(&rgba, &mut |_| Text::empty());
-        assert_eq!(text.spans[0].style.shadow_color, Some(0xffff0080));
+        assert_eq!(text.spans[0].style.shadow_color, Some(0xffff007f));
+        let translucent = serde_json::json!({"text": "A", "shadow_color": [1, 0, 0.5, 0.5]});
+        let text = to_text(&translucent, &mut |_| Text::empty());
+        assert_eq!(text.spans[0].style.shadow_color, Some(0x7fff007f));
         let no_shadow = serde_json::json!({"text": "A", "shadow_color": 0});
         let text = to_text(&no_shadow, &mut |_| Text::empty());
         assert_eq!(text.spans[0].style.shadow_color, Some(0));

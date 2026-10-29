@@ -752,10 +752,11 @@ fn network_stack(
             ));
         }
     }
-    if let Some(name) = s.custom_name() {
+    // Keep the component's styles across integrated-server and LAN inventory sync.
+    if let Some(name) = s.data().and_then(|d| d.other("minecraft:custom_name")) {
         stack.added.push((
             horizon_protocol::item::component::CUSTOM_NAME,
-            horizon_protocol::item::Component::Text(horizon_protocol::text::literal(&name)),
+            horizon_protocol::item::Component::Text(name.clone()),
         ));
     }
     // The component as loaded, so a translatable name stays one.
@@ -783,7 +784,32 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_protocol::buf::{Codec, Reader, Writer};
     use horizon_protocol::item::{Component, component};
+    use horizon_world::nbt::Tag;
+
+    #[test]
+    fn styled_custom_name_survives_inventory_sync() {
+        let name = Tag::compound([
+            ("text", Tag::String("Red".into())),
+            ("color", Tag::String("#ff0000".into())),
+            ("italic", Tag::Byte(0)),
+        ]);
+        let mut item = ItemStack::new("minecraft:stick", 1);
+        item.data_mut().custom_name = Some(name.clone());
+        let sent = stack_to_network(|_| 7, |_, _| None, &Some(item));
+        let mut writer = Writer::new();
+        horizon_protocol::item::Slot::write(&sent, &mut writer);
+        let mut reader = Reader::new(&writer.data);
+        let received = horizon_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(
+            received.component(component::CUSTOM_NAME),
+            Some(&Component::Text(name))
+        );
+    }
 
     #[test]
     fn potions_go_as_potion_registry_ids() {
