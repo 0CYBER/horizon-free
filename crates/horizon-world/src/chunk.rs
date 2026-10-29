@@ -535,7 +535,7 @@ impl<'r> BlockSection<'r> {
         if old == air {
             added += 1;
         }
-        let Some(id) = self.local_ids.get(&state).copied() else {
+        let Some(id) = id_in(&self.palette, &self.counts, &mut self.last, state) else {
             return Ok(added);
         };
         let Some(storage) = self.storage.as_mut() else {
@@ -555,13 +555,15 @@ impl<'r> BlockSection<'r> {
                 added += 1;
             }
             if self.counts[old_id as usize] == 0 {
-                self.local_ids.remove(&old_state);
                 self.free.push(old_id);
+                if self.last == Some((old_state, old_id)) {
+                    self.last = None;
+                }
             }
         }
         if self.counts[id as usize] == 4096 {
             self.palette = vec![state];
-            self.local_ids = local_ids(state);
+            self.last = Some((state, 0));
             self.counts = vec![4096];
             self.free.clear();
             self.storage = None;
