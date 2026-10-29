@@ -72,6 +72,7 @@ mod arena;
 mod cull;
 mod end_sky;
 mod flat;
+mod frame_gen;
 mod hdr;
 pub mod lightning;
 mod lod;
@@ -99,7 +100,6 @@ mod timing;
 pub mod translucency;
 pub(crate) mod upload;
 mod wgsl_prefix;
-mod frame_gen;
 mod world_post;
 
 /// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
