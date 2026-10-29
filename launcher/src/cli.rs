@@ -335,7 +335,7 @@ enum InstanceCmd {
         instance: Option<String>,
     },
     /// List the instances other launchers keep (Prism Launcher, MultiMC, the official
-    /// launcher), read without changing anything there
+    /// launcher, the CurseForge app, the Modrinth App), read without changing anything there
     Others {
         /// Look in this folder instead: a launcher's folder, its instances/ or one instance
         #[arg(long)]
@@ -352,6 +352,10 @@ enum InstanceCmd {
         /// The new instance's name (default: the same)
         #[arg(long = "as")]
         new_name: Option<String>,
+        /// The Minecraft version it plays, when its launcher doesn't say (the CurseForge app,
+        /// the Modrinth App)
+        #[arg(long)]
+        minecraft: Option<String>,
     },
 }
 
@@ -2320,9 +2324,10 @@ fn other_instances(folder: Option<&Path>) -> Result<Vec<other_launchers::Found>,
 }
 
 fn other_plays(f: &other_launchers::Found) -> String {
-    match &f.loader {
-        Some(l) => format!("Minecraft {} with {} {}", f.minecraft, l.name, l.version),
-        None => format!("Minecraft {}", f.minecraft),
+    match (&f.minecraft, &f.loader) {
+        (None, _) => "Minecraft version not recorded: copy-from --minecraft <version>".into(),
+        (Some(v), Some(l)) => format!("Minecraft {v} with {} {}", l.name, l.version),
+        (Some(v), None) => format!("Minecraft {v}"),
     }
 }
 
@@ -2643,6 +2648,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             name,
             folder,
             new_name,
+            minecraft,
         } => {
             let found = other_instances(folder.as_deref())?;
             let matching: Vec<_> = found.iter().filter(|f| f.name == name).collect();
@@ -2661,7 +2667,11 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     ))
                 }
             };
-            let made = other_launchers::import(f, new_name.as_deref().unwrap_or(&f.name))?;
+            let made = other_launchers::import(
+                f,
+                new_name.as_deref().unwrap_or(&f.name),
+                minecraft.as_deref(),
+            )?;
             let unsupported = other_launchers::loader(f).is_none();
             if let Some(l) = f.loader.as_ref().filter(|_| unsupported && !as_json) {
                 println!(
