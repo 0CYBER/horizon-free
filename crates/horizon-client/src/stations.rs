@@ -481,26 +481,7 @@ pub struct StationRecipes {
     pub trim_materials: Vec<(String, String)>,
 }
 fn ingredient(v: &Value, items: &Items) -> Ingredient {
-    let mut list: Vec<String> = Vec::new();
-    for s in match v {
-        Value::String(s) => vec![s.clone()],
-        Value::Array(a) => a
-            .iter()
-            .filter_map(|x| x.as_str().map(str::to_owned))
-            .collect(),
-        _ => vec![],
-    } {
-        let more = match s.strip_prefix('#') {
-            Some(tag) => items.item_tag_order.get(tag).cloned().unwrap_or_default(),
-            None => vec![s],
-        };
-        for i in more {
-            if !list.contains(&i) {
-                list.push(i);
-            }
-        }
-    }
-    Ingredient::of(list)
+    Ingredient::parse(v, items).unwrap_or_else(|| Ingredient::of(Vec::new()))
 }
 impl StationRecipes {
     pub fn load(root: &Path, items: &Items) -> Self {
@@ -1013,5 +994,19 @@ mod tests {
         // min cost of Sharpness III = 23; ceil(23/2)=12 -> 12..23.
         let xp = grindstone_experience(&e, &mut r, Some(&s), None);
         assert!((12..24).contains(&xp));
+    }
+    #[test]
+    fn smithing_ingredient_parses_holders() {
+        let items = sample_items();
+        let a = ingredient(&serde_json::json!("minecraft:diamond_sword"), &items);
+        assert_eq!(a.1, vec!["minecraft:diamond_sword"]);
+        let b = ingredient(
+            &serde_json::json!(["minecraft:diamond_sword", "minecraft:diamond_axe"]),
+            &items,
+        );
+        assert_eq!(
+            b.1,
+            vec!["minecraft:diamond_sword", "minecraft:diamond_axe"]
+        );
     }
 }

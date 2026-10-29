@@ -204,6 +204,15 @@ impl StartupMenu {
     }
 }
 
+/// A panic's message: its `&str` or `String` payload.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("Box<dyn Any>")
+}
+
 /// Each generation has its own channel and progress. Pack changes wait for the
 /// old tail before starting another generation, including cache/global writes.
 pub(super) fn spawn_loader(
@@ -251,20 +260,27 @@ pub(super) fn spawn_loader(
 
 impl Loading {
     pub(super) fn poll_menu_resources(&mut self) -> Result<()> {
-        if self.loaded.is_none() {
+        // Once `Done` arrived the generation is over: the caller may have taken
+        // its result, and the finished loader's channel is closed.
+        if self.loaded.is_none() && !self.delivered {
             loop {
                 match self.receiver.try_recv() {
                     Ok(LoaderMsg::Ui(gui, root)) => self.set_ui(gui, root),
                     Ok(LoaderMsg::Done(result)) => {
                         self.loaded = Some(result);
+                        self.delivered = true;
                         break;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        if let Some(handle) = self.handle.take() {
-                            let _ = handle.join();
-                        }
-                        return Err("resource loader stopped before finishing".into());
+                        // The loader sends `Done` before it returns: it panicked.
+                        let reason = match self.handle.take().map(JoinHandle::join) {
+                            Some(Err(payload)) => format!(": {}", panic_text(payload.as_ref())),
+                            _ => String::new(),
+                        };
+                        return Err(
+                            format!("resource loader stopped before finishing{reason}").into()
+                        );
                     }
                 }
             }
@@ -678,8 +694,11 @@ impl Loading {
             }
         }
         self.loaded = None;
+        self.delivered = false;
         if let Some(handle) = self.handle.take() {
-            handle.join().map_err(|_| "resource loader panicked")?;
+            handle.join().map_err(|payload| {
+                format!("resource loader panicked: {}", panic_text(payload.as_ref()))
+            })?;
         }
         self.progress = Progress::new();
         let options = self.options.as_ref().ok_or("loading already finished")?;
@@ -726,6 +745,7 @@ mod tests {
             progress: Progress::new(),
             receiver,
             loaded: None,
+            delivered: false,
             handle: None,
             shown: false,
             menu: StartupMenu::default(),
@@ -801,6 +821,47 @@ mod tests {
             if address == "localhost:25565" && name == "Guest")
         );
         assert!(menu.pending.take().is_none(), "an entry is consumed once");
+    }
+
+    #[test]
+    fn a_failed_generation_keeps_its_error_after_the_loader_ends() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            sender
+                .send(LoaderMsg::Done(Err("missing facts.json".into())))
+                .unwrap();
+        });
+        let mut loading = loading(receiver);
+        loading.handle = Some(worker);
+        while loading.loaded.is_none() {
+            loading.poll_menu_resources().unwrap();
+        }
+        // App::about_to_wait takes the result to report it; the loop may poll
+        // once more before it exits, with the loader gone.
+        assert!(matches!(loading.loaded.take(), Some(Err(e)) if e == "missing facts.json"));
+        while !loading.handle.as_ref().is_none_or(JoinHandle::is_finished) {
+            std::thread::yield_now();
+        }
+        loading.poll_menu_resources().unwrap();
+        assert!(loading.loaded.is_none());
+    }
+
+    #[test]
+    fn a_panicking_loader_reports_its_panic() {
+        let (sender, receiver) = std::sync::mpsc::channel::<LoaderMsg>();
+        let worker = std::thread::spawn(move || {
+            let _sender = sender;
+            panic!("atlas has no fonts");
+        });
+        while !worker.is_finished() {
+            std::thread::yield_now();
+        }
+        let mut loading = loading(receiver);
+        loading.handle = Some(worker);
+        assert_eq!(
+            loading.poll_menu_resources().unwrap_err().to_string(),
+            "resource loader stopped before finishing: atlas has no fonts"
+        );
     }
 
     #[test]

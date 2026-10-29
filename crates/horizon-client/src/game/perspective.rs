@@ -316,6 +316,11 @@ impl Game<'_> {
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).
     pub(super) fn tick_player_model(&mut self) {
+        let scale = self
+            .player
+            .as_mut()
+            .and_then(|p| p.attribute("minecraft:scale").ok())
+            .unwrap_or(1.0) as f32;
         let Some(p) = self.player.as_ref() else {
             self.player_model = None;
             return;
@@ -370,6 +375,7 @@ impl Game<'_> {
             return;
         };
         m.extra.ints[1] = bed;
+        m.extra.model_scale = scale;
         let at = Vec3::new(
             position.x,
             position.y - if crouching { 0.125 } else { 0.0 },
@@ -540,6 +546,9 @@ impl Game<'_> {
         let x_angle = ((cx - self.cursor.0) / 40.0).atan();
         let y_angle = ((cy - self.cursor.1) / 40.0).atan();
         let mut m = m.clone();
+        // `extractEntityInInventory` divides the size by the entity's scale: the
+        // preview is the same size whatever the player's scale.
+        m.extra.model_scale = 0.0;
         // The render state: still, facing out, the head toward the cursor.
         m.previous = m.position;
         m.body_yaw = 180.0 + x_angle * 20.0;

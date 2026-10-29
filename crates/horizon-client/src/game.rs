@@ -1507,12 +1507,17 @@ struct Game<'a> {
     keys: HashSet<KeyCode>,
     // Physical input is separate from remapped and toggled movement keys.
     physical_keys: HashSet<KeyCode>,
+    physical_buttons: HashSet<MouseButton>,
     left: bool,
     right: bool,
     cursor: (f32, f32),
     /// The cursor icon the window shows (`widgets::take_cursor` each frame).
     cursor_icon: horizon_client::widgets::Cursor,
     captured: bool,
+    /// Only the local player owning keyboard and mouse changes the native pointer.
+    keyboard_mouse: bool,
+    /// This view's corner in its shared window; cursor warps include the offset.
+    view_at: [u32; 2],
     focused: bool,
     /// When the window lost focus, while it is still without
     /// (`Minecraft.lastActiveTime`: pausing waits 500 ms).
@@ -3351,12 +3356,16 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
-                // LevelEventHandler 1010 and 1011: the parrots nearby dance or stop.
+                // LevelEventHandler 1010 and 1011: a jukebox's song starts
+                // (`playJukeboxSong`) or stops, and the parrots nearby dance or stop.
                 LevelEvent::LevelEvent {
-                    id: id @ (1010 | 1011),
+                    id: 1010,
                     pos,
-                    ..
-                } => self.notify_record_playing([pos.x, pos.y, pos.z], id == 1010),
+                    data,
+                } => self.jukebox_song_event([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent { id: 1011, pos, .. } => {
+                    self.jukebox_stop_event([pos.x, pos.y, pos.z])
+                }
                 // LevelEventHandler 2019 and 2020: the crack on a face of the
                 // block being mined, with its hit sound for 2020.
                 LevelEvent::LevelEvent {
@@ -5908,13 +5917,21 @@ impl Game<'_> {
         }
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;
+        // Splitscreen: another player has the pointer; this one's menus leave it alone.
+        if !self.keyboard_mouse {
+            self.captured = false;
+            return;
+        }
         let Some(window) = &self.window else { return };
         let size = self.renderer.as_ref().map_or_else(
             || window.inner_size().into(),
             |r| [r.config.width, r.config.height],
         );
-        let centre =
-            winit::dpi::PhysicalPosition::new(f64::from(size[0]) / 2.0, f64::from(size[1]) / 2.0);
+        let [vx, vy] = self.view_at.map(f64::from);
+        let centre = winit::dpi::PhysicalPosition::new(
+            vx + f64::from(size[0]) / 2.0,
+            vy + f64::from(size[1]) / 2.0,
+        );
         let warp = |window: &Window| {
             let _ = window.set_cursor_position(centre);
         };
@@ -5980,7 +5997,7 @@ impl Game<'_> {
         } else {
             Cursor::Arrow
         };
-        if effective == self.cursor_icon {
+        if effective == self.cursor_icon || !self.keyboard_mouse {
             return;
         }
         if let Some(window) = &self.window {
@@ -6158,6 +6175,11 @@ impl Game<'_> {
         }
         if self.screen == Screen::Options {
             self.draw_options(&mut batch);
+            return batch;
+        }
+        // A mod's settings page opened from Options > Mods at the title.
+        if self.screen == Screen::Mod && self.title.is_some() {
+            self.draw_mod_screen(&mut batch);
             return batch;
         }
         if let Some(title) = &mut self.title {
@@ -6925,6 +6947,9 @@ impl Game<'_> {
                 self.inventory[i] = Some(stack);
             }
             DisplayClick::Offhand(stack) => self.offhand = Some(stack),
+            // handleCreativeModeItemDrop: on a server the stack goes to it (SetCreativeModeSlot
+            // to slot -1), which drops it; a local drop here would never reach the server.
+            DisplayClick::Drop(stack) if self.remote.is_some() => self.remote_creative_throw(stack),
             DisplayClick::Drop(stack) => self.player_drop(stack),
             _ => {}
         }
@@ -10818,14 +10843,16 @@ impl Game<'_> {
             // The main hand on its arm, the off hand on the other one.
             let left = self.settings.main_hand_left != (hand == Hand::Off);
             let Some(stack) = item else {
-                // Only the main hand's empty arm shows.
-                if hand == Hand::Off {
+                // renderArmWithItem: only the main hand's empty arm shows,
+                // on the main arm (the left one with the main hand set to
+                // left), and not while the player is invisible.
+                if hand == Hand::Off || self.potions.effects.get("invisibility").is_some() {
                     continue;
                 }
-                // renderPlayerArm (right arm)
+                // renderPlayerArm
                 let m = to_world
-                    * horizon_client::first_person::player_arm_pose(false, inverse_height, attack);
-                self.first_person_arm(false, m, packed, &mut out);
+                    * horizon_client::first_person::player_arm_pose(left, inverse_height, attack);
+                self.first_person_arm(left, m, packed, &mut out);
                 continue;
             };
             if let Some(id) = maps::map_id(&stack) {
@@ -11427,6 +11454,12 @@ impl Game<'_> {
             if i != selected {
                 let (tx, ty) = Creative::tab_position(t);
                 batch.sprite(&self.gui.atlas, &tab_sprite(t, false), ox + tx, oy + ty);
+                let mouse = (self.cursor.0 - ox, self.cursor.1 - oy);
+                if Creative::tab_wants_hand(t, false, mouse) {
+                    horizon_client::widgets::request_cursor(
+                        horizon_client::widgets::Cursor::PointingHand,
+                    );
+                }
             }
         }
         let background = if tab.search {
@@ -11581,7 +11614,10 @@ impl Game<'_> {
         self.draw_carried(batch);
         if tab.inventory {
             if Self::creative_trash_hovered(batch, self.cursor) {
-                self.tooltip(batch, "Destroy Item", self.cursor.0, self.cursor.1);
+                // `CreativeModeInventoryScreen`: the destroy slot's tooltip is
+                // `inventory.binSlot`, not an English literal.
+                let destroy = self.translate("inventory.binSlot", "Destroy Item");
+                self.tooltip(batch, &destroy, self.cursor.0, self.cursor.1);
             } else if self.carried.is_none()
                 && let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
                 && let Some(stack) = self.slot_view(slot)
@@ -12248,10 +12284,7 @@ impl Game<'_> {
             dynamic_lights: &self.dynamic_lights,
             lightning: horizon_client::gfx::lightning::Input {
                 bolts: &bolts,
-                uv: [
-                    self.gui.atlas.font.white().u0,
-                    self.gui.atlas.font.white().v0,
-                ],
+                uv: horizon_client::gfx::lightning::white_uv(&self.gui.atlas.font.white()),
             },
             additive: &additive,
             see_through: &see_through,
@@ -12367,7 +12400,7 @@ impl Game<'_> {
             || self.remote_loading();
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
-                matches!(self.screen, Screen::Options | Screen::Win)
+                matches!(self.screen, Screen::Options | Screen::Mod | Screen::Win)
                     || !matches!(t.mode, horizon_client::title::Mode::Main)
             })
             || (self.title.is_none()
@@ -12817,12 +12850,14 @@ impl Game<'_> {
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.horizon;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
+            // The meshes, once copied, are freed by a worker (`Streaming::free`).
             if !budgeted && self.pending_uploads.is_empty() {
                 horizon_client::spans::time("upload", || {
-                    for (key, mesh) in uploads {
-                        renderer.upload(key, &mesh);
+                    for (key, mesh) in &uploads {
+                        renderer.upload(*key, mesh);
                     }
                 });
+                self.streaming.free(uploads);
             } else {
                 // Horizon's chunk-update and upload budgets: the nearest
                 // sections go first, the rest wait for later frames; a newer
@@ -12832,12 +12867,17 @@ impl Game<'_> {
                 let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
                     uploads.iter().map(|(k, _)| *k).collect();
                 let chunks = &self.world.chunks;
-                pending.retain(|(k, _)| !fresh.contains(k) && chunks.contains_key(&(k.0, k.2)));
-                pending.extend(
-                    uploads
-                        .into_iter()
-                        .filter(|(k, _)| chunks.contains_key(&(k.0, k.2))),
-                );
+                let loaded = |k: &(i32, i32, i32)| chunks.contains_key(&(k.0, k.2));
+                let mut spent: Vec<_> = pending
+                    .extract_if(.., |(k, _)| fresh.contains(k) || !loaded(k))
+                    .collect();
+                for upload in uploads {
+                    if loaded(&upload.0) {
+                        pending.push(upload);
+                    } else {
+                        spent.push(upload);
+                    }
+                }
                 let centre = self.streaming.center;
                 let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
                 pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
@@ -12861,9 +12901,11 @@ impl Game<'_> {
                     }
                     let (key, mesh) = pending.pop().expect("checked above");
                     renderer.upload(key, &mesh);
+                    spent.push((key, mesh));
                     count += 1;
                     bytes += size;
                 }
+                self.streaming.free(spent);
             }
             renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
@@ -12967,8 +13009,16 @@ impl ApplicationHandler for Game<'_> {
                 self.physical_keys.remove(&key);
             }
         }
+        if let WindowEvent::MouseInput { state, button, .. } = &event {
+            if *state == ElementState::Pressed {
+                self.physical_buttons.insert(*button);
+            } else {
+                self.physical_buttons.remove(button);
+            }
+        }
         if let WindowEvent::Focused(false) = &event {
             self.physical_keys.clear();
+            self.physical_buttons.clear();
         }
         if let WindowEvent::ModifiersChanged(m) = &event {
             self.modifiers = m.state();
@@ -13203,12 +13253,17 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Mod && d != 0.0 {
                         self.mod_screen_scroll(d);
                     }
-                    if self.screen == Screen::Creative && d != 0.0 {
+                    // AbstractContainerScreen.mouseScrolled: a bundle under the
+                    // cursor takes the wheel before the screen's own scrolling.
+                    let bundle = bundles::takes_bundle_wheel(self.screen)
+                        && d != 0.0
+                        && self.bundle_scroll(scaled(raw_x), scaled(raw_y));
+                    if self.screen == Screen::Creative && d != 0.0 && !bundle {
                         self.creative_screen.wheel(f64::from(d), &self.pack.names);
                     }
                     if self.screen == Screen::Inventory
                         && d != 0.0
-                        && !self.bundle_scroll(scaled(raw_x), scaled(raw_y))
+                        && !bundle
                         && !self.tweak_scroll(d, self.inventory_target().0)
                     {
                         self.station_scroll(d);
@@ -13259,6 +13314,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
+                WindowEvent::MouseInput { state, button, .. }
+                    if self.screen == Screen::Mod && self.title.is_some() =>
+                {
+                    if state == ElementState::Pressed {
+                        self.mod_screen_click(button);
+                    }
+                }
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
                         self.options_bind_mouse(button)?;
@@ -13627,6 +13689,16 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if let PhysicalKey::Code(key) = event.physical_key {
                         self.options_key(key, event.text.as_deref())?;
+                    }
+                }
+                // A mod's settings page at the title takes its keys like Options.
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Mod && self.title.is_some() =>
+                {
+                    if event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                    {
+                        self.key_pressed(key)?;
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
@@ -14127,11 +14199,14 @@ impl<'a> Game<'a> {
             },
             keys: HashSet::new(),
             physical_keys: HashSet::new(),
+            physical_buttons: HashSet::new(),
             left: false,
             right: false,
             cursor: (0.0, 0.0),
             cursor_icon: horizon_client::widgets::Cursor::Arrow,
             captured: false,
+            keyboard_mouse: true,
+            view_at: [0, 0],
             focused: true,
             focus_lost: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -15412,6 +15487,8 @@ struct Loading {
     progress: Progress,
     receiver: Receiver<LoaderMsg>,
     loaded: Option<std::result::Result<Loaded, String>>,
+    /// The loader's `Done` arrived: its channel closing afterwards is expected.
+    delivered: bool,
     handle: Option<JoinHandle<()>>,
     shown: bool,
     menu: startup_menu::StartupMenu,
@@ -15512,6 +15589,12 @@ impl Loading {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // The loop may run once more after exit(): keep the first error, the
+        // one that ended loading.
+        if self.error.is_some() {
+            event_loop.exit();
+            return;
+        }
         if horizon_threads::stop_requests() > 0 {
             // No world is open yet: nothing to save.
             event_loop.exit();
@@ -15713,6 +15796,22 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Every launch reads the prepared game files (`horizon-prepare`'s output, whose
+/// manifest is `horizon-resources.json`): without them, say where they were
+/// looked for and how to get them, before a window or a loader starts.
+fn missing_resources(root: &std::path::Path) -> Option<String> {
+    if root.join("horizon-resources.json").is_file() {
+        return None;
+    }
+    let shown = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    Some(format!(
+        "Horizon's prepared game files are missing: no horizon-resources.json in {}\n\
+         Start Horizon from the Horizon launcher, which downloads and prepares them, \
+         or prepare them with: horizon-prepare --prepare (or pass --resources <folder>)",
+        shown.display()
+    ))
+}
+
 /// The ordinary launch: load the resources on a worker while the window shows
 /// the loading screen, then swap in the game on the main thread.
 fn run_loading(
@@ -15740,6 +15839,7 @@ fn run_loading(
         progress,
         receiver,
         loaded: None,
+        delivered: false,
         handle: Some(loader),
         shown: false,
         menu,
@@ -15809,6 +15909,9 @@ pub fn run() -> Result<()> {
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();
+    if let Some(error) = missing_resources(&vanilla_root) {
+        return Err(error.into());
+    }
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     // "Playing Horizon" on Discord: never for a server; an automated run only talks to a test's fake Discord.
     if options.dedicated.is_none() {
@@ -15911,6 +16014,21 @@ fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Sta
 #[cfg(test)]
 mod startup_cpu_tests {
     use super::*;
+
+    #[test]
+    fn a_folder_without_prepared_files_is_named_before_loading() {
+        let root = std::env::temp_dir().join(format!("horizon-unprepared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let missing = missing_resources(&root.join(".local/horizon-client/26.3"))
+            .expect("no manifest is reported");
+        assert!(missing.contains("horizon-resources.json"), "{missing}");
+        assert!(missing.contains("horizon-unprepared-"), "{missing}");
+        assert!(missing.contains("launcher"), "{missing}");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("horizon-resources.json"), "{}").unwrap();
+        assert_eq!(missing_resources(&root), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn worker_prepares_owned_models_and_inventory_before_handoff() {
