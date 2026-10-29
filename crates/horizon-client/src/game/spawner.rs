@@ -466,23 +466,8 @@ impl Game<'_> {
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.2, 0.0))
                 * glam::Mat4::from_rotation_x((-30.0_f32).to_radians())
                 * glam::Mat4::from_scale(glam::Vec3::splat(scale));
-            let (x, y, z) = *key;
-            let mut sky = self.world.light(x, y, z) >> 4;
-            let mut block = self.world.light(x, y, z) & 15;
-            for (dx, dy, dz) in [
-                (0, 1, 0),
-                (0, -1, 0),
-                (1, 0, 0),
-                (-1, 0, 0),
-                (0, 0, 1),
-                (0, 0, -1),
-            ] {
-                let l = self.world.light(x + dx, y + dy, z + dz);
-                sky = sky.max(l >> 4);
-                block = block.max(l & 15);
-            }
-            block = block.max(8);
-            let packed = (u32::from(sky) * 16) | ((u32::from(block) * 16) << 8);
+            let light = self.world.light(key.0, key.1, key.2);
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             if mob.species() == horizon_client::mobs::Species::SulfurCube {
                 self.sulfur_cube_body_geometry(
                     mob,
