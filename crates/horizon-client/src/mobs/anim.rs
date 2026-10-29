@@ -295,6 +295,8 @@ pub struct Hum {
     pub using_item: bool,
     /// The arm the current swing moves (`Some(true)` for the right one).
     pub swing_right_arm: Option<bool>,
+    /// The swing is a STAB (`SwingAnimationType` 2): a spear's jab.
+    pub stab: bool,
     /// `mainArm` is the left one (`Mob.isLeftHanded`): a mob's swing uses it.
     pub left_main: bool,
     /// The spear each arm (right, left) holds, and how long that arm has
@@ -318,6 +320,7 @@ impl Hum {
             swim: 0.0,
             using_item: false,
             swing_right_arm: None,
+            stab: false,
             left_main: false,
             spear: [None; 2],
             spear_ticks: [0.0; 2],
@@ -453,7 +456,7 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
             pose_arm(p, h.right, true, h);
         }
     }
-    // setupAttackAnimation (WHACK swing with the arm of the swinging hand).
+    // setupAttackAnimation: a WHACK or STAB swing of the swinging hand's arm.
     let hx = p.get("head")[3];
     let swing = s.swing;
     let swing_left = h.swing_right_arm.map_or(h.left_main, |right| !right);
@@ -476,17 +479,23 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
             l[2] = -body_y.msin() * 5.0 * age_scale;
             l[0] = body_y.mcos() * 5.0 * age_scale;
         }
-        p.get("right_arm")[4] += body_y;
-        p.get("left_arm")[4] += body_y;
-        p.get("left_arm")[3] += body_y;
-        // Ease.outQuart
-        let eased = 1.0 - (1.0 - swing).powi(4);
-        let aa = (eased * PI).msin();
-        let bb = (swing * PI).msin() * -(hx - 0.7) * 0.75;
-        let r = p.get(if swing_left { "left_arm" } else { "right_arm" });
-        r[3] -= aa * 1.2 + bb;
-        r[4] += body_y * 2.0;
-        r[5] += (swing * PI).msin() * -0.4;
+        let arm = if swing_left { "left_arm" } else { "right_arm" };
+        if h.stab {
+            // SpearAnimations.thirdPersonAttackHand: the arms keep their turn.
+            p.get(arm)[3] += crate::spear::third_person_attack_arm(swing);
+        } else {
+            p.get("right_arm")[4] += body_y;
+            p.get("left_arm")[4] += body_y;
+            p.get("left_arm")[3] += body_y;
+            // Ease.outQuart
+            let eased = 1.0 - (1.0 - swing).powi(4);
+            let aa = (eased * PI).msin();
+            let bb = (swing * PI).msin() * -(hx - 0.7) * 0.75;
+            let r = p.get(arm);
+            r[3] -= aa * 1.2 + bb;
+            r[4] += body_y * 2.0;
+            r[5] += (swing * PI).msin() * -0.4;
+        }
     }
     if let Some(aggressive) = h.zombie {
         // AnimationUtils.animateZombieArms
@@ -789,6 +798,7 @@ pub fn setup(
             h.swim = m.extra.swim.amount(s.partial);
             h.using_item = m.extra.using_item > 0;
             h.swing_right_arm = m.extra.swing_right_arm;
+            h.stab = m.extra.swing_stab;
             h.left_main = m.main_arm_left();
             let main_side = usize::from(m.main_arm_left());
             h.spear[main_side] = main_spear;
@@ -1047,6 +1057,27 @@ mod flight_pose_tests {
         );
         assert!(swinging.get("right_arm")[4] < 1.0);
         assert!(same_angle(swinging.get("left_arm")[4], PI));
+        // A STAB swing turns that arm's pitch alone, by the spear's curve.
+        let mut stabbing = make();
+        h.swim = 0.0;
+        h.stab = true;
+        let mut still = make();
+        humanoid(
+            &mut still,
+            &state,
+            &Hum::new(ArmPose::Empty, ArmPose::Empty),
+        );
+        let stab = State {
+            swing: 0.2,
+            ..state
+        };
+        humanoid(&mut stabbing, &stab, &h);
+        let arm_pitch = crate::spear::third_person_attack_arm(0.2);
+        assert!(same_angle(
+            stabbing.get("right_arm")[3],
+            still.get("right_arm")[3] + arm_pitch
+        ));
+        assert_eq!(stabbing.get("left_arm")[3], still.get("left_arm")[3]);
         // Out of the pose nothing changes.
         let mut dry = make();
         humanoid(&mut dry, &state, &Hum::new(ArmPose::Empty, ArmPose::Empty));

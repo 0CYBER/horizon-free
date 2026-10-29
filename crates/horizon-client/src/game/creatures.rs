@@ -4566,6 +4566,14 @@ impl Game<'_> {
                 self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+                self.player_pumpkin_geometry(
+                    mob,
+                    mob.extra.armor[0].as_ref(),
+                    camera,
+                    alpha,
+                    packed,
+                    out,
+                );
             }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
@@ -4651,7 +4659,15 @@ impl Game<'_> {
                 let Some(model) = self.arrow_model.as_ref() else {
                     continue;
                 };
-                let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
+                // SpectralArrowRenderer, and TippableArrowRenderer's `getColor() > 0`.
+                let texture = if a.is_spectral_arrow() {
+                    "entity/projectiles/arrow_spectral"
+                } else if a.arrow.as_ref().is_some_and(|s| s.effect_color > 0) {
+                    "entity/projectiles/arrow_tipped"
+                } else {
+                    "entity/projectiles/arrow"
+                };
+                let Some(r) = atlas.sprites.get(texture).copied() else {
                     continue;
                 };
                 let m = glam::Mat4::from_translation(c)
@@ -4884,6 +4900,17 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
         K::Cramming => "minecraft:cramming",
+        K::FallingAnvil => "minecraft:falling_anvil",
+        K::Fireworks => "minecraft:fireworks",
+        K::GenericKill => "minecraft:generic_kill",
+        K::LightningBolt => "minecraft:lightning_bolt",
+        K::OutsideBorder => "minecraft:outside_border",
+        K::Spit => "minecraft:spit",
+        K::Stalagmite => "minecraft:stalagmite",
+        K::Starve => "minecraft:starve",
+        K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
+        K::WindCharge => "minecraft:wind_charge",
+        K::Wither => "minecraft:wither",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).

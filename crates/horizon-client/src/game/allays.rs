@@ -219,7 +219,7 @@ impl Game<'_> {
         let holds = m.extra.main_hand.is_some();
         if !holds && !item.is_empty() {
             let m = &mut self.mobs[index];
-            m.extra.main_hand = Some(item.into());
+            m.extra.set_main_hand(Some(item.into()));
             m.extra.tame = true;
             // `Allay.mobInteract` remembers LIKED_PLAYER by UUID.
             m.extra.owner = Some(acting);

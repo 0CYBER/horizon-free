@@ -304,15 +304,27 @@ impl Goal for RunAroundLikeCrazy {
         make_mad(m, cx.events);
     }
 }
+/// `AbstractHorse.standIfPossible`: `setStanding(20)` (which also stops the
+/// eating) when `canPerformRearing`.
+fn stand_if_possible(m: &mut Mob) {
+    if can_rear(m.species()) {
+        m.extra.counter = 20;
+        m.extra.flag = false;
+    }
+}
+/// `AbstractHorse.hurtServer`, after the hurt went through: one hit in three
+/// rears the horse. Llamas and camels make the draw too, but never rear.
+pub fn after_hurt_server(m: &mut Mob) {
+    if m.random.next_int_bound(3).unwrap_or(1) == 0 {
+        stand_if_possible(m);
+    }
+}
 /// `AbstractHorse.makeMad`: rear with the angry sound (`makeSound`).
 pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.extra.counter > 0 {
         return;
     }
-    if can_rear(m.species()) {
-        m.extra.counter = 20;
-        m.extra.flag = false;
-    }
+    stand_if_possible(m);
     // getAngrySound: null (silent) for the skeleton horse.
     let sound = match m.species() {
         Species::SkeletonHorse => return,
@@ -663,10 +675,15 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.extra.flag = false;
         }
     }
+    stand_tick(m);
+    animate(m);
+}
+/// `AbstractHorse.tick`: the stand counter runs down to `clearStanding`. It is
+/// in `tick`, not `aiStep`, so a horse with no AI stops rearing too.
+pub fn stand_tick(m: &mut Mob) {
     if m.extra.counter > 0 {
         m.extra.counter -= 1;
     }
-    animate(m);
 }
 /// `AbstractHorse.tick`'s eat, stand and mouth animations, which follow the
 /// eating and standing flags (`flag` and `counter > 0`).
@@ -856,10 +873,13 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         );
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mobs::Damage;
     use crate::mobs::finalize::base_value;
+    use crate::mobs::sensor_scan_tests::kind;
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
@@ -888,5 +908,51 @@ mod tests {
         let mut m = horse(Species::Horse);
         finalize(&mut m);
         assert_eq!(base_value(&m, Attr::MovementSpeed), m.attrs.speed);
+    }
+
+    fn equine(id: u32, species: Species, name: &str) -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = name.into();
+        k.species = species;
+        k.max_health = 30.0;
+        Mob::new(id, kind, Vec3::new(f64::from(id), 64.0, 0.0), 0.0)
+    }
+    /// Hits `n` fresh mobs of a species once each; how many reared.
+    fn rears(species: Species, name: &str, n: u32) -> u32 {
+        (1..=n)
+            .filter(|&id| {
+                let mut m = equine(id, species, name);
+                assert!(m.damage(1.0, Damage::player([0.0, 64.0, 0.0])));
+                m.extra.counter == 20
+            })
+            .count() as u32
+    }
+
+    #[test]
+    fn a_hurt_horse_rears_one_hit_in_three() {
+        // AbstractHorse.hurtServer: nextInt(3) == 0 -> standIfPossible (#3432).
+        let n = rears(Species::Horse, "minecraft:horse", 300);
+        assert!((60..=140).contains(&n), "{n} of 300 hits reared");
+    }
+
+    #[test]
+    fn the_rear_ends_after_twenty_ticks() {
+        // AbstractHorse.tick: standCounter runs down, then clearStanding.
+        let mut m = equine(1, Species::Horse, "minecraft:horse");
+        stand_if_possible(&mut m);
+        for _ in 0..19 {
+            stand_tick(&mut m);
+        }
+        assert!(m.extra.counter > 0);
+        stand_tick(&mut m);
+        assert_eq!(m.extra.counter, 0);
+    }
+
+    #[test]
+    fn llamas_and_camels_never_rear_when_hurt() {
+        // Llama and Camel: canPerformRearing is false.
+        assert_eq!(rears(Species::Llama, "minecraft:llama", 60), 0);
+        assert_eq!(rears(Species::Camel, "minecraft:camel", 60), 0);
     }
 }

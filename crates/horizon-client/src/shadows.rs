@@ -16,7 +16,7 @@ pub fn shadow_params(entity: &str) -> (f32, f32) {
         "chicken" | "cod" | "parrot" | "rabbit" | "frog" | "silverfish" | "endermite" | "vex" => {
             0.3
         }
-        "cat" | "ocelot" | "fox" | "bee" | "allay" | "salmon" => 0.4,
+        "cat" | "ocelot" | "fox" | "bee" | "allay" | "salmon" | "armadillo" => 0.4,
         "zombie" | "husk" | "drowned" | "zombie_villager" | "zombified_piglin" | "skeleton"
         | "stray" | "wither_skeleton" | "bogged" | "creeper" | "enderman" | "villager"
         | "wandering_trader" | "witch" | "pillager" | "vindicator" | "evoker" | "illusioner"
@@ -30,6 +30,12 @@ pub fn shadow_params(entity: &str) -> (f32, f32) {
         "horse" | "donkey" | "mule" | "skeleton_horse" | "zombie_horse" | "phantom" => 0.75,
         "spider" | "boat" => 0.8,
         "polar_bear" | "panda" | "warden" => 0.9,
+        // GiantMobRenderer: 0.5 times its scale of 6.
+        "giant" => 3.0,
+        "elder_guardian" => 1.2,
+        "happy_ghast" => 2.0,
+        // ShulkerRenderer: none.
+        "shulker" => 0.0,
         "wither" => 1.0,
         "sniffer" | "ravager" => 1.1,
         "ghast" => 1.5,
