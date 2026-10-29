@@ -1032,6 +1032,11 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
             let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
             glam::Mat4::from_rotation_x((-pitch).to_radians())
         }
+        // PhantomRenderer.setupRotations: the body follows its pitch.
+        Species::Phantom => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x(pitch.to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1075,6 +1080,13 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
         }
         Species::Slime | Species::MagmaCube => super::cube::scale(m, alpha),
         Species::SulfurCube => super::sulfur_cube::scale(m, alpha),
+        Species::Phantom => {
+            // PhantomRenderer.scale: 15% bigger per size, and the model moved
+            // down to the box (it is modelled 1.3125 blocks above the feet).
+            let s = 1.0 + 0.15 * m.extra.size as f32;
+            glam::Mat4::from_scale(glam::Vec3::splat(s))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 1.3125, 0.1875))
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1884,6 +1896,35 @@ mod tests {
                     "the vex's item is drawn at 0.55 scale, got {scale}"
                 );
             }
+        }
+    }
+
+    /// PhantomRenderer.scale moves the model down into its 0.5-high box:
+    /// the model's origin ends 1.501 - 1.3125 blocks above the feet (times
+    /// the size's scale), not 1.501 like other mobs (#3008).
+    #[test]
+    fn the_phantom_model_sits_in_its_box() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:phantom"].clone());
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        for (size, scale) in [(0, 1.0f32), (5, 1.75)] {
+            mob.extra.size = size;
+            let origin =
+                base_transform(&mob, 1.0, glam::DVec3::ZERO).transform_point3(glam::Vec3::ZERO);
+            let y = (1.501 - 1.3125) * scale;
+            assert!(
+                (origin.y - y).abs() < 1.0e-4,
+                "size {size}: origin {origin}"
+            );
+            assert!(
+                (origin.z.abs() - 0.1875 * scale).abs() < 1.0e-4,
+                "size {size}: origin {origin}"
+            );
         }
     }
     #[test]
