@@ -31,6 +31,7 @@ impl Fixture {
                     "Data",
                     Tag::compound([
                         ("LevelName", Tag::String(name.into())),
+                        ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                         ("GameType", Tag::Int(1)),
                         ("allowCommands", Tag::Byte(1)),
                         (
@@ -115,6 +116,32 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
     f.title.escape();
     f.click("Direct Connection");
     assert!(f.title.focused_field().unwrap().1.is_empty());
+}
+
+#[test]
+fn f5_reloads_the_server_list() {
+    let mut f = Fixture::new();
+    f.click("Multiplayer");
+    let file = crate::multiplayer::servers_file(&f.title.saves);
+    horizon_protocol::servers::save(
+        &file,
+        &[horizon_protocol::servers::ServerEntry::new(
+            "Local",
+            "127.0.0.1:1",
+        )],
+    )
+    .unwrap();
+    let listed = |f: &Fixture| match &f.title.mode {
+        Mode::Multiplayer(crate::multiplayer::Screen::List { servers, .. }) => servers.len(),
+        _ => usize::MAX,
+    };
+    assert_eq!(listed(&f), 0);
+    f.title.refresh_servers();
+    assert_eq!(listed(&f), 1);
+    // Only the list refreshes.
+    f.title.mode = Mode::Main;
+    f.title.refresh_servers();
+    assert!(matches!(f.title.mode, Mode::Main));
 }
 
 #[test]
