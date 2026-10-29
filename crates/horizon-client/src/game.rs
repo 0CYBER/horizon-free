@@ -3085,6 +3085,35 @@ impl Game<'_> {
         }
         self.process_level_events()
     }
+    /// `AbstractCandleBlock.extinguish`: the smoke from each wick, at
+    /// CandleBlock.PARTICLE_OFFSETS (sixteenths of a block), rising 0.1.
+    fn candle_smoke(&mut self, pos: [i32; 3], state: BlockStateId) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let candles = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("candles")?.parse::<usize>().ok())
+            .unwrap_or(1);
+        const OFFSETS: [&[[u8; 3]]; 4] = [
+            &[[8, 8, 8]],
+            &[[6, 7, 8], [10, 8, 7]],
+            &[[8, 5, 10], [6, 7, 8], [9, 8, 7]],
+            &[[7, 5, 9], [10, 7, 9], [6, 7, 6], [9, 8, 6]],
+        ];
+        for o in OFFSETS[candles.clamp(1, 4) - 1] {
+            self.particles.add(
+                &ParticleOptions::simple(ParticleType::Smoke),
+                [
+                    f64::from(pos[0]) + f64::from(o[0]) / 16.0,
+                    f64::from(pos[1]) + f64::from(o[1]) / 16.0,
+                    f64::from(pos[2]) + f64::from(o[2]) / 16.0,
+                ],
+                [0.0, 0.1, 0.0],
+            );
+        }
+    }
     /// `LeverBlock.makeParticle` at full scale: a powered lever puffs one red
     /// dust on the clicking client (`LeverBlock.useWithoutItem`).
     fn lever_puff(&mut self, pos: [i32; 3]) {
@@ -3879,8 +3908,6 @@ impl Game<'_> {
                         self.audio.play(sound, Some(at), 3.0, 1.0);
                     }
                 }
-                // AbstractCandleBlock.extinguish: the smoke from each wick, at
-                // CandleBlock.PARTICLE_OFFSETS (sixteenths of a block), rising 0.1.
                 // `level.addParticle`: only the local player's own click draws it.
                 LevelEvent::BlockEvent {
                     kind: "candle_smoke",
@@ -3890,33 +3917,7 @@ impl Game<'_> {
                     pos,
                     state,
                     kind: "candle_smoke",
-                } => {
-                    use horizon_client::particles::{ParticleOptions, ParticleType};
-                    let candles = self
-                        .pack
-                        .assets
-                        .registry
-                        .state(state)
-                        .and_then(|s| s.properties.get("candles")?.parse::<usize>().ok())
-                        .unwrap_or(1);
-                    const OFFSETS: [&[[u8; 3]]; 4] = [
-                        &[[8, 8, 8]],
-                        &[[6, 7, 8], [10, 8, 7]],
-                        &[[8, 5, 10], [6, 7, 8], [9, 8, 7]],
-                        &[[7, 5, 9], [10, 7, 9], [6, 7, 6], [9, 8, 6]],
-                    ];
-                    for o in OFFSETS[candles.clamp(1, 4) - 1] {
-                        self.particles.add(
-                            &ParticleOptions::simple(ParticleType::Smoke),
-                            [
-                                f64::from(pos.x) + f64::from(o[0]) / 16.0,
-                                f64::from(pos.y) + f64::from(o[1]) / 16.0,
-                                f64::from(pos.z) + f64::from(o[2]) / 16.0,
-                            ],
-                            [0.0, 0.1, 0.0],
-                        );
-                    }
-                }
+                } => self.candle_smoke([pos.x, pos.y, pos.z], state),
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
                 | LevelEvent::BlockEvent { .. } => {}
