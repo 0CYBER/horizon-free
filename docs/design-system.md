@@ -241,7 +241,9 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
 
 - **Motion that means something**: the sky drifts slowly and stops when the window is hidden or
   unfocused; the interface moves only to show cause and effect (a row arrives where it was added,
-  progress fills). Reduced motion: nothing moves.
+  progress fills). Reduced motion: nothing moves. The launcher's sky (`launcher/src/sky.rs`) moves
+  in whole texels on a half-second beat, so it asks for two frames a second at most;
+  `HORIZON_LAUNCHER_MOTION=off` stills it, `always` keeps it moving unfocused (for recordings).
 - **Copy says what happens** ("Downloads 26.3 and Java 21, about 600 MB"), never praises.
 - The specimen (`HORIZON_LAUNCHER_PAGE=specimen horizon-launcher`) draws the type and colours in the
   launcher itself.

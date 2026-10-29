@@ -39,10 +39,8 @@ pub const STAGGER: Duration = tokens::STAGGER;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
-    /// The page behind everything (under its stone texture), and its colour as `0xRRGGBB` for
-    /// the texture.
+    /// The page behind everything the sky doesn't cover.
     pub page: Hsla,
-    pub page_rgb: u32,
     /// Hover plates, fields and the console: the raised panel colour.
     pub plate_soft: Hsla,
     /// Pressed plates, a switch that is off: the button colour.
@@ -112,7 +110,6 @@ impl Theme {
     fn from(p: tokens::Blocks, night: Night) -> Self {
         Self {
             page: c(p.page),
-            page_rgb: p.page,
             plate_soft: c(p.raised),
             plate: c(p.button),
             surface: c(p.panel),
