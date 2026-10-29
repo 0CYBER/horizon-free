@@ -24,6 +24,15 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum JavaCmd {
+    /// The Java runtimes Horizon downloaded from Mojang and the ones installed on this computer
+    List,
+    /// Download Mojang's Java runtime: a major (8, 16, 17, 21, 25) or a component name from a
+    /// version's JSON (java-runtime-delta)
+    Install { java: String },
+}
+
+#[derive(Subcommand)]
 enum RustCmd {
     /// Whether it is installed, its version and whether this computer can link with it
     Status,
@@ -202,9 +211,41 @@ enum InstanceCmd {
         /// The instance to copy (its name or id)
         #[arg(long)]
         copy: Option<String>,
+        /// Make a Minecraft: Java Edition instance of this version (1.21.4, latest or
+        /// latest-snapshot) instead of a Horizon one
+        #[arg(long, conflicts_with = "copy")]
+        minecraft: Option<String>,
+    },
+    /// The versions of Minecraft: Java Edition a Java instance can play, the newest first
+    Versions {
+        /// Snapshots too
+        #[arg(long)]
+        snapshots: bool,
+        /// Old betas and alphas too
+        #[arg(long)]
+        old: bool,
+    },
+    /// A Java instance's Java: its own Java home or the automatic pick, memory and JVM arguments
+    Java {
+        instance: String,
+        /// A Java home to run it on
+        #[arg(long, conflicts_with = "auto")]
+        home: Option<PathBuf>,
+        /// Go back to the Java the version needs, picked or downloaded by the launcher
+        #[arg(long)]
+        auto: bool,
+        /// The most memory the game may use, in MiB
+        #[arg(long)]
+        memory: Option<u32>,
+        /// Extra JVM arguments (one string; "" clears them)
+        #[arg(long, allow_hyphen_values = true)]
+        args: Option<String>,
     },
     /// Rename an instance (its folder stays)
     Rename { instance: String, name: String },
+    /// Delete an instance: its folder (worlds, options, packs) goes to the Trash, where you can
+    /// get it back. Horizon's own instance stays
+    Delete { instance: String },
     /// Set an instance's icon: a block or item name from your prepared files (grass_block),
     /// a colour (#3fa7d6), or none
     Icon { instance: String, icon: String },
@@ -637,8 +678,10 @@ enum Cmd {
     },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
-    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
-    /// while-playing stay|minimize|hide (what the window does while the game runs), language
+    /// on|off, prune-old-versions on|off (delete old versions after an install, keeping the
+    /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
+    /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
+    /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
     /// system|en|fr|ru (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
@@ -709,6 +752,11 @@ enum Cmd {
     Packs {
         #[command(subcommand)]
         action: Option<PacksCmd>,
+    },
+    /// Java for Minecraft: Java Edition instances: list the runtimes, download Mojang's
+    Java {
+        #[command(subcommand)]
+        action: Option<JavaCmd>,
     },
     /// The screenshots F2 took in an instance: list, delete
     Screenshots {
@@ -784,11 +832,13 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 10] = [
+const SETTING_KEYS: [&str; 12] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
+    "prune-old-versions",
+    "keep-versions",
     "opening-animation",
     "proxy",
     "while-playing",
@@ -812,6 +862,18 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "minecraft-dir" => s.minecraft_dir = folder(value),
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
+        "prune-old-versions" => s.prune_old_versions = Some(on_off(value)?),
+        "keep-versions" => {
+            s.keep_versions = match value {
+                "default" => None,
+                n => Some(
+                    n.parse::<usize>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("{value}: say a number from 1, or default"))?,
+                ),
+            }
+        }
         "opening-animation" => s.skip_opening = !on_off(value)?,
         "while-playing" => {
             s.while_playing = backend::WhilePlaying::parse(value)
@@ -864,6 +926,8 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "minecraft_dir": s.minecraft_dir,
         "server_dir": backend::server_dir(None),
         "install_new_versions": s.install_new_versions.unwrap_or(true),
+        "prune_old_versions": s.auto_prune(),
+        "keep_versions": s.keep_newest(),
         "opening_animation": !s.skip_opening,
         "game_args": s.game_args,
         "proxy": s.proxy,
@@ -1327,7 +1391,45 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
         Cmd::Rust { action } => rust(action.unwrap_or(RustCmd::Status), as_json)?,
+        Cmd::Java { action } => java(action.unwrap_or(JavaCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
+    }
+    Ok(())
+}
+
+fn java(action: JavaCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::java;
+    match action {
+        JavaCmd::List => {
+            let mut all = java::mojang_runtimes(&java::runtimes_dir());
+            all.extend(java::installed());
+            if as_json {
+                json(serde_json::json!(all));
+            } else if all.is_empty() {
+                println!("No Java yet. Horizon downloads Mojang's when an instance needs it.");
+            } else {
+                for r in &all {
+                    let from = match r.source {
+                        java::Source::Mojang => "Mojang's, downloaded by Horizon",
+                        java::Source::Installed => "installed",
+                    };
+                    println!("Java {}  ({from})\n  {}", r.version, r.home.display());
+                }
+            }
+        }
+        JavaCmd::Install { java: which } => {
+            let need = java::Need::named(&which)?;
+            let runtime = java::install(&need, &|line| eprintln!("{line}"))?;
+            if as_json {
+                json(serde_json::json!(runtime));
+            } else {
+                println!(
+                    "Java {} is ready: {}",
+                    runtime.version,
+                    runtime.home.display()
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -2082,7 +2184,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
         serde_json::json!({
             "id": i.id, "name": i.name, "kind": format!("{:?}", i.kind).to_lowercase(),
             "home": i.home, "icon": i.icon, "group": i.group, "selected": selected,
-            "version": i.version, "played_secs": i.played.as_secs(),
+            "version": i.version, "java": i.java, "played_secs": i.played.as_secs(),
             "last_played_ms": i.last_played.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64),
         })
     };
@@ -2093,11 +2195,11 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .as_ref()
             .map(|g| format!("  [{g}]"))
             .unwrap_or_default();
-        let pinned = i
-            .version
-            .as_ref()
-            .map(|v| format!("  {v}"))
-            .unwrap_or_default();
+        let pinned = match (&i.java, &i.version) {
+            (Some(java), _) => format!("  Minecraft {} (Java Edition)", java.minecraft),
+            (None, Some(v)) => format!("  {v}"),
+            (None, None) => String::new(),
+        };
         let played = match i.last_played {
             Some(_) => format!("  {} played", instances::play_time(i.played)),
             None => String::new(),
@@ -2126,7 +2228,62 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 all.iter().for_each(|i| line(i, i.id == selected));
             }
         }
-        InstanceCmd::Create { name, copy } => changed(instances::create(&name, copy.as_deref())?),
+        InstanceCmd::Create {
+            name,
+            copy,
+            minecraft: None,
+        } => changed(instances::create(&name, copy.as_deref())?),
+        InstanceCmd::Create {
+            name,
+            minecraft: Some(version),
+            ..
+        } => {
+            let versions = horizon_launcher::minecraft_versions::load()?;
+            changed(instances::create_java(&name, &versions.find(&version)?.id)?)
+        }
+        InstanceCmd::Versions { snapshots, old } => {
+            let versions = horizon_launcher::minecraft_versions::load()?;
+            let shown: Vec<_> = versions.of(snapshots, old).collect();
+            if as_json {
+                json(serde_json::json!(shown));
+            } else {
+                for v in shown {
+                    let date = v.released.get(..10).unwrap_or("");
+                    println!("{}  {date}  {:?}", v.id, v.kind);
+                }
+            }
+        }
+        InstanceCmd::Java {
+            instance,
+            home,
+            auto,
+            memory,
+            args,
+        } => {
+            if instances::find(&instance)?.java.is_none() {
+                return Err(format!(
+                    "{instance} is a Horizon instance: Horizon is not a Java program."
+                ));
+            }
+            changed(instances::edit(&instance, |m| {
+                let java = m.java.get_or_insert_with(Default::default);
+                if auto {
+                    java.home = None;
+                }
+                java.home = home.or(java.home.take());
+                java.memory_mb = memory.or(java.memory_mb);
+                if let Some(args) = args {
+                    java.jvm_args = args.trim().to_string();
+                }
+            })?)
+        }
+        InstanceCmd::Delete { instance } => {
+            let gone = instances::delete(&instance)?;
+            match as_json {
+                true => json(serde_json::json!({"deleted": gone.id, "trashed": gone.work})),
+                false => println!("{} is in the Trash.", gone.name),
+            }
+        }
         InstanceCmd::Rename { instance, name } => {
             changed(instances::edit(&instance, |m| m.name = Some(name))?)
         }
