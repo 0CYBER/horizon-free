@@ -162,8 +162,9 @@ each was built or last used): switching a mod off and on again plays the kept bu
   versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
   Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
-  has read the source: the `.hnmod` *is* the source (only `.rs` and `.toml`, checked without running anything),
-  pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
+  `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
+  The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
   A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
