@@ -435,10 +435,110 @@ fn hoglin_hurt(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, by: Who) {
         m.ai.last_hurt_by = None;
     }
 }
+/// `PiglinAi.stopHoldingOffHandItem` without bartering (`wasHurtBy`): a gold
+/// ingot is not bartered and is gone; anything else ends its admiring next
+/// tick, as if the time ran out, and the game side puts it away.
+pub fn stop_admiring(m: &mut Mob) {
+    if m.extra.off_hand.as_deref() == Some("minecraft:gold_ingot") {
+        m.extra.off_hand = None;
+        m.extra.using_item = 0;
+    } else {
+        m.extra.using_item = i32::from(m.extra.off_hand.is_some() && m.extra.using_item > 0);
+    }
+}
+/// `avoidTarget.getType() == attacker.getType()`: both the player, or both
+/// mobs of one species.
+fn same_type(w: &MobWorld, a: Who, b: Who) -> bool {
+    match (a, b) {
+        (Who::Player, Who::Player) => true,
+        (Who::Mob(_), Who::Mob(_)) => {
+            species_of(w, a).is_some() && species_of(w, a) == species_of(w, b)
+        }
+        _ => false,
+    }
+}
+/// `PiglinAi.broadcastAngerTarget`, as a baby's hit calls it: the adult
+/// piglins around it that have no target (brutes too, unless the attacker is
+/// a hoglin, which they cannot hunt) take the attacker as theirs.
+fn broadcast_anger(m: &Mob, w: &MobWorld, by: Who, at: Vec3, events: &mut Vec<MobEvent>) {
+    let range = m.attrs.follow_range;
+    let hoglin = species_of(w, by) == Some(Species::Hoglin);
+    // Hoglin.canBeHunted: an adult.
+    let huntable = matches!(by, Who::Mob(id) if w.seen(id).is_some_and(|s| !s.baby));
+    if hoglin && !huntable {
+        return;
+    }
+    let id = m.id;
+    let others: Vec<u32> = w
+        .nearby(m.position, range, move |s| {
+            s.id != id
+                && !s.baby
+                && s.target.is_none()
+                && (s.species == Species::Piglin || (s.species == Species::PiglinBrute && !hoglin))
+                && s.position.distance_squared(at) <= range * range
+        })
+        .map(|s| s.id)
+        .collect();
+    for mob in others {
+        events.push(MobEvent::SetTarget { mob, target: by });
+    }
+}
+/// `PiglinAi.maybeRetaliate`'s tests: not while retreating, only against an
+/// attacker it can attack and that is not more than 4 blocks further away
+/// than its target.
+fn piglin_retaliates(m: &mut Mob, w: &MobWorld, by: Who, at: Vec3) -> bool {
+    m.extra.piglin.activity != Activity::Avoid
+        && attackable(m, w, by, false)
+        && !much_further_than_target(m, w, at)
+}
+/// `Piglin.hurtServer`'s `PiglinAi.wasHurtBy`: another piglin's hit changes
+/// nothing. Any other ends the admiring, the celebration and the dance, and
+/// an avoid target of another kind. A baby flees the attacker for 5 seconds
+/// and calls the adults around it; an adult retreats from a hoglin when
+/// hoglins outnumber piglins and otherwise retaliates when `maybeRetaliate`
+/// allows. The hurt-by goal does the retaliating, so a hit that does not get
+/// it is used up.
+fn piglin_hurt(
+    m: &mut Mob,
+    w: &MobWorld,
+    lr: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+    by: Who,
+) {
+    let species = species_of(w, by);
+    if species == Some(Species::Piglin) {
+        return;
+    }
+    stop_admiring(m);
+    m.extra.scratch[0] = 0;
+    m.extra.scratch[1] = 0;
+    m.extra.home = None;
+    if let Some(avoided) = avoid_target(m)
+        && !same_type(w, avoided, by)
+    {
+        m.extra.piglin.avoid = None;
+    }
+    let Some(at) = w.target_info(by).map(|t| t.position) else {
+        return;
+    };
+    if m.is_baby() {
+        remember_avoid(m, by, at, 100);
+        if attackable(m, w, by, false) {
+            broadcast_anger(m, w, by, at, events);
+        }
+        m.ai.last_hurt_by = None;
+    } else if species == Some(Species::Hoglin) && hoglins_outnumber_piglins(m) {
+        set_avoid_target_and_dont_hunt(m, lr, by, at);
+        broadcast_retreat(m, w, by, at, events);
+        m.ai.last_hurt_by = None;
+    } else if !piglin_retaliates(m, w, by, at) {
+        m.ai.last_hurt_by = None;
+    }
+}
 /// What a piglin or hoglin handles before its goals run: the retreats other
 /// mobs broadcast to it, the hit `wasHurtBy` reacts to and, for a piglin,
 /// its celebration.
-pub fn before_goals(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
+pub fn before_goals(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
     for (from, at) in std::mem::take(&mut m.extra.piglin.retreats) {
         retreat_from_nearest(m, w, lr, from, at);
     }
@@ -448,6 +548,8 @@ pub fn before_goals(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
         m.extra.piglin.hurt_seen = m.ai.last_hurt_by_time;
         if m.species() == Species::Hoglin {
             hoglin_hurt(m, w, lr, by);
+        } else {
+            piglin_hurt(m, w, lr, events, by);
         }
     }
     if m.species() == Species::Piglin {
@@ -994,29 +1096,15 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
     }
 }
 /// `StartCelebratingIfTargetDead` for a piglin (`scratch[0]` dancing,
-/// `scratch[1]` ticks of celebration left, `scratch[2]` the hit seen, `home`
-/// the `CELEBRATE_LOCATION`): a killed target starts a celebration at its
-/// spot, and a hoglin's death makes the piglin dance one time in ten.
-/// `PiglinAi.wasHurtBy` ends both. Runs before the target goals drop the
-/// dead target.
+/// `scratch[1]` ticks of celebration left, `home` the `CELEBRATE_LOCATION`):
+/// a killed target starts a celebration at its spot, and a hoglin's death
+/// makes the piglin dance one time in ten. `piglin_hurt` ends both. Runs
+/// before the target goals drop the dead target.
 pub fn celebrate(m: &mut Mob, w: &MobWorld) {
     if m.extra.scratch[1] > 0 {
         m.extra.scratch[1] -= 1;
         if m.extra.scratch[1] == 0 {
             m.extra.scratch[0] = 0;
-            m.extra.home = None;
-        }
-    }
-    if let Some(by) = m.ai.last_hurt_by
-        && m.ai.last_hurt_by_time != m.extra.scratch[2]
-    {
-        m.extra.scratch[2] = m.ai.last_hurt_by_time;
-        // PiglinAi.wasHurtBy: another piglin's hit ends nothing.
-        let piglin =
-            matches!(by, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Piglin));
-        if !piglin {
-            m.extra.scratch[0] = 0;
-            m.extra.scratch[1] = 0;
             m.extra.home = None;
         }
     }
