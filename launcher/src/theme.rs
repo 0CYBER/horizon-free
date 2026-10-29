@@ -1,17 +1,20 @@
 //! The launcher's view of Horizon's design tokens (`crates/horizon-theme`, described in
-//! `docs/design-system.md`): the blocky look it shares with the website ("Blocks"), stone-dark or
-//! lavender-light with Horizon's violet, Pixelify Sans for headings and controls, Geist and Geist
-//! Mono for text (all bundled, SIL Open Font License).
+//! `docs/design-system.md`): the night look (`horizon_theme::night`, a night sky or a dawn with
+//! Horizon's violet) in Bricolage Grotesque, with Geist Mono for paths and codes (all bundled, SIL
+//! Open Font License). Screens not rebuilt yet draw the Blocks parts in the night's colours.
 use gpui::{rgb, Hsla, WindowAppearance};
 use horizon_launcher::backend::Appearance;
 use horizon_launcher::themes::Accent;
 use horizon_theme as tokens;
 use std::time::Duration;
 
+pub use tokens::night;
 pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, LABEL, MICRO, TITLE, UI, WORDMARK};
-pub const FONT: &str = tokens::FONT;
+pub const FONT: &str = night::FONT;
 pub const MONO: &str = tokens::MONO;
-pub const PIXEL: &str = tokens::PIXEL;
+/// What the Blocks parts set in their pixel face (headings, navigation, buttons) until their
+/// screens are rebuilt: the night's UI family.
+pub const PIXEL: &str = night::FONT;
 
 pub use tokens::{BLOCK_BEVEL as BEVEL, BLOCK_LIP as LIP};
 /// Shapes and controls, shared with the game's menus and the website.
@@ -99,11 +102,8 @@ impl Theme {
             WindowAppearance::Light | WindowAppearance::VibrantLight
         );
         let dark = pinned_dark(choice).unwrap_or(system_dark);
-        Self::from(accent.apply(if dark {
-            tokens::BLOCKS_DARK
-        } else {
-            tokens::BLOCKS_LIGHT
-        }))
+        let night = if dark { night::NIGHT } else { night::DAWN };
+        Self::from(accent.apply(night.blocks()))
     }
 
     fn from(p: tokens::Blocks) -> Self {
@@ -161,7 +161,7 @@ mod tests {
     /// field (WCAG 1.4.11 asks 3:1 for those), and text over a selected suggestion.
     #[test]
     fn marks_and_selections_read_clearly() {
-        for p in [tokens::BLOCKS_LIGHT, tokens::BLOCKS_DARK] {
+        for p in [tokens::night::DAWN.blocks(), tokens::night::NIGHT.blocks()] {
             let theme = if p.dark { "dark" } else { "light" };
             for (name, bg) in [
                 ("page", p.page),
