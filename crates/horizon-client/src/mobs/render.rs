@@ -1009,7 +1009,7 @@ fn shaking(m: &Mob) -> bool {
     match m.species() {
         Species::Strider => super::strider::suffocating(m),
         Species::ZombieVillager => super::zombie_villager::is_converting(m),
-        Species::Zombie | Species::Husk => m.extra.counter2 > 0,
+        Species::Zombie | Species::Husk | Species::Skeleton => m.extra.counter2 > 0,
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
             !m.extra.flag2 && m.extra.counter2 > 0
         }
@@ -1570,6 +1570,43 @@ pub fn part_transform(
     anim::setup(m, &s, &mut poses, &data.animations);
     part_matrix(&model, base, &poses, part, 0.0)
 }
+/// `FoxHeldItemLayer`: the item sits at the head's position under the render
+/// state's head roll, yaw and pitch (not the posed head's, which differ while
+/// it sleeps), pushed out to the mouth.
+fn fox_item_transform(m: &Mob, alpha: f32, camera: glam::DVec3, data: &MobData) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let head = *poses.get("head");
+    let fox = super::fox::pose(m, alpha);
+    let baby = m.is_baby();
+    let mut t = base_transform(m, alpha, camera)
+        * Mat4::from_translation(Vec3::new(head[0], head[1], head[2]) / 16.0);
+    if baby {
+        t *= Mat4::from_scale(Vec3::splat(0.75));
+    }
+    t *= Mat4::from_rotation_z(fox.head_roll_angle)
+        * Mat4::from_rotation_y(s.y_rot.to_radians())
+        * Mat4::from_rotation_x(s.x_rot.to_radians());
+    let (x, y, z) = match (baby, fox.sleeping) {
+        (true, true) => (0.4, 0.26, 0.15),
+        (true, false) => (0.06, 0.26, -0.5),
+        (false, true) => (0.46, 0.26, 0.22),
+        (false, false) => (0.06, 0.27, -0.5),
+    };
+    t *= Mat4::from_translation(Vec3::new(x, y, z)) * Mat4::from_rotation_x(90.0f32.to_radians());
+    if fox.sleeping {
+        t *= Mat4::from_rotation_z(90.0f32.to_radians());
+    }
+    t
+}
 /// The pose a mob's held item is submitted under (`ItemInHandLayer`:
 /// `translateToHand`, then the hand offset; the item model adds its own
 /// display transform), or `None` when the mob shows no held items.
@@ -1585,6 +1622,10 @@ pub fn held_item_transform(
         return super::panda::item_offset(m, alpha)
             .filter(|_| !left)
             .map(|offset| base_transform(m, alpha, camera) * offset);
+    }
+    // FoxHeldItemLayer: the main hand's item in its mouth.
+    if m.species() == Species::Fox {
+        return (!left).then(|| fox_item_transform(m, alpha, camera, data));
     }
     if !super::illager::shows_item(m) {
         return None;
