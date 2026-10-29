@@ -5758,7 +5758,15 @@ mod tests {
             os_reported(&info(Some(120.0), Some(1000.0))),
             Some(Reported {
                 paper_white: 480,
-                peak: 200
+                peak: 480
+            })
+        );
+        // White above the calibrated peak (a Samsung QD-OLED's 380, the slider at 456).
+        assert_eq!(
+            os_reported(&info(Some(380.0), Some(456.0))),
+            Some(Reported {
+                paper_white: 456,
+                peak: 456
             })
         );
         assert_eq!(os_reported(&info(Some(1000.0), None)), None);
@@ -6266,8 +6274,6 @@ static DISPLAY_LOG: std::sync::Mutex<DisplayLog> = std::sync::Mutex::new(Display
     pending: None,
 });
 const DISPLAY_LOG_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
-// Only Wayland's HDR reports call it so far.
-#[cfg(target_os = "linux")]
 fn log_display(line: String) {
     let now = std::time::Instant::now();
     let mut log = DISPLAY_LOG
@@ -6316,9 +6322,12 @@ fn os_reported(info: &wgpu::DisplayHdrInfo) -> Option<crate::graphics::Reported>
     let usable = |n: f32| n.is_finite() && n > 0.0;
     let peak = luminance.max_nits.filter(|&n| usable(n))?;
     let white = luminance.sdr_white_nits.filter(|&n| usable(n))?;
+    let paper_white = (white.round() as u32).clamp(80, 480);
     Some(crate::graphics::Reported {
-        paper_white: (white.round() as u32).clamp(80, 480),
-        peak: (peak.round() as u32).clamp(200, 10_000),
+        paper_white,
+        // Windows' SDR brightness slider can set white above the reported peak (480 against
+        // a calibrated 380): the highlights then stay at white instead of dropping below it.
+        peak: (peak.round() as u32).clamp(200, 10_000).max(paper_white),
     })
 }
 
