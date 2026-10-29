@@ -15701,8 +15701,8 @@ pub fn run() -> Result<()> {
         // 10 to 200 ms to get one back.
         horizon_threads::favour_current();
     }
-    // Someone is playing: the anonymous ping behind the launcher's "N playing now". Not for a
-    // server, a benchmark or a run that quits by itself.
+    // Someone is playing: the anonymous ping behind the launcher's "N playing now", and the
+    // official server in their list. Not for a server, a benchmark or a run that quits by itself.
     if options.execution_role.is_client()
         && options.benchmark.is_none()
         && !options.offscreen
@@ -15710,6 +15710,10 @@ pub fn run() -> Result<()> {
         && options.world_frames.is_none()
     {
         horizon_client::heartbeat::start();
+        if let Err(e) = horizon_client::multiplayer::add_official_server(&std::env::current_dir()?)
+        {
+            log::warn!("could not add the official server to servers.dat: {e}");
+        }
     }
     if options.execution_role.is_client() {
         horizon_threads::catch_stop_signals();
