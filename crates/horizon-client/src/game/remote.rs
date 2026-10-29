@@ -1577,6 +1577,18 @@ impl Game<'_> {
             {
                 return;
             }
+            // A fishing hook keeps a LinearInterpolationHandler: eased towards the
+            // update over three ticks, on top of its own movement (`tick_remote_hooks`).
+            if path.is_some() {
+                if let Some(h) = self.hook.as_mut().filter(|h| h.id() == id as u32) {
+                    h.move_to(position, on_ground);
+                    return;
+                }
+                if let Some(h) = self.remote_hooks.iter_mut().find(|h| h.id() == id as u32) {
+                    h.move_to(position, on_ground);
+                    return;
+                }
+            }
             // A thrown trident is an arrow: placed at once, flown on by its tick.
             if let Some(t) = self.tridents.iter_mut().find(|t| t.id == id as u32) {
                 if path.is_some() {
@@ -3650,6 +3662,7 @@ impl Game<'_> {
             t.velocity = v;
         } else if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id as u32) {
             r.velocity = v;
+        } else if self.remote_hook_motion(id as u32, v) {
         } else if let Some(p) = self
             .remote
             .as_mut()

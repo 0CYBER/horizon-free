@@ -262,6 +262,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
              client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
              sends each target its packet).
+- hook_smooth: a cast fishing hook moves every tick of its flight on the client, between the tracker's updates (#3781).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
 - cure-discount: the host and the guest each cure a zombie villager with a golden apple and pay 14
@@ -6654,6 +6655,41 @@ def check_hero_trading(host, guest, out):
         host('command', command=f'kill @e[tag={tag}]')
     return seen
 
+
+def check_hook_smooth(host, guest, out):
+    """FishingHook.tick runs on a client between the tracker's updates (every 5 ticks): a cast hook moves
+    every tick of its flight, not in jumps with two still ticks between them (#3781)."""
+    result = {}
+    apart(host, guest)
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='weather clear')
+    for game, dz in ((host, -5), (guest, 5)):
+        x, z = hx, hz + dz
+        host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 14} {hy - 1} {z + 1} minecraft:stone')
+        host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 14} {hy + 4} {z + 1} minecraft:air')
+        game('command', command='gamemode survival')
+        game('command', command='clear @s')
+        game('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod')
+        game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+        game.wait(10)
+        game.raw('look-at', f'{x + 8.5:.2f}', f'{hy + 1:.2f}', f'{z + 0.5:.2f}')
+        replies = game.script(['use-item'] + ['status', 'wait 1'] * 30, every=True)
+        seq = []
+        for r in replies:
+            hooks = [o for o in r.get('projectiles', []) if o.get('kind') == 'minecraft:fishing_bobber' and o.get('owner') == 0]
+            if hooks:
+                seq.append(hooks[0]['position'])
+        steps = [round(math.dist(a, b), 3) for a, b in zip(seq, seq[1:])]
+        result[game.name] = steps
+        game.raw('use-item')
+        game.wait(5)
+        # In flight every tick moves it (a hook eased between updates stood still two ticks of five).
+        assert all(d > 0.05 for d in steps[:6]), f'{game.name}: the hook moved in jumps: {steps}'
+    return result
+
+
+CHECKS += ['hook_smooth']
+CHECK_FNS['hook_smooth'] = check_hook_smooth
 
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})
