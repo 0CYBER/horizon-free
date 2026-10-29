@@ -31,6 +31,7 @@ impl Default for SignText {
             lines: Default::default(),
             color: BLACK,
             glowing: false,
+            click: Default::default(),
         }
     }
 }
@@ -79,7 +80,18 @@ impl SignData {
                     Tag::List(
                         t.lines
                             .iter()
-                            .map(|l| Tag::String(l.as_str().into()))
+                            .zip(&t.click)
+                            .map(|(line, click)| {
+                                let text = Tag::String(line.as_str().into());
+                                match click {
+                                    // The line's style keeps its click event.
+                                    Some(event) => Tag::compound([
+                                        ("text", text),
+                                        ("click_event", event.clone()),
+                                    ]),
+                                    None => text,
+                                }
+                            })
                             .collect(),
                     ),
                 ),
@@ -90,19 +102,25 @@ impl SignData {
                 ("has_glowing_text", Tag::Byte(i8::from(t.glowing))),
             ])
         };
-        vec![
+        let mut out = Vec::new();
+        if self.allow_op_features {
+            out.push(("allow_op_features", Tag::Byte(1)));
+        }
+        out.extend([
             ("front_text", side(&self.front)),
             ("back_text", side(&self.back)),
             ("is_waxed", Tag::Byte(i8::from(self.waxed))),
-        ]
+        ]);
+        out
     }
     pub fn decode(&mut self, tag: &Tag) {
         let side = |t: Option<&Tag>| -> SignText {
             let mut out = SignText::default();
             let Some(t) = t else { return out };
             if let Some(Tag::List(messages)) = t.get("messages") {
-                for (line, m) in out.lines.iter_mut().zip(messages) {
+                for ((line, click), m) in out.lines.iter_mut().zip(&mut out.click).zip(messages) {
                     *line = component_text(m);
+                    *click = click_event(m);
                 }
             }
             if let Some(Tag::String(c)) = t.get("color") {
@@ -117,6 +135,21 @@ impl SignData {
         self.front = side(tag.get("front_text"));
         self.back = side(tag.get("back_text"));
         self.waxed = matches!(tag.get("is_waxed"), Some(Tag::Byte(b)) if *b != 0);
+        self.allow_op_features =
+            matches!(tag.get("allow_op_features"), Some(Tag::Byte(b)) if *b != 0);
+    }
+}
+/// The `click_event` in the style of a stored line: the one of a component
+/// object, or of the first component of a list (`createFromList` copies it
+/// and appends the rest as siblings).
+fn click_event(tag: &Tag) -> Option<Tag> {
+    let root = match tag {
+        Tag::List(list) => list.first()?,
+        other => other,
+    };
+    match root.get("click_event") {
+        Some(event @ Tag::Compound(_)) => Some(event.clone()),
+        _ => None,
     }
 }
 /// Plain text of a stored text component (string, `{text: ...}` or JSON string).
