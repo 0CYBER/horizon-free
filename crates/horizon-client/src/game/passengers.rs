@@ -27,16 +27,7 @@ fn zombie_kind(s: Species) -> bool {
 impl Game<'_> {
     /// `Entity.startRiding` for two mobs.
     pub(super) fn mount_mob(&mut self, rider: u32, vehicle: u32) {
-        if rider == vehicle {
-            return;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == rider) {
-            m.extra.mount = Some(vehicle);
-            m.extra.passenger = true;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == vehicle) {
-            m.extra.rider = Some(rider);
-        }
+        riders::link(&mut self.mobs, rider, vehicle);
     }
     /// Riders sit on their vehicles (`Entity.positionRider`), mobs or boats,
     /// and let go when the vehicle dies or is gone.

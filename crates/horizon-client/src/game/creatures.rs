@@ -1757,6 +1757,9 @@ impl Game<'_> {
                         horizon_client::mobs::piglin::receive_retreat(m, from, at);
                     }
                 }
+                MobEvent::StartRiding { rider, vehicle } => {
+                    horizon_client::mobs::riders::start_riding(&mut self.mobs, rider, vehicle);
+                }
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)
