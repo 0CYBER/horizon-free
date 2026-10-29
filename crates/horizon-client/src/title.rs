@@ -42,11 +42,16 @@ fn translate(key: &str, fallback: &str, args: &[&dyn std::fmt::Display]) -> Stri
     format_translation(&lang::get_or(key, fallback), &args).plain()
 }
 
-enum BackupToast {
-    Created { folder: String, bytes: u64 },
+enum WorldToast {
+    Created {
+        folder: String,
+        bytes: u64,
+    },
     Failed(String),
+    /// `SystemToast.onWorldAccessFailure`: the folder of a world that couldn't be locked.
+    AccessFailure(String),
 }
-impl BackupToast {
+impl WorldToast {
     fn text(&self) -> (String, String) {
         match self {
             Self::Created { folder, bytes } => (
@@ -61,6 +66,10 @@ impl BackupToast {
                 lang::get_or("selectWorld.edit.backupFailed", "Backup failed"),
                 error.clone(),
             ),
+            Self::AccessFailure(folder) => (
+                lang::get_or("selectWorld.access_failure", "Failed to access world"),
+                folder.clone(),
+            ),
         }
     }
 }
@@ -69,7 +78,9 @@ impl BackupToast {
 pub struct WorldEntry {
     pub folder: String,
     pub name: String,
-    pub creative: bool,
+    /// `GameType`: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    pub game_mode: i32,
+    pub hardcore: bool,
     pub modified: std::time::SystemTime,
     pub commands: bool,
     pub version: String,
@@ -139,6 +150,11 @@ pub enum Action {
     Connect {
         address: String,
     },
+    /// Create World's Data Packs screen on the new world's pack folder.
+    DataPacks {
+        dir: PathBuf,
+        selected: Vec<String>,
+    },
 }
 pub struct Title {
     pub mode: Mode,
@@ -161,8 +177,8 @@ pub struct Title {
     backup_then_open: bool,
     /// The folder to open next, once that backup has finished.
     open_request: Option<String>,
-    /// EditWorldScreen's `SystemToast` (`WORLD_BACKUP`) and its slide.
-    toast: Option<(crate::toasts::Slide, BackupToast)>,
+    /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
+    toast: Option<(crate::toasts::Slide, WorldToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
     /// The saves listed for Home, re-read every couple of seconds.
@@ -212,7 +228,8 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
             Some(WorldEntry {
                 folder: e.file_name().to_string_lossy().into_owned(),
                 name: level.name,
-                creative: level.creative,
+                game_mode: level.game_mode,
+                hardcore: level.hardcore,
                 modified,
                 commands: matches!(data.get("allowCommands"), Some(horizon_world::nbt::Tag::Byte(v)) if *v != 0),
                 version: data.get("Version").and_then(|v| v.get("Name"))
@@ -223,6 +240,31 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
         .collect();
     worlds.sort_by_key(|w| std::cmp::Reverse(w.modified));
     worlds
+}
+/// LevelSummary.createInfo: a hardcore world's mode in red (CommonColors.RED),
+/// else `gameMode.` + its GameType name, then commands and the version.
+fn world_info(world: &WorldEntry) -> crate::text::Text {
+    let mode = if world.hardcore {
+        crate::text::Text::colored(lang::get_or("gameMode.hardcore", "Hardcore Mode"), 0xFF0000)
+    } else {
+        let (key, fallback) = match world.game_mode {
+            1 => ("gameMode.creative", "Creative Mode"),
+            2 => ("gameMode.adventure", "Adventure Mode"),
+            3 => ("gameMode.spectator", "Spectator Mode"),
+            _ => ("gameMode.survival", "Survival Mode"),
+        };
+        crate::text::Text::literal(lang::get_or(key, fallback))
+    };
+    let commands = if world.commands {
+        format!(", {}", lang::get_or("selectWorld.commands", "Commands"))
+    } else {
+        String::new()
+    };
+    mode.append(crate::text::Text::literal(format!(
+        "{commands}, {} {}",
+        lang::get_or("selectWorld.version", "Version:"),
+        world.version
+    )))
 }
 fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
     // SplashManager checks SpecialDates before the resource list (local date).
@@ -347,6 +389,12 @@ impl Title {
         row
     }
     fn cancel_create(&mut self) {
+        // removeTempDataPackDir.
+        if let Mode::Create { options, .. } = &self.mode
+            && let Some(dir) = &options.pack_dir
+        {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         if self.create_return_to_main {
             self.mode = Mode::Main;
         } else {
@@ -409,6 +457,13 @@ impl Title {
                 focus,
                 options,
             };
+        }
+    }
+    /// The Data Packs screen's Done (`applyNewPackConfig`): its selection for
+    /// the new world.
+    pub fn set_data_packs(&mut self, ids: Vec<String>) {
+        if let Mode::Create { options, .. } = &mut self.mode {
+            options.data_packs = ids;
         }
     }
     fn matches_search(&self, world: &WorldEntry) -> bool {
@@ -538,8 +593,8 @@ impl Title {
                 self.open_request = Some(folder.clone());
             }
             let toast = match result {
-                Ok(bytes) => BackupToast::Created { folder, bytes },
-                Err(error) => BackupToast::Failed(error),
+                Ok(bytes) => WorldToast::Created { folder, bytes },
+                Err(error) => WorldToast::Failed(error),
             };
             self.toast = Some((crate::toasts::Slide::default(), toast));
         }
@@ -567,9 +622,18 @@ impl Title {
     pub fn take_open_request(&mut self) -> Option<String> {
         self.open_request.take()
     }
-    /// `WorldOpenFlows.openWorldCheckVersionCompatibility`: a world whose file
-    /// fixes are due asks for a backup first; any other opens at once.
+    /// `WorldOpenFlows.openWorld`: a world that can't be locked, as one another
+    /// instance has open, stays closed behind `onWorldAccessFailure`
+    /// (`createWorldAccess`); then `openWorldCheckVersionCompatibility`: a world
+    /// whose file fixes are due asks for a backup first; any other opens at once.
     fn play(&mut self, world: WorldEntry) -> Action {
+        if crate::save::SessionLock::acquire(&self.saves.join(&world.folder)).is_err() {
+            self.toast = Some((
+                crate::toasts::Slide::default(),
+                WorldToast::AccessFailure(world.folder),
+            ));
+            return Action::None;
+        }
         if crate::save::needs_file_fixes(&self.saves.join(&world.folder)) {
             self.mode = Mode::BackupBeforeUpgrade { world };
             return Action::None;
@@ -1127,22 +1191,8 @@ impl Title {
                         rgba(128, 128, 128, 255),
                         true,
                     );
-                    let mode = if world.creative {
-                        lang::get_or("gameMode.creative", "Creative Mode")
-                    } else {
-                        lang::get_or("gameMode.survival", "Survival Mode")
-                    };
-                    let commands = if world.commands {
-                        format!(", {}", lang::get_or("selectWorld.commands", "Commands"))
-                    } else {
-                        String::new()
-                    };
-                    let details = format!(
-                        "{mode}{commands}, {} {}",
-                        lang::get_or("selectWorld.version", "Version:"),
-                        world.version
-                    );
-                    batch.text(
+                    let details = world_info(world);
+                    batch.text_styled(
                         atlas,
                         &details,
                         x + 35.0,
@@ -1637,11 +1687,26 @@ impl Title {
                     creative, options, ..
                 },
                 Some(id),
-            ) if id != 21 && id != 22 => {
+            ) if !matches!(id, 21 | 22 | 31) => {
                 options.press(id, creative);
                 Action::None
             }
             (Mode::Create { .. }, Some(21)) => self.create_action(),
+            (Mode::Create { options, .. }, Some(31)) => {
+                if options.pack_dir.is_none() {
+                    match crate::datapack::temp_folder() {
+                        Ok(dir) => options.pack_dir = Some(dir),
+                        Err(e) => {
+                            log::warn!("Horizon: no folder for data packs: {e}");
+                            return Action::None;
+                        }
+                    }
+                }
+                Action::DataPacks {
+                    dir: options.pack_dir.clone().unwrap_or_default(),
+                    selected: options.data_packs.clone(),
+                }
+            }
             (Mode::Create { .. }, Some(22)) => {
                 self.cancel_create();
                 Action::None

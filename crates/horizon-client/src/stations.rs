@@ -628,22 +628,34 @@ impl StationRecipes {
         base: Option<&ItemStack>,
         addition: Option<&ItemStack>,
     ) -> Option<ItemStack> {
+        self.smithing_recipe(e, template, base, addition)
+            .map(|(_, result)| result)
+    }
+    /// `SmithingMenu.createResult` with the id of the recipe that made the result.
+    pub fn smithing_recipe(
+        &self,
+        e: &Enchantments,
+        template: Option<&ItemStack>,
+        base: Option<&ItemStack>,
+        addition: Option<&ItemStack>,
+    ) -> Option<(&str, ItemStack)> {
         let (template, base, addition) = (template?, base?, addition?);
         for r in &self.smithing {
             match r {
                 Smithing::Transform {
+                    id,
                     template: t,
                     base: b,
                     addition: a,
                     result,
-                    ..
                 } => {
                     if t.test(template) && b.test(base) && a.test(addition) {
                         // SmithingTransformRecipe: transmute the base keeping its components.
-                        return Some(base.transmute(result, 1));
+                        return Some((id.as_str(), base.transmute(result, 1)));
                     }
                 }
                 Smithing::Trim {
+                    id,
                     template: t,
                     base: b,
                     addition: a,
@@ -651,7 +663,7 @@ impl StationRecipes {
                     ..
                 } => {
                     if t.test(template) && b.test(base) && a.test(addition) {
-                        return apply_trim(e, base, addition, pattern);
+                        return apply_trim(e, base, addition, pattern).map(|r| (id.as_str(), r));
                     }
                 }
             }
