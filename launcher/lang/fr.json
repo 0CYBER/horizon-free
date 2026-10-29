@@ -192,5 +192,13 @@
   "Delete…": "Supprimer…",
   "Keep": "Garder",
   "Move to Trash": "Mettre à la corbeille",
-  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer."
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer.",
+  "Downloading Rust {version} (once): {done}%": "Téléchargement de Rust {version} (une seule fois) : {done} %",
+  "Building horizon-mixins (once)": "Compilation de horizon-mixins (une seule fois)",
+  "Downloading Horizon's source at {revision}": "Téléchargement du code source de Horizon à {revision}",
+  "Applying the mixins": "Application des mixins",
+  "Checking the mods' crates against Horizon's Cargo.lock": "Vérification des crates des mods avec le Cargo.lock de Horizon",
+  "Compiling the game: {count} crates, now {name}": "Compilation du jeu : {count} crates, en cours : {name}",
+  "Running {name}'s post-build step": "Exécution de l'étape post-compilation de {name}",
+  "Installing the build": "Installation de la version compilée"
 }

@@ -192,5 +192,13 @@
   "Keep": "Залишити",
   "Move to Trash": "Перемістити до кошика",
   "Install and turn on native mods": "Встановити й увімкнути нативні моди",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативні моди компілюються в окрему гру. Встановлення такого мода вмикає нативні моди: потім ви збираєте з ним гру в «Налаштування > Нативні моди». Перше збирання завантажує Rust і може тривати 20–30 хвилин; наступні швидші."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативні моди компілюються в окрему гру. Встановлення такого мода вмикає нативні моди: потім ви збираєте з ним гру в «Налаштування > Нативні моди». Перше збирання завантажує Rust і може тривати 20–30 хвилин; наступні швидші.",
+  "Downloading Rust {version} (once): {done}%": "Завантаження Rust {version} (один раз): {done}%",
+  "Building horizon-mixins (once)": "Збирання horizon-mixins (один раз)",
+  "Downloading Horizon's source at {revision}": "Завантаження вихідного коду Horizon на {revision}",
+  "Applying the mixins": "Застосування міксинів",
+  "Checking the mods' crates against Horizon's Cargo.lock": "Перевірка крейтів модів за Cargo.lock Horizon",
+  "Compiling the game: {count} crates, now {name}": "Компіляція гри: {count} крейтів, зараз {name}",
+  "Running {name}'s post-build step": "Виконання кроку після збирання мода {name}",
+  "Installing the build": "Встановлення збірки"
 }

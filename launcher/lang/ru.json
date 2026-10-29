@@ -192,5 +192,13 @@
   "Delete…": "Удалить…",
   "Keep": "Оставить",
   "Move to Trash": "В корзину",
-  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть."
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть.",
+  "Downloading Rust {version} (once): {done}%": "Загрузка Rust {version} (один раз): {done}%",
+  "Building horizon-mixins (once)": "Сборка horizon-mixins (один раз)",
+  "Downloading Horizon's source at {revision}": "Загрузка исходного кода Horizon на {revision}",
+  "Applying the mixins": "Применение миксинов",
+  "Checking the mods' crates against Horizon's Cargo.lock": "Проверка крейтов модов по Cargo.lock Horizon",
+  "Compiling the game: {count} crates, now {name}": "Компиляция игры: {count} крейтов, сейчас {name}",
+  "Running {name}'s post-build step": "Выполнение шага после сборки мода {name}",
+  "Installing the build": "Установка сборки"
 }

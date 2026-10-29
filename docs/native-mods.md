@@ -39,6 +39,106 @@ the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
 
+## A bundle
+
+A bundle is a folder with a `horizon-mixin.toml`. Besides its helpers and modules (horizon-mixins' README) it can
+have its own crate, data files and a post-build step (horizon-mixins 0.6.0). The test bundle
+[`launcher/tests/fixtures/native-crate-demo`](../launcher/tests/fixtures/native-crate-demo) uses all of them:
+
+```
+native-crate-demo/
+  horizon-mixin.toml
+  frame.rs                # helper, compiled into the game
+  data/greeting.txt       # the bundle's data: native_data!("crate_demo", "greeting.txt")
+  engine/                 # the mod's own crate
+    Cargo.toml            # [dependencies] crc32fast = "1"
+    data/salt.txt         # the crate's data: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/salt.txt"))
+    src/lib.rs
+    src/bin/bake.rs       # the post-build step
+```
+
+```toml
+[mod]
+id = "crate_demo"
+version = "0.1.0"
+
+[[injection]]
+id = "frame"
+hook = "frame"            # a name from native-hooks.json, instead of `target`
+hook_version = 1
+kind = "HEAD"
+helper = "frame.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+[[crate]]
+id = "engine"
+path = "engine"           # holds Cargo.toml
+# dependent = "horizon-client"   (the default: the workspace package that depends on it)
+
+[[post_build]]
+crate = "engine"
+bin = "bake"
+args = []
+```
+
+### Named hook points
+
+`native-hooks.json` at the root of the source names each hook point and the version of its contract (signature,
+when it is called, what it does): `{"name": "hud", "version": 1, "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"}`.
+An injection names `hook` and `hook_version` instead of `target`, and horizon-mixins resolves it from the catalog
+of the source it applies to, so a hook point can move in the source without breaking the mods that use it. A name
+the catalog lacks is `E_HOOK_UNKNOWN` (the error lists the names it has), a version it lacks `E_HOOK_VERSION`. A
+contract is never changed: an incompatible change adds a version. Helpers (`native_text`, `native_player`…) are not
+in the catalog; they are kept stable as the hook points are. A test (`catalog_matches_hook_points`) keeps the
+catalog and `native_hooks.rs` in step.
+
+### The mod's crate
+
+A `[[crate]]` is a Cargo package of the bundle's, staged as `native-crates/<mod>/<crate>/` and added to the
+workspace's members and to the `[dependencies]` of its `dependent`, so helpers call it as
+`crate_demo_engine::checksum(…)`. Cargo compiles it once and keeps it: editing a helper, or switching another mod
+on or off, recompiles `horizon-client` but not the mod's crate, so the heavy code of a big mod belongs there and
+only the glue in helpers. A crate can't depend on `horizon-client` (Cargo forbids the cycle) or on any path or git
+crate, and has no `Cargo.lock`, `[workspace]` or build of its own.
+
+**Dependencies come from Horizon's `Cargo.lock`.** A crate names registry crates by version requirement
+(`crc32fast = "1"`, `{ version, features, default-features, optional }`); each must already be in Horizon's lock
+file in a version that matches, and builds in exactly that version. The lock file is the allow list: horizon-mixins
+refuses a crate the lock lacks (`E_CRATE_DEPENDENCY`) and writes the mod's crates into the staged lock without
+changing any other byte, so the game still builds with `--locked`. The launcher checks it again (every downloaded
+package of the staged lock as in Horizon's: name, version, source, checksum), and a feature that turns on a
+dependency the lock lacks fails at `cargo fetch --locked` with a message saying so. The build stops with:
+
+```
+horizon-mixins failed (exit status: 1). The end of its output, the whole of it in …/native/build.log:
+E_CRATE_DEPENDENCY: crate_lock needs rand ^0.9, which isn't in Horizon's Cargo.lock (…/horizon-mixin.toml)
+```
+
+### Data files
+
+A bundle's `data/` folder (any files) is staged as `native-data/<mod>/` at the root of the workspace. A helper or
+module compiles a file in with `horizon_client::native_data!("<mod id>", "path/in/data")` (`&'static [u8; N]`,
+`crate::native_data!` inside the lib), since hook points API 3. A mod's crate keeps its own data in its folder and
+reads it with `include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/…"))`. The registry's `.hnmod` may carry
+both (`mixins/<id>/data/…`, `mixins/<id>/<crate>/data/…`).
+
+### Post-build steps
+
+A `[[post_build]]` names a bin of one of the mod's crates. After the game compiles, the launcher builds it with the
+same profile into the same `native/target/`, then runs it (at low priority, in mod order) in the new build's version
+folder with:
+
+| Variable | What |
+|---|---|
+| `HORIZON_NATIVE_MOD` | the mod's id |
+| `HORIZON_NATIVE_VERSION_DIR` | the new build's version folder (also the working directory) |
+| `HORIZON_NATIVE_DATA_DIR` | `<version folder>/native-data/<mod>/`, created: what the game reads at run time with `native_built_data("<mod>")` (or `horizon_client::native_data::built`) |
+| `HORIZON_NATIVE_CACHE_DIR` | `<launcher data>/native/cache/<mod>/`, created, kept from one build to the next |
+
+Its output goes to `native/build.log`. When it fails, so does the build ("crate_demo's post-build step failed …")
+and the version folder is removed. It runs on the player's computer like the rest of the mod's code: only the
+launcher runs it, never horizon-mixins.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -67,6 +167,7 @@ trusting native code is the player's decision, never an agent's.
 4. **Mixins.** The bundles are copied first, so the build and its key use that copy whatever happens to the
    folder meanwhile. `horizon-mixins apply` stages the modded source; the launcher copies only the files that
    changed into `native/stage/`, so Cargo, which goes by file times, recompiles only the crates the mods touch.
+   With mods' crates, their dependencies are checked against Horizon's `Cargo.lock` ("The mod's crate").
 5. **Compile**: `cargo build --locked --profile fast [--features horizon-client/mods] -p horizon-client`, into
    `native/target/`. `fast` is the workspace's own profile: the release's optimizations without its link-time
    ones (`lto = false`, `codegen-units = 16`, incremental), so a rebuild recompiles and links only what changed.
@@ -77,7 +178,9 @@ trusting native code is the player's decision, never an agent's.
    on Linux, nice 19 on macOS, below-normal priority on Windows), so the desktop and a game in play stay smooth;
    on an otherwise idle computer they still use every core. The log is `native/build.log`; a failure shows its
    last lines (a horizon-mixins diagnostic in one line).
-6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
+6. **Post-build**: each mod's post-build program is built; it runs in the new version folder once that is copied
+   (next step), before the version counts as installed ("Post-build steps").
+7. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
    saying which release or Nightly it started from (`base`) and which commit, mods, horizon-mixins and Rust made
    it. The instance the mods are installed in plays it, the default **Horizon** instance included: the build
@@ -118,6 +221,16 @@ source downloaded first):
 | One mod switched off, rebuild | 56 s in all, 51 s of compiling (only `horizon-client`) |
 | That mod switched on again | under 1 s: the kept build plays again |
 | Nothing changed, rebuild | 1 s, nothing compiled |
+
+The test bundle `native-crate-demo` (its own crate on `crc32fast`, data files, the `frame` hook by name, a
+post-build step), measured the same way on 2026-10-30 (Rust already downloaded):
+
+| What | Time | Compiled |
+|---|---|---|
+| First build (horizon-mixins, the crates, the whole game) | 3 min 27 s; 2 min 24 s compiling the game | 343 crates |
+| A helper's code changed | 48 s (43 s compiling) | `horizon-client` only: the mod's crate is kept |
+| The mod's crate changed | 11 s (6 s compiling) | `crate-demo-engine`, then `horizon-client` |
+| Nothing changed | under 1 s | nothing |
 
 The same set with the `release` profile took 7 min 6 s for the first build and 2 min 34 s per rebuild (2 min 28 s of
 compiling `horizon-client`, mostly its link-time optimization). In play, a `fast` game drew the same frames per
@@ -163,7 +276,7 @@ each was built or last used): switching a mod off and on again plays the kept bu
   Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
   has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
-  `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
+  `mixins/<id>/data/` or a crate's `data/`. The launcher checks the bundle without running anything. Native code is trusted.
   The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
   A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
@@ -185,12 +298,3 @@ each was built or last used): switching a mod off and on again plays the kept bu
 - Rebuild after the mods change, and offer **Update** when `update_for` finds a newer Horizon (asking first, as it
   compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
-
-## Named hook catalog (draft)
-
-`native-hooks.json` maps stable hook names and contract versions to the current
-source targets. A contract includes the signature, call timing and behavior.
-Keep an existing contract or add a new version when it changes incompatibly.
-The catalog does not cover helper methods or arbitrary private game code.
-Named injection resolution needs a matching horizon-mixins change; existing raw
-targets and the `hooks` metadata continue to work as before.

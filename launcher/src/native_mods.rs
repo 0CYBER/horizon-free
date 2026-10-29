@@ -15,6 +15,7 @@
 //! its next build stays on the same revision ([`base_for`]) until the player asks to update
 //! ([`update_for`]), so a rebuild compiles only what the mods changed.
 use crate::backend;
+use crate::i18n::{tr, trf};
 use crate::instances::{self, Instance};
 use crate::rust_toolchain::{self, Toolchain};
 use sha2::{Digest, Sha256};
@@ -23,10 +24,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod crates;
+
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "0d6b103c70633d8fd9443d8d0acd3aadaacedb06";
+pub const MIXINS_REV: &str = "b74802d8acdf3968a520ccb11b5749cf9fcfc386";
 /// The profile builds use: the workspace's `fast` (the release's optimizations without its
 /// link-time ones, incremental), so a rebuild recompiles and links only what the mods changed.
 /// A revision without it builds with `release` ([`profile_of`]).
@@ -480,26 +483,38 @@ pub enum Step {
     Tool,
     Source(String),
     Mixins,
+    /// The mods' own crates checked against Horizon's `Cargo.lock`.
+    Crates,
     /// Crates compiled so far, and the last one.
     Compile(usize, String),
+    /// A mod's post-build step, built and run.
+    PostBuild(String),
     Install,
 }
 
 impl Step {
     pub fn label(&self) -> String {
         match self {
-            Self::Rust(done) => format!(
-                "Downloading Rust {} (once): {:.0}%",
-                rust_toolchain::VERSION,
-                done * 100.0
+            Self::Rust(done) => trf(
+                "Downloading Rust {version} (once): {done}%",
+                &[
+                    ("version", rust_toolchain::VERSION),
+                    ("done", &format!("{:.0}", done * 100.0)),
+                ],
             ),
-            Self::Tool => "Building horizon-mixins (once)".into(),
-            Self::Source(revision) => {
-                format!("Downloading Horizon's source at {}", &revision[..7])
-            }
-            Self::Mixins => "Applying the mixins".into(),
-            Self::Compile(n, name) => format!("Compiling the game: {n} crates, now {name}"),
-            Self::Install => "Installing the build".into(),
+            Self::Tool => tr("Building horizon-mixins (once)").into(),
+            Self::Source(revision) => trf(
+                "Downloading Horizon's source at {revision}",
+                &[("revision", &revision[..7])],
+            ),
+            Self::Mixins => tr("Applying the mixins").into(),
+            Self::Crates => tr("Checking the mods' crates against Horizon's Cargo.lock").into(),
+            Self::Compile(n, name) => trf(
+                "Compiling the game: {count} crates, now {name}",
+                &[("count", &n.to_string()), ("name", name)],
+            ),
+            Self::PostBuild(id) => trf("Running {name}'s post-build step", &[("name", id)]),
+            Self::Install => tr("Installing the build").into(),
         }
     }
 }
@@ -591,21 +606,90 @@ fn apply(rust: &Toolchain, tool: &Path, source: &Path, mods: &Path, out: &Path) 
 /// outside any Cargo configuration of the player's ([`rust_toolchain::outside_configs`]), so only
 /// the workspace's own (`stage/.cargo/config.toml`, when it has one) applies.
 fn compile(rust: &Toolchain, stage: &Path, target: &Path) -> Command {
-    let mut cmd = rust.command(&rust.cargo());
-    rust_toolchain::low_priority(&mut cmd);
+    let mut cmd = cargo(rust, stage, "build");
     cmd.env("CARGO_TARGET_DIR", target);
-    cmd.arg("build");
-    let config = stage.join(".cargo").join("config.toml");
-    if config.is_file() {
-        cmd.arg("--config").arg(config);
-    }
-    cmd.arg("--manifest-path").arg(stage.join("Cargo.toml"));
     cmd.args(["--locked", "--profile", profile_of(stage)]);
     if has_mods_feature(stage) {
         cmd.args(["--features", FEATURES]);
     }
     cmd.args(["-p", "horizon-client", "--bin", "horizon-client"]);
     cmd
+}
+
+/// The launcher's cargo running `subcommand` on the workspace `dir`, at low priority, with only
+/// the workspace's own Cargo configuration ([`compile`]).
+fn cargo(rust: &Toolchain, dir: &Path, subcommand: &str) -> Command {
+    let mut cmd = rust.command(&rust.cargo());
+    rust_toolchain::low_priority(&mut cmd);
+    cmd.arg(subcommand);
+    let config = dir.join(".cargo").join("config.toml");
+    if config.is_file() {
+        cmd.arg("--config").arg(config);
+    }
+    cmd.arg("--manifest-path").arg(dir.join("Cargo.toml"));
+    cmd
+}
+
+/// Checks the mods' crates (`native-crates/`) against `source`'s `Cargo.lock`, Horizon's own.
+/// horizon-mixins already wrote them into `stage`'s lock (and refused a crate the lock lacks,
+/// `E_CRATE_DEPENDENCY`), leaving every other package as it was: this checks that again, a crate
+/// they name must be in Horizon's lock and every package downloaded exactly as there. Then the
+/// crates are fetched, so a feature turning on a dependency the lock lacks fails here, readably.
+fn lock_crates(rust: &Toolchain, source: &Path, stage: &Path) -> Result<(), String> {
+    let read = |dir: &Path| {
+        let path = dir.join("Cargo.lock");
+        fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
+    };
+    let horizon = crates::downloaded(&read(source)?)?;
+    let staged = crates::downloaded(&read(stage)?)?;
+    if let Some(why) = crates::refused(&horizon, Some(&staged), &crates::wanted(stage)?) {
+        return Err(why);
+    }
+    // Only this computer's crates: the build needs no others.
+    let mut fetch = cargo(rust, stage, "fetch");
+    fetch.arg("--locked");
+    if let Some(host) = rust_toolchain::host() {
+        fetch.args(["--target", host.target]);
+    }
+    run(fetch, "Downloading the crates", |_| {}).map_err(crates::locked)
+}
+
+/// Builds the mods' post-build programs with the game's profile in `target`; each step and its
+/// program, in mod order.
+fn post_build_programs(
+    rust: &Toolchain,
+    stage: &Path,
+    target: &Path,
+    progress: &impl Fn(Step),
+) -> Result<Vec<(crates::PostBuild, PathBuf)>, String> {
+    let steps = crates::post_builds(stage)?;
+    let profile = profile_of(stage);
+    let mut out = Vec::new();
+    for step in steps {
+        progress(Step::PostBuild(step.mod_id.clone()));
+        let mut cmd = cargo(rust, stage, "build");
+        cmd.env("CARGO_TARGET_DIR", target);
+        cmd.args([
+            "--locked",
+            "--profile",
+            profile,
+            "-p",
+            &step.package,
+            "--bin",
+            &step.bin,
+        ]);
+        run(
+            cmd,
+            &format!("Building {}'s post-build step", step.mod_id),
+            |_| {},
+        )?;
+        let program =
+            target
+                .join(profile)
+                .join(format!("{}{}", step.bin, std::env::consts::EXE_SUFFIX));
+        out.push((step, program));
+    }
+    Ok(out)
 }
 
 /// Horizon's source at commit `revision`: GitHub's archive of it, unpacked once, with the commit in
@@ -745,6 +829,10 @@ pub fn build(
         let stage = real.join("stage");
         sync(&fresh, &stage)?;
         let _ = fs::remove_dir_all(&fresh);
+        if stage.join(crates::DIR).is_dir() {
+            progress(Step::Crates);
+            lock_crates(&rust, &source, &stage)?;
+        }
         let target = real.join("target");
         let profile = profile_of(&stage);
         let mut crates = 0;
@@ -758,7 +846,9 @@ pub fn build(
                     progress(Step::Compile(crates, name.to_owned()));
                 }
             },
-        )?;
+        )
+        .map_err(crates::locked)?;
+        let post = post_build_programs(&rust, &stage, &target, &progress)?;
         progress(Step::Install);
         let about = serde_json::json!({
             "base": origin,
@@ -770,7 +860,14 @@ pub fn build(
             "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
         });
         let binary = target.join(profile).join(backend::CLIENT);
-        install(base, &version, &binary, &about)?;
+        install(base, &version, &binary, &about, |dir| {
+            for (step, program) in &post {
+                progress(Step::PostBuild(step.mod_id.clone()));
+                let cmd = crates::post_build(program, step, dir, &real.join("cache"))?;
+                run(cmd, &format!("{}'s post-build step", step.mod_id), |_| {})?;
+            }
+            Ok(())
+        })?;
     } else {
         // Used again: it counts as the newest of the builds kept (`prune`).
         let _ = fs::write(backend::version_dir(&version).join(".installed"), "");
@@ -783,11 +880,14 @@ pub fn build(
 
 /// Installs `binary` as version `version`: a copy of installed version `base`'s folder (its
 /// resources included; cloned where the disk can) with the built game in place of `base`'s.
+/// `finish` (the mods' post-build steps) runs in its folder before it counts as installed; when
+/// it fails, the folder is removed.
 fn install(
     base: &str,
     version: &str,
     binary: &Path,
     about: &serde_json::Value,
+    finish: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
     let from = backend::version_dir(base);
     let partial = backend::version_dir(&format!(".{version}.partial"));
@@ -822,6 +922,10 @@ fn install(
     let dir = backend::version_dir(version);
     let _ = fs::remove_dir_all(&dir);
     fs::rename(&partial, &dir).map_err(|e| e.to_string())?;
+    if let Err(e) = finish(&dir) {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(e);
+    }
     fs::write(dir.join(".installed"), "").map_err(|e| e.to_string())
 }
 
@@ -1187,6 +1291,33 @@ mod tests {
         assert_ne!(first, version_for(A, B, &bundles(&d).unwrap()).unwrap());
         fs::write(d.join("hook.rs"), "fn hook() { let _ = 1; }").unwrap();
         assert_ne!(first, key(A));
+    }
+
+    /// The test bundle (`tests/fixtures/native-crate-demo`): its crate's sources and data, and its
+    /// own data folder, are all in the build's key.
+    #[test]
+    fn the_key_covers_a_bundles_crate_and_data_files() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-crate-demo");
+        let d = dir("crate-key");
+        backend::copy_dir(&fixture, &d).unwrap();
+        let found = bundles(&d).unwrap();
+        assert_eq!(found[0].id, "crate_demo");
+        let key = || version_for(A, B, &bundles(&d).unwrap()).unwrap();
+        let mut seen = vec![key()];
+        for file in [
+            "engine/src/lib.rs",
+            "engine/data/salt.txt",
+            "engine/Cargo.toml",
+            "data/greeting.txt",
+        ] {
+            let mut bytes = fs::read(d.join(file)).unwrap();
+            bytes.extend_from_slice(b"\n");
+            fs::write(d.join(file), bytes).unwrap();
+            let now = key();
+            assert!(!seen.contains(&now), "{file} is in the key");
+            seen.push(now);
+        }
     }
 
     #[test]

@@ -192,5 +192,13 @@
   "Keep": "Behalten",
   "Move to Trash": "In den Papierkorb",
   "Install and turn on native mods": "Installieren und native Mods einschalten",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller.",
+  "Downloading Rust {version} (once): {done}%": "Rust {version} wird heruntergeladen (einmalig): {done} %",
+  "Building horizon-mixins (once)": "horizon-mixins wird gebaut (einmalig)",
+  "Downloading Horizon's source at {revision}": "Horizons Quellcode bei {revision} wird heruntergeladen",
+  "Applying the mixins": "Mixins werden angewendet",
+  "Checking the mods' crates against Horizon's Cargo.lock": "Crates der Mods werden mit Horizons Cargo.lock abgeglichen",
+  "Compiling the game: {count} crates, now {name}": "Spiel wird kompiliert: {count} Crates, gerade {name}",
+  "Running {name}'s post-build step": "Post-Build-Schritt von {name} wird ausgeführt",
+  "Installing the build": "Build wird installiert"
 }
