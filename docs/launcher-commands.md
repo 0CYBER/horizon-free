@@ -363,6 +363,7 @@ A Java instance's Java: its own Java home or the automatic pick, memory and JVM 
 - `--auto`: Go back to the Java the version needs, picked or downloaded by the launcher
 - `--memory`: The most memory the game may use, in MiB
 - `--args`: Extra JVM arguments (one string; "" clears them)
+- `--window`: The game window's size, as 1280x720; "default" goes back to the game's own
 
 MCP: `instance_java`.
 

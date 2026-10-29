@@ -78,7 +78,9 @@ impl WorldToast {
 pub struct WorldEntry {
     pub folder: String,
     pub name: String,
-    pub creative: bool,
+    /// `GameType`: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    pub game_mode: i32,
+    pub hardcore: bool,
     pub modified: std::time::SystemTime,
     pub commands: bool,
     pub version: String,
@@ -221,7 +223,8 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
             Some(WorldEntry {
                 folder: e.file_name().to_string_lossy().into_owned(),
                 name: level.name,
-                creative: level.creative,
+                game_mode: level.game_mode,
+                hardcore: level.hardcore,
                 modified,
                 commands: matches!(data.get("allowCommands"), Some(horizon_world::nbt::Tag::Byte(v)) if *v != 0),
                 version: data.get("Version").and_then(|v| v.get("Name"))
@@ -232,6 +235,31 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
         .collect();
     worlds.sort_by_key(|w| std::cmp::Reverse(w.modified));
     worlds
+}
+/// LevelSummary.createInfo: a hardcore world's mode in red (CommonColors.RED),
+/// else `gameMode.` + its GameType name, then commands and the version.
+fn world_info(world: &WorldEntry) -> crate::text::Text {
+    let mode = if world.hardcore {
+        crate::text::Text::colored(lang::get_or("gameMode.hardcore", "Hardcore Mode"), 0xFF0000)
+    } else {
+        let (key, fallback) = match world.game_mode {
+            1 => ("gameMode.creative", "Creative Mode"),
+            2 => ("gameMode.adventure", "Adventure Mode"),
+            3 => ("gameMode.spectator", "Spectator Mode"),
+            _ => ("gameMode.survival", "Survival Mode"),
+        };
+        crate::text::Text::literal(lang::get_or(key, fallback))
+    };
+    let commands = if world.commands {
+        format!(", {}", lang::get_or("selectWorld.commands", "Commands"))
+    } else {
+        String::new()
+    };
+    mode.append(crate::text::Text::literal(format!(
+        "{commands}, {} {}",
+        lang::get_or("selectWorld.version", "Version:"),
+        world.version
+    )))
 }
 fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
     // SplashManager checks SpecialDates before the resource list (local date).
@@ -1145,22 +1173,8 @@ impl Title {
                         rgba(128, 128, 128, 255),
                         true,
                     );
-                    let mode = if world.creative {
-                        lang::get_or("gameMode.creative", "Creative Mode")
-                    } else {
-                        lang::get_or("gameMode.survival", "Survival Mode")
-                    };
-                    let commands = if world.commands {
-                        format!(", {}", lang::get_or("selectWorld.commands", "Commands"))
-                    } else {
-                        String::new()
-                    };
-                    let details = format!(
-                        "{mode}{commands}, {} {}",
-                        lang::get_or("selectWorld.version", "Version:"),
-                        world.version
-                    );
-                    batch.text(
+                    let details = world_info(world);
+                    batch.text_styled(
                         atlas,
                         &details,
                         x + 35.0,

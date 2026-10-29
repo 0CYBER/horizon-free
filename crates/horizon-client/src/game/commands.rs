@@ -925,24 +925,7 @@ impl Game<'_> {
                 Ok(1)
             }
             "say" | "me" | "msg" => self.cmd_say(id, ctx),
-            "list" => {
-                let names = if ctx.has("uuids") {
-                    Text::translate(
-                        "commands.list.nameAndId",
-                        &[
-                            Text::literal(PLAYER_NAME),
-                            Text::literal(self.player_uuid_string()),
-                        ],
-                    )
-                } else {
-                    Text::literal(PLAYER_NAME)
-                };
-                self.system_message(Text::translate(
-                    "commands.list.players",
-                    &[Text::literal("1"), Text::literal("8"), names],
-                ));
-                Ok(1)
-            }
+            "list" => self.cmd_list(ctx),
             _ => Err(err("command.failed", &[])),
         }
     }
@@ -3098,6 +3081,63 @@ impl Game<'_> {
             }
         }
         out
+    }
+    /// ListPlayersCommand: every online player, the host of a hosted world
+    /// first and then the guests in join order, with the count and the max.
+    fn cmd_list(&mut self, ctx: &Context) -> R<i32> {
+        // A single-player owner is a placed guest of the in-process server, so
+        // it is the host and needs no entry of its own.
+        let owner_listed = self
+            .lan
+            .as_ref()
+            .is_some_and(|h| h.hub.singleplayer_owner.is_some());
+        // The host is online unless this is a dedicated server, which has none.
+        let host = (self.options.dedicated.is_none() && !owner_listed).then(|| match &self.lan {
+            Some(h) => (h.host_uuid, h.host_name.clone()),
+            None => (self.player_uuid(), PLAYER_NAME.to_owned()),
+        });
+        let guests = self
+            .lan
+            .iter()
+            .flat_map(|h| h.hub.guests.iter())
+            .filter(|g| g.placed)
+            .map(|g| (g.uuid, g.name.clone()));
+        let players: Vec<(u128, String)> = host.into_iter().chain(guests).collect();
+        let max = self
+            .lan
+            .as_ref()
+            .map_or(horizon_client::lan::MAX_PLAYERS, |h| {
+                h.hub.lan.shared.max_players()
+            });
+        let uuids = ctx.has("uuids");
+        let mut names = Text::empty();
+        for (k, (uuid, name)) in players.iter().enumerate() {
+            if k > 0 {
+                // ComponentUtils.formatList: gray commas.
+                names.push(Text::colored(", ", text::GRAY));
+            }
+            if uuids {
+                names.push(Text::translate(
+                    "commands.list.nameAndId",
+                    &[
+                        Text::literal(name.as_str()),
+                        Text::literal(horizon_protocol::crypto::uuid_string(*uuid)),
+                    ],
+                ));
+            } else {
+                names.push(self.player_text(name, *uuid));
+            }
+        }
+        let count = players.len();
+        self.system_message(Text::translate(
+            "commands.list.players",
+            &[
+                Text::literal(count.to_string()),
+                Text::literal(max.to_string()),
+                names,
+            ],
+        ));
+        Ok(count as i32)
     }
     fn cmd_say(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let raw = match ctx.get(if id == "me" { "action" } else { "message" }) {
