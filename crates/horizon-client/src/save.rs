@@ -54,10 +54,10 @@ pub const VERSION_NAME: &str = horizon_core::VANILLA_VERSION;
 /// mutating the world. Each map is visited once, retaining its iteration order
 /// within each chunk (including repeated chunk coordinates in the input).
 /// An empty batch skips both maps; one chunk uses the direct filter path.
-pub fn chunks_with_block_entities<'a>(
+pub fn chunks_with_block_entities<'a, N: std::hash::BuildHasher>(
     chunks: impl IntoIterator<Item = &'a Arc<Chunk>>,
     entities: &HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
-    names: &HashMap<(i32, i32, i32), String>,
+    names: &HashMap<(i32, i32, i32), String, N>,
 ) -> Vec<Chunk> {
     let chunks: Vec<_> = chunks.into_iter().collect();
     if chunks.is_empty() {

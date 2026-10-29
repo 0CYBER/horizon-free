@@ -160,14 +160,16 @@ impl Game<'_> {
         let Some(BlockEntity::Brushable(b)) = self.world.block_entities.get(&key) else {
             return;
         };
-        if b.loot_table.is_none() {
+        let Some(horizon_world::nbt::Tag::String(table)) = &b.loot_table else {
             return;
-        }
+        };
+        let table = table.to_string_lossy();
         let mut tag = save::encode_block_entity(
             key,
             &BlockEntity::Brushable(b.clone()),
             "minecraft:brushable_block",
         );
+        self.trigger_loot_table(&table);
         let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
         decorated_pot::unpack_loot(
             &mut tag,

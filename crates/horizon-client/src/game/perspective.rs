@@ -446,6 +446,7 @@ impl Game<'_> {
             m.extra.avatar.cloak_o[1] -= 0.125;
         }
         m.extra.swing_right_arm = swing_right_arm;
+        m.extra.swing_stab = self.swing.current.is_some_and(|c| c.animation.kind == 2);
         m.hurt_time = hurt;
     }
     /// `LevelExtractor`'s skip of the camera entity: the player's own body

@@ -539,8 +539,36 @@ pub enum DamageKind {
     Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
-    /// `cramming`: too many entities in one place (`maxEntityCramming`).
+    /// `cramming`: crushed by the mobs around it.
     Cramming,
+    /// `falling_anvil`: an anvil landing on it (it damages a helmet).
+    FallingAnvil,
+    /// `fireworks`: a firework rocket's burst (an explosion for Blast Protection).
+    Fireworks,
+    /// `generic_kill`: a kill that bypasses invulnerability.
+    GenericKill,
+    /// `lightning_bolt`.
+    LightningBolt,
+    /// `outside_border`: past the world border.
+    OutsideBorder,
+    /// `spit`: a llama's spit.
+    Spit,
+    /// `stalagmite`: a fall onto a stalagmite (a fall for Feather Falling).
+    Stalagmite,
+    /// `starve`: no food left.
+    Starve,
+    /// `sulfur_cube_hot`: a sulfur cube's hot floor (a fire).
+    SulfurCubeHot,
+    /// `wind_charge`: a wind charge's burst (a projectile).
+    WindCharge,
+    /// `wither`: the wither effect.
+    Wither,
+}
+impl DamageKind {
+    /// DamageTypeTags.BYPASSES_INVULNERABILITY
+    pub fn bypasses_invulnerability(self) -> bool {
+        matches!(self, DamageKind::OutOfWorld | DamageKind::GenericKill)
+    }
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -604,6 +632,15 @@ impl Damage {
                 | DamageKind::Generic
                 | DamageKind::InWall
                 | DamageKind::SweetBerryBush
+                | DamageKind::OutOfWorld
+                | DamageKind::FallingBlock
+                | DamageKind::FallingAnvil
+                | DamageKind::Cramming
+                | DamageKind::GenericKill
+                | DamageKind::OutsideBorder
+                | DamageKind::Spit
+                | DamageKind::Stalagmite
+                | DamageKind::Starve
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -620,12 +657,21 @@ impl Damage {
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
                 | DamageKind::Cramming
+                | DamageKind::GenericKill
+                | DamageKind::OutsideBorder
+                | DamageKind::Stalagmite
+                | DamageKind::Starve
+                | DamageKind::Wither
         )
     }
     pub fn is_fire(&self) -> bool {
         matches!(
             self.kind,
-            DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
+            DamageKind::OnFire
+                | DamageKind::InFire
+                | DamageKind::Lava
+                | DamageKind::Fireball
+                | DamageKind::SulfurCubeHot
         )
     }
     /// DamageTypeTags.NO_KNOCKBACK
@@ -646,13 +692,20 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::LightningBolt
                 | DamageKind::Cramming
+                | DamageKind::GenericKill
+                | DamageKind::OutsideBorder
+                | DamageKind::Stalagmite
+                | DamageKind::Starve
+                | DamageKind::SulfurCubeHot
+                | DamageKind::Wither
         )
     }
     pub fn is_projectile(&self) -> bool {
         matches!(
             self.kind,
-            DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball
+            DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball | DamageKind::WindCharge
         )
     }
 }
@@ -779,6 +832,8 @@ pub struct Extra {
     /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
     /// for the right arm.
     pub swing_right_arm: Option<bool>,
+    /// The current swing is a STAB (`SwingAnimationType` 2): a spear's jab.
+    pub swing_stab: bool,
     pub flag: bool,
     pub flag2: bool,
     /// Species scratch values (the wither's head targets and clocks).
@@ -1569,6 +1624,11 @@ impl Mob {
             .sum();
         (base - 0.15 * f64::from(protection)).max(0.0)
     }
+    /// Entity.isOnFire: fire-immune mobs never count as burning, even on the
+    /// tick a sun or fire check set their timer before `base_tick` clears it.
+    pub fn is_on_fire(&self) -> bool {
+        !self.kind.flags.fire_immune && self.fire_ticks > 0
+    }
     pub fn ignite_for_ticks(&mut self, ticks: i32) {
         self.fire_ticks = self
             .fire_ticks
@@ -2093,7 +2153,11 @@ impl Mob {
     ) -> bool {
         axolotl::before_damage(self, amount, &source);
         raider::note_hurt(self);
-        if !self.alive() || self.removed || self.invulnerable_flag {
+        // LivingEntity.isInvulnerableTo: only #bypasses_invulnerability gets past it.
+        if !self.alive()
+            || self.removed
+            || (self.invulnerable_flag && !source.kind.bypasses_invulnerability())
+        {
             return false;
         }
         // Ghast.isReflectedFireball: a fireball a player turned back is
@@ -2111,9 +2175,10 @@ impl Mob {
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
+        // #damages_helmet: falling anvils, blocks and stalactites.
         if matches!(
             source.kind,
-            DamageKind::FallingBlock | DamageKind::FallingStalactite
+            DamageKind::FallingBlock | DamageKind::FallingAnvil | DamageKind::FallingStalactite
         ) && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
@@ -2269,6 +2334,10 @@ impl Mob {
                     | DamageKind::OutOfWorld
                     | DamageKind::Cramming
                     | DamageKind::Generic
+                    | DamageKind::GenericKill
+                    | DamageKind::OutsideBorder
+                    | DamageKind::Starve
+                    | DamageKind::Wither
             )
     }
     /// `Wolf.actuallyHurt`: the armor loses `ceil(damage)` durability, cracks
@@ -2363,6 +2432,11 @@ impl Mob {
     /// server's client, `glowing` holds shared flag 6 instead).
     pub fn is_currently_glowing(&self) -> bool {
         self.glowing || self.has_effect("minecraft:glowing")
+    }
+    /// `Entity.isInvisible`: the shared flag 0x20 a server sends (`invisible`),
+    /// or the Invisibility effect on a mob this game ticks itself.
+    pub fn is_invisible(&self) -> bool {
+        self.invisible || self.has_effect("minecraft:invisibility")
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
@@ -2866,12 +2940,12 @@ mod teams_tests {
     }
 }
 #[cfg(test)]
-mod sensor_scan_tests {
+pub(crate) mod sensor_scan_tests {
     use super::*;
     use horizon_core::geometry::Vec3;
     use serde_json::json;
 
-    pub(super) fn kind() -> Arc<MobType> {
+    pub(crate) fn kind() -> Arc<MobType> {
         Arc::new(MobType {
             id: "minecraft:cow".into(),
             species: Species::Cow,

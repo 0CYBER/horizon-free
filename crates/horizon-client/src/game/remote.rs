@@ -549,7 +549,10 @@ impl Game<'_> {
             self.extras_left();
         }
         self.clear_waypoints();
-        self.boss_overlay.reset();
+        self.hud_disconnected();
+        // Vanilla's Hud also ticks on the title and connect screens, so the
+        // action bar has run out by the next world; Horizon's ticks in one.
+        self.titles.overlay_time = 0;
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -574,8 +577,6 @@ impl Game<'_> {
         self.clock = Default::default();
         self.adv = Default::default();
         self.stats = Default::default();
-        self.debug_charts.reset();
-        self.tab_list.reset();
         self.score.board = Default::default();
         self.streaming = Streaming::new(Arc::new(NoTerrain), self.pack.context.clone(), 1);
         self.streaming.paused = true;
@@ -618,6 +619,17 @@ impl Game<'_> {
         self.title = Some(title);
         self.capture(false);
         Ok(())
+    }
+    /// `Hud.onDisconnected`, from `Minecraft.disconnect` and `clearClientLevel`
+    /// (a proxy's reconfiguration too), but the chat: joining clears it and a
+    /// reconfiguration keeps it (`ChatComponent.storeState`).
+    fn hud_disconnected(&mut self) {
+        self.tab_list.reset();
+        self.boss_overlay.reset();
+        self.adv.toasts.clear();
+        self.debug_charts.reset();
+        self.titles.clear();
+        self.titles.reset_times();
     }
 
     pub(super) fn send(&self, packet: S) {
@@ -910,7 +922,15 @@ impl Game<'_> {
                     }
                 }
                 Event::Reconfigured(registries) => {
-                    self.boss_overlay.reset();
+                    // handleConfigurationStart → clearClientLevel, and the next
+                    // ClientPacketListener starts with no players or scoreboard.
+                    self.hud_disconnected();
+                    self.score.board = Default::default();
+                    if let Some(r) = self.remote.as_mut() {
+                        r.players.clear();
+                        r.tab_players.clear();
+                        r.listed.clear();
+                    }
                     self.set_registries(registries);
                 }
                 // handleTransfer: "Cannot transfer to server from
@@ -1796,8 +1816,9 @@ impl Game<'_> {
             C::Login(p) => {
                 self.level.hardcore = p.hardcore;
                 // handleLogin makes a new MultiPlayerGameMode (carried index 0) and a
-                // new LocalPlayer (slot 0).
+                // new LocalPlayer (slot 0, no effects).
                 self.selected = 0;
+                self.potions.effects.clear();
                 if let Some(r) = self.remote.as_mut() {
                     r.carried = Some(0);
                     r.online_mode = p.online_mode;
@@ -2559,7 +2580,7 @@ impl Game<'_> {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
                     self.swing_hand(hand, animation);
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    m.swing_hand_modified(hand == Hand::Off, animation.duration);
+                    m.swing_hand_modified(hand == Hand::Off, animation);
                 }
             }
             // The player's own instances: its maximum health (the hearts the
@@ -3770,6 +3791,7 @@ impl Game<'_> {
         // and the moving pistons a block event's client-side moveBlocks made
         // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.client_tick_beacons();
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
         });

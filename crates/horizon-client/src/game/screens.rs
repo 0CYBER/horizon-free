@@ -118,14 +118,12 @@ fn death_buttons(w: f32, h: f32, hardcore: bool) -> [(f32, f32, &'static str, u8
     } else {
         "deathScreen.respawn"
     };
+    // DeathScreen.init: `width / 2 - 100`, `height / 4 + 72` and `+ 96`, in
+    // int GUI pixels.
+    let (x, y) = ((w.ceil() / 2.0).floor() - 100.0, (h.ceil() / 4.0).floor());
     [
-        (w / 2.0 - 100.0, h / 4.0 + 72.0, respawn, 0),
-        (
-            w / 2.0 - 100.0,
-            h / 4.0 + 96.0,
-            "deathScreen.titleScreen",
-            1,
-        ),
+        (x, y + 72.0, respawn, 0),
+        (x, y + 96.0, "deathScreen.titleScreen", 1),
     ]
 }
 impl Game<'_> {
@@ -469,7 +467,16 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Screen, pause_buttons, pause_icons};
+    use super::{Screen, death_buttons, pause_buttons, pause_icons};
+
+    #[test]
+    fn death_buttons_sit_on_whole_gui_pixels() {
+        // DeathScreen.init in ints: a 427x253 GUI (1709x1009 at scale 4) puts
+        // Respawn at (113, 63 + 72), not (113.5, 63.25 + 72).
+        let at = |w, h| death_buttons(w, h, false).map(|b| (b.0, b.1));
+        assert_eq!(at(427.0, 253.0), [(113.0, 135.0), (113.0, 159.0)]);
+        assert_eq!(at(320.0, 334.0), [(60.0, 155.0), (60.0, 179.0)]);
+    }
 
     #[test]
     fn menu_blur_matches_vanilla_screen_backgrounds() {

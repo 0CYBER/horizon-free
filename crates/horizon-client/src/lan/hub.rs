@@ -493,6 +493,18 @@ impl Hub {
             overlay: false,
         }));
     }
+    /// A system message for the guests `hears` picks by name
+    /// (`PlayerList.broadcastSystemToTeam` and its kin).
+    pub fn system_message_to(&self, content: Tag, hears: impl Fn(&str) -> bool) {
+        let body = C::SystemChat(play::SystemChat {
+            content,
+            overlay: false,
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| g.placed && hears(&g.name)) {
+            g.sender.send(body.clone());
+        }
+    }
     /// `ServerPlayer.sendOverlayMessage` to every guest (the action bar).
     pub fn overlay_message(&self, content: Tag) {
         self.broadcast(&C::SystemChat(play::SystemChat {

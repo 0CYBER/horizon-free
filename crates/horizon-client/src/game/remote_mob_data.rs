@@ -246,6 +246,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Zombie | Species::Husk, 18, Value::Bool(converting)) => {
                 m.extra.counter2 = i32::from(*converting);
             }
+            // Skeleton.DATA_STRAY_CONVERSION_ID (the first entry after Mob's):
+            // the freezing conversion's shaking.
+            (Species::Skeleton, 16, Value::Bool(converting)) => {
+                m.extra.counter2 = i32::from(*converting);
+            }
             // ZombieVillager.DATA_CONVERTING_ID (before its villager data).
             (Species::ZombieVillager, 19, Value::Bool(converting)) => {
                 zombie_villager::set_converting(m, *converting);

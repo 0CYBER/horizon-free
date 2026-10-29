@@ -132,6 +132,22 @@ pub enum Outcome {
 /// A button: x, y, width, label, enabled, id.
 pub type ButtonSpec = (f32, f32, f32, String, bool, u8);
 
+/// `this.width / 2` (or `height / 2`): `Screen`'s size is an int, so the
+/// division drops the half and widgets stay on whole GUI pixels. A half
+/// pixel lands between device pixels and draws thinner borders and uneven
+/// glyphs at most window heights.
+fn half(size: f32) -> f32 {
+    (size.ceil() / 2.0).floor()
+}
+/// `this.height / 4`, as an int division.
+fn quarter(size: f32) -> f32 {
+    (size.ceil() / 4.0).floor()
+}
+/// `centeredText` around `width / 2`: `x - font.width(text) / 2`.
+fn centered_x(width: f32, text_width: f32) -> f32 {
+    half(width) - half(text_width)
+}
+
 pub fn servers_file(saves: &Path) -> PathBuf {
     saves
         .parent()
@@ -548,24 +564,24 @@ impl Screen {
             Self::Edit { address, packs, .. } => vec![
                 // ManageServerScreen's CycleButton, above Done.
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 72.0,
+                    half(w) - 100.0,
+                    quarter(h) + 72.0,
                     200.0,
                     &pack_setting_label(*packs),
                     true,
                     60,
                 ),
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 96.0 + 18.0,
+                    half(w) - 100.0,
+                    quarter(h) + 96.0 + 18.0,
                     200.0,
                     &crate::lang::get_or("gui.done", "Done"),
                     servers::parse_address(address).is_some(),
                     50,
                 ),
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 120.0 + 18.0,
+                    half(w) - 100.0,
+                    quarter(h) + 120.0 + 18.0,
                     200.0,
                     &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
@@ -597,16 +613,16 @@ impl Screen {
             }
             Self::Direct { address } => vec![
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 96.0 + 12.0,
+                    half(w) - 100.0,
+                    quarter(h) + 96.0 + 12.0,
                     200.0,
                     &crate::lang::get_or("selectServer.select", "Join Server"),
                     servers::parse_address(address).is_some(),
                     52,
                 ),
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 120.0 + 12.0,
+                    half(w) - 100.0,
+                    quarter(h) + 120.0 + 12.0,
                     200.0,
                     &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
@@ -615,16 +631,16 @@ impl Screen {
             ],
             Self::Friend { code, .. } => vec![
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 96.0 + 18.0,
+                    half(w) - 100.0,
+                    quarter(h) + 96.0 + 18.0,
                     200.0,
                     "Join",
                     horizon_friends::invite::parse(code).is_some(),
                     56,
                 ),
                 b(
-                    w / 2.0 - 100.0,
-                    h / 4.0 + 120.0 + 18.0,
+                    half(w) - 100.0,
+                    quarter(h) + 120.0 + 18.0,
                     200.0,
                     &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
@@ -633,8 +649,8 @@ impl Screen {
             ],
             Self::Disconnected { retry, .. } => {
                 let mut v = vec![b(
-                    w / 2.0 - 100.0,
-                    h / 2.0 + 30.0,
+                    half(w) - 100.0,
+                    half(h) + 30.0,
                     200.0,
                     &crate::lang::get_or("gui.toMenu", "Back to Server List"),
                     true,
@@ -642,8 +658,8 @@ impl Screen {
                 )];
                 if retry.is_some() {
                     v.push(b(
-                        w / 2.0 - 100.0,
-                        h / 2.0 + 54.0,
+                        half(w) - 100.0,
+                        half(h) + 54.0,
                         200.0,
                         "Cancel Reconnecting",
                         true,
@@ -698,9 +714,10 @@ impl Screen {
         let (w, h) = (batch.width, batch.height);
         let max = self.max_length();
         crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        // GuiGraphicsExtractor.centeredText at width / 2: x - width(text) / 2.
         let centered = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
             let tw = HudBatch::text_width(atlas, text);
-            batch.text(atlas, text, (w - tw) / 2.0, y, color, true);
+            batch.text(atlas, text, centered_x(w, tw), y, color, true);
         };
         match self {
             Self::List {
@@ -1042,15 +1059,15 @@ impl Screen {
                 centered(
                     batch,
                     &crate::lang::get_or("disconnect.lost", "Connection Lost"),
-                    h / 2.0 - 40.0,
+                    half(h) - 40.0,
                     rgba(170, 170, 170, 255),
                 );
                 for (i, line) in wrap(reason, 300.0, atlas).iter().enumerate() {
-                    centered(batch, line, h / 2.0 - 16.0 + i as f32 * 9.0, u32::MAX);
+                    centered(batch, line, half(h) - 16.0 + i as f32 * 9.0, u32::MAX);
                 }
                 if let Some(r) = retry {
                     let text = r.text(std::time::Instant::now());
-                    centered(batch, &text, h / 2.0 + 16.0, rgba(170, 170, 170, 255));
+                    centered(batch, &text, half(h) + 16.0, rgba(170, 170, 170, 255));
                 }
             }
         }
@@ -1281,7 +1298,7 @@ impl Screen {
                     unreachable!()
                 };
                 for (i, fy) in [(0u8, boxes[0]), (1, boxes[1])] {
-                    if y >= fy && y < fy + 20.0 && (x - w / 2.0).abs() < 100.0 {
+                    if y >= fy && y < fy + 20.0 && (half(w) - 100.0..half(w) + 100.0).contains(&x) {
                         *focus = i;
                     }
                 }
@@ -1537,6 +1554,35 @@ mod tests {
             hover(&pings, 0.0, (349.0, 37.0)).as_deref(),
             Some("(no connection)")
         );
+    }
+
+    #[test]
+    fn screens_lay_out_on_whole_gui_pixels_at_any_window_size() {
+        // A 1000-pixel-high window at GUI scale 3 is 334 GUI pixels high and
+        // a 1281-wide one 427 wide: vanilla's `height / 4` is 83 and
+        // `width / 2` 213, never 83.5 and 213.5.
+        let direct = Screen::Direct {
+            address: "localhost".into(),
+        };
+        let at = |screen: &Screen, w, h| -> Vec<(f32, f32)> {
+            screen.buttons(w, h).iter().map(|b| (b.0, b.1)).collect()
+        };
+        assert_eq!(at(&direct, 427.0, 334.0), [(113.0, 191.0), (113.0, 215.0)]);
+        assert_eq!(at(&direct, 320.0, 240.0), [(60.0, 168.0), (60.0, 192.0)]);
+        let friend = Screen::Friend {
+            code: String::new(),
+            relay: String::new(),
+            focus: 0,
+        };
+        assert_eq!(at(&friend, 427.0, 253.0), [(113.0, 177.0), (113.0, 201.0)]);
+        let lost = Screen::Disconnected {
+            reason: String::new(),
+            retry: None,
+        };
+        assert_eq!(at(&lost, 427.0, 253.0), [(113.0, 156.0)]);
+        // centeredText: `width / 2 - font.width(text) / 2`.
+        assert_eq!(centered_x(427.0, 85.0), 171.0);
+        assert_eq!(centered_x(320.0, 84.0), 118.0);
     }
 
     #[test]
@@ -1820,11 +1866,12 @@ mod tests {
                 .find(|b| b.5 == 60)
                 .map(|b| (b.0, b.1, b.2, b.3))
         };
-        // ManageServerScreen: 200 wide at height / 4 + 72, the saved value first.
+        // ManageServerScreen: 200 wide at width / 2 - 100 (ints: 427 / 2 is
+        // 213) and height / 4 + 72, the saved value first.
         assert_eq!(
             cycle(&screen),
             Some((
-                113.5,
+                113.0,
                 132.0,
                 200.0,
                 "Server Resource Packs: Disabled".into()

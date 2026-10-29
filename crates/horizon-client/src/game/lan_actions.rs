@@ -1877,8 +1877,11 @@ impl Game<'_> {
         // ListPlayersCommand needs no permission and lists every player.
         let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
         if words[0] == "list" && (words.len() == 1 || words[1..] == ["uuids"]) {
-            let me = (self.options.dedicated.is_none() && self.player.is_some())
-                .then_some((host.host_uuid, host.host_name.as_str()));
+            // A single-player owner is a placed guest already: no host entry.
+            let me = (self.options.dedicated.is_none()
+                && self.player.is_some()
+                && host.hub.singleplayer_owner.is_none())
+            .then_some((host.host_uuid, host.host_name.as_str()));
             let content = host.hub.list_reply(me, words.len() == 2);
             host.hub.send_to(
                 conn,
@@ -2361,14 +2364,25 @@ impl Game<'_> {
                     None => self.guest_death_message(conn, me),
                 };
                 let message = horizon_client::lan::data::component_nbt(&text.component());
-                let team = self.score.board.players_team(&name);
-                if horizon_client::scoreboard::own_death_message_shown(team) {
-                    host.hub.system_message(message.clone());
-                    if self.options.dedicated.is_some() {
+                let board = &self.score.board;
+                host.hub.system_message_to(message.clone(), |other| {
+                    horizon_client::scoreboard::death_message_reaches(board, &name, other)
+                });
+                if self.options.dedicated.is_some() {
+                    // Only a message for everyone is logged (`broadcastSystemMessage`).
+                    if board.players_team(&name).is_none_or(|t| {
+                        t.death_message_visibility == horizon_client::scoreboard::Visibility::Always
+                    }) {
                         super::dedicated::log("INFO", &format!("System chat: {}", text.plain()));
-                    } else if self.player.is_some() {
-                        self.system_message(text);
                     }
+                } else if self.player.is_some()
+                    && horizon_client::scoreboard::death_message_reaches(
+                        board,
+                        &name,
+                        super::chat::PLAYER_NAME,
+                    )
+                {
+                    self.system_message(text);
                 }
                 message
             } else {

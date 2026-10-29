@@ -1320,8 +1320,10 @@ pub fn download_version_for_owner(
 /// version downloaded from Mojang the first time (then it starts offline too), the Java it needs
 /// (the instance's own, else one found here, else Mojang's, downloaded), and the game in the
 /// instance's folder. The caller wraps it (`launch::wrap`) and never logs it: it holds the token.
+/// A Java instance's game, ready to start; `server` (`host[:port]`) is joined once it has.
 pub fn java_game(
     instance: &crate::instances::Instance,
+    server: Option<&str>,
     log: &dyn Fn(String),
 ) -> Result<Command, String> {
     let game = instance.java.as_ref().ok_or_else(|| {
@@ -1391,6 +1393,8 @@ pub fn java_game(
             jvm_args: &jvm_args,
             player: &player,
             os: crate::java_launch::os_name(),
+            window: game.window,
+            server,
         },
     )
 }
@@ -2767,7 +2771,12 @@ pub enum Msg {
     Native(Result<String, String>),
     /// A Java instance's game is ready to start (`java_game`, wrapped): the instance's id and
     /// game folder, and the command or why not.
-    JavaGame(String, PathBuf, Result<Command, String>),
+    /// A Java instance's game ready to start, and its variables for the post-exit command.
+    JavaGame(
+        String,
+        PathBuf,
+        Result<(Command, crate::launch::Vars), String>,
+    ),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
