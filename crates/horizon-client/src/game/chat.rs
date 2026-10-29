@@ -20,7 +20,7 @@ use std::{
 
 /// The tree the chat parses and completes with: a server's, once it has
 /// sent one (ClientPacketListener.commands), else the game's own.
-fn chat_tree<'a>(
+pub(super) fn chat_tree<'a>(
     remote: &'a Option<super::remote::Remote>,
     mods: &'a super::mods::ModsState,
 ) -> &'a horizon_client::command::Dispatcher {
@@ -1203,7 +1203,10 @@ impl Game<'_> {
             return;
         };
         let path = dir.join(name);
-        renderer.screenshot = Some(path.clone());
+        renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
+            path: path.clone(),
+            size: None,
+        });
         self.ui.screenshot_message = Some(path);
     }
     /// After a frame: report a finished F2 screenshot in chat.
