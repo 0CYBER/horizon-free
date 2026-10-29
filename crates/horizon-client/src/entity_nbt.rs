@@ -300,6 +300,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.entry(key.into()).or_insert(value);
             }
         }
+        // Rabbit.addAdditionalSaveData (the legacy id; 99 is the killer bunny).
         "minecraft:rabbit" => {
             map.insert("RabbitType".into(), Tag::Int(i32::from(m.extra.variant)));
             map.entry("MoreCarrotTicks".into()).or_insert(Tag::Int(0));
@@ -1521,6 +1522,10 @@ pub fn arrow_to_nbt(
         // Projectile: LeftOwner only when set; Owner as the UUID.
         map.remove(&"LeftOwner".into());
         map.remove(&"inBlockState".into());
+        map.remove(&"weapon".into());
+    }
+    if let Some(weapon) = &a.fired_from_weapon {
+        put(&mut tag, "weapon", item_to_nbt(weapon));
     }
     if p.left_owner {
         put(&mut tag, "LeftOwner", Tag::Byte(1));
@@ -1567,6 +1572,7 @@ pub fn arrow_from_nbt(
     a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i16 as i32;
     a.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
     a.pickup_item = item;
+    a.fired_from_weapon = tag.get("weapon").and_then(item_from_nbt);
     p.stuck = a.in_ground;
     Some((p, tag.get("inBlockState").cloned()))
 }

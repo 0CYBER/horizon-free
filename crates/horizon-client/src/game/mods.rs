@@ -92,12 +92,6 @@ pub(super) struct ModsState {
     /// Capability `recipes`'s tables, made once a mod reads them.
     #[cfg(feature = "mods")]
     pub(super) recipes: Option<std::sync::Arc<horizon_mods::Recipes>>,
-    /// The recipe book's known displays, and the book's version they are of.
-    #[cfg(feature = "mods")]
-    pub(super) known_recipes: (Option<u64>, std::sync::Arc<[i32]>),
-    /// Capability `ui`'s item panel beside container screens.
-    #[cfg(feature = "mods")]
-    pub(super) browser: super::mod_browser::Browser,
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
@@ -267,6 +261,7 @@ impl Game<'_> {
                 "Horizon: {found} mod(s) not started: this build has no mod runtime (build with --features mods)"
             );
         }
+        self.list_native_mods();
     }
     pub(super) fn merge_remote_tree(&mut self) {}
     pub(super) fn sync_mods(&mut self) {}
@@ -302,8 +297,14 @@ impl Game<'_> {
             .filter_map(|p| horizon_mods::Package::read(p).ok())
             .map(|p| p.manifest.id)
             .collect();
+        // A native mod of the same id (one built into this game) takes over.
+        let mut native = Vec::new();
+        self.native_mods(&mut native);
         let enabled = &self.settings.mods.enabled;
-        let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
+        let on = |id: &str| {
+            (enabled.contains(id) || dev_ids.iter().any(|d| d == id))
+                && !native.iter().any(|n| n.id == id)
+        };
         let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
@@ -349,6 +350,7 @@ impl Game<'_> {
                         problem,
                         dev: false,
                         has_settings: false,
+                        native: None,
                     };
                 };
                 // What it may do first: the row cuts long descriptions.
@@ -365,9 +367,11 @@ impl Game<'_> {
                     problem,
                     dev: dev.contains(&e.path),
                     has_settings: e.has_ui_settings(),
+                    native: None,
                 }
             })
             .collect();
+        self.list_native_mods();
     }
     /// The chat's tree after the running mods changed.
     fn sync_mod_commands(&mut self) {

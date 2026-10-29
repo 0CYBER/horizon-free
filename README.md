@@ -29,9 +29,9 @@ Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that re
 
 ## Download
 
-Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.dev](https://playhorizon.dev) (the Download button picks your system) or from [the launcher releases](https://github.com/horizon-rust/horizon/releases?q=launcher-v&expanded=true), for Linux x86-64, macOS on Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its files from your own copy of Minecraft, and updates itself.
+Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.dev](https://playhorizon.dev) (the Download button picks your system) or from [the launcher releases](https://github.com/horizon-rust/horizon/releases?q=launcher-v&expanded=true), for Linux x86-64, macOS on Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its files from your copy of Minecraft (your own install, or downloaded from Mojang for your account), and updates itself.
 
-**You need** a Microsoft account that owns Minecraft: Java Edition (the launcher signs in with it, as other launchers do; see [Microsoft account](docs/microsoft-account.md)); Minecraft: Java Edition 26.3, played once (the official launcher, Prism, MultiMC and other launchers all work); a Java 25 runtime, for the one-time preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac. Step by step, with macOS's first-open prompt and the first launch: [Install and first launch](https://playhorizon.dev/docs/install).
+**You need** a Microsoft account that owns Minecraft: Java Edition (the launcher signs in with it, as other launchers do; see [Microsoft account](docs/microsoft-account.md)) and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac. Nothing else: with no Minecraft on your computer, Play downloads 26.3 and the Java it needs from Mojang for your account, as the official launcher does, then prepares it once. An install you already have (the official launcher, Prism, MultiMC and other launchers all work) is used instead. Step by step, with macOS's first-open prompt and the first launch: [Install and first launch](https://playhorizon.dev/docs/install).
 
 <table>
   <tr>
@@ -93,7 +93,7 @@ Commands block until the action is done and reply with what happened; errors are
 
 For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA and udev development headers (`libasound2-dev libudev-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
 
-Horizon contains no game files and never downloads them. It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`:
+Horizon contains no game files, and `horizon-prepare` never downloads them (the launcher downloads them from Mojang only for a signed-in account that owns the game). It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`:
 
 1. **Client:** install Java Edition with the official launcher and play 26.3 once. Horizon reads `versions/26.3/`, `libraries/` and `assets/` from the launcher's game directory (`~/.minecraft` on Linux). If yours lives elsewhere, pass `--minecraft-dir` or set `HORIZON_MINECRAFT_DIR`.
 2. **Server jar:** the 26.3 server jar, from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json` (or [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release). Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
