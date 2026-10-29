@@ -138,6 +138,8 @@ machine can read it in the process list. Horizon keeps it out of argv:
   A file older than two minutes is refused (and deleted), so a stale file can't be replayed.
 - Without a session file the game is offline as today (`--name`, offline UUID).
 - `HORIZON_SESSION_FILE` is the same as `--session-file` (development and harnesses).
+- `--session-stdin` takes the same JSON on standard input instead, so nothing touches the disk (for other
+  launchers: [the Launch API](api/launch.md)).
 
 ## Online-mode login (game)
 
