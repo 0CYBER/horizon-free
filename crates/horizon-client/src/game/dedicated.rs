@@ -608,6 +608,7 @@ impl Game<'_> {
             motd: props.motd.clone(),
             max_players: props.max_players.max(0) as usize,
             compression_threshold: props.network_compression_threshold,
+            rate_limit: props.rate_limit,
             enable_status: props.enable_status,
             hide_online_players: props.hide_online_players,
             favicon,
