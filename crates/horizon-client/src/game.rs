@@ -14955,8 +14955,16 @@ fn load_resources(
         ui_ready = true;
     }
     progress.set(0);
+    // Nor the block sprites' pixels, which only the renderer reads (32 MB).
+    let reload = |assets: &Assets, root: &std::path::Path| {
+        if headless {
+            assets.reload_for_server(root)
+        } else {
+            assets.reload(root)
+        }
+    };
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
-        let render = assets.reload(&root)?;
+        let render = reload(&assets, &root)?;
         Ok((assets, render))
     }) {
         Ok(bundle) => bundle,
@@ -14967,7 +14975,7 @@ fn load_resources(
             pack_error = Some(e.to_string());
             root = vanilla_root.to_path_buf();
             let assets = Assets::load(vanilla_root)?;
-            let render = assets.reload(vanilla_root)?;
+            let render = reload(&assets, vanilla_root)?;
             (assets, render)
         }
         Err(e) => {
