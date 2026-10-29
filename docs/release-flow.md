@@ -514,7 +514,8 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
   hashes the archives with the runner's `sha256sum` and signs with its OpenSSL: it never runs what `build` made.
   `publish` runs main's `horizon-release-sign`, never the archives. Nothing a nightly's build leaves reaches a
   release either: `game-build.yml`'s `trusted` input is true only for `release.yml`. An untrusted build runs its
-  macOS jobs on the runner that runs pull requests' parity jobs (`horizon-game`), never the release runner
+  macOS jobs on the Mac mini's nightly runner (`horizon-nightly`, its own so a nightly never waits behind pull
+  requests' parity queue; same machine and trust as the `horizon-game` runner), never the release runner
   (`MAC_RUNNER`), and its Rust cache has its own key and is never saved. A trusted build doesn't use the machine's
   shared sccache, which pull requests' jobs write (`HORIZON_NO_SCCACHE`, `tools/ci/runner-env.sh`).
 - **Players.** Every launcher and `horizon-server update` install the `nightly` pre-release

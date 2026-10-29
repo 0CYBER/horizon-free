@@ -2,13 +2,14 @@
 use super::Vertex;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
-/// ordinary entities, breaking cracks (11), translucent breaking cracks (12),
-/// the boat water mask (13, `RenderPipelines.WATER_MASK`), energy swirls
-/// (34, `RenderPipelines.ENERGY_SWIRL`), entity shadows (14,
+/// ordinary entities, world text drawn with a depth bias (35,
+/// `RenderPipelines.TEXT_POLYGON_OFFSET`), breaking cracks (11), translucent
+/// breaking cracks (12), the boat water mask (13, `RenderPipelines.WATER_MASK`),
+/// energy swirls (34, `RenderPipelines.ENERGY_SWIRL`), entity shadows (14,
 /// `RenderPipelines.ENTITY_SHADOW`), translucent-layer particles (15, drawn
 /// after translucent terrain: `SubmitNodeCollection.submitQuadParticleGroup`)
 /// and translucent item quads (32, drawn without depth writes).
-const MATERIALS: usize = 8;
+const MATERIALS: usize = 9;
 /// The overlay of depth-only quads that hide water (`RenderTypes.waterMask`).
 pub const WATER_MASK_OVERLAY: u32 = 13;
 /// The overlay of energy swirl quads (`RenderTypes.energySwirl`: the charged creeper's and the
@@ -24,17 +25,21 @@ pub const TRANSLUCENT_PARTICLE_OVERLAY: u32 = 15;
 pub const TRANSLUCENT_ITEM_OVERLAY: u32 = 32;
 /// A translucent item with an enchantment glint.
 pub const TRANSLUCENT_GLINT_ITEM_OVERLAY: u32 = 33;
+/// The overlay of text in `Font.DisplayMode.POLYGON_OFFSET` (text displays):
+/// drawn like an ordinary entity, pulled toward the camera.
+pub const TEXT_POLYGON_OFFSET_OVERLAY: u32 = 35;
 
 /// The material of a quad by its overlay (`MATERIALS` order).
 fn material(layer: u32) -> usize {
     match layer {
-        11 => 1,
-        12 => 2,
-        WATER_MASK_OVERLAY => 3,
-        ENERGY_SWIRL_OVERLAY => 4,
-        SHADOW_OVERLAY => 5,
-        TRANSLUCENT_PARTICLE_OVERLAY => 6,
-        TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 7,
+        TEXT_POLYGON_OFFSET_OVERLAY => 1,
+        11 => 2,
+        12 => 3,
+        WATER_MASK_OVERLAY => 4,
+        ENERGY_SWIRL_OVERLAY => 5,
+        SHADOW_OVERLAY => 6,
+        TRANSLUCENT_PARTICLE_OVERLAY => 7,
+        TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 8,
         _ => 0,
     }
 }
@@ -102,9 +107,10 @@ mod tests {
     ) -> (Vec<Vertex>, [u32; MATERIALS]) {
         let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
         let mut counts = [0; MATERIALS];
-        for (i, layer) in [0, 11, 12, 13, 34, 14, 15].into_iter().enumerate() {
+        for (i, layer) in [0, 35, 11, 12, 13, 34, 14, 15].into_iter().enumerate() {
             for quad in entities.as_chunks::<4>().0 {
                 let material = match quad[0].layer {
+                    35 => 35,
                     11 => 11,
                     12 => 12,
                     13 => 13,
@@ -130,7 +136,7 @@ mod tests {
                 pos: [index as f32, 2.0, 3.0],
                 uv: [index as f32, 5.0],
                 layer: if mixed {
-                    [7, 11, 14, 12, 4, 13, 15, 0][index / 4 % 8]
+                    [7, 11, 14, 35, 12, 4, 13, 15, 0][index / 4 % 9]
                 } else {
                     0
                 },

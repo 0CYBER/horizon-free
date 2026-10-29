@@ -334,25 +334,43 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
         return Err("Xbox Live refused the sign-in.".into());
     };
     let xuid = claims.and_then(|c| str_field(c, "xid"));
+    let (token, expires_in) = minecraft_token(ep, &format!("XBL3.0 x={uhs};{xsts_token}"))?;
+    Ok(Minecraft {
+        token,
+        expires_at: now() + expires_in,
+        xuid,
+    })
+}
+
+/// The Minecraft access token and its lifetime from the XSTS one (`XBL3.0 x=<uhs>;<token>`).
+/// `launcher/login` first: a new account's token from `login_with_xbox` names no profile, so
+/// joining an online-mode server answers "Profile not found" (found and diagnosed by
+/// martipops). `login_with_xbox` stays the fallback, so a sign-in that worked before still does
+/// when the other refuses.
+fn minecraft_token(ep: &Endpoints, xtoken: &str) -> Result<(String, u64), String> {
+    let lifetime = |v: &Value| v.get("expires_in").and_then(Value::as_u64).unwrap_or(86400);
+    let launcher = send(
+        request_to("POST", &format!("{}/launcher/login", ep.minecraft)),
+        Some(Body::Json(
+            json!({ "xtoken": xtoken, "platform": "PC_LAUNCHER" }),
+        )),
+        "the Minecraft services",
+    );
+    if let Ok((200, v)) = &launcher {
+        if let Some(token) = str_field(v, "access_token") {
+            return Ok((token, lifetime(v)));
+        }
+    }
     let (status, mc) = send(
         request_to(
             "POST",
             &format!("{}/authentication/login_with_xbox", ep.minecraft),
         ),
-        Some(Body::Json(
-            json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") }),
-        )),
+        Some(Body::Json(json!({ "identityToken": xtoken }))),
         "the Minecraft services",
     )?;
     match (status, str_field(&mc, "access_token")) {
-        (200, Some(token)) => Ok(Minecraft {
-            token,
-            expires_at: now()
-                + mc.get("expires_in")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(86400),
-            xuid,
-        }),
+        (200, Some(token)) => Ok((token, lifetime(&mc))),
         // New Azure apps are refused until Mojang approves them (Minecraft API access).
         (403, _) => Err(
             "The Minecraft services refused this launcher: its app is not approved by Mojang yet."
@@ -1198,6 +1216,48 @@ pub fn session_for_game(
         Ok(file) => Ok((Some(file), None)),
         Err(e) => Ok((None, Some(e))),
     }
+}
+
+/// Who plays the real Minecraft: Java Edition (a Java instance), past the owner gate itself
+/// ([`launch`]): the selected account when it owns the game, else one that does. With no answer
+/// from the services, an account that owned it plays with its last token. Mojang's game takes the
+/// token on its command line, as Mojang's launcher gives it; that command is never logged.
+pub fn java_player() -> Result<crate::java_launch::Player, String> {
+    let mut accounts = Accounts::load();
+    let player = java_player_with(
+        &Endpoints::live(),
+        client_id().as_deref(),
+        store(),
+        &mut accounts,
+    );
+    let _ = accounts.save();
+    player
+}
+
+fn java_player_with(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    accounts: &mut Accounts,
+) -> Result<crate::java_launch::Player, String> {
+    let pass = launch(ep, client_id, store, accounts).map_err(|e| e.to_string())?;
+    let kept = || {
+        let order = accounts.selected().into_iter().chain(&accounts.accounts);
+        order
+            .into_iter()
+            .find_map(|a| Some((a.clone(), secrets_in(store, &a.uuid).filter(|s| s.owns)?)))
+    };
+    let (account, secrets) = pass
+        .session
+        .or(pass.owner)
+        .or_else(kept)
+        .ok_or_else(|| NoOwner.to_string())?;
+    Ok(crate::java_launch::Player {
+        name: account.name,
+        uuid: account.uuid,
+        token: secrets.minecraft_token,
+        xuid: secrets.xuid.unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]

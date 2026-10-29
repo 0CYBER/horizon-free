@@ -328,7 +328,7 @@ fn mob_meta(
     // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, swimming 0x10 (a drowned
     // under water, `Drowned.setSwimming`), invisible 0x20 (the effect's flag)
     // and glowing 0x40 (LivingEntity.updateGlowingStatus).
-    let shared = i8::from(m.fire_ticks > 0)
+    let shared = i8::from(m.is_on_fire())
         | i8::from(m.species() == Species::Drowned && m.extra.flag) << 4
         | i8::from(m.invisible || horizon_client::mobs::trader::is_invisible(m)) << 5
         | i8::from(m.is_currently_glowing()) << 6;
@@ -800,6 +800,14 @@ fn mob_meta(
                 meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
             }
             defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Skeleton.DATA_STRAY_CONVERSION_ID (the first entry after Mob's):
+        // the shaking of the freezing conversion.
+        "minecraft:skeleton" => {
+            if e.counter2 > 0 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
         }
         // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
         "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
@@ -2152,6 +2160,7 @@ impl Game<'_> {
                 .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
             // ClientInformation.mainHand (HumanoidArm: 0 left, 1 right).
             m.extra.main_hand_left = g.info.main_hand == 0;
+            m.extra.hidden_model_parts = !g.info.model_customisation & 0x7F;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()

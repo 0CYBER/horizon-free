@@ -380,11 +380,45 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
     if target.is_dir() {
         Ok(())
     } else {
-        fs::copy(target, at).map(|_| ())
+        // The mirror only reads these files, and unix links them: a hardlink gives
+        // the same view without writing the 639 MB prepared root again, which was
+        // 33 s of a cold Windows launch with a pack on. Another volume (or a
+        // filesystem without hardlinks) still copies.
+        fs::hard_link(target, at).or_else(|_| fs::copy(target, at).map(|_| ()))
     }
 }
+/// A directory junction, which Windows creates without privileges (a directory symlink needs
+/// developer mode). The mirror falls back to copying the tree when it fails.
+#[cfg(windows)]
+fn junction(target: &Path, at: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    // cmd parses its own line: Rust quotes only paths with spaces, so `&` or `^` in an
+    // unquoted path would split or change the command. A Windows path cannot hold `"`.
+    let quoted = |path: &Path| -> io::Result<std::ffi::OsString> {
+        let mut quoted = std::ffi::OsString::from("\"");
+        quoted.push(std::path::absolute(path)?);
+        quoted.push("\"");
+        Ok(quoted)
+    };
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .raw_arg(quoted(at)?)
+        .raw_arg(quoted(target)?)
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| io::Error::other("mklink /J failed"))
+}
+#[cfg(not(windows))]
+fn junction(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
-/// load order, last wins). Untouched directories are symlinks into vanilla.
+/// load order, last wins). Untouched directories are links into vanilla.
 pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()> {
     cache::build(vanilla, packs, out)
 }
@@ -516,11 +550,17 @@ fn build_overlay_uncached(
                         }
                     }
                 }
+            } else if filters.is_empty()
+                && !touched.contains(&child)
+                && vanilla.join(&child).is_dir()
+                && junction(&vanilla.join(&child), &out.join(&child)).is_ok()
+            {
+                // Linked whole, like the unix symlink: no file in it is visited or copied.
             } else if touched.contains(&child)
-                // Windows cannot link a directory the way unix does (`link` above), so an
-                // untouched one has to be mirrored: skipping it hid textures/font and the
-                // title panorama from the overlay, and a font json that names those sheets
-                // then failed to load (#1688).
+                // Without a junction Windows cannot link a directory the way unix does (`link`
+                // above), so an untouched one has to be mirrored: skipping it hid textures/font
+                // and the title panorama from the overlay, and a font json that names those
+                // sheets then failed to load (#1688).
                 || (vanilla.join(&child).is_dir() && (cfg!(not(unix)) || !filters.is_empty()))
             {
                 mirror(
@@ -939,7 +979,8 @@ mod tests {
     }
     #[test]
     fn overlay_layers_packs_over_vanilla() {
-        let base = std::env::temp_dir().join(format!("horizon-packs-{}", std::process::id()));
+        // `&` would split an unquoted `cmd /C mklink` line.
+        let base = std::env::temp_dir().join(format!("horizon-packs-&{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let vanilla = base.join("vanilla");
         fs::create_dir_all(vanilla.join("assets/minecraft/textures/block")).unwrap();
@@ -960,6 +1001,13 @@ mod tests {
         )
         .unwrap();
         fs::write(vanilla.join("facts.json"), b"[]").unwrap();
+        // A directory no pack touches (#1688: a font json names sheets in it).
+        fs::create_dir_all(vanilla.join("assets/minecraft/textures/font")).unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/font/ascii.png"),
+            b"font",
+        )
+        .unwrap();
         let pack_dir = base.join("packs/Mine");
         fs::create_dir_all(pack_dir.join("assets/minecraft/textures/block")).unwrap();
         fs::write(
@@ -997,6 +1045,17 @@ mod tests {
             br#"{"a":"vanilla","b":"pack"}"#
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/font/ascii.png")).unwrap(),
+            b"font"
+        );
+        // Linked, not mirrored: a junction on Windows, a symlink on unix.
+        assert!(
+            fs::symlink_metadata(out.join("assets/minecraft/textures/font"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         let _ = fs::remove_dir_all(base);
     }
     #[test]
