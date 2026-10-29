@@ -675,8 +675,10 @@ enum Cmd {
     },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
-    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
-    /// while-playing stay|minimize|hide (what the window does while the game runs), language
+    /// on|off, prune-old-versions on|off (delete old versions after an install, keeping the
+    /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
+    /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
+    /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
     /// system|en|fr|ru (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
@@ -827,11 +829,13 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 10] = [
+const SETTING_KEYS: [&str; 12] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
+    "prune-old-versions",
+    "keep-versions",
     "opening-animation",
     "proxy",
     "while-playing",
@@ -855,6 +859,18 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "minecraft-dir" => s.minecraft_dir = folder(value),
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
+        "prune-old-versions" => s.prune_old_versions = Some(on_off(value)?),
+        "keep-versions" => {
+            s.keep_versions = match value {
+                "default" => None,
+                n => Some(
+                    n.parse::<usize>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("{value}: say a number from 1, or default"))?,
+                ),
+            }
+        }
         "opening-animation" => s.skip_opening = !on_off(value)?,
         "while-playing" => {
             s.while_playing = backend::WhilePlaying::parse(value)
@@ -907,6 +923,8 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "minecraft_dir": s.minecraft_dir,
         "server_dir": backend::server_dir(None),
         "install_new_versions": s.install_new_versions.unwrap_or(true),
+        "prune_old_versions": s.auto_prune(),
+        "keep_versions": s.keep_newest(),
         "opening_animation": !s.skip_opening,
         "game_args": s.game_args,
         "proxy": s.proxy,
