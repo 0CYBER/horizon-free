@@ -12,10 +12,10 @@ pub use horizon_client_render::{
     extras, fast_hash, fog, font, gfx, graphics, graphics_style, graphics_ui, hud, hud_layout,
     hud_overlays, inventory_effects, java_text, level_loading, light, lod, logging, menu_blur,
     mesher, minimap, mipmap, mod_list, model_library, models, options_file, options_fixes,
-    options_ui, overlay, pack_screen, packs, par, particles, poi_sections, providers, screen_draw,
-    screen_effects, sculk, settings, shader_pack_list, signs, skins, sound_engine, sound_events,
-    spans, split_layout, sprites, streaming, tab_list, telemetry, testgen, title_edition, trims,
-    ui, vault, weather, widgets, world, worldborder, zip,
+    options_ui, overlay, pack_screen, packs, par, particles, poi_sections, potent_sulfur,
+    providers, screen_draw, screen_effects, sculk, settings, shader_pack_list, signs, skins,
+    sound_engine, sound_events, spans, split_layout, sprites, streaming, tab_list, telemetry,
+    testgen, title_edition, trims, ui, vault, weather, widgets, world, worldborder, zip,
 };
 pub mod attack_strength;
 pub mod attribute_updates;
