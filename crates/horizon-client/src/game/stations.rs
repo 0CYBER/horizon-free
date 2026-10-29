@@ -1643,7 +1643,7 @@ impl Game<'_> {
                 continue;
             };
             let stack = self.slot_mut(i).clone();
-            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
+            self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -1996,6 +1996,12 @@ impl Game<'_> {
             horizon_client::item_tooltip::unbreakable_line(stack, &display, &translate)
         {
             push(&mut lines, text, rgba(85, 85, 255, 255));
+        }
+        // OminousBottleAmplifier.addToTooltip.
+        if let Some((text, c)) =
+            horizon_client::item_tooltip::ominous_bottle_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, c);
         }
         // BlockItemStateProperties.addToTooltip.
         if let Some(text) = horizon_client::item_tooltip::honey_line(stack, &display, &translate) {

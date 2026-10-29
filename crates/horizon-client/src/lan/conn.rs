@@ -381,7 +381,7 @@ fn serve_legacy(mut stream: TcpStream, shared: &Shared) -> Result<(), String> {
     let body = if data.len() == 1 {
         format!("{motd}\u{a7}{online}\u{a7}{max}")
     } else {
-        if data[1] != 1 {
+        if data.get(1) != Some(&1) {
             return Ok(());
         }
         if data.len() > 2 {
