@@ -177,6 +177,10 @@ pub(super) struct Remote {
     pub chat: Vec<(String, Instant)>,
     /// Lines received since joining, for the control socket's events.
     pub chat_received: u64,
+    /// `ChatListener.delayedMessageQueue`: player chat held back by Chat Delay.
+    chat_queue: VecDeque<(horizon_client::text::Text, horizon_client::chat::ChatSource)>,
+    /// `ChatListener.previousMessageTime`: when a message last showed, if one has.
+    chat_previous: Option<Instant>,
     /// The server's command tree (ClientboundCommandsPacket).
     pub commands: Option<horizon_client::command::Dispatcher>,
     players: HashMap<u128, String>,
@@ -499,6 +503,8 @@ impl Game<'_> {
             game_mode: 0,
             chat: Vec::new(),
             chat_received: 0,
+            chat_queue: VecDeque::new(),
+            chat_previous: None,
             commands: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
@@ -742,9 +748,9 @@ impl Game<'_> {
         &mut self,
         content: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
-    ) {
+    ) -> bool {
         if !self.ui.chat.shows(source) {
-            return;
+            return false;
         }
         let text = content.plain();
         // addServerSystemMessage and addClientSystemMessage both carry
@@ -765,6 +771,98 @@ impl Game<'_> {
             if r.chat.len() > 100 {
                 r.chat.remove(0);
             }
+        }
+        true
+    }
+
+    /// `ChatListener.handleMessage` for player and disguised chat: held in the
+    /// queue while Chat Delay is set, shown at once otherwise.
+    pub(super) fn handle_player_chat(&mut self, line: horizon_client::text::Text) {
+        let source = horizon_client::chat::ChatSource::Player;
+        if self.chat_delay_ms() > 0 {
+            if let Some(r) = self.remote.as_mut() {
+                r.chat_queue.push_back((line, source));
+            }
+        } else {
+            self.accept_chat(line, source);
+        }
+    }
+
+    /// A message's `accept`: shown, it starts the Chat Delay wait again.
+    fn accept_chat(
+        &mut self,
+        line: horizon_client::text::Text,
+        source: horizon_client::chat::ChatSource,
+    ) -> bool {
+        let shown = self.chat_line(line, source);
+        if shown && let Some(r) = self.remote.as_mut() {
+            r.chat_previous = Some(Instant::now());
+        }
+        shown
+    }
+
+    /// `ChatListener.messageDelay`: Chat Delay in milliseconds, as Java
+    /// truncates it.
+    fn chat_delay_ms(&self) -> i64 {
+        (self.settings.chat_delay * 1000.0) as i64
+    }
+
+    /// `ChatListener.tick`: while paused the wait does not run down; with no
+    /// Chat Delay the queue flushes; otherwise the next message the chat takes
+    /// shows once the delay has passed since the last shown one.
+    pub(super) fn tick_chat_queue(&mut self) {
+        let delay = self.chat_delay_ms();
+        // Minecraft.isPaused: a single-player pausing screen, not every pause menu.
+        if self.pause {
+            if delay > 0
+                && let Some(r) = self.remote.as_mut()
+            {
+                r.chat_previous = r.chat_previous.map(|t| t + Duration::from_millis(50));
+            }
+            return;
+        }
+        if delay == 0 {
+            if self
+                .remote
+                .as_ref()
+                .is_some_and(|r| !r.chat_queue.is_empty())
+            {
+                self.flush_chat_queue();
+            }
+            return;
+        }
+        let ready = self.remote.as_ref().is_some_and(|r| {
+            r.chat_previous
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(delay as u64))
+        });
+        if !ready {
+            return;
+        }
+        // A message the Chat option hides is dropped and the next one is tried,
+        // until one shows.
+        while let Some((line, source)) = self.remote.as_mut().and_then(|r| r.chat_queue.pop_front())
+        {
+            if self.accept_chat(line, source) {
+                break;
+            }
+        }
+    }
+
+    /// `ChatListener.flushQueue`: every held-back message shows now, and the
+    /// delay starts over.
+    fn flush_chat_queue(&mut self) {
+        let Some(queue) = self
+            .remote
+            .as_mut()
+            .map(|r| std::mem::take(&mut r.chat_queue))
+        else {
+            return;
+        };
+        for (line, source) in queue {
+            self.chat_line(line, source);
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.chat_previous = None;
         }
     }
 
@@ -2929,12 +3027,12 @@ impl Game<'_> {
                     .as_ref()
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line, horizon_client::chat::ChatSource::Player);
+                self.handle_player_chat(line);
             }
             C::DisguisedChat(p) => {
                 let content = horizon_client::scoreboard::tag_to_json(&p.message);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line, horizon_client::chat::ChatSource::Player);
+                self.handle_player_chat(line);
             }
             C::PlayerInfoUpdate(p) => {
                 if let Some(r) = self.remote.as_mut() {

@@ -13942,6 +13942,8 @@ impl ApplicationHandler for Game<'_> {
                             self.tick_fov();
                         }
                         self.tick_win_screen()?;
+                        // Gui.tick runs ChatListener.tick paused or not.
+                        self.tick_chat_queue();
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
