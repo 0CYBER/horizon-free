@@ -68,6 +68,8 @@ unicode-bidi = "0.3.18"
 rustix = { version = "1", default-features = false, features = ["std", "time"] }
 
 [target.'cfg(windows)'.dependencies]
+# Opt-in Rust allocator experiment; the system allocator remains the default.
+mimalloc = { version = "0.1.52", optional = true }
 # Use the registered URI handler without routing links through Explorer/cmd.
 open = { version = "5.4.5", features = ["shellexecute-on-windows"] }
 # DirectX 12, where Vulkan has no adapter or device, or by choice (`graphicsApi`, graphics.rs).
@@ -93,6 +95,9 @@ audio = ["horizon-client-render/audio"]
 controllers = ["dep:gilrs", "dep:horizon-dualsense", "horizon-client-input/controllers"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace"]
+# Independent Windows allocator experiments; see docs/windows-allocators.md.
+windows-mimalloc = ["dep:mimalloc"]
+windows-segment-heap = []
 
 # Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
 [[example]]

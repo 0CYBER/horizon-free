@@ -4,6 +4,10 @@ mod game;
 
 use horizon_client::{crash, logging};
 
+#[cfg(all(windows, feature = "windows-mimalloc"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// The mod API level this game serves, kept in the program for the launcher
 /// to read without running it (`horizon_mods::api_level::MARK`). `main`
 /// reads it, so the linker keeps it.
