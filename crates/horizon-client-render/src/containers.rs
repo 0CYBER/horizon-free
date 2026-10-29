@@ -378,6 +378,58 @@ impl BlockEntity {
 }
 pub use crate::providers::Providers;
 
+/// A `ChestBlock`, which `ChestBlock.combine` can join into a double chest:
+/// chests, trapped chests and copper chests in every weathering state, waxed
+/// or not (`CopperChestBlock` extends `ChestBlock`). Ender chests are
+/// `EnderChestBlock`s and always single.
+pub fn is_chest_block(name: &str) -> bool {
+    matches!(name, "minecraft:chest" | "minecraft:trapped_chest") || name.ends_with("copper_chest")
+}
+
+/// A chest block's name with its `type` and `facing` properties.
+#[derive(Clone, Copy, Debug)]
+pub struct ChestHalf<'a> {
+    pub block: &'a str,
+    pub kind: &'a str,
+    pub facing: &'a str,
+}
+
+impl ChestHalf<'_> {
+    /// `ChestBlock.getConnectedDirection` as an (x, z) step to the other
+    /// half: clockwise from the facing for a left half, counter-clockwise for
+    /// a right one. None for a single chest.
+    pub fn connected_step(&self) -> Option<(i32, i32)> {
+        let step = |facing: &str| match facing {
+            "north" => Some((0, -1)),
+            "south" => Some((0, 1)),
+            "west" => Some((-1, 0)),
+            "east" => Some((1, 0)),
+            _ => None,
+        };
+        let (x, z) = step(self.facing)?;
+        // Turning clockwise seen from above takes (x, z) to (-z, x).
+        match self.kind {
+            "left" => Some((-z, x)),
+            "right" => Some((z, -x)),
+            _ => None,
+        }
+    }
+
+    /// `DoubleBlockCombiner.combineWithNeigbour` as `ChestBlock.combine` calls
+    /// it: `other`, the block in this half's connected direction, is its other
+    /// half when it is the same block, a half of the other side and faces the
+    /// same way. Copper chests in different weathering states never join
+    /// (`CopperChestBlock` keeps both halves in one state instead).
+    pub fn pairs_with(&self, other: &ChestHalf) -> bool {
+        is_chest_block(self.block)
+            && self.kind != "single"
+            && other.block == self.block
+            && other.kind != "single"
+            && other.kind != self.kind
+            && other.facing == self.facing
+    }
+}
+
 /// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
 /// more with the chance of what is left over (a level random draw only when there is some).
 pub fn create_experience(
