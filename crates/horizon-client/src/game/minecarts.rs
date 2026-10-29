@@ -1254,11 +1254,11 @@ impl Game<'_> {
                 } else {
                     0xFF00_0000 | shade << 16 | shade << 8 | shade
                 };
-                let tint = self.pack.context.tables.default_tint(
-                    state,
-                    face.quad.tint_index,
-                    grass,
-                );
+                let tint =
+                    self.pack
+                        .context
+                        .tables
+                        .default_tint(state, face.quad.tint_index, grass);
                 let color = if let Some(tint) = tint {
                     let tint = horizon_client::mobs::render::abgr(tint);
                     let channel = |shift: u32| {
