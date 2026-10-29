@@ -11713,13 +11713,21 @@ impl Game<'_> {
                 && let Some(stack) = self.slot_view(slot)
             {
                 let tabs = self.creative_tooltip_tabs(&stack, false);
-                self.draw_stack_tooltip_with(batch, &stack, self.cursor.0, self.cursor.1, tabs);
+                self.draw_stack_tooltip_with(
+                    batch,
+                    &stack,
+                    false,
+                    self.cursor.0,
+                    self.cursor.1,
+                    tabs,
+                );
             }
         } else if self.carried.is_none()
             && let Some((item, grid)) = hovered
         {
             let tabs = self.creative_tooltip_tabs(&item, grid);
-            self.draw_stack_tooltip_with(batch, &item, self.cursor.0, self.cursor.1, tabs);
+            // A `CustomCreativeSlot`: TooltipFlag.asCreative.
+            self.draw_stack_tooltip_with(batch, &item, grid, self.cursor.0, self.cursor.1, tabs);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }
