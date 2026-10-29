@@ -2293,6 +2293,12 @@ impl Game<'_> {
             );
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.held_item_geometry(m, camera, alpha, packed, true, out);
+            let head = host
+                .hub
+                .guest(*conn)
+                .and_then(|g| g.armor[0].as_ref())
+                .or(m.extra.armor[0].as_ref());
+            self.custom_head_geometry(m, head, camera, alpha, packed, true, out);
             // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
             let guest = host.hub.guest(*conn);
             if m.glowing || guest.is_some_and(|g| g.effects.get("glowing").is_some()) {

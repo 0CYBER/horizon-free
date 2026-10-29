@@ -539,6 +539,7 @@ impl Game<'_> {
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
+        self.custom_head_geometry(m, self.armor[0].as_ref(), camera, alpha, packed, true, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect.
         if self.potions.effects.get("glowing").is_some() {
             let color = super::glowing::team_color(self.own_team());
@@ -627,6 +628,15 @@ impl Game<'_> {
         }
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+        self.custom_head_geometry(
+            &m,
+            self.armor[0].as_ref(),
+            camera,
+            1.0,
+            240 | 240 << 8,
+            false,
+            &mut verts,
+        );
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).
@@ -681,7 +691,12 @@ impl Game<'_> {
             return;
         };
         let assets = &self.armor_stand_assets;
-        let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
+        let Some((texture, _)) = assets
+            .equipment
+            .get(asset)
+            .and_then(|k| k.get("wings"))
+            .and_then(|l| l.first())
+        else {
             return;
         };
         // WingsLayer.getPlayerElytraTexture: a player's cape texture has its elytra.

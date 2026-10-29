@@ -150,6 +150,7 @@ impl Game<'_> {
         self.captain_banner_geometry(mob, camera, alpha, light, out);
         self.held_item_geometry(mob, camera, alpha, light, true, out);
         self.worn_block_geometry(mob, camera, alpha, light, out);
+        self.custom_head_geometry(mob, None, camera, alpha, light, true, out);
         self.golem_flower_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
@@ -269,6 +270,109 @@ impl Game<'_> {
             for vertex in &mut out[start..] {
                 vertex.layer = overlay;
             }
+        }
+    }
+    /// `CustomHeadLayer`: a non-armour head item (e.g. carved pumpkin, mob
+    /// skull, or other items worn on the head) on a player or mob
+    /// (`translateToHead`: down a quarter, turned, 0.625 scale; skulls 1.1875 scale).
+    pub(super) fn custom_head_geometry(
+        &self,
+        mob: &Mob,
+        stack: Option<&ItemStack>,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        lit: bool,
+        out: &mut Vec<Vertex>,
+    ) {
+        if horizon_client::mobs::raider::is_captain(mob) || mob.species() == Species::SnowGolem {
+            return;
+        }
+        let fallback = mob.extra.head.as_ref().map(|item| ItemStack::new(item, 1));
+        let Some(stack) = stack.or(mob.extra.armor[0].as_ref()).or(fallback.as_ref()) else {
+            return;
+        };
+        // A head item that is armour is drawn by HumanoidArmorLayer (armor_layers).
+        if self
+            .res
+            .items()
+            .get(&stack.item)
+            .is_some_and(|i| i.equip_asset.is_some())
+        {
+            return;
+        }
+        let Some(head) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        // `CustomHeadLayer`: a worn skull draws the skull model.
+        if let Some(kind) = super::armor_stands::skull_kind(&stack.item) {
+            let pose = head * glam::Mat4::from_scale(glam::Vec3::splat(1.1875));
+            let special = horizon_assets::item_model::SpecialModel {
+                kind: if kind == "player" {
+                    horizon_assets::item_model::SpecialKind::PlayerHead
+                } else {
+                    horizon_assets::item_model::SpecialKind::Head {
+                        kind: kind.to_owned(),
+                        texture: None,
+                        animation: 0.0,
+                    }
+                },
+            };
+            let mut sink = horizon_client::item_render::WorldSink {
+                out,
+                light,
+                lights: lit.then(|| {
+                    horizon_client::block_entity_render::diffuse_lights(
+                        self.dim == super::Dim::Nether,
+                    )
+                }),
+                glint: self.glint(),
+            };
+            let profile = stack
+                .extra
+                .as_deref()
+                .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
+                .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
+                .unwrap_or(serde_json::Value::Null);
+            let item_glint = self
+                .res
+                .items()
+                .enchantments
+                .props
+                .get(&stack.item)
+                .is_some_and(|p| p.glint);
+            self.pack.item_renderer.submit_special(
+                &special,
+                &profile,
+                stack.has_foil(item_glint),
+                pose,
+                &self.gui.atlas.sprites,
+                &self.item_host(),
+                &mut sink,
+            );
+            return;
+        }
+        let pose = head
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.25, 0.0))
+            * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+            * glam::Mat4::from_scale(glam::Vec3::new(0.625, -0.625, -0.625));
+        let owner = super::item_draw::owner_at(
+            [mob.position.x, mob.position.y, mob.position.z],
+            mob.body_yaw,
+            &mob.kind.id,
+        );
+        let state = self.resolve_item(
+            stack,
+            horizon_assets::item_model::DisplayContext::Head,
+            Some(&owner),
+            mob.id as i32 + 5,
+        );
+        if lit {
+            self.submit_item_world(&state, pose, light, out);
+        } else {
+            self.submit_item_unlit(&state, pose, light, out);
         }
     }
     /// `ItemInHandLayer`: both hands through the item model pipeline; `lit`

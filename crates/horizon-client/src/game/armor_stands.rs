@@ -39,8 +39,8 @@ pub(super) struct ArmorStandAssets {
     pub layers: HashMap<(&'static str, bool), Part>,
     /// The player's armour models by slot (helmet, chestplate, leggings, boots).
     pub player: HashMap<&'static str, Part>,
-    /// asset id -> layer kind (humanoid / humanoid_leggings) -> (texture, undyed colour).
-    pub equipment: HashMap<String, HashMap<String, (String, Option<u32>)>>,
+    /// asset id -> layer kind (humanoid / humanoid_leggings) -> [(texture, undyed colour)].
+    pub equipment: HashMap<String, HashMap<String, Vec<(String, Option<u32>)>>>,
     /// asset id -> `trim_overrides`.
     pub trim_overrides: HashMap<String, Vec<TrimOverride>>,
     pub trims: TrimRegistry,
@@ -84,18 +84,21 @@ impl ArmorStandAssets {
                 let Ok(v) = v else { continue };
                 let mut kinds = HashMap::new();
                 for kind in ["humanoid", "humanoid_leggings", "wings"] {
-                    if let Some(layer) = v["layers"][kind].get(0) {
-                        let tex = layer["texture"]
-                            .as_str()
-                            .unwrap_or(name)
-                            .trim_start_matches("minecraft:");
-                        let undyed = layer["dyeable"]["color_when_undyed"]
-                            .as_i64()
-                            .map(|c| c as u32 & 0xFF_FFFF);
-                        kinds.insert(
-                            kind.to_owned(),
-                            (format!("entity/equipment/{kind}/{tex}"), undyed),
-                        );
+                    if let Some(layers) = v["layers"][kind].as_array() {
+                        let mut list = Vec::new();
+                        for layer in layers {
+                            let tex = layer["texture"]
+                                .as_str()
+                                .unwrap_or(name)
+                                .trim_start_matches("minecraft:");
+                            let undyed = layer["dyeable"]["color_when_undyed"]
+                                .as_i64()
+                                .map(|c| c as u32 & 0xFF_FFFF);
+                            list.push((format!("entity/equipment/{kind}/{tex}"), undyed));
+                        }
+                        if !list.is_empty() {
+                            kinds.insert(kind.to_owned(), list);
+                        }
                     }
                 }
                 trim_overrides.insert(format!("minecraft:{name}"), TrimOverride::list(&v));
@@ -190,18 +193,19 @@ impl Game<'_> {
             } else {
                 "humanoid"
             };
-            let Some((texture, undyed)) = assets.equipment.get(&asset).and_then(|k| k.get(kind))
-            else {
+            let Some(layers) = assets.equipment.get(&asset).and_then(|k| k.get(kind)) else {
                 continue;
             };
-            let (Some(r), Some(part)) = (
-                self.gui.atlas.sprites.get(texture.as_str()),
-                assets.player.get(layer),
-            ) else {
+            let Some(part) = assets.player.get(layer) else {
                 continue;
             };
-            let color = layer_color(*undyed, stack);
-            out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
+            for (texture, undyed) in layers {
+                let Some(r) = self.gui.atlas.sprites.get(texture.as_str()) else {
+                    continue;
+                };
+                let color = layer_color(*undyed, stack);
+                out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
+            }
             // EquipmentLayerRenderer: the trim layer over the armour.
             if let Some(r) = stack
                 .and_then(|s| assets.trim_texture(&asset, kind, s))
@@ -725,16 +729,12 @@ impl Game<'_> {
                 } else {
                     "humanoid"
                 };
-                let Some((texture, undyed)) =
-                    assets.equipment.get(&asset).and_then(|k| k.get(kind))
-                else {
+                let Some(layers) = assets.equipment.get(&asset).and_then(|k| k.get(kind)) else {
                     continue;
                 };
-                let (Some(uv), Some(part)) = (uv_of(texture), assets.layers.get(&(layer, a.small)))
-                else {
+                let Some(part) = assets.layers.get(&(layer, a.small)) else {
                     continue;
                 };
-                let color = layer_color(*undyed, Some(stack));
                 // ArmorStandRenderer's HumanoidArmorLayer: the armour glint
                 // when `stack.hasFoil()`, as on a living entity.
                 let item_glint = self
@@ -752,16 +752,22 @@ impl Game<'_> {
                 // ArmorStandArmorModel.setupAnim: the same pose as the stand.
                 let mut layer_poses = Poses::new(part);
                 apply_pose(&mut layer_poses, &a.pose);
-                horizon_client::mobs::render::draw(
-                    part,
-                    base,
-                    &layer_poses,
-                    uv,
-                    color,
-                    packed,
-                    overlay,
-                    out,
-                );
+                for (texture, undyed) in layers {
+                    let Some(uv) = uv_of(texture) else {
+                        continue;
+                    };
+                    let color = layer_color(*undyed, Some(stack));
+                    horizon_client::mobs::render::draw(
+                        part,
+                        base,
+                        &layer_poses,
+                        uv,
+                        color,
+                        packed,
+                        overlay,
+                        out,
+                    );
+                }
                 // EquipmentLayerRenderer: the trim layer over the armour.
                 if let Some(trim) = assets
                     .trim_texture(&asset, kind, stack)
