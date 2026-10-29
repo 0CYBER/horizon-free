@@ -1755,13 +1755,8 @@ impl Game<'_> {
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
         let mut lines = Vec::new();
         if !nested && display.name_visible(self.screen == Screen::Creative) {
-            // `getStyledHoverName`: a custom name is italic.
-            let name = self.stack_hover_name(stack);
-            let name = if stack.custom_name().is_some() {
-                horizon_client::text::Text::literal(name).italic()
-            } else {
-                horizon_client::text::Text::legacy(&name)
-            };
+            let name =
+                horizon_client::item_tooltip::styled_name(stack, || self.stack_hover_name(stack));
             lines.push((name, color));
         }
         let translate = |k: &str| self.pack.names.display_get(k);
@@ -1788,7 +1783,6 @@ impl Game<'_> {
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map(str::to_owned)
                 .or_else(|| s.item_name())
                 .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
@@ -1875,9 +1869,9 @@ impl Game<'_> {
                 "minecraft:tipped_arrow" => 0.125,
                 _ => 1.0,
             };
-            for (text, cat) in brewing::tooltip(stack.potion(), scale, &|k| {
-                e.translate(k).map(str::to_owned)
-            }) {
+            // PotionContents.getPotionDescription: the effect names are
+            // translatable, read in the selected language like every other line.
+            for (text, cat) in brewing::tooltip(stack.potion(), scale, &translate) {
                 let c = match cat {
                     brewing::Category::Beneficial => rgba(85, 85, 255, 255),
                     brewing::Category::Harmful => rgba(255, 85, 85, 255),
@@ -1902,18 +1896,15 @@ impl Game<'_> {
         {
             push(
                 &mut lines,
-                e.translate("item.minecraft.smithing_template.upgrade")
-                    .unwrap_or("Upgrade:")
-                    .to_owned(),
+                translate("item.minecraft.smithing_template.upgrade")
+                    .unwrap_or_else(|| "Upgrade:".to_owned()),
                 rgba(170, 170, 170, 255),
             );
             let short = |s: &str| s.trim_start_matches("minecraft:").to_owned();
-            let p = e
-                .translate(&format!("trim_pattern.minecraft.{}", short(&pattern)))
-                .map_or_else(|| short(&pattern), str::to_owned);
-            let m = e
-                .translate(&format!("trim_material.minecraft.{}", short(&material)))
-                .map_or_else(|| short(&material), str::to_owned);
+            let p = translate(&format!("trim_pattern.minecraft.{}", short(&pattern)))
+                .unwrap_or_else(|| short(&pattern));
+            let m = translate(&format!("trim_material.minecraft.{}", short(&material)))
+                .unwrap_or_else(|| short(&material));
             push(&mut lines, format!(" {p}"), rgba(170, 170, 170, 255));
             push(&mut lines, format!(" {m}"), rgba(170, 170, 170, 255));
         }
@@ -1996,6 +1987,22 @@ impl Game<'_> {
             horizon_client::item_tooltip::unbreakable_line(stack, &display, &translate)
         {
             push(&mut lines, text, rgba(85, 85, 255, 255));
+        }
+        // OminousBottleAmplifier.addToTooltip.
+        if let Some((text, c)) =
+            horizon_client::item_tooltip::ominous_bottle_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, c);
+        }
+        // SuspiciousStewEffects.addToTooltip: the creative flag, which vanilla
+        // sets for the creative screen's own slots, as `name_visible` above.
+        for (text, c) in horizon_client::item_tooltip::stew_lines(
+            stack,
+            !nested && self.screen == Screen::Creative,
+            &display,
+            &translate,
+        ) {
+            push(&mut lines, text, c);
         }
         // BlockItemStateProperties.addToTooltip.
         if let Some(text) = horizon_client::item_tooltip::honey_line(stack, &display, &translate) {
@@ -2245,10 +2252,24 @@ impl Game<'_> {
         x: f32,
         y: f32,
     ) {
-        let lines = Self::resolved(&self.stack_tooltip(stack));
+        self.draw_stack_tooltip_with(batch, stack, x, y, Vec::new());
+    }
+    /// [`Self::draw_stack_tooltip`] with `after_name` inserted from line 1,
+    /// as the creative screen adds its tab names.
+    pub(super) fn draw_stack_tooltip_with(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+        after_name: Vec<(horizon_client::text::Text, u32)>,
+    ) {
+        let mut lines = self.stack_tooltip(stack);
         if lines.is_empty() {
             return;
         }
+        lines.splice(1..1, after_name);
+        let lines = Self::resolved(&lines);
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
         let probe = horizon_client::bundle::tooltip_layout(self.res.items(), stack, 0.0, 0.0, 96.0);

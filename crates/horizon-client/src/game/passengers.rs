@@ -159,7 +159,7 @@ impl Game<'_> {
             {
                 if let Some(zombie) = self.spawn_mob("minecraft:zombie", at, false) {
                     if let Some(z) = self.mobs.iter_mut().find(|m| m.id == zombie) {
-                        z.extra.main_hand = Some("minecraft:iron_spear".into());
+                        z.extra.set_main_hand(Some("minecraft:iron_spear".into()));
                     }
                     self.mount_mob(zombie, id);
                 }
@@ -189,7 +189,7 @@ impl Game<'_> {
             return;
         }
         if let Some(h) = self.mobs.iter_mut().find(|m| m.id == id) {
-            h.extra.main_hand = Some("minecraft:iron_spear".into());
+            h.extra.set_main_hand(Some("minecraft:iron_spear".into()));
         }
         let Some(camel) = self.spawn_mob("minecraft:camel_husk", at, false) else {
             return;
@@ -257,7 +257,8 @@ impl Game<'_> {
             if let Some(piglin) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
                 let baby = self.world.random.next_float() < CHICKEN_JOCKEY_ODDS;
                 if let Some(p) = self.mobs.iter_mut().find(|m| m.id == piglin) {
-                    p.extra.main_hand = Some("minecraft:warped_fungus_on_a_stick".into());
+                    p.extra
+                        .set_main_hand(Some("minecraft:warped_fungus_on_a_stick".into()));
                     p.extra.age = if baby { i32::MIN / 2 } else { 0 };
                 }
                 if let Some(s) = self.mobs.iter_mut().find(|m| m.id == id) {
