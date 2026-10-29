@@ -1431,7 +1431,16 @@ impl Game<'_> {
         on_ground: bool,
         far_snaps: bool,
     ) {
-        let mob = self.mobs.iter_mut().find(|m| m.id == id as u32);
+        // The dragon is drawn from its own state (game/dragon.rs), which
+        // tick_remote_dragon eases to the server's moves through `lerps`. Its
+        // copy in the mob list draws nothing: given the move, it kept the
+        // dragon where it spawned (#2083).
+        let dragon = self.dragon.as_ref().is_some_and(|d| d.id as i32 == id);
+        let mob = self
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == id as u32)
+            .filter(|_| !dragon);
         let tracked = self
             .remote
             .as_ref()

@@ -127,11 +127,11 @@ pub struct JavaGame {
 }
 
 impl JavaGame {
-    /// What the mod browser installs for: its Minecraft version (vanilla: no loader).
+    /// What the mod browser installs for: its Minecraft version and its loader.
     pub fn target(&self) -> crate::browser::java_instance::Target {
         crate::browser::java_instance::Target {
             minecraft: self.minecraft.clone(),
-            loader: None,
+            loader: self.loader.as_ref().map(|l| l.kind.id().to_string()),
         }
     }
 }
