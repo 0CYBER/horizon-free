@@ -179,30 +179,24 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
                 let Some(s) = w.seen(id) else { continue };
                 let (species, baby) = (s.species, s.baby);
                 match species {
-                    Species::Hoglin if baby && baby_hoglin.is_none() => {
-                        if visible(m, w, who) {
-                            baby_hoglin = Some(id);
-                        }
+                    Species::Hoglin if baby && baby_hoglin.is_none() && visible(m, w, who) => {
+                        baby_hoglin = Some(id);
                     }
-                    Species::Hoglin if !baby => {
-                        if visible(m, w, who) {
-                            hoglins += 1;
-                        }
+                    Species::Hoglin if !baby && visible(m, w, who) => {
+                        hoglins += 1;
                     }
-                    Species::Piglin | Species::PiglinBrute if !baby => {
-                        if visible(m, w, who) {
-                            adults.push(id);
-                        }
+                    Species::Piglin | Species::PiglinBrute if !baby && visible(m, w, who) => {
+                        adults.push(id);
                     }
-                    Species::WitherSkeleton | Species::Wither if nemesis.is_none() => {
-                        if visible(m, w, who) {
-                            nemesis = Some(who);
-                        }
+                    Species::WitherSkeleton | Species::Wither
+                        if nemesis.is_none() && visible(m, w, who) =>
+                    {
+                        nemesis = Some(who);
                     }
-                    Species::ZombifiedPiglin | Species::Zoglin if zombified.is_none() => {
-                        if visible(m, w, who) {
-                            zombified = Some(who);
-                        }
+                    Species::ZombifiedPiglin | Species::Zoglin
+                        if zombified.is_none() && visible(m, w, who) =>
+                    {
+                        zombified = Some(who);
                     }
                     _ => {}
                 }
@@ -363,9 +357,9 @@ fn piglin_sound(m: &Mob, w: &MobWorld, activity: Activity) -> &'static str {
     let b = &m.extra.piglin;
     if activity == Activity::Fight {
         "entity.piglin.angry"
-    } else if converting(m, w) {
-        "entity.piglin.retreat"
-    } else if activity == Activity::Avoid && b.avoid.is_some_and(|a| m.distance_sqr(a.at) < 144.0) {
+    } else if converting(m, w)
+        || (activity == Activity::Avoid && b.avoid.is_some_and(|a| m.distance_sqr(a.at) < 144.0))
+    {
         "entity.piglin.retreat"
     } else if activity == Activity::Admire {
         "entity.piglin.admiring_item"
