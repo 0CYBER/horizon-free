@@ -5213,7 +5213,7 @@ impl Game<'_> {
         // level 8 is SUCCESS on the client too (only the server adds the
         // layer), so the other hand (a torch) is never tried.
         if self.composter_takes(hit.pos, held) {
-            return (true, DryUse::default());
+            return (InteractionResult::Success, DryUse::default());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {
