@@ -188,10 +188,17 @@ pub struct GeneratorData {
     /// Concentric ring positions by seed and dimension generator (see
     /// `rings_for`), most recent last.
     ring_cache: Mutex<Vec<RingCacheEntry>>,
+    /// Placed-feature decoration by biome source (see `decoration_for`),
+    /// most recent last.
+    decorations: Mutex<Vec<(String, DecorationSlot)>>,
 }
 type RingCacheEntry = ((i64, String), Arc<OnceLock<super::structure::start::Rings>>);
 /// Generators whose ring positions are kept: the dimensions of a few worlds.
 const RING_CACHE_LIMIT: usize = 8;
+type DecorationSlot =
+    Arc<OnceLock<Result<Option<Arc<super::generator_decoration::Decoration>>, String>>>;
+/// Biome sources whose decoration is kept: the three dimensions and a spare.
+const DECORATION_CACHE_LIMIT: usize = 4;
 type Bundle = BTreeMap<String, String>;
 fn read_bundle(dir: &Path, name: &str) -> Result<Bundle, GeneratorError> {
     let path = dir.join(format!("{name}.json"));
@@ -490,6 +497,7 @@ impl GeneratorData {
             biome_tags,
             feature_resources,
             ring_cache: Mutex::new(Vec::new()),
+            decorations: Mutex::new(Vec::new()),
         }))
     }
     /// The concentric ring positions (strongholds) of the generator for
@@ -512,6 +520,59 @@ impl GeneratorData {
         }
         cache.push((key, rings.clone()));
         rings
+    }
+    /// The placed-feature decoration of the biome source `source_json`
+    /// (resolved: `source`), shared by every generator that uses it. It
+    /// depends on these resources and the source alone, not on the seed, and
+    /// building it (decoding the placed features of every biome the source
+    /// can place) took about 140 ms of each world opening. A caller that
+    /// arrives while another builds it waits for that build.
+    pub(super) fn decoration_for(
+        self: &Arc<Self>,
+        source_json: &str,
+        source: &ResolvedBiomeSource,
+    ) -> Result<Option<Arc<super::generator_decoration::Decoration>>, GeneratorError> {
+        let slot = {
+            let mut cache = self.decorations.lock().unwrap_or_else(|e| e.into_inner());
+            let slot = match cache.iter().position(|(k, _)| k == source_json) {
+                Some(i) => cache.remove(i).1,
+                None => Arc::new(OnceLock::new()),
+            };
+            if cache.len() >= DECORATION_CACHE_LIMIT {
+                cache.remove(0);
+            }
+            cache.push((source_json.to_owned(), slot.clone()));
+            slot
+        };
+        slot.get_or_init(|| {
+            super::generator_decoration::Decoration::new(self, source)
+                .map(|d| d.map(Arc::new))
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+        .map_err(resource)
+    }
+    /// Builds the decoration of `preset`'s `dimension` generator before a
+    /// world needs it (the world screens' preload), so opening the world
+    /// finds it ready.
+    pub fn prepare_decoration(
+        self: &Arc<Self>,
+        preset: &str,
+        dimension: &str,
+    ) -> Result<(), GeneratorError> {
+        let preset_json: Value = serde_json::from_str(
+            self.world_presets
+                .get(preset)
+                .ok_or_else(|| resource(format!("missing world preset {preset}")))?,
+        )?;
+        let source_json =
+            preset_json["dimensions"][dimension]["generator"]["biome_source"].to_string();
+        let source = self
+            .source_catalog
+            .decode(&source_json)?
+            .resolve(&self.presets)
+            .map_err(|e| resource(format!("biome source: {e}")))?;
+        self.decoration_for(&source_json, &source).map(drop)
     }
     pub fn registry(&self) -> &'static BlockRegistry {
         self.registry
@@ -683,7 +744,7 @@ struct Pipeline<R: RandomSource> {
     biome_cache: BiomeCache,
     biome_work: ChunkWork,
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
-    pub(super) decoration: Option<super::generator_decoration::Decoration>,
+    pub(super) decoration: Option<Arc<super::generator_decoration::Decoration>>,
     pub(super) structures: Option<super::generator_structures::StructureState>,
     /// The noise settings' `spawn_target` points.
     spawn_target: Vec<SpawnTargetPoint>,
@@ -831,9 +892,10 @@ where
                 .collect::<Result<_, GeneratorError>>()?,
             _ => Vec::new(),
         };
+        let source_json = generator["biome_source"].to_string();
         let source = data
             .source_catalog
-            .decode(&generator["biome_source"].to_string())?
+            .decode(&source_json)?
             .resolve(&data.presets)
             .map_err(|e| resource(format!("biome source: {e}")))?;
         let climate = router.climate_sampler();
@@ -912,8 +974,9 @@ where
             spawn_target,
             spawn_position: std::sync::OnceLock::new(),
         };
-        pipeline.decoration =
-            super::generator_decoration::Decoration::new(&pipeline.data, &pipeline.source)?;
+        pipeline.decoration = pipeline
+            .data
+            .decoration_for(&source_json, &pipeline.source)?;
         if with_structures {
             let possible = pipeline
                 .source
@@ -939,13 +1002,32 @@ where
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError> {
+        self.biome_chunk_or_busy(worker, pos, true)
+            .map(|chunk| chunk.expect("waited for the builder"))
+    }
+    /// The chunk's biomes, built here if no other thread is building them.
+    /// With `wait` false, None when another thread is building them now.
+    fn biome_chunk_or_busy(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+        wait: bool,
+    ) -> Result<Option<Arc<BiomeChunk<BiomeId>>>, GeneratorError> {
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
-            return Ok(chunk.clone());
+            return Ok(Some(chunk.clone()));
         }
         let work = self.biome_work.at((pos.x, pos.z));
-        let _work = work.lock().unwrap();
+        let _work = if wait {
+            work.lock().unwrap()
+        } else {
+            match work.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+                Err(std::sync::TryLockError::Poisoned(error)) => panic!("{error}"),
+            }
+        };
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
-            return Ok(chunk.clone());
+            return Ok(Some(chunk.clone()));
         }
         let (min, height) = (self.settings.level_min_y, self.settings.level_height);
         let mut chunk = BiomeChunk::new(pos, min, height, BiomeId(0)).map_err(stage("biomes"))?;
@@ -966,12 +1048,22 @@ where
             )
             .map_err(stage("biomes"))?;
         let ids = &self.data.biome_ids;
+        // Names point into the source's parameter list: neighbouring quarts
+        // mostly resolve to the same entry, so skip the map lookup for it.
+        let mut last: Option<(*const str, BiomeId)> = None;
         chunk
-            .fill(min, min + height - 1, |quart| {
-                resolver
+            .fill(min, min + height - 1, |quart| -> Result<BiomeId, String> {
+                let name = resolver
                     .sample_prepared(context, volume.as_ref(), quart)
-                    .map_err(|e| e.to_string())
-                    .and_then(|name| ids.get(name).copied().ok_or_else(|| name.to_owned()))
+                    .map_err(|e| e.to_string())?;
+                if let Some((pointer, id)) = last {
+                    if std::ptr::eq(pointer, name) {
+                        return Ok(id);
+                    }
+                }
+                let id = ids.get(name).copied().ok_or_else(|| name.to_owned())?;
+                last = Some((name as *const str, id));
+                Ok(id)
             })
             .map_err(stage("biomes"))?;
         let chunk = Arc::new(chunk);
@@ -980,7 +1072,7 @@ where
             cache.clear();
         }
         cache.insert((pos.x, pos.z), chunk.clone());
-        Ok(chunk)
+        Ok(Some(chunk))
     }
     fn carver_biome(&self, worker: &mut WorkerState, origin: ChunkPos) -> Result<BiomeId, String> {
         let key = (origin.x, origin.z);
@@ -1081,28 +1173,55 @@ where
         );
         let mut clock = std::time::Instant::now();
         let mut neighbors = Vec::with_capacity(9);
-        let mut possible = BTreeSet::new();
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let chunk = self.biome_chunk(
-                    worker,
-                    ChunkPos::new(pos.x.wrapping_add(dx), pos.z.wrapping_add(dz)),
-                )?;
+        // The biome ids present, as a bitset: ascending like a sorted set.
+        let mut seen: Vec<u64> = Vec::new();
+        // Build the neighbours no other thread is building first, then wait
+        // for the rest (each is built once, by whichever thread gets it).
+        let around =
+            |i: i32| ChunkPos::new(pos.x.wrapping_add(i % 3 - 1), pos.z.wrapping_add(i / 3 - 1));
+        let mut ready: [Option<Arc<BiomeChunk<BiomeId>>>; 9] = Default::default();
+        for (i, slot) in ready.iter_mut().enumerate() {
+            *slot = self.biome_chunk_or_busy(worker, around(i as i32), false)?;
+        }
+        for (i, slot) in ready.iter_mut().enumerate() {
+            let chunk = match slot.take() {
+                Some(chunk) => chunk,
+                None => self.biome_chunk(worker, around(i as i32))?,
+            };
+            {
                 let mut section = 0;
+                let mut last = None;
                 while let Some(biomes) = chunk.section(section) {
-                    possible.extend(biomes.iter().copied());
+                    for &id in biomes {
+                        if last == Some(id) {
+                            continue;
+                        }
+                        last = Some(id);
+                        let word = id.0 as usize / 64;
+                        if seen.len() <= word {
+                            seen.resize(word + 1, 0);
+                        }
+                        seen[word] |= 1 << (id.0 % 64);
+                    }
                     section += 1;
                 }
                 neighbors.push((*chunk).clone());
             }
         }
+        let possible = seen.iter().enumerate().flat_map(|(word, &bits)| {
+            let mut bits = bits;
+            std::iter::from_fn(move || {
+                (bits != 0).then(|| {
+                    let bit = bits.trailing_zeros();
+                    bits &= bits - 1;
+                    BiomeId(word as u32 * 64 + bit)
+                })
+            })
+        });
         let center = neighbors[4].clone();
         let biomes =
             BiomeRegion::new(neighbors, obfuscate_seed(self.seed)).map_err(stage("biomes"))?;
-        let possible = possible
-            .into_iter()
-            .map(|id| data.biome_name(id).to_owned())
-            .collect();
+        let possible = possible.map(|id| data.biome_name(id).to_owned()).collect();
         worker.timings.biomes += lap(&mut clock);
         let mut chunk = TerrainChunk::new(
             pos,
@@ -1411,10 +1530,33 @@ where
         self.worker.heights.insert((x, z, kind as u8), h);
         h
     }
+    /// JigsawPlacement.couldStructureExistInColumn: one resolver for the
+    /// column (createResolverForChunk, a bulk climate volume of 1 x n x 1
+    /// quarts, as the biome stage samples a chunk), then each quart from the
+    /// bottom. One volume costs about what a few single climate samples do;
+    /// a column without a valid biome took one sample per quart (~500 in To
+    /// The Max).
     fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool {
-        use super::structure::start::StartContext;
-        ((min_y >> 2)..=(max_y >> 2)).any(|qy| {
-            let id = self.noise_biome([x >> 2, qy, z >> 2]);
+        let (qx, qz, qmin, qmax) = (x >> 2, z >> 2, min_y >> 2, max_y >> 2);
+        if qmin > qmax {
+            return false;
+        }
+        let pipeline = self.pipeline;
+        let mut resolver = pipeline.source.resolver(
+            &pipeline.climate,
+            pipeline.router.get(RouterField::Erosion).as_ref(),
+        );
+        let context = &mut self.worker.biome_context;
+        let volume = resolver
+            .prepare_volume(context, [qx, qmin, qz], [1, qmax - qmin + 1, 1])
+            .ok()
+            .flatten();
+        (qmin..=qmax).any(|qy| {
+            let id = resolver
+                .sample_prepared(context, volume.as_ref(), [qx, qy, qz])
+                .ok()
+                .and_then(|name| pipeline.data.biome_id(name))
+                .unwrap_or(BiomeId(0));
             self.valid.contains(&id)
         })
     }
@@ -1447,7 +1589,15 @@ where
         self.pipeline.generation()
     }
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId {
-        self.noise_biomes(&[quart])[0]
+        if let Some(&id) = self.worker.structure_biomes.get(&quart) {
+            return id;
+        }
+        let id = self.noise_biomes(&[quart])[0];
+        if self.worker.structure_biomes.len() >= 1 << 16 {
+            self.worker.structure_biomes.clear();
+        }
+        self.worker.structure_biomes.insert(quart, id);
+        id
     }
     fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId> {
         let mut resolver = self.pipeline.source.resolver(
@@ -1476,6 +1626,36 @@ enum Biomes<'a, 'b> {
         &'a mut super::biome_source::BiomeSourceResolver<'b>,
         &'a mut SamplerContext,
     ),
+    /// A resolver whose answers are kept per quart: far sampling paints eight
+    /// depths of every column, and neighbouring columns share quarts, so most
+    /// queries repeat one (each is a full climate sample and parameter search).
+    Memo(
+        &'a mut super::biome_source::BiomeSourceResolver<'b>,
+        &'a mut SamplerContext,
+        &'a mut BiomeMemo,
+    ),
+}
+/// Resolved biomes by quart (`Biomes::Memo`).
+struct BiomeMemo {
+    biomes: HashMap<[i32; 3], BiomeId>,
+}
+/// The biome at `quart`, resolved once per quart (`Biomes::Memo`).
+fn memo_biome(
+    data: &GeneratorData,
+    resolver: &mut super::biome_source::BiomeSourceResolver<'_>,
+    context: &mut SamplerContext,
+    memo: &mut BiomeMemo,
+    quart: [i32; 3],
+) -> Result<BiomeId, MaterialRuleError> {
+    if let Some(&id) = memo.biomes.get(&quart) {
+        return Ok(id);
+    }
+    let name = resolver
+        .sample(context, quart)
+        .map_err(|_| MaterialRuleError::BiomeQueryFailed)?;
+    let id = data.biome_id(name).ok_or(MaterialRuleError::MissingBiome)?;
+    memo.biomes.insert(quart, id);
+    Ok(id)
 }
 // Lazy equality proofs for the eight quart corners of a block-biome cell.
 // Adjacent blocks share these candidates even though their zoom distances differ.
@@ -1595,6 +1775,13 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
                     .map_err(|_| MaterialRuleError::BiomeQueryFailed)?;
                 data.biome_id(name).ok_or(MaterialRuleError::MissingBiome)?
             }
+            Biomes::Memo(resolver, context, memo) => memo_biome(
+                data,
+                resolver,
+                context,
+                memo,
+                self.pipeline.zoom.quart_at_block(p),
+            )?,
         };
         Ok(Some(data.biome_names[id.0 as usize].clone()))
     }
@@ -1647,6 +1834,10 @@ pub(super) struct WorkerState {
     /// Seed/dimension-bound lookups avoid the shared mutex for overlapping
     /// carver neighborhoods. Bounded independently of the shared cache.
     carver_biomes: HashMap<(i32, i32), BiomeId>,
+    /// Noise biomes asked one at a time by structure placement checks
+    /// (`StartContext::noise_biome`): several structures test the same
+    /// quarts, column checks whole columns, and each is a full climate sample.
+    structure_biomes: HashMap<[i32; 3], BiomeId>,
     timings: StageTimings,
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
@@ -1681,6 +1872,8 @@ trait SeededPipeline: Send + Sync {
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
+    /// The exact `end_island_decorated` origins in a chunk, without terrain.
+    fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]>;
     fn sea_level(&self) -> i32;
     fn surface_sample(
         &self,
@@ -1778,6 +1971,20 @@ where
     fn data(&self) -> &Arc<GeneratorData> {
         &self.data
     }
+    fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]> {
+        let Some(decoration) = &self.decoration else {
+            return Vec::new();
+        };
+        let mut resolver = self.source.resolver(
+            &self.climate,
+            self.router.get(RouterField::Erosion).as_ref(),
+        );
+        let mut context = SamplerContext::cached();
+        decoration.origins(self.seed, chunk, |position| {
+            let quart = [position[0] >> 2, position[1] >> 2, position[2] >> 2];
+            resolver.sample(&mut context, quart).ok() == Some("minecraft:small_end_islands")
+        })
+    }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
     }
@@ -1803,7 +2010,7 @@ where
     fn unsupported_features(&self) -> Vec<(String, String)> {
         self.decoration
             .as_ref()
-            .map(super::generator_decoration::Decoration::unsupported)
+            .map(|decoration| decoration.unsupported())
             .unwrap_or_default()
     }
     fn use_saved_start(
@@ -2067,6 +2274,9 @@ where
             self.router.get(RouterField::Erosion).as_ref(),
         );
         let mut biome_context = SamplerContext::cached();
+        let mut biome_memo = BiomeMemo {
+            biomes: HashMap::new(),
+        };
         for dz in 0..side {
             for dx in 0..side {
                 let (wx, wz) = (x + dx as i32 * width, z + dz as i32 * width);
@@ -2111,16 +2321,17 @@ where
                         }
                     }
                 }
+                // Void cells still need a biome: the End's small islands are
+                // features over the void, and their biome is 2D there.
                 let biome = if let Some((height, _)) = top {
-                    let name = resolver
-                        .sample(
-                            &mut biome_context,
-                            self.zoom.quart_at_block(BlockPos::new(wx, height - 1, wz)),
-                        )
-                        .map_err(stage("far biome"))?;
-                    self.data
-                        .biome_id(name)
-                        .ok_or_else(|| resource("far biome"))?
+                    memo_biome(
+                        &self.data,
+                        &mut resolver,
+                        &mut biome_context,
+                        &mut biome_memo,
+                        self.zoom.quart_at_block(BlockPos::new(wx, height - 1, wz)),
+                    )
+                    .map_err(stage("far biome"))?
                 } else {
                     BiomeId(0)
                 };
@@ -2138,7 +2349,7 @@ where
         let queries = SurfaceQueries {
             pipeline: self,
             temperatures: &mut worker.temperatures,
-            biome: Biomes::Resolver(&mut resolver, &mut biome_context),
+            biome: Biomes::Memo(&mut resolver, &mut biome_context, &mut biome_memo),
             uniform_biomes: None,
             possible: None,
         };
@@ -2448,6 +2659,10 @@ impl OverworldGenerator {
     pub fn data(&self) -> &Arc<GeneratorData> {
         self.pipeline.data()
     }
+    /// The exact `end_island_decorated` origins in a chunk, without terrain.
+    pub fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]> {
+        self.pipeline.end_island_origins(chunk)
+    }
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
     }
@@ -2481,6 +2696,7 @@ impl OverworldGenerator {
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
                 carver_biomes: HashMap::new(),
+                structure_biomes: HashMap::new(),
                 timings: StageTimings::default(),
                 structures_only: false,
                 structure_mobs: None,
@@ -3089,6 +3305,40 @@ mod tests {
             &a,
             &data.rings_for(1, &serde_json::json!({ "settings": "a" }))
         ));
+    }
+
+    /// Generators of every seed share their biome source's decoration, the
+    /// one the world screens' preload built; another dimension gets its own.
+    #[test]
+    fn decoration_is_shared_by_biome_source() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
+        data.prepare_decoration("minecraft:normal", "minecraft:overworld")
+            .expect("decoration");
+        let built = |i: usize| {
+            let cache = data.decorations.lock().unwrap();
+            let slot = cache[i].1.get().expect("built").clone();
+            slot.expect("decoration").expect("feature resources")
+        };
+        let prepared = built(0);
+        // The cache's handle and ours.
+        assert_eq!(Arc::strong_count(&prepared), 2);
+        let first = OverworldGenerator::new(data.clone(), 1234).expect("generator");
+        let other = OverworldGenerator::new(data.clone(), -7).expect("generator");
+        assert_eq!(Arc::strong_count(&prepared), 4);
+        assert_eq!(data.decorations.lock().unwrap().len(), 1);
+        let nether = OverworldGenerator::for_dimension(
+            data.clone(),
+            1234,
+            "minecraft:normal",
+            "minecraft:the_nether",
+        )
+        .expect("generator");
+        assert_eq!(data.decorations.lock().unwrap().len(), 2);
+        assert!(!Arc::ptr_eq(&prepared, &built(1)));
+        drop((first, other, nether));
+        assert_eq!(Arc::strong_count(&prepared), 2);
     }
 
     #[test]
