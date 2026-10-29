@@ -1,6 +1,6 @@
 //! Text components from commands: `ComponentArgument` reads an SNBT (or JSON)
 //! value, `ComponentSerialization` turns it into styled text.
-use crate::text::{Style, Text, named_color};
+use crate::text::{InlineObject, Style, Text, named_color};
 use horizon_world::nbt::Tag;
 use serde_json::{Map, Value};
 
@@ -11,13 +11,18 @@ pub fn parse_snbt(input: &str) -> Result<(Value, usize), String> {
     let mut p = Parser {
         s: input.as_bytes(),
         i: 0,
+        depth: 0,
     };
     let v = p.value()?;
     Ok((v, p.i))
 }
+/// Nesting deeper than NBT's own limit (`NbtAccounter`'s 512) is refused
+/// rather than overflowing the stack.
+const SNBT_MAX_DEPTH: usize = 512;
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    depth: usize,
 }
 impl Parser<'_> {
     fn ws(&mut self) {
@@ -41,57 +46,22 @@ impl Parser<'_> {
         self.ws();
         match self.peek() {
             Some(b'{') => {
-                self.i += 1;
-                let mut map = Map::new();
-                self.ws();
-                if self.peek() == Some(b'}') {
-                    self.i += 1;
-                    return Ok(Value::Object(map));
+                if self.depth >= SNBT_MAX_DEPTH {
+                    return Err(format!("tag nesting too deep at {}", self.i));
                 }
-                loop {
-                    self.ws();
-                    let key = self.string()?;
-                    self.expect(b':')?;
-                    map.insert(key, self.value()?);
-                    self.ws();
-                    match self.peek() {
-                        Some(b',') => self.i += 1,
-                        Some(b'}') => {
-                            self.i += 1;
-                            return Ok(Value::Object(map));
-                        }
-                        _ => return Err("expected ',' or '}'".into()),
-                    }
-                }
+                self.depth += 1;
+                let v = self.object();
+                self.depth -= 1;
+                v
             }
             Some(b'[') => {
-                self.i += 1;
-                let mut list = Vec::new();
-                self.ws();
-                // Typed arrays [B;...], [I;...], [L;...].
-                if matches!(
-                    self.s.get(self.i..self.i + 2),
-                    Some([b'B' | b'I' | b'L', b';'])
-                ) {
-                    self.i += 2;
+                if self.depth >= SNBT_MAX_DEPTH {
+                    return Err(format!("tag nesting too deep at {}", self.i));
                 }
-                self.ws();
-                if self.peek() == Some(b']') {
-                    self.i += 1;
-                    return Ok(Value::Array(list));
-                }
-                loop {
-                    list.push(self.value()?);
-                    self.ws();
-                    match self.peek() {
-                        Some(b',') => self.i += 1,
-                        Some(b']') => {
-                            self.i += 1;
-                            return Ok(Value::Array(list));
-                        }
-                        _ => return Err("expected ',' or ']'".into()),
-                    }
-                }
+                self.depth += 1;
+                let v = self.array();
+                self.depth -= 1;
+                v
             }
             Some(b'"' | b'\'') => Ok(Value::String(self.string()?)),
             Some(_) => {
@@ -105,15 +75,78 @@ impl Parser<'_> {
                     _ => {
                         let digits = word
                             .trim_end_matches(['b', 'B', 's', 'S', 'l', 'L', 'f', 'F', 'd', 'D']);
-                        match (digits.parse::<i64>(), digits.parse::<f64>()) {
-                            (Ok(n), _) if digits.len() + 1 >= word.len() => Value::from(n),
-                            (_, Ok(f)) if digits.len() + 1 >= word.len() => Value::from(f),
-                            _ => Value::String(word),
+                        // Only digits (and an exponent) make a number: `nan`
+                        // or `Infinity`, which Rust's parse would take, stays
+                        // a string.
+                        if digits
+                            .bytes()
+                            .any(|c| c.is_ascii_alphabetic() && c != b'e' && c != b'E')
+                        {
+                            Value::String(word)
+                        } else {
+                            match (digits.parse::<i64>(), digits.parse::<f64>()) {
+                                (Ok(n), _) if digits.len() + 1 >= word.len() => Value::from(n),
+                                (_, Ok(f)) if digits.len() + 1 >= word.len() => Value::from(f),
+                                _ => Value::String(word),
+                            }
                         }
                     }
                 })
             }
             None => Err("expected a value".into()),
+        }
+    }
+    fn object(&mut self) -> Result<Value, String> {
+        self.i += 1;
+        let mut map = Map::new();
+        self.ws();
+        if self.peek() == Some(b'}') {
+            self.i += 1;
+            return Ok(Value::Object(map));
+        }
+        loop {
+            self.ws();
+            let key = self.string()?;
+            self.expect(b':')?;
+            map.insert(key, self.value()?);
+            self.ws();
+            match self.peek() {
+                Some(b',') => self.i += 1,
+                Some(b'}') => {
+                    self.i += 1;
+                    return Ok(Value::Object(map));
+                }
+                _ => return Err("expected ',' or '}'".into()),
+            }
+        }
+    }
+    fn array(&mut self) -> Result<Value, String> {
+        self.i += 1;
+        let mut list = Vec::new();
+        self.ws();
+        // Typed arrays [B;...], [I;...], [L;...].
+        if matches!(
+            self.s.get(self.i..self.i + 2),
+            Some([b'B' | b'I' | b'L', b';'])
+        ) {
+            self.i += 2;
+        }
+        self.ws();
+        if self.peek() == Some(b']') {
+            self.i += 1;
+            return Ok(Value::Array(list));
+        }
+        loop {
+            list.push(self.value()?);
+            self.ws();
+            match self.peek() {
+                Some(b',') => self.i += 1,
+                Some(b']') => {
+                    self.i += 1;
+                    return Ok(Value::Array(list));
+                }
+                _ => return Err("expected ',' or ']'".into()),
+            }
         }
     }
     fn unquoted(&mut self) -> String {
@@ -286,6 +319,10 @@ pub fn to_text_with(
             let style = object_style(o);
             let content = if let Some(t) = contents(o) {
                 t
+            } else if let Some(object) = inline_object(o, resolve, contents) {
+                let mut text = Text::literal("\u{fffc}");
+                text.spans[0].style.inline_object = Some(object);
+                text
             } else if let Some(t) = o.get("text") {
                 match t {
                     Value::String(s) => Text::literal(s.clone()),
@@ -322,9 +359,71 @@ pub fn to_text_with(
             {
                 out.push(to_text_with(extra, resolve, contents).with_style(&style));
             }
-            out
+            if o.contains_key("object") || o.contains_key("player") || o.contains_key("sprite") {
+                out.with_component(Value::Object(o.clone()))
+            } else {
+                out
+            }
         }
         Value::Null => Text::empty(),
+    }
+}
+
+fn inline_object(
+    object: &serde_json::Map<String, Value>,
+    resolve: &mut dyn FnMut(&str) -> Text,
+    contents: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<Text>,
+) -> Option<InlineObject> {
+    let kind = object.get("object").and_then(Value::as_str);
+    let fallback = object
+        .get("fallback")
+        .map(|value| to_text_with(value, resolve, contents).plain());
+    match kind {
+        Some("player") | None if object.contains_key("player") => {
+            let profile = object.get("player")?.clone();
+            // PlayerSprite.defaultFallback.
+            let fallback = fallback.unwrap_or_else(|| {
+                match profile
+                    .as_str()
+                    .or_else(|| profile.get("name").and_then(Value::as_str))
+                {
+                    Some(name) => format!("[{name} head]"),
+                    None => "[unknown player head]".to_owned(),
+                }
+            });
+            Some(InlineObject::Player {
+                profile,
+                hat: object.get("hat").and_then(Value::as_bool).unwrap_or(true),
+                fallback,
+            })
+        }
+        Some("atlas") | None if object.contains_key("sprite") => {
+            let atlas = object
+                .get("atlas")
+                .and_then(Value::as_str)
+                .unwrap_or("minecraft:blocks")
+                .to_owned();
+            let sprite = object.get("sprite")?.as_str()?.to_owned();
+            // AtlasSprite.defaultFallback: short names, the atlas unless blocks.
+            let fallback = fallback.unwrap_or_else(|| {
+                let short = |id: &str| match id.split_once(':') {
+                    Some(("minecraft", path)) => path.to_owned(),
+                    Some(_) => id.to_owned(),
+                    None => id.to_owned(),
+                };
+                if short(&atlas) == "blocks" {
+                    format!("[{}]", short(&sprite))
+                } else {
+                    format!("[{}@{}]", short(&sprite), short(&atlas))
+                }
+            });
+            Some(InlineObject::Atlas {
+                atlas,
+                sprite,
+                fallback,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -359,6 +458,44 @@ mod tests {
     }
 
     #[test]
+    fn player_object_survives_text_parsing_and_keeps_its_siblings() {
+        let component = serde_json::json!({
+            "text": "<",
+            "extra": [
+                {"object": "player", "player": {"name": "elyapluggin"}, "hat": false,
+                 "fallback": "[head]"},
+                {"text": " >", "color": "gold"}
+            ]
+        });
+        let text = to_text(&component, &mut |_| Text::empty());
+        assert_eq!(text.plain(), "<[head] >");
+        assert!(matches!(
+            &text.spans[1].style.inline_object,
+            Some(InlineObject::Player { hat: false, .. })
+        ));
+        assert!(text.spans[2].style.inline_object.is_none());
+        assert_eq!(text.component(), component);
+        let sprite = serde_json::json!({"object": "atlas", "sprite": "minecraft:item/porkchop"});
+        let text = to_text(&sprite, &mut |_| Text::empty());
+        assert!(matches!(
+            &text.spans[0].style.inline_object,
+            Some(InlineObject::Atlas { sprite, .. }) if sprite == "minecraft:item/porkchop"
+        ));
+        // ObjectContents.visit without a fallback: the sprite's defaultFallback.
+        assert_eq!(text.plain(), "[item/porkchop]");
+        let head = serde_json::json!({"object": "player", "player": {"name": "Steve"}});
+        assert_eq!(
+            to_text(&head, &mut |_| Text::empty()).plain(),
+            "[Steve head]"
+        );
+        let gui = serde_json::json!({"atlas": "gui", "sprite": "hud/heart/full"});
+        assert_eq!(
+            to_text(&gui, &mut |_| Text::empty()).plain(),
+            "[hud/heart/full@gui]"
+        );
+    }
+
+    #[test]
     fn snbt_and_json_components() {
         let input = "{text:'Hi ',color:red,extra:[{text:\"there\",bold:1b}]} rest";
         let (v, n) = parse_snbt(input).unwrap();
@@ -390,5 +527,23 @@ mod tests {
         let (v, _) = parse_snbt(r#"{text:"a",font:"Bad Font"}"#).unwrap();
         let t = to_text(&v, &mut |_| Text::empty());
         assert_eq!(t.spans[0].style.font, None);
+    }
+
+    #[test]
+    fn snbt_nesting_is_bounded() {
+        let nest = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+        assert!(parse_snbt(&nest(512)).is_ok());
+        assert!(parse_snbt(&nest(513)).is_err());
+        assert!(parse_snbt(&nest(100_000)).is_err());
+    }
+
+    #[test]
+    fn bare_words_that_look_numeric_stay_strings() {
+        let (v, _) = parse_snbt("{text:nan}").unwrap();
+        assert_eq!(v["text"], Value::String("nan".into()));
+        let (v, _) = parse_snbt("{text:Infinity}").unwrap();
+        assert_eq!(v["text"], Value::String("Infinity".into()));
+        let (v, _) = parse_snbt("{n:1.5}").unwrap();
+        assert_eq!(v["n"], Value::from(1.5));
     }
 }

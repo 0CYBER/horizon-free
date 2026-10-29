@@ -588,10 +588,17 @@ impl Game<'_> {
                             .announced
                             .push(Text::translate(key, &[player, name]));
                     }
-                    None => self.system_message(Text::translate(
-                        key,
-                        &[Text::literal(super::chat::PLAYER_NAME), name],
-                    )),
+                    None => {
+                        let text = Text::translate(key, &[self.player_display_text(), name]);
+                        // The guests hear of the host's advancement too.
+                        if let Some(host) = &self.lan {
+                            host.hub
+                                .system_message(horizon_client::lan::data::component_nbt(
+                                    &text.component(),
+                                ));
+                        }
+                        self.system_message(text);
+                    }
                 }
             }
         }
@@ -1366,6 +1373,55 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
         });
     }
+    /// `RecipeCraftedTrigger`: the recipe and the stacks that went into it
+    /// (`ServerPlayer.triggerRecipeCrafted`); an empty slot is air.
+    pub(super) fn trigger_recipe_crafted(
+        &mut self,
+        recipe: &str,
+        ingredients: &[Option<ItemStack>],
+    ) {
+        let me = self.player_entity();
+        let used: Vec<ItemView> = ingredients
+            .iter()
+            .map(|s| {
+                s.as_ref().map_or_else(
+                    || ItemView {
+                        id: "minecraft:air".to_owned(),
+                        ..Default::default()
+                    },
+                    item_view,
+                )
+            })
+            .collect();
+        let recipe = recipe.to_owned();
+        self.trigger("minecraft:recipe_crafted", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::id_matches(&c["recipes"], "recipe", &recipe, w)
+                && adv::recipe_ingredients(&c["ingredients"], &used, w)
+        });
+    }
+    /// `LootTableTrigger`: a container's loot table unpacked for this player
+    /// (`RandomizableContainer.unpackLootTable`).
+    pub(super) fn trigger_loot_table(&mut self, table: &str) {
+        let me = self.player_entity();
+        let table = table.to_owned();
+        self.trigger("minecraft:player_generates_container_loot", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::id_matches(&c["loot_tables"], "loot_table", &table, w)
+        });
+    }
     /// `BredAnimalsTrigger`.
     pub(super) fn trigger_bred(
         &mut self,
@@ -1493,7 +1549,7 @@ impl Game<'_> {
             .iter()
             .filter_map(|t| t.slot)
             .chain(packs)
-            .fold(0, |used, slot| used | 1 << slot)
+            .fold(self.tutorial_toast_slots(), |used, slot| used | 1 << slot)
     }
     /// The `AdvancementToast` or `RecipeToast` at `index` in its slot at `y`.
     fn draw_toast(&mut self, batch: &mut HudBatch, index: usize, y: f32, multiplier: f64) {

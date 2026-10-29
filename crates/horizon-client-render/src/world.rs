@@ -1,12 +1,10 @@
 //! Resident client world: streamed chunk columns plus the bookkeeping the game
 //! loop needs to relight and remesh after edits.
 use crate::chunk::{Chunk, MIN_Y, SECTIONS};
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use horizon_core::random::LegacyRandom;
 use horizon_world::registry::BlockStateId;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 /// Sections (x, section index, z) waiting to be remeshed, kept by column
 /// (a bit per section index), so the mesh scheduler looks at each column once
@@ -65,14 +63,14 @@ pub struct World {
     /// Saved entities of chunks that just loaded, spawned by the game.
     pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
-    pub modified: HashSet<(i32, i32)>,
+    pub modified: FxHashSet<(i32, i32)>,
     /// Block entities, and the order they tick in.
     pub block_entities: crate::block_entities::BlockEntities,
     /// Each chest's `ContainerOpenersCounter`: opener count and largest
     /// interaction range.
-    pub chest_openers: HashMap<(i32, i32, i32), (i32, f64)>,
+    pub chest_openers: FxHashMap<(i32, i32, i32), (i32, f64)>,
     /// `BaseContainerBlockEntity.name`: custom names of container block entities.
-    pub block_names: HashMap<(i32, i32, i32), String>,
+    pub block_names: FxHashMap<(i32, i32, i32), String>,
     /// States (by id) whose writes are recorded in `watched_writes` (sculk
     /// blocks, which need a block entity).
     pub watched: Vec<bool>,
@@ -80,7 +78,7 @@ pub struct World {
     pub watched_writes: Vec<((i32, i32, i32), u32, u32)>,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
-    pub inhabited: HashMap<(i32, i32), i64>,
+    pub inhabited: FxHashMap<(i32, i32), i64>,
     pub game_time: i64,
     pub day_time: i64,
     pub weather: Weather,
@@ -177,13 +175,13 @@ impl World {
             dirty_light: Default::default(),
             light_edits: Vec::new(),
             loaded_entities: Vec::new(),
-            modified: HashSet::new(),
+            modified: FxHashSet::default(),
             block_entities: Default::default(),
-            chest_openers: HashMap::new(),
-            block_names: HashMap::new(),
+            chest_openers: FxHashMap::default(),
+            block_names: FxHashMap::default(),
             watched: Vec::new(),
             watched_writes: Vec::new(),
-            inhabited: HashMap::new(),
+            inhabited: FxHashMap::default(),
             game_time: 0,
             day_time: 1000,
             weather: Weather::default(),
@@ -274,20 +272,40 @@ impl World {
                 log.push((x, y, z));
             }
             self.modified.insert((x >> 4, z >> 4));
+            // The mesher reads a 3x3x3 neighbourhood for AO, so a write marks
+            // the sections it can reach: this section, the one above/below
+            // only on a section face, and a neighbour column only on a chunk
+            // border (the diagonal only where both borders meet).
             let sy = (y - MIN_Y) >> 4;
-            for dz in -1..=1 {
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let (bx, by, bz) = (x + dx, y + dy, z + dz);
-                        let s = (by - MIN_Y) >> 4;
-                        if !(0..SECTIONS as i32).contains(&s) {
-                            continue;
-                        }
-                        self.dirty_sections.insert((bx >> 4, s, bz >> 4));
-                    }
+            let local_y = y & 15;
+            let mark = |dirty: &mut DirtySections, bx: i32, bz: i32| {
+                dirty.insert((bx >> 4, sy, bz >> 4));
+                if local_y == 0 && sy > 0 {
+                    dirty.insert((bx >> 4, sy - 1, bz >> 4));
                 }
+                if local_y == 15 && sy + 1 < SECTIONS as i32 {
+                    dirty.insert((bx >> 4, sy + 1, bz >> 4));
+                }
+            };
+            let (bx, bz) = (x & 15, z & 15);
+            mark(&mut self.dirty_sections, x, z);
+            if bx == 0 {
+                mark(&mut self.dirty_sections, x - 1, z);
+            } else if bx == 15 {
+                mark(&mut self.dirty_sections, x + 1, z);
             }
-            let _ = sy;
+            if bz == 0 {
+                mark(&mut self.dirty_sections, x, z - 1);
+            } else if bz == 15 {
+                mark(&mut self.dirty_sections, x, z + 1);
+            }
+            if (bx == 0 || bx == 15) && (bz == 0 || bz == 15) {
+                mark(
+                    &mut self.dirty_sections,
+                    if bx == 0 { x - 1 } else { x + 1 },
+                    if bz == 0 { z - 1 } else { z + 1 },
+                );
+            }
             if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
                 self.light_edits.push(((x, y, z), previous, state.0));
             } else {
@@ -407,10 +425,58 @@ impl Default for HealthRules {
 
 #[cfg(test)]
 mod tests {
-    use super::World;
-    use crate::chunk::Chunk;
+    use super::{DirtySections, World};
+    use crate::chunk::{Chunk, MIN_Y, SECTIONS};
     use horizon_world::registry::BlockStateId;
     use std::sync::Arc;
+
+    /// Every block write marks the same section set the 27-cell loop did, but
+    /// only the distinct keys: one in the interior, a neighbour section on a
+    /// section face, a neighbour column on a chunk border and the diagonal at
+    /// a corner (eight keys at a corner on a section face).
+    #[test]
+    fn writes_mark_exactly_the_reachable_sections() {
+        let mut world = World::new(BlockStateId(0), 0);
+        world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        for (x, y, z) in [
+            (3, 70, 3),
+            (0, 70, 3),
+            (15, 70, 3),
+            (3, 70, 0),
+            (0, 70, 0),
+            (15, 70, 15),
+            (0, MIN_Y, 0),
+            (0, 80, 0),
+            (15, MIN_Y + SECTIONS as i32 * 16 - 1, 15),
+        ] {
+            world.dirty_sections.clear();
+            world.set(x, y, z, BlockStateId(1)).unwrap();
+            let mut expected = DirtySections::default();
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let (bx, by, bz) = (x + dx, y + dy, z + dz);
+                        let s = (by - MIN_Y) >> 4;
+                        if (0..SECTIONS as i32).contains(&s) {
+                            expected.insert((bx >> 4, s, bz >> 4));
+                        }
+                    }
+                }
+            }
+            let mut got: Vec<_> = world.dirty_sections.columns().collect();
+            let mut want: Vec<_> = expected.columns().collect();
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want, "write at {x} {y} {z}");
+            if (x & 15, z & 15) == (3, 3) {
+                assert_eq!(world.dirty_sections.len(), 1);
+            }
+            if (x & 15, z & 15, y & 15) == (0, 0, 0) && y > MIN_Y {
+                // Four columns, each with the section below and this one.
+                assert_eq!(world.dirty_sections.len(), 8);
+            }
+        }
+    }
 
     /// A box misses a state only where no section it reaches lists it, and
     /// unloaded columns or heights past the world count as their air.
