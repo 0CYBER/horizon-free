@@ -232,6 +232,15 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
+                Event::DataPacks(ids) => {
+                    if let Some(title) = &mut self.title {
+                        title.set_data_packs(ids);
+                    }
+                }
+                Event::OpenDataPackFolder(dir) => {
+                    let _ = std::fs::create_dir_all(&dir);
+                    super::packs::open_folder(&dir);
+                }
                 Event::OpenModFolder => {
                     let dir = Self::options_path().with_file_name(horizon_client::mod_list::DIR);
                     let _ = std::fs::create_dir_all(&dir);

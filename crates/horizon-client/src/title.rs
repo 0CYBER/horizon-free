@@ -150,6 +150,11 @@ pub enum Action {
     Connect {
         address: String,
     },
+    /// Create World's Data Packs screen on the new world's pack folder.
+    DataPacks {
+        dir: PathBuf,
+        selected: Vec<String>,
+    },
 }
 pub struct Title {
     pub mode: Mode,
@@ -384,6 +389,12 @@ impl Title {
         row
     }
     fn cancel_create(&mut self) {
+        // removeTempDataPackDir.
+        if let Mode::Create { options, .. } = &self.mode
+            && let Some(dir) = &options.pack_dir
+        {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         if self.create_return_to_main {
             self.mode = Mode::Main;
         } else {
@@ -446,6 +457,13 @@ impl Title {
                 focus,
                 options,
             };
+        }
+    }
+    /// The Data Packs screen's Done (`applyNewPackConfig`): its selection for
+    /// the new world.
+    pub fn set_data_packs(&mut self, ids: Vec<String>) {
+        if let Mode::Create { options, .. } = &mut self.mode {
+            options.data_packs = ids;
         }
     }
     fn matches_search(&self, world: &WorldEntry) -> bool {
@@ -1669,11 +1687,26 @@ impl Title {
                     creative, options, ..
                 },
                 Some(id),
-            ) if id != 21 && id != 22 => {
+            ) if !matches!(id, 21 | 22 | 31) => {
                 options.press(id, creative);
                 Action::None
             }
             (Mode::Create { .. }, Some(21)) => self.create_action(),
+            (Mode::Create { options, .. }, Some(31)) => {
+                if options.pack_dir.is_none() {
+                    match crate::datapack::temp_folder() {
+                        Ok(dir) => options.pack_dir = Some(dir),
+                        Err(e) => {
+                            log::warn!("Horizon: no folder for data packs: {e}");
+                            return Action::None;
+                        }
+                    }
+                }
+                Action::DataPacks {
+                    dir: options.pack_dir.clone().unwrap_or_default(),
+                    selected: options.data_packs.clone(),
+                }
+            }
             (Mode::Create { .. }, Some(22)) => {
                 self.cancel_create();
                 Action::None
