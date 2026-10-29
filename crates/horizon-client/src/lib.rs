@@ -43,6 +43,7 @@ pub mod dialog;
 pub mod dialog_screen;
 pub mod discord_presence;
 pub mod end_crystal;
+pub mod end_gateway;
 pub mod entities;
 pub mod entity_culling;
 pub mod entity_nbt;
