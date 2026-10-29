@@ -12,6 +12,7 @@ use crate::backend;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -52,9 +53,14 @@ fn save_list(entries: &[Entry]) -> Result<(), String> {
     fs::create_dir_all(backend::data_dir()).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
     // A torn write would drop every server from the sidebar: write beside
-    // the list and rename it into place.
+    // the list, flush it, and rename it into place. Without the flush a
+    // power cut can leave a file of the right length full of zeros.
     let partial = path.with_extension("json.tmp");
-    fs::write(&partial, text).map_err(|e| e.to_string())?;
+    let mut file = fs::File::create(&partial).map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    drop(file);
     fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
