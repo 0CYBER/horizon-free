@@ -497,8 +497,6 @@ impl Decoration {
     }
 }
 
-/// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
-/// the FEATURES step's write radius, biome lookups through the biome zoom.
 /// Advances a feature's random stream with no block storage; every write is
 /// discarded. Placement modifiers still see the real biome and build bounds.
 struct OriginWorld<'a> {
@@ -537,6 +535,8 @@ impl PlacementContext for OriginWorld<'_> {
     }
 }
 
+/// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
+/// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
     block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
     entities: Vec<crate::nbt::Compound>,
