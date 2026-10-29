@@ -47,8 +47,8 @@ mod worlds_page;
 use gpui::{
     actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
     AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
-    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, PathPromptOptions, SharedString,
-    Stateful, Subscription, Window, WindowBounds, WindowOptions,
+    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, MouseDownEvent, PathPromptOptions,
+    Pixels, Point, SharedString, Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -184,6 +184,9 @@ struct Launcher {
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
     account_menu: bool,
+    /// Where the mouse went down to close a menu by pressing outside it, so that the
+    /// same press, ending on the menu's own button, doesn't open it again.
+    menu_closed_at: Option<Point<Pixels>>,
     /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
     skin: Option<skin_page::SkinPanel>,
     /// Why the last picture for Home's background was refused.
@@ -408,6 +411,7 @@ impl Launcher {
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
+            menu_closed_at: None,
             skin: None,
             background_error: None,
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
@@ -1955,7 +1959,10 @@ impl Launcher {
                     )
                     .child(text(theme::CAPTION).text_color(t.muted).child(how)),
             )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if this.closed_by_this_press(event) {
+                    return;
+                }
                 this.account_menu = !this.account_menu;
                 if this.account_menu {
                     // Who can play may have changed elsewhere since the window opened.
@@ -2288,6 +2295,12 @@ impl Launcher {
             .child(foot)
     }
 
+    /// Whether `event` is the press that just closed a menu from outside it (on the menu's
+    /// own button): the button then leaves the menu closed instead of opening it again.
+    fn closed_by_this_press(&mut self, event: &ClickEvent) -> bool {
+        closed_by_press(self.menu_closed_at.take(), event)
+    }
+
     fn picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let label = self
@@ -2329,8 +2342,10 @@ impl Launcher {
                         ),
                 )
                 .child(blocks::icon("chevron-down", 20., t.muted))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.picker_open = !this.picker_open;
+                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                    if !this.closed_by_this_press(event) {
+                        this.picker_open = !this.picker_open;
+                    }
                     cx.notify();
                 })),
         );
@@ -2345,7 +2360,12 @@ impl Launcher {
                 .border_color(t.outline)
                 .bg(t.surface)
                 .flex()
-                .flex_col();
+                .flex_col()
+                .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.picker_open = false;
+                    this.menu_closed_at = Some(event.position);
+                    cx.notify();
+                }));
             // Picking a version keeps the selected instance on it; the launcher's own version
             // (newest unless chosen otherwise on Versions) follows updates.
             let follows = self.launcher_version().cloned();
@@ -4589,8 +4609,37 @@ fn main() {
         });
 }
 
+/// Whether the click `event` began with the mouse-down that closed a menu at `closed_at`.
+/// A keyboard click never did.
+fn closed_by_press(closed_at: Option<Point<Pixels>>, event: &ClickEvent) -> bool {
+    matches!(event, ClickEvent::Mouse(click) if closed_at == Some(click.down.position))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_menu_button_stays_closed_after_the_press_that_closed_its_menu() {
+        use super::closed_by_press;
+        use gpui::{point, px, ClickEvent, KeyboardClickEvent, MouseClickEvent, MouseDownEvent};
+        let click = |x: f32| {
+            ClickEvent::Mouse(MouseClickEvent {
+                down: MouseDownEvent {
+                    position: point(px(x), px(20.)),
+                    ..MouseDownEvent::default()
+                },
+                ..MouseClickEvent::default()
+            })
+        };
+        let closed_at = Some(point(px(10.), px(20.)));
+        // The press on the button that closed the open menu: it stays closed.
+        assert!(closed_by_press(closed_at, &click(10.)));
+        // A later press, or one with no menu closed, toggles as before.
+        assert!(!closed_by_press(closed_at, &click(11.)));
+        assert!(!closed_by_press(None, &click(10.)));
+        let keyboard = ClickEvent::Keyboard(KeyboardClickEvent::default());
+        assert!(!closed_by_press(closed_at, &keyboard));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn cmd_q_quits_and_cmd_w_closes_the_window() {
