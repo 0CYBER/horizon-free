@@ -202,7 +202,6 @@ impl Game<'_> {
                 Event::Changed => {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
-                    self.sync_mods();
                     self.sync_agent_control();
                     self.ui.options.agent_status = self.agent_status_lines();
                 }
@@ -263,7 +262,6 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
-                Event::ModSettings(i) => self.open_mod_screen(i, true),
                 Event::NativeSettings(i) => self.native_settings_refresh(i),
                 Event::NativeButton(i, b) => self.native_settings_event(i, b),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),

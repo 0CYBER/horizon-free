@@ -58,6 +58,28 @@ pub enum ClickEvent {
     OpenFile(String),
 }
 
+/// A non-character `minecraft:object` embedded in a text component.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InlineObject {
+    Player {
+        profile: Value,
+        hat: bool,
+        fallback: String,
+    },
+    Atlas {
+        atlas: String,
+        sprite: String,
+        fallback: String,
+    },
+}
+impl InlineObject {
+    pub fn fallback(&self) -> &str {
+        match self {
+            Self::Player { fallback, .. } | Self::Atlas { fallback, .. } => fallback,
+        }
+    }
+}
+
 /// Text style; `None` fields inherit from the enclosing style.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
@@ -77,6 +99,8 @@ pub struct Style {
     /// The font (`FontDescription.Resource`), a full id like
     /// `minecraft:alt`; the default font when unset.
     pub font: Option<String>,
+    /// Content metadata for a single U+FFFC object span; never inherited.
+    pub inline_object: Option<InlineObject>,
 }
 /// A style's `font` field: an identifier (`alt` is `minecraft:alt`).
 pub fn font_id(v: &Value) -> Option<String> {
@@ -337,7 +361,13 @@ impl Text {
     }
     /// Component.getString: the plain characters.
     pub fn plain(&self) -> String {
-        self.spans.iter().map(|s| s.text.as_str()).collect()
+        self.spans
+            .iter()
+            .map(|s| match &s.style.inline_object {
+                Some(object) if s.text == "\u{fffc}" => object.fallback(),
+                _ => s.text.as_str(),
+            })
+            .collect()
     }
     pub fn is_empty(&self) -> bool {
         self.spans.iter().all(|s| s.text.is_empty())
