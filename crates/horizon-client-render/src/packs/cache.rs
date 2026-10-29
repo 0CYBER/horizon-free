@@ -343,24 +343,31 @@ mod tests {
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
-        /// Writes `bytes` as a person editing the pack would: a change lands on a later tick
-        /// of the filesystem's clock. On Unix the cache compares stamps (length, mtime, ctime,
-        /// inode), and Linux takes them from a coarse clock (a few milliseconds a tick), so a
-        /// same-length rewrite within one tick looked unchanged and the tests failed at random.
         fn write(&self, name: &str, bytes: &[u8]) {
             let path = self.0.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            let before = fs::read(&path)
-                .ok()
-                .filter(|old| old != bytes)
-                .and_then(|_| dependency_signature(&path, false).ok());
-            fs::write(&path, bytes).unwrap();
-            if let Some(before) = before {
-                while dependency_signature(&path, false).unwrap() == before {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    fs::write(&path, bytes).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        /// Waits for the filesystem's clock to move on, as it does between a build and a
+        /// person's next edit. On Unix the cache compares stamps (length, mtime, ctime, inode),
+        /// and Linux takes them from a coarse clock (a few milliseconds a tick): an edit in the
+        /// tick of the build before kept them all, and the tests failed at random.
+        fn next_tick(&self) {
+            let probe = self.0.with_extension("tick");
+            // New bytes each time: NTFS keeps the time of a write that changes nothing.
+            let stamp = |n: u32| {
+                fs::write(&probe, n.to_le_bytes()).unwrap();
+                fs::metadata(&probe).unwrap().modified().unwrap()
+            };
+            let start = stamp(0);
+            // A second at most: no clock is that coarse, and a test never hangs on one.
+            for n in 1..1000 {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                if stamp(n) != start {
+                    break;
                 }
             }
+            let _ = fs::remove_file(&probe);
         }
         fn dir_pack(&self, name: &str) -> Pack {
             self.write(
@@ -384,6 +391,7 @@ mod tests {
                 output_signature(&cached).unwrap(),
                 output_signature(&self.0.join("reference")).unwrap()
             );
+            self.next_tick();
         }
     }
     impl Drop for Fixture {
