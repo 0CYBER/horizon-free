@@ -20,7 +20,9 @@ use std::{
 
 /// The tree the chat parses and completes with: a server's, once it has
 /// sent one (ClientPacketListener.commands), else the game's own.
-fn chat_tree(remote: &Option<super::remote::Remote>) -> &horizon_client::command::Dispatcher {
+pub(super) fn chat_tree(
+    remote: &Option<super::remote::Remote>,
+) -> &horizon_client::command::Dispatcher {
     match remote.as_ref().and_then(|r| r.commands.as_ref()) {
         Some(tree) => tree,
         None => horizon_client::command::vanilla::game_dispatcher(),
@@ -1191,7 +1193,10 @@ impl Game<'_> {
             return;
         };
         let path = dir.join(name);
-        renderer.screenshot = Some(path.clone());
+        renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
+            path: path.clone(),
+            size: None,
+        });
         self.ui.screenshot_message = Some(path);
     }
     /// After a frame: report a finished F2 screenshot in chat.

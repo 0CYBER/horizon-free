@@ -1045,8 +1045,8 @@ impl Mob {
         } else {
             y -= self.gravity();
         }
-        // LivingEntity.shouldDiscardFriction (a breeze's long jump).
-        if super::breeze::discards_friction(self) {
+        // LivingEntity.shouldDiscardFriction (a breeze's or a frog's long jump).
+        if super::breeze::discards_friction(self) || self.extra.frog.discard_friction {
             self.velocity = Vec3::new(movement.x, y, movement.z);
             return;
         }
