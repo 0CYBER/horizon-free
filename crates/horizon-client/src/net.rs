@@ -61,6 +61,10 @@ pub enum Event {
     ShowDialog(horizon_world::nbt::Tag),
     /// `clear_dialog` in configuration.
     ClearDialog,
+    /// ClientboundCodeOfConductPacket: the game shows it and answers with
+    /// `Session::accept_code_of_conduct` or a disconnect; until then the
+    /// server waits in configuration.
+    CodeOfConduct(String),
     /// `ClientboundTransferPacket`: the server sent us to another address.
     /// The connection ends right after; the game reconnects there with the
     /// stored cookies.
@@ -258,6 +262,16 @@ impl Session {
         };
         if let Some(w) = writer.as_mut()
             && w.send(&body).is_err()
+        {
+            w.shutdown();
+        }
+    }
+    /// ServerboundAcceptCodeOfConductPacket, sent in configuration.
+    pub fn accept_code_of_conduct(&self) {
+        let mut writer = self.writer.lock().unwrap();
+        if let Some(w) = writer.as_mut()
+            && w.send(&cfg::Serverbound::AcceptCodeOfConduct(Empty).encode())
+                .is_err()
         {
             w.shutdown();
         }
@@ -625,8 +639,8 @@ fn configure(
                 }))?
             }
             cfg::Clientbound::RegistryData(r) => registries.add(r),
-            cfg::Clientbound::CodeOfConduct(_) => {
-                reply(cfg::Serverbound::AcceptCodeOfConduct(Empty))?
+            cfg::Clientbound::CodeOfConduct(c) => {
+                let _ = send.send(Event::CodeOfConduct(c.text));
             }
             // The game answers: it may prompt the player first.
             cfg::Clientbound::ResourcePackPush(p) => {
