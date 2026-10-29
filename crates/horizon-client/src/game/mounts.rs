@@ -87,16 +87,20 @@ impl Game<'_> {
             return false;
         }
         if !self.creative
-            && let Some(stack) = self.inventory[self.selected].as_mut()
+            && let Some(stack) = self.inventory[self.selected].clone()
         {
-            stack.damage += wear;
-            let max = self
-                .res
-                .items()
-                .get(&stack.item)
-                .map_or(25, |i| i.max_damage);
-            if stack.damage >= max {
-                self.inventory[self.selected] = Some(ItemStack::new("minecraft:fishing_rod", 1));
+            self.trigger_item_durability(&stack);
+            if let Some(stack) = self.inventory[self.selected].as_mut() {
+                stack.damage += wear;
+                let max = self
+                    .res
+                    .items()
+                    .get(&stack.item)
+                    .map_or(25, |i| i.max_damage);
+                if stack.damage >= max {
+                    self.inventory[self.selected] =
+                        Some(ItemStack::new("minecraft:fishing_rod", 1));
+                }
             }
         }
         self.swing_arm();
@@ -259,6 +263,7 @@ impl Game<'_> {
             Species::CamelHusk => "minecraft:entity.camel_husk.eat",
             Species::Donkey => "minecraft:entity.donkey.eat",
             Species::Mule => "minecraft:entity.mule.eat",
+            Species::Horse if m.is_baby() => "minecraft:entity.baby_horse.eat",
             _ => "minecraft:entity.horse.eat",
         };
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
@@ -337,7 +342,16 @@ impl Game<'_> {
             }
             // The nautilus plays its dash sound itself.
             if equine::is_equine(m.species()) {
-                let sound = "minecraft:entity.horse.jump";
+                // playJumpSound: Donkey and Mule have their own; a skeleton
+                // horse in water splashes.
+                let sound = match m.species() {
+                    Species::Donkey => "minecraft:entity.donkey.jump",
+                    Species::Mule => "minecraft:entity.mule.jump",
+                    Species::SkeletonHorse if m.fluids.in_water => {
+                        "minecraft:entity.skeleton_horse.jump_water"
+                    }
+                    _ => "minecraft:entity.horse.jump",
+                };
                 let at = m.center();
                 self.audio.play(sound, Some(at), 0.4, 1.0);
             }
