@@ -755,7 +755,7 @@ impl PiglinSpear {
         }
     }
 
-    /// Whether the piglin is in the fight activity with a kinetic weapon.
+    /// Whether the piglin is fighting (it has a target) with a kinetic weapon.
     fn fighting_with_spear(m: &Mob) -> bool {
         m.ai.target.is_some() && main_hand_kinetic(m).is_some()
     }

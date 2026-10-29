@@ -384,6 +384,20 @@ impl Mob {
             f64::from(y_cos * x_cos),
         ]
     }
+    /// `Entity.getLookAngle`: `calculateViewVector(xRot, yRot)`, the facing
+    /// of the body (`getHeadLookAngle` is the one with the head's yaw).
+    pub fn look_angle(&self) -> [f64; 3] {
+        use horizon_core::geometry::trig::Mth;
+        let to_rad = std::f32::consts::PI / 180.0;
+        let x = self.head_pitch * to_rad;
+        let y = -self.yaw * to_rad;
+        let (y_cos, y_sin, x_cos, x_sin) = (y.mcos(), y.msin(), x.mcos(), x.msin());
+        [
+            f64::from(y_sin * x_cos),
+            f64::from(-x_sin),
+            f64::from(y_cos * x_cos),
+        ]
+    }
     /// AirAndWaterRandomPos.getPos: within the radians of a direction, kept
     /// near home, moved up out of solid blocks and free of path maluses.
     pub fn air_and_water_random_pos(
