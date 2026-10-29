@@ -610,14 +610,17 @@ impl Loading {
                 } else {
                     raw
                 } * self.settings.mouse_wheel_sensitivity;
-                let batch = HudBatch::new(self.menu_size());
+                let size = self.menu_size();
+                let batch = HudBatch::new(size);
                 if self.menu.options_open {
-                    self.menu.options.scroll_at(
-                        &self.settings,
+                    let events = self.menu.options.wheel(
+                        &mut self.settings,
                         (batch.width, batch.height),
                         self.menu.cursor,
+                        [size[0] as i32, size[1] as i32],
                         amount,
                     );
+                    self.menu_option_events(events);
                 } else if let Some(title) = &mut self.menu.title {
                     title.scroll_worlds(amount, self.menu.cursor, (batch.width, batch.height));
                 }

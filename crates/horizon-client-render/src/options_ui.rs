@@ -2797,26 +2797,7 @@ impl OptionsUi {
                         }
                         Act::Done => events.extend(self.back(s)),
                         Act::Cycle(opt) => {
-                            opt.cycle(s, right, framebuffer);
-                            if opt == Opt::Preset {
-                                apply_preset(s);
-                            }
-                            if opt == Opt::HighContrast {
-                                // Options.highContrast: the built-in pack follows the option.
-                                let on = s.resource_packs.iter().any(|id| id == "high_contrast");
-                                if on != s.high_contrast {
-                                    s.resource_packs.retain(|id| id != "high_contrast");
-                                    if s.high_contrast {
-                                        s.resource_packs.push("high_contrast".into());
-                                    }
-                                    // PackSelectionScreen reads the repository each time it
-                                    // opens: the next one starts from this selection.
-                                    self.pack_selection = s.resource_packs.clone();
-                                    self.pack_screen = None;
-                                    events.push(Event::Packs(s.resource_packs.clone()));
-                                }
-                            }
-                            events.push(Event::Changed);
+                            events.extend(self.cycle_option(s, opt, right, framebuffer));
                         }
                         Act::Extra(item) => {
                             if let Some(name) = item.key_name() {
@@ -2923,6 +2904,77 @@ impl OptionsUi {
         let (_, top, bottom, content) = self.layout(s, size.0, size.1);
         self.scroll -= amount * 18.0;
         self.clamp_scroll(top, bottom, content);
+    }
+    /// `CycleButton.cycleValue` on an option, then what the option changes:
+    /// the preset's values, High Contrast's built-in pack.
+    fn cycle_option(
+        &mut self,
+        s: &mut Settings,
+        opt: Opt,
+        back: bool,
+        framebuffer: [i32; 2],
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        opt.cycle(s, back, framebuffer);
+        if opt == Opt::Preset {
+            apply_preset(s);
+        }
+        if opt == Opt::HighContrast {
+            // Options.highContrast: the built-in pack follows the option.
+            let on = s.resource_packs.iter().any(|id| id == "high_contrast");
+            if on != s.high_contrast {
+                s.resource_packs.retain(|id| id != "high_contrast");
+                if s.high_contrast {
+                    s.resource_packs.push("high_contrast".into());
+                }
+                // PackSelectionScreen reads the repository each time it
+                // opens: the next one starts from this selection.
+                self.pack_selection = s.resource_packs.clone();
+                self.pack_screen = None;
+                events.push(Event::Packs(s.resource_packs.clone()));
+            }
+        }
+        events.push(Event::Changed);
+        events
+    }
+    /// The mouse wheel at the cursor. Over a cycle button it takes the step
+    /// (`CycleButton.mouseScrolled`: up goes back) and the list stays put.
+    pub fn wheel(
+        &mut self,
+        s: &mut Settings,
+        size: (f32, f32),
+        cursor: (f32, f32),
+        framebuffer: [i32; 2],
+        amount: f32,
+    ) -> Vec<Event> {
+        let plain = self.resource_error.is_none()
+            && Self::graphics_level(self.page()).is_none()
+            && !(self.pack_screen.is_some() && self.stack.last() == Some(&Page::Packs));
+        if !plain {
+            self.scroll_at(s, size, cursor, amount);
+            return Vec::new();
+        }
+        let (widgets, top, bottom, _) = self.layout(s, size.0, size.1);
+        let hovered = widgets.iter().find_map(|wd| match &wd.kind {
+            WKind::Button {
+                active: true,
+                act: Act::Cycle(opt),
+                ..
+            } if ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
+                && !(wd.list && (cursor.1 < top || cursor.1 >= bottom)) =>
+            {
+                Some(*opt)
+            }
+            _ => None,
+        });
+        match hovered {
+            Some(opt) if amount != 0.0 => self.cycle_option(s, opt, amount > 0.0, framebuffer),
+            Some(_) => Vec::new(),
+            None => {
+                self.scroll_at(s, size, cursor, amount);
+                Vec::new()
+            }
+        }
     }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
