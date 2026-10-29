@@ -574,12 +574,13 @@ impl Game<'_> {
         let ctrl = self.keys.contains(&KeyCode::ControlLeft);
         let shift = self.keys.contains(&KeyCode::ShiftLeft);
         let shortcut = self.edit_shortcut(event);
+        let types_text = self.types_text();
         let Some(s) = self.command_block_screen.as_mut() else {
             return;
         };
         if let Some(shortcut) = shortcut {
             s.command.shortcut(shortcut, &mut self.clipboard);
-        } else if !s.command.key(key, ctrl, shift) && !ctrl {
+        } else if !s.command.key(key, ctrl, shift) && types_text {
             self.command_block_type(event.text.as_deref().unwrap_or(""));
         }
     }
