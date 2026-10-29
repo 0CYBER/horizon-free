@@ -103,10 +103,11 @@ impl SpriteAnimator {
         let mut counts: Vec<usize> = Vec::new();
         let mut sprites = Vec::with_capacity(animations.len());
         for animation in animations {
-            let chains: Vec<_> = (0..animation.frame_count())
-                .map(|frame| source_chain(animation.pixels(frame), size, settings, animation.layer))
+            let pixels: Vec<_> = (0..animation.frame_count())
+                .map(|frame| animation.pixels(frame))
                 .collect();
-            let bytes: u64 = chains.iter().map(|(chain, _)| chain.len() as u64).sum();
+            let (chains, edge) = source_chains(&pixels, size, settings, animation.layer);
+            let bytes: u64 = chains.iter().map(|chain| chain.len() as u64).sum();
             if bytes > limit {
                 log::warn!(
                     "Horizon: layer {}'s animation ({bytes} bytes) does not fit in a storage buffer; it stays still",
@@ -124,7 +125,7 @@ impl SpriteAnimator {
             let data = &mut frames[buffer];
             let offsets = chains
                 .iter()
-                .map(|(chain, _)| {
+                .map(|chain| {
                     let offset = (data.len() / 4) as u32;
                     data.extend_from_slice(chain);
                     offset
@@ -142,7 +143,7 @@ impl SpriteAnimator {
                 shown: None,
                 layer: animation.layer % split,
                 frames: offsets,
-                edge: chains[0].1,
+                edge,
                 group,
             });
         }
@@ -424,15 +425,63 @@ fn mix_level(frames: &[u8], [_, current, next, millis, edge]: [u32; 5], width: u
 /// array's size from its own size's chain, its first level repeated into the
 /// larger levels: that chain, which the shader repeats. Any other sprite: its
 /// chain at the array's size.
+#[cfg(test)]
 fn source_chain(pixels: &[u8], size: u32, settings: &[Settings], layer: u32) -> (Vec<u8>, u32) {
-    let native = settings.get(layer as usize).map_or(0, |s| s.native_size);
-    let edge = if native.is_power_of_two() && native < size {
-        native
+    let (mut chains, edge) = source_chains(&[pixels], size, settings, layer);
+    (chains.swap_remove(0), edge)
+}
+
+/// Every frame's chain, laid out as one frame's `source_chain`, but mipmapped as
+/// vanilla's `SpriteContents.increaseMipLevel` does: over the whole animation
+/// sheet (the frames stacked), so `solidify` and the alpha-to-coverage scale
+/// of each level are the sheet's, not each frame's. A frame alone has a
+/// single texel square at its 2x2 level, and its coverage scale could round
+/// a whole far frame transparent (kelp blinking out at distance).
+fn source_chains(
+    frames: &[&[u8]],
+    size: u32,
+    settings: &[Settings],
+    layer: u32,
+) -> (Vec<Vec<u8>>, u32) {
+    let s = settings.get(layer as usize).copied().unwrap_or_default();
+    let edge = if s.native_size.is_power_of_two() && s.native_size < size {
+        s.native_size
     } else {
         size
     };
-    let frame = crate::sprites::resample(pixels, size, edge);
-    (super::mip_chain(&frame, edge, settings, layer, 1).0, edge)
+    let mut sheet = crate::mipmap::Image {
+        width: edge,
+        height: edge * frames.len() as u32,
+        pixels: Vec::with_capacity((edge * edge) as usize * frames.len()),
+    };
+    for frame in frames {
+        let frame = crate::sprites::resample(frame, size, edge);
+        sheet.pixels.extend_from_slice(frame.as_chunks::<4>().0);
+    }
+    let has_transparent = s.has_transparent || sheet.pixels.iter().any(|p| p[3] == 0);
+    let levels = crate::mipmap::generate(
+        sheet,
+        edge.trailing_zeros(),
+        Settings {
+            has_transparent,
+            ..s
+        },
+    );
+    let chains = (0..frames.len())
+        .map(|frame| {
+            let mut chain = Vec::new();
+            for level in &levels {
+                let texels = (level.width * level.width) as usize;
+                chain.extend(
+                    level.pixels[frame * texels..(frame + 1) * texels]
+                        .iter()
+                        .flatten(),
+                );
+            }
+            chain
+        })
+        .collect();
+    (chains, edge)
 }
 
 #[cfg(test)]
@@ -570,6 +619,63 @@ mod tests {
                 assert_eq!(reference(&chain, &chain, 0, edge, 64), expected);
             }
         }
+    }
+
+    #[test]
+    fn kelp_frames_share_the_sheet_mips() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root
+            .join("assets/minecraft/textures/block/kelp.png")
+            .exists()
+        {
+            return;
+        }
+        let mut sprites = crate::sprites::Sprites::default();
+        for name in ["kelp", "kelp_plant", "seagrass", "tall_seagrass_top"] {
+            sprites
+                .insert(&root, &format!("minecraft:block/{name}"))
+                .unwrap();
+        }
+        sprites.finish();
+        // A level drawn nowhere: no texel passes the cutout's alpha test.
+        let blank = |chain: &[u8], edge: u32| {
+            let mut start = 0;
+            let mut level = edge;
+            let mut blank = Vec::new();
+            while level > 0 {
+                let bytes = (level * level * 4) as usize;
+                let texels = &chain[start..start + bytes];
+                blank.push(texels.as_chunks::<4>().0.iter().all(|p| p[3] < 128));
+                start += bytes;
+                level >>= 1;
+            }
+            blank
+        };
+        let mut blinked = 0;
+        for animation in &sprites.animations {
+            let size = sprites.size;
+            let pixels: Vec<_> = (0..animation.frame_count())
+                .map(|f| animation.pixels(f))
+                .collect();
+            let (chains, edge) = source_chains(&pixels, size, &sprites.mips, animation.layer);
+            for (frame, chain) in chains.iter().enumerate() {
+                // The 1x1 level has no texel square to measure coverage on
+                // (vanilla leaves it unscaled); every larger level shows.
+                let levels = blank(chain, edge);
+                assert!(
+                    !levels[..levels.len() - 1].contains(&true),
+                    "layer {} frame {frame}: {levels:?}",
+                    animation.layer
+                );
+                let (alone, _) = source_chain(pixels[frame], size, &sprites.mips, animation.layer);
+                let alone = blank(&alone, edge);
+                blinked += usize::from(alone[..alone.len() - 1].contains(&true));
+            }
+        }
+        // Mipmapped frame by frame, some kelp frames vanished at the 2x2 level.
+        assert!(blinked > 0);
     }
 
     #[test]
@@ -730,8 +836,11 @@ mod tests {
             queue.submit([encoder.finish()]);
             for animation in &animations {
                 let blend = animation.blend(tick);
-                let chain = |f| source_chain(animation.pixels(f), size, &mips, animation.layer);
-                let ((current, edge), (next, _)) = (chain(blend.frame), chain(blend.next));
+                let pixels: Vec<_> = (0..animation.frame_count())
+                    .map(|f| animation.pixels(f))
+                    .collect();
+                let (chains, edge) = source_chains(&pixels, size, &mips, animation.layer);
+                let (current, next) = (&chains[blend.frame], &chains[blend.next]);
                 let layers = read_back(
                     &device,
                     &queue,
@@ -739,7 +848,7 @@ mod tests {
                 );
                 assert_eq!(
                     layers[(animation.layer % split) as usize],
-                    reference(&current, &next, blend.millis, edge, size),
+                    reference(current, next, blend.millis, edge, size),
                     "layer {} at tick {tick}",
                     animation.layer
                 );

@@ -318,6 +318,8 @@ pub enum Action {
 /// The pack screen and its state.
 #[derive(Clone, Debug)]
 pub struct PackScreen {
+    /// `resourcePack.title`, or `dataPack.title` from Create World.
+    pub title: Text,
     pub width: i32,
     pub height: i32,
     pub in_world: bool,
@@ -342,6 +344,7 @@ impl PackScreen {
     /// `PackSelectionScreen.init`: the lists filled, the search box focused.
     pub fn new(
         m: &Measure,
+        title: Text,
         width: i32,
         height: i32,
         in_world: bool,
@@ -360,6 +363,7 @@ impl PackScreen {
             .filter_map(|p| Some((icon_texture(&p.id), p.icon.clone()?)))
             .collect();
         let mut s = Self {
+            title,
             width,
             height,
             in_world,
@@ -382,7 +386,7 @@ impl PackScreen {
     }
     /// The header layout: title, drop info and search box, centred.
     fn header(&self, m: &Measure) -> [(i32, i32); 3] {
-        let tw = m.width(&tr("resourcePack.title"));
+        let tw = m.width(&self.title);
         let dw = m.width(&tr("pack.dropInfo"));
         let col = tw.max(dw).max(200);
         let frame = self.width.max(col);
@@ -837,7 +841,7 @@ impl PackScreen {
             return out;
         }
         let [(tx, ty), (dx, dy), _] = self.header(m);
-        d::string_widget(&mut out, m, &tr("resourcePack.title"), tx, ty, 0);
+        d::string_widget(&mut out, m, &self.title, tx, ty, 0);
         d::string_widget(
             &mut out,
             m,
@@ -1105,7 +1109,7 @@ mod icon_tests {
             pack("high_contrast", Some(contrast.clone())),
             pack("file/Iconless", None),
         ];
-        let screen = PackScreen::new(&m, 480, 320, false, packs, &[]);
+        let screen = PackScreen::new(&m, tr("resourcePack.title"), 480, 320, false, packs, &[]);
         let mut draws = screen.draw(&m, (0, 0), 0);
         let mut patches = Vec::new();
         screen.bind_icons(&mut draws, &atlas, &mut patches);
@@ -1152,7 +1156,8 @@ mod click_sound_tests {
             crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
                 .unwrap();
         let m = Measure(&atlas.font);
-        let mut screen = PackScreen::new(&m, 480, 320, false, Vec::new(), &[]);
+        let title = tr("resourcePack.title");
+        let mut screen = PackScreen::new(&m, title, 480, 320, false, Vec::new(), &[]);
         assert!(!screen.button_at(&m, 0.0, 0.0));
         assert!(!screen.button_at(
             &m,

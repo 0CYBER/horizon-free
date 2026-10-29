@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset},
+    graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset, Upscaling},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     settings::{Opt, Settings},
@@ -36,9 +36,11 @@ pub enum H {
     Overlay,
     ResolutionScale,
     Antialiasing,
+    Upscaling,
     Hdr,
-    HdrPaperWhite,
+    HdrBlackLevel,
     HdrPeak,
+    HdrPaperWhite,
     BatteryMode,
     GraphicsApi,
 }
@@ -221,7 +223,12 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::Antialiasing,
                 Medium,
-                "FXAA smooths jagged edges of the world; slightly softer image.",
+                "Smooths jagged edges. FXAA: softer. TAA: smoothest, moving things may trail.",
+            ),
+            h(
+                H::Upscaling,
+                High,
+                "Renders the world smaller and rebuilds it with TAA. Faster, softer.",
             ),
             h(
                 H::Hdr,
@@ -229,14 +236,19 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "HDR output on an HDR display: lava, fire and sunlight shine brighter.",
             ),
             h(
-                H::HdrPaperWhite,
+                H::HdrBlackLevel,
                 None,
-                "HDR: how bright white paper and menus look. Match your desktop.",
+                "HDR: your display's darkest black. 0 for OLED; LCDs glow a little.",
             ),
             h(
                 H::HdrPeak,
                 None,
                 "HDR: how bright the brightest highlights get. Your display's peak.",
+            ),
+            h(
+                H::HdrPaperWhite,
+                None,
+                "HDR: how bright white paper and menus look. Match your desktop.",
             ),
             h(
                 H::PresentMode,
@@ -276,7 +288,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::GraphicsApi,
                 None,
-                "Vulkan, or DirectX 12 where Vulkan fails. Next start.",
+                "Vulkan, then DirectX 12 (Windows) or OpenGL (Linux) where it fails. Next start.",
             ),
             h(
                 H::UploadBudget,
@@ -291,8 +303,8 @@ pub fn rows(level: Level) -> Vec<Row> {
             ),
         ],
     };
-    // Only Windows has more than one graphics API.
-    if !cfg!(windows) {
+    // Only Windows and Linux have more than one graphics API.
+    if cfg!(target_os = "macos") {
         rows.retain(
             |row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::GraphicsApi)),
         );
@@ -303,9 +315,13 @@ pub fn rows(level: Level) -> Vec<Row> {
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
 /// Horizon's graphics screens supplement the vanilla options on Video Settings.
-fn extra_rows(level: Level) -> Vec<Row> {
+/// Upscaling is only there while TAA is, which does it.
+fn extra_rows(level: Level, settings: &Settings) -> Vec<Row> {
     let mut rows = rows(level);
     rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
+    if !settings.horizon.taa {
+        rows.retain(|row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::Upscaling)));
+    }
     // Drop headings whose settings were all on the parent screens.
     let mut has_setting = false;
     rows.reverse();
@@ -343,6 +359,7 @@ impl H {
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
             H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
             H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
+            H::HdrBlackLevel => Some(g.hdr_black_level as f32 / 100.0),
             _ => None,
         }
     }
@@ -383,10 +400,22 @@ impl H {
                 n => labelled("Worker Threads", n),
             },
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
-            H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
+            H::Antialiasing => labelled(
+                "Anti-aliasing",
+                match (g.fxaa, g.taa) {
+                    (_, true) => "TAA",
+                    (true, false) => "FXAA",
+                    (false, false) => "Off",
+                },
+            ),
+            H::Upscaling => labelled("Upscaling", g.upscaling.label()),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
             H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
+            H::HdrBlackLevel => labelled(
+                "Black Level",
+                format!("{:.2} nits", g.hdr_black_level as f32 / 100.0),
+            ),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -411,6 +440,7 @@ impl H {
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
             H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
             H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
+            H::HdrBlackLevel => g.hdr_black_level = (v * 100.0).round() as u32,
             _ => {}
         }
     }
@@ -441,10 +471,25 @@ impl H {
             H::Weather => g.weather = !g.weather,
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
-            H::Antialiasing => g.fxaa = !g.fxaa,
+            // Off, FXAA, TAA.
+            H::Antialiasing => {
+                let i = if g.taa { 2 } else { usize::from(g.fxaa) };
+                let i = (i + if back { 2 } else { 1 }) % 3;
+                (g.fxaa, g.taa) = (i == 1, i == 2);
+                if !g.taa {
+                    g.upscaling = Upscaling::Native;
+                }
+            }
+            // Upscaling is TAA's: picking a ratio turns it on.
+            H::Upscaling => {
+                g.upscaling = step(&Upscaling::ALL, g.upscaling, back);
+                if g.upscaling != Upscaling::Native {
+                    (g.fxaa, g.taa) = (false, true);
+                }
+            }
             H::Hdr => g.hdr = !g.hdr,
             H::BatteryMode => g.battery = !g.battery,
-            H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
+            H::GraphicsApi => g.api = step(GraphicsApi::choices(), g.api, back),
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,
@@ -481,7 +526,6 @@ impl Item {
             Item::Horizon(H::Fog) => g.fog,
             Item::Horizon(H::Weather) => g.weather,
             Item::Horizon(H::AnimatedTextures) => g.animated_textures,
-            Item::Horizon(H::Antialiasing) => g.fxaa,
             Item::Horizon(H::Hdr) => g.hdr,
             Item::Horizon(H::BatteryMode) => g.battery,
             Item::Vanilla(Opt::ViewBobbing) => s.view_bobbing,
@@ -570,6 +614,7 @@ impl Item {
 pub enum Action {
     ButtonClick,
     Changed,
+    SliderDrag,
     OpenAdvanced,
     OpenSimple,
     Done,
@@ -603,8 +648,8 @@ impl GraphicsUi {
     fn bounds(h: f32) -> (f32, f32) {
         (STYLE.band, h - STYLE.band)
     }
-    fn content_height(level: Level) -> f32 {
-        extra_rows(level).iter().fold(4.0, |height, row| {
+    fn content_height(level: Level, s: &Settings) -> f32 {
+        extra_rows(level, s).iter().fold(4.0, |height, row| {
             height
                 + match row {
                     Row::Header(_) => STYLE.header_height,
@@ -616,17 +661,18 @@ impl GraphicsUi {
     fn layout(
         &mut self,
         level: Level,
+        s: &Settings,
         w: f32,
         h: f32,
     ) -> (Vec<Widget>, Vec<(f32, &'static str)>, f32) {
-        let content = Self::content_height(level);
+        let content = Self::content_height(level, s);
         self.clamp_scroll(h, content);
         let (top, _) = Self::bounds(h);
         let x = STYLE.row_x(w);
         let mut y = top + 4.0 - self.scroll;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
-        for row in extra_rows(level) {
+        for row in extra_rows(level, s) {
             match row {
                 Row::Header(name) => {
                     headers.push((y, name));
@@ -680,7 +726,7 @@ impl GraphicsUi {
         in_world: bool,
     ) {
         let (w, h) = (batch.width, batch.height);
-        let (widgets, headers, content) = self.layout(level, w, h);
+        let (widgets, headers, content) = self.layout(level, s, w, h);
         let (top, bottom) = Self::bounds(h);
         STYLE.background(batch, atlas, top, bottom, in_world);
         let shown = |y: f32, height: f32| y >= top && y + height <= bottom;
@@ -690,7 +736,7 @@ impl GraphicsUi {
                 STYLE.header(batch, atlas, &Text::literal(name), x, y);
             }
         }
-        let descriptions: Vec<(Cost, &'static str)> = extra_rows(level)
+        let descriptions: Vec<(Cost, &'static str)> = extra_rows(level, s)
             .into_iter()
             .filter_map(|r| match r {
                 Row::Setting(s) => Some((s.cost, s.text)),
@@ -791,7 +837,7 @@ impl GraphicsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Action> {
-        let (widgets, _, _) = self.layout(level, w, h);
+        let (widgets, _, _) = self.layout(level, s, w, h);
         let (top, bottom) = Self::bounds(h);
         if drag {
             if let Some(item) = self.dragging
@@ -800,7 +846,7 @@ impl GraphicsUi {
                     .find(|wd| matches!(wd.target, Target::Item(i) if i == item))
             {
                 item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
-                return vec![Action::Changed];
+                return vec![Action::SliderDrag];
             }
             return Vec::new();
         }
@@ -822,11 +868,11 @@ impl GraphicsUi {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
                         item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
+                        vec![Action::SliderDrag]
                     } else {
                         item.cycle(s, right, framebuffer);
-                        return vec![Action::ButtonClick, Action::Changed];
+                        vec![Action::ButtonClick, Action::Changed]
                     }
-                    vec![Action::Changed]
                 }
             };
         }
@@ -835,8 +881,8 @@ impl GraphicsUi {
     pub fn release(&mut self) -> bool {
         self.dragging.take().is_some()
     }
-    pub fn scroll(&mut self, level: Level, h: f32, amount: f32) {
-        let content = Self::content_height(level);
+    pub fn scroll(&mut self, level: Level, s: &Settings, h: f32, amount: f32) {
+        let content = Self::content_height(level, s);
         self.clamp_scroll(h, content);
         self.scroll -= amount * 18.0;
         self.clamp_scroll(h, content);
@@ -852,7 +898,7 @@ mod tests {
         let mut s = Settings::default();
         let mut ui = GraphicsUi::default();
         let size = (480.0, 320.0);
-        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let (widgets, _, _) = ui.layout(Level::Advanced, &s, size.0, size.1);
         let button = widgets
             .iter()
             .find(|w| matches!(w.target, Target::Button(_)))
@@ -897,7 +943,7 @@ mod tests {
                 false,
                 false
             ),
-            vec![Action::Changed]
+            vec![Action::SliderDrag]
         );
         assert_eq!(
             ui.click(
@@ -909,7 +955,7 @@ mod tests {
                 true,
                 false
             ),
-            vec![Action::Changed]
+            vec![Action::SliderDrag]
         );
         assert!(ui.release());
         assert!(!ui.release());
@@ -917,45 +963,47 @@ mod tests {
 
     #[test]
     fn scrolling_stops_at_both_limits_before_layout() {
+        let s = Settings::default();
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
             let h = 2.0 * STYLE.band + 10.0;
             let (top, bottom) = GraphicsUi::bounds(h);
-            let max = GraphicsUi::content_height(level) - (bottom - top);
+            let max = GraphicsUi::content_height(level, &s) - (bottom - top);
             assert!(max > 4.5);
             for _ in 0..3 {
-                ui.scroll(level, h, 1000.0);
+                ui.scroll(level, &s, h, 1000.0);
                 assert_eq!(ui.scroll, 0.0);
             }
             for _ in 0..3 {
-                ui.scroll(level, h, -1000.0);
+                ui.scroll(level, &s, h, -1000.0);
                 assert_eq!(ui.scroll, max);
             }
-            ui.scroll(level, h, 0.25);
+            ui.scroll(level, &s, h, 0.25);
             assert_eq!(ui.scroll, max - 4.5);
-            ui.scroll(level, h, 1000.0);
-            ui.scroll(level, h, -0.25);
+            ui.scroll(level, &s, h, 1000.0);
+            ui.scroll(level, &s, h, -0.25);
             assert_eq!(ui.scroll, 4.5);
         }
     }
 
     #[test]
     fn resizing_clamps_before_positioning_graphics_rows() {
+        let s = Settings::default();
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
-            ui.scroll(level, 2.0 * STYLE.band + 10.0, -1000.0);
+            ui.scroll(level, &s, 2.0 * STYLE.band + 10.0, -1000.0);
             assert!(ui.scroll > 0.0);
-            let (widgets, headers, _) = ui.layout(level, 480.0, 4000.0);
+            let (widgets, headers, _) = ui.layout(level, &s, 480.0, 4000.0);
             assert_eq!(ui.scroll, 0.0);
             if let Some((y, _)) = headers.first() {
                 assert_eq!(*y, STYLE.band + 4.0);
             }
-            let (expected, _, _) = GraphicsUi::default().layout(level, 480.0, 4000.0);
+            let (expected, _, _) = GraphicsUi::default().layout(level, &s, 480.0, 4000.0);
             assert_eq!(
                 widgets.iter().map(|w| w.y).collect::<Vec<_>>(),
                 expected.iter().map(|w| w.y).collect::<Vec<_>>()
             );
-            ui.scroll(level, 4000.0, -1000.0);
+            ui.scroll(level, &s, 4000.0, -1000.0);
             assert_eq!(ui.scroll, 0.0);
         }
     }
@@ -963,7 +1011,7 @@ mod tests {
     #[test]
     fn classic_submenus_only_add_horizon_settings_without_empty_groups() {
         for level in [Level::Simple, Level::Advanced] {
-            let rows = extra_rows(level);
+            let rows = extra_rows(level, &Settings::default());
             assert!(rows.iter().any(|row| matches!(row, Row::Setting(_))));
             for (i, row) in rows.iter().enumerate() {
                 match row {
@@ -1052,6 +1100,37 @@ mod tests {
     }
 
     #[test]
+    fn antialiasing_cycles_off_fxaa_taa() {
+        let mut s = Settings::default();
+        let item = Item::Horizon(H::Antialiasing);
+        for label in ["FXAA", "TAA", "Off"] {
+            item.cycle(&mut s, false, [854, 480]);
+            assert_eq!(item.label(&s).plain(), format!("Anti-aliasing: {label}"));
+        }
+        item.cycle(&mut s, true, [854, 480]);
+        assert_eq!((s.horizon.fxaa, s.horizon.taa), (false, true));
+
+        // Upscaling needs TAA: a ratio turns it on, leaving TAA goes back to Native.
+        s.horizon.taa = false;
+        let upscaling = Item::Horizon(H::Upscaling);
+        upscaling.cycle(&mut s, false, [854, 480]);
+        assert_eq!(upscaling.label(&s).plain(), "Upscaling: Quality");
+        assert!(s.horizon.taa);
+        item.cycle(&mut s, false, [854, 480]);
+        assert_eq!(s.horizon.upscaling, Upscaling::Native);
+
+        // The Upscaling row is only on the screen while TAA is on.
+        let shown = |s: &Settings| {
+            extra_rows(Level::Advanced, s)
+                .iter()
+                .any(|row| matches!(row, Row::Setting(r) if r.item == upscaling))
+        };
+        assert!(!shown(&s));
+        s.horizon.taa = true;
+        assert!(shown(&s));
+    }
+
+    #[test]
     fn entity_culling_is_opt_in_and_toggles_from_advanced_graphics() {
         let mut s = Settings::default();
         let item = Item::Horizon(H::EntityCulling);
@@ -1067,7 +1146,7 @@ mod tests {
 
         let mut ui = GraphicsUi::default();
         let size = (480.0, 4000.0);
-        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let (widgets, _, _) = ui.layout(Level::Advanced, &s, size.0, size.1);
         let switch = widgets
             .iter()
             .find(|w| matches!(w.target, Target::Item(i) if i == item))
