@@ -235,11 +235,10 @@ pub fn register(m: &mut Mob) {
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic if m.species() == Species::Fox => super::fox::register(m),
         Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
+        Family::Generic if m.species() == Species::Rabbit => super::rabbit::register(m),
+        Family::Generic if m.species() == Species::Ocelot => super::tame::register_ocelot(m),
         Family::Generic => {
             generic(m);
-            if m.species() == Species::Rabbit {
-                super::rabbit::register(m);
-            }
             if m.species() == Species::Frog {
                 // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true).
                 // The speed attribute is 1.0, so the controller's scaling is
@@ -390,9 +389,8 @@ fn generic(m: &mut Mob) {
             return;
         }
         g.add(0, Float);
-        let rabbit = m.kind.species == Species::Rabbit;
-        g.add(1, Panic::new(if rabbit { 2.2 } else { 1.25 }));
-        g.add(5, Stroll::avoiding_water(if rabbit { 0.6 } else { 1.0 }));
+        g.add(1, Panic::new(1.25));
+        g.add(5, Stroll::avoiding_water(1.0));
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
         if m.kind.species == Species::Armadillo {
@@ -477,7 +475,14 @@ pub fn tick(
     if m.species() == Species::ZombieVillager {
         // ZombieVillager.tick counts the cure down before super.tick, with
         // or without AI (NoAI only skips serverAiStep).
-        super::zombie_villager::step(m, &mut Cx { w, events });
+        super::zombie_villager::step(
+            m,
+            &mut Cx {
+                w,
+                lr: level_random,
+                events,
+            },
+        );
     }
     super::warden::pre_tick(m, w, events);
     if m.species() == Species::Strider {
@@ -658,6 +663,16 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
 }
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    // Entity.canSpawnSprintParticle / spawnSprintParticle (a dashing cat or
+    // ocelot): a server level drops the particle, but its spot is drawn
+    // from the mob's random first.
+    if m.extra.sprinting && !m.fluids.in_water && !m.fluids.in_lava && m.alive() {
+        let at = m.block_on_legacy(w);
+        let state = w.world.block(at[0], at[1], at[2]);
+        if w.facts.get(state).render_shape != crate::blocks::RenderShape::Invisible {
+            let _ = (m.random.next_double(), m.random.next_double());
+        }
+    }
     m.was_eye_in_water = m.fluids.eye_in_water;
     m.update_fluids(w, events);
     if m.species() == Species::Drowned {
@@ -1197,7 +1212,11 @@ fn server_ai_step(
     let mut targets = std::mem::take(&mut m.ai.targets);
     let mut goals = std::mem::take(&mut m.ai.goals);
     {
-        let mut cx = Cx { w, events };
+        let mut cx = Cx {
+            w,
+            lr: level_random,
+            events,
+        };
         if id_based % 2 != 0 && tick_count > 1 {
             targets.tick_running(m, &mut cx, false);
             goals.tick_running(m, &mut cx, false);
@@ -1238,7 +1257,11 @@ fn server_ai_step(
         super::animal_brain::tick(m, w, level_random, events);
     }
     {
-        let mut cx = Cx { w, events };
+        let mut cx = Cx {
+            w,
+            lr: level_random,
+            events,
+        };
         custom_server_ai_step(m, &mut cx);
     }
     if frozen {
@@ -1278,6 +1301,7 @@ fn armadillo_server_ai_step(m: &mut Mob, mob_drops: bool, events: &mut Vec<MobEv
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     match m.species() {
         Species::Rabbit => super::rabbit::server_ai_step(m),
+        Species::Cat | Species::Ocelot => super::tame::feline_server_ai_step(m),
         // Armadillo.customServerAiStep: the brain and its activity, then the scute.
         Species::Armadillo => {
             super::armadillo::server_ai_step(m, cx);
@@ -2275,6 +2299,48 @@ mod frog_tests {
                 outside: 0.1,
                 gravity: true,
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod poison_effect_tests {
+    use super::*;
+    use crate::mobs::MobTypes;
+    use std::sync::Arc;
+
+    #[test]
+    fn poison_effect_damages_living_mobs_but_not_undead() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists() {
+            return;
+        }
+        let data = MobTypes::load(&root).unwrap();
+
+        // Pig is not undead: should take damage from poison.
+        let pig_kind = Arc::new(data.types.get("minecraft:pig").unwrap().clone());
+        let mut pig = Mob::new(1, pig_kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        pig.add_effect("poison", 100, 0);
+        assert_eq!(pig.extra.effects[0].0, "minecraft:poison");
+        let initial_pig_health = pig.health;
+        tick_effects(&mut pig);
+        assert_eq!(
+            pig.health,
+            initial_pig_health - 1.0,
+            "living mob should take 1.0 damage from poison"
+        );
+
+        // Zombie is undead: immune to poison damage.
+        let zombie_kind = Arc::new(data.types.get("minecraft:zombie").unwrap().clone());
+        let mut zombie = Mob::new(2, zombie_kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        zombie.add_effect("poison", 100, 0);
+        let initial_zombie_health = zombie.health;
+        tick_effects(&mut zombie);
+        assert_eq!(
+            zombie.health, initial_zombie_health,
+            "undead mobs are immune to poison"
         );
     }
 }

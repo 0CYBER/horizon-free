@@ -29,10 +29,18 @@ impl Launcher {
         let Some(i) = self.selected_instance().cloned() else {
             return;
         };
-        *self.servers.text(Field::PreLaunch) = i.launch.pre_launch.clone();
-        *self.servers.text(Field::Wrapper) = i.launch.wrapper.clone();
-        *self.servers.text(Field::LaunchEnv) = launch::env_line(&i.launch.env);
-        *self.servers.text(Field::PostExit) = i.launch.post_exit.clone();
+        self.servers
+            .text(Field::PreLaunch)
+            .set(i.launch.pre_launch.clone());
+        self.servers
+            .text(Field::Wrapper)
+            .set(i.launch.wrapper.clone());
+        self.servers
+            .text(Field::LaunchEnv)
+            .set(launch::env_line(&i.launch.env));
+        self.servers
+            .text(Field::PostExit)
+            .set(i.launch.post_exit.clone());
         self.launch = Some(LaunchPanel {
             instance: i.id,
             saved: None,

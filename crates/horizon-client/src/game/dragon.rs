@@ -2590,54 +2590,9 @@ impl Game<'_> {
             self.crystal_beam(pos, to - pos, self.ticks as f32 + a, camera, out);
         }
     }
-    /// `submitRays`: the death rays from a fixed seed, fading in white to magenta.
+    /// `EnderDragonRenderer.submitRays`: untextured, additive death rays.
     fn dragon_rays(&self, base: glam::Mat4, t: f32, out: &mut Vec<Vertex>) {
-        let white = self.gui.atlas.font.white();
-        let uv = [white.u0, white.v0];
-        let over = if t > 0.8 {
-            ((t - 0.8) / 0.2).min(1.0)
-        } else {
-            0.0
-        };
-        let inner = (((1.0 - over) * 255.0) as u32) << 24 | 0x00FF_FFFF;
-        let outer = 0x00FF_00FF;
-        let mut random = LegacyRandom::new(432);
-        let mut m = base;
-        let count = ((t + t * t) / 2.0 * 60.0).floor() as i32;
-        let half_sqrt3 = 3f32.sqrt() / 2.0;
-        let tau = std::f32::consts::TAU;
-        for _ in 0..count {
-            let mut f = || random.next_float() * tau;
-            let q1 = glam::Quat::from_rotation_x(f())
-                * glam::Quat::from_rotation_y(f())
-                * glam::Quat::from_rotation_z(f());
-            let (a, b, c) = (f(), f(), f());
-            let q2 = glam::Quat::from_rotation_x(a)
-                * glam::Quat::from_rotation_y(b)
-                * glam::Quat::from_rotation_z(c + t * std::f32::consts::FRAC_PI_2);
-            m *= glam::Mat4::from_quat(q1 * q2);
-            let length = random.next_float() * 20.0 + 5.0 + over * 10.0;
-            let width = random.next_float() * 2.0 + 1.0 + over * 2.0;
-            let o = glam::Vec3::ZERO;
-            let left = glam::Vec3::new(-half_sqrt3 * width, length, -0.5 * width);
-            let right = glam::Vec3::new(half_sqrt3 * width, length, -0.5 * width);
-            let bottom = glam::Vec3::new(0.0, length, width);
-            for (p1, p2) in [(left, right), (right, bottom), (bottom, left)] {
-                // A triangle as a quad with its last corner repeated.
-                for (p, c) in [(o, inner), (p1, outer), (p2, outer), (p2, outer)] {
-                    out.push(Vertex {
-                        normal: [0; 4],
-                        pos: m.transform_point3(p).to_array(),
-                        uv,
-                        layer: 2,
-                        color: c,
-                        light: 0,
-
-                        glint_uv: [0.0, 0.0],
-                    });
-                }
-            }
-        }
+        dragon_rays(base, t, self.gui.atlas.font.white(), out);
     }
     /// `submitCrystalBeams`: an eight-sided tube from `from` (+2 up) along
     /// `delta`, the beam texture scrolling along it.
@@ -3019,10 +2974,17 @@ impl Game<'_> {
     }
     /// `EnderDragon.kill` (`/kill`): `Entity.kill` removes the entity, it
     /// does not hurt it (the dragon flies its death flight when its health
-    /// runs out).
+    /// runs out). The fight's dragon ends the fight there and then
+    /// (`dragonFight.setDragonKilled`): the exit portal, a gateway and the
+    /// first dragon's egg, and no new dragon. No experience: `tickDeath`
+    /// drops it, and a killed dragon never gets there.
     pub(super) fn kill_dragon(&mut self, id: u32) {
         if self.dragon.as_ref().is_some_and(|d| d.id == id) {
             self.dragon = None;
+            // ServerLevel.getDragonFight: only the End has a fight.
+            if self.dim == Dim::End {
+                self.dragon_killed();
+            }
         }
     }
     /// Any entity touching `room` (`Level.getEntities(null, box)`).
@@ -3590,9 +3552,92 @@ impl Game<'_> {
     }
 }
 
+/// `submitRays`: the death rays from a fixed seed, fading in white to magenta.
+fn dragon_rays(base: glam::Mat4, t: f32, white: horizon_client::hud::Rect, out: &mut Vec<Vertex>) {
+    // Vanilla's dragonRays has no texture. Sample inside the white sprite:
+    // its border can round into transparent neighbours during interpolation.
+    let uv = [(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0];
+    let over = if t > 0.8 {
+        ((t - 0.8) / 0.2).min(1.0)
+    } else {
+        0.0
+    };
+    let inner = (((1.0 - over) * 255.0) as u32) << 24 | 0x00FF_FFFF;
+    let outer = 0x00FF_00FF;
+    let mut random = LegacyRandom::new(432);
+    let mut m = base;
+    let count = ((t + t * t) / 2.0 * 60.0).floor() as i32;
+    let half_sqrt3 = 3f32.sqrt() / 2.0;
+    let tau = std::f32::consts::TAU;
+    for _ in 0..count {
+        let mut f = || random.next_float() * tau;
+        let q1 = glam::Quat::from_rotation_x(f())
+            * glam::Quat::from_rotation_y(f())
+            * glam::Quat::from_rotation_z(f());
+        let (a, b, c) = (f(), f(), f());
+        let q2 = glam::Quat::from_rotation_x(a)
+            * glam::Quat::from_rotation_y(b)
+            * glam::Quat::from_rotation_z(c + t * std::f32::consts::FRAC_PI_2);
+        m *= glam::Mat4::from_quat(q1 * q2);
+        let length = random.next_float() * 20.0 + 5.0 + over * 10.0;
+        let width = random.next_float() * 2.0 + 1.0 + over * 2.0;
+        let o = glam::Vec3::ZERO;
+        let left = glam::Vec3::new(-half_sqrt3 * width, length, -0.5 * width);
+        let right = glam::Vec3::new(half_sqrt3 * width, length, -0.5 * width);
+        let bottom = glam::Vec3::new(0.0, length, width);
+        for (p1, p2) in [(left, right), (right, bottom), (bottom, left)] {
+            // A triangle as a quad with its last corner repeated.
+            for (p, c) in [(o, inner), (p1, outer), (p2, outer), (p2, outer)] {
+                out.push(Vertex {
+                    normal: [0; 4],
+                    pos: m.transform_point3(p).to_array(),
+                    uv,
+                    layer: 2,
+                    color: c,
+                    light: 0,
+
+                    glint_uv: [0.0, 0.0],
+                });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn death_rays_sample_inside_the_white_sprite() {
+        // A four-texel white sprite surrounded by transparent atlas pixels.
+        // A border UV can round outside it during perspective interpolation.
+        let size = 1024.0;
+        let white = horizon_client::hud::Rect {
+            u0: 20.0 / size,
+            v0: 60.0 / size,
+            u1: 24.0 / size,
+            v1: 64.0 / size,
+            w: 4,
+            h: 4,
+        };
+        for t in [0.25, 0.8, 0.95, 1.0] {
+            let mut vertices = Vec::new();
+            dragon_rays(glam::Mat4::IDENTITY, t, white, &mut vertices);
+            assert!(!vertices.is_empty());
+            for v in &vertices {
+                assert!(
+                    v.uv[0] > white.u0 + 0.5 / size && v.uv[0] < white.u1 - 0.5 / size,
+                    "death-ray U touches the atlas border: {}",
+                    v.uv[0]
+                );
+                assert!(
+                    v.uv[1] > white.v0 + 0.5 / size && v.uv[1] < white.v1 - 0.5 / size,
+                    "death-ray V touches the atlas border: {}",
+                    v.uv[1]
+                );
+            }
+        }
+    }
 
     fn dragon(phase: Phase) -> Dragon {
         let mut d = Dragon::new(Vec3::new(0.0, 70.0, 0.0), 0.0, 1);

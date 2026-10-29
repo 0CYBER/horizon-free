@@ -211,7 +211,8 @@ struct Launcher {
     accounts: Accounts,
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
-    keychain: bool,
+    /// What to say when the keychain doesn't keep sign-ins ([`account::no_keychain`]).
+    keychain: Option<String>,
     /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
     /// none until the keychain has been read.
     owner: Option<bool>,
@@ -228,7 +229,7 @@ struct Launcher {
     play_when_prepared: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
-    friend_code: String,
+    friend_code: line_edit::LineEdit,
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
@@ -243,7 +244,7 @@ struct Launcher {
     args_focused: bool,
     args_focus: FocusHandle,
     /// Settings' Proxy field, the same way (`proxy`).
-    proxy_input: String,
+    proxy_input: line_edit::LineEdit,
     proxy_focused: bool,
     proxy_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
@@ -412,7 +413,11 @@ impl Launcher {
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
-            proxy_input: settings.proxy.clone().unwrap_or_default(),
+            proxy_input: line_edit::LineEdit::new(
+                settings.proxy.clone().unwrap_or_default(),
+                256,
+                44,
+            ),
             proxy_focused: false,
             proxy_focus: cx.focus_handle(),
             settings,
@@ -431,14 +436,14 @@ impl Launcher {
             accounts: Accounts::load(),
             sign_in: None,
             sign_in_state: None,
-            keychain: true,
+            keychain: None,
             owner: None,
             owner_screen_open: false,
             dev_clicks: 0,
             dev_options: false,
             starting_client: None,
             play_when_prepared: None,
-            friend_code: String::new(),
+            friend_code: line_edit::LineEdit::new(String::new(), 256, 32),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
             joining: None,
@@ -493,7 +498,7 @@ impl Launcher {
         let accounts = this.accounts.clone();
         std::thread::spawn(move || {
             let store = account::store();
-            let _ = keychain_tx.send(Msg::Keychain(store.persistent()));
+            let _ = keychain_tx.send(Msg::Keychain(account::no_keychain()));
             let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
         });
         std::thread::spawn(move || {
@@ -678,7 +683,7 @@ impl Launcher {
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
-                Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Keychain(said) => self.keychain = said,
                 Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::JavaGame(id, home, cmd) => {
@@ -692,6 +697,7 @@ impl Launcher {
                             self.client = Some(r);
                             self.client_home = Some(home);
                             self.client_run = Some((id, Instant::now()));
+                            self.client_error = account::take_unsaved();
                             self.step_aside(cx);
                         }
                         Err(e) => {
@@ -728,6 +734,8 @@ impl Launcher {
                         // Still play, offline, and say why.
                         if let Some(e) = offline {
                             self.client_error = Some(format!("Playing offline: {e}"));
+                        } else if let Some(e) = account::take_unsaved() {
+                            self.client_error = Some(e);
                         }
                         self.accounts = Accounts::load();
                         // An offline name the player picked (the quick switch).
@@ -1152,14 +1160,18 @@ impl Launcher {
             .cloned();
         if let Some(instance) = java {
             // Mojang's game: no Horizon version or preparation, only no game already running.
-            // Joining and quick play are Horizon's.
+            // It joins a server; a friend's code and opening a world are Horizon's.
             self.joining = None;
-            self.quick_play = None;
+            let server = self
+                .quick_play
+                .take()
+                .filter(|(flag, _)| *flag == "--server")
+                .map(|(_, ip)| ip);
             if self.client.is_some() || self.starting_client.is_some() {
                 return;
             }
             self.starting_pack = None;
-            self.start_java(instance);
+            self.start_java(instance, server);
             return;
         }
         let Some(tag) = self.selected().cloned() else {
@@ -1172,9 +1184,10 @@ impl Launcher {
         self.start_client(tag);
     }
 
-    /// Starts a Java instance's Minecraft: its files and Java first (downloaded the first time,
-    /// their lines in the log), then `drain` starts the game when the command arrives.
-    fn start_java(&mut self, instance: instances::Instance) {
+    /// Starts a Java instance's Minecraft, joining `server` if given: its files and Java first
+    /// (downloaded the first time, their lines in the log), then `drain` starts the game when
+    /// the command arrives.
+    fn start_java(&mut self, instance: instances::Instance, server: Option<String>) {
         self.client_error = None;
         self.crash = None;
         self.prepare_log.clear();
@@ -1186,7 +1199,7 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, None, &log).map(|mut cmd| {
+            let cmd = backend::java_game(&instance, server.as_deref(), &log).map(|mut cmd| {
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
@@ -1207,6 +1220,15 @@ impl Launcher {
     pub(crate) fn can_start_selected(&self) -> bool {
         self.selected_instance().is_none_or(|i| i.java.is_none())
             && self.selected().is_some_and(|tag| self.can_start(tag))
+    }
+
+    /// Whether a server's Join starts the selected instance now: a Java instance too, as Play
+    /// would (no game running or starting).
+    pub(crate) fn can_join_selected(&self) -> bool {
+        match self.selected_instance() {
+            Some(i) if i.java.is_some() => self.client.is_none() && self.starting_client.is_none(),
+            _ => self.can_start_selected(),
+        }
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -1361,7 +1383,10 @@ fn version_tag(tag: &str) -> Div {
         .text_size(px(22.))
         .line_height(px(28.))
         .font_weight(FontWeight::MEDIUM)
-        .child(tag.trim_start_matches('v').to_string())
+        .child(
+            horizon_launcher::nightly::label(tag)
+                .unwrap_or_else(|| tag.trim_start_matches('v').to_string()),
+        )
 }
 
 /// Horizon's mark: two stems, their reflection below, and the horizon across in the accent.
@@ -3510,52 +3535,34 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.proxy_input.is_empty() && !focused {
-                div()
-                    .text_color(t.muted)
-                    .child("For example http://127.0.0.1:7890")
-            } else {
-                // The end of a long line stays in view while typing.
-                let chars: Vec<char> = self.proxy_input.chars().collect();
-                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.proxy_input,
+                &t,
+                focused,
+                false,
+                false,
+                "For example http://127.0.0.1:7890",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.proxy_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "backspace" => {
-                        this.proxy_input.pop();
-                    }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            // A copied line, not a copied page: the field takes one address.
-                            let line = text.lines().next().unwrap_or(&text);
-                            this.proxy_input.push_str(line.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.proxy_input.push_str(ch);
-                        }
-                    }
-                    _ => return,
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.proxy_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited => this.save_proxy(),
+                    _ => {}
                 }
-                // `truncate` counts bytes, and a cut inside a character panics: count characters.
-                if this.proxy_input.chars().count() > 256 {
-                    this.proxy_input = this.proxy_input.chars().take(256).collect();
-                }
-                this.save_proxy();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.proxy_input);
         // A half-typed address is no reason to complain; one left behind is.
-        let detail = match (focused, horizon_launcher::proxy::refuse(&self.proxy_input)) {
+        let detail = match (
+            focused,
+            horizon_launcher::proxy::refuse(self.proxy_input.text()),
+        ) {
             (false, Some(why)) => div().text_color(t.danger).child(why).into_any_element(),
             _ => div()
                 .child(
@@ -3571,7 +3578,7 @@ impl Launcher {
     /// Keeps the Proxy field in `settings.json`, and tells the parts that build their own agents
     /// (`horizon-port-pack`) which proxy to use.
     fn save_proxy(&mut self) {
-        let value = self.proxy_input.trim().to_owned();
+        let value = self.proxy_input.text().trim().to_owned();
         self.settings.proxy = (!value.is_empty()).then_some(value);
         self.settings.save();
         horizon_launcher::proxy::announce(self.settings.proxy.clone());
@@ -3674,15 +3681,14 @@ impl Launcher {
             )),
             None => div().child(tr("Add another account.")),
         };
-        let detail = if self.keychain || self.accounts.accounts.is_empty() {
-            detail
-        } else {
-            div()
+        let detail = match self.keychain.clone() {
+            Some(said) if !self.accounts.accounts.is_empty() => div()
                 .flex()
                 .flex_col()
                 .gap(px(4.))
                 .child(detail)
-                .child(div().child(account::NO_KEYCHAIN))
+                .child(div().child(said)),
+            _ => detail,
         };
         let action = if !configured {
             None
@@ -3767,46 +3773,30 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.friend_code.is_empty() && !focused {
-                div().text_color(t.muted).child(tr("Paste an invite code"))
-            } else {
-                // The end of a long code stays in view while typing.
-                let shown: String = {
-                    let chars: Vec<char> = self.friend_code.chars().collect();
-                    chars[chars.len().saturating_sub(30)..].iter().collect()
-                };
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.friend_code,
+                &t,
+                focused,
+                false,
+                false,
+                "Paste an invite code",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.friend_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "enter" => this.join_friend(),
-                    "backspace" => {
-                        this.friend_code.pop();
-                    }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.friend_code.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.friend_code.push_str(ch);
-                        }
-                    }
-                    _ => return,
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.friend_code, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Enter => this.join_friend(),
+                    line_edit::Key::Escape => window.blur(),
+                    _ => {}
                 }
-                this.friend_code.truncate(256);
                 cx.stop_propagation();
                 cx.notify();
             }));
-        let valid = horizon_friends::invite::parse(&self.friend_code).is_some();
+        let field = line_edit::mouse(field, cx, |this| &mut this.friend_code);
+        let valid = horizon_friends::invite::parse(self.friend_code.text()).is_some();
         let mut join = button("join-friend", "Join", Kind::Secondary, &t);
         if can_play && valid {
             join = join.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -3848,10 +3838,10 @@ impl Launcher {
     }
 
     fn join_friend(&mut self) {
-        if horizon_friends::invite::parse(&self.friend_code).is_none() {
+        if horizon_friends::invite::parse(self.friend_code.text()).is_none() {
             return;
         }
-        self.joining = Some(self.friend_code.clone());
+        self.joining = Some(self.friend_code.text().to_string());
         self.play();
         if self.starting_client.is_none() {
             self.joining = None;

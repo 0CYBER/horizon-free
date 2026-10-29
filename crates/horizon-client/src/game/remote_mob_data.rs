@@ -35,6 +35,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // fire down: the flag goes off when the server's fire is out.
             (0, Value::Byte(flags)) => {
                 m.fire_ticks = i32::from(flags & 1);
+                // Entity.isSprinting: a dashing cat's or ocelot's model.
+                m.extra.sprinting = flags & 8 != 0;
                 // Drowned.setSwimming: the shared flag of swimming.
                 if species == Species::Drowned {
                     m.extra.flag = flags & 16 != 0;

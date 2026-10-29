@@ -14,11 +14,13 @@ use zip::{CompressionMethod, ZipArchive};
 /// bomb stops here.
 const MAX_ENTRY: usize = 1 << 30;
 
-/// One archive with its entries indexed by name (`\` read as `/`, folders
-/// left out).
+/// One archive with its entries indexed by name (`\` read as `/`), files
+/// and folders apart.
 pub struct Zip {
     archive: ZipArchive<Cursor<Arc<[u8]>>>,
     entries: BTreeMap<String, usize>,
+    /// Folder entries (`name/`) by their name without the slash.
+    folders: BTreeMap<String, usize>,
     /// The archive's length: no size an entry claims can be bigger.
     len: usize,
 }
@@ -33,26 +35,44 @@ impl Zip {
         normalize_end(&mut data);
         let len = data.len();
         let archive = ZipArchive::new(Cursor::new(Arc::from(data))).map_err(invalid)?;
-        let entries = (0..archive.len())
-            .filter_map(|i| Some((archive.name_for_index(i)?.replace('\\', "/"), i)))
-            .filter(|(name, _)| !name.ends_with('/'))
-            .collect();
+        let (mut entries, mut folders) = (BTreeMap::new(), BTreeMap::new());
+        for i in 0..archive.len() {
+            let Some(name) = archive.name_for_index(i) else {
+                continue;
+            };
+            let name = name.replace('\\', "/");
+            match name.strip_suffix('/') {
+                Some(folder) => folders.insert(folder.to_owned(), i),
+                None => entries.insert(name, i),
+            };
+        }
         Ok(Self {
             archive,
             entries,
+            folders,
             len,
         })
     }
+    /// The files, as `FilePackResources.listResources` lists them (folder
+    /// entries skipped).
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
     }
+    /// `FilePackResources.getResource` through `ZipFile.getEntry`: the file
+    /// `name`, else the folder entry `name/`, whose bytes Java reads like a
+    /// file's (Loka's pack stores its `pack.mcmeta` and `pack.png` that way).
+    fn index(&self, name: &str) -> Option<usize> {
+        self.entries
+            .get(name)
+            .or_else(|| self.folders.get(name))
+            .copied()
+    }
     pub fn contains(&self, name: &str) -> bool {
-        self.entries.contains_key(name)
+        self.index(name).is_some()
     }
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
-        let &index = self
-            .entries
-            .get(name)
+        let index = self
+            .index(name)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?;
         // A clone shares the bytes and the central directory: reading needs `&mut`.
         let mut archive = self.archive.clone();
@@ -133,13 +153,16 @@ mod tests {
     use super::*;
     /// A hand-built archive with one stored and one deflated entry.
     fn archive() -> Vec<u8> {
-        let files: [(&str, &[u8], bool); 2] = [
+        archive_of(&[
             ("pack.mcmeta", b"{\"pack\":{}}", false),
             ("a/b.txt", b"hello hello hello hello", true),
-        ];
+        ])
+    }
+    /// A hand-built archive of `(name, body, deflated)` entries.
+    fn archive_of(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut central = Vec::new();
-        for (name, body, deflate) in files {
+        for &(name, body, deflate) in files {
             let data = if deflate {
                 miniz_oxide::deflate::compress_to_vec(body, 6)
             } else {
@@ -174,8 +197,8 @@ mod tests {
         out.extend(&central);
         out.extend(0x0605_4b50u32.to_le_bytes());
         out.extend([0; 4]);
-        out.extend(2u16.to_le_bytes());
-        out.extend(2u16.to_le_bytes());
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((files.len() as u16).to_le_bytes());
         out.extend((central.len() as u32).to_le_bytes());
         out.extend(start.to_le_bytes());
         out.extend([0; 2]);
@@ -189,6 +212,29 @@ mod tests {
         assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
         assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
         assert!(zip.read("missing").is_err());
+    }
+
+    /// Loka's server pack (#3413) names its metadata `pack.mcmeta/`.
+    /// `ZipFile.getEntry("pack.mcmeta")` falls back to that folder entry and
+    /// vanilla reads its bytes; a file of the exact name still comes first.
+    #[test]
+    fn a_name_falls_back_to_its_folder_entry() {
+        let zip = Zip::from_bytes(archive_of(&[
+            ("pack.mcmeta/", b"{\"pack\":{\"pack_format\":75}}", true),
+            ("pack.png/", b"png", false),
+            ("a/", b"folder", false),
+            ("a", b"file", false),
+        ]))
+        .unwrap();
+        assert_eq!(zip.names().collect::<Vec<_>>(), ["a"]);
+        assert!(zip.contains("pack.mcmeta"));
+        assert_eq!(
+            zip.read("pack.mcmeta").unwrap(),
+            b"{\"pack\":{\"pack_format\":75}}"
+        );
+        assert_eq!(zip.read("pack.png").unwrap(), b"png");
+        assert_eq!(zip.read("a").unwrap(), b"file");
+        assert!(!zip.contains("pack"));
     }
 
     /// A pack as zip tools write it: folder entries, a nested pack root,
