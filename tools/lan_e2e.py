@@ -1059,7 +1059,16 @@ def check_damage(host, guest, out):
     guest.wait(50)
     water = remote(guest)['health']
     assert water >= after, f'health {after} -> {water} after falling into water'
-    return {'before': before, 'after': after, 'water': water}
+    # The host's /damage on the guest by name hurts it (not "Target is invulnerable").
+    guest('command', command='effect give @s minecraft:instant_health 1 4')
+    guest.wait(10)
+    healed = remote(guest)['health']
+    said = host('command', command=f'damage {GUEST_NAME} 4 minecraft:generic')
+    guest.wait(20)
+    hit = remote(guest)['health']
+    applied = any('Applied' in line for line in said.get('chat', []))
+    assert applied and hit < healed, f'/damage {GUEST_NAME} 4: health {healed} -> {hit} ({said})'
+    return {'before': before, 'after': after, 'water': water, 'damage_command': [healed, hit]}
 
 
 def first_hurt(guest, before, ticks):
