@@ -321,23 +321,52 @@ fn inline_object(
     let kind = object.get("object").and_then(Value::as_str);
     let fallback = object
         .get("fallback")
-        .map(|value| to_text_with(value, resolve, contents).plain())
-        .unwrap_or_default();
+        .map(|value| to_text_with(value, resolve, contents).plain());
     match kind {
-        Some("player") | None if object.contains_key("player") => Some(InlineObject::Player {
-            profile: object.get("player")?.clone(),
-            hat: object.get("hat").and_then(Value::as_bool).unwrap_or(true),
-            fallback,
-        }),
-        Some("atlas") | None if object.contains_key("sprite") => Some(InlineObject::Atlas {
-            atlas: object
+        Some("player") | None if object.contains_key("player") => {
+            let profile = object.get("player")?.clone();
+            // PlayerSprite.defaultFallback.
+            let fallback = fallback.unwrap_or_else(|| {
+                match profile
+                    .as_str()
+                    .or_else(|| profile.get("name").and_then(Value::as_str))
+                {
+                    Some(name) => format!("[{name} head]"),
+                    None => "[unknown player head]".to_owned(),
+                }
+            });
+            Some(InlineObject::Player {
+                profile,
+                hat: object.get("hat").and_then(Value::as_bool).unwrap_or(true),
+                fallback,
+            })
+        }
+        Some("atlas") | None if object.contains_key("sprite") => {
+            let atlas = object
                 .get("atlas")
                 .and_then(Value::as_str)
                 .unwrap_or("minecraft:blocks")
-                .to_owned(),
-            sprite: object.get("sprite")?.as_str()?.to_owned(),
-            fallback,
-        }),
+                .to_owned();
+            let sprite = object.get("sprite")?.as_str()?.to_owned();
+            // AtlasSprite.defaultFallback: short names, the atlas unless blocks.
+            let fallback = fallback.unwrap_or_else(|| {
+                let short = |id: &str| match id.split_once(':') {
+                    Some(("minecraft", path)) => path.to_owned(),
+                    Some(_) => id.to_owned(),
+                    None => id.to_owned(),
+                };
+                if short(&atlas) == "blocks" {
+                    format!("[{}]", short(&sprite))
+                } else {
+                    format!("[{}@{}]", short(&sprite), short(&atlas))
+                }
+            });
+            Some(InlineObject::Atlas {
+                atlas,
+                sprite,
+                fallback,
+            })
+        }
         _ => None,
     }
 }
@@ -379,6 +408,18 @@ mod tests {
             &text.spans[0].style.inline_object,
             Some(InlineObject::Atlas { sprite, .. }) if sprite == "minecraft:item/porkchop"
         ));
+        // ObjectContents.visit without a fallback: the sprite's defaultFallback.
+        assert_eq!(text.plain(), "[item/porkchop]");
+        let head = serde_json::json!({"object": "player", "player": {"name": "Steve"}});
+        assert_eq!(
+            to_text(&head, &mut |_| Text::empty()).plain(),
+            "[Steve head]"
+        );
+        let gui = serde_json::json!({"atlas": "gui", "sprite": "hud/heart/full"});
+        assert_eq!(
+            to_text(&gui, &mut |_| Text::empty()).plain(),
+            "[hud/heart/full@gui]"
+        );
     }
 
     #[test]
