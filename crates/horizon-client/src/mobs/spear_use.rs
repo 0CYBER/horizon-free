@@ -1,11 +1,15 @@
 //! Mobs using a spear (`KineticWeapon`): `startUsingItem` of the main hand,
 //! the stab of every tick of the use (`KineticWeapon.damageEntities`) and
-//! what makes a mob use it: `SpearUseGoal` of zombies and zombified piglins.
+//! what makes a mob use it: `SpearUseGoal` of zombies and zombified piglins,
+//! and the fight activity's `SpearApproach`, `SpearAttack` and `SpearRetreat`
+//! of piglins.
 //! A mob's `using_item` counts the ticks of the use up from 1, which the
 //! living entity flags tell the clients (`mob_meta`), so the arm and the
 //! spear are drawn charging for them as well.
 use super::{
-    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who, gear,
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
+    brain::Timed,
+    gear,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone, reduced},
 };
 use crate::spear::{Kinetic, REACH, hits_in_reach};
@@ -498,5 +502,178 @@ impl Goal for SpearUse {
             self.step(&mut state, m, cx);
             self.state = Some(state);
         }
+    }
+}
+
+/// `SpearAttack.SpearStatus`: where a piglin is in its charge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpearStatus {
+    Approach,
+    Charging,
+    Retreat,
+}
+
+/// The spear memories of a piglin's brain (`SPEAR_STATUS` and the like). None
+/// of them is saved: they have no codec.
+#[derive(Clone, Debug, Default)]
+pub struct Memories {
+    /// `SPEAR_STATUS`.
+    pub status: Option<SpearStatus>,
+}
+
+/// A piglin's `LOOK_TARGET` of an `EntityTracker(target, true)`: its eyes
+/// follow the target's eyes.
+fn look_at_target(m: &mut Mob, eye: [f64; 3]) {
+    m.look_at(eye);
+}
+
+/// `SpearApproach.checkExtraStartConditions`: able to attack and not using an
+/// item. The behaviour also needs `SPEAR_STATUS` to be absent.
+fn approach_check_extra_start_conditions(m: &Mob, w: &MobWorld) -> bool {
+    able_to_attack(m, w) && !is_using_item(m)
+}
+
+/// `SpearApproach.start`: aggressive, and the status is APPROACH.
+fn approach_start(m: &mut Mob) {
+    m.ai.aggressive = true;
+    m.extra.piglin.spear.status = Some(SpearStatus::Approach);
+}
+
+/// `SpearApproach.canStillUse`: able to attack and still farther from the
+/// target than the approach distance (`farEnough`).
+fn approach_can_still_use(m: &Mob, w: &MobWorld) -> bool {
+    let Some(t) = m.target_info(w) else {
+        return false;
+    };
+    able_to_attack(m, w)
+        && m.distance_sqr(t.position) > f64::from(PiglinSpear::APPROACH_DISTANCE_SQ)
+}
+
+/// `SpearApproach.tick`: look at the target and walk up to it.
+fn approach_tick(m: &mut Mob, cx: &mut Cx) {
+    let Some(t) = m.target_info(cx.w) else { return };
+    let speed_modifier = f64::from(charge_speed_modifier(m, cx.w));
+    look_at_target(m, [t.position.x, t.eye_y, t.position.z]);
+    m.nav_move_to_entity(
+        cx.w,
+        [t.position.x, t.position.y, t.position.z],
+        1,
+        speed_modifier * PiglinSpear::SPEED_MODIFIER_WHEN_REPOSITIONING,
+    );
+}
+
+/// `SpearApproach.stop`: the walk ends and the charge is next.
+fn approach_stop(m: &mut Mob) {
+    m.nav_stop();
+    m.extra.piglin.spear.status = Some(SpearStatus::Charging);
+}
+
+/// The spear behaviours of a piglin's fight activity, `SpearApproach`,
+/// `SpearAttack` and `SpearRetreat`: each starts on the `SPEAR_STATUS` the
+/// one before it leaves. The goal runs them in the order of `Brain.tick`:
+/// the ones not running try to start, then the running ones tick or stop.
+/// Fight is the activity while the piglin has a target; a piglin with a
+/// spear never melees (`NoMeleeWithSpear`).
+#[derive(Clone, Debug)]
+pub struct PiglinSpear {
+    approach: Timed,
+}
+impl PiglinSpear {
+    /// `new SpearApproach(1.0, 10.0F)`: the squared approach distance.
+    const APPROACH_DISTANCE_SQ: f32 = 10.0 * 10.0;
+    /// The `speedModifierWhenRepositioning` of the three behaviours.
+    const SPEED_MODIFIER_WHEN_REPOSITIONING: f64 = 1.0;
+
+    pub fn new() -> Self {
+        Self {
+            // `Behavior(Map)`: a duration of 60 ticks (which `timedOut` ignores).
+            approach: Timed::new(60, 60),
+        }
+    }
+
+    /// Whether the piglin is in the fight activity with a kinetic weapon.
+    fn fighting_with_spear(m: &Mob) -> bool {
+        m.ai.target.is_some() && main_hand_kinetic(m).is_some()
+    }
+}
+impl Default for PiglinSpear {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Goal for PiglinSpear {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        Self::fighting_with_spear(m)
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        Self::fighting_with_spear(m)
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    /// `Behavior.doStop` of the behaviours still running when the fight ends.
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        if self.approach.running {
+            self.approach.running = false;
+            approach_stop(m);
+        }
+    }
+    /// `Brain.tick`'s `startEachNonRunningBehavior`, then `tickEachRunningBehavior`.
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let now = cx.w.game_time;
+        if !self.approach.running
+            && m.extra.piglin.spear.status.is_none()
+            && approach_check_extra_start_conditions(m, cx.w)
+        {
+            self.approach.begin(cx.lr, now);
+            approach_start(m);
+        }
+        if self.approach.running {
+            if approach_can_still_use(m, cx.w) {
+                approach_tick(m, cx);
+            } else {
+                self.approach.running = false;
+                approach_stop(m);
+            }
+        }
+    }
+}
+
+/// `MeleeAttack.isHoldingUsableNonMeleeWeapon`: a piglin holding a kinetic
+/// weapon (`canUseNonMeleeWeapon`) never melees; its spear behaviours attack.
+#[derive(Clone, Debug)]
+pub struct NoMeleeWithSpear<G>(pub G);
+impl<G: Goal + Clone + 'static> Goal for NoMeleeWithSpear<G> {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        main_hand_kinetic(m).is_none() && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        main_hand_kinetic(m).is_none() && self.0.can_continue(m, cx)
+    }
+    fn interruptable(&self) -> bool {
+        self.0.interruptable()
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx)
     }
 }

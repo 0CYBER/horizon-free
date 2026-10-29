@@ -25,6 +25,14 @@ const CONVERSION: i32 = 300;
 /// `DANCING` memories last.
 const CELEBRATION: i32 = 300;
 
+/// What a piglin's brain remembers. None of it is saved: these memories have
+/// no codec.
+#[derive(Clone, Debug, Default)]
+pub struct Memories {
+    /// The spear behaviours' memories (`SPEAR_STATUS`...).
+    pub spear: super::spear_use::Memories,
+}
+
 fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     if m.is_baby() {
         return false;
@@ -51,7 +59,12 @@ pub fn register_piglin(m: &mut Mob) {
     if crossbow {
         g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     }
-    g.add(3, MeleeAttack::new(1.0, true));
+    // `PiglinAi.initFightActivity`: the spear behaviours come before the melee one.
+    g.add(3, super::spear_use::PiglinSpear::new());
+    g.add(
+        3,
+        super::spear_use::NoMeleeWithSpear(MeleeAttack::new(1.0, true)),
+    );
     g.add(4, PiglinAvoidRepellent);
     g.add(4, GoToWantedItem);
     g.add(4, Celebrate);
