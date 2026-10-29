@@ -49,6 +49,10 @@ impl Game<'_> {
     fn scoreboard_path(&self) -> std::path::PathBuf {
         self.world_root.join("data/minecraft/scoreboard.dat")
     }
+    fn border_path(&self) -> std::path::PathBuf {
+        save::dimension_dir(&self.world_root, "minecraft:overworld")
+            .join("data/minecraft/world_border.dat")
+    }
     /// `ScoreboardSaveData` read from `data/minecraft/scoreboard.dat`.
     pub(super) fn load_scoreboard(&mut self) {
         if self.score.loaded || self.remote.is_some() {
@@ -62,7 +66,12 @@ impl Game<'_> {
         }
         self.score.storage =
             horizon_client::command_storage::CommandStorage::load(&self.world_root);
-        if let Some(root) = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"))
+        // ServerLevel.getWorldBorder: each dimension's data/minecraft/world_border.dat. Horizon
+        // keeps one border, so the overworld's file stands for it; the root file is what
+        // older Horizon builds wrote.
+        let border_path = self.border_path();
+        if let Some(root) = save::read_dat(&border_path)
+            .or_else(|| save::read_dat(&self.world_root.join("data/minecraft/world_border.dat")))
             && let Some(data) = root.get("data")
         {
             self.border = horizon_client::worldborder::WorldBorder::unpack(data);
@@ -78,7 +87,7 @@ impl Game<'_> {
         self.score.stopwatches.save(&self.world_root);
         if self.border != horizon_client::worldborder::WorldBorder::default() {
             let _ = save::write_dat(
-                &self.world_root.join("data/minecraft/world_border.dat"),
+                &self.border_path(),
                 Tag::compound([
                     ("data", self.border.pack()),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
@@ -132,8 +141,18 @@ impl Game<'_> {
         match t {
             Target::Player => Some(self.acting_player_name().to_owned()),
             Target::Guest(conn) => self.command_guest(conn).map(|g| g.name.clone()),
-            Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
-            _ => None,
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
+            | Target::Other(id) => Some(uuid_text(self.uuid_for(id))),
+            // Orbs and projectiles have no UUID here.
+            Target::Orb(_) | Target::Projectile(_) => None,
         }
     }
     fn holder_for(&mut self, t: Target) -> Option<Holder> {
@@ -180,7 +199,11 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Guest(_) | Target::Orb(_) | Target::Projectile(_) => None,
+            Target::Guest(_)
+            | Target::Orb(_)
+            | Target::Projectile(_)
+            | Target::Crystal(_)
+            | Target::Dragon(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l
@@ -669,7 +692,7 @@ impl Game<'_> {
         let objective = board.display_objective(sb::SLOT_LIST);
         let shown = tab_list::visible(
             key,
-            self.remote.is_none(),
+            self.has_singleplayer_server(),
             players.len(),
             objective.is_some(),
         );

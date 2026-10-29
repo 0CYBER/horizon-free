@@ -65,6 +65,17 @@ pub(super) fn load_parts(root: &Path) -> HashMap<String, ModelPart> {
         .collect()
 }
 
+/// Marks every quad passed on as drawn with a back-face-culling render type (`entitySolid`).
+struct CullBack<'a>(&'a mut dyn ItemSink);
+impl ItemSink for CullBack<'_> {
+    fn quad(&mut self, quad: ItemQuad) {
+        self.0.quad(ItemQuad {
+            cull_back: true,
+            ..quad
+        });
+    }
+}
+
 /// A pose override for a named part (`setupAnim`).
 type Adjust<'a> = &'a dyn Fn(&str, &mut [f32; 9]);
 fn none(_: &str, _: &mut [f32; 9]) {}
@@ -115,10 +126,13 @@ fn draw(
                     sprite.v0 + (sprite.v1 - sprite.v0) * v[4],
                 ]
             }),
+            foil_uv: poly.map(|v| [v[3], v[4]]),
             normal,
             color,
             foil,
             light_emission: 0,
+            cull_back: false,
+            translucent: false,
         });
     }
     for (child_name, child) in &part.children {
@@ -498,7 +512,7 @@ pub(super) fn submit(
             let skin = (!argument.is_null())
                 .then(|| host.player_skin(argument))
                 .flatten()
-                .unwrap_or_else(|| "entity/player/wide/steve".to_owned());
+                .unwrap_or_else(|| "entity/player/slim/steve".to_owned());
             part("player", &none, &skin, white, Foil::None);
         }
         SpecialKind::Trident => {
@@ -569,6 +583,8 @@ pub(super) fn submit(
         }
         SpecialKind::DecoratedPot => {
             let sides = pot_sides(argument);
+            // `DecoratedPotRenderer` draws every part with `entitySolid`.
+            let sink = &mut CullBack(sink);
             if let Some(base) = renderer.part("decorated_pot_base")
                 && let Some(r) = sprites
                     .get("entity/decorated_pot/decorated_pot_base")
@@ -671,5 +687,52 @@ mod tests {
                 quads[0].normal
             );
         }
+    }
+    /// `DecoratedPotRenderer` draws every part with `RenderTypes.entitySolid`,
+    /// whose pipeline culls back faces: the pot's flat `top` and `bottom`
+    /// planes would otherwise show both sides and z-fight in the hand too.
+    #[test]
+    fn the_decorated_pot_item_culls_its_back_faces() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let renderer = ItemRenderer::load(&root).unwrap();
+        let sprite = Rect {
+            u0: 0.25,
+            v0: 0.125,
+            u1: 0.375,
+            v1: 0.25,
+            w: 16,
+            h: 16,
+        };
+        let sprites: HashMap<String, Rect> = [
+            "entity/decorated_pot/decorated_pot_base",
+            "entity/decorated_pot/decorated_pot_side",
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), sprite))
+        .collect();
+        let model = SpecialModel {
+            kind: SpecialKind::DecoratedPot,
+        };
+        let mut quads: Vec<ItemQuad> = Vec::new();
+        submit(
+            &renderer,
+            &model,
+            &Value::Null,
+            false,
+            Mat4::IDENTITY,
+            &sprites,
+            &super::super::NoHost,
+            &mut quads,
+        );
+        assert!(!quads.is_empty(), "the pot item draws its parts");
+        assert!(
+            quads.iter().all(|q| q.cull_back),
+            "entitySolid culls the pot's back faces"
+        );
     }
 }

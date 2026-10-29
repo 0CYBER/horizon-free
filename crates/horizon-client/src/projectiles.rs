@@ -28,6 +28,10 @@ pub enum ProjectileKind {
         critical: bool,
         effect: Option<(&'static str, i32)>,
     },
+    /// `ThrownTrident` of a mob (a drowned's): flies and sticks with
+    /// `AbstractArrow`'s tick; the trident itself is the arrow state's
+    /// `pickup_item`.
+    Trident,
     Snowball,
     Egg,
     EnderPearl,
@@ -62,10 +66,28 @@ pub enum ProjectileKind {
     },
 }
 impl ProjectileKind {
+    /// The width and height of its entity type's `sized(...)`.
+    pub fn size(&self) -> f64 {
+        match self {
+            Self::Arrow { .. } | Self::Trident => 0.5,
+            Self::Snowball
+            | Self::Egg
+            | Self::EnderPearl
+            | Self::LlamaSpit
+            | Self::Potion { .. } => 0.25,
+            Self::SmallFireball
+            | Self::WindCharge
+            | Self::BreezeWindCharge
+            | Self::ShulkerBullet { .. }
+            | Self::WitherSkull { .. } => 0.3125,
+            Self::LargeFireball { .. } => 1.0,
+        }
+    }
     /// Its entity type.
     pub fn id(&self) -> &'static str {
         match self {
             Self::Arrow { .. } => "minecraft:arrow",
+            Self::Trident => "minecraft:trident",
             Self::Snowball => "minecraft:snowball",
             Self::Egg => "minecraft:egg",
             Self::EnderPearl => "minecraft:ender_pearl",
@@ -104,6 +126,9 @@ pub struct Projectile {
     pub arrow: Option<Box<crate::arrows::ArrowState>>,
     /// `AbstractHurtingProjectile.accelerationPower`.
     pub acceleration: f64,
+    /// `Entity.needsSync`: a server tells its clients about the change this
+    /// tick instead of at the next update interval.
+    pub needs_sync: bool,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -152,7 +177,7 @@ fn axis_of(d: u8) -> u8 {
 }
 impl Projectile {
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
-        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. });
+        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
         Self {
             id: 0,
             kind,
@@ -168,6 +193,7 @@ impl Projectile {
             left_owner: false,
             bonus: Default::default(),
             acceleration: 0.1,
+            needs_sync: false,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
                 Box::new(crate::arrows::ArrowState::new(
@@ -253,7 +279,7 @@ impl Projectile {
     }
     fn gravity(&self) -> f64 {
         match self.kind {
-            ProjectileKind::Arrow { .. } => 0.05,
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => 0.05,
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
             | ProjectileKind::WitherSkull { .. } => 0.0,
@@ -604,8 +630,8 @@ impl Projectile {
             | ProjectileKind::WitherSkull { .. } => {
                 self.apply_hurting_inertia(water);
             }
-            // Arrows tick with `arrows::tick`.
-            ProjectileKind::Arrow { .. } => {}
+            // Arrows and tridents tick with `arrows::tick`.
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => {}
             ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
             ProjectileKind::LlamaSpit => {
@@ -741,12 +767,14 @@ impl Projectile {
             }
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
-            ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
-            // Drawn as `WindChargeModel` by the game.
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
+            // Drawn as `WindChargeModel` and `ShulkerBulletModel` by the game.
+            ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge
+            | ProjectileKind::ShulkerBullet { .. } => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
-            ProjectileKind::Arrow { .. } => return None,
+            // Drawn as their models by the game.
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => return None,
         })
     }
     /// Render scale of the item billboard (fireball renderers).

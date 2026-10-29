@@ -60,7 +60,7 @@ class ReachTests(unittest.TestCase):
                 pub fn main() { println!("{} {} {}", helper(), Thing.method(), Thing); }
             """,
         })
-        self.dependencies = sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*") if path.is_file())
+        self.dependencies = sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*") if path.is_file())
         self.dependencies.remove("crates/a/examples/probe/main.rs")  # parity.only_probes_run leaves it out
 
     def tearDown(self):
@@ -110,6 +110,26 @@ class ReachTests(unittest.TestCase):
         full = parity_reach.narrow(self.dependencies, PROBE, graph, (), {"crates/b/src/lib.rs"})
         self.assertIn("crates/a/src/display.rs", full)
         self.assertTrue(graph.results)
+
+    def test_a_module_moved_to_a_new_crate_counts_through_its_reexport(self):
+        # used.rs moves to crate b after the harness was recorded; a re-exports it under its old path. Crate c is
+        # a dependency nothing reached names: its items stay out even where their names match.
+        (self.root / "crates/a/src/used.rs").unlink()
+        workspace(self.root, {
+            "crates/a/Cargo.toml": (self.root / "crates/a/Cargo.toml").read_text()
+            + '\n[dependencies]\nb = { path = "../b" }\nc = { path = "../c" }\n',
+            "crates/a/src/lib.rs": "pub use b::used;\npub mod unused;\nmod methods;\nmod display;\n",
+            "crates/b/Cargo.toml": '[package]\nname = "b"\n',
+            "crates/b/src/lib.rs": "pub mod used;\n",
+            "crates/b/src/used.rs": "pub struct Thing;\npub fn helper() -> u32 { 1 }\n",
+            "crates/c/Cargo.toml": '[package]\nname = "c"\n',
+            "crates/c/src/lib.rs": "pub fn helper() -> u32 { 3 }\n",
+        })
+        changed = {"crates/b/src/used.rs", "crates/c/src/lib.rs"}
+        self.assertEqual(parity_reach.unrecorded(self.root, self.dependencies, changed), changed)
+        kept = self.narrowed(changed=changed)
+        self.assertIn("crates/b/src/used.rs", kept)
+        self.assertNotIn("crates/c/src/lib.rs", kept)
 
     def test_unknown_probes_keep_everything(self):
         self.assertEqual(set(self.narrowed(artifacts=[])), set(self.dependencies))

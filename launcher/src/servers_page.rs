@@ -32,10 +32,25 @@ pub(super) enum Field {
     Port,
     Token,
     Email,
+    /// The instance dialog's (`instances_page.rs`).
+    InstanceName,
+    InstanceGroup,
+    /// Home's Multiplayer section's (`multiplayer_page.rs`).
+    ServerName,
+    ServerAddress,
+    /// Home's Console's search (`console_page.rs`).
+    ConsoleSearch,
+    /// The Launch panel's (`launch_page.rs`).
+    PreLaunch,
+    Wrapper,
+    LaunchEnv,
+    /// Settings' new offline name (`switch_page.rs`).
+    OfflineName,
+    DeleteServer,
 }
 
 impl Field {
-    const ALL: [Field; 9] = [
+    const ALL: [Field; 19] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -45,6 +60,16 @@ impl Field {
         Field::Port,
         Field::Token,
         Field::Email,
+        Field::InstanceName,
+        Field::InstanceGroup,
+        Field::ServerName,
+        Field::ServerAddress,
+        Field::ConsoleSearch,
+        Field::PreLaunch,
+        Field::Wrapper,
+        Field::LaunchEnv,
+        Field::OfflineName,
+        Field::DeleteServer,
     ];
 }
 
@@ -87,6 +112,10 @@ pub(super) enum Event {
     Line(String),
     Done(Result<String, Problem>),
     Created(Result<Entry, Problem>),
+    Deleted {
+        dir: PathBuf,
+        result: Result<(), String>,
+    },
     Details {
         dir: PathBuf,
         config: Option<Value>,
@@ -154,6 +183,7 @@ pub(super) struct Servers {
     restart_needed: BTreeSet<String>,
     backups: Vec<Backup>,
     confirm_restore: Option<String>,
+    confirm_delete: bool,
     service: Option<bool>,
     update: Option<Value>,
     /// `update --check` is under way.
@@ -163,7 +193,7 @@ pub(super) struct Servers {
     focus: HashMap<Field, FocusHandle>,
     focused: Option<Field>,
     /// The field to put the keyboard in on the next frame.
-    focus_soon: Option<Field>,
+    pub(super) focus_soon: Option<Field>,
     /// A suggested value shown selected: the first key typed replaces it.
     selected: Option<Field>,
     /// A field whose value was refused, and why: shown under it until it's edited.
@@ -202,6 +232,7 @@ impl Servers {
             restart_needed: BTreeSet::new(),
             backups: Vec::new(),
             confirm_restore: None,
+            confirm_delete: false,
             service: None,
             update: None,
             checking: false,
@@ -454,7 +485,7 @@ impl Launcher {
         });
     }
 
-    fn open_server(&mut self, dir: PathBuf) {
+    pub(super) fn open_server(&mut self, dir: PathBuf) {
         if self.servers.open.as_ref() == Some(&dir) {
             return;
         }
@@ -469,6 +500,8 @@ impl Launcher {
         s.problem = None;
         s.note = None;
         s.confirm_restore = None;
+        s.confirm_delete = false;
+        s.texts.remove(&Field::DeleteServer);
         s.restart_needed.clear();
         s.texts.remove(&Field::Motd);
         s.texts.remove(&Field::Port);
@@ -617,6 +650,24 @@ impl Launcher {
                     s.service = Some(service);
                 }
             }
+            Event::Deleted { dir, result } => {
+                s.busy = None;
+                s.confirm_delete = false;
+                s.list = servers::list();
+                s.statuses.remove(&dir);
+                STARTED_HERE
+                    .lock()
+                    .unwrap()
+                    .retain(|started| started != &dir);
+                if !s.list.iter().any(|entry| entry.dir == dir) {
+                    s.open = None;
+                    self.side_servers = s.list.clone();
+                }
+                match result {
+                    Ok(()) => s.note = Some("Server moved to the trash.".into()),
+                    Err(e) => s.problem = Some(Problem::plain(e)),
+                }
+            }
             Event::Applied(result) => {
                 s.applying = false;
                 match result {
@@ -759,7 +810,7 @@ impl Launcher {
                     self.servers.create = None;
                     self.go(Page::Play);
                     if !self.preparing {
-                        self.prepare();
+                        self.prepare(backend::MinecraftFrom::Install);
                     }
                 }
             },
@@ -961,11 +1012,16 @@ impl Launcher {
                     command,
                 );
                 match typed {
+                    Key::Enter if matches!(f, Field::InstanceName | Field::InstanceGroup) => {
+                        this.save_instance(cx)
+                    }
                     Key::Enter => this.field_enter(f),
                     Key::Escape => {
+                        this.servers.confirm_delete = false;
                         if this.servers.create.is_some() && !this.servers.creating {
                             this.servers.create = None;
                         }
+                        this.instance_escape();
                         window.blur();
                     }
                     Key::Paste => {
@@ -986,6 +1042,10 @@ impl Launcher {
 
     /// Escape closes the Create dialog. Whether it did.
     pub(super) fn servers_escape(&mut self) -> bool {
+        if self.page == Page::Servers && self.servers.confirm_delete {
+            self.servers.confirm_delete = false;
+            return true;
+        }
         if self.page != Page::Servers || self.servers.create.is_none() || self.servers.creating {
             return false;
         }
@@ -1017,6 +1077,13 @@ impl Launcher {
             Field::Port => self.save_port(),
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
+            Field::InstanceName
+            | Field::InstanceGroup
+            | Field::ConsoleSearch
+            | Field::DeleteServer => {}
+            Field::PreLaunch | Field::Wrapper | Field::LaunchEnv => self.save_launch(),
+            Field::OfflineName => self.offline_name_enter(),
+            Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }
 
@@ -1627,7 +1694,7 @@ impl Launcher {
                         )
                         .bg(t.plate)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            copy_to_clipboard(cx, gpui::ClipboardItem::new_string(
                                 copy_text.clone(),
                             ));
                             this.servers.copied = Some(Instant::now());
@@ -2273,7 +2340,8 @@ impl Launcher {
                 },
                 accounts_switch,
             ))
-            .child(self.background_row(cx));
+            .child(self.background_row(cx))
+            .child(self.delete_server_section(status, cx));
         div()
             .flex()
             .flex_col()
@@ -2283,6 +2351,119 @@ impl Launcher {
                  a restart, and the page says so.",
             ))
             .child(form)
+    }
+
+    fn delete_server_section(&mut self, status: &Status, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let name = self
+            .servers
+            .list
+            .iter()
+            .find(|entry| Some(&entry.dir) == self.servers.open.as_ref())
+            .map(|entry| entry.name.clone())
+            .unwrap_or_default();
+        let ready = !status.running()
+            && self.servers.busy.is_none()
+            && !self.servers.applying
+            && self.servers.queued.is_empty()
+            && self.servers.service == Some(false);
+        let hint = if status.running() {
+            Some("Stop the server before deleting it.")
+        } else if self.servers.service == Some(true) {
+            Some("Turn off running in the background before deleting it.")
+        } else if !ready {
+            Some("Wait for the current operation to finish.")
+        } else {
+            None
+        };
+        let mut controls = div()
+            .flex()
+            .flex_col()
+            .items_end()
+            .flex_none()
+            .w(px(260.))
+            .gap(px(12.));
+        if self.servers.confirm_delete {
+            let matches = self.servers.value(Field::DeleteServer) == name && !name.is_empty();
+            let field = self.field(Field::DeleteServer, "Server name", 225., cx);
+            let confirm = button(
+                "server-delete-confirm",
+                "Move to trash",
+                Kind::Secondary,
+                &t,
+            )
+            .text_color(t.danger);
+            let confirm = if ready && matches {
+                confirm.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    if let Some(dir) = this.servers.open.clone() {
+                        this.servers.busy = Some("Moving server to trash".into());
+                        let tx = this.servers.tx.clone();
+                        std::thread::spawn(move || {
+                            let result = servers::delete(&dir);
+                            let _ = tx.send(Event::Deleted { dir, result });
+                        });
+                    }
+                    cx.notify();
+                }))
+            } else {
+                disabled(confirm)
+            };
+            controls = controls
+                .child(field)
+                .child(text(theme::CAPTION).text_color(t.muted).child(
+                    gpui::StyledText::new(format!("Type {name} to confirm.")).with_highlights([(
+                        5..5 + name.len(),
+                        gpui::HighlightStyle {
+                            font_weight: Some(FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    )]),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .child(
+                            button("server-delete-cancel", "Cancel", Kind::Ghost, &t).on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.servers.confirm_delete = false;
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                        .child(confirm),
+                );
+        } else {
+            let delete =
+                button("server-delete", "Delete server…", Kind::Secondary, &t).text_color(t.danger);
+            let delete = if ready {
+                delete.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.servers.confirm_delete = true;
+                    this.servers.text(Field::DeleteServer).clear();
+                    this.focus_handle(Field::DeleteServer, cx);
+                    this.servers.focus_soon = Some(Field::DeleteServer);
+                    cx.notify();
+                }))
+            } else {
+                disabled(delete)
+            };
+            controls = controls.child(delete);
+        }
+        if let Some(hint) = hint {
+            controls = controls.child(
+                text(theme::CAPTION)
+                    .text_color(t.muted)
+                    .w(px(260.))
+                    .text_align(gpui::TextAlign::Right)
+                    .child(hint),
+            );
+        }
+        self.setting_row(
+            "Delete server",
+            "Remove this server from Horizon and move its worlds, settings and backups to the trash.".into(),
+            controls.into_any_element(),
+        )
+        .items_start()
     }
 
     fn background_row(&mut self, cx: &mut Context<Self>) -> Div {

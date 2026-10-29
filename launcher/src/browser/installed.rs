@@ -261,6 +261,10 @@ pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
         }
     }
     if let Some(id) = super::horizon::mod_id(&entry).filter(|_| entry.source == SourceId::Horizon) {
+        // The `.hmod` a mod that turned native left behind (horizon::install_version).
+        if entry.file.ends_with(".hnmod") {
+            let _ = fs::remove_file(home.join(super::java::MODS_DIR).join(format!("{id}.hmod")));
+        }
         super::java::set_enabled(home, id, false)?;
     }
     installed
@@ -294,6 +298,68 @@ pub fn fetch_modpack(
         .ok_or_else(|| format!("{} has no file to download.", project.title))?;
     let file = version.file().expect("pick keeps versions with a file");
     source.fetch(file, folder, progress)
+}
+
+/// A data pack installed into a world.
+pub struct DataPackInstall {
+    pub pack: crate::datapacks::DataPack,
+    /// Its version's number.
+    pub number: String,
+    /// What of it runs in Horizon.
+    pub coverage: crate::datapacks::Coverage,
+}
+
+/// Downloads a project's data pack (checksum checked) into the world folder `world`, under a
+/// free name. Refused when nothing in it runs in Horizon yet. It isn't recorded with the
+/// browser's installs: the world's data pack list (Home, `worlds datapack-list`) has it.
+pub fn install_datapack(
+    source: &dyn Source,
+    project: &Project,
+    everything: bool,
+    world: &Path,
+    progress: &dyn Fn(f32),
+) -> Result<DataPackInstall, String> {
+    if project.kind != Kind::DataPack && !project.loaders.iter().any(|l| l == "datapack") {
+        return Err(format!("{} isn't a data pack.", project.title));
+    }
+    let versions = source.versions(project)?;
+    let version = pick(Kind::DataPack, &versions, everything).ok_or_else(|| {
+        format!(
+            "{} has no data pack for {}{}.",
+            project.title,
+            super::GAME,
+            if everything {
+                " or any other version"
+            } else {
+                ""
+            }
+        )
+    })?;
+    let file = version.file().expect("pick keeps versions with a file");
+    let folder = std::env::temp_dir().join(format!(
+        "horizon-launcher-datapack-{}-{}",
+        std::process::id(),
+        version.id
+    ));
+    let result = source.fetch(file, &folder, progress).and_then(|zip| {
+        let coverage = crate::datapacks::coverage(&zip)?;
+        if coverage.read.is_empty() {
+            return Err(format!(
+                "{} would change nothing in Horizon yet: it has no functions, predicates or item \
+                 modifiers, and Horizon doesn't read its {} yet.",
+                project.title,
+                coverage.not_read()
+            ));
+        }
+        let pack = crate::datapacks::add(world, &zip)?;
+        Ok(DataPackInstall {
+            pack,
+            number: version.number.clone(),
+            coverage,
+        })
+    });
+    let _ = fs::remove_dir_all(&folder);
+    result
 }
 
 #[cfg(test)]

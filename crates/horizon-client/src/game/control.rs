@@ -343,8 +343,10 @@ impl Game<'_> {
                 // hook does.
                 let action = arg(2)?;
                 self.mod_key(physical, action != "up", action == "repeat");
+                self.native_key_event(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.mod_key(physical, false, false);
+                    self.native_key_event(physical, false, false);
                 }
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(self.screen, Screen::Chat | Screen::Options);
@@ -628,6 +630,9 @@ impl Game<'_> {
                     // The port, or the game rules' search and number boxes.
                     Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
                     Screen::WorldOptions => self.world_options_text(Some(text)),
+                    Screen::Inventory if self.mod_browser_typing() => {
+                        self.mod_browser_text((text != "\\b").then_some(text), text == "\\b")
+                    }
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
@@ -875,6 +880,9 @@ impl Game<'_> {
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
             Screen::Friends => "friends",
+            Screen::ServerLinks => "server-links",
+            Screen::ConfirmLink => "confirm-link",
+            Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
             Screen::Mod => "mod",
@@ -1080,6 +1088,9 @@ impl Game<'_> {
             "flashes": self.lightning_seen[1], "flash": self.flash});
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.
         status["projectiles"] = json!(self.projectiles_status());
+        let mut fangs_vertices = Vec::new();
+        self.fangs_geometry(glam::DVec3::ZERO, 0.5, &mut fangs_vertices);
+        status["fangs_vertices"] = json!(fangs_vertices.len());
         status["maps"] = json!(self.maps_status());
         // The particles made so far, by type.
         status["particles"] = json!(self.particles.made());

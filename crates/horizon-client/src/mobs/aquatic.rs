@@ -24,6 +24,58 @@ const Z_BODY_ROT: usize = 3;
 const TENTACLE_SPEED: usize = 4;
 const ROTATE_SPEED: usize = 5;
 
+/// `Squid.spawnInk`: the squirt sound and 30 ink particles shot from under
+/// the squid, turned by its body rotation.
+pub fn spawn_ink(m: &mut Mob) {
+    let sound = if m.species() == Species::GlowSquid {
+        "entity.glow_squid.squirt"
+    } else {
+        "entity.squid.squirt"
+    };
+    let kind = if m.species() == Species::GlowSquid {
+        "glow_squid_ink"
+    } else {
+        "squid_ink"
+    };
+    // makeSound draws the voice pitch even for a silent squid.
+    let pitch = m.voice_pitch();
+    if !m.silent {
+        let at = [m.position.x, m.position.y, m.position.z];
+        m.outbox.push(MobEvent::Sound(
+            sound,
+            at,
+            super::ai::sound_volume(m),
+            pitch,
+        ));
+    }
+    // rotateVector: xRot(xBodyRotO), then yRot(-yBodyRotO).
+    let to_radians = (std::f64::consts::PI / 180.0) as f32;
+    let (x_rot, y_rot) = (
+        m.anim.vo[X_BODY_ROT] * to_radians,
+        -m.previous_body_yaw * to_radians,
+    );
+    let rotate = |v: Vec3| v.rotate_x(x_rot).rotate_y(y_rot);
+    let pos = rotate(Vec3::new(0.0, -1.0, 0.0)).add_vector(m.position);
+    let offset_scale: f32 = if m.is_baby() { 0.1 } else { 0.3 };
+    for _ in 0..30 {
+        let x = f64::from(m.random.next_float()) * 0.6 - 0.3;
+        let z = f64::from(m.random.next_float()) * 0.6 - 0.3;
+        let dir = rotate(Vec3::new(x, -1.0, z));
+        let d = dir.scale(f64::from(offset_scale + m.random.next_float() * 2.0));
+        // ServerLevel.sendParticles with a count of 0 and speed 0.1: one
+        // particle moving at the float offset times the float speed.
+        let speed = f64::from(0.1f32);
+        m.outbox.push(MobEvent::ParticleAt {
+            kind,
+            at: [pos.x, pos.y + 0.5, pos.z],
+            velocity: [
+                speed * f64::from(d.x as f32),
+                speed * f64::from(d.y as f32),
+                speed * f64::from(d.z as f32),
+            ],
+        });
+    }
+}
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
@@ -36,6 +88,7 @@ pub fn register(m: &mut Mob) {
             m.anim.v[TENTACLE_SPEED] = speed;
         }
         S::Axolotl => {
+            m.air = super::axolotl::MAX_AIR;
             // Native controller scaling is essential: the base speed attribute is 1.0.
             m.ai.mov.kind = MoveKind::SmoothSwimming {
                 max_turn_x: 85.0,
@@ -75,9 +128,12 @@ pub fn register(m: &mut Mob) {
             let g = &mut m.ai.goals;
             g.add(0, BreathAir);
             g.add(0, TryFindWater::default());
+            g.add(1, super::dolphin::SwimToTreasure::default());
+            g.add(2, super::dolphin::SwimWithPlayer::new(4.0));
             g.add(4, Stroll::swimming(1.0, 10));
             g.add(4, RandomLookAround::default());
             g.add(5, LookAtPlayer::new(6.0));
+            g.add(5, super::dolphin::Jump::new(10));
             g.add(6, MeleeAttack::new(1.2, true));
             m.ai.targets.add(1, HurtByTarget::new().alert());
             m.ai.mov.kind = MoveKind::SmoothSwimming {
@@ -191,11 +247,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     && m.ai.no_action_time % 10 == 0
                 {
                     let amount = 1.0 + m.extra.size as f32;
-                    events.push(MobEvent::AttackPlayer(
+                    // Only when the sting hurt the player.
+                    events.push(MobEvent::AttackPlayerWithEffect {
                         amount,
-                        [m.position.x, m.position.y, m.position.z],
-                    ));
-                    events.push(MobEvent::EffectPlayer {
+                        from: [m.position.x, m.position.y, m.position.z],
                         effect: "minecraft:poison",
                         ticks: 60 * m.extra.size,
                         amplifier: 0,
@@ -206,7 +261,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         S::Dolphin => {
             // Dolphin.tick: moisture out of water, hop on land.
-            if m.fluids.in_water || w.raining {
+            if m.fluids.in_water || super::ai::in_rain(m, w) {
                 m.extra.counter = 2400;
             } else {
                 m.extra.counter -= 1;
@@ -479,7 +534,7 @@ impl Goal for PufferfishPuff {
             cx.w.player
                 .as_ref()
                 .is_some_and(|p| p.alive && !p.creative && area.intersects(p.bounds));
-        // TARGETING_CONDITIONS: not other fish (not_scary_for_pufferfish) and alive.
+        // TARGETING_CONDITIONS: not #not_scary_for_pufferfish, and alive.
         let mob = cx.w.others_near(area).any(|s| {
             s.id != m.id
                 && s.alive
@@ -492,7 +547,13 @@ impl Goal for PufferfishPuff {
                         | Species::Squid
                         | Species::GlowSquid
                         | Species::Dolphin
-                        | Species::Axolotl
+                        | Species::Turtle
+                        | Species::Guardian
+                        | Species::ElderGuardian
+                        | Species::Tadpole
+                        | Species::Nautilus
+                        | Species::ZombieNautilus
+                        | Species::SulfurCube
                 )
                 && area.intersects(s.bounds)
         });

@@ -15,7 +15,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, command, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
-| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom, Minimap |
+| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom, Minimap; Far View (`far-view`), distant terrain; and Recipes, a recipe viewer |
 | Runtime | `crates/horizon-mods` | wasmtime 48 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / test / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
@@ -88,9 +88,10 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
 | `command` | `command` | `run(line)`: a vanilla command run as the player, with the player's permissions, after the hook returns (8 per call); mods' own commands are not run. `run-quiet(lines)`: up to 256 a call, the same rights, nothing in the chat (single player and Horizon's servers run them 64 a tick and log one line a batch; elsewhere they go as chat commands and their feedback shows) |
-| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, button, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
-| `render` | `render` | `set-hud(shapes)`: up to 1024 fills, four-cornered shapes, GUI sprites, items and text, kept on the HUD (over the hotbar, under chat and screens, hidden with F1) until replaced; `set-corner(corner, w, h, shapes)`: a box the game places in a corner, stacked with its overlays and other panels, as `hud`'s panels are; `text-width(text)`; `frame-stats()`: the game's FPS, min and 1% low; `gui-size()`; `shake(strength, seconds)`: the view turns, the player doesn't, scaled by Distortion Effects; `set-zoom(zoom)`: the field of view divided by up to 10, eased or at once, with slower turning, while playing and not through a spyglass (the strongest of several mods' zooms counts); `set-minimap(minimap)`: a map of the world around the player in a corner, as a map item colours it (the floor underground and under roofs), square or round, turning with the player or north up, with the player's arrow; the game keeps its tiles within its own frame budget (one map at a time, the first loaded mod's). The game's own HUD renderer draws them: a mod never supplies shader code. **Experimental:** `experimental = ["render"]` |
+| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, button, item and list widgets the game lays out and draws with its own menus' code; `browser.set-items`, `browser.poll`: a recipe viewer's panel of items right of the inventory and container screens (not the creative one), which the game pages and draws with its own slots and search box, and the mod hears its clicks, its searches and the mod's own keys (`input.register-key`) pressed over any item on the screen; `browser.set-recipes`: recipes in the panel's place (crafting grids, cooking, stonecutting, smithing and brewing layouts, their slots cycling through their stacks, a note and an action button each), paged by the game, with clicks on their slots, action buttons, page turns and a back button. **Experimental:** the manifest needs `experimental = ["ui"]` |
+| `render` | `render` | `set-hud(shapes)`: up to 1024 fills, four-cornered shapes, GUI sprites, items and text, kept on the HUD (over the hotbar, under chat and screens, hidden with F1) until replaced; `set-corner(corner, w, h, shapes)`: a box the game places in a corner, stacked with its overlays and other panels, as `hud`'s panels are; `text-width(text)`; `frame-stats()`: the game's FPS, min and 1% low; `gui-size()`; `shake(strength, seconds)`: the view turns, the player doesn't, scaled by Distortion Effects; `set-zoom(zoom)`: the field of view divided by up to 10, eased or at once, with slower turning, while playing and not through a spyglass (the strongest of several mods' zooms counts); `set-minimap(minimap)`: a map of the world around the player in a corner, as a map item colours it (the floor underground and under roofs), square or round, turning with the player or north up, with the player's arrow; the game keeps its tiles within its own frame budget (one map at a time, the first loaded mod's); `set-far-terrain(far-terrain)`: the world past the render distance as distant terrain, out to 64 to 1024 chunks, built by the game's own workers (the player's LOD Distance, when on, wins; the first loaded mod's). The game's own HUD renderer draws them: a mod never supplies shader code. **Experimental:** `experimental = ["render"]` |
 | `input` | `input` | `claim-items(ids)`: the use button on those items is the mod's (`use-start`, `use-stop` with the ticks held; the game doesn't place, eat or swing); `register-key(name, label, key)`: up to 16 keys (`key.keyboard.r`), heard while playing as `key-down` / `key-up` (the game's own mapping on that key still runs; a screen opening lets held keys up), mouse buttons as `key.mouse.4`. The player rebinds them on the mod's page in Options > Mods, where the game lists them first as Key Binds rows (click, then press a key or mouse button; Esc binds none), even for a mod without `ui`; the choice is kept in `horizon-mods.txt` (`key.<mod>.<name>:key.keyboard.z`) and wins over `register-key`'s default; `claim-wheel(on)`: the wheel's steps become `wheel` events and the hotbar doesn't move (the one input a mod takes from the game; a mod's keys never do); `held()`; `mapping(name)`: a movement or click mapping's key label and whether it is held; `clicks-per-second()`; `poll()` returns the events, at most 256 kept. **Experimental:** `experimental = ["input"]` |
+| `recipes` | `recipes` | `items()`: every item in the registry's order, with its name in the player's language and its tags; `all()`: every recipe (crafting, smelting, blasting, smoking, campfire, stonecutting, smithing, brewing), its slots as the stacks that fit each, its results, cooking time and experience, and the recipe book's id for it; `known()`: the book ids the player's recipe book holds; `place(book-id, all)`: the recipe book's click on a recipe, in the open inventory's or crafting table's grid (refused for a recipe the player's book doesn't hold, as vanilla's server refuses it); `give(stack)`: in creative mode, the stack into the player's inventory, as from the creative inventory. The recipes are the world's in single player and on Horizon's servers, vanilla 26.3's on any other server (a client is sent no others), while `known` follows that server's book. The game makes the tables once, when a mod first reads them. **Experimental:** `experimental = ["recipes"]` |
 
 | Hook (export) | When |
 |---|---|
@@ -116,7 +117,6 @@ loading. Ordered by what the first native ports need:
 | `keys` | keybinds | registered binds appear in Controls; press/release events |
 | `target` | the crosshair's block or entity, with its state and NBT summary | Jade/WTHIT-style tooltips |
 | `inventory-read` | the player's inventory, held item, open container | AppleSkin, recipe viewers |
-| `recipes` | the recipe registry and lookups | JEI/EMI-style viewers |
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
 | `render` (world) | world-space lines, boxes and billboards, beside the HUD shapes `render` has | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
@@ -219,7 +219,7 @@ Benchmarks (`--benchmark`) never load mods.
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo install --git https://github.com/ludovic111/horizon cargo-horizon-mod
+cargo install --git https://github.com/horizon-rust/horizon cargo-horizon-mod
 cargo horizon-mod new my-mod        # Cargo.toml, horizon-mod.toml, src/lib.rs, tests/hello.toml
                                     # (--template content: a content mod, no code)
 cd my-mod
@@ -488,7 +488,7 @@ its component targets the WIT world `horizon-server-mod` instead of
 | `tick(tick)` | each server tick |
 | `player-joined(player)`, `player-left(player)` | `registration.joins` |
 | `chat(player, text)` | `registration.chat`: each chat message a player sends |
-| `command(player, name, args)` | `/name args` typed by a player, for a command it registered; `ok(some)` is that player's feedback, `err` their red error |
+| `command(player, name, args, values)` | `/name args` typed by a player, for a command it registered, with its arguments' values (below); `ok(some)` is that player's feedback, `err` their red error |
 | `block-broken(player, pos, state)`, `block-placed(player, pos, state)` | `registration.blocks`, with the state as `minecraft:oak_log[axis=y]` |
 
 Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
@@ -496,6 +496,31 @@ client mods; `players` is for server mods. In Rust: `impl
 horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
 [`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs), and with
 `world`, [`beacons`](../crates/horizon-mod-sdk/examples/beacons/src/lib.rs).
+
+**Typed commands.** Each command in `registration.commands` lists its
+arguments, in order: a name and a kind, required or optional (optional ones
+last). The server adds them to the command tree every player receives, after
+vanilla's commands, so a player's chat box completes and colours them as it
+does vanilla's (player names, coordinates, bounds); when a player sends one,
+the server parses the line the way vanilla's parsers do and gives the mod the
+values, by argument name, or answers with vanilla's error (`Integer must not
+be more than 64, found 65`, `No player was found`) without calling the mod.
+
+| Kind | Takes | Value | Chat box parser |
+|---|---|---|---|
+| `word` | one word: letters, digits, `_ - . +` | `word(string)` | `brigadier:string` (word) |
+| `text` | the rest of the line, only last | `text(string)` | `brigadier:string` (greedy) |
+| `integer(min, max)` | a whole number within the bounds given | `integer(s32)` | `brigadier:integer` |
+| `number` | a number | `number(f64)` | `brigadier:double` |
+| `boolean` | `true` or `false` | `boolean(bool)` | `brigadier:bool` |
+| `player` | an online player's name, `@s` or `@p` (whoever typed it) | `player(player)` | `minecraft:entity` (one player) |
+| `block-pos` | `x y z`, each a whole number, `~` or `~n` (from whoever typed it) | `block-pos(block-pos)` | `minecraft:block_pos` |
+
+A command with no arguments takes nothing after its name. In Rust,
+`Registration::command_with("beacon", [Argument::integer("height", Some(1),
+Some(64)).optional()])`, read with `args.integer("height")`; `command(name)`
+alone takes free text, an optional `text` argument named `args`
+(`args.text()` is the line as typed either way).
 
 **Capability `world`.** Reads are of the server's loaded chunks as they are
 during the call: the game lends a server mod's call the levels' chunk maps
@@ -537,10 +562,11 @@ chat for the in-frame player and a system message for a connection;
 on, each of these points costs one branch (measured in the PR that added
 them).
 
-**Not yet.** Clients aren't sent server mods' commands with vanilla's
-command tree, so a player's chat box doesn't complete or colour them; typing
-them works. Block events are a player's own breaking and placing, not
-explosions, pistons or other mods.
+**Not yet.** Block events are a player's own breaking and placing, not
+explosions, pistons or other mods. Command arguments don't take entities,
+items or block states yet, and `^` coordinates; in-frame single player's chat
+box lists server mods' commands by name only (the server still parses their
+arguments).
 
 ## Publish your mod
 
@@ -555,7 +581,7 @@ published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/m
    public profile) and fill in the page: the file, its name and summary, licence, source address, and optionally a
    minisign public key with the file's `.minisig`.
 4. The form checks the file again and opens a pull request in
-   [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) that adds `mods/<id>.toml`, with you as its
+   [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) that adds `mods/<id>.toml`, with you as its
    owner. That repository's checks run the file in the sandbox and post their report on the pull request; answer the
    reviewers there.
 5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
@@ -571,7 +597,7 @@ says how). The formats: [api/mod-index.md](api/mod-index.md).
 
 ### Horizon's official mods
 
-The Horizon extras that are mods now live in `mods/official/<name>/`, one crate each in the game's workspace, so
+The Horizon extras that are mods now, and Horizon's own recipe viewer, live in `mods/official/<name>/`, one crate each in the game's workspace, so
 `cargo clippy --workspace` and pr_ready cover them. They use only the public API, like any other mod, with the same
 options on their settings page as the extra had and the same look. Each is published by a maintainer: build it on
 `main` with the toolchain CI uses (`cd mods/official/<name> && cargo horizon-mod build`), then open a pull request in
@@ -585,6 +611,8 @@ so the same rustc and `Cargo.lock` give the same file.
 | Keystrokes | `keystrokes` | Extras > Keystrokes | `corner`: as above, default `top_left`; `cps`: `true` (default), `false` |
 | Zoom | `zoom` | Extras > Zoom | `level`: `2`, `3`, `4` (default), `6`, `8`, `10`; `smooth`: `true` (default), `false`; `sensitivity` (slower turning): `true` (default), `false`. The key is the game's: `key.zoom.zoom` in `horizon-mods.txt`, default `key.keyboard.z` |
 | Minimap | `minimap` | Extras > Minimap | `corner`: as above, default `top_right`; `size`: `64`, `96` (default), `128`; `shape`: `square` (default), `round`; `zoom` (blocks per pixel): `0.5`, `1` (default), `2`, `4`; `rotate`: `false` (default), `true`. The game draws the map (`render.set-minimap`) |
+| Far View | `far_view` | Graphics > LOD Distance and Far Detail | `distance` (chunks): `64`, `128`, `256` (default), `512`, `1024`; `detail`: `full` (default), `reduced`. The game builds and draws the distant terrain (`render.set-far-terrain`); the player's LOD Distance, when on, wins |
+| Recipes | `recipes` | nothing (new) | `give` (a click on the item panel gives the item in creative mode: one, a stack with a right click): `false` (default), `true`. The keys are the game's: `key.recipes.recipe` (default `key.keyboard.r`) and `key.recipes.uses` (default `key.keyboard.u`) in `horizon-mods.txt`. Every item sits in the item panel (`browser`) with a search box (words in the name or id, `@namespace`, `#tag`); R or a click shows an item's recipes, U or a right click its uses, a tab per station, and + fills the grid with a recipe the player knows (`recipes.place`). On servers that are not Horizon it shows the game's own 26.3 recipes; known recipes and + follow the server's recipe book |
 
 ## Versions and compatibility
 
@@ -635,7 +663,7 @@ so the same rustc and `Cargo.lock` give the same file.
   key, so an update signed by another key is refused. Unsigned local files
   stay allowed, with an "unsigned" mark on the Mods page.
 - **Where mods come from.** Horizon's registry ([Publish your mod](#publish-your-mod)): reviewed pull requests in
-  [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods), files as its release assets, and an
+  [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods), files as its release assets, and an
   `index.json` on GitHub Pages that the launcher and the website read. A file the registry takes down
   (`revoked.toml`) is refused by the launcher and turned off where installed.
 - **The launcher.** A Mods tab per installation: browse and search the index,

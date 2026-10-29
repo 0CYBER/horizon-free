@@ -8,14 +8,14 @@ use crate::{
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
-    item::{Component, Hashed, HashedSlot, Slot, Stack},
+    item::{Component, DelimitedSlot, Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
         configuration::{
             ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
             Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
-            StoreCookie, Transfer, UpdateTags,
+            ServerLinks, StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -111,6 +111,7 @@ impl From<NetCost> for Stack {
             count: cost.count,
             added: cost.components,
             removed: Vec::new(),
+            wire: Default::default(),
         }
     }
 }
@@ -1903,6 +1904,9 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     StopSound(StopSound) = STOP_SOUND,
     StartConfiguration(Empty) = START_CONFIGURATION,
     StoreCookie(StoreCookie) = STORE_COOKIE,
+    // A common packet: the same `configuration::ServerLinks` the
+    // configuration phase sends.
+    ServerLinks(ServerLinks) = SERVER_LINKS,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
@@ -2043,6 +2047,7 @@ impl Codec<TrackedWaypoint> for TrackedWaypoint {
 
 packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float });
 packet!(Attack { id: i32 => VarInt });
+packet!(TeleportToEntity { uuid: u128 => Uuid });
 packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
@@ -2161,6 +2166,12 @@ packet!(
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
 packet!(
+    /// ServerboundSetCommandBlockPacket: the command block's command, its
+    /// mode (`CommandBlockEntity.Mode` ordinal) and the track output (1),
+    /// conditional (2) and automatic (4) flags.
+    SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
+);
+packet!(
     /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
     /// the off hand), its pages and, to sign it, its title.
     EditBook {
@@ -2234,6 +2245,7 @@ packet!(
     PaddleBoat { left: bool => Bool, right: bool => Bool }
 );
 packet!(PickItemFromBlock { pos: [i32; 3] => Pos, include_data: bool => Bool });
+packet!(PickItemFromEntity { id: i32 => VarInt, include_data: bool => Bool });
 packet!(
     /// ServerboundPlayerActionPacket.Action: 0 start destroy, 1 change destroy
     /// direction, 2 abort, 3 stop destroy, 4 drop all, 5 drop item, 6 release
@@ -2249,8 +2261,13 @@ packet!(
     /// Input flags: forward 1, backward 2, left 4, right 8, jump 16, shift 32, sprint 64.
     PlayerInput { flags: u8 => UByte }
 );
+packet!(
+    /// ServerboundSelectBundleItemPacket: the menu slot of a bundle and the
+    /// index of its selected item (-1: none).
+    SelectBundleItem { slot: i32 => VarInt, index: i32 => VarInt }
+);
 packet!(SetCarriedItem { slot: i16 => Short });
-packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => Slot });
+packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => DelimitedSlot });
 packet!(UseItem { hand: i32 => VarInt, sequence: i32 => VarInt, yaw: f32 => Float, pitch: f32 => Float });
 packet!(UseItemOn {
     hand: i32 => VarInt,
@@ -2278,6 +2295,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -2285,6 +2303,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
     ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
+    RecipeBookChangeSettings(super::recipes::RecipeBookChangeSettings) = RECIPE_BOOK_CHANGE_SETTINGS,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
@@ -2306,6 +2325,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MoveVehicle(MoveVehicleRequest) = MOVE_VEHICLE,
     PaddleBoat(PaddleBoat) = PADDLE_BOAT,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
+    PickItemFromEntity(PickItemFromEntity) = PICK_ITEM_FROM_ENTITY,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
     PlayerAction(PlayerAction) = PLAYER_ACTION,
@@ -2317,9 +2337,11 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
+    SelectBundleItem(SelectBundleItem) = BUNDLE_ITEM_SELECTED,
     SelectTrade(SelectTrade) = SELECT_TRADE,
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
+    SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,

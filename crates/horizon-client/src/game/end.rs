@@ -5,12 +5,14 @@
 use super::{Dim, Game};
 use horizon_client::{
     Result,
+    containers::{BlockEntity, EndGateway},
     environment::Environment,
     items::ItemStack,
     mesher::Vertex,
     motion::PlayerMotion,
     particles::{ParticleOptions, ParticleType},
     vanillagen::VanillaTerrain,
+    world_spawn::PlayerSpawnFinder,
 };
 use horizon_core::{
     geometry::Vec3,
@@ -19,7 +21,7 @@ use horizon_core::{
 use std::{collections::HashMap, sync::Arc};
 
 /// ServerLevel.END_SPAWN_POINT.
-const END_SPAWN: [i32; 3] = [100, 50, 0];
+pub(super) const END_SPAWN: [i32; 3] = [100, 50, 0];
 /// EnderDragonFight gateway ring radius and height.
 const GATEWAY_RADIUS: f64 = 96.0;
 const GATEWAY_Y: i32 = 75;
@@ -27,12 +29,62 @@ const GATEWAY_Y: i32 = 75;
 const GATEWAY_FILE: &str = "horizon-end-gateways.json";
 
 /// A gateway teleport waiting for its destination chunks.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GatewayJob {
     /// TheEndGatewayBlockEntity.findOrCreateValidTeleportPos from this gateway.
-    Find { gateway: [i32; 3] },
+    /// `exact` is the gateway's own `ExactTeleport`, read while its chunk is loaded.
+    Find { gateway: [i32; 3], exact: bool },
     /// A known exit (exact, or findExitPosition around it).
     Known { exit: [i32; 3], exact: bool },
+}
+
+impl GatewayJob {
+    /// TheEndGatewayBlockEntity.getPortalPosition, with legacy save fallbacks.
+    fn for_gateway(
+        gateway: [i32; 3],
+        entity: Option<&BlockEntity>,
+        legacy: Option<([i32; 3], bool)>,
+    ) -> Self {
+        let configured = match entity {
+            Some(BlockEntity::EndGateway(g)) => g.exit_portal.map(|exit| (exit, g.exact_teleport)),
+            _ => None,
+        };
+        match configured.or(legacy) {
+            Some((exit, exact)) => Self::Known { exit, exact },
+            // Worldgen return gateways (end_gateway_return) lead exactly to the End spawn.
+            None if f64::from(gateway[0]).hypot(f64::from(gateway[2])) > 512.0 => Self::Known {
+                exit: END_SPAWN,
+                exact: true,
+            },
+            None => Self::Find {
+                gateway,
+                exact: exact_teleport(entity),
+            },
+        }
+    }
+}
+
+/// `TheEndGatewayBlockEntity.exactTeleport` of the block entity at a gateway
+/// (false without one).
+fn exact_teleport(entity: Option<&BlockEntity>) -> bool {
+    matches!(entity, Some(BlockEntity::EndGateway(g)) if g.exact_teleport)
+}
+
+/// Moves an exit that only the side file knew into the gateway's block entity, unless the block
+/// entity has its own; true when it took the saved one.
+fn adopt_saved_exit(entity: &mut EndGateway, (exit, exact): ([i32; 3], bool)) -> bool {
+    if entity.exit_portal.is_some() {
+        return false;
+    }
+    entity.exit_portal = Some(exit);
+    entity.exact_teleport = exact;
+    true
+}
+
+/// The end of `getPortalPosition`: the exit itself when the teleport is exact,
+/// else the spot [`Game::resolve_gateway`] finds around it (`findExitPosition`).
+fn exit_target(exit: [i32; 3], exact: bool, find: impl FnOnce([i32; 3]) -> [i32; 3]) -> [i32; 3] {
+    if exact { exit } else { find(exit) }
 }
 
 #[derive(Default)]
@@ -247,16 +299,25 @@ impl Game<'_> {
                     layer: 2,
                     color,
                     light: 0,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
         out
     }
 
-    /// LightmapRenderStateExtractor: End flashes add to the sky light factor.
+    /// LightmapRenderStateExtractor: End flashes add to the sky light factor
+    /// unless Hide Lightning Flashes is on (the sky sprite is not gated), a
+    /// third of it under a boss bar's world fog.
     pub(super) fn end_flash_sky(&self, sky: &mut horizon_client::environment::Sky, partial: f64) {
-        if self.dim == Dim::End {
-            sky.sky_light_factor += self.end.flash.intensity(partial as f32);
+        if self.dim == Dim::End && !self.settings.file.bool("hideLightningFlashes") {
+            let intensity = self.end.flash.intensity(partial as f32);
+            sky.sky_light_factor += if self.boss_overlay.should_create_world_fog() {
+                intensity / 3.0
+            } else {
+                intensity
+            };
         }
     }
 
@@ -315,14 +376,8 @@ impl Game<'_> {
         }
         self.consume_held();
         self.swing_arm();
-        let center = hit.pos.map(|v| f64::from(v) + 0.5);
-        // LevelEvent 1503: END_PORTAL_FRAME_FILL.
-        self.audio.play(
-            "minecraft:block.end_portal_frame.fill",
-            Some(center),
-            1.0,
-            1.0,
-        );
+        // EnderEyeItem.useOn emits this event for all nearby players.
+        self.level_event_at(1503, hit.pos, 0);
         if let Some(c) = self.portal_ring_center(hit.pos) {
             for dz in -1..=1 {
                 for dx in -1..=1 {
@@ -521,7 +576,15 @@ impl Game<'_> {
         let position = if let Some(job) = self.end.job.take() {
             self.resolve_gateway(job, target)?
         } else {
-            let (position, yaw) = self.end_arrival(target)?;
+            let mut finder = self.player_spawn.take();
+            let arrival = self.end_arrival(target, &mut finder);
+            self.player_spawn = finder;
+            let Some((position, yaw)) = arrival? else {
+                // A spawn candidate's chunk is loading: try again next tick.
+                self.travelling = Some((player, target));
+                self.end_travel = true;
+                return Ok(());
+            };
             if let Some(yaw) = yaw {
                 self.yaw = yaw;
                 player.yaw = yaw;
@@ -546,7 +609,13 @@ impl Game<'_> {
     /// Where an End portal's traveller lands once `target` has loaded, and
     /// the yaw it faces there: the platform below the End's spawn point,
     /// facing west, or the top of the Overworld's spawn column.
-    pub(super) fn end_arrival(&mut self, target: Vec3) -> Result<(Vec3, Option<f32>)> {
+    /// None while a candidate of the world spawn's search loads (`finder`
+    /// keeps it, see `search_spawn`).
+    pub(super) fn end_arrival(
+        &mut self,
+        target: Vec3,
+        finder: &mut Option<PlayerSpawnFinder>,
+    ) -> Result<Option<(Vec3, Option<f32>)>> {
         if self.dim == Dim::End {
             // EndPlatformFeature.createEndPlatform below the spawn point.
             let origin = [END_SPAWN[0], END_SPAWN[1] - 1, END_SPAWN[2]];
@@ -566,22 +635,32 @@ impl Game<'_> {
                 }
             }
             // Direction.WEST.toYRot().
-            return Ok((target, Some(90.0)));
+            return Ok(Some((target, Some(90.0))));
         }
         // ServerPlayer.findRespawnPositionAndUseSpawnBlock: where the bed or
         // anchor puts the player, facing it; else onto the spawn column.
         let mut target = target;
         if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
             if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
-                return Ok((at, Some(yaw)));
+                return Ok(Some((at, Some(yaw))));
             }
             let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
             target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
         }
-        let y = self
-            .land_column(target.x.floor() as i32, target.z.floor() as i32)
-            .map_or(target.y, f64::from);
-        Ok((Vec3::new(target.x, y, target.z), None))
+        let (x, z) = (target.x.floor() as i32, target.z.floor() as i32);
+        // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder around
+        // the world spawn.
+        if let Some(world) = self.level.world_spawn.filter(|w| w[0] == x && w[2] == z) {
+            return Ok(match self.search_spawn(world, finder) {
+                Ok(at) => Some((at, None)),
+                Err(chunk) => {
+                    self.spawn_wait.push(chunk);
+                    None
+                }
+            });
+        }
+        let y = self.land_column(x, z).map_or(target.y, f64::from);
+        Ok(Some((Vec3::new(target.x, y, target.z), None)))
     }
 
     /// Dying away from the Overworld respawns at the world spawn there.
@@ -599,7 +678,9 @@ impl Game<'_> {
 
     /// EnderDragonFight without a dragon: once the centre of the main island
     /// is loaded, place the active exit portal (EndPodiumFeature) and the
-    /// first gateway (spawnNewGateway) if the portal is not there yet.
+    /// first gateway (spawnNewGateway) if the portal is not there yet. Like
+    /// scanState and spawnExitPortal, only while the fight has no exit portal
+    /// location: a podium that is later broken stays broken.
     fn ensure_exit_portal(&mut self) -> Result<()> {
         if self.travelling.is_some()
             || !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
@@ -609,8 +690,14 @@ impl Game<'_> {
         }
         let won = self.fight.previously_killed;
         let gateway = self.first_gateway();
-        if (0..256).any(|y| &*self.block_name([0, y, 0]) == "minecraft:bedrock") {
-            // The podium exists; the gateway may have been out of range when it was placed.
+        if self.exit_portal().is_none() {
+            // findExitPortal remembers the location of a podium that is already there.
+            if let Some(level) = self.podium_level() {
+                self.set_exit_portal([0, level, 0]);
+            }
+        }
+        if self.exit_portal().is_some() {
+            // The gateway may have been out of range when it was placed.
             if won
                 && self.world.loaded(gateway[0], gateway[2])
                 && &*self.block_name(gateway) != "minecraft:end_gateway"
@@ -641,17 +728,40 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// The portal level of the podium around the centre column, read from the
+    /// bedrock that EndPodiumFeature places (rim at the portal level, disc
+    /// below it, the torch column) so a broken column does not hide it.
+    fn podium_level(&self) -> Option<i32> {
+        let mut offsets: Vec<[i32; 3]> = (0..4).map(|dy| [0, dy, 0]).collect();
+        for z in -4..=4i32 {
+            for x in -4..=4i32 {
+                let flat = f64::from(x * x + z * z);
+                if (6.25..12.25).contains(&flat) {
+                    offsets.push([x, 0, z]);
+                } else if flat + 1.0 < 6.25 {
+                    offsets.push([x, -1, z]);
+                }
+            }
+        }
+        (1..253)
+            .map(|y| {
+                let score = offsets
+                    .iter()
+                    .filter(|o| &*self.block_name([o[0], y + o[1], o[2]]) == "minecraft:bedrock")
+                    .count();
+                (score, y)
+            })
+            .filter(|&(score, _)| score >= 3)
+            .max()
+            .map(|(_, y)| y)
+    }
     /// `spawnExitPortal(true)` after the dragon dies.
     pub(super) fn activate_exit_portal(&mut self) -> Result<()> {
         let origin = match self.exit_portal() {
             Some(o) => o,
             None => {
-                // The rim's level: the top of the bedrock column minus three.
-                let top = (0..256)
-                    .rev()
-                    .find(|&y| &*self.block_name([0, y, 0]) == "minecraft:bedrock")
-                    .unwrap_or(64);
-                [0, top - 3, 0]
+                // The rim's level, found without assuming the centre column is intact.
+                [0, self.podium_level().unwrap_or(61), 0]
             }
         };
         self.place_podium(origin, true)
@@ -754,6 +864,11 @@ impl Game<'_> {
                 }
             }
         }
+        self.world
+            .block_entities
+            .get_or_insert_with((origin[0], origin[1], origin[2]), || {
+                BlockEntity::EndGateway(Default::default())
+            });
         Ok(())
     }
 
@@ -775,8 +890,7 @@ impl Game<'_> {
         self.end.exits.as_mut().expect("loaded exits")
     }
 
-    fn set_gateway_exit(&mut self, gateway: [i32; 3], exit: [i32; 3], exact: bool) -> Result<()> {
-        self.gateway_exits().insert(gateway, (exit, exact));
+    fn save_gateway_exits(&mut self) -> Result<()> {
         let list: Vec<_> = self
             .gateway_exits()
             .iter()
@@ -786,6 +900,35 @@ impl Game<'_> {
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join(GATEWAY_FILE), serde_json::to_vec(&list)?)?;
         Ok(())
+    }
+
+    /// Drops a gateway's entry from the side file: its block entity is the source of truth.
+    fn forget_gateway_exit(&mut self, gateway: [i32; 3]) -> Result<()> {
+        if self.gateway_exits().remove(&gateway).is_some() {
+            self.save_gateway_exits()?;
+        }
+        Ok(())
+    }
+
+    fn set_gateway_exit(&mut self, gateway: [i32; 3], exit: [i32; 3], exact: bool) -> Result<()> {
+        // TheEndGatewayBlockEntity.setExitPosition (also EndGatewayFeature.knownExit).
+        let key = (gateway[0], gateway[1], gateway[2]);
+        let chunk = (gateway[0] >> 4, gateway[2] >> 4);
+        // The gateway's chunk can be unloaded by now (travel waits for the destination): the
+        // exit then waits in the side file until the gateway is used again (`gateway_job`).
+        if self.world.chunks.contains_key(&chunk)
+            && let BlockEntity::EndGateway(g) = self
+                .world
+                .block_entities
+                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
+        {
+            g.exit_portal = Some(exit);
+            g.exact_teleport = exact;
+            self.world.modified.insert(chunk);
+            return self.forget_gateway_exit(gateway);
+        }
+        self.gateway_exits().insert(gateway, (exit, exact));
+        self.save_gateway_exits()
     }
 
     /// EndGatewayBlock.entityInside and TheEndGatewayBlockEntity.getPortalPosition:
@@ -807,25 +950,39 @@ impl Game<'_> {
     /// its exit, or the search for one, and the spot to load before either
     /// is resolved ([`Game::resolve_gateway`]).
     pub(super) fn gateway_job(&mut self, gateway: [i32; 3]) -> (GatewayJob, Vec3) {
-        let known = self.gateway_exits().get(&gateway).copied();
-        let job = match known {
-            Some((exit, exact)) => GatewayJob::Known { exit, exact },
-            // Worldgen return gateways (end_gateway_return) lead exactly to the End spawn.
-            None if f64::from(gateway[0]).hypot(f64::from(gateway[2])) > 512.0 => {
-                GatewayJob::Known {
-                    exit: END_SPAWN,
-                    exact: true,
-                }
+        let mut known = self.gateway_exits().get(&gateway).copied();
+        // Once the gateway's chunk is loaded its block entity is the source of truth: an exit the
+        // side file kept for it moves there, and the entry is dropped, so removing or replacing
+        // the exit (`/data remove block`) is not undone by an old entry.
+        let key = (gateway[0], gateway[1], gateway[2]);
+        let chunk = (gateway[0] >> 4, gateway[2] >> 4);
+        if let Some(saved) = known
+            && self.world.chunks.contains_key(&chunk)
+            && let BlockEntity::EndGateway(g) = self
+                .world
+                .block_entities
+                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
+        {
+            if adopt_saved_exit(g, saved) {
+                self.world.modified.insert(chunk);
             }
-            None => GatewayJob::Find { gateway },
-        };
+            known = None;
+            let _ = self.forget_gateway_exit(gateway);
+        }
+        let job = GatewayJob::for_gateway(
+            gateway,
+            self.world
+                .block_entities
+                .get(&(gateway[0], gateway[1], gateway[2])),
+            known,
+        );
         let destination = match job {
             GatewayJob::Known { exit, .. } => Vec3::new(
                 f64::from(exit[0]) + 0.5,
                 f64::from(exit[1]),
                 f64::from(exit[2]) + 0.5,
             ),
-            GatewayJob::Find { gateway } => {
+            GatewayJob::Find { gateway, .. } => {
                 let d = glam::DVec2::new(f64::from(gateway[0]), f64::from(gateway[2]))
                     .normalize_or_zero()
                     * 1024.0;
@@ -882,12 +1039,10 @@ impl Game<'_> {
             [p[0], p[1] + 1, p[2]]
         };
         match job {
-            GatewayJob::Known { exit, exact } => Ok(bottom_center(if exact {
-                exit
-            } else {
-                find_exit(self, exit)
-            })),
-            GatewayJob::Find { gateway } => {
+            GatewayJob::Known { exit, exact } => Ok(bottom_center(exit_target(exit, exact, |e| {
+                find_exit(self, e)
+            }))),
+            GatewayJob::Find { gateway, exact } => {
                 // findExitPortalXZPosTentative over the loaded chunks.
                 let dir = glam::DVec2::new(f64::from(gateway[0]), f64::from(gateway[2]))
                     .normalize_or_zero();
@@ -947,8 +1102,11 @@ impl Game<'_> {
                 let exit = [tallest[0], tallest[1] + 10, tallest[2]];
                 self.place_gateway(exit)?;
                 self.set_gateway_exit(exit, gateway, false)?;
-                self.set_gateway_exit(gateway, exit, false)?;
-                Ok(bottom_center(find_exit(self, exit)))
+                // setExitPosition keeps the gateway's own exactTeleport.
+                self.set_gateway_exit(gateway, exit, exact)?;
+                Ok(bottom_center(exit_target(exit, exact, |e| {
+                    find_exit(self, e)
+                })))
             }
         }
     }
@@ -1240,8 +1398,103 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light: full,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::containers::EndGateway;
+
+    #[test]
+    fn a_saved_exit_moves_into_a_gateway_without_one() {
+        let saved = ([8, 100, 0], true);
+        let mut bare = EndGateway::default();
+        assert!(adopt_saved_exit(&mut bare, saved));
+        assert_eq!(bare.exit_portal, Some([8, 100, 0]));
+        assert!(bare.exact_teleport);
+        // The block entity's own exit wins over a stale entry.
+        let mut own = EndGateway {
+            exit_portal: Some([1, 2, 3]),
+            ..Default::default()
+        };
+        assert!(!adopt_saved_exit(&mut own, saved));
+        assert_eq!(own.exit_portal, Some([1, 2, 3]));
+        assert!(!own.exact_teleport);
+    }
+
+    #[test]
+    fn a_new_exit_keeps_the_gateways_exact_teleport() {
+        let exact = BlockEntity::EndGateway(EndGateway {
+            exact_teleport: true,
+            ..Default::default()
+        });
+        let plain = BlockEntity::EndGateway(EndGateway::default());
+        assert!(exact_teleport(Some(&exact)));
+        assert!(!exact_teleport(Some(&plain)));
+        assert!(!exact_teleport(None));
+        assert!(!exact_teleport(Some(&BlockEntity::DaylightDetector)));
+        let exit = [8, 100, 0];
+        // Exact: the exit itself, nothing is searched for.
+        assert_eq!(exit_target(exit, true, |_| panic!("searched")), exit);
+        assert_eq!(
+            exit_target(exit, false, |e| [e[0], e[1] + 11, e[2]]),
+            [8, 111, 0]
+        );
+    }
+
+    #[test]
+    fn end_gateway_job_prefers_block_entity_then_legacy_then_heuristic() {
+        let gateway = [702, 100, 0];
+        let exit = [8, 100, 0];
+        for exact in [true, false] {
+            let entity = BlockEntity::EndGateway(EndGateway {
+                exit_portal: Some(exit),
+                exact_teleport: exact,
+                ..Default::default()
+            });
+            assert_eq!(
+                GatewayJob::for_gateway(gateway, Some(&entity), Some((END_SPAWN, !exact))),
+                GatewayJob::Known { exit, exact },
+            );
+        }
+        let empty = BlockEntity::EndGateway(EndGateway::default());
+        for entity in [None, Some(&empty)] {
+            assert_eq!(
+                GatewayJob::for_gateway(gateway, entity, Some((exit, false))),
+                GatewayJob::Known { exit, exact: false }
+            );
+            assert_eq!(
+                GatewayJob::for_gateway(gateway, entity, None),
+                GatewayJob::Known {
+                    exit: END_SPAWN,
+                    exact: true
+                }
+            );
+            let nearby = [96, 75, 0];
+            let exact = BlockEntity::EndGateway(EndGateway {
+                exact_teleport: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                GatewayJob::for_gateway(nearby, Some(&exact), None),
+                GatewayJob::Find {
+                    gateway: nearby,
+                    exact: true
+                }
+            );
+            assert_eq!(
+                GatewayJob::for_gateway(nearby, entity, None),
+                GatewayJob::Find {
+                    gateway: nearby,
+                    exact: false
+                }
+            );
         }
     }
 }

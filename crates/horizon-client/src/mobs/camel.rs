@@ -24,12 +24,13 @@ pub fn register(m: &mut Mob) {
     m.extra.tame = true;
     let tempt = m.kind.tempt.clone();
     let g = &mut m.ai.goals;
+    // CamelAi speed modifiers (times the 0.09 movement speed attribute).
     g.add(0, Float);
-    g.add(1, CamelPanic(Panic::new(4.0 * 0.25)));
+    g.add(1, CamelPanic(Panic::new(4.0)));
     g.add(2, Breed::new(1.0));
-    g.add(3, Tempt::new(2.5 * 0.25, tempt, false));
-    g.add(4, FollowParent::new(2.5 * 0.25));
-    g.add(5, Stroll::new(2.0 * 0.25));
+    g.add(3, Tempt::new(2.5, tempt, false));
+    g.add(4, FollowParent::new(2.5));
+    g.add(5, Stroll::new(2.0));
     g.add(5, RandomSitting);
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());
@@ -44,6 +45,25 @@ pub fn sitting(m: &Mob) -> bool {
 }
 fn in_transition(m: &Mob) -> bool {
     pose_time(m) < if sitting(m) { SIT_DOWN } else { STAND_UP }
+}
+/// `Camel.getPoseTime` of a client mob from the `LAST_POSE_CHANGE_TICK` it
+/// was sent and the client's game time, and whether that value says it sits.
+fn client_pose(m: &Mob, game_time: i64) -> (i64, bool) {
+    let tick = m.extra.pose_change_tick;
+    (game_time - tick.abs(), tick < 0)
+}
+/// The camel's `LAST_POSE_CHANGE_TICK` as the server sends it: in game time
+/// (a mob counts its own age), negative while sitting.
+pub fn synced_pose_tick(m: &Mob, game_time: i64) -> i64 {
+    let tick = (game_time - pose_time(m)).max(0);
+    if sitting(m) { -tick.max(1) } else { tick }
+}
+/// `Entity.onSyncedDataUpdated` for the pose tick of a client mob: its sign
+/// is whether it sits. `client_tick` keeps `egg_time` (in the mob's age, for
+/// `sitting` and `refuse_to_move`) with it.
+pub fn set_synced_pose_tick(m: &mut Mob, tick: i64) {
+    m.extra.pose_change_tick = tick;
+    m.extra.egg_time = if tick < 0 { -1 } else { 0 };
 }
 /// `Camel.refuseToMove`: sitting or getting up or down.
 pub fn refuse_to_move(m: &Mob) -> bool {
@@ -166,7 +186,29 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.ai.zza = 0.0;
         m.ai.nav.stop();
     }
-    // setupAnimationStates.
+    animation_states(m, pose_time(m), sitting(m));
+}
+/// `Camel.tick` on a client that is not the server: the dash cooldown, which
+/// the dash flag starts, and the keyframe states from the synced pose tick.
+pub fn client_tick(m: &mut Mob, game_time: i64) {
+    if m.extra.anim_ticks > 0 {
+        m.extra.anim_ticks -= 1;
+    }
+    let (pose_time, sitting) = client_pose(m, game_time);
+    let since = (i64::from(m.age) - pose_time).max(0) as i32;
+    m.extra.egg_time = if sitting { -since.max(1) } else { since };
+    animation_states(m, pose_time, sitting);
+}
+/// `Camel.onSyncedDataUpdated(DASH)`: a dash starts the cooldown unless it
+/// runs. Not on the first tick.
+pub fn set_dashing(m: &mut Mob, dashing: bool) {
+    if m.age > 0 && m.extra.anim_ticks == 0 {
+        m.extra.anim_ticks = DASH_COOLDOWN;
+    }
+    m.extra.flag2 = dashing;
+}
+/// `Camel.setupAnimationStates` for a pose time and whether it sits.
+fn animation_states(m: &mut Mob, pose_time: i64, sitting: bool) {
     let age = m.age as f32;
     if m.extra.ints[0] <= 0 {
         m.extra.ints[0] = m.random.next_int_bound(40).unwrap_or(0) + 80;
@@ -175,9 +217,9 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.extra.ints[0] -= 1;
     }
     // isCamelVisuallySitting: (poseTime < 0) != sitting.
-    let visually_sitting = (pose_time(m) < 0) != sitting(m);
-    let sitting_down = sitting(m) && pose_time(m) < SIT_DOWN && pose_time(m) >= 0;
-    let transition = in_transition(m) && pose_time(m) >= 0;
+    let visually_sitting = (pose_time < 0) != sitting;
+    let sitting_down = sitting && (0..SIT_DOWN).contains(&pose_time);
+    let transition = (0..if sitting { SIT_DOWN } else { STAND_UP }).contains(&pose_time);
     let dashing = m.extra.flag2;
     let st = &mut m.anim.states;
     if visually_sitting {

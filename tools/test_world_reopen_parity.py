@@ -34,9 +34,10 @@ CYCLES = 3
 
 
 def game_env():
-    """macOS renders offscreen; Linux uses the virtual screen (as test_save_roundtrip_parity)."""
+    """macOS renders offscreen; Linux uses the virtual screen (as test_save_roundtrip_parity), or renders
+    offscreen too where there is no vscreen."""
     env = lab.game_env()
-    if sys.platform == 'darwin':
+    if sys.platform == 'darwin' or not shutil.which('vscreen'):
         return env, ['--offscreen']
     subprocess.run(['vscreen', 'up'], check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], capture_output=True, text=True, check=True).stdout
@@ -68,14 +69,23 @@ def main():
         return json.loads(result.stdout) if result.stdout.strip().startswith('{') else result.stdout
 
     def carts():
-        found = ctl('status')['carts']
-        return sorted((c['kind'], *(round(v, 1) for v in c['position'])) for c in found)
+        """The loaded minecarts once their list stops changing: on a loaded runner the mineshaft's chunks and their
+        entities keep arriving after the world counts as loaded, so one reading can be short of a cart."""
+        last = None
+        for _ in range(30):
+            found = sorted((c['kind'], *(round(v, 1) for v in c['position'])) for c in ctl('status')['carts'])
+            if found == last:
+                return found
+            last = found
+            ctl('wait', '40')
+        return last
 
     ctl('launch', '--resources', str(RESOURCES), '--world', 'reopen', '--seed', '7', '--creative',
         '--render-distance', '4', *extra)
     failures = 0
     try:
         ctl('wait-ready', '300')
+        ctl('wait-for', 'loaded', '--timeout', '300')  # as after each reopen below
         ctl('command', 'summon minecraft:minecart ~2 ~ ~2')
         ctl('wait', '20')
         expected = carts()

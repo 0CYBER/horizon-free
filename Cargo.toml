@@ -1,6 +1,49 @@
 [workspace]
 exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal"]
-members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-threads", "crates/horizon-hdr", "crates/horizon-world", "crates/horizon-client", "crates/horizon-server-files", "crates/horizon-server", "crates/horizon-bots", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/horizon-mods/tests/ui_guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-shaders", "crates/horizon-shader-api", "crates/horizon-release-sign", "crates/horizon-mod-sdk/examples/coords-hud", "crates/horizon-mod-sdk/examples/predator-missile", "crates/horizon-mod-sdk/examples/welcome", "crates/horizon-mod-sdk/examples/beacons", "mods/official/fps-overlay", "mods/official/keystrokes", "mods/official/minimap", "mods/official/zoom", "xtask"]
+members = [
+    "crates/horizon-core",
+    "crates/horizon-dualsense",
+    "crates/horizon-threads",
+    "crates/horizon-hdr",
+    "crates/horizon-world",
+    "crates/horizon-client",
+    "crates/horizon-client-core",
+    "crates/horizon-client-input",
+    "crates/horizon-client-render",
+    "crates/horizon-command",
+    "crates/horizon-items",
+    "crates/horizon-server-files",
+    "crates/horizon-server",
+    "crates/horizon-bots",
+    "crates/horizon-assets",
+    "crates/horizon-protocol",
+    "crates/horizon-theme",
+    "crates/horizon-prepare",
+    "crates/horizon-telemetry",
+    "crates/horizon-bench",
+    "crates/horizon-friends",
+    "crates/horizon-relay",
+    "crates/horizon-mod-sdk",
+    "crates/horizon-mods",
+    "crates/horizon-mods/tests/guest",
+    "crates/horizon-mods/tests/ui_guest",
+    "crates/cargo-horizon-mod",
+    "crates/horizon-port-pack",
+    "crates/horizon-shaders",
+    "crates/horizon-shader-api",
+    "crates/horizon-release-sign",
+    "crates/horizon-mod-sdk/examples/coords-hud",
+    "crates/horizon-mod-sdk/examples/predator-missile",
+    "crates/horizon-mod-sdk/examples/welcome",
+    "crates/horizon-mod-sdk/examples/beacons",
+    "mods/official/fps-overlay",
+    "mods/official/keystrokes",
+    "mods/official/far-view",
+    "mods/official/minimap",
+    "mods/official/zoom",
+    "xtask",
+    "mods/official/recipes",
+]
 resolver = "2"
 
 [workspace.package]
@@ -19,8 +62,10 @@ large_enum_variant = "allow"
 # wgpu-hal 30.0.1 with gfx-rs/wgpu#10124: wgpu 30 creates a Vulkan descriptor
 # pool with no pool sizes while it creates the device, which Vulkan allows only
 # since 1.3.215, and Intel's Windows driver for 6th-10th gen iGPUs (HD 520/530,
-# UHD 620/630) crashes on it with an access violation (#746). Drop this and the
-# folder once a wgpu release has the fix.
+# UHD 620/630) crashes on it with an access violation (#746). It also fixes the
+# Metal backend's lookup of the CoreGraphics HDR colour space names, which handed
+# CoreGraphics a symbol's address as the string and crashed HDR output on macOS.
+# Drop this and the folder once a wgpu release has both fixes.
 [patch.crates-io]
 wgpu-hal = { path = "third_party/wgpu-hal" }
 

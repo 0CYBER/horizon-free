@@ -1,12 +1,15 @@
 package dev.horizonlab.parity;
 
 import com.google.gson.*;
+import io.netty.buffer.Unpooled;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.*;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.protocol.game.ServerboundRecipeBookChangeSettingsPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
@@ -102,8 +105,22 @@ public final class VanillaRecipeBookOracle {
                                 count = kind.equals("give") ? book.addRecipes(holders, player) : book.removeRecipes(holders, player);
                             }
                             case "seen" -> book.removeHighlight(key(op.get("id").getAsString()));
-                            case "set" -> book.setBookSetting(RecipeBookType.valueOf(op.get("type").getAsString()),
-                                op.get("open").getAsBoolean(), op.get("filtering").getAsBoolean());
+                            case "set" -> {
+                                var packet = new ServerboundRecipeBookChangeSettingsPacket(
+                                    RecipeBookType.valueOf(op.get("type").getAsString()),
+                                    op.get("open").getAsBoolean(), op.get("filtering").getAsBoolean());
+                                var buf = new FriendlyByteBuf(Unpooled.buffer());
+                                try {
+                                    ServerboundRecipeBookChangeSettingsPacket.STREAM_CODEC.encode(buf, packet);
+                                    byte[] wire = new byte[buf.readableBytes()];
+                                    buf.getBytes(buf.readerIndex(), wire);
+                                    extra = " packet=" + HexFormat.of().formatHex(wire);
+                                    var decoded = ServerboundRecipeBookChangeSettingsPacket.STREAM_CODEC.decode(buf);
+                                    book.setBookSetting(decoded.getBookType(), decoded.isOpen(), decoded.isFiltering());
+                                } finally {
+                                    buf.release();
+                                }
+                            }
                             case "save" -> {
                                 saved = (CompoundTag) ServerRecipeBook.Packed.CODEC.encodeStart(NbtOps.INSTANCE, book.pack()).getOrThrow();
                                 extra = compound(saved);

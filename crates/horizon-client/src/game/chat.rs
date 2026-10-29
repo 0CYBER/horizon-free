@@ -81,6 +81,8 @@ pub struct UiState {
     pub chat_screen: Option<ChatScreen>,
     /// When the chat screen opened (its input took the focus: the cursor blink).
     pub chat_opened: Option<std::time::Instant>,
+    /// The chat screen is `InBedChatScreen`: the sleeper's, with a Leave Bed button.
+    pub in_bed_chat: bool,
     pub registries: Registries,
     pub rules: GameRules,
     pub clock: WorldClock,
@@ -102,8 +104,23 @@ pub struct UiState {
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
     pub died_at: Option<std::time::Instant>,
+    /// `DeathScreen.TitleConfirmScreen` and when it opened (its buttons wait
+    /// 20 ticks, `setDelay`).
+    pub death_confirm: Option<std::time::Instant>,
     /// `LivingEntity.deathTime` of the window's player: ticks since it died.
     pub death_time: u32,
+}
+
+impl UiState {
+    /// The state a window starts with: the chat remembers the commands kept
+    /// in the game folder (`ChatComponent`'s constructor).
+    pub fn new() -> Self {
+        let mut ui = Self::default();
+        if let Ok(dir) = std::env::current_dir() {
+            ui.chat.load_history(&dir);
+        }
+        ui
+    }
 }
 
 impl Game<'_> {
@@ -440,12 +457,47 @@ impl Game<'_> {
         self.capture(false);
     }
     pub(super) fn close_chat(&mut self) {
+        // InBedChatScreen.onClose: leaving the screen means getting up; the
+        // screen goes once the player has woken (`tick_in_bed_chat`).
+        if self.ui.in_bed_chat && self.sleeping.is_some() {
+            self.wake_up();
+            return;
+        }
         self.ui.chat_screen = None;
         self.ui.chat.reset_scroll();
         if self.screen == Screen::Chat {
             self.screen = Screen::Playing;
             self.capture(true);
         }
+    }
+    /// `Gui.tick`: a sleeper gets `InBedChatScreen`; when the player has
+    /// woken (`onPlayerWokeUp`) it closes, or turns into the plain chat
+    /// screen if something was typed.
+    pub(super) fn tick_in_bed_chat(&mut self) {
+        if self.screen != Screen::Chat {
+            self.ui.in_bed_chat = false;
+        }
+        if self.ui.in_bed_chat {
+            if self.sleeping.is_none() {
+                self.ui.in_bed_chat = false;
+                let text = self
+                    .ui
+                    .chat_screen
+                    .as_ref()
+                    .map_or_else(String::new, |s| s.value().to_owned());
+                self.close_chat();
+                if !text.is_empty() {
+                    self.open_chat(&text);
+                }
+            }
+        } else if self.sleeping.is_some() && self.screen == Screen::Playing {
+            self.open_chat("");
+            self.ui.in_bed_chat = self.screen == Screen::Chat;
+        }
+    }
+    /// The Leave Bed button of `InBedChatScreen`: its bounds.
+    fn leave_bed_button(width: f32, height: f32) -> (i32, i32, i32, i32) {
+        (width as i32 / 2 - 100, height as i32 - 40, 200, 20)
     }
     /// `Minecraft.computeChatAbilities` from the Chat option.
     pub(super) fn chat_abilities(&self) -> ChatAbilities {
@@ -559,7 +611,15 @@ impl Game<'_> {
         match screen.key(&m, &c, &self.ui.chat.recent, key, shift, ctrl) {
             ChatAction::Close => self.close_chat(),
             ChatAction::Submit(message) => {
-                self.close_chat();
+                // InBedChatScreen sends without closing (`closeOnSubmit` is
+                // false): the box empties and the screen stays.
+                if self.ui.in_bed_chat && self.sleeping.is_some() {
+                    screen.suggest_command(&m, &c, "");
+                    self.ui.chat.reset_scroll();
+                    self.ui.chat_screen = Some(screen);
+                } else {
+                    self.close_chat();
+                }
                 if !message.is_empty() {
                     self.handle_chat_input(&message);
                 }
@@ -615,7 +675,7 @@ impl Game<'_> {
         // unless a client mod owns the command.
         if self.remote.is_some() {
             if let Some(command) = message.strip_prefix('/')
-                && self.mod_command(command)
+                && self.client_mod_command(command)
             {
                 return;
             }
@@ -624,7 +684,7 @@ impl Game<'_> {
         }
         if let Some(command) = message.strip_prefix('/') {
             // A client mod's command first, then a server mod's, as on a server.
-            if !self.mod_command(command) && !self.local_server_mod_command(command) {
+            if !self.client_mod_command(command) && !self.local_server_mod_command(command) {
                 self.run_command(command);
             }
         } else {
@@ -661,7 +721,8 @@ impl Game<'_> {
         {
             return;
         }
-        let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        // ChatScreen.mouseScrolled: `hasShiftDown`, either Shift key.
+        let shift = self.has_shift_down();
         let amount = amount.clamp(-1.0, 1.0) * if shift { 1.0 } else { 7.0 };
         self.ui.chat.scroll_by(amount as i32, true);
     }
@@ -675,6 +736,16 @@ impl Game<'_> {
             dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
+        if self.ui.in_bed_chat && self.sleeping.is_some() {
+            let width = self.renderer.as_ref().map_or(1280.0, |r| {
+                HudBatch::new([r.config.width, r.config.height]).width
+            });
+            let (x, y, w, h) = Self::leave_bed_button(width, height);
+            if horizon_client::screen_draw::inside((cursor.0 as i32, cursor.1 as i32), x, y, w, h) {
+                self.wake_up();
+                return;
+            }
+        }
         if let Some(screen) = self.ui.chat_screen.as_mut() {
             if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64) {
                 return;
@@ -682,12 +753,25 @@ impl Game<'_> {
         } else {
             return;
         }
-        match self.ui.chat.click_at(
+        let Some(style) = self.ui.chat.style_at(
             &self.gui.atlas.font,
             height as i32,
             cursor.0 as f64,
             cursor.1 as f64,
-        ) {
+        ) else {
+            return;
+        };
+        // ChatScreen.handleComponentClicked: with Shift held only an
+        // insertion acts, else only the click event.
+        if self.has_shift_down() {
+            if let Some(insertion) = style.insertion
+                && let Some(screen) = self.ui.chat_screen.as_mut()
+            {
+                screen.type_text(&m, &c, &insertion);
+            }
+            return;
+        }
+        match style.click {
             Some(ClickEvent::CopyToClipboard(value)) => {
                 use horizon_client::clipboard::Clipboard;
                 self.clipboard.set(&value);
@@ -695,12 +779,107 @@ impl Game<'_> {
             Some(ClickEvent::OpenFile(path)) => {
                 super::packs::open_folder(std::path::Path::new(&path));
             }
+            Some(ClickEvent::OpenUrl(url)) => self.click_url(url),
             Some(ClickEvent::SuggestCommand(command)) => {
                 if let Some(screen) = self.ui.chat_screen.as_mut() {
                     screen.suggest_command(&m, &c, &command);
                 }
             }
-            None => {}
+            Some(ClickEvent::RunCommand(command)) => self.click_command(&command),
+            // Screen.defaultHandleGameClickEvent: the dialog opens over the
+            // screen, and closes back to it.
+            Some(ClickEvent::ShowDialog(dialog)) => self.show_dialog_ref(&dialog),
+            // Screen.defaultHandleClickEvent: a page link means nothing in chat.
+            Some(ClickEvent::ChangePage(_)) | None => {}
+        }
+    }
+    /// `Screen.clickUrlAction`: nothing with Web Links off, else the link
+    /// opens, after the confirmation unless Prompt on Links is off.
+    pub(super) fn click_url(&mut self, url: String) {
+        if !self.settings.chat_links {
+            return;
+        }
+        if self.settings.file.bool("chatLinksPrompt") {
+            self.link_prompt = Some(url);
+        } else {
+            super::packs::open_uri(&url);
+        }
+    }
+    /// `ConfirmLinkScreen` (untrusted): the link and its warning over the
+    /// chat, answered yes to open it.
+    fn link_prompt_layout(
+        &self,
+        url: &str,
+        size: (f32, f32),
+    ) -> horizon_client::confirm_screen::Choice {
+        let warning = Text::translate("chat.link.warning", &[]).with_color(0xFF_CCCC);
+        let message = Text::literal(url)
+            .append(Text::literal("\n"))
+            .append(warning);
+        // ConfirmLinkScreen.addButtons: yes, copy and no, 100 wide each.
+        horizon_client::confirm_screen::Choice::new(
+            &self.gui.atlas.font,
+            size,
+            &Text::translate("chat.link.confirm", &[]),
+            &message,
+            3,
+            100.0,
+        )
+    }
+    pub(super) fn draw_link_prompt(&self, batch: &mut HudBatch) {
+        let Some(url) = &self.link_prompt else {
+            return;
+        };
+        let atlas = &self.gui.atlas;
+        let (w, h) = (batch.width, batch.height);
+        horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        let labels = [
+            Text::translate("gui.yes", &[]),
+            Text::translate("chat.copy", &[]),
+            Text::translate("gui.no", &[]),
+        ];
+        self.link_prompt_layout(url, (w, h))
+            .draw(batch, atlas, self.cursor, &labels);
+    }
+    /// The prompt's answer: the link opens on yes; either way the chat is back.
+    pub(super) fn answer_link_prompt(&mut self, yes: bool) {
+        if let Some(url) = self.link_prompt.take()
+            && yes
+        {
+            super::packs::open_uri(&url);
+        }
+    }
+    pub(super) fn link_prompt_click(&mut self) {
+        let Some(url) = self.link_prompt.clone() else {
+            return;
+        };
+        let pressed = self
+            .link_prompt_layout(&url, self.gui_size())
+            .pressed_at(self.cursor);
+        if let Some(button) = pressed {
+            self.audio.play_button_click();
+            if button == LINK_COPY {
+                // ConfirmLinkScreen.copyToClipboard, then the callback's no.
+                use horizon_client::clipboard::Clipboard;
+                self.clipboard.set(&url);
+            }
+            self.answer_link_prompt(button == LINK_YES);
+        }
+    }
+    /// `Screen.clickCommandAction`: run a clicked command as the player
+    /// without adding it to the chat history. A client mod's command goes
+    /// first, as `ClientPacketListener.sendUnattendedCommand` lets client
+    /// commands take it. (Vanilla asks first when the command fails to
+    /// parse; here the server answers it.)
+    pub(super) fn click_command(&mut self, command: &str) {
+        let command = command.strip_prefix('/').unwrap_or(command);
+        if self.client_mod_command(command) {
+            return;
+        }
+        if self.remote.is_some() {
+            self.send_chat(&format!("/{command}"));
+        } else if !self.local_server_mod_command(command) {
+            self.run_command(command);
         }
     }
     /// Chat lines over the HUD (focused while the chat screen is open).
@@ -737,16 +916,58 @@ impl Game<'_> {
         let draws = screen.draw(&m, mouse, blink, background);
         horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
-        // The hovered message part's tooltip, one row per line of its text.
-        if let Some(hover) = self.ui.chat.hover_at(
-            &self.gui.atlas.font,
-            batch.height as i32,
-            f64::from(self.cursor.0),
-            f64::from(self.cursor.1),
-        ) {
-            let lines = hover_rows(&hover);
+        if self.ui.in_bed_chat && self.sleeping.is_some() {
+            let (x, y, w, h) = Self::leave_bed_button(batch.width, batch.height);
+            let label = Text::literal(horizon_client::lang::get_or(
+                "multiplayer.stopSleeping",
+                "Leave Bed",
+            ));
+            let mut button = Vec::new();
+            horizon_client::screen_draw::button(
+                &mut button,
+                &m,
+                &label,
+                x,
+                y,
+                w,
+                h,
+                true,
+                horizon_client::screen_draw::inside(mouse, x, y, w, h),
+            );
+            horizon_client::screen_draw::paint(batch, &self.gui.atlas, &button);
+        }
+        // The hovered message part's tooltip (`renderComponentHoverEffect`),
+        // or the text of the message tag under the cursor.
+        let height = batch.height as i32;
+        let (cx, cy) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
+        let wrap = (batch.width as i32 / 2).max(200);
+        if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
+            if let Some(hover) = style.hover {
+                let lines = self.wrapped_rows(&hover, wrap);
+                self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            } else if let Some(stack) = style
+                .hover_item
+                .as_deref()
+                .and_then(horizon_client::item_data::stack_from_hover)
+                .filter(|s| self.res.items().get(&s.item).is_some())
+            {
+                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            }
+        } else if self.ui.chat.indicator_at(height, cx, cy) {
+            // GuiMessageTag.systemSinglePlayer's text, split at 210.
+            let tag = Text::translate("chat.tag.system_single_player", &[]);
+            let lines = self.wrapped_rows(&tag, 210);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
+    }
+    /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
+    fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
+        let split = self
+            .gui
+            .atlas
+            .font
+            .split(&text.resolve_legacy(), width as f32);
+        split.into_iter().map(|row| (row, u32::MAX)).collect()
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
     /// `advance_time` allows it.
@@ -783,12 +1004,18 @@ impl Game<'_> {
             spawn_mobs: r.bool("spawn_mobs"),
             spawn_monsters: r.bool("spawn_monsters"),
             fire_spread_radius_around_player: r.int("fire_spread_radius_around_player"),
+            spread_vines: r.bool("spread_vines"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).
     pub(super) fn sync_rules(&mut self) {
         self.world.health_rules.natural_regeneration =
             self.ui.rules.bool("natural_health_regeneration");
+        // Player.isInvulnerableTo: the damage-type rules.
+        self.world.health_rules.drowning_damage = self.ui.rules.bool("drowning_damage");
+        self.world.health_rules.fall_damage = self.ui.rules.bool("fall_damage");
+        self.world.health_rules.fire_damage = self.ui.rules.bool("fire_damage");
+        self.world.health_rules.freeze_damage = self.ui.rules.bool("freeze_damage");
         use horizon_world::food::Difficulty;
         self.world.health_rules.difficulty = match self.ui.difficulty {
             0 => Difficulty::Peaceful,
@@ -801,7 +1028,8 @@ impl Game<'_> {
     pub(super) fn load_world_state(&mut self) {
         self.ui.rules = GameRules::load(&self.world_root);
         self.ui.clock = WorldClock::default();
-        self.ui.difficulty = read_difficulty(&self.world_root).unwrap_or(2);
+        // PrimaryLevelData: the difficulty comes back from level.dat's difficulty_settings.
+        self.ui.difficulty = self.level.difficulty_id();
         if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
             && let Ok((root, _)) =
@@ -826,9 +1054,9 @@ impl Game<'_> {
         self.build_registries();
         self.sync_rules();
     }
-    /// Save the clock and the difficulty beside level.dat (Level.write saves
-    /// the game rules: a second writer of game_rules.dat could leave it with
-    /// the rules loaded when the world opened).
+    /// Save the clock beside level.dat (Level.write saves the game rules: a
+    /// second writer of game_rules.dat could leave it with the rules loaded
+    /// when the world opened).
     pub(super) fn save_world_state(&mut self) {
         if self.world_root.as_os_str().is_empty() {
             return;
@@ -876,9 +1104,6 @@ impl Game<'_> {
         if let Err(e) = horizon_client::save::write_dat(&path, root) {
             log::warn!("the world clocks were not written: {e}");
         }
-        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
-            log::warn!("the difficulty was not written: {e}");
-        }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
     /// cause is known to the client).
@@ -886,6 +1111,7 @@ impl Game<'_> {
         let cause = self.ui.death_cause.take();
         self.ui.died_at = Some(std::time::Instant::now());
         self.ui.death_text = None;
+        self.ui.death_confirm = None;
         if !self.ui.rules.bool("show_death_messages") {
             return;
         }
@@ -988,34 +1214,6 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
         n += 1;
     }
 }
-fn read_difficulty(world: &std::path::Path) -> Option<u8> {
-    let bytes = std::fs::read(world.join("level.dat")).ok()?;
-    let raw = horizon_world::compression::Compression::Gzip
-        .decode(&bytes, 64 << 20)
-        .ok()?;
-    let (root, _) =
-        horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default()).ok()?;
-    match root.tag.get("Data")?.get("Difficulty")? {
-        horizon_world::nbt::Tag::Byte(b) => Some((*b).clamp(0, 3) as u8),
-        _ => None,
-    }
-}
-/// Patch `Data.Difficulty` in level.dat (Level::write stores the default).
-fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::Result<()> {
-    use horizon_world::{compression::Compression, nbt};
-    let path = world.join("level.dat");
-    let bytes = std::fs::read(&path)?;
-    let raw = Compression::Gzip.decode(&bytes, 64 << 20)?;
-    let (mut root, _) = nbt::read_named(&raw, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    if let Some(data) = root.tag.get_mut("Data")
-        && let Some(d) = data.get_mut("Difficulty")
-    {
-        *d = nbt::Tag::Byte(difficulty as i8);
-    }
-    let out = nbt::write_named(&root, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, Compression::Gzip.encode(&out)?)?;
-    Ok(())
-}
 
 /// `IntegratedServer.getProfilePermissions` for the owner: `OWNER` (4) when
 /// commands are allowed, else `ALL` (0).
@@ -1023,25 +1221,6 @@ fn owner_permission(allow_commands: bool) -> u8 {
     if allow_commands { 4 } else { 0 }
 }
 
-/// A hover text's rows for the tooltip: split at line breaks, each in the
-/// colour of its first styled character (white without one).
-fn hover_rows(hover: &horizon_client::text::Text) -> Vec<(String, u32)> {
-    let mut rows = vec![(String::new(), None)];
-    for (c, style) in hover.resolve_legacy().chars() {
-        if c == '\n' {
-            rows.push((String::new(), None));
-            continue;
-        }
-        let row = rows.last_mut().expect("one row");
-        if row.0.is_empty() {
-            row.1 = style.color;
-        }
-        row.0.push(c);
-    }
-    rows.into_iter()
-        .map(|(text, color)| {
-            let [_, r, g, b] = color.unwrap_or(0xFF_FFFF).to_be_bytes();
-            (text, horizon_client::hud::rgba(r, g, b, 255))
-        })
-        .collect()
-}
+/// `ConfirmLinkScreen`'s buttons, left to right: yes, copy, no.
+const LINK_YES: usize = 0;
+const LINK_COPY: usize = 1;

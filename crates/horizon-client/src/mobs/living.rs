@@ -9,7 +9,14 @@ use crate::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, trig},
+    position::BlockPos,
     random::RandomSource,
+};
+use horizon_world::{
+    entity_fluid::{CurrentAccumulator, CurrentTarget},
+    fluid::{FluidKind, FluidState},
+    fluid_flow::{FluidFlowWorld, flow_at},
+    registry::BlockStateId,
 };
 
 /// `Entity.moveDist`, `flyDist` and `nextStep`.
@@ -18,6 +25,8 @@ pub struct Steps {
     pub move_dist: f32,
     pub fly_dist: f32,
     pub next_step: f32,
+    /// `AbstractHorse.gallopSoundCounter`.
+    pub gallop: i32,
 }
 impl Default for Steps {
     fn default() -> Self {
@@ -25,6 +34,7 @@ impl Default for Steps {
             move_dist: 0.0,
             fly_dist: 0.0,
             next_step: 1.0,
+            gallop: 0,
         }
     }
 }
@@ -35,6 +45,50 @@ pub struct Fluids {
     pub in_water: bool,
     pub in_lava: bool,
     pub eye_in_water: bool,
+}
+/// `FluidFlowWorld` over the mob's scene: the neighbours a flow vector reads.
+struct FlowScene<'a, 'w>(&'a MobWorld<'w>);
+impl FluidFlowWorld for FlowScene<'_, '_> {
+    type Error = std::convert::Infallible;
+    type Block = BlockStateId;
+    fn fluid(&mut self, p: BlockPos) -> Result<FluidState, Self::Error> {
+        Ok(self.0.fluid_tables.fluid(self.0.world.block(p.x, p.y, p.z)))
+    }
+    fn block(&mut self, p: BlockPos) -> Result<BlockStateId, Self::Error> {
+        Ok(self.0.world.block(p.x, p.y, p.z))
+    }
+    fn blocks_fluid_flow(&self, s: BlockStateId) -> bool {
+        self.0.fluid_tables.blocks_flow(s)
+    }
+    fn is_ice_class(&self, s: BlockStateId) -> bool {
+        self.0.fluid_tables.ice(s)
+    }
+    fn is_face_sturdy(
+        &mut self,
+        s: BlockStateId,
+        _: BlockPos,
+        d: horizon_core::geometry::Direction,
+    ) -> Result<bool, Self::Error> {
+        Ok(self.0.fluid_tables.sturdy(s, d))
+    }
+}
+/// The mob's velocity, for `CurrentAccumulator::apply_to`.
+struct Pushed<'a>(&'a mut Vec3);
+impl CurrentTarget for Pushed<'_> {
+    type Error = std::convert::Infallible;
+    fn is_player_class(&self) -> bool {
+        false
+    }
+    fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+        Ok(*self.0)
+    }
+    fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+        let sum = Vec3::new(self.0.x + delta.x, self.0.y + delta.y, self.0.z + delta.z);
+        if delta.is_finite() && sum.is_finite() {
+            *self.0 = sum;
+        }
+        Ok(())
+    }
 }
 pub fn wrap(a: f32) -> f32 {
     let mut a = a % 360.0;
@@ -140,6 +194,40 @@ impl MobWorld<'_> {
         }
         out
     }
+    /// Entity.updateFluidHeightAndDoFluidPushing's currents over the deflated
+    /// box: the flow of every water and lava block it touches, summed (a thin
+    /// fluid layer scales its flow down), as (water, lava).
+    fn fluid_currents(&self, bounds: Aabb) -> (CurrentAccumulator, CurrentAccumulator) {
+        let base_y = bounds.min_position().y;
+        let b = bounds.deflate(Vec3::new(0.001, 0.001, 0.001));
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let mut scene = FlowScene(self);
+        let (mut water, mut lava) = (CurrentAccumulator::default(), CurrentAccumulator::default());
+        for x in lo.x.floor() as i32..=(hi.x.ceil() as i32 - 1) {
+            for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
+                for z in lo.z.floor() as i32..=(hi.z.ceil() as i32 - 1) {
+                    let p = BlockPos::new(x, y, z);
+                    let state = self.fluid_tables.fluid(self.world.block(x, y, z));
+                    let current = match state.kind() {
+                        FluidKind::Empty => continue,
+                        FluidKind::Water | FluidKind::FlowingWater => &mut water,
+                        FluidKind::Lava | FluidKind::FlowingLava => &mut lava,
+                    };
+                    let surface = f64::from(y) + self.fluid_height(x, y, z).1;
+                    if surface < lo.y {
+                        continue;
+                    }
+                    current.height = current.height.max(surface - base_y);
+                    let mut flow = flow_at(&mut scene, state, p).unwrap_or(Vec3::ZERO);
+                    if current.height < 0.4 {
+                        flow = flow.scale(current.height);
+                    }
+                    current.accumulate(flow);
+                }
+            }
+        }
+        (water, lava)
+    }
     /// `BlockState.getCollisionShape(level, pos)` (the empty collision
     /// context) as boxes in the world.
     pub fn block_collision_boxes(&self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
@@ -235,6 +323,26 @@ impl MobWorld<'_> {
         };
         scene.unobstructed(b).unwrap_or(false)
     }
+    /// `LevelReader.containsAnyLiquid`: the blocks from the box's minimum
+    /// corner to the block holding its maximum corner.
+    pub fn contains_any_liquid(&self, b: Aabb) -> bool {
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let (x0, y0, z0) = (
+            lo.x.floor() as i32,
+            lo.y.floor() as i32,
+            lo.z.floor() as i32,
+        );
+        let (x1, y1, z1) = (
+            hi.x.floor() as i32,
+            hi.y.floor() as i32,
+            hi.z.floor() as i32,
+        );
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                (z0..=z1).any(|z| self.facts.get(self.world.block(x, y, z)).fluid != Fluid::None)
+            })
+        })
+    }
 }
 impl Mob {
     /// `Entity.refreshDimensions` after growing from `old_w` by `old_h`:
@@ -280,7 +388,22 @@ impl Mob {
         if super::villager::sleeping(self) {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
+        self.awake_dims()
+    }
+    /// `dims` without the sleeping box: a sleeping villager's
+    /// `getDimensions(Pose.STANDING)`, whose eye height lays it in the bed
+    /// (`LivingEntityRenderer.submit`).
+    pub fn awake_dims(&self) -> (f64, f64, f64) {
         let k = &self.kind;
+        // Avatar.POSES: a player's or mannequin's box follows its pose.
+        if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
+            let d = self.extra.avatar_pose.dimensions(1.0);
+            return (
+                f64::from(d.width),
+                f64::from(d.height),
+                f64::from(d.eye_height),
+            );
+        }
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
         if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
@@ -334,6 +457,27 @@ impl Mob {
     pub fn is_in_liquid(&self) -> bool {
         self.fluids.in_water || self.fluids.in_lava
     }
+    /// `Entity.isPushedByFluid`: water animals, turtles, axolotls, frogs and
+    /// nautiluses keep their own course.
+    fn pushed_by_fluid(&self) -> bool {
+        use super::Species as S;
+        !matches!(
+            self.species(),
+            S::Tadpole
+                | S::Cod
+                | S::Salmon
+                | S::TropicalFish
+                | S::Pufferfish
+                | S::Squid
+                | S::GlowSquid
+                | S::Dolphin
+                | S::Turtle
+                | S::Axolotl
+                | S::Frog
+                | S::Nautilus
+                | S::ZombieNautilus
+        )
+    }
     fn affected_by_fluids(&self) -> bool {
         true
     }
@@ -370,7 +514,14 @@ impl Mob {
     /// Entity.move with block collisions and step-up; updates collision flags
     /// and fall distance (Entity.checkFallDamage).
     pub fn do_move(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
-        let wanted = self.velocity;
+        let mut wanted = self.velocity;
+        // Entity.move: a block the mob is stuck in (sweet berry bush) scales
+        // this move once and stops it.
+        if self.stuck_multiplier.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(self.stuck_multiplier);
+            self.stuck_multiplier = Vec3::ZERO;
+            self.velocity = Vec3::ZERO;
+        }
         let step = self.kind.step_height as f32;
         let mut scene = SceneCollisions {
             world: w.world,
@@ -411,23 +562,60 @@ impl Mob {
         } else if !matches!(self.kind.species, super::Species::Bat | super::Species::Bee) {
             self.check_fall_damage(w, moved, events);
         }
-        // restituteMovementAfterCollisions with no bounciness: the colliding
-        // components become (signed) zero.
+        // Entity.restituteMovementAfterCollisions: the colliding components
+        // bounce back by the entity's bounciness (zero for most mobs, so they
+        // become signed zero). Block bounciness is not modelled for mobs.
         if moved_vertically && vertical || self.horizontal_collision {
             let v = self.velocity;
+            let restitution = self.entity_bounciness();
+            let mut after = v;
             if x_hit {
-                self.velocity.x = -v.x * 0.0;
+                after.x = -v.x * restitution;
             }
             if z_hit {
-                self.velocity.z = -v.z * 0.0;
+                after.z = -v.z * restitution;
             }
             if vertical {
-                self.velocity.y = (0.0 - v.y) * 1.0 * 0.0;
+                let mut restitution = restitution;
+                if self.vertical_collision_below {
+                    // Only a hard enough landing bounces, and never on honey.
+                    let on = (
+                        self.position.x.floor() as i32,
+                        (self.position.y - f64::from(0.2_f32)).floor() as i32,
+                        self.position.z.floor() as i32,
+                    );
+                    if -v.y <= self.gravity()
+                        || restitution > 0.0
+                            && w.block_name(on.0, on.1, on.2) == "minecraft:honey_block"
+                    {
+                        restitution = 0.0;
+                    }
+                }
+                let (compensation, drag) = if restitution > 0.0 {
+                    let portion = moved.y / v.y;
+                    let air_drag = f64::from(self.air_drag());
+                    (portion * self.gravity(), 1.0 + portion * (air_drag - 1.0))
+                } else {
+                    (0.0, 1.0)
+                };
+                after.y = (compensation - v.y) * drag * restitution;
             }
+            self.velocity = after;
         }
         // Entity.checkSupportingBlock
         self.supporting = self.supporting_block(w, moved);
         self.movement_emission(w, moved, events);
+        // Entity.applyEffectsFromBlocks: bubble columns push the mob.
+        if crate::motion::bubble_column_push(
+            w.world,
+            w.registry,
+            w.facts,
+            w.collision,
+            self.bounds(),
+            &mut self.velocity,
+        ) {
+            self.fall_distance = 0.0;
+        }
     }
     /// LivingEntity.checkFallDamage: the fluid state refreshed out of water
     /// (touching water resets the fall), then Entity.checkFallDamage.
@@ -440,9 +628,34 @@ impl Mob {
         }
         if self.on_ground {
             if self.fall_distance > 0.0 {
+                self.trample_farmland(w, events);
                 self.cause_fall_damage(events);
             }
             self.fall_distance = 0.0;
+        }
+    }
+    /// `FarmlandBlock.fallOn`: a landing on farmland turns it to dirt with
+    /// chance `fallDistance - 0.5`, if mobs may grief and the mob's
+    /// `width * width * height` is over 0.512. `Block.pushEntitiesUp` lifts
+    /// the mob onto the dirt, which is a full block.
+    fn trample_farmland(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+        let p = self.block_on_legacy(w);
+        if w.block_name(p[0], p[1], p[2]) != "minecraft:farmland" {
+            return;
+        }
+        let roll = f64::from(self.random.next_float());
+        let Some(dirt) = w.registry.default_state("minecraft:dirt") else {
+            return;
+        };
+        if roll < self.fall_distance - 0.5
+            && w.mob_griefing
+            && self.width() * self.width() * self.height() > 0.512
+        {
+            events.push(MobEvent::SetBlock {
+                pos: p,
+                state: dirt,
+            });
+            self.position.y = self.position.y.max(f64::from(p[1]) + 1.0);
         }
     }
     /// Entity.updateFluidInteraction: the fluid state, then touching water
@@ -450,6 +663,22 @@ impl Mob {
     pub(super) fn update_fluids(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let was_touching_water = self.fluids.in_water;
         self.fluids = w.fluids(self.bounds(), self.eye_y());
+        // EntityFluidInteraction.applyCurrentTo: the flow pushes the mob.
+        if (self.fluids.in_water || self.fluids.in_lava) && self.pushed_by_fluid() {
+            let (water, lava) = w.fluid_currents(self.bounds());
+            let lava_scale = if w.nether {
+                0.007
+            } else {
+                0.0023333333333333335
+            };
+            let mut pushed = Pushed(&mut self.velocity);
+            if water.height > 0.0 {
+                let _ = water.apply_to(&mut pushed, 0.014);
+            }
+            if lava.height > 0.0 {
+                let _ = lava.apply_to(&mut pushed, lava_scale);
+            }
+        }
         if self.fluids.in_water {
             self.fall_distance = 0.0;
             if !was_touching_water && !self.first_tick {
@@ -486,7 +715,11 @@ impl Mob {
                 && (self.on_ground || climbable)
                 && !self.fluids_swimming();
             if produced {
-                if let Some((sound, volume, pitch)) =
+                if super::equine::hoof_steps(self.species()) {
+                    if !self.silent {
+                        super::equine::play_step(self, w, legacy, legacy_state, events);
+                    }
+                } else if let Some((sound, volume, pitch)) =
                     super::ai::step_sound(self, w, legacy, legacy_state)
                     && !self.silent
                 {
@@ -529,13 +762,15 @@ impl Mob {
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
-    /// every 0.55, a strider's every 0.6.
+    /// every 0.55, a strider's every 0.6, a turtle's every 0.15.
     fn next_step(&self) -> f32 {
         let walked = self.ai.steps.move_dist;
         if self.kind.species == super::Species::Warden {
             walked + 0.55
         } else if self.kind.species == super::Species::Strider {
             walked + 0.6
+        } else if self.kind.species == super::Species::Turtle {
+            walked + 0.15
         } else {
             (walked as i32).wrapping_add(1) as f32
         }
@@ -625,17 +860,29 @@ impl Mob {
             let at = [self.position.x, self.position.y, self.position.z];
             events.push(MobEvent::Sound("entity.breeze.land", at, 1.0, 1.0));
         }
+        // Creeper.causeFallDamage: the fall swells the fuse, up to five ticks
+        // short of exploding.
+        if self.species() == super::Species::Creeper {
+            self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
+        }
         if self.kind.flags.fall_immune {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
-        let damage = (power * self.kind.fall_damage_multiplier).floor();
+        let mut damage = (power * self.kind.fall_damage_multiplier).floor();
+        // Frog.calculateFallDamage: five points less than the base damage.
+        if self.species() == super::Species::Frog {
+            damage -= 5.0;
+        }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
-            let sound = if damage > 4.0 {
-                "entity.generic.big_fall"
-            } else {
-                "entity.generic.small_fall"
+            // Monster.getFallSounds: the hostile pair.
+            let monster = super::ai::is_monster(self.species());
+            let sound = match (monster, damage > 4.0) {
+                (true, true) => "entity.hostile.big_fall",
+                (true, false) => "entity.hostile.small_fall",
+                (false, true) => "entity.generic.big_fall",
+                (false, false) => "entity.generic.small_fall",
             };
             events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
             self.damage(damage as f32, super::Damage::fall());
@@ -694,12 +941,33 @@ impl Mob {
         } else {
             0.02
         };
+        self.travel_flying_speeds(
+            w,
+            input,
+            events,
+            fluid_speed,
+            fluid_speed,
+            self.kind.air_speed,
+        );
+    }
+    /// `LivingEntity.travelFlying(input, waterSpeed, lavaSpeed, airSpeed)`:
+    /// the speeds vary per mob (an allay flies at the speed its move control
+    /// set, `Allay.travel`).
+    pub fn travel_flying_speeds(
+        &mut self,
+        w: &MobWorld,
+        input: Vec3,
+        events: &mut Vec<MobEvent>,
+        water_speed: f32,
+        lava_speed: f32,
+        air_speed: f32,
+    ) {
         let (speed, drag) = if self.fluids.in_water {
-            (fluid_speed, f64::from(0.8_f32))
+            (water_speed, f64::from(0.8_f32))
         } else if self.fluids.in_lava {
-            (fluid_speed, 0.5)
+            (lava_speed, 0.5)
         } else {
-            (self.kind.air_speed, f64::from(0.91_f32))
+            (air_speed, f64::from(0.91_f32))
         };
         self.move_relative(speed, input);
         self.do_move(w, events);
@@ -716,9 +984,33 @@ impl Mob {
         let y = (self.position.y - 0.500_001).floor() as i32;
         w.facts.get(w.world.block(x, y, z)).friction
     }
+    /// `getAttributeValue(BOUNCINESS)`.
+    fn entity_bounciness(&self) -> f64 {
+        super::sulfur_cube::physics(self).map_or(0.0, |a| f64::from(a.bounciness.clamp(0.0, 1.0)))
+    }
+    /// `LivingEntity.computeModifiedFriction`.
+    fn modified_friction(friction: f32, modifier: f32) -> f32 {
+        (1.0 - (1.0 - friction) * modifier).clamp(0.0, 1.0)
+    }
+    /// `LivingEntity.getAirDrag`: what vertical air drag a bounce applies.
+    fn air_drag(&self) -> f32 {
+        let base = if self.kind.flags.omnidirectional {
+            0.91
+        } else {
+            0.98
+        };
+        Self::modified_friction(base, self.air_drag_modifier())
+    }
+    /// `getAttributeValue(AIR_DRAG_MODIFIER)`.
+    fn air_drag_modifier(&self) -> f32 {
+        super::sulfur_cube::physics(self).map_or(1.0, |a| a.air_drag_modifier.clamp(0.0, 2048.0))
+    }
     fn travel_in_air(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
         let friction = if self.on_ground {
-            self.block_friction(w)
+            // FRICTION_MODIFIER scales the block's slipperiness.
+            let modifier = super::sulfur_cube::physics(self)
+                .map_or(1.0, |a| a.friction_modifier.clamp(0.0, 2048.0));
+            Self::modified_friction(self.block_friction(w), modifier)
         } else {
             1.0
         };
@@ -742,8 +1034,14 @@ impl Mob {
             movement.y = 0.2;
         }
         let mut y = movement.y;
-        if self.extra.levitation > 0 {
-            y += (0.05 * 1.0 - movement.y) * 0.2;
+        // LivingEntity.travelInAir: levitation lifts by its amplifier.
+        if let Some(&(_, _, amp)) = self
+            .extra
+            .effects
+            .iter()
+            .find(|e| e.0 == "minecraft:levitation")
+        {
+            y += (0.05 * f64::from(amp + 1) - movement.y) * 0.2;
         } else {
             y -= self.gravity();
         }
@@ -752,12 +1050,13 @@ impl Mob {
             self.velocity = Vec3::new(movement.x, y, movement.z);
             return;
         }
-        let drag = 0.91f32;
+        let air_drag_modifier = self.air_drag_modifier();
+        let drag = Self::modified_friction(0.91, air_drag_modifier);
         let f = friction * drag;
         let vertical = if self.kind.flags.omnidirectional {
             drag
         } else {
-            0.98
+            Self::modified_friction(0.98, air_drag_modifier)
         };
         self.velocity = Vec3::new(
             movement.x * f64::from(f),
@@ -813,14 +1112,24 @@ impl Mob {
                 self.velocity.y -= gravity / 4.0;
             }
         }
-        // jumpOutOfFluid
+        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
+        // entities a mob collides with (canBeCollidedWith: living shulkers).
         let m = self.velocity;
+        let ahead = self.bounds().move_by(Vec3::new(
+            m.x,
+            m.y + f64::from(0.6_f32) - self.position.y + old_y,
+            m.z,
+        ));
+        let wide = ahead.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
         if self.horizontal_collision
-            && w.no_collision(self.bounds().move_by(Vec3::new(
-                m.x,
-                m.y + f64::from(0.6_f32) - self.position.y + old_y,
-                m.z,
-            )))
+            && w.no_collision(ahead)
+            && !w.contains_any_liquid(ahead)
+            && !w.others_near(wide).any(|s| {
+                s.id != self.id
+                    && s.alive
+                    && s.species == super::Species::Shulker
+                    && s.bounds.intersects(wide)
+            })
         {
             self.velocity.y = f64::from(0.3_f32);
         }
@@ -846,17 +1155,24 @@ impl Mob {
                         self.ai.no_jump_delay = 10;
                     }
                 } else {
-                    self.jump_in_liquid();
+                    self.jump_in_liquid(true);
                 }
             } else {
-                self.jump_in_liquid();
+                self.jump_in_liquid(false);
             }
         } else {
             self.ai.no_jump_delay = 0;
         }
     }
     /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3; bees 0.01.
-    fn jump_in_liquid(&mut self) {
+    /// A magma cube in lava rises to `0.22 + size * 0.05` instead
+    /// (`MagmaCube.jumpInLiquid`).
+    fn jump_in_liquid(&mut self, lava: bool) {
+        if lava && self.species() == super::Species::MagmaCube {
+            self.velocity.y = f64::from(0.22_f32 + self.extra.size as f32 * 0.05);
+            self.needs_sync = true;
+            return;
+        }
         self.velocity.y += if self.species() == super::Species::Bee {
             0.01
         } else if self.ai.nav.can_float {
@@ -908,7 +1224,7 @@ impl Mob {
                 (distance * 4.0).min(1.0)
             };
             self.limb_speed += (target - self.limb_speed) * 0.4;
-            self.limb_position += self.limb_speed * if self.is_baby() { 3.0 } else { 1.0 };
+            self.limb_position += self.limb_speed;
         } else {
             self.limb_speed = 0.0;
         }
