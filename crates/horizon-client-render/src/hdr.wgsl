@@ -16,6 +16,8 @@ struct Params {
     debug: f32,
     // 1 for an HDR10 swapchain, 0 for scRGB.
     pq: f32,
+    // The display's black level in nits; 0 leaves the picture as it is.
+    black: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 
@@ -56,6 +58,23 @@ fn pq(nits: vec3<f32>) -> vec3<f32> {
     return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), vec3(78.84375));
 }
 
+// ST 2084's inverse: the PQ signal to nits.
+fn pq_nits(e: vec3<f32>) -> vec3<f32> {
+    let p = pow(clamp(e, vec3(0.0), vec3(1.0)), vec3(1.0 / 78.84375));
+    let y = max(p - 0.8359375, vec3(0.0)) / (18.8515625 - 18.6875 * p);
+    return 10000.0 * pow(y, vec3(1.0 / 0.1593017578125));
+}
+
+// ITU-R BT.2390's black level lift (its EETF without the knee) on the PQ signal
+// `e`: black moves up to the display's black level, the peak stays, and the lift
+// fades out by the fourth power on the way up, so only the shadows move. A display
+// that can't go darker than its black level would crush everything below it.
+fn lift_black(e: vec3<f32>) -> vec3<f32> {
+    let top = pq(vec3(params.peak * params.paper * 80.0)).x;
+    let n = min(e / top, vec3(1.0));
+    return e + pq(vec3(params.black)).x * pow(vec3(1.0) - n, vec3(4.0));
+}
+
 @vertex fn vs_hdr(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
     return vec4(p * 2.0 - 1.0, 0.0, 1.0);
@@ -86,7 +105,11 @@ fn pq(nits: vec3<f32>) -> vec3<f32> {
     }
     let scrgb = light * params.paper;
     if params.pq > 0.5 {
-        return vec4(pq(BT709_TO_BT2020 * scrgb * 80.0), 1.0);
+        let e = pq(BT709_TO_BT2020 * scrgb * 80.0);
+        return vec4(select(e, lift_black(e), params.black > 0.0), 1.0);
+    }
+    if params.black > 0.0 {
+        return vec4(pq_nits(lift_black(pq(scrgb * 80.0))) / 80.0, 1.0);
     }
     return vec4(scrgb, 1.0);
 }
