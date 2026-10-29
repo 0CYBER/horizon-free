@@ -158,7 +158,9 @@ impl StackData {
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
         self.other.retain(|(k, _)| k != id);
         if id == "minecraft:custom_name" {
-            self.custom_name = value.filter(|tag| read_text(tag).is_some());
+            self.custom_name = value
+                .filter(|tag| read_text(tag).is_some())
+                .map(collapsed_text);
             return;
         }
         if let Some(v) = value {
@@ -421,6 +423,25 @@ fn read_text(t: &Tag) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// `Component.tryCollapseToString`: `ComponentSerialization.CODEC` writes
+/// plain text with no style and no siblings as a bare string.
+fn collapsed_text(tag: Tag) -> Tag {
+    if let Tag::Compound(map) = &tag
+        && let Some(Tag::String(text)) = tag.get("text")
+        && map
+            .iter()
+            .all(|(key, value)| match key.to_string_lossy().as_str() {
+                "text" => true,
+                "type" => matches!(value, Tag::String(s) if s.to_string_lossy() == "text"),
+                "extra" => matches!(value, Tag::List(l) if l.is_empty()),
+                _ => false,
+            })
+    {
+        return Tag::String(text.clone());
+    }
+    tag
 }
 
 /// A `FireworkExplosion` as vanilla's codec writes it (defaults omitted).
@@ -806,7 +827,8 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         custom_name: c
             .get("minecraft:custom_name")
             .filter(|tag| read_text(tag).is_some())
-            .cloned(),
+            .cloned()
+            .map(collapsed_text),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
         banner_patterns: crate::banner_layer::layers_from_nbt(c.get("minecraft:banner_patterns")),
@@ -1033,6 +1055,29 @@ mod tests {
             extra.and_then(|d| d.custom_name_plain()).as_deref(),
             Some("Games Right click")
         );
+    }
+
+    #[test]
+    fn plain_custom_name_is_saved_as_a_string() {
+        // Component.tryCollapseToString: `{text:"Cool"}` is written "Cool";
+        // a style or a sibling keeps the compound.
+        let decode = |name: Tag| {
+            let components = Tag::compound([("minecraft:custom_name", name)]);
+            decode_components(Some(&components)).1.unwrap().custom_name
+        };
+        let plain = Tag::compound([("text", Tag::String("Cool".into()))]);
+        assert_eq!(decode(plain), Some(Tag::String("Cool".into())));
+        let styled = Tag::compound([
+            ("text", Tag::String("Cool".into())),
+            ("color", Tag::String("red".into())),
+        ]);
+        assert_eq!(decode(styled.clone()), Some(styled));
+        let mut data = StackData::default();
+        data.set_other(
+            "minecraft:custom_name",
+            Some(Tag::compound([("text", Tag::String("Loot".into()))])),
+        );
+        assert_eq!(data.custom_name, Some(Tag::String("Loot".into())));
     }
 
     #[test]
