@@ -150,6 +150,7 @@ impl Game<'_> {
         self.captain_banner_geometry(mob, camera, alpha, light, out);
         self.held_item_geometry(mob, camera, alpha, light, true, out);
         self.worn_block_geometry(mob, camera, alpha, light, out);
+        self.worn_skull_geometry(mob, camera, alpha, light, out);
         self.golem_flower_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
@@ -270,6 +271,106 @@ impl Game<'_> {
                 vertex.layer = overlay;
             }
         }
+    }
+    /// `CustomHeadLayer.submit`: a skull worn in the head slot is drawn on the
+    /// head. A player head takes its skin from the worn stack's profile
+    /// (`CustomHeadLayer.resolveSkullRenderType`).
+    fn worn_skull_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        let Some(kind) = mob
+            .extra
+            .head
+            .as_deref()
+            .and_then(super::armor_stands::skull_kind)
+        else {
+            return;
+        };
+        // Only the renderers that add a `CustomHeadLayer` draw it: the
+        // humanoid mobs, the illagers, the villagers, the copper golem and
+        // the avatars. The layer also draws on an invisible mob.
+        if !(&*mob.kind.id == "minecraft:player"
+            || matches!(
+                mob.species(),
+                Species::Zombie
+                    | Species::Husk
+                    | Species::Drowned
+                    | Species::ZombieVillager
+                    | Species::Skeleton
+                    | Species::Stray
+                    | Species::Bogged
+                    | Species::Parched
+                    | Species::WitherSkeleton
+                    | Species::Piglin
+                    | Species::PiglinBrute
+                    | Species::ZombifiedPiglin
+                    | Species::Pillager
+                    | Species::Vindicator
+                    | Species::Evoker
+                    | Species::Illusioner
+                    | Species::Villager
+                    | Species::WanderingTrader
+                    | Species::CopperGolem
+                    | Species::Mannequin
+            ))
+        {
+            return;
+        }
+        let Some(head) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        // translateToHead, the renderer's `skullYOffset` (the villager's
+        // `CUSTOM_HEAD_TRANSFORMS`), then the skull's SKULL_SCALE.
+        let y_offset = if mob.species() == Species::Villager {
+            -0.074_218_75
+        } else {
+            0.0
+        };
+        let pose = head
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, y_offset, 0.0))
+            * glam::Mat4::from_scale(glam::Vec3::splat(1.1875));
+        let special = horizon_assets::item_model::SpecialModel {
+            kind: if kind == "player" {
+                horizon_assets::item_model::SpecialKind::PlayerHead
+            } else {
+                horizon_assets::item_model::SpecialKind::Head {
+                    kind: kind.to_owned(),
+                    texture: None,
+                    animation: 0.0,
+                }
+            },
+        };
+        let profile = mob.extra.armor[0]
+            .as_ref()
+            .filter(|stack| mob.extra.head.as_deref() == Some(&*stack.item))
+            .and_then(|stack| stack.extra.as_deref())
+            .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
+            .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
+            .unwrap_or(serde_json::Value::Null);
+        let mut sink = horizon_client::item_render::WorldSink {
+            out,
+            light,
+            lights: Some(horizon_client::block_entity_render::diffuse_lights(
+                self.dim == super::Dim::Nether,
+            )),
+            glint: self.glint(),
+        };
+        self.pack.item_renderer.submit_special(
+            &special,
+            &profile,
+            false,
+            pose,
+            &self.gui.atlas.sprites,
+            &self.item_host(),
+            &mut sink,
+        );
     }
     /// `ItemInHandLayer`: both hands through the item model pipeline; `lit`
     /// applies the level's diffuse lighting (off for GUI previews, which
