@@ -74,6 +74,22 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
+/// Where the player's fall, lava ride and Nether trip began, the blast that
+/// last hit the player, and the effects the last tick saw (`ServerPlayer`'s
+/// fields of the same names). A guest keeps their own, as `levitation` does.
+#[derive(Clone, Debug, Default)]
+pub(super) struct TravelMarks {
+    /// `startingToFallPosition`.
+    pub(super) fall: Option<[f64; 3]>,
+    /// `currentExplosionImpactPos`, and whether a wind charge made the blast.
+    pub(super) blast: Option<([f64; 3], bool)>,
+    /// `enteredLavaOnVehiclePosition`.
+    pub(super) lava_ride: Option<[f64; 3]>,
+    /// `enteredNetherPosition`.
+    pub(super) nether: Option<[f64; 3]>,
+    /// The (effect, amplifier) pairs `EffectsChangedTrigger` last saw.
+    pub(super) effects: Vec<(&'static str, i32)>,
+}
 #[derive(Default)]
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
@@ -89,6 +105,8 @@ pub(super) struct AdvState {
     pub(super) last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
+    /// The fall, lava ride, Nether trip, blast and effects `tick_marks` follows.
+    pub(super) marks: TravelMarks,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
     /// unlocked and the announcements, for their client and everyone's.
@@ -408,6 +426,14 @@ impl Game<'_> {
             equipment[4] = slot(&m.extra.legs);
             equipment[5] = slot(&m.extra.feet);
         }
+        // A wolf's armor is its body slot, with its durability.
+        if m.species() == horizon_client::mobs::Species::Wolf {
+            equipment[6] = m.extra.head.as_ref().map(|id| {
+                let mut armor = ItemStack::new(id, 1);
+                armor.damage = m.extra.body_damage.max(0) as u32;
+                item_view(&armor)
+            });
+        }
         EntityView {
             kind: m.kind.id.clone(),
             position: [m.position.x, m.position.y, m.position.z],
@@ -685,6 +711,7 @@ impl Game<'_> {
         if let Some((start, since)) = self.adv.levitation {
             self.trigger_levitation(start, (self.ticks - since) as i64);
         }
+        self.tick_marks();
         if self.ticks.is_multiple_of(20) {
             let me = self.player_entity();
             self.trigger("minecraft:location", |c, w| {
@@ -719,6 +746,32 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
     }
+    /// `KilledTrigger` (`player_killed_entity`): the entity killed and the
+    /// killing blow's damage source (none: any `killing_blow` fails).
+    pub(super) fn trigger_killed(&mut self, target: &EntityView, blow: Option<&adv::DamageView>) {
+        let me = self.player_entity();
+        let target = target.clone();
+        let blow = blow.cloned();
+        self.trigger("minecraft:player_killed_entity", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let ectx = adv::Entities {
+                this: Some(&target),
+                ..pctx
+            };
+            let blow_ok = c["killing_blow"].is_null()
+                || blow
+                    .as_ref()
+                    .is_some_and(|d| adv::damage_source(&c["killing_blow"], d, w, me.position));
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["entity"], &ectx, w)
+                && blow_ok
+        });
+    }
     /// `KilledByArrowTrigger`: what the arrow killed and the weapon it came from.
     pub(super) fn trigger_killed_by_arrow(
         &mut self,
@@ -746,6 +799,162 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
                 && adv::range_i(&c["duration"], duration)
+        });
+    }
+    /// `ServerPlayer.tick`: `trackStartFallingPosition` and the end of a fall
+    /// (`resetFallDistance`), `trackEnteredOrExitedLavaOnVehicle`, the way back
+    /// from the Nether, and `onEffectAdded`, `onEffectUpdated` and
+    /// `onEffectsRemoved`, which are seen as each tick ends.
+    fn tick_marks(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let falling = p.fall_distance > 0.0;
+        let dead = p.health.dead_or_dying();
+        let lava = self
+            .riding
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+            .is_some_and(|m| m.fluids.in_lava);
+        match (falling, self.adv.marks.fall) {
+            (true, None) => {
+                self.adv.marks.fall = Some(at);
+                // The blast a wind charge made is spent by the fall, and counts
+                // only if the player was above where it hit.
+                if let Some((impact, wind_charge)) = self.adv.marks.blast.take()
+                    && wind_charge
+                    && impact[1] <= at[1]
+                {
+                    self.trigger_fall_after_explosion(impact);
+                }
+            }
+            // `resetFallDistance`: a fall ends by landing, climbing or water.
+            (false, Some(start)) => {
+                self.adv.marks.fall = None;
+                if !dead {
+                    self.trigger_distance("minecraft:fall_from_height", start);
+                }
+            }
+            _ => {}
+        }
+        match (lava, self.adv.marks.lava_ride) {
+            (true, None) => self.adv.marks.lava_ride = Some(at),
+            (true, Some(start)) => self.trigger_distance("minecraft:ride_entity_in_lava", start),
+            (false, Some(_)) => self.adv.marks.lava_ride = None,
+            (false, None) => {}
+        }
+        // Back in the Overworld from the Nether: measured from where it was entered.
+        if let Some(start) = self.adv.marks.nether
+            && self.dim == Dim::Overworld
+        {
+            self.adv.marks.nether = None;
+            self.trigger_distance("minecraft:nether_travel", start);
+        }
+        let effects: Vec<(&'static str, i32)> = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .map(|e| (e.id, e.amplifier))
+            .collect();
+        if effects != self.adv.marks.effects {
+            self.adv.marks.effects = effects;
+            self.trigger_effects_changed(None);
+        }
+    }
+    /// `DistanceTrigger`: the player's `player` condition, `start_position`
+    /// at `start`, and the `distance` from `start` to the player.
+    fn trigger_distance(&mut self, name: &str, start: [f64; 3]) {
+        let me = self.player_entity();
+        self.trigger(name, move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::location(&c["start_position"], start, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
+        });
+    }
+    /// `FallAfterExplosionTrigger` for a wind charge's blast that hit the
+    /// player at `impact`, measured to where the player is now.
+    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3]) {
+        let me = self.player_entity();
+        let cause = EntityView {
+            kind: "minecraft:wind_charge".into(),
+            position: impact,
+            ..EntityView::default()
+        };
+        self.trigger("minecraft:fall_after_explosion", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let cctx = adv::Entities {
+                this: Some(&cause),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::location(&c["start_position"], impact, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], impact, me.position))
+                && adv::conditions(&c["cause"], &cctx, w)
+        });
+    }
+    /// `EffectsChangedTrigger`: the player's `effects`, and for an effect that
+    /// `source` gave, that entity (`source`).
+    pub(super) fn trigger_effects_changed(&mut self, source: Option<EntityView>) {
+        let me = self.player_entity();
+        self.trigger("minecraft:effects_changed", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let effects = c["effects"].is_null()
+                || adv::entity(
+                    &serde_json::json!({ "minecraft:effects": c["effects"] }),
+                    &me,
+                    w,
+                    me.position,
+                );
+            let source = c["source"].is_null()
+                || source.as_ref().is_some_and(|s| {
+                    let sctx = adv::Entities {
+                        this: Some(s),
+                        origin: me.position,
+                        tool: None,
+                        block_pos: None,
+                    };
+                    adv::conditions(&c["source"], &sctx, w)
+                });
+            adv::conditions(&c["player"], &pctx, w) && effects && source
+        });
+    }
+    /// `ItemDurabilityTrigger`: a player's item takes damage (`ItemStack.applyDamage`),
+    /// `stack` as it is before the damage. The durability and delta ranges are not
+    /// read: no advancement in the data uses them.
+    pub(super) fn trigger_item_durability(&mut self, stack: &ItemStack) {
+        if self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        let me = self.player_entity();
+        let item = item_view(stack);
+        self.trigger("minecraft:item_durability_changed", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && (c["item"].is_null() || adv::item(&c["item"], &item, w))
         });
     }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
@@ -869,9 +1078,6 @@ impl Game<'_> {
         stack: &ItemStack,
         target: &EntityView,
     ) {
-        if self.lan_acting.is_some() {
-            return;
-        }
         let me = self.player_entity();
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
@@ -1043,6 +1249,110 @@ impl Game<'_> {
             adv::conditions(&c["location"], &ctx, w)
         });
     }
+    /// `LightningStrikeTrigger`: the bolt, and the mobs around it that it did
+    /// not hit (`bystander`), each tested from this player's position.
+    pub(super) fn trigger_lightning_strike(&mut self, bolt: &EntityView, viewers: &[EntityView]) {
+        let me = self.player_entity();
+        let (bolt, viewers) = (bolt.clone(), viewers.to_vec());
+        self.trigger("minecraft:lightning_strike", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let bctx = adv::Entities {
+                this: Some(&bolt),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["lightning"], &bctx, w)
+                && (c["bystander"].is_null()
+                    || viewers.iter().any(|v| {
+                        adv::conditions(
+                            &c["bystander"],
+                            &adv::Entities {
+                                this: Some(v),
+                                ..pctx
+                            },
+                            w,
+                        )
+                    }))
+        });
+    }
+    /// `ChanneledLightningTrigger`: each victim condition matched by some
+    /// mob the bolt hit, from the player who channelled it.
+    pub(super) fn trigger_channeled_lightning(&mut self, victims: &[EntityView]) {
+        let me = self.player_entity();
+        let victims = victims.to_vec();
+        self.trigger("minecraft:channeled_lightning", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && c["victims"].as_array().into_iter().flatten().all(|want| {
+                    victims.iter().any(|v| {
+                        adv::conditions(
+                            want,
+                            &adv::Entities {
+                                this: Some(v),
+                                ..pctx
+                            },
+                            w,
+                        )
+                    })
+                })
+        });
+    }
+    /// `SpearMobsTrigger`: the living entities the spear stabbed in this use.
+    pub(super) fn trigger_spear_mobs(&mut self, stabbed: usize) {
+        let me = self.player_entity();
+        self.trigger("minecraft:spear_mobs", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && c["count"].as_u64().is_none_or(|n| stabbed as u64 >= n)
+        });
+    }
+    /// `BeeNestDestroyedTrigger`: the nest's block state, the tool that broke
+    /// it and the bees left inside.
+    pub(super) fn trigger_bee_nest_destroyed(
+        &mut self,
+        state: horizon_world::registry::BlockStateId,
+        tool: Option<&ItemStack>,
+        bees: i64,
+    ) {
+        let Some(definition) = self.pack.assets.registry.state(state).cloned() else {
+            return;
+        };
+        let me = self.player_entity();
+        let tool = tool.map(item_view).unwrap_or_default();
+        self.trigger("minecraft:bee_nest_destroyed", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let state_ok = c["state"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .all(|(k, v)| definition.properties.get(k).map(String::as_str) == v.as_str());
+            adv::id_matches(&c["blocks"], "block", &definition.name, w)
+                && state_ok
+                && adv::item(&c["item"], &tool, w)
+                && adv::range_i(&c["num_bees_inside"], bees)
+                && adv::conditions(&c["player"], &pctx, w)
+        });
+    }
     /// A trigger with only the player condition (slept_in_bed, started_riding).
     pub(super) fn trigger_player(&mut self, name: &str) {
         let me = self.player_entity();
@@ -1098,12 +1408,20 @@ impl Game<'_> {
                 && test("child", child.as_ref())
         });
     }
-    /// `ChangeDimensionTrigger`.
-    pub(super) fn trigger_dimension(&mut self, from: Dim, to: Dim) {
-        let (from, to) = (from.id().to_owned(), to.id().to_owned());
+    /// `ChangeDimensionTrigger`, and `ServerPlayer.enteredNetherPosition`: the
+    /// Overworld position the player went into the Nether from (`at`) is kept
+    /// for the way back, and any other trip drops it.
+    pub(super) fn trigger_dimension(&mut self, from: Dim, to: Dim, at: [f64; 3]) {
+        let (from_id, to_id) = (from.id().to_owned(), to.id().to_owned());
         self.trigger("minecraft:changed_dimension", move |c, _| {
-            c["from"].as_str().is_none_or(|f| f == from) && c["to"].as_str().is_none_or(|t| t == to)
+            c["from"].as_str().is_none_or(|f| f == from_id)
+                && c["to"].as_str().is_none_or(|t| t == to_id)
         });
+        if from == Dim::Overworld && to == Dim::Nether {
+            self.adv.marks.nether = Some(at);
+        } else if !(from == Dim::Nether && to == Dim::Overworld) {
+            self.adv.marks.nether = None;
+        }
     }
     /// `ToastManager.SLOT_COUNT`.
     pub(super) const TOAST_SLOTS: usize = 5;
