@@ -91,6 +91,7 @@ pub mod pack_uniforms;
 mod pack_weather;
 mod page_runs;
 pub mod panorama;
+mod readback;
 mod resident;
 mod stars;
 mod timing;
@@ -561,6 +562,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
+    /// Where a screenshot's frame is drawn when the swapchain cannot be read back.
+    readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -2660,6 +2663,7 @@ impl Renderer {
             pack_terrain_flat: false,
             hud,
             menu_blur: None,
+            readback: readback::Readback::default(),
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
@@ -3586,7 +3590,12 @@ impl Renderer {
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
             (Some(_), Some(hdr)) => hdr.frame(&self.device, size),
-            (Some(f), None) => f.texture.clone(),
+            // A screenshot of a swapchain without COPY_SRC (OpenGL) draws
+            // into a texture that has it, then onto the swapchain.
+            (Some(f), None) => self
+                .readback
+                .target(&self.device, &f.texture, self.screenshot.is_some())
+                .unwrap_or_else(|| f.texture.clone()),
             (None, _) => self.offscreen.clone().ok_or("no offscreen target")?,
         };
         // One command buffer for the frame, after the section copies staged
@@ -5193,7 +5202,11 @@ impl Renderer {
             // The copy and PNG writer both assume 8-bit pixels; a float surface would make
             // the row stride too small for the copy and abort in validation.
             if self.config.format.block_copy_size(None) == Some(4) {
-                Some((path, self.copy_frame(&mut encoder, &target_texture)))
+                let size = [self.config.width, self.config.height];
+                Some((
+                    path,
+                    copy_frame(&self.device, &mut encoder, &target_texture, size),
+                ))
             } else {
                 self.screenshot_result = Some(Err(format!(
                     "screenshots need a 32-bit surface format, not {:?}",
@@ -5206,6 +5219,10 @@ impl Renderer {
         if has_section_copies {
             self.section_copy_bytes = 0;
             self.section_uploads.finish(&encoder);
+        }
+        if let Some(f) = &surface_frame {
+            self.readback
+                .present(&self.device, &mut encoder, &f.texture);
         }
         if let (Some(hdr), Some(f)) = (&self.hdr, &surface_frame) {
             hdr.present(&self.queue, &mut encoder, &f.texture, !frame.title);
@@ -5279,43 +5296,43 @@ impl Renderer {
         Ok(true)
     }
 }
+/// Bytes per row of a `width`-pixel frame read back at 4 bytes a pixel.
+fn padded_row(width: u32) -> u32 {
+    (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+}
+/// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
+fn copy_frame(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    [width, height]: [u32; 2],
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Horizon screenshot"),
+        size: u64::from(padded_row(width)) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row(width)),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    buffer
+}
 impl Renderer {
-    fn padded_row(&self) -> u32 {
-        (self.config.width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-    }
-    fn copy_frame(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        texture: &wgpu::Texture,
-    ) -> wgpu::Buffer {
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Horizon screenshot"),
-            size: u64::from(self.padded_row()) * u64::from(self.config.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.padded_row()),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width: self.config.width,
-                height: self.config.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        buffer
-    }
     fn write_screenshot(&self, path: &std::path::Path, buffer: &wgpu::Buffer) -> Result<[u32; 2]> {
-        if !self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
-            return Err("this surface does not support frame readback".into());
-        }
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = sender.send(r);
@@ -5330,7 +5347,7 @@ impl Renderer {
         let (width, height, row) = (
             self.config.width,
             self.config.height,
-            self.padded_row() as usize,
+            padded_row(self.config.width) as usize,
         );
         let bgra = matches!(
             self.config.format.remove_srgb_suffix(),
