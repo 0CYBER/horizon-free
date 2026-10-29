@@ -1444,6 +1444,8 @@ struct Game<'a> {
     /// `FogRenderer`'s evolving state.
     fog: horizon_client::fog::FogState,
     screen_fx: horizon_client::screen_effects::ScreenEffects,
+    /// `LocalPlayer.itemActivation`: the totem flying up to the screen.
+    item_activation: horizon_client::item_activation::ItemActivation,
     weather_parameters: horizon_client::weather::ParameterCache,
     panorama_rotation: horizon_client::gfx::panorama::Rotation,
     world: World,
@@ -5227,8 +5229,10 @@ impl Game<'_> {
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
-        // GameRenderer.tick: a wither's bar darkens the world, then fades.
+        // GameRenderer.tick: a wither's bar darkens the world, then fades;
+        // the activated item counts down.
         self.boss_overlay.tick_darken(running);
+        self.tick_item_activation();
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {
@@ -9641,6 +9645,8 @@ impl Game<'_> {
         horizon_client::crash::clear_detail("World");
         self.debug_charts.reset();
         self.boss_overlay.reset();
+        // GameRenderer.resetData (Minecraft.clearClientLevel).
+        self.item_activation.reset();
         self.bosses = Default::default();
         self.streaming.paused = true;
         self.world = World::new(self.res.facts().air, 0);
@@ -12105,11 +12111,18 @@ impl Game<'_> {
         } else {
             (Vec::new(), None)
         };
-        let hand = if title || self.scoping() {
+        let mut hand = if title || self.scoping() {
             Vec::new()
         } else {
             self.hand_geometry(camera_alpha)
         };
+        // GameRenderer.render3dHud: the screen effects after the hand, in
+        // its pass (the hand pass draws with `bob * view`).
+        if !title {
+            let view = bob * horizon_client::camera::view_matrix(yaw, pitch);
+            let aspect = size[0] as f32 / size[1].max(1) as f32;
+            self.item_activation_geometry(camera_alpha as f32, view, aspect, &mut hand);
+        }
         let screen = if title {
             Vec::new()
         } else {
@@ -14032,6 +14045,7 @@ impl<'a> Game<'a> {
             gui,
             fog: Default::default(),
             screen_fx: Default::default(),
+            item_activation: Default::default(),
             weather_parameters: Default::default(),
             panorama_rotation: Default::default(),
             world,
