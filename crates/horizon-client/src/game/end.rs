@@ -329,6 +329,13 @@ impl Game<'_> {
             .clone()
     }
 
+    /// EnderEyeItem.use's `getPlayerPOVHitResult`: whether the block aimed
+    /// at is an End portal frame (the use passes there).
+    pub(super) fn aims_at_end_portal_frame(&self) -> bool {
+        self.pick()
+            .is_some_and(|hit| &*self.block_name(hit.pos) == "minecraft:end_portal_frame")
+    }
+
     /// EnderEyeItem.useOn: fill an empty End portal frame, then light the
     /// portal when the ring of twelve filled frames is complete.
     pub(super) fn use_ender_eye(&mut self, stack: &ItemStack, use_on_block: bool) -> Result<bool> {
@@ -345,7 +352,12 @@ impl Game<'_> {
             if matches!(self.guest_use, Some(super::GuestUse::OnBlock(_))) {
                 return Ok(false);
             }
-            // EnderEyeItem.use: throw the eye towards the nearest stronghold.
+            // EnderEyeItem.use: startUsingItem (getUseDuration 0, so the use
+            // lasts until the button lets go), then the eye is thrown towards
+            // the nearest stronghold if there is one (CONSUME without).
+            if self.using.is_none() {
+                self.using = Some((self.held_slot(), 0));
+            }
             self.throw_ender_eye();
             return Ok(true);
         };

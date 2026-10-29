@@ -1667,9 +1667,7 @@ impl Game<'_> {
         host.hub.teleport(gi, Some(at));
     }
     fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
-        let g = &mut host.hub.guests[gi];
-        g.death_time += 1;
-        if g.death_time >= 20 {
+        if host.hub.guests[gi].tick_death() {
             self.guest_drop_carried(host, gi);
         }
     }
@@ -2734,6 +2732,12 @@ impl Game<'_> {
         self.as_guest(host, conn, |game| {
             game.sculk_step_on_player();
             game.tick_player_sculk_events();
+            // Entity.restituteMovementAfterCollisions: GameEvent.BOUNCE.
+            for event in &events {
+                if matches!(event, MotionEvent::Bounce { .. }) {
+                    game.post_entity_event("minecraft:bounce", horizon_client::mobs::Who::Player);
+                }
+            }
         });
         for event in events {
             match event {

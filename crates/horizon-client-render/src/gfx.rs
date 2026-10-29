@@ -535,7 +535,7 @@ pub struct Renderer {
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
-    /// Resolution scale and FXAA (Horizon settings).
+    /// Resolution scale, FXAA and TAA (Horizon settings).
     world_post: world_post::Post,
     /// HDR output (Horizon setting): `Some` while the swapchain is HDR.
     hdr: Option<hdr::Hdr>,
@@ -767,8 +767,14 @@ fn mip_chain(
 /// pass is also what passes each draw's first instance to shaders reading
 /// `instance_index`, and DirectX 12 is the fallback, where working matters
 /// more than CPU time.
-fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
+fn instance_descriptor(
+    backends: wgpu::Backends,
+    window: Option<&Arc<Window>>,
+) -> wgpu::InstanceDescriptor {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if let Some(window) = window {
+        descriptor = descriptor.with_display_handle(Box::new(WindowDisplay(window.clone())));
+    }
     descriptor.backends = backends.with_env();
     let dx12 = cfg!(windows) && descriptor.backends.contains(wgpu::Backends::DX12);
     if !cfg!(debug_assertions) && !dx12 {
@@ -777,6 +783,21 @@ fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
             .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     }
     descriptor.with_env()
+}
+/// The window's display connection, so the OpenGL backend creates its EGL
+/// display from the X11 or Wayland connection the window lives on. Without
+/// one, wgpu-hal falls back to `EGL_MESA_platform_surfaceless`, whose configs
+/// cannot present to a window; the backend then reports the surface as
+/// incompatible and the game has no OpenGL to fall back to (`gl not
+/// compatible with provided surface`).
+#[derive(Debug, Clone)]
+struct WindowDisplay(Arc<Window>);
+impl wgpu::rwh::HasDisplayHandle for WindowDisplay {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        wgpu::rwh::HasDisplayHandle::display_handle(&*self.0)
+    }
 }
 /// The backends to open a device on, each tried in turn until one gives a
 /// device. `api` is the player's choice (`GraphicsApi::with_env` applied);
@@ -892,7 +913,7 @@ async fn open_device(
         if attempt > 0 {
             log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));
         }
-        let instance = wgpu::Instance::new(instance_descriptor(backends));
+        let instance = wgpu::Instance::new(instance_descriptor(backends, Some(window)));
         let surface = if offscreen {
             None
         } else {
@@ -3233,9 +3254,12 @@ impl Renderer {
             self.send_hdr_metadata();
         }
     }
-    pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
+    /// `upscale`: output pixels per rendered pixel, for TAA to rebuild (1: native).
+    pub fn set_world_post(&mut self, scale: f32, antialias: bool, taa: bool, upscale: f32) {
         self.world_post.scale = scale.clamp(0.25, 2.0);
-        self.world_post.antialias = antialias;
+        self.world_post.antialias = antialias && !taa;
+        self.world_post.taa = taa;
+        self.world_post.upscale = if taa { upscale.clamp(1.0, 4.0) } else { 1.0 };
     }
     /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`;
     /// `block_ids` gives each block sprite layer's `mc_Entity` (id, fluid) pair.
@@ -3620,6 +3644,16 @@ impl Renderer {
         let views = self.views(frame);
         let pose = frame.bob * frame.spin;
         let view_proj = views.primary().view_proj(pose);
+        // TAA runs where the world post pass does, not under a shader pack's own.
+        let taa = !frame.title
+            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
+            && self.native.as_ref().is_none_or(|n| n.post.is_none());
+        let jittered = self.world_post.jitter(
+            [self.config.width, self.config.height],
+            taa,
+            view_proj,
+            frame.camera,
+        ) * view_proj;
         if frame.title {
             self.panorama.prepare(
                 &self.queue,
@@ -3670,7 +3704,7 @@ impl Renderer {
             )
         };
         let globals = Globals {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: jittered.to_cols_array_2d(),
             fog_color,
             fog,
             sky_color: [
@@ -4303,7 +4337,7 @@ impl Renderer {
             self.stars.prepare(
                 &mut self.uploads,
                 &mut encoder,
-                view_proj * rotation,
+                jittered * rotation,
                 brightness,
             );
         }
@@ -4476,6 +4510,8 @@ impl Renderer {
                 .flatten();
         }
         let pack_reads_world = pack_post || native_post;
+        // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
+        let keep_depth = pack_reads_world || (taa && self.world_post.taa);
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         // The shadow camera's lists, drawn by the pack's shadow programs.
@@ -4627,8 +4663,7 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // Phase 2 of occlusion culling draws over it; a shader pack reads it.
-                        store: if cull.is_some() || pack_reads_world {
+                        store: if cull.is_some() || keep_depth {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -4703,7 +4738,7 @@ impl Renderer {
                                 &mut encoder,
                                 world_view,
                                 world_depth,
-                                pack_reads_world,
+                                keep_depth,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pack_frame(&mut pass);
@@ -4733,7 +4768,7 @@ impl Renderer {
                                 &mut encoder,
                                 world_view,
                                 world_depth,
-                                pack_reads_world,
+                                keep_depth,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pack_frame(&mut pass);
@@ -5046,7 +5081,8 @@ impl Renderer {
                 native.timing.as_mut(),
             );
         } else if scaled.is_some() {
-            self.world_post.finish(&mut encoder, &view_target);
+            self.world_post
+                .finish(&self.queue, &mut encoder, &view_target);
         }
         if let Some(hdr) = &self.hdr {
             hdr.keep_world(&mut encoder);
@@ -5709,7 +5745,7 @@ mod tests {
     #[test]
     fn indirect_draws_are_validated_only_in_debug_builds_and_on_directx_12() {
         let validated = |backends| {
-            super::instance_descriptor(backends)
+            super::instance_descriptor(backends, None)
                 .flags
                 .contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL)
         };

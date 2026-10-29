@@ -11,6 +11,7 @@ use super::{Dim, Game, Mining, Screen};
 use horizon_client::first_person::{Hand, SwingAnimation};
 use horizon_client::{
     Result,
+    blocks::Fluid,
     chunk::Chunk,
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ExperienceOrb, ItemEntity},
@@ -141,11 +142,9 @@ pub(super) struct Remote {
     /// the first teleport, which takes them then.
     abilities: Option<play::PlayerAbilities>,
     loaded_sent: bool,
-    /// The view distance last sent in ClientInformation.
-    sent_view: i8,
-    /// The Chat option's visibility last sent in ClientInformation
-    /// (`Options.broadcastOptions` sends it again when it changes).
-    sent_chat_visibility: i32,
+    /// The ClientInformation last sent (`Options.broadcastOptions` sends it
+    /// again when a view distance, Chat, skin or Main Hand option changes).
+    sent_info: horizon_protocol::packets::configuration::ClientInformation,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -192,6 +191,9 @@ pub(super) struct Remote {
     online_mode: bool,
     /// Player entities in the level: entity id to profile UUID.
     level_players: HashMap<i32, u128>,
+    /// The profile name each player entity was created with (`RemotePlayer.getGameProfile`): it outlives the
+    /// player-list entry, which servers remove to hide their NPCs from the list.
+    level_player_names: HashMap<i32, String>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
@@ -476,8 +478,7 @@ impl Game<'_> {
             carried: None,
             abilities: None,
             loaded_sent: false,
-            sent_view: view,
-            sent_chat_visibility: self.settings.chat_visibility as i32,
+            sent_info: self.settings.client_information(view),
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -502,6 +503,7 @@ impl Game<'_> {
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
+            level_player_names: HashMap::new(),
             glowing: Default::default(),
             profile: 0,
             profile_name: String::new(),
@@ -552,7 +554,14 @@ impl Game<'_> {
             r.session.disconnect();
         }
         self.server_packs_disconnect();
+        self.code_of_conduct = None;
         self.close_dialogs();
+        // Gui.setScreen -> KeyMapping.releaseAll: the title or disconnect
+        // screen releases every held key. Its release goes to that screen,
+        // so a key kept here would still be down in the next world (#3246).
+        self.keys.clear();
+        self.left = false;
+        self.right = false;
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
             Some(server) => {
@@ -922,6 +931,7 @@ impl Game<'_> {
                 }
                 Event::ShowDialog(dialog) => self.show_dialog(&dialog),
                 Event::ClearDialog => self.clear_dialog(),
+                Event::CodeOfConduct(text) => self.handle_code_of_conduct(text),
                 Event::DecodeError(e) => {
                     if let Some(r) = self.remote.as_mut() {
                         r.decode_errors += 1;
@@ -1098,6 +1108,7 @@ impl Game<'_> {
                 // The entity ids are the old world's; the new dimension's
                 // player entities re-map to their profiles on AddEntity.
                 r.level_players.clear();
+                r.level_player_names.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -1789,13 +1800,12 @@ impl Game<'_> {
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
                 self.enter_remote_dimension(&p.spawn, false);
-                let view = client_view_distance(self.settings.render_distance);
+                let info = self
+                    .settings
+                    .client_information(client_view_distance(self.settings.render_distance));
                 if let Some(r) = self.remote.as_mut() {
-                    r.sent_view = view;
+                    r.sent_info = info.clone();
                 }
-                let mut info =
-                    horizon_protocol::packets::configuration::ClientInformation::new(view);
-                info.chat_visibility = self.settings.chat_visibility as i32;
                 self.send(S::ClientInformation(info));
             }
             C::Respawn(p) => {
@@ -1803,6 +1813,12 @@ impl Game<'_> {
                 // again) and with no item in use.
                 self.potions.effects.clear();
                 self.using = None;
+                // After a death (no KEEP_ENTITY_DATA) the new LocalPlayer
+                // rides nothing: the server pairs a vehicle again with its
+                // passengers. A dimension change keeps the vehicle it travels in.
+                if p.keep & 2 == 0 {
+                    self.riding = None;
+                }
                 let dimension_changed = self.dim != Dim::from_id(&p.spawn.dimension);
                 self.enter_remote_dimension(&p.spawn, true);
                 if dimension_changed {
@@ -1940,11 +1956,18 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
+                        // createEntityFromPacket: the player takes the profile of its list entry.
+                        match r.players.get(&p.uuid) {
+                            Some(name) => r.level_player_names.insert(p.id, name.clone()),
+                            None => r.level_player_names.remove(&p.id),
+                        };
                     } else {
                         r.level_players.remove(&p.id);
+                        r.level_player_names.remove(&p.id);
                     }
                 }
-                // Entity.getTeam: a mob is on a team by its UUID.
+                // Entity.getTeam: a mob is on a team by its UUID, a player by
+                // its profile name (`Game::scoreboard_name`).
                 self.persist.uuids.insert(
                     p.id as u32,
                     horizon_client::lan::playerdata::uuid_ints(p.uuid),
@@ -1968,6 +1991,7 @@ impl Game<'_> {
                 for id in p.ids {
                     if let Some(r) = self.remote.as_mut() {
                         r.level_players.remove(&id);
+                        r.level_player_names.remove(&id);
                     }
                     self.remove_entity(id);
                 }
@@ -2158,6 +2182,13 @@ impl Game<'_> {
                             && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                         {
                             m.extra.main_hand_left = *arm == 0;
+                        }
+                        // Avatar.DATA_PLAYER_MODE_CUSTOMISATION: the skin layers
+                        // the player shows (PlayerModelPart bits).
+                        if let (16, Value::Byte(bits)) = (index, value)
+                            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                        {
+                            m.extra.hidden_model_parts = !(*bits as u8) & 0x7F;
                         }
                     }
                 }
@@ -3212,6 +3243,8 @@ impl Game<'_> {
         let mut resolved: Vec<(u128, String)> = Vec::new();
         // PlayerSkin.model of each resolved skin: the textures' `slim`.
         let mut slim = std::collections::HashSet::new();
+        // PlayerSkin.cape of each resolved skin.
+        let mut capes: HashMap<u128, String> = HashMap::new();
         for (uuid, textures) in entries {
             // PlayerInfo.createSkinLookup: only the local player's own skin
             // may be unsigned.
@@ -3225,10 +3258,24 @@ impl Game<'_> {
                 if textures.slim {
                     slim.insert(uuid);
                 }
+                if let Some(cape) = horizon_client::skins::cape(&textures) {
+                    capes.insert(uuid, cape);
+                }
                 resolved.push((uuid, skin));
             }
         }
         resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
+        // An offline name's cape from the launcher, where the profile has none.
+        if !capes.contains_key(&local)
+            && let Some(rgba) = horizon_client::skins::offline_cape()
+        {
+            const OFFLINE: &str = "capes/offline";
+            if !self.show_skin(OFFLINE) {
+                self.store_skin(OFFLINE.into(), rgba.to_vec());
+            }
+            capes.insert(local, OFFLINE.into());
+        }
+        capes.retain(|_, cape| self.again_skin(cape));
         // PlayerInfo.getSkin: the downloaded skin and its model, else the
         // profile's default skin (DefaultPlayerSkin.get), slim or wide.
         let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
@@ -3260,12 +3307,18 @@ impl Game<'_> {
             {
                 mob.skin = Some(skin);
                 mob.slim = is_slim;
+                mob.cape = capes.get(&uuid).cloned();
             }
         }
         if let Some(mob) = self.player_model.as_mut() {
             let (skin, is_slim) = skin_of(&skins, own);
             mob.skin = Some(skin);
             mob.slim = is_slim;
+            // Avatar.isModelPartShown(CAPE): the Skin Customization option.
+            mob.cape = capes
+                .get(&own)
+                .filter(|_| self.settings.file.bool("modelPart_cape"))
+                .cloned();
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3349,7 +3402,7 @@ impl Game<'_> {
             self.gui.atlas.sprites.remove(&old);
             slot
         };
-        let Some(rect) = self
+        let Some(mut rect) = self
             .gui
             .atlas
             .sprites
@@ -3366,6 +3419,10 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
+        // A cape is a 64x32 texture in the top half of the slot (skins::process_cape).
+        if location.starts_with("capes/") {
+            rect.v1 = (rect.v0 + rect.v1) / 2.0;
+        }
         self.gui.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }
@@ -3652,16 +3709,14 @@ impl Game<'_> {
         self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
-        let view = client_view_distance(self.settings.render_distance);
-        let visibility = self.settings.chat_visibility as i32;
+        let info = self
+            .settings
+            .client_information(client_view_distance(self.settings.render_distance));
         if let Some(r) = self.remote.as_mut()
             && r.joined
-            && (r.sent_view != view || r.sent_chat_visibility != visibility)
+            && r.sent_info != info
         {
-            r.sent_view = view;
-            r.sent_chat_visibility = visibility;
-            let mut info = horizon_protocol::packets::configuration::ClientInformation::new(view);
-            info.chat_visibility = visibility;
+            r.sent_info = info.clone();
             self.send(S::ClientInformation(info));
         }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
@@ -3825,6 +3880,17 @@ impl Game<'_> {
             // player too (controlled_simulation_tick does it otherwise): left
             // at 10, the hurt tilt restarted every frame and shook the camera.
             player.health.advance_clock();
+            if riding && !dead {
+                MotionWorld {
+                    entities: &entity_collisions,
+                    player: &mut *player,
+                    scene: &mut self.world,
+                    assets: &self.pack.assets,
+                    collision_binding: self.collision,
+                    resources: self.motion,
+                }
+                .passenger_pose_tick()?;
+            }
         }
         // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
         // jump, a spectator, landing) is sent to the server.
@@ -4749,7 +4815,13 @@ impl Game<'_> {
             let (reacts, changes) = if hand == Hand::Main {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
-                (false, DryUse::default())
+                // useItemOn runs for the off hand too (useWithoutItem doesn't):
+                // RespawnAnchorBlock.useItemOn charges an anchor with its glowstone.
+                let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+                let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
+                let charges =
+                    !(sneaking && hands_full) && self.anchor_takes(hit.pos, held.as_ref());
+                (charges, DryUse::default())
             };
             let seq = self.next_sequence();
             let cursor = [
@@ -4914,6 +4986,12 @@ impl Game<'_> {
         if self.jukebox_takes(hit.pos, held) {
             return (true, DryUse::default());
         }
+        // RespawnAnchorBlock.useItemOn: PASS when the off hand's glowstone is to
+        // charge the anchor, so useWithoutItem doesn't run and the off hand's turn
+        // comes (glowstone in this hand charges it in `use_item_on`).
+        if !self.anchor_takes(hit.pos, held) && self.anchor_takes(hit.pos, self.offhand.as_ref()) {
+            return (false, DryUse::default());
+        }
         // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
         // (honey level 5) is SUCCESS, so the click ends after UseItemOn and
         // no UseItem follows (the server does the harvest, see `use_beehive`).
@@ -5018,7 +5096,7 @@ impl Game<'_> {
     }
 
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
-    /// the click ends there, as far as this client can tell (`item_has_use`).
+    /// the click ends there, as far as this client can tell (`use_ends_click`).
     fn remote_use_item(&mut self, hand: Hand) -> bool {
         let Some(held) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
@@ -5047,6 +5125,12 @@ impl Game<'_> {
         if info.food.is_some() && !eating {
             return false;
         }
+        // A bucket, a glass bottle or a boat with nothing to fill, empty or
+        // place PASSes or FAILs: startUseItem goes on to the off hand (a
+        // Riptide trident there charges).
+        if self.with_hand(hand, |g| g.use_finds_no_target(&held)) {
+            return false;
+        }
         // It runs the use here too: ItemStack.use starts the `use_cooldown`
         // of an item with no use time, and the server's
         // ClientboundCooldownPacket confirms it; one held in use starts it at
@@ -5058,9 +5142,65 @@ impl Game<'_> {
             return true;
         }
         self.with_hand(hand, |g| g.remote_start_held_use(&held));
-        item_has_use(&info)
+        let gliding = self.player.as_ref().is_some_and(|p| p.fall_flying);
+        use_ends_click(&info, gliding)
     }
 
+    /// Whether `held`'s `Item.use` needs a target this client sees none of
+    /// (not SUCCESS): BucketItem.use (a fluid source or powder snow to pick
+    /// up through `ClipContext.Fluid.SOURCE_ONLY`, a block to empty a full
+    /// one against, `mayUseItemAt`), BottleItem.use (water to fill from) and
+    /// BoatItem.use (a block or fluid surface with room for the boat).
+    fn use_finds_no_target(&self, held: &ItemStack) -> bool {
+        let id = &*held.item;
+        let facts = |pos: [i32; 3]| {
+            self.res
+                .facts()
+                .get(self.world.block(pos[0], pos[1], pos[2]))
+        };
+        let source = |want: Option<Fluid>| {
+            let fluid_hit = self.pick_fluid();
+            // pick_fluid steps through waterlogged blocks, but their water is
+            // a source the SOURCE_ONLY ray stops at (and a BucketPickup).
+            if let Some(hit) = self.pick()
+                && facts(hit.pos).waterlogged
+            {
+                let eye = self.aim().map_or(hit.point, |(eye, _)| eye);
+                let d = |p: [f64; 3]| (0..3).map(|a| (p[a] - eye[a]).powi(2)).sum::<f64>();
+                if fluid_hit
+                    .as_ref()
+                    .is_none_or(|fluid| d(fluid.point) >= d(hit.point))
+                {
+                    return want.is_none_or(|want| want == Fluid::Water);
+                }
+            }
+            fluid_hit.is_some_and(|hit| {
+                let f = facts(hit.pos);
+                let fluid = f.fluid != Fluid::None && f.fluid_level == 8 && !f.fluid_falling;
+                match want {
+                    Some(want) => fluid && f.fluid == want,
+                    None => fluid || self.is_powder_snow(hit.pos),
+                }
+            })
+        };
+        // SolidBucketItem only has useOn: its use is Item.use's PASS.
+        if id == "minecraft:powder_snow_bucket" {
+            return true;
+        }
+        if id == "minecraft:bucket" {
+            return !self.may_build() || !source(None);
+        }
+        if horizon_client::items::bucket_contents(id).is_some() {
+            return !self.may_build() || self.pick().is_none();
+        }
+        if id == "minecraft:glass_bottle" {
+            return !source(Some(Fluid::Water));
+        }
+        if super::boats::any_boat_wood(id).is_some() {
+            return self.boat_to_place(held).is_none();
+        }
+        false
+    }
     /// `Item.use` runs on the client too (MultiPlayerGameMode.useItem): an
     /// item held in use until the button lets go starts being used here, so
     /// that letting go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and
@@ -5090,6 +5230,9 @@ impl Game<'_> {
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
+            // EnderEyeItem.use: startUsingItem unless an End portal frame is
+            // aimed at, with or without a stronghold to throw the eye at.
+            "minecraft:ender_eye" => !self.aims_at_end_portal_frame(),
             // Item.use: a kinetic weapon starts being used.
             id if horizon_client::spear::Kinetic::of(id).is_some() => true,
             // ShieldItem.use: anything that blocks attacks, off cooldown.
@@ -5103,11 +5246,17 @@ impl Game<'_> {
         }
     }
     /// Whether `stack` stays in use until the button lets go (bows,
-    /// crossbows, tridents, spyglasses, shields): its use only counts ticks here.
+    /// crossbows, tridents, spyglasses, shields, eyes of ender, whose
+    /// `getUseDuration` 0 never counts down to the end): its use only counts
+    /// ticks here.
     fn held_until_released(&self, stack: &ItemStack) -> bool {
         matches!(
             &*stack.item,
-            "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:spyglass"
+            "minecraft:bow"
+                | "minecraft:crossbow"
+                | "minecraft:trident"
+                | "minecraft:spyglass"
+                | "minecraft:ender_eye"
         ) || horizon_client::spear::Kinetic::of(&stack.item).is_some()
             || self.blocks_attacks(stack).is_some()
     }
@@ -6092,9 +6241,18 @@ impl Game<'_> {
         let r = self.remote.as_ref()?;
         Some(r.glowing.contains(&(id as i32)))
     }
+    /// The profile name of another player the server sent, by entity id.
+    pub(super) fn remote_player_name(&self, id: u32) -> Option<&str> {
+        let r = self.remote.as_ref()?;
+        let uuid = r.level_players.get(&(id as i32))?;
+        if *uuid == r.profile {
+            return None;
+        }
+        r.level_player_name(id as i32, uuid)
+    }
     /// Status for `horizon-ctl status`.
-    /// The other players' entities in the level and their names (from the
-    /// player list).
+    /// The other players' entities in the level and their names (their
+    /// profiles', which outlive the player list's entries).
     pub(super) fn remote_player_names(&self) -> Vec<(u32, String)> {
         let Some(r) = self.remote.as_ref() else {
             return Vec::new();
@@ -6102,7 +6260,7 @@ impl Game<'_> {
         r.level_players
             .iter()
             .filter(|(_, uuid)| **uuid != r.profile)
-            .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
+            .filter_map(|(id, uuid)| Some((*id as u32, r.level_player_name(*id, uuid)?.to_owned())))
             .collect()
     }
     /// `ClientClockManager.tick`: the clock moves on by the game time that
@@ -6375,6 +6533,13 @@ fn hand_id(hand: Hand) -> i32 {
     }
 }
 
+/// Whether `Item.use` of `info` ends `Minecraft.startUseItem`'s click, so the
+/// off hand gets no turn. `FireworkRocketItem.use` answers SUCCESS while the
+/// player glides (the rocket boosts them) and PASS otherwise.
+fn use_ends_click(info: &horizon_client::items::ItemInfo, fall_flying: bool) -> bool {
+    item_has_use(info) || (fall_flying && &*info.id == "minecraft:firework_rocket")
+}
+
 /// Whether `Item.use` usually acts on this item (eats, drinks, equips, raises,
 /// throws, shoots, fills or places), which ends `Minecraft.startUseItem` at
 /// its hand. Tools and materials pass, and the off hand gets its turn. The
@@ -6497,6 +6662,14 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 }
 
 impl Remote {
+    /// A player entity's profile name: the one it was created with, else its
+    /// player-list entry's (an entity the list named after it spawned).
+    fn level_player_name(&self, id: i32, uuid: &u128) -> Option<&str> {
+        self.level_player_names
+            .get(&id)
+            .or_else(|| self.players.get(uuid))
+            .map(String::as_str)
+    }
     /// Players in the server's player list, this one included.
     pub(super) fn player_count(&self) -> usize {
         self.players.len()
@@ -6656,5 +6829,32 @@ mod tests {
         assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 354), None);
         assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 504), None);
         assert_eq!(Game::menu_slot_index("unknown", 0), None);
+    }
+
+    /// `FireworkRocketItem.use` is SUCCESS while gliding: the main hand's
+    /// rocket ends the click and the off hand's shield is not raised (#3424).
+    /// On foot it passes, so the off hand still gets its turn.
+    #[test]
+    fn a_rocket_used_while_gliding_ends_the_click() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            eprintln!("skipping: no prepared resources in {}", root.display());
+            return;
+        }
+        let registry = horizon_world::level::data::load_registry(&root).unwrap();
+        let facts = horizon_client::blocks::BlockFacts::load(&root, &registry).unwrap();
+        let items = horizon_client::items::Items::load(&root, &registry, &facts).unwrap();
+        let rocket = items.get("minecraft:firework_rocket").unwrap();
+        assert!(super::use_ends_click(rocket, true), "gliding");
+        assert!(!super::use_ends_click(rocket, false), "on foot");
+        // Other items answer the same whether or not the player glides.
+        let shield = items.get("minecraft:shield").unwrap();
+        let stick = items.get("minecraft:stick").unwrap();
+        for gliding in [false, true] {
+            assert!(super::use_ends_click(shield, gliding));
+            assert!(!super::use_ends_click(stick, gliding));
+        }
     }
 }

@@ -704,3 +704,28 @@ fn offline_names_switch_with_accounts() {
         r#"{"accounts":[],"selected":null}"#
     );
 }
+
+#[test]
+fn the_java_edition_plays_as_an_owner_even_offline() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let player = java_player_with(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    assert_eq!(
+        (
+            player.name.as_str(),
+            player.uuid.as_str(),
+            player.token.as_str()
+        ),
+        ("Notch", UUID, "mc-token")
+    );
+    // No network: the last token of an account that owned the game.
+    let player = java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap();
+    assert_eq!(player.token, "mc-token");
+    // Never for an account that doesn't own it.
+    let mut accounts = signed_in(&store, &secrets("mc-token", false));
+    assert_eq!(
+        java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
+        NoOwner.to_string()
+    );
+}

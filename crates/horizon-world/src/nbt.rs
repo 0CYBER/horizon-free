@@ -111,6 +111,18 @@ impl Limits {
         }
     }
 
+    /// Chunks, entities, POI and the world's `.dat` files: vanilla reads and
+    /// writes them with `NbtAccounter.unlimitedHeap()` (`NbtIo.read`), so a
+    /// chunk past the default node cap (a few thousand full containers) still
+    /// loads. The byte cap stays as the only guard on the decompressed data.
+    pub fn saved() -> Self {
+        Self {
+            max_bytes: 1 << 30,
+            max_nodes: usize::MAX,
+            max_depth: 512,
+        }
+    }
+
     /// Structure templates (`structure/*.nbt`): vanilla reads them with
     /// `NbtAccounter.unlimitedHeap()` (TemplateSource.readStructure), and
     /// mods ship templates past the default node cap (YUNG's Better Ocean
