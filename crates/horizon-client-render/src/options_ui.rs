@@ -939,6 +939,9 @@ pub enum Event {
     /// Open the mod's own settings page (capability `ui`): the installed
     /// mod's index in `mods.installed`.
     ModSettings(usize),
+    /// Native mod `.0`'s page opened: the game asks the mod for its labels
+    /// again (they were made with the list, maybe in another language).
+    NativeSettings(usize),
     /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
     /// mod and refreshes the page.
     NativeButton(usize, usize),
@@ -2612,6 +2615,7 @@ impl OptionsUi {
                             events.push(Event::ButtonClick);
                             if s.mods.installed.get(i).is_some_and(|m| m.native.is_some()) {
                                 self.push(Page::NativeMod(i));
+                                events.push(Event::NativeSettings(i));
                             } else {
                                 events.push(Event::ModSettings(i));
                             }
@@ -3228,6 +3232,50 @@ mod tests {
         assert!(!s.mods.is_on(0));
         assert!(!ui.back(&mut s).contains(&Event::Close));
         assert_eq!(ui.page(), Page::Main);
+    }
+
+    #[test]
+    fn opening_a_native_mods_page_asks_the_game_for_its_labels_again() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "native".into(),
+            title: "Native 1.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            has_settings: false,
+            native: Some(crate::mod_list::NativePage::default()),
+        });
+        ui.show(Page::Mods);
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let settings = widgets
+            .iter()
+            .find(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ModSettings(0),
+                        ..
+                    }
+                )
+            })
+            .expect("a native mod's row has a Settings button");
+        let events = ui.click(
+            &mut s,
+            &atlas,
+            settings.x + 1.0,
+            settings.y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        // Its labels were made with the list, maybe in another language.
+        assert_eq!(events.last(), Some(&Event::NativeSettings(0)));
+        assert_eq!(ui.page(), Page::NativeMod(0));
     }
 
     #[test]
