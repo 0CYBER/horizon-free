@@ -297,7 +297,8 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
 }
 /// `HoglinAi.updateActivity` and `PiglinAi.updateActivity`: take the first
 /// valid activity and, when it is not the one it was in, make the sound that
-/// goes with the new one.
+/// goes with the new one; a piglin then gets off a baby it rides once it has
+/// no ride target (`isBabyRidingBaby`).
 fn update_activity(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let now = activity(m);
     let before = std::mem::replace(&mut m.extra.piglin.activity, now);
@@ -309,6 +310,22 @@ fn update_activity(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         };
         m.voice(sound, events);
     }
+    // A baby that rides a baby but has no ride target (any more) gets off.
+    if m.species() == Species::Piglin && m.extra.piglin.ride.is_none() && is_baby_riding_baby(m, w)
+    {
+        dismount(m, w);
+    }
+}
+/// `PiglinAi.isBabyRidingBaby`: a baby piglin on a baby piglin or a baby
+/// hoglin.
+fn is_baby_riding_baby(m: &Mob, w: &MobWorld) -> bool {
+    if !m.is_baby() {
+        return false;
+    }
+    m.extra
+        .mount
+        .and_then(|id| w.seen(id))
+        .is_some_and(|v| v.baby && matches!(v.species, Species::Piglin | Species::Hoglin))
 }
 /// `Hoglin.isConverting` and `AbstractPiglin.isConverting`: in a dimension
 /// that is not piglin safe, a mob that is not immune and has AI.
