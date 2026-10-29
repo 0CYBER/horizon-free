@@ -1473,3 +1473,114 @@ fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
     stand(&mut w, true, 1.9375);
     assert_eq!(w.prop(pos, "tilt"), "none");
 }
+
+#[test]
+fn using_storage_and_interactable_blocks_succeeds() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        ("chest", &[("facing", "north"), ("type", "single")]),
+        ("trapped_chest", &[("facing", "north"), ("type", "single")]),
+        ("barrel", &[("facing", "up")]),
+        ("ender_chest", &[("facing", "north")]),
+        ("shulker_box", &[("facing", "up")]),
+        ("dispenser", &[("facing", "north")]),
+        ("dropper", &[("facing", "north")]),
+        ("hopper", &[("facing", "down")]),
+        ("crafter", &[("orientation", "north_up")]),
+        ("furnace", &[("facing", "north")]),
+        ("blast_furnace", &[("facing", "north")]),
+        ("smoker", &[("facing", "north")]),
+        ("brewing_stand", &[]),
+        ("beacon", &[]),
+        ("decorated_pot", &[]),
+        ("jukebox", &[("has_record", "true")]),
+    ];
+    for &(name, props) in cases {
+        w.put(pos, w.id(name, props));
+        assert_eq!(
+            w.use_block(pos),
+            InteractionResult::Success,
+            "{name} should succeed (client swing)"
+        );
+    }
+    w.put(pos, w.id("jukebox", &[("has_record", "false")]));
+    assert_eq!(
+        w.use_block(pos),
+        InteractionResult::Pass,
+        "an empty jukebox passes"
+    );
+}
+
+#[test]
+fn creative_breaking_piston_head_does_not_drop_piston() {
+    for (piston_name, head_type) in [("piston", "normal"), ("sticky_piston", "sticky")] {
+        let mut w = world!();
+        let base_pos = BlockPos::new(0, 1, 0);
+        let head_pos = BlockPos::new(1, 1, 0);
+        let base = w.id(piston_name, &[("extended", "true"), ("facing", "east")]);
+        let head = w.id(
+            "piston_head",
+            &[("type", head_type), ("facing", "east"), ("short", "false")],
+        );
+        w.put(base_pos, base);
+        w.put(head_pos, head);
+        w.level.events.clear();
+
+        // Breaking the head in creative mode. Destroying the base first makes the
+        // head's shape update remove it, so its own removeBlock finds air.
+        w.f.behaviours
+            .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, true, true);
+
+        // Both head and base must be removed:
+        assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
+        assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
+
+        // Must NOT drop the base: the head's own removal (its shape update) drops
+        // its empty loot, as vanilla's updateOrDestroy does.
+        assert!(
+            !w.level
+                .events
+                .iter()
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "creative mode breaking {head_type} piston head must not drop the base piston"
+        );
+    }
+}
+
+#[test]
+fn survival_breaking_piston_head_drops_piston() {
+    for (piston_name, head_type) in [("piston", "normal"), ("sticky_piston", "sticky")] {
+        let mut w = world!();
+        let base_pos = BlockPos::new(0, 1, 0);
+        let head_pos = BlockPos::new(1, 1, 0);
+        let base = w.id(piston_name, &[("extended", "true"), ("facing", "east")]);
+        let head = w.id(
+            "piston_head",
+            &[("type", head_type), ("facing", "east"), ("short", "false")],
+        );
+        w.put(base_pos, base);
+        w.put(head_pos, head);
+        w.level.events.clear();
+
+        // Breaking the head in survival mode:
+        assert!(
+            w.f.behaviours
+                .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, false, true),
+            "head should be destroyed"
+        );
+
+        // Both head and base must be removed:
+        assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
+        assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
+
+        // Must drop the base piston at base_pos:
+        assert!(
+            w.level
+                .events
+                .iter()
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "survival mode breaking {head_type} piston head must drop base piston"
+        );
+    }
+}

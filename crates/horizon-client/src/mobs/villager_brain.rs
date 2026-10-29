@@ -1721,7 +1721,7 @@ impl B {
                 }
                 t.begin(cx.lr, cx.now);
                 bonemeal_target(m, *crop);
-                m.extra.main_hand = Some("minecraft:bone_meal".into());
+                m.extra.set_main_hand(Some("minecraft:bone_meal".into()));
                 *next_work = cx.now;
                 *worked = 0;
                 *repick = false;
@@ -3200,7 +3200,7 @@ impl B {
                 t, last_session, ..
             } => {
                 t.running = false;
-                m.extra.main_hand = None;
+                m.extra.set_main_hand(None);
                 *last_session = i64::from(m.age);
             }
             B::WorkAtPoi { t, .. } => t.running = false,

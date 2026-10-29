@@ -159,7 +159,18 @@ impl Game<'_> {
                     attacker: p.owner,
                     from: Some([p.previous.x, p.previous.y, p.previous.z]),
                 };
+                let owner_species = owner
+                    .and_then(|o| self.mobs.iter().find(|m| m.id == o))
+                    .map(|m| m.species());
                 let killed = match self.mobs.iter_mut().find(|m| m.id == id) {
+                    // `WitherBoss.hurtServer`: nothing from a wither friend.
+                    Some(m)
+                        if owner_species.is_some_and(|o| {
+                            horizon_client::mobs::wither::shielded_from(m.species(), o)
+                        }) =>
+                    {
+                        false
+                    }
                     Some(m) => {
                         let hit = m.damage(amount, source);
                         if hit && m.alive() && m.species() != Species::Wither && wither_ticks > 0 {

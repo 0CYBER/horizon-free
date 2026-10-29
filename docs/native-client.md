@@ -48,7 +48,7 @@ Development builds that link quickly: `cargo build --profile fast -p horizon-cli
 | `--world NAME` | World folder under `saves/` (default "New World"); reopened if it exists |
 | `--seed N` | Seed for a new world (numbers or text, like vanilla) |
 | `--creative` | Creative mode (instant breaking, pick block) |
-| `--render-distance N` | Chunks, 2..64 (default 12) |
+| `--render-distance N` | Chunks, 2..128 (default 12) |
 | `--resources PATH` | Prepared resource directory |
 
 | Control | Action |
