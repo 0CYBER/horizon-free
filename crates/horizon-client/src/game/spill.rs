@@ -421,7 +421,14 @@ impl GameLevel<'_> {
         let entity = self.world.block_entities.remove(&key);
         self.world.block_names.remove(&key);
         let name = self.facts.get(old).name.clone();
-        let kind = removal::pre_remove(&name);
+        let kind = match &entity {
+            // BaseContainerBlockEntity.preRemoveSideEffects: Containers.dropContents.
+            Some(BlockEntity::Mod(m)) if !m.items.is_empty() => PreRemove::Contents {
+                slots: m.items.len(),
+                furnace: false,
+            },
+            _ => removal::pre_remove(&name),
+        };
         let mut neighbour_updates = 0;
         if side_effects {
             match kind {

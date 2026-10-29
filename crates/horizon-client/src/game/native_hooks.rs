@@ -14,7 +14,9 @@
 //!
 //! API 3 adds block entities for a mod's blocks (`native_block_entity`,
 //! `native_block_entity_ticks`, `native_block_entity_tick`): made when the
-//! block is placed, ticked on the server and saved with the chunk.
+//! block is placed, ticked on the server and saved with the chunk; and their
+//! item slots (`native_block_entity_container`), which hoppers, comparators
+//! and breaking the block use as they use vanilla's containers.
 //!
 //! Names, parameters and call sites are kept from release to release, and
 //! hook points are only ever added: each addition raises [`NATIVE_HOOKS_API`].
@@ -27,10 +29,12 @@ use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::R
 use horizon_client::{
     block_entities::Pos,
     chat::ChatSource,
-    containers::{BlockEntity, ModBlockEntity},
+    containers::{BlockEntity, ModBlockEntity, ModContainer},
     extras::Corner,
     extras_hud::Corners,
+    fast_hash::FxHashMap,
     hud::{HudBatch, rgba},
+    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
     text::Text,
@@ -344,14 +348,31 @@ impl Game<'_> {
     pub(super) fn native_block_entity_ticks(&self, block: &str, ticks: &mut bool) {
         let _ = (block, ticks);
     }
+    /// Block `block`'s block entity has item slots (a `WorldlyContainer`):
+    /// set `container` when the block is yours. Asked once for each mod
+    /// block when the ticking table is built; at most 256 slots, and slot
+    /// numbers past the count are left out. API 3.
+    pub(super) fn native_block_entity_container(
+        &self,
+        block: &str,
+        container: &mut Option<ModContainer>,
+    ) {
+        let _ = (block, container);
+    }
     /// A server tick of block entity `id` at `pos`, in vanilla's order among
     /// the others (`Level.tickBlockEntities`): read and change its saved
-    /// compound `nbt`. It is out of the world during the call (the block
+    /// compound `nbt` and its item `slots` (none without a container). It is out of the world during the call (the block
     /// entity at `pos` reads as a `Mod` with an empty id, and a save leaves
     /// it out); if the call removes or replaces it, `nbt` is dropped. Clients,
     /// the window's own in single player included, don't get it yet. API 3.
-    pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], id: &str, nbt: &mut Compound) {
-        let _ = (pos, id, nbt);
+    pub(super) fn native_block_entity_tick(
+        &mut self,
+        pos: [i32; 3],
+        id: &str,
+        nbt: &mut Compound,
+        slots: &mut [Option<ItemStack>],
+    ) {
+        let _ = (pos, id, nbt, slots);
     }
 }
 
@@ -545,7 +566,43 @@ impl Game<'_> {
         let mut entity = None;
         self.native_block_entity(name, &mut entity);
         let (id, nbt) = entity?;
-        Some(BlockEntity::Mod(Box::new(ModBlockEntity { id, nbt })))
+        let items = Vec::new();
+        Some(BlockEntity::Mod(Box::new(ModBlockEntity {
+            id,
+            nbt,
+            items,
+        })))
+    }
+    /// The containers of the mod blocks' block entities, by block state
+    /// (`native_block_entity_container`), checked.
+    pub(super) fn native_containers(&self) -> FxHashMap<u32, Arc<ModContainer>> {
+        let registry = self.pack.assets.registry;
+        let mut by_block: FxHashMap<String, Option<Arc<ModContainer>>> = FxHashMap::default();
+        let mut out = FxHashMap::default();
+        for i in 0..registry.len() as u32 {
+            let Some(state) = registry.state(horizon_world::registry::BlockStateId(i)) else {
+                continue;
+            };
+            if state.name.starts_with("minecraft:") {
+                continue;
+            }
+            let container = by_block.entry(state.name.clone()).or_insert_with(|| {
+                let mut container = None;
+                self.native_block_entity_container(&state.name, &mut container);
+                container.map(|mut c| {
+                    c.slots = c.slots.min(256);
+                    let n = c.slots;
+                    for list in c.faces.iter_mut().chain([&mut c.inputs, &mut c.outputs]) {
+                        list.retain(|&s| s < n);
+                    }
+                    Arc::new(c)
+                })
+            });
+            if let Some(c) = container {
+                out.insert(i, Arc::clone(c));
+            }
+        }
+        out
     }
     /// Whether a native mod's block `name` has a ticking block entity.
     pub(super) fn native_ticks(&self, name: &str) -> bool {
@@ -560,7 +617,18 @@ impl Game<'_> {
         };
         // An empty id marks its place while the mod has it.
         let mut taken = std::mem::take(&mut **m);
-        self.native_block_entity_tick([pos.0, pos.1, pos.2], &taken.id, &mut taken.nbt);
+        let state = self.world.block(pos.0, pos.1, pos.2).0;
+        let slots = self
+            .world
+            .block_entities
+            .mod_container(state)
+            .map_or(0, |c| c.slots);
+        // Grown only: items a container no longer has room for stay saved.
+        if taken.items.len() < slots {
+            taken.items.resize(slots, None);
+        }
+        let ModBlockEntity { id, nbt, items } = &mut taken;
+        self.native_block_entity_tick([pos.0, pos.1, pos.2], id, nbt, items);
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
             && m.id.is_empty()
         {

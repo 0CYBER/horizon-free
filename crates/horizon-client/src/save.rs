@@ -427,6 +427,9 @@ pub fn encode_block_entity(
     if let BlockEntity::Mod(m) = e {
         let mut map = m.nbt.clone();
         map.insert("id".into(), string(&m.id));
+        if m.items.iter().any(Option::is_some) {
+            map.insert("Items".into(), encode_items(&m.items));
+        }
         for (key, v) in [("x", p.0), ("y", p.1), ("z", p.2)] {
             map.insert(key.into(), Tag::Int(v));
         }
@@ -637,7 +640,9 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
         exact_teleport: number(tag.get("ExactTeleport")).unwrap_or(0) != 0,
     }
 }
-/// A mod's block entity: its compound without `id` and the position.
+/// A mod's block entity: its compound without `id` and the position, and
+/// its `Items` as slots (`ContainerHelper.loadAllItems`; the game sizes them
+/// to the block's container when it uses them).
 fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::ModBlockEntity> {
     let Tag::Compound(map) = tag else {
         return None;
@@ -646,7 +651,12 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
     for key in ["id", "x", "y", "z"] {
         nbt.remove(&key.into());
     }
-    Some(crate::containers::ModBlockEntity { id, nbt })
+    // `Slot` is a byte: 256 slots at most.
+    let mut items = decode_items(nbt.remove(&"Items".into()).as_ref(), 256);
+    while items.last().is_some_and(Option::is_none) {
+        items.pop();
+    }
+    Some(crate::containers::ModBlockEntity { id, nbt, items })
 }
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
@@ -4967,6 +4977,10 @@ mod tests {
             assert!(!m.nbt.contains_key(&key.into()), "{key}");
         }
         assert_eq!(m.nbt.get(&"energy".into()), Some(&Tag::Long(1200)));
+        // `Items` are its slots, not the mod's compound.
+        assert!(!m.nbt.contains_key(&"Items".into()));
+        assert_eq!(m.items.len(), 1);
+        assert_eq!(m.items[0].as_ref().map(|s| s.count), Some(3));
         assert_eq!(encode_block_entity(pos, &back, "gtmod:macerator"), saved);
         // Vanilla's types are never a mod's, modelled or not.
         let ender = horizon_world::nbt::parse_snbt(r#"{id:"minecraft:ender_chest",x:0,y:0,z:0}"#)

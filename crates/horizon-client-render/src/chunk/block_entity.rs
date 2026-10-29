@@ -84,12 +84,26 @@ pub enum BlockEntity {
     /// compound for the mod to read and change.
     Mod(Box<ModBlockEntity>),
 }
-/// A mod's block entity: its type id (`mymod:machine`) and its saved
-/// compound without `id`, `x`, `y` and `z`.
+/// A mod's block entity: its type id (`mymod:machine`), its saved
+/// compound without `id`, `x`, `y`, `z` and `Items`, and its item slots
+/// (`Items`) when its block has a container (`ModContainer`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModBlockEntity {
     pub id: String,
     pub nbt: Compound,
+    pub items: Vec<Option<ItemStack>>,
+}
+/// The container of a mod block's block entity, as a `WorldlyContainer`
+/// says it: its slot count, the slots each face reaches
+/// (`getSlotsForFace`, by `Direction`: down, up, north, south, west, east),
+/// and the slots hoppers may put into (`canPlaceItemThroughFace`) and take
+/// from (`canTakeItemThroughFace`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModContainer {
+    pub slots: usize,
+    pub faces: [Vec<usize>; 6],
+    pub inputs: Vec<usize>,
+    pub outputs: Vec<usize>,
 }
 /// `BrushableBlockEntity`: the loot table is resolved on the first brush.
 #[derive(Clone, Debug, Default)]
