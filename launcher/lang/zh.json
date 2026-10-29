@@ -177,9 +177,6 @@
   "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "保留最新的 {count} 个版本、当前使用的版本，以及你的实例所使用的版本。已删除的版本可从“版本”页面重新安装。",
   "Installed versions use {size}.": "已安装的版本共占用 {size}。",
   "{size} on disk": "磁盘占用 {size}",
-  "Native mods (experimental)": "原生模组（实验性）",
-  "Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.": "“模组”页面中的原生模组会使用启动器自己的 Rust 工具链编译到游戏中。它们不受沙盒限制：你能在这台电脑上执行的操作，它们都能执行。",
-  "{version} plays in this instance.": "此实例使用 {version} 进行游戏。",
   "Install Horizon first.": "请先安装 Horizon。",
   "Starting the build": "开始构建",
   "These mods will run with full access to your computer": "这些模组运行时将拥有对你电脑的完全访问权限",
@@ -190,7 +187,10 @@
   "Keep": "保留",
   "Move to Trash": "移到回收站",
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "要将 {name} 连同其世界和设置一起移到回收站吗？你之后可以从那里恢复。",
-  "Install and turn on native mods": "安装并启用原生模组",
   "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version}（Java 版）。首次点击“开始游戏”时，会用你的账户从 Mojang 下载游戏及其所需的 Java。",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "原生模组会编译成一个独立的游戏。安装原生模组会启用“原生模组”：之后你需要在“设置 > 原生模组”中构建包含它的游戏。首次构建会下载 Rust，可能需要 20 到 30 分钟；之后的构建会更快。"
+  "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "原生模组不在沙盒中运行：它们和任何程序一样，可以完全访问你的电脑。只安装你信任其作者的模组。要使用模组游玩，请在模组页面构建游戏；首次构建会下载 Rust，需要 20 到 30 分钟。",
+  "Native build": "原生构建",
+  "No native mod is turned on.": "没有开启任何原生模组。",
+  "Build the game to play with the native mods turned on.": "构建游戏，以使用已开启的原生模组游玩。",
+  "Up to date: {instance} plays these mods.": "已是最新：{instance} 使用这些模组游玩。"
 }

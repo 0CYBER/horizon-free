@@ -173,9 +173,6 @@
   "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.": "Nicht vorbereitet. Horizon kann Minecraft {version} von Mojang für dein Konto herunterladen oder deine eigene Installation verwenden.",
   "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.": "Nicht vorbereitet. Melde dich zuerst mit dem Microsoft-Konto an, das Minecraft {version} besitzt.",
   "Cancel": "Abbrechen",
-  "Native mods (experimental)": "Native Mods (experimentell)",
-  "Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.": "Native Mods von der Mods-Seite werden mit dem launcher-eigenen Rust in das Spiel kompiliert. Nicht in einer Sandbox: Sie können alles tun, was du auf diesem Computer tun kannst.",
-  "{version} plays in this instance.": "Diese Instanz spielt {version}.",
   "Install Horizon first.": "Installiere zuerst Horizon.",
   "Starting the build": "Starte den Build",
   "These mods will run with full access to your computer": "Diese Mods erhalten vollen Zugriff auf deinen Computer",
@@ -191,6 +188,9 @@
   "Delete…": "Löschen…",
   "Keep": "Behalten",
   "Move to Trash": "In den Papierkorb",
-  "Install and turn on native mods": "Installieren und native Mods einschalten",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller."
+  "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "Native Mods laufen nicht in einer Sandbox: Sie haben vollen Zugriff auf deinen Computer, wie jedes Programm. Installiere nur Mods, deren Autoren du vertraust. Um mit einer zu spielen, baue das Spiel auf der Mods-Seite; der erste Build lädt Rust herunter und dauert 20 bis 30 Minuten.",
+  "Native build": "Nativer Build",
+  "No native mod is turned on.": "Keine native Mod ist eingeschaltet.",
+  "Build the game to play with the native mods turned on.": "Baue das Spiel, um mit den eingeschalteten nativen Mods zu spielen.",
+  "Up to date: {instance} plays these mods.": "Auf dem neuesten Stand: {instance} spielt mit diesen Mods."
 }

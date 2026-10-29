@@ -175,8 +175,8 @@ struct Launcher {
     disk: Vec<(String, u64)>,
     disk_for: Vec<String>,
     install_error: Option<(String, String)>,
-    /// Native mods (`native_mods`): the build's step while it runs, why it failed, and the
-    /// warning before a build while it is open, with the mods it names.
+    /// Native mods (`native_mods`, on the Mods page): the build's step while it runs, why it
+    /// failed, and the warning before a build while it is open, with the mods it names.
     native_step: Option<String>,
     native_error: Option<String>,
     native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
@@ -3288,7 +3288,6 @@ impl Launcher {
                     .child(self.proxy_row(n + 4, cx))
                     .child(group("Game", "gamepad"))
                     .child(self.game_args_row(n + 5, cx))
-                    .child(self.native_mods_row(n + 5, cx))
                     .child(group("AI", "terminal"))
                     .child(self.no_ai_row(n + 6, cx))
                     .child(group("About", "info-box"))
@@ -3345,59 +3344,6 @@ impl Launcher {
             .children(self.dev_options_section(cx))
     }
 
-    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
-    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
-    /// Settings' Native mods row (docs/native-mods.md): off by default. On, Build compiles the
-    /// native mods installed in the instance Play starts, after a warning that names them, and
-    /// that instance then plays the build.
-    fn native_mods_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let on = self.settings.native_mods;
-        let toggle =
-            switch("native-mods", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.settings.native_mods = !this.settings.native_mods;
-                this.native_confirm = None;
-                this.settings.save();
-                cx.notify();
-            }));
-        let mut detail = div().flex().flex_col().gap(px(4.)).child(
-            tr("Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.").to_string(),
-        );
-        if on {
-            let status = match (&self.native_step, &self.native_error) {
-                (Some(step), _) => Some(div().child(step.clone())),
-                (None, Some(e)) => Some(div().text_color(t.danger).child(e.clone())),
-                (None, None) => instances::selected()
-                    .version
-                    .filter(|v| native_mods::is_native(v))
-                    .map(|v| {
-                        div().child(trf("{version} plays in this instance.", &[("version", &v)]))
-                    }),
-            };
-            detail = detail.children(status);
-            if self.native_step.is_none() && self.native_confirm.is_none() {
-                detail = detail.child(div().flex().gap(px(8.)).mt(px(4.)).child(
-                    button("native-build", "Build", Kind::Primary, &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
-                            cx.notify();
-                        },
-                    )),
-                ));
-            }
-            if let Some(mods) = &self.native_confirm {
-                detail = detail.child(self.native_warning(mods, cx));
-            }
-        }
-        index_row(
-            n,
-            tr("Native mods (experimental)"),
-            Some(detail.into_any_element()),
-            Some(toggle.into_any_element()),
-            &t,
-        )
-    }
-
     /// The warning before a native build: what the mods can do and which mods. The build starts
     /// only from its button.
     fn native_warning(
@@ -3450,6 +3396,8 @@ impl Launcher {
         ))
     }
 
+    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
+    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
     fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let focused = self.args_focused;

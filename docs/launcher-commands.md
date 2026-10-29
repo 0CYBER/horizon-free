@@ -73,7 +73,7 @@ MCP: `server`, `server_command`, `server_log`, `server_stop`.
 
 ## `horizon-launcher native-build`
 
-Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon revision they pin, else the one the instance plays, with the launcher's own Rust, as the version the instance then plays. Not sandboxed: the mods' code runs with your rights.
+Native mods (docs/native-mods.md): compile mixin bundles on the Horizon revision they pin, else the one the instance plays, with the launcher's own Rust, as the version the instance then plays. Not sandboxed: the mods' code runs with your rights.
 
     horizon-launcher native-build [FOLDER]
 
