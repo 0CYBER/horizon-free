@@ -57,6 +57,33 @@ impl Target {
         query
     }
 
+    /// The page's search: the player's categories, side and sort, for this instance's version
+    /// and loader (in place of any the player picked).
+    pub fn search(&self, text: &str, kind: Kind, picked: &details::Filters) -> Query {
+        let mut query = self.query(text, kind);
+        query.filters = details::Filters {
+            categories: picked.categories.clone(),
+            environment: picked.environment,
+            sort: picked.sort,
+            ..query.filters
+        };
+        query
+    }
+
+    /// Whether this instance takes files of `kind` from the browser as they are: mods and
+    /// resource packs.
+    pub fn takes(&self, kind: Kind) -> bool {
+        matches!(kind, Kind::Mod | Kind::ResourcePack)
+    }
+
+    /// What it plays, as a search with no results names it: `Minecraft 1.21.1 with fabric`.
+    pub fn describe(&self, kind: Kind) -> String {
+        match (&self.loader, kind) {
+            (Some(l), Kind::Mod) => format!("Minecraft {} with {l}", self.minecraft),
+            _ => format!("Minecraft {}", self.minecraft),
+        }
+    }
+
     /// The newest version made for this instance, a file for its own loader before one it
     /// only accepts (a Fabric file in a Quilt instance).
     pub fn pick<'a>(&self, kind: Kind, versions: &'a [Version]) -> Option<&'a Version> {
