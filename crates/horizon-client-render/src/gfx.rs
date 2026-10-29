@@ -384,9 +384,11 @@ pub struct Renderer {
     pub last_wait: std::time::Duration,
     /// CPU time of the last `render`, waits excluded.
     pub last_encode: std::time::Duration,
-    /// What the system says about the window's display; before `window`, so it's
-    /// dropped first.
+    /// What the system says about the window's display, watched only while HDR output
+    /// is on; before `window`, so it's dropped first.
     display: DisplayWatch,
+    /// The watch was just made: the settings' Auto values take what it reported.
+    display_fresh: bool,
     window: Arc<Window>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -2589,15 +2591,9 @@ impl Renderer {
                 on_off(gpu_timer.is_some()),
             ));
         }
-        let display = if hdr_output.is_some() {
-            let (watch, now) = DisplayWatch::new(&window);
-            crate::graphics::report(now);
-            watch
-        } else {
-            DisplayWatch::default()
-        };
         Ok(Self {
-            display,
+            display: DisplayWatch::default(),
+            display_fresh: false,
             instance,
             adapter,
             surface,
@@ -3324,6 +3320,16 @@ impl Renderer {
             } else if let Some(marker) = self.hdr_marker.take() {
                 let _ = std::fs::remove_file(marker);
             }
+            // Only HDR output asks the system about the display, so with HDR off the
+            // game never waits on the compositor for it.
+            self.display = if output.is_some() {
+                let (watch, now) = DisplayWatch::new(&self.window);
+                crate::graphics::report(now);
+                self.display_fresh = true;
+                watch
+            } else {
+                DisplayWatch::default()
+            };
             let format = self.config.format.remove_srgb_suffix();
             self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
@@ -3353,6 +3359,9 @@ impl Renderer {
     /// apply them again.
     pub fn display_changed(&mut self) -> bool {
         flush_display_log();
+        if std::mem::take(&mut self.display_fresh) {
+            return true;
+        }
         let Some(now) = self.display.changed() else {
             return false;
         };
