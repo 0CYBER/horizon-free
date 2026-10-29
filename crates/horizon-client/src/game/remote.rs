@@ -5844,6 +5844,7 @@ impl Game<'_> {
                 self.recipe_ui.reset_screen();
                 if self.creative {
                     self.screen = Screen::Creative;
+                    self.refresh_creative_tabs();
                     self.creative_screen.reopen();
                 } else {
                     self.screen = Screen::Inventory;

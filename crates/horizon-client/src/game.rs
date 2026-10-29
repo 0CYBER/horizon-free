@@ -5291,6 +5291,9 @@ impl Game<'_> {
         self.tick_debug_keys()?;
         self.tick_debug_charts();
         self.tick_tutorial();
+        if self.screen == Screen::Creative {
+            self.refresh_creative_tabs();
+        }
         if self.remote.is_some() {
             return self.tick_remote();
         }
@@ -6518,6 +6521,14 @@ impl Game<'_> {
             self.draw_book(&mut batch);
         }
         batch
+    }
+    /// `CreativeModeInventoryScreen.hasPermissions` (`canUseGameMasterBlocks`
+    /// and the Operator Items Tab option) given to `tryRefreshInvalidatedTabs`,
+    /// as the screen's constructor and `containerTick` do.
+    fn refresh_creative_tabs(&mut self) {
+        let permissions = self.can_use_game_master_blocks() && self.settings.operator_items_tab;
+        self.creative_screen
+            .set_permissions(permissions, &self.pack.names);
     }
     fn creative_inventory_open(&self) -> bool {
         self.screen == Screen::Creative && self.creative_screen.tab().inventory
@@ -12661,6 +12672,7 @@ impl Game<'_> {
                         }
                         if self.creative {
                             self.screen = Screen::Creative;
+                            self.refresh_creative_tabs();
                             self.creative_screen.reopen();
                         } else {
                             self.screen = Screen::Inventory;
