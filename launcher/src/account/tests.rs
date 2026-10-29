@@ -394,6 +394,46 @@ fn an_owner_plays_with_a_session() {
     assert!(accounts.selected().unwrap().skin.is_some());
 }
 
+/// A keychain that reads but refuses to keep anything new (#3249).
+struct Refusing(MemoryStore);
+impl SecretStore for Refusing {
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        self.0.get(key)
+    }
+    fn set(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("the keyring is locked".into())
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        self.0.delete(key)
+    }
+    fn persistent(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_renewed_sign_in_the_keychain_refuses_still_plays_and_says_so() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let stale = Secrets {
+        minecraft_expires_at: now() + 60,
+        ..secrets("old-token", true)
+    };
+    let mut accounts = signed_in(&store, &stale);
+    let refusing = Refusing(store);
+    let pass = launch(&ep, Some("test-client"), &refusing, &mut accounts).unwrap();
+    assert_eq!(pass.session.unwrap().1.minecraft_token, "mc-token");
+    let said = "Notch's renewed sign-in couldn't be saved in the keychain (the keyring is \
+                locked): you may have to sign in again next time.";
+    assert_eq!(pass.unsaved.as_deref(), Some(said));
+    assert_eq!(take_unsaved().as_deref(), Some(said));
+    assert_eq!(take_unsaved(), None, "said once");
+    // Nothing to save, nothing to say.
+    let mut accounts = signed_in(&refusing.0, &secrets("mc-token", true));
+    let pass = launch(&ep, Some("test-client"), &refusing, &mut accounts).unwrap();
+    assert!(pass.unsaved.is_none());
+}
+
 #[test]
 fn a_no_from_the_services_blocks_at_once() {
     let (_, ep) = mock(|m| m.owns_game = false);

@@ -20,7 +20,9 @@ use std::{
 
 /// The tree the chat parses and completes with: a server's, once it has
 /// sent one (ClientPacketListener.commands), else the game's own.
-fn chat_tree(remote: &Option<super::remote::Remote>) -> &horizon_client::command::Dispatcher {
+pub(super) fn chat_tree(
+    remote: &Option<super::remote::Remote>,
+) -> &horizon_client::command::Dispatcher {
     match remote.as_ref().and_then(|r| r.commands.as_ref()) {
         Some(tree) => tree,
         None => horizon_client::command::vanilla::game_dispatcher(),
@@ -145,7 +147,7 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
         recipes: ids_under(&data.join("recipe"), "json"),
         damage_types: ids_under(&data.join("damage_type"), "json"),
         loot_tables: ids_under(&data.join("loot_table"), "json"),
-        templates: ids_under(&root.join("worldgen/structure/minecraft"), "nbt"),
+        templates: templates_under(&root.join("worldgen/structure")),
     });
     cache.push((root.to_owned(), ids.clone()));
     ids
@@ -153,6 +155,26 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
 
 /// The `minecraft:` ids of the `extension` files under `root`, sorted.
 fn ids_under(root: &Path, extension: &str) -> Vec<String> {
+    ids_in(root, extension, "minecraft")
+}
+
+/// The templates of every namespace folder under `root` (vanilla's and the
+/// content mods'), as `namespace:path`, sorted.
+fn templates_under(root: &Path) -> Vec<String> {
+    let Ok(namespaces) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = namespaces
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .flat_map(|e| ids_in(&e.path(), "nbt", &e.file_name().to_string_lossy()))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The `namespace:` ids of the `extension` files under `root`, sorted.
+fn ids_in(root: &Path, extension: &str, namespace: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_owned()];
     while let Some(dir) = stack.pop() {
@@ -172,7 +194,7 @@ fn ids_under(root: &Path, extension: &str) -> Vec<String> {
                 && let Ok(rel) = path.strip_prefix(root)
             {
                 out.push(format!(
-                    "minecraft:{}",
+                    "{namespace}:{}",
                     rel.with_extension("").to_string_lossy().replace('\\', "/")
                 ));
             }
@@ -424,9 +446,21 @@ impl Game<'_> {
             .map(|(k, _)| k.clone())
             .collect();
     }
-    /// The block the player is looking at, for coordinate suggestions.
+    /// The block the player is looking at, for coordinate suggestions, and
+    /// the entity, for entity arguments (ClientSuggestionProvider).
+    /// `ClientSuggestionProvider.getRelevantCoordinates` and
+    /// `getAbsoluteCoordinates` read `Minecraft.hitResult` only when it is a
+    /// block: an entity in front of the block leaves the `~` defaults.
     fn refresh_dynamic_registries(&mut self) {
-        self.ui.registries.target_block = self.pick().map(|h| h.pos);
+        let hit = if self.pick_entity_hit().is_some() {
+            None
+        } else {
+            self.pick()
+        };
+        self.ui.registries.target_block = hit.as_ref().map(|h| h.pos);
+        self.ui.registries.target_point =
+            hit.map(|h| h.point.map(horizon_client::java_text::format_fixed2));
+        self.ui.registries.selected_entities = self.crosshair_entity_uuid().into_iter().collect();
         // ClientPacketListener.getOnlinePlayerNames on a server.
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;
@@ -632,7 +666,7 @@ impl Game<'_> {
             ChatAction::None => {
                 // charTyped: the text the key typed.
                 if let Some(text) = typed_text
-                    && !ctrl
+                    && self.types_text()
                 {
                     screen.type_text(&m, &c, text);
                 }
@@ -961,7 +995,7 @@ impl Game<'_> {
         }
     }
     /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
-    fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
+    pub(super) fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
         let split = self
             .gui
             .atlas
@@ -1126,9 +1160,19 @@ impl Game<'_> {
             None => self.combat_death_message(),
         };
         self.ui.death_text = Some(message.clone());
-        // ServerPlayer.die: a team that hides death messages keeps it out of
-        // the dying player's own chat (the death screen still shows it).
-        if horizon_client::scoreboard::own_death_message_shown(self.player_team()) {
+        // ServerPlayer.die: the team's death message visibility decides who
+        // hears it, the dying player's own chat included (the death screen
+        // still shows it).
+        let board = &self.score.board;
+        if let Some(host) = &self.lan {
+            host.hub.system_message_to(
+                horizon_client::lan::data::component_nbt(&message.component()),
+                |other| {
+                    horizon_client::scoreboard::death_message_reaches(board, PLAYER_NAME, other)
+                },
+            );
+        }
+        if horizon_client::scoreboard::death_message_reaches(board, PLAYER_NAME, PLAYER_NAME) {
             self.system_message(message);
         }
     }
@@ -1149,7 +1193,10 @@ impl Game<'_> {
             return;
         };
         let path = dir.join(name);
-        renderer.screenshot = Some(path.clone());
+        renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
+            path: path.clone(),
+            size: None,
+        });
         self.ui.screenshot_message = Some(path);
     }
     /// After a frame: report a finished F2 screenshot in chat.
@@ -1159,6 +1206,7 @@ impl Game<'_> {
         };
         let message = match result {
             Ok(_) => {
+                log::info!("Saved screenshot to {}", path.display());
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 let link = Text::styled(
                     name,
@@ -1183,24 +1231,10 @@ impl Game<'_> {
         );
     }
 }
-/// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time
-/// approximated as UTC).
+/// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, in local time).
 pub fn screenshot_name(dir: &std::path::Path) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let days = (secs / 86400) as i64;
-    let (h, m, s) = ((secs % 86400) / 3600, (secs % 3600) / 60, secs % 60);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(mo <= 2);
-    let base = format!("{y}-{mo:02}-{d:02}_{h:02}.{m:02}.{s:02}");
+    // Util.getFilenameFormattedDateTime: the local date and time.
+    let base = chrono::Local::now().format("%Y-%m-%d_%H.%M.%S").to_string();
     let mut n = 1;
     loop {
         let name = if n == 1 {

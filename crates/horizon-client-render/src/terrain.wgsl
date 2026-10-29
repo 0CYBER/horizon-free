@@ -24,6 +24,9 @@ struct Globals {
     outline_params: vec4<f32>,
     // Horizon Extras' dynamic lights: camera-relative position and level (dynamic_light.rs).
     dynamic_lights: array<vec4<f32>, 16>,
+    // The sunrise fan's 16 triangles (gfx/sunrise_fan.rs): xyz the apex weight's normal, w the
+    // triangle's volume with the camera; then each rim vertex's normal against the apex.
+    sunrise_fan: array<vec4<f32>, 32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;
@@ -197,39 +200,26 @@ fn sky_fog(color: vec3<f32>, dist: vec2<f32>) -> vec3<f32> {
     let f = max(linear_fog(dist.x, 0.0, end), linear_fog(dist.y, end, end));
     return mix(color, globals.fog_color.rgb, f * globals.fog_color.a);
 }
-fn rotate_x90(v: vec3<f32>) -> vec3<f32> { return vec3(v.x, -v.z, v.y); }
-// Weight of the fan centre where the ray crosses the sunrise fan (0 when missed).
+// Weight of the fan centre where the ray crosses the sunrise fan (0 when missed):
+// Moller-Trumbore from the origin along d, over normals built once a frame
+// (gfx/sunrise_fan.rs). The barycentrics are apex/s, k1/s and -k0/s; s is -det.
 fn sunrise_weight(d: vec3<f32>) -> f32 {
-    let alpha = globals.sunrise.a;
-    if alpha <= 0.001 { return 0.0; }
-    // sin(sunAngle) < 0 flips the fan to the other horizon; sun.z = -sin(sunAngle).
-    let flip = select(0.0, 180.0, -globals.sun.z < 0.0);
-    let theta = radians(flip + 90.0);
-    let c = cos(theta);
-    let s = sin(theta);
+    if globals.sunrise.a <= 0.001 { return 0.0; }
     var best = 0.0;
-    let apex = rotate_x90(vec3(-100.0 * s, 100.0 * c, 0.0));
+    var k0 = dot(d, globals.sunrise_fan[16].xyz);
     for (var i = 0; i < 16; i++) {
-        let a0 = f32(i) * 2.0 * PI / 16.0;
-        let a1 = f32(i + 1) * 2.0 * PI / 16.0;
-        let l0 = vec3(sin(a0) * 120.0, cos(a0) * 120.0, -cos(a0) * 40.0 * alpha);
-        let l1 = vec3(sin(a1) * 120.0, cos(a1) * 120.0, -cos(a1) * 40.0 * alpha);
-        let r0 = rotate_x90(vec3(l0.x * c - l0.y * s, l0.x * s + l0.y * c, l0.z));
-        let r1 = rotate_x90(vec3(l1.x * c - l1.y * s, l1.x * s + l1.y * c, l1.z));
-        // Moller-Trumbore from the origin along d.
-        let e1 = r0 - apex;
-        let e2 = r1 - apex;
-        let pv = cross(d, e2);
-        let det = dot(e1, pv);
-        if abs(det) < 1e-6 { continue; }
-        let tv = -apex;
-        let u = dot(tv, pv) / det;
-        let qv = cross(tv, e1);
-        let v = dot(d, qv) / det;
-        let t = dot(e2, qv) / det;
-        if u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0 {
-            best = max(best, 1.0 - u - v);
+        let triangle = globals.sunrise_fan[i];
+        let k1 = dot(d, globals.sunrise_fan[16 + (i + 1) % 16].xyz);
+        // A hit needs s on the side of w, so k0 and k1 on either side of 0.
+        if k0 * triangle.w <= 0.0 && k1 * triangle.w >= 0.0 {
+            let apex = dot(d, triangle.xyz);
+            let s = apex + k1 - k0;
+            if abs(s) >= 1e-6 && s * triangle.w > 0.0 && apex * s >= 0.0 && k1 * s >= 0.0
+                && k0 * s <= 0.0 {
+                best = max(best, apex / s);
+            }
         }
+        k0 = k1;
     }
     return best;
 }

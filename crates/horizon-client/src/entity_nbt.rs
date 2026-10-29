@@ -953,7 +953,20 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 continue;
             };
             let v = f64::from_bits(*bits);
+            // A mount's rolled health and speed stay attribute bases, which
+            // the server syncs (its hearts over the rider's hotbar).
+            let equine = crate::mobs::equine::is_equine(m.species());
             match id.as_str() {
+                "minecraft:max_health" if equine => crate::mobs::finalize::set_base(
+                    &mut m,
+                    crate::mobs::finalize::Attr::MaxHealth,
+                    v,
+                ),
+                "minecraft:movement_speed" if equine => crate::mobs::finalize::set_base(
+                    &mut m,
+                    crate::mobs::finalize::Attr::MovementSpeed,
+                    v,
+                ),
                 "minecraft:max_health" => m.attrs.max_health = v as f32,
                 "minecraft:movement_speed" => m.attrs.speed = v,
                 "minecraft:attack_damage" => m.attrs.attack_damage = v as f32,

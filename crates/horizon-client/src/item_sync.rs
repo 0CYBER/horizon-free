@@ -90,6 +90,11 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                     ("pattern", Tag::String(pattern.into())),
                 ])
             }
+            // Instruments are a synced registry: a goat horn names its own.
+            Component::Instrument(id) => match synced.name("minecraft:instrument", *id) {
+                Some(name) => Tag::String(name.into()),
+                None => continue,
+            },
             // BannerPatternLayers: each layer's pattern is a synced registry entry.
             Component::BannerPatterns(layers) => {
                 let layers: Option<Vec<Tag>> = layers
@@ -447,6 +452,7 @@ mod tests {
         };
         let dynamic = Dynamic {
             registries: Default::default(),
+            ..Default::default()
         };
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
         bundle.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 32)];
@@ -490,6 +496,7 @@ mod tests {
         };
         let dynamic = Dynamic {
             registries: Default::default(),
+            ..Default::default()
         };
         for amplifier in [None, Some(0), Some(3)] {
             let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
@@ -574,6 +581,7 @@ mod tests {
                 ),
             ]
             .into(),
+            ..Default::default()
         };
         let mut stack = ItemStack::new("minecraft:diamond_chestplate", 1);
         stack.damage = 5;

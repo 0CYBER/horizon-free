@@ -153,7 +153,7 @@ The opening, then Play ([clip](docs/opening.webm)):
   white on the Play button at 4.5:1 and the accent at 3:1 on every background (a test holds every
   accent in both looks to it). The picture is copied into the data folder.
   `horizon-launcher settings accent NAME`, `settings background PATH|default`.
-- **Language**: English, French and Russian (the languages Horizon's own game menus have).
+- **Language**: English, French, Russian, German, Spanish and Ukrainian.
   The window follows the system's language unless the player picks one in Settings > Launcher
   (each named in itself); a string a table lacks shows in English. The tables are
   `launcher/lang/<code>.json`, English text to its translation, Horizon's own; a test fails when
