@@ -62,6 +62,11 @@ pub struct Memories {
     pub avoid: Option<AvoidTarget>,
     /// `RIDE_TARGET`.
     pub ride: Option<RideTarget>,
+    /// A piglin's `NEAREST_VISIBLE_BABY_HOGLIN`.
+    pub baby_hoglin: Option<u32>,
+    /// `SetEntityLookTargetSometimes.Ticker.ticksUntilNextStart` of
+    /// `babySometimesRideBabyHoglin`.
+    pub ride_wait: i32,
     /// `Brain.getActiveNonCoreActivity` as `updateActivity` last left it.
     pub activity: Activity,
     /// The `last_hurt_by_time` of the hit `wasHurtBy` last reacted to.
@@ -145,11 +150,13 @@ fn hoglin_sense(m: &mut Mob, w: &MobWorld) {
     b.adults = hoglins;
 }
 /// `PiglinSpecificSensor.doTick`: what a piglin sees: adult piglins (brutes
-/// too) and hoglins counted, the nearest zombified piglin or zoglin, the
-/// nearest wither skeleton or wither, and a player holding gold.
+/// too) and hoglins counted, the nearest baby hoglin, the nearest zombified
+/// piglin or zoglin, the nearest wither skeleton or wither, and a player
+/// holding gold.
 fn piglin_sense(m: &mut Mob, w: &MobWorld) {
     let mut adults = Vec::new();
     let mut hoglins = 0;
+    let mut baby_hoglin = None;
     let mut zombified = None;
     let mut nemesis = None;
     let mut loved = false;
@@ -169,6 +176,11 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
                 let Some(s) = w.seen(id) else { continue };
                 let (species, baby) = (s.species, s.baby);
                 match species {
+                    Species::Hoglin if baby && baby_hoglin.is_none() => {
+                        if visible(m, w, who) {
+                            baby_hoglin = Some(id);
+                        }
+                    }
                     Species::Hoglin if !baby => {
                         if visible(m, w, who) {
                             hoglins += 1;
@@ -198,6 +210,7 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
     b.piglins = adults.len() as i32;
     b.adults = adults;
     b.hoglins = hoglins;
+    b.baby_hoglin = baby_hoglin;
     b.zombified = zombified;
     b.nemesis = nemesis;
     b.sees_loved = loved;
@@ -259,6 +272,10 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     }
     if m.species() == Species::Piglin {
         copy_to_avoid(m, cx);
+        // The idle activity's behaviours: `babySometimesRideBabyHoglin`.
+        if m.extra.piglin.activity == Activity::Idle {
+            baby_sometimes_ride_baby_hoglin(m, cx);
+        }
     }
     if m.extra.piglin.activity == Activity::Avoid && wants_to_stop_fleeing(m, cx.w) {
         m.extra.piglin.avoid = None;
@@ -370,6 +387,45 @@ fn copy_to_avoid(m: &mut Mob, cx: &mut Cx) {
         let ticks = avoid_duration(cx.lr);
         remember_avoid(m, who, at, ticks);
     }
+}
+/// `SetEntityLookTargetSometimes.Ticker.tickDownAndCheck`: with nothing left
+/// to wait for, draw the next wait from `interval` and say no; otherwise
+/// count down and say yes when it reaches nothing.
+fn tick_down_and_check(wait: &mut i32, lr: &mut LegacyRandom, interval: (i32, i32)) -> bool {
+    if *wait == 0 {
+        *wait = lr
+            .next_int_between_inclusive(interval.0, interval.1)
+            .unwrap_or(interval.0)
+            - 1;
+        false
+    } else {
+        *wait -= 1;
+        *wait == 0
+    }
+}
+/// `PiglinAi.babySometimesRideBabyHoglin`: the idle activity's
+/// `CopyMemoryWithExpiry` of the nearest baby hoglin it sees into
+/// `RIDE_TARGET` for 10 to 30 seconds. It asks only while the target is
+/// empty, and a baby's ticker lets it through once every 10 to 40 seconds
+/// of asking (`RIDE_START_INTERVAL`, `RIDE_DURATION`, both drawn from the
+/// level random).
+fn baby_sometimes_ride_baby_hoglin(m: &mut Mob, cx: &mut Cx) {
+    let b = &m.extra.piglin;
+    let Some(hoglin) = b.baby_hoglin else { return };
+    if b.ride.is_some() || !m.is_baby() {
+        return;
+    }
+    if !tick_down_and_check(&mut m.extra.piglin.ride_wait, cx.lr, (200, 800)) {
+        return;
+    }
+    let ticks = cx.lr.next_int_between_inclusive(200, 600).unwrap_or(200);
+    let mut ttl = Ttl::default();
+    ttl.set(ticks);
+    m.extra.piglin.ride = Some(RideTarget {
+        vehicle: hoglin,
+        ttl,
+        aimed: None,
+    });
 }
 /// `HoglinAi.piglinsOutnumberHoglins`: an adult hoglin counts itself and
 /// sees more adult piglins than hoglins.
