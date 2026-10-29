@@ -29,7 +29,7 @@ mod crates;
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "b74802d8acdf3968a520ccb11b5749cf9fcfc386";
+pub const MIXINS_REV: &str = "cb1ad23022392d88f006cf94cbf6552a73f5df12";
 /// The profile builds use: the workspace's `fast` (the release's optimizations without its
 /// link-time ones, incremental), so a rebuild recompiles and links only what the mods changed.
 /// A revision without it builds with `release` ([`profile_of`]).
