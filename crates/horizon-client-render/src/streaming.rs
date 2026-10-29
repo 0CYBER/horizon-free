@@ -99,6 +99,9 @@ pub trait LodSampler: Send {
     fn drain_details(&mut self) -> Vec<LodDetail> {
         Vec::new()
     }
+    /// Reduced far detail (`graphics::FarDetail::Reduced`): `grid` may then
+    /// approximate wide cells.
+    fn set_approximate(&mut self, _approximate: bool) {}
     fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface>;
     fn column(&mut self, x: i32, z: i32) -> crate::lod::Column {
         crate::lod::Column::from_surface(self.sample(x, z))

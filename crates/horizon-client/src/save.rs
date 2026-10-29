@@ -3489,6 +3489,9 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
             details: Vec::new(),
         }))
     }
+    fn set_approximate(&mut self, approximate: bool) {
+        self.inner.set_approximate(approximate);
+    }
     fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
         let mut missing = Vec::new();
         for &key in chunks {

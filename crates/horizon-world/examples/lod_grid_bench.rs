@@ -3,6 +3,9 @@
 //! (16 x 16 columns), with checksums of what they hold.
 //!
 //! lod_grid_bench <client resource dir> [--seed S] [--tiles N] [--levels 0,2,4,6] [--dump PATH]
+//!     [--approximate]
+//!
+//! `--approximate` samples as Reduced far detail does.
 use horizon_world::worldgen::generator::{GeneratorData, OverworldGenerator};
 use std::{path::PathBuf, time::Instant};
 
@@ -14,9 +17,11 @@ fn main() -> Result<(), Error> {
     let (mut seed, mut tiles) = (0i64, 25);
     let mut levels = vec![0u8, 2, 4, 6];
     let mut dump: Option<std::fs::File> = None;
+    let mut approximate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seed" => seed = args.next().ok_or("--seed S")?.parse()?,
+            "--approximate" => approximate = true,
             "--tiles" => tiles = args.next().ok_or("--tiles N")?.parse()?,
             "--dump" => dump = Some(std::fs::File::create(args.next().ok_or("--dump PATH")?)?),
             "--levels" => {
@@ -43,7 +48,7 @@ fn main() -> Result<(), Error> {
         start.elapsed().as_secs_f64()
     );
     // Warm the worker's caches once.
-    worker.lod_grid(0, 0, 16, 16)?;
+    worker.lod_grid(0, 0, 16, 16, approximate)?;
     for level in levels {
         let size = 16i32 << level;
         let width = size / 16;
@@ -57,7 +62,13 @@ fn main() -> Result<(), Error> {
         for i in 0..tiles {
             // Tiles around the origin, as a view would request them.
             let (tx, tz) = (i % 5 - 2, i / 5 - 2);
-            let grid = worker.lod_grid(tx * size + width / 2, tz * size + width / 2, width, 16)?;
+            let grid = worker.lod_grid(
+                tx * size + width / 2,
+                tz * size + width / 2,
+                width,
+                16,
+                approximate,
+            )?;
             spans += grid.iter().map(|(_, s)| s.len()).sum::<usize>();
             std::hash::Hash::hash(&format!("{grid:?}"), &mut hash);
             for (surface, _) in &grid {
