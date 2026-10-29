@@ -653,18 +653,57 @@ pub fn modify_fov_based_on_death_or_fluid(
     fov
 }
 
-/// `ClientAvatarState`: the walked distance and view bob of a player.
+/// `ClientAvatarState`: the walked distance, view bob and cloak of a player.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AvatarBob {
     pub walk_dist: f32,
     pub walk_dist_o: f32,
     pub bob: f32,
     pub bob_o: f32,
+    /// `xCloak`, `yCloak`, `zCloak`: a point trailing the player, which the cape leans from.
+    pub cloak: [f64; 3],
+    pub cloak_o: [f64; 3],
 }
 impl AvatarBob {
-    /// `ClientAvatarState.tick` (at the start of `AbstractClientPlayer.tick`).
-    pub fn tick(&mut self) {
+    /// `ClientAvatarState.tick` (at the start of `AbstractClientPlayer.tick`)
+    /// with the player's position then: `moveCloak` eases the cloak a quarter
+    /// of the way there, or puts it there from 10 blocks away.
+    pub fn tick(&mut self, position: [f64; 3]) {
         self.walk_dist_o = self.walk_dist;
+        self.cloak_o = self.cloak;
+        for i in 0..3 {
+            let d = position[i] - self.cloak[i];
+            if d > 10.0 || d < -10.0 {
+                self.cloak[i] = position[i];
+                self.cloak_o[i] = position[i];
+            } else {
+                self.cloak[i] += d * 0.25;
+            }
+        }
+    }
+    /// `AvatarRenderer.extractCapeState`: the cape's `capeFlap`, `capeLean`
+    /// and `capeLean2` (degrees) for the player at `position` (interpolated)
+    /// with its body turned `body_yaw` and its `fallFlyingScale`.
+    pub fn cape(
+        &self,
+        partial: f32,
+        position: [f64; 3],
+        body_yaw: f32,
+        fall_flying_scale: f32,
+    ) -> [f32; 3] {
+        let d: [f64; 3] = std::array::from_fn(|i| {
+            lerp_d(f64::from(partial), self.cloak_o[i], self.cloak[i]) - position[i]
+        });
+        let rad = f64::from(body_yaw * DEG_TO_RAD);
+        let (sin, cos) = (f64::from(trig::sin(rad)), f64::from(-trig::cos(rad)));
+        let mut flap = (d[1] as f32 * 10.0).clamp(-6.0, 32.0);
+        let lean = ((d[0] * sin + d[2] * cos) as f32 * 100.0 * (1.0 - fall_flying_scale))
+            .clamp(0.0, 150.0);
+        let lean2 = ((d[0] * cos - d[2] * sin) as f32 * 100.0).clamp(-20.0, 20.0);
+        let bob = self.interpolated_bob(partial);
+        let walk = lerp(partial, self.walk_dist_o, self.walk_dist);
+        flap += trig::sin(f64::from(walk * 6.0)) * 32.0 * bob;
+        [flap, lean, lean2]
     }
     /// `LocalPlayer.move`: `addWalkedDistance(Mth.length(dx, dz) * 0.6F)`
     /// with the float horizontal displacement.
@@ -795,6 +834,23 @@ pub fn spinning_effect_matrix(intensity: f32, angle_degrees: f32) -> glam::Mat4 
 
 #[cfg(test)]
 mod tests {
+    /// `moveCloak` trails a quarter of the way, jumps from 10 blocks away; the
+    /// cape leans back as the player walks forward (south, body yaw 0).
+    #[test]
+    fn the_cloak_trails_the_player() {
+        let mut a = super::AvatarBob::default();
+        a.tick([0.0, 64.0, 0.0]);
+        assert_eq!((a.cloak, a.cloak_o), ([0.0, 64.0, 0.0], [0.0, 64.0, 0.0]));
+        a.tick([0.0, 64.0, 1.0]);
+        assert_eq!(a.cloak, [0.0, 64.0, 0.25]);
+        let [flap, lean, lean2] = a.cape(1.0, [0.0, 64.0, 1.0], 0.0, 0.0);
+        assert_eq!((flap, lean, lean2), (0.0, 75.0, 0.0));
+        // Falling lifts the flap, at most 32 degrees.
+        assert_eq!(a.cape(1.0, [0.0, 60.0, 0.25], 0.0, 0.0)[0], 32.0);
+        // Gliding takes the lean away.
+        assert_eq!(a.cape(1.0, [0.0, 64.0, 1.0], 0.0, 1.0)[1], 0.0);
+    }
+
     #[test]
     fn depth_far_covers_the_cloud_range() {
         // renderDistance 2 with the default Cloud Distance (128 chunks).

@@ -349,6 +349,27 @@ def entities():
     ]
 
 
+def wither_spawn():
+    """A wither charging up (`Invul`) neither moves toward its target nor is hurt by
+    the blast that ends the charge (#3322): `WitherBoss.customServerAiStep` sets no
+    alternative target while invulnerable, and `ServerLevel.explode`'s entity query
+    skips the source."""
+    wither = '@e[type=minecraft:wither,limit=1]'
+    return [
+        *setup('/fill 0 209 4 9 209 20 minecraft:stone',
+               '/summon minecraft:pig 4.5 210 18.5 {NoAI:1b,Tags:["wither_prey"]}',
+               '/summon minecraft:wither 4.5 210 8.5 {Invul:20}'),
+        {'op': 'tick', 'n': 10},
+        cmd(f'/data get entity {wither} Pos'),
+        cmd(f'/data get entity {wither} Invul'),
+        {'op': 'tick', 'n': 12},
+        cmd(f'/data get entity {wither} Invul'),
+        cmd(f'/data get entity {wither} Health'),
+        *setup('/kill @e[type=minecraft:wither]', '/kill @e[tag=wither_prey]', '/fill 0 200 0 15 228 20 air'),
+        {'op': 'tick', 'n': 5},
+    ]
+
+
 def riding_teleport():
     """Player teleports remove the vehicle, leave it behind and keep the destination (#1473)."""
     horse = '@e[tag=tp_horse,limit=1]'
@@ -1122,6 +1143,7 @@ def groups():
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
+        ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('mob riding', mob_riding()),
         ('scores, teams and bossbars', scores()),
