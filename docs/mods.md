@@ -193,6 +193,7 @@ Horizon's own mods are native. They live in
 | Zoom | `native/zoom` | Extras > Zoom |
 | Minimap | `native/minimap` | Extras > Minimap |
 | Recipes | `native/recipes` | The Recipes WebAssembly mod (item panel and recipe pages, on hook points version 2) |
+| Coordinates HUD | `native/coords-hud` | The WebAssembly SDK's example mod (position and facing, `/where`, `/coords`) |
 
 The game keeps the parts that must be fast, such as drawing the minimap's map, and a native mod picks the options
 ([extras.md](extras.md)). Far View is not a mod any more: its distance and detail are Graphics > LOD Distance and Far
