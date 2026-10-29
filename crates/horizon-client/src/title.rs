@@ -1985,9 +1985,11 @@ impl Title {
             Err(error) => self.failed(error),
         }
     }
-    /// Enter on the open screen: `CreateWorldScreen.keyPressed` creates the
-    /// world as its Create button does; a rename saves.
+    /// Enter on the open screen: Create New World creates the world as its
+    /// button does (`CreateWorldScreen.keyPressed`), a rename saves, and
+    /// Direct Connection joins (`DirectJoinServerScreen.keyPressed`).
     pub fn confirm_key(&mut self) -> Action {
+        self.remember_direct_address();
         if self.rules.get_mut().is_some() {
             return Action::None;
         }
@@ -1997,6 +1999,10 @@ impl Title {
         }
         match &self.mode {
             Mode::Create { .. } => self.create_action(),
+            Mode::Multiplayer(screen) => match screen.confirm() {
+                crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
+                _ => Action::None,
+            },
             _ => Action::None,
         }
     }
