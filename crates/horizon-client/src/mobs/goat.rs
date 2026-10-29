@@ -3,7 +3,8 @@
 //! the nearest living thing it can see, walks to a spot four to seven
 //! blocks away in a straight line and waits there 20 ticks with its head
 //! down; `RamTarget` then charges at it, knocks it back, or breaks a horn
-//! on a log, stone or ore. Both are one goal here.
+//! on a log, stone or ore. Both are one goal here. The long jump activity is
+//! the frog's goal (frog.rs) with the goat's numbers.
 use super::{
     Damage, Mob, MobEvent, MobWorld, Who,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone},
@@ -57,6 +58,41 @@ pub struct State {
 
 pub fn register(m: &mut Mob) {
     m.ai.goals.add(2, Ram);
+    // `GoatAi.initLongJumpActivity`: the long jump activity comes after the
+    // ram activity and before the idle one.
+    m.ai.goals.add(2, super::frog::LongJump::default());
+}
+/// The goat's long jump activity is the one in use: `GoatAi` tries the ram
+/// activity first, so the ram cooldown runs, and the long jump activity wants
+/// no tempting player, no breed target and no walk target (the navigation is
+/// idle).
+pub(super) fn long_jump_activity(m: &Mob, w: &MobWorld) -> bool {
+    ram_cooldown(m) > 0 && m.ai.nav.is_done() && !tempted(m, w) && !breeding(m, w)
+}
+/// `TemptingSensor.forAnimal`: a player within 10 blocks holds goat food.
+fn tempted(m: &Mob, w: &MobWorld) -> bool {
+    let holds = |item: &Option<std::sync::Arc<str>>| {
+        item.as_deref()
+            .is_some_and(|i| m.kind.food.iter().any(|f| f.as_str() == i))
+    };
+    w.player.as_ref().is_some_and(|p| {
+        p.alive
+            && !p.spectator
+            && m.distance_sqr(p.position) <= 100.0
+            && (holds(&p.main_hand) || holds(&p.off_hand))
+            && m.rider.is_none()
+    })
+}
+/// `AnimalMakeLove.checkExtraStartConditions`: the goat is in love and an
+/// adult goat in love is near, so `BREED_TARGET` is set or about to be.
+fn breeding(m: &Mob, w: &MobWorld) -> bool {
+    let id = m.id;
+    m.extra.in_love > 0
+        && w.nearby(m.position, 8.0, move |s| {
+            s.id != id && s.species == super::Species::Goat && s.in_love && !s.baby
+        })
+        .next()
+        .is_some()
 }
 
 /// `Goat.handleEntityEvent`: 58 lowers the head, 59 raises it.

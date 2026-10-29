@@ -506,7 +506,14 @@ impl LongJump {
                 continue;
             };
             let here = [m.position.x.floor() as i32, m.position.z.floor() as i32];
-            if here == [target[0], target[2]] || !acceptable_landing(m, w, target) {
+            // GoatAi's landing spot is LongJumpToRandomPos's default; the
+            // frog's is FrogAi.isAcceptableLandingSpot.
+            let acceptable = if m.species() == Species::Goat {
+                default_acceptable_landing(m, w, target)
+            } else {
+                acceptable_landing(m, w, target)
+            };
+            if here == [target[0], target[2]] || !acceptable {
                 continue;
             }
             let centre = Vec3::new(
@@ -601,6 +608,11 @@ impl Goal for LongJump {
         // TODO: gate on them once frogs follow frog_food, breed and lay
         // frogspawn here; none of the three exists for frogs yet.
         if jump_cooldown(m).is_some() || m.species() != Species::Goat && m.fluids.in_water {
+            return false;
+        }
+        // GoatAi.initLongJumpActivity's other memories, and the activity
+        // order of GoatAi.updateActivity.
+        if m.species() == Species::Goat && !super::goat::long_jump_activity(m, cx.w) {
             return false;
         }
         // checkExtraStartConditions: on the ground, not in water or lava or
