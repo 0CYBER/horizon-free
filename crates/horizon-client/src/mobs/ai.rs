@@ -897,6 +897,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Cat if !m.extra.tame => {
             super::finalize::variant_sound(m, "stray_ambient").unwrap_or("entity.cat.stray_ambient")
         }
+        // Fox.getAmbientSound: a sleeping fox makes its sleep sound.
+        Species::Fox if super::fox::flag(m, super::fox::SLEEPING) => "entity.fox.sleep",
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
         Species::Dolphin if !m.fluids.in_water => "entity.dolphin.ambient",
         Species::Guardian if !m.fluids.in_water => "entity.guardian.ambient_land",
