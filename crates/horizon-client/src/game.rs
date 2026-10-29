@@ -11346,6 +11346,7 @@ impl Game<'_> {
             search.draw(batch, atlas, None);
         }
         let mut hovered: Option<ItemStack> = None;
+        let mut hovered_creative = false;
         if tab.inventory {
             self.draw_player_preview(
                 batch,
@@ -11396,6 +11397,8 @@ impl Game<'_> {
                     {
                         batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
                         hovered = Some(stack.clone());
+                        // A `CustomCreativeSlot`: TooltipFlag.asCreative.
+                        hovered_creative = true;
                     }
                 }
             }
@@ -11450,7 +11453,8 @@ impl Game<'_> {
         } else if self.carried.is_none()
             && let Some(item) = hovered
         {
-            self.draw_stack_tooltip(batch, &item, self.cursor.0, self.cursor.1);
+            let (x, y) = self.cursor;
+            self.draw_flagged_stack_tooltip(batch, &item, hovered_creative, x, y);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }

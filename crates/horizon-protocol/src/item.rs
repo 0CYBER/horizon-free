@@ -48,6 +48,7 @@ pub mod component {
     pub const FIREWORKS: i32 = 71;
     pub const BLOCK_ENTITY_DATA: i32 = 62;
     pub const CONTAINER: i32 = 77;
+    pub const PAINTING_VARIANT: i32 = 109;
 }
 
 /// A written book's content (`WrittenBookContent.STREAM_CODEC`): the
@@ -121,6 +122,9 @@ pub enum Component {
     /// its dye id (`DyeColor.getId`). A layer with a direct pattern has no
     /// registry name: that value stays [`Component::Raw`].
     BannerPatterns(Vec<(i32, i32)>),
+    /// `painting/variant` naming its `painting_variant` by registry id; a
+    /// direct variant stays [`Component::Raw`].
+    PaintingVariant(i32),
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
@@ -358,6 +362,18 @@ impl Component {
                     _ => Self::Raw(bytes.to_vec()),
                 }
             }
+            // Holder<PaintingVariant>: a reference's id plus one, or 0 and
+            // the variant itself (no registry name: read past).
+            PAINTING_VARIANT => {
+                let start = r.position();
+                skip::component(PAINTING_VARIANT, r)?;
+                let bytes = r.since(start);
+                let mut ids = Reader::new(bytes);
+                match ids.varint() {
+                    Ok(id @ 1..) if ids.remaining() == 0 => Self::PaintingVariant(id - 1),
+                    _ => Self::Raw(bytes.to_vec()),
+                }
+            }
             // DyeColor.STREAM_CODEC: its id.
             BASE_COLOR => Self::Int(r.varint()?),
             // BannerPatternLayers.STREAM_CODEC: a list of a pattern holder (a
@@ -408,6 +424,7 @@ impl Component {
                 w.varint(material + 1);
                 w.varint(pattern + 1);
             }
+            Self::PaintingVariant(id) => w.varint(id + 1),
             Self::Int(v) if kind == component::DYED_COLOR => w.i32(*v),
             Self::Int(v) => w.varint(*v),
             Self::Unit => {}
@@ -1053,6 +1070,39 @@ mod tests {
             let mut w = Writer::new();
             Slot::write(&stack, &mut w);
             assert_eq!(w.data, bytes, "component {kind}");
+        }
+    }
+
+    #[test]
+    fn painting_variants_decode_by_reference() {
+        // Holder<PaintingVariant>: a reference (its id plus one) is typed; a
+        // direct variant (0, width, height, asset id, no title, no author)
+        // is read past. Both encode back to the same bytes.
+        let asset = b"minecraft:x";
+        let mut direct = vec![1u8, 7, 1, 0, 109, 0, 2, 1, asset.len() as u8];
+        direct.extend_from_slice(asset);
+        direct.extend_from_slice(&[0, 0]);
+        for (bytes, expected) in [
+            (
+                vec![1u8, 7, 1, 0, 109, 5],
+                Some(Component::PaintingVariant(4)),
+            ),
+            (direct, None),
+        ] {
+            let mut r = Reader::new(&bytes);
+            let stack = Slot::read(&mut r).unwrap();
+            assert_eq!(r.remaining(), 0);
+            let c = stack
+                .as_ref()
+                .and_then(|s| s.component(component::PAINTING_VARIANT))
+                .unwrap();
+            match &expected {
+                Some(e) => assert_eq!(c, e),
+                None => assert!(matches!(c, Component::Raw(_))),
+            }
+            let mut w = Writer::new();
+            Slot::write(&stack, &mut w);
+            assert_eq!(w.data, bytes);
         }
     }
 }

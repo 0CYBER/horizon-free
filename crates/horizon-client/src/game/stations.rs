@@ -1696,7 +1696,7 @@ impl Game<'_> {
         &self,
         stack: &ItemStack,
     ) -> Vec<(horizon_client::text::Text, u32)> {
-        self.stack_tooltip_lines(stack, false)
+        self.stack_tooltip_lines(stack, false, false)
     }
     /// `ItemStack.getRarity`'s colour for the name line and a `[name]` link.
     fn rarity_color(&self, stack: &ItemStack) -> u32 {
@@ -1743,11 +1743,13 @@ impl Game<'_> {
     }
     /// `ItemStack.getTooltipLines`. A `nested` stack is a crossbow's
     /// projectile: `ChargedProjectiles.addProjectileTooltip` takes its details
-    /// without the name, the player and the advanced flag.
+    /// without the name, the player and the advanced flag. `creative` is
+    /// `TooltipFlag.isCreative`: a creative tab's own slot.
     fn stack_tooltip_lines(
         &self,
         stack: &ItemStack,
         nested: bool,
+        creative: bool,
     ) -> Vec<(horizon_client::text::Text, u32)> {
         let e: &Enchantments = &self.res.stations().enchantments;
         let color = self.rarity_color(stack);
@@ -1774,6 +1776,27 @@ impl Game<'_> {
         // before the components.
         for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
             push(&mut lines, text, c);
+        }
+        // HangingEntityItem.appendHoverText: a painting's variant, its title,
+        // author and size, or in a creative tab "Random variant".
+        if &*stack.item == "minecraft:painting" && display.shows("minecraft:painting/variant") {
+            use horizon_client::text::Text;
+            if let Some(v) = self.painting_variants.of_stack(stack) {
+                for part in [&v.title, &v.author].into_iter().flatten() {
+                    let text = horizon_client::component::to_text(part, &mut |_| Text::empty());
+                    lines.push((text, u32::MAX));
+                }
+                let size = [v.width, v.height].map(|n| Text::literal(n.to_string()));
+                lines.push((Text::translate("painting.dimensions", &size), u32::MAX));
+            } else if creative
+                && stack
+                    .data()
+                    .and_then(|d| d.other("minecraft:painting/variant"))
+                    .is_none()
+            {
+                let random = Text::translate("painting.random", &[]);
+                lines.push((random.with_color(horizon_client::text::GRAY), u32::MAX));
+            }
         }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
@@ -1848,7 +1871,7 @@ impl Game<'_> {
                     )
                 };
                 lines.push((line, u32::MAX));
-                for (text, c) in self.stack_tooltip_lines(projectile, true) {
+                for (text, c) in self.stack_tooltip_lines(projectile, true, false) {
                     // `literal("  ").append(line).withStyle(GRAY)`: the line's
                     // own colours win over the gray.
                     let rgb = if c == u32::MAX {
@@ -2245,7 +2268,19 @@ impl Game<'_> {
         x: f32,
         y: f32,
     ) {
-        let lines = Self::resolved(&self.stack_tooltip(stack));
+        self.draw_flagged_stack_tooltip(batch, stack, false, x, y);
+    }
+    /// [`Self::draw_stack_tooltip`] with `TooltipFlag.isCreative` set when
+    /// `creative` (a creative tab's own slot).
+    pub(super) fn draw_flagged_stack_tooltip(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        creative: bool,
+        x: f32,
+        y: f32,
+    ) {
+        let lines = Self::resolved(&self.stack_tooltip_lines(stack, false, creative));
         if lines.is_empty() {
             return;
         }

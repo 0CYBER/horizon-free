@@ -107,6 +107,13 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 };
                 Tag::List(layers)
             }
+            // `painting/variant`: a synced registry entry, as trims are.
+            Component::PaintingVariant(id) => {
+                let Some(name) = synced.name("minecraft:painting_variant", *id) else {
+                    continue;
+                };
+                Tag::String(name.into())
+            }
             // A shield's `base_color`: the dye's id.
             Component::Int(v) if *kind == component::BASE_COLOR => Tag::String(dye_name(*v).into()),
             Component::Int(v) if *kind == component::RARITY => {
@@ -583,6 +590,68 @@ mod tests {
         assert_eq!(
             from_network(&wire, &builtin, &dynamic).potion(),
             Some("minecraft:swiftness")
+        );
+    }
+
+    /// A painting's `painting/variant` (a `painting_variant` holder, id 109)
+    /// crosses the wire both ways: a server's creative slot gets the variant
+    /// its client picked, and a client's tooltip names the server's.
+    #[test]
+    fn a_painting_keeps_its_variant_across_the_wire() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); 110];
+        components[109] = "minecraft:painting/variant".into();
+        let items = ["minecraft:air", "minecraft:painting"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let variants = ["minecraft:alban", "minecraft:kebab"];
+        let dynamic = Dynamic {
+            registries: [(
+                "minecraft:painting_variant".to_owned(),
+                variants.iter().map(|v| (v.to_string(), None)).collect(),
+            )]
+            .into(),
+        };
+        // ItemStack.OPTIONAL_STREAM_CODEC: count 1, the painting, one added
+        // component (109: the reference to kebab, its id plus one), none removed.
+        let vanilla = [1u8, 1, 1, 0, 109, 2];
+        let stack = Slot::read(&mut Reader::new(&vanilla)).unwrap().unwrap();
+        let back = from_network(&stack, &builtin, &dynamic);
+        let variant = |s: &ItemStack| {
+            s.data()
+                .and_then(|d| d.other("minecraft:painting/variant"))
+                .cloned()
+        };
+        assert_eq!(variant(&back), Some(Tag::String("minecraft:kebab".into())));
+        let mut alban = ItemStack::new("minecraft:painting", 1);
+        alban.data_mut().set_other(
+            "minecraft:painting/variant",
+            Some(Tag::String("minecraft:alban".into())),
+        );
+        let wire = crate::lan::guest::stack_to_network(
+            |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+            |registry, name| dynamic.id(registry, name),
+            &Some(alban.clone()),
+        );
+        let mut w = Writer::new();
+        Slot::write(&wire, &mut w);
+        assert_eq!(w.data, [1, 1, 1, 0, 109, 1]);
+        let wire = Slot::read(&mut Reader::new(&w.data)).unwrap().unwrap();
+        assert_eq!(
+            variant(&from_network(&wire, &builtin, &dynamic)),
+            variant(&alban)
         );
     }
 }
