@@ -12,6 +12,9 @@
 //! `native_known_recipes`, `native_place_recipe`, `native_give`): what a
 //! recipe viewer needs.
 //!
+//! API 3 adds bundles' data files: `horizon_client::native_data!` compiles a file of a
+//! bundle's `data/` folder in, and `native_built_data` is the folder its post-build step wrote.
+//!
 //! Names, parameters and call sites are kept from release to release, and
 //! hook points are only ever added: each addition raises [`NATIVE_HOOKS_API`].
 //! A bundle that hooks only these names the API it needs (`hooks`), and the
@@ -35,7 +38,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 2;
+pub(crate) const NATIVE_HOOKS_API: u32 = 3;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -432,6 +435,11 @@ impl Game<'_> {
     pub(super) fn native_data_dir(&self, mod_id: &str) -> PathBuf {
         let mods = Self::options_path().with_file_name(mod_list::DIR);
         mods.join(".horizon-mod-data").join(mod_id)
+    }
+    /// The folder mod `mod_id`'s post-build step wrote into when the launcher built the game
+    /// (`native-data/<id>/` in the build's version folder). API 3.
+    pub(super) fn native_built_data(&self, mod_id: &str) -> PathBuf {
+        horizon_client::native_data::built(mod_id)
     }
     /// A mod's setting `key` (one file per key in `native_data_dir`).
     pub(super) fn native_setting(&self, mod_id: &str, key: &str) -> Option<String> {

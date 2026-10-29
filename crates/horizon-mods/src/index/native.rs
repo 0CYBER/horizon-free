@@ -66,7 +66,8 @@ impl Manifest {
 
 pub struct Bundle {
     pub manifest: Manifest,
-    /// Validated relative paths: Rust and TOML, plus files under `mixins/<id>/data/`.
+    /// Validated relative paths: Rust and TOML, plus files under `mixins/<id>/data/` or a
+    /// `data/` folder deeper in (a crate's).
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
@@ -115,13 +116,13 @@ impl Bundle {
                 .map_err(|e| e.to_string())?;
         manifest.check()?;
         let prefix = format!("mixins/{}/", manifest.id);
-        let data_prefix = format!("{prefix}data/");
+        // Data: the bundle's `data/`, or a `data/` of one of its crates (`engine/data/`).
+        let in_data = |rest: &str| rest.rsplit('/').skip(1).any(|dir| dir == "data");
         for name in files.keys().filter(|n| n.as_str() != MANIFEST) {
-            if !name.starts_with(&prefix)
-                || !(name.ends_with(".rs")
-                    || name.ends_with(".toml")
-                    || name.starts_with(&data_prefix))
-            {
+            let Some(rest) = name.strip_prefix(&prefix) else {
+                return Err(format!("unexpected native source: {name}"));
+            };
+            if !(name.ends_with(".rs") || name.ends_with(".toml") || in_data(rest)) {
                 return Err(format!("unexpected native source: {name}"));
             }
         }
@@ -217,7 +218,10 @@ mod tests {
         let bytes = [0, 255, 42];
         let bundle = read(
             "data",
-            &[("mixins/veinminer/data/nested/table.bin", &bytes)],
+            &[
+                ("mixins/veinminer/data/nested/table.bin", &bytes),
+                ("mixins/veinminer/engine/data/model.bin", &bytes),
+            ],
             &mixin(),
         )
         .unwrap();
@@ -235,6 +239,8 @@ mod tests {
             "mixins/veinminer/code.dll",
             "mixins/veinminer/data/../code.dll",
             "mixins/veinminer/database/file.bin",
+            "mixins/veinminer/engine/data.bin",
+            "mixins/veinminer/engine/Cargo.lock",
             "mixins/other/data/file.bin",
             "mixins\\veinminer\\hook.rs",
         ]
