@@ -1923,6 +1923,8 @@ struct Game<'a> {
     world_options: Option<lan_screen::WorldOptions>,
     /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
     options_to_world_options: bool,
+    /// HDR's settings opened with their key from the game: Done returns to the game.
+    options_to_game: bool,
     command_block_screen: Option<command_blocks::CommandBlockScreen>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
@@ -14532,6 +14534,7 @@ impl<'a> Game<'a> {
             serving: None,
             world_options: None,
             options_to_world_options: false,
+            options_to_game: false,
             command_block_screen: None,
             friends: None,
             debug_keys: Default::default(),

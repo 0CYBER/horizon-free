@@ -395,6 +395,7 @@ impl Game<'_> {
             self.title.is_some(),
             horizon_client::options_ui::Page::GraphicsHdr,
         );
+        self.options_to_game = self.title.is_none();
         true
     }
     fn sort_input(&mut self, name: &str) -> bool {
