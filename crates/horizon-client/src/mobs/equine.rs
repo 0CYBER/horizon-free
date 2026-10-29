@@ -109,14 +109,6 @@ pub fn on_elastic_leash_pull(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
         super::camel::on_elastic_leash_pull(m, w, events);
     }
 }
-/// `AbstractHorse.standIfPossible`: a horse that can rear does, for twenty
-/// ticks (`setStanding(20)`, which also ends its grazing).
-pub fn stand_if_possible(m: &mut Mob) {
-    if can_rear(m.species()) {
-        m.extra.counter = 20;
-        m.extra.flag = false;
-    }
-}
 /// `AbstractHorse.onPlayerJump`: a released jump bar lets the horse slide on
 /// the rider's keys (`allowStandSliding`) and makes it rear.
 pub fn on_player_jump(m: &mut Mob) {
@@ -344,7 +336,7 @@ impl Goal for RunAroundLikeCrazy {
 }
 /// `AbstractHorse.standIfPossible`: `setStanding(20)` (which also stops the
 /// eating) when `canPerformRearing`.
-fn stand_if_possible(m: &mut Mob) {
+pub fn stand_if_possible(m: &mut Mob) {
     if can_rear(m.species()) {
         m.extra.counter = 20;
         m.extra.flag = false;
