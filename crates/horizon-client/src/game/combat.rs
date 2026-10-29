@@ -300,12 +300,15 @@ impl Game<'_> {
             None
         }
     }
-    /// The custom name of a mob's main hand item, when it has one.
+    /// The display component of a custom-named held stack.
     fn mob_main_hand_name(&self, id: u32) -> Option<Text> {
         let m = self.mobs.iter().find(|m| m.id == id)?;
-        let stack = m.extra.main_hand_stack()?;
+        let mut stack = m.extra.main_hand_stack()?.clone();
         stack.custom_name()?;
-        Some(self.stack_display_name(stack))
+        if let Some(g) = horizon_client::mobs::gear::gear(m) {
+            stack.data_mut().enchantments = g.slots[horizon_client::mobs::gear::MAIN].clone();
+        }
+        Some(self.stack_display_name(&stack))
     }
     /// `CombatTracker.getDeathMessage`.
     pub(super) fn combat_death_message(&mut self) -> Text {

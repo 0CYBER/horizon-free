@@ -762,7 +762,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             if slot == "mainhand"
                 && let Some(stack) = m.extra.main_hand_stack()
             {
-                equipment.insert(slot.into(), crate::save::item_to_nbt(stack));
+                let mut stack = stack.clone();
+                if let Some(g) = crate::mobs::gear::gear(m) {
+                    stack.data_mut().enchantments = g.slots[index].clone();
+                    stack.data_mut().trim = g.trims[index].clone();
+                }
+                equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
                 continue;
             }
             // Enchanted or trimmed gear is saved with its components.
