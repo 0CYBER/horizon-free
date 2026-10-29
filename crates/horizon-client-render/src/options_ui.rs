@@ -1054,8 +1054,7 @@ enum Act {
     /// Pick `s.shader_packs[i]`, or turn it off when it is the pick.
     PickShaderPack(usize),
     OpenShaderPackFolder,
-    /// The installed mod's own settings page (capability `ui`), shown as a
-    /// screen: `Event::ModSettings` has the game open it.
+    /// The installed native mod's settings page.
     ModSettings(usize),
     /// A native mod's key (mod, key) waits for a key; a button of its page.
     NativeKey(usize, usize),
@@ -1122,9 +1121,6 @@ pub enum Event {
     /// A shader pack was picked or turned off: save and apply it.
     ShaderPack,
     OpenShaderPackFolder,
-    /// Open the mod's own settings page (capability `ui`): the installed
-    /// mod's index in `mods.installed`.
-    ModSettings(usize),
     /// Native mod `.0`'s page opened: the game asks the mod for its labels
     /// again (they were made with the list, maybe in another language).
     NativeSettings(usize),
@@ -1815,9 +1811,9 @@ impl OptionsUi {
                             label = label.append(" (Dev)");
                         }
                         let dead = installed.dev || installed.id.is_empty();
-                        // A running mod with a settings page (capability
-                        // `ui`) gets its own button beside the toggle.
-                        if installed.has_settings || installed.native.is_some() {
+                        // A native mod gets its settings page's button beside
+                        // the toggle.
+                        if installed.native.is_some() {
                             let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
                             let settings = button(
                                 0.0,
@@ -2874,12 +2870,8 @@ impl OptionsUi {
                         }
                         Act::ModSettings(i) => {
                             events.push(Event::ButtonClick);
-                            if s.mods.installed.get(i).is_some_and(|m| m.native.is_some()) {
-                                self.push(Page::NativeMod(i));
-                                events.push(Event::NativeSettings(i));
-                            } else {
-                                events.push(Event::ModSettings(i));
-                            }
+                            self.push(Page::NativeMod(i));
+                            events.push(Event::NativeSettings(i));
                         }
                         Act::NativeKey(i, k) => {
                             self.selected_key = Some(NATIVE_KEY);
@@ -3488,7 +3480,6 @@ mod tests {
                 description: "May show HUD panels.".into(),
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
-                has_settings: false,
                 native: None,
             });
         }
@@ -3556,7 +3547,6 @@ mod tests {
             description: String::new(),
             problem: None,
             dev: false,
-            has_settings: false,
             native: Some(crate::mod_list::NativePage::default()),
         });
         ui.show(Page::Mods);
