@@ -3548,68 +3548,75 @@ def check_sidebar(host, guest, out):
     return result
 
 
+def fluid_pig_position(host, tag):
+    """Read the tagged pig even after the current carries it past its spawn."""
+    reply = server_reply(host, f'data get entity @e[type=pig,tag={tag},limit=1] Pos', 'entity data')
+    values = re.findall(r'-?\d+(?:\.\d+)?', reply.rsplit(':', 1)[-1])
+    assert len(values) == 3, f'no position for {tag}: {reply}'
+    return tuple(map(float, values))
+
+
+def clear_fluid_arena(host, x, y, z, tags):
+    for tag in tags:
+        host('command', command=f'kill @e[type=pig,tag={tag}]')
+    host('command', command=f'fill {x-2} {y} {z-2} {x+9} {y+6} {z+7} minecraft:air')
+    host('command', command=f'fill {x-2} {y-1} {z-2} {x+9} {y-1} {z+7} minecraft:stone')
+    host.wait(10)
+
+
 def check_flow_push(host, guest, out):
-    """A mob in a current is carried along with it (`Entity.updateFluidInteraction`)."""
+    """A current pushes a tagged pig farther than a pool of source blocks."""
     hx, hy, hz = pos_of(host)
     x, y, z = (int(hx // 16) * 16 + 8, int(hy), int(hz // 16) * 16 + 8)
+    tags = ('horizon_flow_test', 'horizon_still_test')
     host('command', command='gamemode survival')
-    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
-    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+6} {z+4} minecraft:air')
-    # A water source with a flowing block next to it: the current runs +x.
-    host('command', command=f'setblock {x} {y} {z} minecraft:water')
-    host('command', command=f'setblock {x+1} {y} {z} minecraft:water[level=1]')
-    # A pool of sources: the middle one has no current at all.
-    for dx in range(3):
-        for dz in range(3):
-            host('command', command=f'setblock {x+3+dx} {y} {z+3+dz} minecraft:water')
-    host.wait(20)
-    host('command', command=f'summon minecraft:pig {x+1.5} {y+0.5} {z+0.5}')
-    host('command', command=f'summon minecraft:pig {x+4.5} {y+0.5} {z+4.5}')
-    host.wait(20)
-
-    def drift(at_x, at_z):
-        host.wait(30)
-        pigs = [p for p in host('entities', radius=16, type='pig')['entities']
-                if abs(p['pos'][2] - at_z) < 1.5]
-        near = [p['pos'][0] for p in pigs if abs(p['pos'][0] - at_x) < 3.0]
-        return (max(near) - at_x) if near else 0.0
-
-    flowing = drift(x + 1.5, z + 0.5)
-    still = drift(x + 4.5, z + 4.5)
-    assert flowing - still > 0.2, f'the current did not carry the mob: {flowing} vs {still}'
-    return {'flowing': round(flowing, 3), 'still': round(still, 3)}
+    try:
+        clear_fluid_arena(host, x, y, z, tags)
+        # Enclosed trough: its walls keep water inside the area cleaned below.
+        host('command', command=f'fill {x-1} {y} {z-1} {x+8} {y+1} {z+1} minecraft:stone')
+        host('command', command=f'fill {x} {y} {z} {x+7} {y+2} {z} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:water')
+        # Enclosed source pool, whose centre has no horizontal current.
+        host('command', command=f'fill {x+2} {y} {z+2} {x+6} {y+1} {z+6} minecraft:stone')
+        host('command', command=f'fill {x+3} {y} {z+3} {x+5} {y} {z+5} minecraft:water')
+        host('command', command=f'fill {x+3} {y+1} {z+3} {x+5} {y+3} {z+5} minecraft:air')
+        host.wait(40)
+        for tag, px, pz in [(tags[0], x+1.5, z+0.5), (tags[1], x+4.5, z+4.5)]:
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {pz} {{NoAI:1b,Tags:["{tag}"]}}')
+        host.wait(40)
+        flowing = fluid_pig_position(host, tags[0])[0] - (x + 1.5)
+        still = fluid_pig_position(host, tags[1])[0] - (x + 4.5)
+        assert flowing - still > 0.2, f'the current did not carry the mob: {flowing} vs {still}'
+        return {'flowing': round(flowing, 3), 'still': round(still, 3)}
+    finally:
+        clear_fluid_arena(host, x, y, z, tags)
 
 
 def check_bubble_column(host, guest, out):
-    """A mob in a bubble column is carried up with it (`BubbleColumnBlock.entityInside`)."""
+    """A bubble column lifts a tagged pig farther than an ordinary water source."""
     hx, hy, hz = pos_of(host)
     x, y, z = (int(hx // 16) * 16 + 8, int(hy), int(hz // 16) * 16 + 8)
+    tags = ('horizon_bubble_test', 'horizon_plain_test')
     host('command', command='gamemode survival')
-    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
-    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+6} {z+4} minecraft:air')
-    # Soul sand under a water source makes the water a bubble column that
-    # pushes up (`BubbleColumnBlock.getColumnState`).
-    host('command', command=f'setblock {x} {y-1} {z} minecraft:soul_sand')
-    host('command', command=f'setblock {x} {y} {z} minecraft:water')
-    # A plain water source, with no soul sand under it: no column there.
-    host('command', command=f'setblock {x+3} {y} {z} minecraft:water')
-    host.wait(20)
-    host('command', command=f'summon minecraft:pig {x+0.5} {y+0.5} {z+0.5}')
-    host('command', command=f'summon minecraft:pig {x+3.5} {y+0.5} {z+0.5}')
-    host.wait(20)
-
-    def rises(at_x):
-        samples = []
-        for _ in range(6):
+    try:
+        clear_fluid_arena(host, x, y, z, tags)
+        for px in (x, x+3):
+            host('command', command=f'fill {px-1} {y} {z-1} {px+1} {y} {z+1} minecraft:stone')
+            host('command', command=f'setblock {px} {y} {z} minecraft:water')
+        host('command', command=f'setblock {x} {y-1} {z} minecraft:soul_sand')
+        host.wait(20)
+        for tag, px in [(tags[0], x+0.5), (tags[1], x+3.5)]:
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {z+0.5} {{NoAI:1b,Tags:["{tag}"]}}')
+        samples = {tag: [] for tag in tags}
+        for _ in range(8):
             host.wait(5)
-            samples += [p['pos'][1] for p in host('entities', radius=16, type='pig')['entities']
-                        if abs(p['pos'][0] - at_x) < 1.5 and abs(p['pos'][2] - (z + 0.5)) < 1.5]
-        return max(samples) if samples else y + 0.5
-
-    column = rises(x + 0.5)
-    plain = rises(x + 3.5)
-    assert column - plain > 0.2, f'the bubble column did not carry the pig up: {column} vs {plain}'
-    return {'column': round(column - (y + 0.5), 3), 'plain': round(plain - (y + 0.5), 3)}
+            for tag in tags:
+                samples[tag].append(fluid_pig_position(host, tag)[1])
+        column, plain = (max(samples[tag]) for tag in tags)
+        assert column - plain > 0.2, f'the bubble column did not carry the pig up: {column} vs {plain}'
+        return {'column': round(column-y, 3), 'plain': round(plain-y, 3)}
+    finally:
+        clear_fluid_arena(host, x, y, z, tags)
 
 
 def check_border(host, guest, out):
