@@ -393,18 +393,31 @@ impl HudAtlas {
         for folder in folders {
             walk(&textures.join(folder), &mut files);
         }
+        // Content mods' equipment textures, which their equipment assets name as `<ns>:<path>`.
+        if folders.contains(&"entity") {
+            for namespace in horizon_items::content_namespaces::namespaces(root) {
+                walk(
+                    &root.join(format!("assets/{namespace}/textures/entity/equipment")),
+                    &mut files,
+                );
+            }
+        }
+        let assets = root.join("assets");
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
         type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>, bool);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
-            let name = path
-                .strip_prefix(&textures)
-                .ok()?
-                .with_extension("")
-                .to_string_lossy()
-                .replace('\\', "/");
+            let name = match path.strip_prefix(&textures) {
+                Ok(rel) => rel.with_extension("").to_string_lossy().replace('\\', "/"),
+                Err(_) => {
+                    let rel = path.strip_prefix(&assets).ok()?.with_extension("");
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    let (namespace, rest) = rel.split_once("/textures/")?;
+                    format!("{namespace}:{rest}")
+                }
+            };
             let (mut w, mut h, pixels) = decode(path).ok()?;
             let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
             let animation = mcmeta
@@ -1708,6 +1721,34 @@ mod tests {
         let py = (rect.v0 * atlas.height as f32).round() as u32 + y;
         let at = ((py * atlas.width + px) * 4) as usize;
         atlas.pixels[at..at + 4].try_into().unwrap()
+    }
+    #[test]
+    fn content_mod_equipment_textures_pack_under_their_namespace() {
+        let root = std::env::temp_dir().join(format!("horizon-atlas-equip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let equipment = root.join("assets/gems/textures/entity/equipment/humanoid");
+        fs::create_dir_all(&equipment).unwrap();
+        write_strip(
+            &equipment.join("ruby.png"),
+            64,
+            32,
+            &[[200, 0, 0, 255]],
+            None,
+        );
+        let other = root.join("assets/gems/textures/item");
+        fs::create_dir_all(&other).unwrap();
+        write_strip(&other.join("ruby.png"), 16, 16, &[[0, 200, 0, 255]], None);
+        fs::write(
+            root.join(horizon_items::content_namespaces::MARKER),
+            br#"["gems"]"#,
+        )
+        .unwrap();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["gems:entity/equipment/humanoid/ruby"];
+        assert_eq!(texel_at(&atlas, rect, 0, 0), [200, 0, 0, 255]);
+        // Only equipment: the mods' other textures reach the atlas through atlas definitions.
+        assert!(!atlas.sprites.contains_key("gems:item/ruby"));
+        fs::remove_dir_all(&root).unwrap();
     }
     #[test]
     fn animated_block_sprites_register_and_pack_their_first_mcmeta_frame() {
