@@ -327,6 +327,11 @@ def entities():
         cmd('/data get entity @e[tag=attr,limit=1] Health'),
         cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
         cmd('/kill @e[tag=attr]'),
+        # A summoned mob is not persistent: vanilla never calls
+        # `Mob.setPersistenceRequired` for a mob it spawns (#2787).
+        cmd('/summon minecraft:zombie 4.5 210 12.5'),
+        cmd('/execute if entity @e[type=minecraft:zombie,nbt={PersistenceRequired:1b}]'),
+        cmd('/kill @e[type=minecraft:zombie]'),
         # An End crystal is an entity of its own: a type selector finds it,
         # reads it and kills it (#1531).
         cmd('/summon minecraft:end_crystal 4.5 210 8.5'),
@@ -341,6 +346,27 @@ def entities():
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
+    ]
+
+
+def wither_spawn():
+    """A wither charging up (`Invul`) neither moves toward its target nor is hurt by
+    the blast that ends the charge (#3322): `WitherBoss.customServerAiStep` sets no
+    alternative target while invulnerable, and `ServerLevel.explode`'s entity query
+    skips the source."""
+    wither = '@e[type=minecraft:wither,limit=1]'
+    return [
+        *setup('/fill 0 209 4 9 209 20 minecraft:stone',
+               '/summon minecraft:pig 4.5 210 18.5 {NoAI:1b,Tags:["wither_prey"]}',
+               '/summon minecraft:wither 4.5 210 8.5 {Invul:20}'),
+        {'op': 'tick', 'n': 10},
+        cmd(f'/data get entity {wither} Pos'),
+        cmd(f'/data get entity {wither} Invul'),
+        {'op': 'tick', 'n': 12},
+        cmd(f'/data get entity {wither} Invul'),
+        cmd(f'/data get entity {wither} Health'),
+        *setup('/kill @e[type=minecraft:wither]', '/kill @e[tag=wither_prey]', '/fill 0 200 0 15 228 20 air'),
+        {'op': 'tick', 'n': 5},
     ]
 
 
@@ -1117,6 +1143,7 @@ def groups():
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
+        ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('mob riding', mob_riding()),
         ('scores, teams and bossbars', scores()),
