@@ -599,12 +599,46 @@ fn attack_can_still_use(m: &Mob, w: &MobWorld) -> bool {
     m.extra.piglin.spear.engage_time.unwrap_or(0) > 0 && able_to_attack(m, w)
 }
 
-/// `SpearAttack.tick`: look at the target and count the charge down.
+/// `SpearAttack.tick`: look at the target, count the charge down and keep
+/// moving: run at the target, and once within 2 blocks of it (or at the end
+/// of the path) pick a spot 6 to 7 blocks past it to reposition to, then run
+/// at the target again from there.
 fn attack_tick(m: &mut Mob, cx: &mut Cx) {
     let Some(t) = m.target_info(cx.w) else { return };
+    let target_dist_sqr = m.distance_sqr(t.position);
+    let speed_modifier = f64::from(charge_speed_modifier(m, cx.w));
+    let mount_distance = passenger_distance(m);
     look_at_target(m, [t.position.x, t.eye_y, t.position.z]);
     let left = m.extra.piglin.spear.engage_time.unwrap_or(0) - 1;
     m.extra.piglin.spear.engage_time = Some(left);
+    if let Some(away) = m.extra.piglin.spear.charge_position {
+        m.nav_move_to(
+            cx.w,
+            away,
+            speed_modifier * PiglinSpear::SPEED_MODIFIER_WHEN_REPOSITIONING,
+        );
+        if m.ai.nav.is_done() {
+            m.extra.piglin.spear.charge_position = None;
+        }
+    } else {
+        m.nav_move_to_entity(
+            cx.w,
+            [t.position.x, t.position.y, t.position.z],
+            1,
+            speed_modifier * PiglinSpear::SPEED_MODIFIER_WHEN_CHARGING,
+        );
+        if target_dist_sqr < f64::from(PiglinSpear::TARGET_IN_RANGE_RADIUS_SQ) || m.ai.nav.is_done()
+        {
+            let distance = target_dist_sqr.sqrt();
+            m.extra.piglin.spear.charge_position = m.land_random_pos_away_between(
+                cx.w,
+                f64::from(6 + mount_distance) - distance,
+                f64::from(7 + mount_distance) - distance,
+                7,
+                [t.position.x, t.position.y, t.position.z],
+            );
+        }
+    }
 }
 
 /// `SpearAttack.stop`: the walk ends, the spear goes down and the retreat is next.
@@ -630,6 +664,10 @@ pub struct PiglinSpear {
 impl PiglinSpear {
     /// `new SpearApproach(1.0, 10.0F)`: the squared approach distance.
     const APPROACH_DISTANCE_SQ: f32 = 10.0 * 10.0;
+    /// `new SpearAttack(1.0, 1.0, 2.0F)`: the speed charging and the squared
+    /// radius around the target that ends the run at it.
+    const SPEED_MODIFIER_WHEN_CHARGING: f64 = 1.0;
+    const TARGET_IN_RANGE_RADIUS_SQ: f32 = 2.0 * 2.0;
     /// The `speedModifierWhenRepositioning` of the three behaviours.
     const SPEED_MODIFIER_WHEN_REPOSITIONING: f64 = 1.0;
 
