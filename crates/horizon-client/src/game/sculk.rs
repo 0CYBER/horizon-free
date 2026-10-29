@@ -1626,7 +1626,16 @@ impl Game<'_> {
     }
 
     fn tick_mob_sculk_events(&mut self) {
-        let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>, Option<u32>)> = self
+        let snapshot: Vec<(
+            u32,
+            [f64; 3],
+            bool,
+            bool,
+            Species,
+            Option<i64>,
+            Option<u32>,
+            u32,
+        )> = self
             .mobs
             .iter()
             .filter(|m| m.alive())
@@ -1639,10 +1648,11 @@ impl Game<'_> {
                     m.species(),
                     m.last_damage.map(|(_, t)| t),
                     m.extra.mount,
+                    m.age,
                 )
             })
             .collect();
-        for (id, at, on_ground, in_water, species, damaged, vehicle) in snapshot {
+        for (id, at, on_ground, in_water, species, damaged, vehicle, age) in snapshot {
             if on_ground {
                 self.step_on_redstone_ore(at, false);
             }
@@ -1652,6 +1662,19 @@ impl Game<'_> {
             let emits = !matches!(species, Species::Shulker);
             if emits {
                 self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);
+                // Entity.processFlappingMovement with Bee.isFlapping: a bee off
+                // the ground over air flaps on every other tick (the mob's own
+                // `MobEvent::GameEvent` is not read here).
+                if species == Species::Bee && !on_ground && age.is_multiple_of(2) {
+                    let below = self.world.block(
+                        at[0].floor() as i32,
+                        (at[1] - 1.0e-5).floor() as i32,
+                        at[2].floor() as i32,
+                    );
+                    if self.res.facts().is_air(below) {
+                        self.post_entity_event("minecraft:flap", Who::Mob(id));
+                    }
+                }
             }
             if let Some(t) = damaged {
                 let seen = self.sculk.damaged.insert(id, t);
