@@ -1738,12 +1738,28 @@ fn memo_biome(
     memo.biomes.insert(key, id);
     Ok(id)
 }
-// Lazy equality proofs for the eight quart corners of a block-biome cell.
-// Adjacent blocks share these candidates even though their zoom distances differ.
+// Per quart cell of a block-biome lookup: a lazy equality proof for its
+// eight corners, or (when they differ) their jitter and biomes, so the blocks
+// of the cell only redo the distance comparison.
+#[derive(Clone, Copy, PartialEq)]
+enum SurfaceCell {
+    Unknown,
+    /// A corner lookup failed: only the original lookup may report errors.
+    Lookup,
+    Uniform(BiomeId),
+    Mixed(u32),
+}
+struct MixedCell {
+    jitter: [[f64; 3]; 8],
+    biomes: [BiomeId; 8],
+}
 struct UniformSurfaceBiomes {
     origin: [i32; 3],
     height: i32,
-    cells: Vec<Option<Option<BiomeId>>>,
+    cells: Vec<SurfaceCell>,
+    mixed: Vec<MixedCell>,
+    /// The cell of the previous lookup (columns are walked down in y).
+    last: ([i32; 3], SurfaceCell),
 }
 impl UniformSurfaceBiomes {
     fn new(pos: ChunkPos, min_y: i32, height: i32) -> Self {
@@ -1755,43 +1771,63 @@ impl UniformSurfaceBiomes {
                 pos.z.wrapping_shl(4).wrapping_sub(2) >> 2,
             ],
             height,
-            cells: vec![None; 25 * height as usize],
+            cells: vec![SurfaceCell::Unknown; 25 * height as usize],
+            mixed: Vec::new(),
+            last: ([0; 3], SurfaceCell::Unknown),
         }
     }
+    #[inline]
     fn get(&mut self, region: &BiomeRegion<BiomeId>, p: BlockPos) -> Option<BiomeId> {
         let base = [p.x, p.y, p.z].map(|v| v.wrapping_sub(2) >> 2);
+        let cell = if self.last.0 == base && self.last.1 != SurfaceCell::Unknown {
+            self.last.1
+        } else {
+            let cell = self.cell(region, base);
+            self.last = (base, cell);
+            cell
+        };
+        match cell {
+            SurfaceCell::Uniform(id) => Some(id),
+            SurfaceCell::Mixed(index) => {
+                let mixed = &self.mixed[index as usize];
+                Some(mixed.biomes[BiomeZoom::select_corner(p, &mixed.jitter)])
+            }
+            SurfaceCell::Unknown | SurfaceCell::Lookup => None,
+        }
+    }
+    fn cell(&mut self, region: &BiomeRegion<BiomeId>, base: [i32; 3]) -> SurfaceCell {
         let d: [i32; 3] = std::array::from_fn(|i| base[i].wrapping_sub(self.origin[i]));
         if !(0..5).contains(&d[0]) || !(0..self.height).contains(&d[1]) || !(0..5).contains(&d[2]) {
-            return None;
+            return SurfaceCell::Lookup;
         }
         let slot = &mut self.cells[((d[0] * 5 + d[2]) * self.height + d[1]) as usize];
-        if let Some(value) = slot {
-            return *value;
+        if *slot != SurfaceCell::Unknown {
+            return *slot;
         }
-        let value = (|| {
-            // These are immutable stored lookups. A missing candidate prevents
-            // the shortcut; only the original selected lookup may report errors.
-            let first = *region.noise_biome(base).ok()?;
-            for x in 0..2 {
-                for y in 0..2 {
-                    for z in 0..2 {
-                        if *region
-                            .noise_biome([
-                                base[0].wrapping_add(x),
-                                base[1].wrapping_add(y),
-                                base[2].wrapping_add(z),
-                            ])
-                            .ok()?
-                            != first
-                        {
-                            return None;
-                        }
-                    }
+        // These are immutable stored lookups, in quart_at_block's corner order.
+        let mut biomes = [BiomeId(0); 8];
+        for (corner, biome) in biomes.iter_mut().enumerate() {
+            let offsets = [(corner >> 2) & 1, (corner >> 1) & 1, corner & 1];
+            match region.noise_biome(std::array::from_fn(|i| {
+                base[i].wrapping_add(offsets[i] as i32)
+            })) {
+                Ok(id) => *biome = *id,
+                Err(_) => {
+                    *slot = SurfaceCell::Lookup;
+                    return SurfaceCell::Lookup;
                 }
             }
-            Some(first)
-        })();
-        *slot = Some(value);
+        }
+        let value = if biomes.iter().all(|id| *id == biomes[0]) {
+            SurfaceCell::Uniform(biomes[0])
+        } else {
+            self.mixed.push(MixedCell {
+                jitter: region.zoom().corner_jitter(base),
+                biomes,
+            });
+            SurfaceCell::Mixed(self.mixed.len() as u32 - 1)
+        };
+        *slot = value;
         value
     }
 }
@@ -1838,6 +1874,14 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
         self.possible.clone()
     }
     fn biome(&mut self, p: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+        Ok(self
+            .biome_id(p)?
+            .map(|id| self.pipeline.data.biome_names[id as usize].clone()))
+    }
+    fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+        Some(self.pipeline.data.biome_id(name).map(|id| id.0))
+    }
+    fn biome_id(&mut self, p: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
         let data = &self.pipeline.data;
         let id = match &mut self.biome {
             Biomes::Region(region) => match self
@@ -1864,7 +1908,7 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
                 self.pipeline.zoom.quart_at_block(p),
             )?,
         };
-        Ok(Some(data.biome_names[id.0 as usize].clone()))
+        Ok(Some(id.0))
     }
     fn cold_enough_to_snow(
         &mut self,
