@@ -868,6 +868,8 @@ impl Game<'_> {
                 Slots::Double(other, pos)
             };
             ("minecraft:generic_9x6", halves)
+        } else if let Some(menu) = self.mod_menu_at(pos) {
+            (menu, Slots::Block(pos))
         } else {
             let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
                 return false;
@@ -889,10 +891,16 @@ impl Game<'_> {
                 horizon_client::containers::double_chest_name(custom(first), custom(second))
             }
             Slots::Block(k) => {
-                let Some(key) = horizon_client::containers::default_name_key(name) else {
-                    return false;
+                // A mod block's container is named after its block
+                // (`Block.getDescriptionId`).
+                let key = match horizon_client::containers::default_name_key(name) {
+                    Some(key) => key.to_owned(),
+                    None if self.mod_menu_at(k).is_some() => {
+                        format!("block.{}", name.replace(':', "."))
+                    }
+                    None => return false,
                 };
-                horizon_client::containers::display_name(custom(k), key)
+                horizon_client::containers::display_name(custom(k), &key)
             }
         };
         let Some(items) = host

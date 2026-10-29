@@ -29,7 +29,7 @@ use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::R
 use horizon_client::{
     block_entities::Pos,
     chat::ChatSource,
-    containers::{BlockEntity, ModBlockEntity, ModContainer},
+    containers::{BlockEntity, MOD_MENUS, ModBlockEntity, ModContainer},
     extras::Corner,
     extras_hud::Corners,
     fast_hash::FxHashMap,
@@ -351,7 +351,10 @@ impl Game<'_> {
     /// Block `block`'s block entity has item slots (a `WorldlyContainer`):
     /// set `container` when the block is yours. Asked once for each mod
     /// block when the ticking table is built; at most 256 slots, and slot
-    /// numbers past the count are left out. API 3.
+    /// numbers past the count are left out. Its `menu`, one of
+    /// `containers::MOD_MENUS` with as many slots, opens when the block is
+    /// used (its template must open a menu, as a chest or a furnace does);
+    /// another is left out. API 3.
     pub(super) fn native_block_entity_container(
         &self,
         block: &str,
@@ -595,6 +598,9 @@ impl Game<'_> {
                     for list in c.faces.iter_mut().chain([&mut c.inputs, &mut c.outputs]) {
                         list.retain(|&s| s < n);
                     }
+                    c.menu = c
+                        .menu
+                        .filter(|m| mod_menu(m).is_some_and(|(_, size)| size == n));
                     Arc::new(c)
                 })
             });
@@ -609,6 +615,31 @@ impl Game<'_> {
         let mut ticks = false;
         self.native_block_entity_ticks(name, &mut ticks);
         ticks
+    }
+    /// A mod block's container at `key` opens its menu: its slots grown to
+    /// the menu's. False for any other block.
+    pub(super) fn open_mod_menu(&mut self, key: Pos) -> bool {
+        let state = self.world.block(key.0, key.1, key.2).0;
+        let Some(c) = self.world.block_entities.mod_container(state) else {
+            return false;
+        };
+        let slots = c.slots;
+        if c.menu.is_none() {
+            return false;
+        }
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
+            return false;
+        };
+        if m.items.len() < slots {
+            m.items.resize(slots, None);
+        }
+        true
+    }
+    /// The menu type of the mod container at `key`, if it has one.
+    pub(super) fn mod_menu_at(&self, key: Pos) -> Option<&'static str> {
+        let state = self.world.block(key.0, key.1, key.2).0;
+        let c = self.world.block_entities.mod_container(state)?;
+        mod_menu(c.menu.as_deref()?).map(|(menu, _)| menu)
     }
     /// The tick of the mod block entity at `pos`.
     pub(super) fn tick_mod_block_entity(&mut self, pos: Pos) {
@@ -759,6 +790,11 @@ fn debug_takes(corner: Corner, debug: bool, charts: [bool; 2]) -> bool {
         }
 }
 
+/// A menu of `MOD_MENUS`, by its name.
+fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
+    MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -823,6 +859,16 @@ mod tests {
             );
         }
         assert_eq!(names, declared);
+    }
+
+    /// A mod container opens only a plain slot grid, by its slot count.
+    #[test]
+    fn mod_menus_are_plain_slot_grids() {
+        use super::mod_menu;
+        assert_eq!(mod_menu("minecraft:hopper"), Some(("minecraft:hopper", 5)));
+        assert_eq!(mod_menu("minecraft:generic_9x3").map(|m| m.1), Some(27));
+        assert_eq!(mod_menu("minecraft:furnace"), None);
+        assert_eq!(mod_menu("hopper"), None);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

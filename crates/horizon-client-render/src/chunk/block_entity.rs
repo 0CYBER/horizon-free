@@ -97,14 +97,28 @@ pub struct ModBlockEntity {
 /// says it: its slot count, the slots each face reaches
 /// (`getSlotsForFace`, by `Direction`: down, up, north, south, west, east),
 /// and the slots hoppers may put into (`canPlaceItemThroughFace`) and take
-/// from (`canTakeItemThroughFace`).
+/// from (`canTakeItemThroughFace`); and the vanilla menu that shows its
+/// slots when the block is used, if any (`MOD_MENUS`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModContainer {
     pub slots: usize,
     pub faces: [Vec<usize>; 6],
     pub inputs: Vec<usize>,
     pub outputs: Vec<usize>,
+    pub menu: Option<String>,
 }
+/// The vanilla menus a mod container can open, with the slot count each
+/// shows: plain slot grids, whose clicks need nothing of the block entity.
+pub const MOD_MENUS: [(&str, usize); 8] = [
+    ("minecraft:hopper", 5),
+    ("minecraft:generic_3x3", 9),
+    ("minecraft:generic_9x1", 9),
+    ("minecraft:generic_9x2", 18),
+    ("minecraft:generic_9x3", 27),
+    ("minecraft:generic_9x4", 36),
+    ("minecraft:generic_9x5", 45),
+    ("minecraft:generic_9x6", 54),
+];
 /// `BrushableBlockEntity`: the loot table is resolved on the first brush.
 #[derive(Clone, Debug, Default)]
 pub struct Brushable {
