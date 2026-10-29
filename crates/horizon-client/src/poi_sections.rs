@@ -87,6 +87,22 @@ pub enum Poi {
     Home,
     Meeting,
 }
+impl Poi {
+    /// `PoiType.maxTickets`.
+    pub fn max_tickets(self) -> usize {
+        match self {
+            Poi::Meeting => 32,
+            _ => 1,
+        }
+    }
+    /// `PoiType.validRange`.
+    pub fn valid_range(self) -> i32 {
+        match self {
+            Poi::Meeting => 6,
+            _ => 1,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -168,6 +168,8 @@ pub struct Settings {
     /// Every option in its stored form (the typed fields above mirror it).
     pub file: OptionsFile,
     pub invert_x: bool,
+    /// Allow widgets to replace the default mouse cursor icon.
+    pub allow_cursor_changes: bool,
     pub toggle_attack: bool,
     pub toggle_use: bool,
     /// Taps of the sprint key counted as double taps (sprintWindow).
@@ -223,6 +225,7 @@ impl Default for Settings {
             invert_y: false,
             mouse_wheel_sensitivity: 1.0,
             discrete_scroll: false,
+            allow_cursor_changes: true,
             toggle_crouch: false,
             toggle_sprint: false,
             auto_jump: false,
@@ -409,6 +412,7 @@ impl Settings {
             invert_y: f.bool("invertYMouse"),
             mouse_wheel_sensitivity: f.double("mouseWheelSensitivity") as f32,
             discrete_scroll: f.bool("discrete_mouse_scroll"),
+            allow_cursor_changes: f.bool("allowCursorChanges"),
             toggle_crouch: f.bool("toggleCrouch"),
             toggle_sprint: f.bool("toggleSprint"),
             toggle_attack: f.bool("toggleAttack"),
@@ -508,6 +512,7 @@ impl Settings {
             self.mouse_wheel_sensitivity,
         );
         put_b(&mut f, "discrete_mouse_scroll", self.discrete_scroll);
+        put_b(&mut f, "allowCursorChanges", self.allow_cursor_changes);
         put_b(&mut f, "toggleCrouch", self.toggle_crouch);
         put_b(&mut f, "toggleSprint", self.toggle_sprint);
         put_b(&mut f, "toggleAttack", self.toggle_attack);
@@ -627,8 +632,10 @@ pub enum Opt {
     SimulationDistance,
     Sensitivity,
     WheelSensitivity,
-    InvertY,
     DiscreteScroll,
+    InvertX,
+    InvertY,
+    AllowCursorChanges,
     Volume(usize),
     GuiScale,
     ViewBobbing,
