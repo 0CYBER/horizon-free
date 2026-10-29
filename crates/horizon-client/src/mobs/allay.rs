@@ -23,6 +23,8 @@ pub const SPIN: usize = 1;
 /// `Allay.VibrationUser.VIBRATION_EVENT_LISTENER_RANGE`.
 const LISTENER_RADIUS: i64 = 16;
 
+/// `AllayAi.TIME_TO_FORGET_NOTEBLOCK`.
+const TIME_TO_FORGET_NOTEBLOCK: i32 = 600;
 /// `Allay.MAX_NOTEBLOCK_DISTANCE`.
 const MAX_NOTEBLOCK_DISTANCE: i32 = 1024;
 
@@ -109,6 +111,31 @@ pub fn can_receive_vibration(m: &Mob, dimension: &str, pos: [i32; 3]) -> bool {
     };
     liked_noteblock_position.is_close_enough(dimension, block_pos(m), MAX_NOTEBLOCK_DISTANCE)
         && liked_noteblock_position.pos == pos
+}
+/// `AllayAi.hearNoteblock`: an allay without a liked note block likes the
+/// one it heard (`liked_noteblock_position`) and waits 600 ticks
+/// (`liked_noteblock_cooldown_ticks`); one it already likes starts the wait over.
+pub fn hear_noteblock(m: &mut Mob, dimension: &'static str, pos: [i32; 3]) {
+    let heard = GlobalPos { dimension, pos };
+    let Some(st) = m.extra.allay.as_mut() else {
+        return;
+    };
+    let liked_noteblock_cooldown_ticks = TIME_TO_FORGET_NOTEBLOCK;
+    let liked_noteblock_position = st.noteblock;
+    match liked_noteblock_position {
+        None => {
+            st.noteblock = Some(heard);
+            m.extra.ints[2] = liked_noteblock_cooldown_ticks;
+        }
+        Some(liked) if liked == heard => m.extra.ints[2] = liked_noteblock_cooldown_ticks,
+        Some(_) => {}
+    }
+}
+/// `Allay.VibrationUser.onReceiveVibration`: a note block's note is heard.
+fn receive_vibration(m: &mut Mob, dimension: &'static str, info: Info) {
+    if info.event == "minecraft:note_block_play" {
+        hear_noteblock(m, dimension, info.pos.map(|v| v.floor() as i32));
+    }
 }
 /// `AllayAi.getItemDepositPosition` for the liked note block: the centre of
 /// the block above it while the allay is within 1024 blocks of it, it is
@@ -277,9 +304,10 @@ pub fn listen(
         );
     }
 }
-/// `Allay.tick`'s server half: `VibrationSystem.Ticker.tick` after
-/// `super.tick()`, choosing a vibration and letting it travel to the eyes
-/// at a block a tick (the particle starts there).
+/// `VibrationSystem.Ticker.tick` for an allay, run after the living tick as
+/// the server branch of its `tick` override does: it chooses a vibration, lets
+/// it travel to the eyes at a block a tick (the particle starts there) and
+/// hands it over on arrival.
 pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let tick = m
         .extra
@@ -296,6 +324,9 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             to: [m.position.x, m.eye_y(), m.position.z],
             ticks: travel,
         });
+    }
+    if let Some(info) = tick.received {
+        receive_vibration(m, dimension(w), info);
     }
 }
 /// `Allay.travel`: `travelFlying(input, getSpeed())` — the airborne speed is
