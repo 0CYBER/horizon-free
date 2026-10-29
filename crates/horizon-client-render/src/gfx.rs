@@ -99,6 +99,7 @@ mod timing;
 pub mod translucency;
 pub(crate) mod upload;
 mod wgsl_prefix;
+mod frame_gen;
 mod world_post;
 
 /// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
