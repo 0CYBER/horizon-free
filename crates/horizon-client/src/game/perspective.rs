@@ -825,6 +825,18 @@ impl Game<'_> {
     }
 }
 
+/// `Lighting.Entry.ENTITY_IN_UI` through the entity shader's
+/// `minecraft_mix_light`: the two inventory lights, (0.2, -1, 1) and
+/// (-0.2, -1, 0), with the 0.6 light power and 0.4 ambient. `normal` is the
+/// face's outward normal in the preview's screen space (x right, y down, z
+/// towards the viewer), where a face that looks up has a negative y.
+fn entity_in_ui_shade(normal: glam::Vec3) -> f32 {
+    const LIGHT_0: glam::Vec3 = glam::Vec3::new(0.2, -1.0, 1.0);
+    const LIGHT_1: glam::Vec3 = glam::Vec3::new(-0.2, -1.0, 0.0);
+    let light = LIGHT_0.normalize().dot(normal).max(0.0) + LIGHT_1.normalize().dot(normal).max(0.0);
+    (light * 0.6 + 0.4).min(1.0)
+}
+
 fn player_preview_quads(
     mut verts: Vec<horizon_client::mesher::Vertex>,
     gui: glam::Mat4,
@@ -854,11 +866,10 @@ fn player_preview_quads(
             continue;
         }
         let n = n.normalize_or_zero();
-        // Lighting.Entry.ENTITY_IN_UI, roughly: lit from the front and above.
         let shade = if index * 4 >= flame_start {
             1.0
         } else {
-            (0.55 + 0.45 * -n.z - 0.15 * n.y).clamp(0.4, 1.0)
+            entity_in_ui_shade(-n)
         };
         let c = q[0].color;
         let ch = |s: u32| ((((c >> s) & 255) as f32 * shade) as u32) << s;
@@ -977,6 +988,19 @@ mod preview_tests {
         assert!(shield[0].depth < arm[0].depth);
         assert!(shield[2].depth > arm[2].depth);
         assert_eq!(batch.runs(), vec![(0..12, Blend::Depth([1, 0, 1, 1]))]);
+    }
+
+    #[test]
+    fn the_inventory_preview_is_lit_as_entity_in_ui() {
+        // A face looking at the viewer, up, down, to the right and to the left.
+        let shade = |x, y, z| entity_in_ui_shade(glam::Vec3::new(x, y, z));
+        assert!((shade(0.0, 0.0, 1.0) - 0.8195).abs() < 1e-3);
+        assert_eq!(shade(0.0, -1.0, 0.0), 1.0);
+        assert!((shade(0.0, 1.0, 0.0) - 0.4).abs() < 1e-6);
+        assert!((shade(1.0, 0.0, 0.0) - 0.4839).abs() < 1e-3);
+        assert!((shade(-1.0, 0.0, 0.0) - 0.5176).abs() < 1e-3);
+        // Away from the viewer: only the ambient light.
+        assert!((shade(0.0, 0.0, -1.0) - 0.4).abs() < 1e-6);
     }
 
     #[test]
