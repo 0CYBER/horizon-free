@@ -123,6 +123,16 @@ pub struct JavaGame {
     pub jvm_args: String,
 }
 
+impl JavaGame {
+    /// What the mod browser installs for: its Minecraft version (vanilla: no loader).
+    pub fn target(&self) -> crate::browser::java_instance::Target {
+        crate::browser::java_instance::Target {
+            minecraft: self.minecraft.clone(),
+            loader: None,
+        }
+    }
+}
+
 /// 4 GiB: enough for vanilla and most modpacks, as other launchers start with.
 pub const DEFAULT_MEMORY_MB: u32 = 4096;
 
