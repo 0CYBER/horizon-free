@@ -1182,6 +1182,7 @@ impl Renderer {
             }
             surface.configure(&device, &config);
             let hdr_output = hdr::output(&caps);
+            crate::graphics::offer_hdr(hdr_output.is_some());
             if previous.is_none() {
                 log::info!(
                     "Horizon renderer: HDR output {}",

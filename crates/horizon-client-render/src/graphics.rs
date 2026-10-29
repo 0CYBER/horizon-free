@@ -285,6 +285,16 @@ pub fn reduced_far_detail_suggested() -> bool {
     REDUCED_SUGGESTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static HDR_OFFERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the display path offers HDR output (HDR10 or scRGB): set when the renderer
+/// opens its surface; the settings open HDR's screen only then.
+pub fn offer_hdr(on: bool) {
+    HDR_OFFERED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn hdr_offered() -> bool {
+    HDR_OFFERED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The farthest LOD Distance, in chunks, on integrated GPUs other than
 /// Apple's: they share the CPU's memory bandwidth, and past it far terrain
 /// costs them more frame time than it is worth.
