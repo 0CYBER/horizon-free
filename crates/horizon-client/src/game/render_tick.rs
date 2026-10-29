@@ -118,8 +118,27 @@ impl Game<'_> {
                     .boss_overlay
                     .darken_amount(self.clock.fraction() as f32),
                 boss_world_fog: self.boss_overlay.should_create_world_fog(),
+                spectator: self.spectator(),
+                fire_resistance: self.potions.effects.get("fire_resistance").is_some(),
+                night_vision: self.fog_night_vision(),
             },
         )
+    }
+    /// `FogRenderer.computeFogColor`'s night vision brightenFactor:
+    /// `GameRenderer.nightVisionScale`, but not while Darkness is on.
+    fn fog_night_vision(&self) -> f32 {
+        let partial = self.clock.fraction() as f32;
+        match self.potions.effects.get("night_vision") {
+            Some(e) if self.potions.effects.get("darkness").is_none() => {
+                // MobEffectInstance.endsWithin(200); -1 is infinite.
+                if e.duration < 0 || e.duration > 200 {
+                    1.0
+                } else {
+                    0.7 + ((e.duration as f32 - partial) * std::f32::consts::PI * 0.2).sin() * 0.3
+                }
+            }
+            _ => 0.0,
+        }
     }
     /// `ClientLevelData.isFlat`: on the server thread, the world-wide flag.
     fn level_flat(&self) -> bool {
