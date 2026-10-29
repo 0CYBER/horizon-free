@@ -178,6 +178,7 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
         | "minecraft:dolphin"
         | "minecraft:squid"
         | "minecraft:glow_squid" => Some(16),
+        | "minecraft:sulfur_cube" => Some(16),
         _ => None,
     }
 }

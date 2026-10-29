@@ -4084,6 +4084,9 @@ impl Game<'_> {
             if species == Species::Sheep {
                 child.extra.color = color;
             }
+            if species == Species::SulfurCube {
+                horizon_client::mobs::sulfur_cube::set_size(child, 1, true);
+            }
         }
         self.trigger_item_entity("minecraft:player_interacted_with_entity", &stack, &target);
         self.consume_held();

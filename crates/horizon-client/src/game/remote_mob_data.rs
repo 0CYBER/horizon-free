@@ -137,11 +137,7 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
             (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
-                let size = (*size).clamp(1, 127);
-                m.extra.size = size;
-                if m.species() == Species::SulfurCube {
-                    m.extra.age = if size == 1 { -24000 } else { 0 };
-                }
+                m.extra.size = (*size).clamp(1, 127);
             }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
             // and raised head of an angry enderman.
