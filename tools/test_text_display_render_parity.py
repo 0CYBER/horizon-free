@@ -102,7 +102,7 @@ def main():
     classes = build / 'classes'
     classes.mkdir(exist_ok=True)
     sources = [PARITY / 'VanillaTextDisplayRenderOracle.java', lab.ROOT / 'crates/horizon-client/src/text_display.rs',
-               lab.ROOT / 'crates/horizon-client/src/hud.rs', lab.ROOT / 'crates/horizon-client/src/font.rs']
+               lab.ROOT / 'crates/horizon-client-render/src/hud.rs', lab.ROOT / 'crates/horizon-client-render/src/font.rs']
     tested = base.source_hashes(sources)
     chosen = cases(args.count)
     inputs = build / 'cases.jsonl'
