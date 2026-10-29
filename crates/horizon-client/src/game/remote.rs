@@ -3783,7 +3783,7 @@ impl Game<'_> {
         }
         let playing = self.screen == Screen::Playing;
         let held = |k| playing && self.keys.contains(&k);
-        let keys = Keys {
+        let mut keys = Keys {
             forward: held(KeyCode::KeyW),
             backward: held(KeyCode::KeyS),
             left: held(KeyCode::KeyA),
@@ -3794,6 +3794,13 @@ impl Game<'_> {
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
+        // On a server (not this game's own server thread), the stick moves as the keys it sets do
+        // (`KeyboardInput.tick`: 8 directions, full speed). The server only hears those keys
+        // (`ServerboundPlayerInputPacket`), and an anticheat that predicts from them pulls back
+        // a player moving at the stick's own angle and speed.
+        if self.integrated.is_none() && self.server_address().is_some() {
+            keys.analog = None;
+        }
         let input = u8::from(keys.forward)
             | u8::from(keys.backward) << 1
             | u8::from(keys.left) << 2
