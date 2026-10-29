@@ -1101,6 +1101,18 @@ fn on_climbable(m: &Mob, w: &MobWorld) -> bool {
     );
     w.has_tag("minecraft:climbable", w.block_name(x, y, z))
 }
+/// `Entity.getRootVehicle` of the mob `id` riding `vehicle`: the bottom of
+/// its stack of vehicles (itself when it rides nothing).
+fn root_vehicle(w: &MobWorld, id: u32, vehicle: Option<u32>) -> u32 {
+    let (mut root, mut next) = (id, vehicle);
+    // A stack of riders is short; the bound only guards a broken loop.
+    for _ in 0..16 {
+        let Some(v) = next else { break };
+        root = v;
+        next = w.seen(v).and_then(|s| s.vehicle);
+    }
+    root
+}
 /// LivingEntity.pushEntities: every pushable entity overlapping the box is
 /// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
 /// mobs are `Push` events their tick picks up.
@@ -1125,8 +1137,16 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         targets.push((Who::Player, p.position, p.passenger));
     }
+    // Entity.push: passengers of the same vehicle (a rider and its mount
+    // among them) never push each other.
+    let root = root_vehicle(w, m.id, m.extra.mount);
     for o in w.others_near(bounds) {
-        if o.id != m.id && o.alive && o.pushable && o.bounds.intersects(bounds) {
+        if o.id != m.id
+            && o.alive
+            && o.pushable
+            && o.bounds.intersects(bounds)
+            && root_vehicle(w, o.id, o.vehicle) != root
+        {
             targets.push((Who::Mob(o.id), o.position, o.passenger));
         }
     }
