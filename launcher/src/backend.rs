@@ -1089,9 +1089,11 @@ fn lacks_unifont(resources: &Path) -> bool {
         .is_file()
 }
 
-/// Whether `en_us`, the one language the client jar has, is the only one.
+/// Whether the language list is missing: `pack.mcmeta` only the asset index holds, while the
+/// client jar's `lang` folder holds `en_us.json` and `deprecated.json`, so counting its files
+/// never tells.
 fn lacks_languages(resources: &Path) -> bool {
-    fs::read_dir(resources.join("assets/minecraft/lang")).map_or(true, |dir| dir.count() <= 1)
+    !resources.join("assets/pack.mcmeta").is_file()
 }
 
 fn lacks_packs(resources: &Path) -> bool {
@@ -4034,6 +4036,10 @@ mod tests {
                 let resources = resources_at(&root);
                 write(resources.join(RESOURCES_MANIFEST), b"{}");
                 write(resources.join("assets/minecraft/lang/en_us.json"), b"{}");
+                write(
+                    resources.join("assets/minecraft/lang/deprecated.json"),
+                    b"{}",
+                );
                 write(
                     resources
                         .join("assets")
