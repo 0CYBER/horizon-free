@@ -8231,5 +8231,33 @@ CHECKS += ['dig_sounds']
 CHECK_FNS['dig_sounds'] = check_dig_sounds
 
 
+def check_keys_released(host, guest, out):
+    """Gui.setScreen -> KeyMapping.releaseAll: the screen shown after leaving a server releases every held
+    key, so W and Space held through the disconnect don't walk and jump on in the next world (#3246)."""
+    port = host.raw('lan', 'status')['port']
+    guest.raw('key', 'w', 'down')
+    guest.raw('key', 'space', 'down')
+    held = sorted(guest('status')['keys'])
+    guest.raw('disconnect')
+    left = sorted(guest('status')['keys'])
+    guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+    guest.raw('wait-for', 'loaded', '--timeout', 300)
+    guest.wait(20)
+    rejoined = sorted(guest('status')['keys'])
+    start = pos_of(guest)
+    guest.wait(20)
+    end = pos_of(guest)
+    walked = round(math.hypot(end[0] - start[0], end[2] - start[2]), 3)
+    seen = {'held': held, 'left': left, 'rejoined': rejoined, 'walked': walked}
+    assert held == ['KeyW', 'Space'], f'the keys were not pressed: {seen}'
+    assert left == [] and rejoined == [], f'keys stayed down after leaving: {seen}'
+    assert walked < 0.1, f'the guest walked on its own after rejoining: {seen}'
+    return seen
+
+
+CHECKS += ['keys_released']
+CHECK_FNS['keys_released'] = check_keys_released
+
+
 if __name__ == '__main__':
     main()
