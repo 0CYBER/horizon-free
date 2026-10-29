@@ -2355,6 +2355,11 @@ impl Mob {
     pub fn is_currently_glowing(&self) -> bool {
         self.glowing || self.has_effect("minecraft:glowing")
     }
+    /// `Entity.isInvisible`: the shared flag 0x20 a server sends (`invisible`),
+    /// or the Invisibility effect on a mob this game ticks itself.
+    pub fn is_invisible(&self) -> bool {
+        self.invisible || self.has_effect("minecraft:invisibility")
+    }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
             // MobEffectInstance.update: a stronger effect replaces with its
@@ -2844,12 +2849,12 @@ mod teams_tests {
     }
 }
 #[cfg(test)]
-mod sensor_scan_tests {
+pub(crate) mod sensor_scan_tests {
     use super::*;
     use horizon_core::geometry::Vec3;
     use serde_json::json;
 
-    pub(super) fn kind() -> Arc<MobType> {
+    pub(crate) fn kind() -> Arc<MobType> {
         Arc::new(MobType {
             id: "minecraft:cow".into(),
             species: Species::Cow,
