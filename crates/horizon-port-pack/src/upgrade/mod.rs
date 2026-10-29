@@ -13,9 +13,11 @@
 //! cell from `size_horizontal`/`size_vertical`) are spelled out as data.
 //! Whatever has no faithful 26.3 form is kept as it is and listed in the
 //! report.
+mod density;
 mod noise;
 mod registries;
 
+use density::Context;
 use noise::noise;
 pub use noise::parity_base_amplitude;
 use registries::{biome, carver, dimension_type, structure};
@@ -69,6 +71,7 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
             }
         }
     }
+    let mut ctx = Context::new(&json);
     let mut written: BTreeMap<String, Value> = BTreeMap::new();
     for (path, v) in &json {
         let Some(file) = PackFile::parse(path) else {
@@ -77,6 +80,7 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
         };
         let upgraded = match file.registry.as_str() {
             "worldgen/noise" => Some(noise(v, &mut report)),
+            "worldgen/density_function" => Some(ctx.named_function(&file.id(), v, &mut report)),
             "worldgen/configured_carver" => Some(carver(v, &mut report)),
             "worldgen/biome" => Some(biome(v, &mut report)),
             "worldgen/structure" => Some(structure(v)),
@@ -158,6 +162,9 @@ impl PackFile {
             path: path.into(),
         })
     }
+    fn id(&self) -> String {
+        format!("{}:{}", self.namespace, self.path)
+    }
     fn with_registry(&self, registry: &str) -> String {
         format!("data/{}/{registry}/{}.json", self.namespace, self.path)
     }
@@ -167,6 +174,24 @@ impl PackFile {
 fn kind(v: &Value) -> Option<&str> {
     let t = v.get("type")?.as_str()?;
     Some(t.strip_prefix("minecraft:").unwrap_or(t))
+}
+
+/// An id with its namespace (`minecraft:` when it has none).
+fn full_id(id: &str) -> String {
+    if id.contains(':') {
+        id.to_owned()
+    } else {
+        format!("minecraft:{id}")
+    }
+}
+
+/// Whether an object of type `t` appears anywhere in `v`.
+fn contains_type(v: &Value, t: &str) -> bool {
+    match v {
+        Value::Object(o) => kind(v) == Some(t) || o.values().any(|x| contains_type(x, t)),
+        Value::Array(a) => a.iter().any(|x| contains_type(x, t)),
+        _ => false,
+    }
 }
 
 fn vanilla(name: &str) -> Value {
@@ -350,6 +375,55 @@ mod tests {
         assert_eq!(
             v,
             json!({"base_amplitude": 0.955388882960065, "base_octave": -3})
+        );
+    }
+
+    #[test]
+    fn density_arguments_and_removed_types() {
+        let (v, _) = up(
+            "data/x/worldgen/density_function/f.json",
+            json!({"type": "minecraft:add", "argument1": {"type": "minecraft:constant", "argument": 2.0},
+                "argument2": {"type": "minecraft:abs", "argument": {"type": "minecraft:y_clamped_gradient",
+                    "from_y": -64, "to_y": 320, "from_value": 1.5, "to_value": -1.5}}}),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "minecraft:add", "left": 2.0, "right": {"type": "minecraft:abs",
+                "input": {"type": "minecraft:gradient", "axis": "y", "from_coordinate": -64,
+                    "to_coordinate": 320, "from_value": 1.5, "to_value": -1.5}}})
+        );
+        let (v, _) = up(
+            "data/x/worldgen/density_function/f.json",
+            json!({"type": "minecraft:shifted_noise", "noise": "minecraft:erosion",
+                "shift_x": "minecraft:shift_x", "shift_y": 0.0, "shift_z": "minecraft:shift_z",
+                "xz_scale": 0.25, "y_scale": 0.0}),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "minecraft:noise", "noise": "minecraft:erosion", "shift_x": "minecraft:shift_x",
+                "shift_z": "minecraft:shift_z", "xz_scale": 0.25, "y_scale": 0.0})
+        );
+    }
+
+    #[test]
+    fn flat_cache_slices_at_y_zero_only_what_depends_on_y() {
+        let flat = |argument: Value| {
+            up(
+                "data/x/worldgen/density_function/f.json",
+                json!({"type": "minecraft:flat_cache", "argument": argument}),
+            )
+            .0
+        };
+        let n = json!({"type": "minecraft:noise", "noise": "x:n", "xz_scale": 1.0, "y_scale": 0.0});
+        assert_eq!(
+            flat(n.clone()),
+            json!({"type": "minecraft:cache", "input": n})
+        );
+        let y = json!({"type": "minecraft:mul", "argument1": "minecraft:y", "argument2": 2.0});
+        assert_eq!(
+            flat(y),
+            json!({"type": "minecraft:cache", "input": {"type": "minecraft:slice", "axis": "y",
+                "coordinate": 0, "input": {"type": "minecraft:mul", "left": "minecraft:y", "right": 2.0}}})
         );
     }
 
