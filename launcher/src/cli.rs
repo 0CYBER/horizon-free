@@ -3013,15 +3013,15 @@ mod tests {
             Some(ModsCmd::List { instance: None })
         ));
         assert!(parse(&[]).is_none());
-        // Search and Check read no instance: checks are shared.
-        assert!(Cli::try_parse_from([
-            "horizon-launcher",
-            "mods",
-            "search",
-            "x",
-            "--instance",
-            "A"
-        ])
-        .is_err());
+        // Search names one for a Java instance's version and loader; Check reads none: checks
+        // are shared.
+        assert!(matches!(
+            parse(&["search", "x", "--instance", "A"]),
+            Some(ModsCmd::Search { instance: Some(i), .. }) if i == "A"
+        ));
+        assert!(
+            Cli::try_parse_from(["horizon-launcher", "mods", "check", "x", "--instance", "A"])
+                .is_err()
+        );
     }
 }
