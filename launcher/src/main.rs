@@ -1152,14 +1152,18 @@ impl Launcher {
             .cloned();
         if let Some(instance) = java {
             // Mojang's game: no Horizon version or preparation, only no game already running.
-            // Joining and quick play are Horizon's.
+            // It joins a server; a friend's code and opening a world are Horizon's.
             self.joining = None;
-            self.quick_play = None;
+            let server = self
+                .quick_play
+                .take()
+                .filter(|(flag, _)| *flag == "--server")
+                .map(|(_, ip)| ip);
             if self.client.is_some() || self.starting_client.is_some() {
                 return;
             }
             self.starting_pack = None;
-            self.start_java(instance);
+            self.start_java(instance, server);
             return;
         }
         let Some(tag) = self.selected().cloned() else {
@@ -1172,9 +1176,10 @@ impl Launcher {
         self.start_client(tag);
     }
 
-    /// Starts a Java instance's Minecraft: its files and Java first (downloaded the first time,
-    /// their lines in the log), then `drain` starts the game when the command arrives.
-    fn start_java(&mut self, instance: instances::Instance) {
+    /// Starts a Java instance's Minecraft, joining `server` if given: its files and Java first
+    /// (downloaded the first time, their lines in the log), then `drain` starts the game when
+    /// the command arrives.
+    fn start_java(&mut self, instance: instances::Instance, server: Option<String>) {
         self.client_error = None;
         self.crash = None;
         self.prepare_log.clear();
@@ -1186,7 +1191,7 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, None, &log).map(|mut cmd| {
+            let cmd = backend::java_game(&instance, server.as_deref(), &log).map(|mut cmd| {
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
@@ -1207,6 +1212,15 @@ impl Launcher {
     pub(crate) fn can_start_selected(&self) -> bool {
         self.selected_instance().is_none_or(|i| i.java.is_none())
             && self.selected().is_some_and(|tag| self.can_start(tag))
+    }
+
+    /// Whether a server's Join starts the selected instance now: a Java instance too, as Play
+    /// would (no game running or starting).
+    pub(crate) fn can_join_selected(&self) -> bool {
+        match self.selected_instance() {
+            Some(i) if i.java.is_some() => self.client.is_none() && self.starting_client.is_none(),
+            _ => self.can_start_selected(),
+        }
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
