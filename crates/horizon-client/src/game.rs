@@ -16318,7 +16318,10 @@ mod tests {
     fn selecting_creative_tabs_does_not_drop_the_carried_stack_on_release() {
         let mut creative = Creative::from_json(&serde_json::json!({
             "schema": 2,
-            "tabs": [{"type": "CATEGORY"}, {"type": "INVENTORY"}]
+            "tabs": [
+                {"type": "CATEGORY", "items": ["{count:1,id:\"minecraft:stone\"}"]},
+                {"type": "INVENTORY"}
+            ]
         }))
         .unwrap();
         for button in [Button::Left, Button::Right] {
