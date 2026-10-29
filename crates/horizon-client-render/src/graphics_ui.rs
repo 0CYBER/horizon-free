@@ -141,12 +141,12 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::HdrPeak,
                 None,
-                "How bright the brightest highlights get. Your display's peak.",
+                "How bright highlights get. Auto: the peak your system reports.",
             ),
             h(
                 H::HdrPaperWhite,
                 None,
-                "How bright white paper and menus look. Match your desktop.",
+                "How bright white paper and menus look. Auto: your desktop's white.",
             ),
             h(
                 H::HdrUiBrightness,
@@ -375,8 +375,16 @@ impl H {
             }
             H::Workers => Some(g.workers as f32 / max_workers() as f32),
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
-            H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
-            H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
+            // Auto, then 80..480 by 10.
+            H::HdrPaperWhite => Some(match g.hdr_paper_white {
+                0 => 0.0,
+                n => (n as f32 - 70.0) / 410.0,
+            }),
+            // Auto, then 200..2000 by 50.
+            H::HdrPeak => Some(match g.hdr_peak {
+                0 => 0.0,
+                n => (n as f32 - 150.0) / 1850.0,
+            }),
             H::HdrBlackLevel => Some(g.hdr_black_level as f32 / 100.0),
             H::HdrUiBrightness => Some((g.hdr_ui_brightness as f32 - 25.0) / 75.0),
             _ => None,
@@ -430,8 +438,17 @@ impl H {
             H::Upscaling => labelled("Upscaling", g.upscaling.label()),
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrSettings => Text::literal("HDR Settings..."),
-            H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
-            H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
+            H::HdrPaperWhite => match g.hdr_paper_white {
+                0 => labelled(
+                    "Paper White",
+                    format!("Auto ({} nits)", g.paper_white_nits()),
+                ),
+                n => labelled("Paper White", format!("{n} nits")),
+            },
+            H::HdrPeak => match g.hdr_peak {
+                0 => labelled("Peak Brightness", format!("Auto ({} nits)", g.peak_nits())),
+                n => labelled("Peak Brightness", format!("{n} nits")),
+            },
             H::HdrBlackLevel => labelled(
                 "Black Level",
                 format!("{:.2} nits", g.hdr_black_level as f32 / 100.0),
@@ -459,8 +476,18 @@ impl H {
             }
             H::Workers => g.workers = (v * max_workers() as f32).round() as u32,
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
-            H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
-            H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
+            H::HdrPaperWhite => {
+                g.hdr_paper_white = match (v * 41.0).round() as u32 {
+                    0 => 0,
+                    step => 70 + step * 10,
+                }
+            }
+            H::HdrPeak => {
+                g.hdr_peak = match (v * 37.0).round() as u32 {
+                    0 => 0,
+                    step => 150 + step * 50,
+                }
+            }
             H::HdrBlackLevel => g.hdr_black_level = (v * 100.0).round() as u32,
             H::HdrUiBrightness => g.hdr_ui_brightness = (25.0 + (v * 15.0).round() * 5.0) as u32,
             _ => {}

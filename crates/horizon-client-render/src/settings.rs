@@ -101,6 +101,8 @@ pub struct Settings {
     pub master_volume: f32,
     /// Volumes of every other sound source, indexed like SOUND_SOURCES.
     pub volumes: [f32; 11],
+    /// Empty for system default, or a specific audio device name.
+    pub sound_device: String,
     /// Requested scale (0 = auto); rendering caps it to the current framebuffer.
     pub gui_scale: u32,
     pub view_bobbing: bool,
@@ -201,6 +203,7 @@ impl Default for Settings {
             sensitivity: 0.5,
             master_volume: 1.0,
             volumes: [1.0; 11],
+            sound_device: String::new(),
             gui_scale: 0,
             view_bobbing: true,
             gamma: 0.5,
@@ -392,6 +395,7 @@ impl Settings {
             sensitivity: f.double("mouseSensitivity") as f32,
             master_volume: volumes[0],
             volumes,
+            sound_device: f.string("soundDevice"),
             gui_scale: f.int("guiScale").max(0) as u32,
             view_bobbing: f.bool("bobView"),
             gamma: f.double("gamma") as f32,
@@ -487,6 +491,7 @@ impl Settings {
             };
             put_f(&mut f, &format!("soundCategory_{source}"), v);
         }
+        put_s(&mut f, "soundDevice", &self.sound_device);
         put_i(&mut f, "guiScale", self.gui_scale as i32);
         put_b(&mut f, "bobView", self.view_bobbing);
         put_f(&mut f, "gamma", self.gamma);
@@ -656,6 +661,7 @@ pub enum Opt {
     InvertY,
     AllowCursorChanges,
     Volume(usize),
+    SoundDevice,
     GuiScale,
     ViewBobbing,
     Gamma,
@@ -844,5 +850,16 @@ mod tests {
             Settings::parse("notificationDisplayTime:50\n").notification_display_time,
             1.0
         );
+    }
+    #[test]
+    fn sound_device_option() {
+        let s = Settings::parse("soundDevice:\"Headphones\"\n");
+        assert_eq!(s.sound_device, "Headphones");
+        let serialized = s.serialize();
+        assert!(serialized.contains("soundDevice:\"Headphones\""));
+        let again = Settings::parse(&serialized);
+        assert_eq!(again.sound_device, "Headphones");
+        let empty = Settings::parse("");
+        assert_eq!(empty.sound_device, "");
     }
 }
