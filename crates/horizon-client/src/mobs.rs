@@ -669,6 +669,15 @@ pub struct Attrs {
 }
 /// `minecraft:wolf_armor`'s maximum damage.
 pub const WOLF_ARMOR_DURABILITY: i32 = 64;
+/// `NeutralMob.readPersistentAngerSaveData`: the anger runs until its end
+/// time, so a mob that is loaded again is angry for what is left of it.
+pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
+    if anger_end <= 0 {
+        return 0;
+    }
+    (anger_end - game_time).clamp(0, i64::from(i32::MAX)) as i32
+}
+
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
@@ -728,6 +737,15 @@ pub struct Extra {
     pub anim_ticks: i32,
     pub egg_time: i32,
     pub anger: i32,
+    /// `NeutralMob.getPersistentAngerEndTime`: the absolute game time the
+    /// anger ends at, -1 when the mob is calm. The save keeps it, so the
+    /// anger goes on while the chunk is unloaded.
+    pub anger_end: i64,
+    /// `NeutralMob.getPersistentAngerTarget`: the entity the mob is angry
+    /// at, which the save keeps with it.
+    pub angry_at: Option<Who>,
+    /// `IronGolem.isPlayerCreated` (`PlayerCreated`): built from blocks.
+    pub player_created: bool,
     pub carried: Option<horizon_world::registry::BlockStateId>,
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
@@ -1259,8 +1277,10 @@ pub enum MobEvent {
         at: [f64; 3],
         amount: u32,
     },
-    /// Regeneration support after an axolotl-assisted kill.
-    AxolotlSupportPlayer,
+    /// Regeneration support after an axolotl-assisted kill, from the axolotl `mob`.
+    AxolotlSupportPlayer {
+        mob: u32,
+    },
     /// A dolphin that was given a fish asks the game for the nearest
     /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
     /// sets the dolphin's `extra.home` to it, or leaves it empty.
@@ -1832,6 +1852,9 @@ pub struct MobWorld<'a> {
     /// Where each id stands in `others`, when the caller keeps one.
     pub others_index: Option<&'a crate::fast_hash::FxHashMap<u32, u32>>,
     pub daylight: bool,
+    /// The `gameplay/monsters_burn` attribute: the overworld day timeline's
+    /// step track, false in every other dimension.
+    pub monsters_burn: bool,
     pub game_time: i64,
     pub day_time: i64,
     pub raining: bool,

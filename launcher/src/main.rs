@@ -170,6 +170,10 @@ struct Launcher {
     /// The version being deleted on a background thread. It is already out of `installed`, so
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
     removing: Option<String>,
+    /// What each installed version takes on disk, measured on a thread for the Versions page, and
+    /// the installed list it was measured for.
+    disk: Vec<(String, u64)>,
+    disk_for: Vec<String>,
     install_error: Option<(String, String)>,
     /// Native mods (`native_mods`): the build's step while it runs, why it failed, and the
     /// warning before a build while it is open, with the mods it names.
@@ -391,6 +395,8 @@ impl Launcher {
             installed,
             installing: None,
             removing: None,
+            disk: Vec::new(),
+            disk_for: Vec::new(),
             install_error: None,
             native_step: None,
             native_error: None,
@@ -777,6 +783,11 @@ impl Launcher {
                                 self.settings.selected = Some(tag);
                             }
                             self.settings.save();
+                            // After the save: the selected version is never pruned.
+                            let tx = self.tx.clone();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(Msg::Pruned(backend::prune_old_versions()));
+                            });
                         }
                         Err(e) => self.install_error = Some((tag, e)),
                     }
@@ -790,6 +801,12 @@ impl Launcher {
                         selection_after_removal(&self.installed, Settings::load().selected);
                     if let Err(e) = result {
                         self.install_error = Some((tag, e));
+                    }
+                }
+                Msg::DiskUse(disk) => self.disk = disk,
+                Msg::Pruned(gone) => {
+                    if !gone.is_empty() {
+                        self.installed = backend::installed();
                     }
                 }
                 Msg::Updates(Ok(updates)) => {
@@ -1093,11 +1110,23 @@ impl Launcher {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        if self.client.is_some() || self.starting_client.is_some() {
+        if !self.can_start(&tag) {
             return;
         }
         self.starting_pack = None;
         self.start_client(tag);
+    }
+
+    /// Whether `tag` can start now ([`starts_now`]): prepared, no preparation under way, no game
+    /// running or starting.
+    pub(crate) fn can_start(&self, tag: &str) -> bool {
+        let running = self.client.is_some() || self.starting_client.is_some();
+        starts_now(backend::is_prepared(tag), self.preparing, running)
+    }
+
+    /// Whether the selected instance's version can start now.
+    pub(crate) fn can_start_selected(&self) -> bool {
+        self.selected().is_some_and(|tag| self.can_start(tag))
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -1504,6 +1533,13 @@ fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
         (false, Some(true)) => PlayPress::PrepareThenPlay,
         (false, _) => PlayPress::Nothing,
     }
+}
+
+/// Whether a shortcut that starts the game at once (a server's Join, a world's Play, a friend's
+/// code, a pack's Play) starts it now: only when Play would play. Never while a preparation runs:
+/// the game would open on half-written files.
+fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
+    play_press(prepared, None, preparing || running) == PlayPress::Play
 }
 
 /// The selected version once one has been removed: the saved choice if it is still installed,
@@ -2444,7 +2480,7 @@ impl Launcher {
                 &t,
             ));
         {
-            rows = rows.child(self.join_friend_row(prepared && !running, cx));
+            rows = rows.child(self.join_friend_row(self.can_start(&tag), cx));
             // The top bar shows who plays; a row only when there is something to do about it:
             // no account that owns the game (Play needs one), or offline.
             if self.owner_shown() == Some(false) {
@@ -2878,6 +2914,13 @@ impl Launcher {
                 cx.notify();
             }),
         );
+        let prune = switch("auto-prune", self.settings.auto_prune(), &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.prune_old_versions = Some(!this.settings.auto_prune());
+                this.settings.save();
+                cx.notify();
+            },
+        ));
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -3026,6 +3069,20 @@ impl Launcher {
                             "Your selected version only changes if you were playing the newest one.",
                         )),
                         Some(toggle.into_any_element()),
+                        &t,
+                    ))
+                    .child(index_row(
+                        n + 2,
+                        tr("Delete old versions automatically"),
+                        Some(
+                            div()
+                                .child(trf(
+                                    "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.",
+                                    &[("count", &self.settings.keep_newest().to_string())],
+                                ))
+                                .into_any_element(),
+                        ),
+                        Some(prune.into_any_element()),
                         &t,
                     ))
                     .child(group("Launcher", "monitor"))
@@ -3645,7 +3702,36 @@ impl Launcher {
             "Builds from GitHub. Each one installs into its own folder.",
             &t,
         );
-        let page = div().flex().flex_col().gap(px(32.)).child(header);
+        // Measured again when the installed versions change.
+        if self.disk_for != self.installed {
+            self.disk_for = self.installed.clone();
+            let (tags, tx) = (self.installed.clone(), self.tx.clone());
+            std::thread::spawn(move || {
+                let disk = tags.into_iter().map(|t| {
+                    let n = backend::disk_use(&t);
+                    (t, n)
+                });
+                let _ = tx.send(Msg::DiskUse(disk.collect()));
+            });
+        }
+        let on_disk = |tag: &String| {
+            let found = self.disk.iter().find(|(t, _)| t == tag);
+            found
+                .filter(|_| self.installed.contains(tag))
+                .map(|(_, n)| *n)
+        };
+        let used: u64 = self.installed.iter().filter_map(on_disk).sum();
+        let page = div()
+            .flex()
+            .flex_col()
+            .gap(px(32.))
+            .child(header)
+            .children((used > 0).then(|| {
+                text(theme::UI).text_color(t.muted).child(trf(
+                    "Installed versions use {size}.",
+                    &[("size", &megabytes(used))],
+                ))
+            }));
         let releases = match &self.releases {
             Load::Loading => return page.child(centered("Loading releases…", &t)),
             Load::Failed(e) => {
@@ -3682,6 +3768,9 @@ impl Launcher {
                 let mut meta = vec![release.date.clone()];
                 if let Some((_, size)) = release.asset {
                     meta.push(megabytes(size));
+                }
+                if let Some(n) = on_disk(&tag) {
+                    meta.push(trf("{size} on disk", &[("size", &megabytes(n))]));
                 }
                 let summary = release
                     .name
@@ -4395,6 +4484,21 @@ mod tests {
         assert_eq!(play_press(false, None, false), PlayPress::Nothing);
         assert_eq!(play_press(false, Some(true), true), PlayPress::Nothing);
         assert_eq!(play_press(true, Some(true), true), PlayPress::Nothing);
+    }
+
+    /// A server's Join (and every other shortcut) waits like Play: not while the version's
+    /// first download and preparation run (#horizon-bugs, 0.2.23: a white window opened).
+    #[test]
+    fn shortcuts_start_only_when_play_would() {
+        use super::starts_now;
+        assert!(starts_now(true, false, false));
+        assert!(
+            !starts_now(false, true, false),
+            "first-time setup under way"
+        );
+        assert!(!starts_now(true, true, false), "prepared again under way");
+        assert!(!starts_now(false, false, false), "not prepared");
+        assert!(!starts_now(true, false, true), "already running");
     }
 
     #[test]
