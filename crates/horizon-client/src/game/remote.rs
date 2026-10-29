@@ -378,7 +378,7 @@ impl Game<'_> {
         );
         self.server_packs_connect(local.is_none().then_some(address), user);
         let session = match local {
-            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
+            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone(), root.clone()),
             None => {
                 self.extras_connecting(address, name);
                 match cookies {
@@ -389,8 +389,16 @@ impl Game<'_> {
                         view,
                         lang.clone(),
                         cookies,
+                        root.clone(),
                     ),
-                    None => Session::connect(address, name, auth.clone(), view, lang.clone()),
+                    None => Session::connect(
+                        address,
+                        name,
+                        auth.clone(),
+                        view,
+                        lang.clone(),
+                        root.clone(),
+                    ),
                 }
             }
         };

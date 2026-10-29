@@ -854,6 +854,44 @@ fn login_and_configure(
             }),
         )?;
     }
+    if brand == "horizon"
+        && let Some(hash) = sync.content_identity
+    {
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: crate::content_identity::CHANNEL.into(),
+                data: hash.to_vec(),
+            }),
+        )?;
+        send(c, cfg::Clientbound::Ping(cfg::Ping { id: 0 }))?;
+        let mut content_match = false;
+        loop {
+            let (id, payload) = c.recv().map_err(e)?;
+            match cfg::Serverbound::decode(id, &payload).map_err(e)? {
+                cfg::Serverbound::CustomPayload(p)
+                    if p.channel == crate::content_identity::CHANNEL =>
+                {
+                    content_match = p.data == hash;
+                }
+                cfg::Serverbound::Pong(p) if p.id == 0 => break,
+                cfg::Serverbound::ClientInformation(i) => info = i,
+                _ => {}
+            }
+        }
+        if !content_match {
+            let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(
+                crate::content_identity::MISMATCH,
+            ));
+            let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+            lost(
+                shared,
+                &format!("{name} ({})", uuid_string(uuid)),
+                crate::content_identity::MISMATCH,
+            );
+            return Ok(None);
+        }
+    }
     for packet in sync.registry_packets(known_pack) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
