@@ -1905,6 +1905,36 @@ impl Game<'_> {
             self.spawn_orbs(at, amount);
         }
     }
+    /// `DyeColor.getMixedColor`: the colour of the crafting recipe that mixes
+    /// the two dyes, else one of the two picked at random.
+    fn dye_mix(&mut self, a: u8, b: u8) -> u8 {
+        if let Some(mixed) = self.dye_color_mix_in_recipes(a, b) {
+            return mixed;
+        }
+        if self.world.random.next_boolean() {
+            a
+        } else {
+            b
+        }
+    }
+    /// `DyeColor.findColorMixInRecipes`: the dye colour a two-dye crafting
+    /// recipe makes, when its result is a dye.
+    fn dye_color_mix_in_recipes(&self, a: u8, b: u8) -> Option<u8> {
+        let dye = |c: u8| {
+            let name = horizon_client::mobs::render::DYE_NAMES[usize::from(c) & 15];
+            Some(ItemStack::new(&format!("minecraft:{name}_dye"), 1))
+        };
+        let grid = [dye(a), dye(b), None, None];
+        let (_, result) = self.res.recipes().find(&grid, 2)?;
+        let name = result
+            .item
+            .strip_prefix("minecraft:")?
+            .strip_suffix("_dye")?;
+        let index = horizon_client::mobs::render::DYE_NAMES
+            .iter()
+            .position(|n| *n == name)?;
+        u8::try_from(index).ok()
+    }
     /// Animal.spawnChildFromBreeding
     fn breed(
         &mut self,
@@ -1969,7 +1999,6 @@ impl Game<'_> {
             return;
         }
         let coin = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
-        let coin2 = self.world.random.next_int_bound(2).unwrap_or(0) == 0;
         // A horse and a donkey have a mule.
         let kind = match (p.species(), q.as_ref().map(|q| q.species())) {
             (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse)) => {
@@ -2032,11 +2061,12 @@ impl Game<'_> {
                 if p.extra.tame {
                     child.extra.tame = true;
                     child.extra.owner = p.extra.owner;
-                    child.extra.color = if coin2 {
-                        p.extra.color
-                    } else {
-                        other.extra.color
-                    };
+                    // The mix needs all of `self`, so it waits until `child`'s
+                    // borrow of the mob list is over.
+                    let mixed = self.dye_mix(p.extra.color, other.extra.color);
+                    if let Some(c) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        c.extra.color = mixed;
+                    }
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
@@ -2044,7 +2074,7 @@ impl Game<'_> {
             }
             if p.species() == Species::Wolf {
                 // Wolf.getBreedOffspring: a parent's variant; tame parents
-                // give a tame baby with one of their collar colours.
+                // give a tame baby with their collar colours mixed.
                 let other = q.as_ref().unwrap_or(&p);
                 child.extra.variant = if coin {
                     p.extra.variant
@@ -2054,11 +2084,12 @@ impl Game<'_> {
                 if p.extra.tame {
                     horizon_client::mobs::tame::set_tame(child, true);
                     child.extra.owner = p.extra.owner;
-                    child.extra.color = if coin2 {
-                        p.extra.color
-                    } else {
-                        other.extra.color
-                    };
+                    // The mix needs all of `self`, so it waits until `child`'s
+                    // borrow of the mob list is over.
+                    let mixed = self.dye_mix(p.extra.color, other.extra.color);
+                    if let Some(c) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        c.extra.color = mixed;
+                    }
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
@@ -2087,8 +2118,13 @@ impl Game<'_> {
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
             }
+            // Sheep.getBreedOffspring: the lamb's wool mixes both parents' dyes.
             if p.species() == Species::Sheep {
-                child.extra.color = p.extra.color;
+                let other = q.as_ref().unwrap_or(&p);
+                let mixed = self.dye_mix(p.extra.color, other.extra.color);
+                if let Some(c) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    c.extra.color = mixed;
+                }
             }
         }
         let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
