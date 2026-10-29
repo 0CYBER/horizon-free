@@ -114,6 +114,11 @@ horizon-mixins failed (exit status: 1). The end of its output, the whole of it i
 E_CRATE_DEPENDENCY: crate_lock needs rand ^0.9, which isn't in Horizon's Cargo.lock (…/horizon-mixin.toml)
 ```
 
+**Features are shared with the game.** Cargo builds each locked crate once, with the union of the features everyone
+asks for, so a feature a mod's crate turns on also applies to the game's own use of that crate. `serde_json`'s
+`preserve_order`, for example, would change the key order of every JSON file the game writes. Ask only for
+features that add something (new functions, new types), never ones that change existing behaviour.
+
 ### Data files
 
 A bundle's `data/` folder (any files) is staged as `native-data/<mod>/` at the root of the workspace. A helper or
