@@ -6840,12 +6840,13 @@ impl Game<'_> {
             search.move_cursor_to_end(false);
             search.highlight = 0;
         }
-        let items = self.creative_screen.items(&self.pack.names);
         let first = self.creative_screen.first_row(&self.pack.names);
-        let shown = items.get(first * 9 + slot - Creative::DISPLAY);
+        let shown = self
+            .creative_screen
+            .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY);
         let catalog = self.res.items();
         let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
-        match click_display(&mut self.carried, shown, max, button, input) {
+        match click_display(&mut self.carried, shown.as_ref(), max, button, input) {
             DisplayClick::Hotbar(i, stack) if i < self.inventory.len() => {
                 self.inventory[i] = Some(stack);
             }
@@ -7441,9 +7442,11 @@ impl Game<'_> {
             None => Hover::Nothing,
             Some(slot) if slot >= Creative::DISPLAY => {
                 let first = self.creative_screen.first_row(&self.pack.names);
-                let shown = self.creative_screen.items(&self.pack.names).len();
                 Hover::Display {
-                    filled: first * 9 + slot - Creative::DISPLAY < shown,
+                    filled: self
+                        .creative_screen
+                        .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY)
+                        .is_some(),
                 }
             }
             Some(_) => Hover::Slot,
@@ -11407,7 +11410,7 @@ impl Game<'_> {
             let first = self.creative_screen.first_row(&self.pack.names);
             for r in 0..5 {
                 for c in 0..9 {
-                    let Some(stack) = items.get((first + r) * 9 + c) else {
+                    let Some(stack) = items.get((first + r) * 9 + c).filter(|s| s.count > 0) else {
                         continue;
                     };
                     let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
@@ -11501,6 +11504,7 @@ impl Game<'_> {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
                 select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
+                self.refresh_saved_hotbars();
                 self.inv_drag = None;
                 self.last_inv_click = None;
                 return;
@@ -12394,6 +12398,7 @@ impl Game<'_> {
                         if self.creative {
                             self.screen = Screen::Creative;
                             self.creative_screen.reopen();
+                            self.refresh_saved_hotbars();
                         } else {
                             self.screen = Screen::Inventory;
                         }
