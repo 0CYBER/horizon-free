@@ -2615,7 +2615,10 @@ pub fn bucket_data(m: &Mob) -> Tag {
 }
 pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
     let mut data = crate::item_data::StackData {
-        custom_name: m.custom_name.clone(),
+        custom_name: m
+            .custom_name
+            .as_ref()
+            .map(|name| Tag::String(name.as_str().into())),
         ..Default::default()
     };
     data.set_other("minecraft:bucket_entity_data", Some(bucket_data(m)));
@@ -2654,8 +2657,8 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
     let Some(components) = stack.data() else {
         return;
     };
-    if let Some(name) = &components.custom_name {
-        m.custom_name = Some(name.clone());
+    if let Some(name) = stack.custom_name() {
+        m.custom_name = Some(name);
     }
     if let Some(data) = components.other("minecraft:bucket_entity_data") {
         if let Some(v) = number(data.get("Age")) {
@@ -3164,12 +3167,17 @@ mod held_item_name_tests {
             .collect();
         let mut mob = Mob::new(1, Arc::clone(&types["minecraft:zombie"]), Vec3::ZERO, 0.0);
         let mut sword = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
-        sword.data_mut().custom_name = Some("Old Sword".into());
+        sword.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
         mob.extra.set_main_hand_stack(Some(sword));
         let raw = mob_to_nbt(&mob, [1, 2, 3, 4], None);
         let mut loaded = mob_from_nbt(&raw, &types, 2).unwrap();
         assert_eq!(
-            loaded.extra.main_hand_stack().unwrap().custom_name(),
+            loaded
+                .extra
+                .main_hand_stack()
+                .unwrap()
+                .custom_name()
+                .as_deref(),
             Some("Old Sword")
         );
         loaded
