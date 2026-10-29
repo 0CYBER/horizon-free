@@ -47,6 +47,7 @@ pub mod component {
     pub const FIREWORK_EXPLOSION: i32 = 70;
     pub const FIREWORKS: i32 = 71;
     pub const BLOCK_ENTITY_DATA: i32 = 62;
+    pub const OMINOUS_BOTTLE_AMPLIFIER: i32 = 65;
     pub const CONTAINER: i32 = 77;
 }
 
@@ -183,8 +184,14 @@ impl Component {
     pub(crate) fn read(kind: i32, r: &mut Reader) -> Result<Self> {
         use component::*;
         Ok(match kind {
-            MAX_STACK_SIZE | MAX_DAMAGE | DAMAGE | RARITY | REPAIR_COST | MAP_ID
-            | MAP_POST_PROCESSING => Self::Int(r.varint()?),
+            MAX_STACK_SIZE
+            | MAX_DAMAGE
+            | DAMAGE
+            | RARITY
+            | REPAIR_COST
+            | MAP_ID
+            | MAP_POST_PROCESSING
+            | OMINOUS_BOTTLE_AMPLIFIER => Self::Int(r.varint()?),
             WRITABLE_BOOK_CONTENT => {
                 let n = r.count(100)?;
                 Self::WritableBook(
@@ -862,6 +869,15 @@ mod tests {
         book.added
             .push((component::MAP_POST_PROCESSING, Component::Int(1)));
         round::<Option<Stack>, Slot>(Some(book));
+        // OminousBottleAmplifier.STREAM_CODEC: a VarInt.
+        let mut bottle = Stack::new(1200, 1);
+        bottle
+            .added
+            .push((component::OMINOUS_BOTTLE_AMPLIFIER, Component::Int(3)));
+        let mut w = Writer::new();
+        Slot::write(&Some(bottle.clone()), &mut w);
+        assert_eq!(w.data, [1, 0xb0, 0x09, 1, 0, 65, 3]);
+        round::<Option<Stack>, Slot>(Some(bottle));
         let mut quill = Stack::new(1099, 1);
         quill.added.push((
             component::WRITABLE_BOOK_CONTENT,
