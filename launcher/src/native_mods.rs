@@ -33,6 +33,26 @@ pub const MIXINS_REV: &str = "0d6b103c70633d8fd9443d8d0acd3aadaacedb06";
 const PROFILE: &str = "release";
 const FEATURES: &str = "horizon-client/mods";
 
+/// Whether Native mods are on after an install into a game folder whose list is `installed`:
+/// installing a native mod turns them on, so the player only has to build. A player who never
+/// installs one keeps them off; one already on stays on.
+pub fn turns_on(on: bool, installed: &[crate::browser::installed::Entry]) -> bool {
+    on || installed.iter().any(|e| {
+        e.file
+            .strip_prefix(INSTALLED)
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// Whether installing a native mod shows its notice first (what the first build takes): once,
+/// for a player whose Native mods are still off.
+pub fn needs_notice(on: bool, noticed: bool) -> bool {
+    !on && !noticed
+}
+
+/// The notice before the first native mod is installed.
+pub const NOTICE: &str = "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.";
+
 /// Whether an installed version is a native-mods build.
 pub fn is_native(version: &str) -> bool {
     version.starts_with(PREFIX)
@@ -777,6 +797,42 @@ pub fn prune(keep: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ludovic's decision (2026-10-29): installing a native mod turns Native mods on, after a
+    /// notice shown once; players who never install one keep them off.
+    #[test]
+    fn installing_a_native_mod_turns_native_mods_on() {
+        let entry = |file: &str| {
+            serde_json::from_value::<crate::browser::installed::Entry>(serde_json::json!({
+                "source": "horizon", "project": "p", "slug": "p", "title": "P", "kind": "mod",
+                "version": "1", "number": "1", "file": file, "checksum": "", "page": ""
+            }))
+            .unwrap()
+        };
+        let plain = [
+            entry("horizon-mods/zoom.hmod"),
+            entry("resourcepacks/x.zip"),
+        ];
+        assert!(!turns_on(false, &[]));
+        assert!(!turns_on(false, &plain), "no native mod: they stay off");
+        assert!(!turns_on(
+            false,
+            &[entry("horizon-native-mods-old/x.hnmod")]
+        ));
+        let native = [
+            plain[0].clone(),
+            entry("horizon-native-mods/veinminer.hnmod"),
+        ];
+        assert!(turns_on(false, &native));
+        assert!(turns_on(true, &plain), "on stays on");
+        // The notice: before the first one only.
+        assert!(needs_notice(false, false));
+        assert!(!needs_notice(false, true));
+        assert!(!needs_notice(true, false));
+        // Settings without the fields read as off and not noticed.
+        let s: backend::Settings = serde_json::from_str("{}").unwrap();
+        assert!(!s.native_mods && !s.native_mods_noticed);
+    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("horizon-native-{name}-{}", std::process::id()));

@@ -40,8 +40,9 @@ mod shows one.
 
 ## What the launcher does
 
-In the window: install a native mod from the Mods page, turn on Settings → Game → **Native mods (experimental)**,
-then **Build**. The launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the
+In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
+Rust and can take 20 to 30 minutes; later builds are faster) and turns on Settings → Game → **Native mods
+(experimental)**, which stays off for players who never install one; `mods install` does the same. Then **Build**. The launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the
 row shows each step, the error if one fails, and the build the instance plays. From the command line:
 `horizon-launcher native-build [FOLDER] [--instance NAME] --trust-native-code`. FOLDER is a bundle, an unpacked
 `.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
