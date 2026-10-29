@@ -523,6 +523,10 @@ pub struct Memories {
     pub engage_time: Option<i32>,
     /// `SPEAR_CHARGE_POSITION`: where the charge goes to reposition.
     pub charge_position: Option<[f64; 3]>,
+    /// `SPEAR_FLEEING_TIME`: ticks spent backing off.
+    pub fleeing_time: Option<i32>,
+    /// `SPEAR_FLEEING_POSITION`: where it backs off to.
+    pub fleeing_position: Option<[f64; 3]>,
 }
 
 /// A piglin's `LOOK_TARGET` of an `EntityTracker(target, true)`: its eyes
@@ -650,6 +654,75 @@ fn attack_stop(m: &mut Mob) {
     m.extra.piglin.spear.status = Some(SpearStatus::Retreat);
 }
 
+/// `SpearRetreat.checkExtraStartConditions`: able to attack, not using an
+/// item, the status RETREAT and a spot 9 to 11 blocks from the target to back
+/// off to (2 more on a mount), which becomes `SPEAR_FLEEING_POSITION`.
+fn retreat_check_extra_start_conditions(m: &mut Mob, cx: &mut Cx) -> bool {
+    if !able_to_attack(m, cx.w) || is_using_item(m) {
+        return false;
+    }
+    if m.extra.piglin.spear.status.unwrap_or(SpearStatus::Approach) != SpearStatus::Retreat {
+        return false;
+    }
+    let Some(t) = m.target_info(cx.w) else {
+        return false;
+    };
+    let mount_distance = passenger_distance(m);
+    let distance = m.distance_sqr(t.position).sqrt();
+    let Some(away) = m.land_random_pos_away_between(
+        cx.w,
+        0.0_f64.max(f64::from(9 + mount_distance) - distance),
+        1.0_f64.max(f64::from(11 + mount_distance) - distance),
+        7,
+        [t.position.x, t.position.y, t.position.z],
+    ) else {
+        return false;
+    };
+    m.extra.piglin.spear.fleeing_position = Some(away);
+    true
+}
+
+/// `SpearRetreat.start`: aggressive, with no time spent backing off yet.
+fn retreat_start(m: &mut Mob) {
+    m.ai.aggressive = true;
+    m.extra.piglin.spear.fleeing_time = Some(0);
+}
+
+/// `SpearRetreat.canStillUse`: under 100 ticks backing off, with a spot to
+/// back off to, a walk going on and able to attack.
+fn retreat_can_still_use(m: &Mob, w: &MobWorld) -> bool {
+    m.extra.piglin.spear.fleeing_time.unwrap_or(100) < 100
+        && m.extra.piglin.spear.fleeing_position.is_some()
+        && !m.ai.nav.is_done()
+        && able_to_attack(m, w)
+}
+
+/// `SpearRetreat.tick`: look at the target, count the time and walk to the spot.
+fn retreat_tick(m: &mut Mob, cx: &mut Cx) {
+    let Some(t) = m.target_info(cx.w) else { return };
+    let speed_modifier = f64::from(charge_speed_modifier(m, cx.w));
+    look_at_target(m, [t.position.x, t.eye_y, t.position.z]);
+    let time = m.extra.piglin.spear.fleeing_time.unwrap_or(0) + 1;
+    m.extra.piglin.spear.fleeing_time = Some(time);
+    if let Some(away) = m.extra.piglin.spear.fleeing_position {
+        m.nav_move_to(
+            cx.w,
+            away,
+            speed_modifier * PiglinSpear::SPEED_MODIFIER_WHEN_REPOSITIONING,
+        );
+    }
+}
+
+/// `SpearRetreat.stop`: the walk ends, the spear is down and the charge starts over.
+fn retreat_stop(m: &mut Mob) {
+    m.nav_stop();
+    m.ai.aggressive = false;
+    stop_using_item(m);
+    m.extra.piglin.spear.fleeing_time = None;
+    m.extra.piglin.spear.fleeing_position = None;
+    m.extra.piglin.spear.status = None;
+}
+
 /// The spear behaviours of a piglin's fight activity, `SpearApproach`,
 /// `SpearAttack` and `SpearRetreat`: each starts on the `SPEAR_STATUS` the
 /// one before it leaves. The goal runs them in the order of `Brain.tick`:
@@ -660,6 +733,7 @@ fn attack_stop(m: &mut Mob) {
 pub struct PiglinSpear {
     approach: Timed,
     attack: Timed,
+    retreat: Timed,
 }
 impl PiglinSpear {
     /// `new SpearApproach(1.0, 10.0F)`: the squared approach distance.
@@ -676,6 +750,8 @@ impl PiglinSpear {
             // `Behavior(Map)`: a duration of 60 ticks (which `timedOut` ignores).
             approach: Timed::new(60, 60),
             attack: Timed::new(60, 60),
+            // `super(Map, 100)`: a timeout of 100 ticks.
+            retreat: Timed::new(100, 100),
         }
     }
 
@@ -713,6 +789,10 @@ impl Goal for PiglinSpear {
             self.attack.running = false;
             attack_stop(m);
         }
+        if self.retreat.running {
+            self.retreat.running = false;
+            retreat_stop(m);
+        }
     }
     /// `Brain.tick`'s `startEachNonRunningBehavior`, then `tickEachRunningBehavior`.
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
@@ -731,6 +811,13 @@ impl Goal for PiglinSpear {
             self.attack.begin(cx.lr, now);
             attack_start(m);
         }
+        if !self.retreat.running
+            && m.extra.piglin.spear.status.is_some()
+            && retreat_check_extra_start_conditions(m, cx)
+        {
+            self.retreat.begin(cx.lr, now);
+            retreat_start(m);
+        }
         if self.approach.running {
             if approach_can_still_use(m, cx.w) {
                 approach_tick(m, cx);
@@ -745,6 +832,14 @@ impl Goal for PiglinSpear {
             } else {
                 self.attack.running = false;
                 attack_stop(m);
+            }
+        }
+        if self.retreat.running {
+            if !self.retreat.timed_out(now) && retreat_can_still_use(m, cx.w) {
+                retreat_tick(m, cx);
+            } else {
+                self.retreat.running = false;
+                retreat_stop(m);
             }
         }
     }
