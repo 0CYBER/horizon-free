@@ -1445,6 +1445,9 @@ struct Game<'a> {
     pending_entry: Option<PendingWorldEntry>,
     world_loader: Option<world_loading::WorldLoader>,
     pending_pack_reload: bool,
+    /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
+    /// its progress until `drive_pack_reload` applies it.
+    pack_reload: Option<packs::PackReload>,
     /// A server's resource packs (game/server_packs.rs).
     server_packs: server_packs::ServerPackState,
     /// The link a chat click asks to open (`ConfirmLinkScreen`).
@@ -12021,9 +12024,9 @@ impl Game<'_> {
             }
             return Ok(false);
         }
-        // A server pack's reload covers the frame with its progress
-        // (`LoadingOverlay`) until `tick_server_packs` applies it.
-        if let Some(reload) = &self.server_packs.reload {
+        // A pack reload covers the frame with its progress
+        // (`LoadingOverlay`) until `drive_pack_reload` applies it.
+        if let Some(reload) = &self.pack_reload {
             if let Some(renderer) = &mut self.renderer {
                 let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
                 horizon_client::level_loading::draw_progress(
@@ -13191,8 +13194,8 @@ impl ApplicationHandler for Game<'_> {
             return;
         }
         // The pack reload's progress overlay takes no input
-        // (`LoadingOverlay`): `start_pack_reload` released what was held.
-        if self.server_packs.reload.is_some()
+        // (`LoadingOverlay`): `spawn_pack_reload` released what was held.
+        if self.pack_reload.is_some()
             && !matches!(
                 &event,
                 WindowEvent::CloseRequested
@@ -14227,6 +14230,7 @@ impl<'a> Game<'a> {
             pending_entry: None,
             world_loader: None,
             pending_pack_reload: false,
+            pack_reload: None,
             server_packs: Default::default(),
             link_prompt: None,
             code_of_conduct: None,
