@@ -1,5 +1,5 @@
-//! Scheduling hints for the game's threads: the few OS calls that the other
-//! crates, which forbid unsafe code, can't make themselves.
+//! Scheduling hints for the game's threads and its allocator: the few OS calls
+//! that the other crates, which forbid unsafe code, can't make themselves.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -195,11 +195,21 @@ pub fn catch_stop_signals() {
 #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
 pub fn catch_stop_signals() {}
 
+/// The game's global allocator (`#[global_allocator]` in its `main.rs`).
+/// World generation, meshing and the tick allocate and free small blocks on
+/// every worker at once; the system heaps serialise them (Windows' heap was
+/// 16% of a chunk's generation time), mimalloc keeps a heap per thread.
+pub use mimalloc::MiMalloc as Allocator;
+
 /// Give back to the OS the memory the allocator holds free, after something
-/// large was dropped: glibc keeps freed pages in the arena of the thread that
-/// allocated them, and macOS in its zones until memory runs short. Nothing
-/// elsewhere.
+/// large was dropped: mimalloc's free pages, then the system heap's, which
+/// native libraries still use: glibc keeps freed pages in the arena of the
+/// thread that allocated them, and macOS in its zones until memory runs short.
 pub fn release_free_memory() {
+    // SAFETY: frees only pages no allocation uses, in every thread's heap.
+    unsafe {
+        libmimalloc_sys::mi_collect(true);
+    }
     release();
 }
 
