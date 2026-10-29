@@ -679,7 +679,7 @@ fn content_root_carries_a_structure_mod() {
         assert!(!ours.contains_key("othermod:houses"));
     }
 
-    // The commands suggest the mod's structure, set, pool and template.
+    // The commands suggest the mod's structure, set and pool.
     let registries: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("command-registries.json")).unwrap()).unwrap();
     for (registry, id) in [
@@ -696,13 +696,6 @@ fn content_root_carries_a_structure_mod() {
                 .any(|v| v.as_str().unwrap().starts_with("minecraft:"))
         );
     }
-    assert!(
-        registries["templates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "huts:hut")
-    );
 
     let assets = Assets::load(&root).unwrap();
     let biomes = crate::biome::Biomes::load(&root).unwrap();

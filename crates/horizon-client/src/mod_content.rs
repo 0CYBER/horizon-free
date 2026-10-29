@@ -1116,7 +1116,6 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
     let mut warnings = Vec::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
-    let mut templates: Vec<J> = Vec::new();
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
         let mut reader = m.content.reader()?;
@@ -1149,7 +1148,6 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
                 {
                     // The worldgen loader's templates: worldgen/structure/<ns>/<path>.nbt.
                     let (ns, path) = template;
-                    templates.push(J::Str(format!("{ns}:{}", path.trim_end_matches(".nbt"))));
                     overlay.write(&format!("worldgen/structure/{ns}/{path}"), &bytes)?;
                 }
             }
@@ -1237,7 +1235,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
         overlay.write(bundle, &serde_json::to_vec(&doc)?)?;
     }
     // The commands suggest ids from `command-registries.json`: add the
-    // structures, pools, sets and templates the mods bring.
+    // structures, pools, sets and features the mods bring.
     let registries = out_path(&overlay, "command-registries.json");
     if let Ok(mut doc) = read_json(&registries) {
         // Registry names hold `/`, so each key is looked up by itself.
@@ -1260,7 +1258,6 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
                 .collect();
             add(&["by_registry", registry, "ids"], &new);
         }
-        add(&["templates"], &templates);
         overlay.write("command-registries.json", &serde_json::to_vec(&doc)?)?;
     }
     // A block without its own blockstate looks like its template, so every

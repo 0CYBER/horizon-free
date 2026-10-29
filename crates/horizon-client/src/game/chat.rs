@@ -176,7 +176,8 @@ impl Game<'_> {
             self.ui.registries.damage_types = dir("damage_type");
             self.ui.registries.loot_tables = dir("loot_table");
             self.ui.registries.templates = {
-                let root = self.options.resources.join("worldgen/structure/minecraft");
+                // Every namespace's templates: vanilla's and the content mods'.
+                let root = self.options.resources.join("worldgen/structure");
                 let mut out = Vec::new();
                 let mut stack = vec![root.clone()];
                 while let Some(d) = stack.pop() {
@@ -190,10 +191,10 @@ impl Game<'_> {
                         } else if p.extension().and_then(|x| x.to_str()) == Some("nbt")
                             && let Ok(rel) = p.strip_prefix(&root)
                         {
-                            out.push(format!(
-                                "minecraft:{}",
-                                rel.with_extension("").to_string_lossy().replace('\\', "/")
-                            ));
+                            let rel = rel.with_extension("").to_string_lossy().replace('\\', "/");
+                            if let Some((ns, path)) = rel.split_once('/') {
+                                out.push(format!("{ns}:{path}"));
+                            }
                         }
                     }
                 }
