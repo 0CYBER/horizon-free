@@ -1028,6 +1028,17 @@ impl Game<'_> {
         }
         best
     }
+    /// `ContainerEntity.unpackChestVehicleLootTable` for a player who opens a
+    /// chest minecart: a roll it still holds fires `player_generates_container_loot`
+    /// for its table, and the cart keeps its items from then on.
+    fn unpack_cart_loot(&mut self, i: usize) {
+        let Some(loot) = self.carts[i].loot.take() else {
+            return;
+        };
+        if loot.items == horizon_client::save::encode_items(&self.carts[i].items) {
+            self.trigger_loot_table(&loot.table);
+        }
+    }
     /// `interact`: ride, open, fuel or ignite the cart under the crosshair.
     pub(super) fn interact_cart(&mut self) -> bool {
         let Some((i, d)) = self.cart_hit() else {
@@ -1047,6 +1058,7 @@ impl Game<'_> {
             }
             // AbstractMinecartContainer.interact: no sneak check.
             CartKind::Chest | CartKind::Hopper => {
+                self.unpack_cart_loot(i);
                 let c = self.carts[i].clone();
                 let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
                 self.world
@@ -1228,6 +1240,20 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
+        self.block_model_vertices_tinted(state, seed, m, light, diffuse, 0xFF_FFFF, out);
+    }
+    /// `block_model_vertices` with `tint` (RGB) on the faces that have a tint index.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn block_model_vertices_tinted(
+        &self,
+        state: BlockStateId,
+        seed: i64,
+        m: glam::Mat4,
+        light: u32,
+        diffuse: bool,
+        tint: u32,
+        out: &mut Vec<Vertex>,
+    ) {
         let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
             return;
         };
@@ -1252,6 +1278,12 @@ impl Game<'_> {
                     u32::MAX
                 } else {
                     0xFF00_0000 | shade << 16 | shade << 8 | shade
+                };
+                let color = if face.quad.tint_index >= 0 {
+                    let tint = horizon_client::mobs::render::abgr(tint);
+                    horizon_client::hud_layout::multiply(color, tint)
+                } else {
+                    color
                 };
                 let normal = if diffuse {
                     use horizon_client::item_render::{direction_vector, transform_normal};

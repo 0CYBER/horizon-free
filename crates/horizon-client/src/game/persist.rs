@@ -228,6 +228,11 @@ impl Game<'_> {
                             });
                         }
                     }
+                    "minecraft:firework_rocket" => {
+                        if let Some(r) = entity_nbt::firework_rocket_from_nbt(&tag, player_uuid) {
+                            self.rockets.push(super::fireworks::Rocket::from_nbt(r));
+                        }
+                    }
                     // PrimedTnt.readAdditionalSaveData: its fuse (80 when absent) and motion.
                     "minecraft:tnt" => {
                         if let Some(position) = entity_nbt::position(&tag) {
@@ -547,7 +552,13 @@ impl Game<'_> {
             -1
         };
         self.mobs[i].extra.angry_at = if anger > 0 {
-            self.mobs[i].ai.target
+            // A wolf keeps its anger's target itself, also once the target
+            // is gone (`tame::update_persistent_anger`).
+            if self.mobs[i].species() == horizon_client::mobs::Species::Wolf {
+                self.mobs[i].extra.angry_at
+            } else {
+                self.mobs[i].ai.target
+            }
         } else {
             None
         };
