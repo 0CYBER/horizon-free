@@ -1201,8 +1201,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             });
             horizon_core::jmath::pow(2.0, f64::from(note - 12) / 12.0) as f32
         };
+        // NoteBlock.getCustomSoundId: the sound saved in the skull above is
+        // read by the client; no skull or no sound means no sound.
+        if instrument == "custom_head" {
+            self.emit(LevelEvent::BlockEvent {
+                pos,
+                state,
+                kind: "note_custom_sound",
+            });
+            return;
+        }
         let sound = match instrument.as_str() {
-            "custom_head" => "minecraft:ui.button.click".to_owned(),
             "dragon" => "minecraft:block.note_block.imitate.ender_dragon".to_owned(),
             name if mob_head => format!("minecraft:block.note_block.imitate.{name}"),
             name => format!("minecraft:block.note_block.{name}"),

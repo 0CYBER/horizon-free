@@ -3860,6 +3860,25 @@ impl Game<'_> {
                         [note / 24.0, 0.0, 0.0],
                     );
                 }
+                // NoteBlock.getCustomSoundId: the skull above's note block sound,
+                // played at volume 3 (vanilla's pitch for a head is 1).
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "note_custom_sound",
+                    ..
+                } => {
+                    if let Some(BlockEntity::Skull(skull)) =
+                        self.world.block_entities.get(&(pos.x, pos.y + 1, pos.z))
+                        && let Some(sound) = skull.note_block_sound.as_deref()
+                    {
+                        let at = [
+                            f64::from(pos.x) + 0.5,
+                            f64::from(pos.y) + 0.5,
+                            f64::from(pos.z) + 0.5,
+                        ];
+                        self.audio.play(sound, Some(at), 3.0, 1.0);
+                    }
+                }
                 // AbstractCandleBlock.extinguish: the smoke from each wick, at
                 // CandleBlock.PARTICLE_OFFSETS (sixteenths of a block), rising 0.1.
                 // `level.addParticle`: only the local player's own click draws it.
