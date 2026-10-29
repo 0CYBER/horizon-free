@@ -744,6 +744,20 @@ impl Behaviours {
         {
             return InteractionResult::Pass;
         }
+        // CandleCakeBlock.useItemOn: an empty hand on the lit candle (`candleHit`:
+        // above half a block) snuffs it, as `AbstractCandleBlock.extinguish`.
+        if item.is_none()
+            && self.data(state).chain.contains(&Class::CandleCake)
+            && hit.y - f64::from(pos.y) > 0.5
+            && self.table.bool(state, self.props.lit)
+        {
+            let mut sim = self.sim(level, ticks);
+            let next = self.table.set_bool(state, self.props.lit, false);
+            sim.set_block(pos, next, 11);
+            sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+            sim.game_event(pos, "minecraft:block_change");
+            return InteractionResult::Success;
+        }
         self.use_without_item(level, ticks, pos, face, hit, player)
     }
 
