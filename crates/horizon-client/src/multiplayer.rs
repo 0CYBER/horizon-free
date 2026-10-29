@@ -264,6 +264,32 @@ pub fn save_server_icon(saves: &Path, address: &str, png: &[u8]) {
     }
 }
 
+/// Horizon's official survival server: a name and an address like any entry.
+pub const OFFICIAL_SERVER: (&str, &str) = ("Horizon Official", "horizon.bunchy7s.dev");
+/// Beside servers.dat once the official server was offered, so a player who
+/// deletes it never gets it back. The launcher writes the same file.
+const OFFICIAL_MARKER: &str = "horizon_official_server.txt";
+
+/// Puts the official server at the top of the list in `game_dir`, once: not
+/// again after the player deletes it, and not when the list has its address.
+pub fn add_official_server(game_dir: &Path) -> std::io::Result<()> {
+    let marker = game_dir.join(OFFICIAL_MARKER);
+    if marker.exists() {
+        return Ok(());
+    }
+    let (name, address) = OFFICIAL_SERVER;
+    let file = game_dir.join("servers.dat");
+    let key = |ip: &str| servers::parse_address(ip).map(|(h, p)| (h.to_ascii_lowercase(), p));
+    let _guard = SAVING.lock();
+    if !servers::load(&file)
+        .iter()
+        .any(|s| key(&s.ip) == key(address))
+    {
+        servers::prepend(&file, &ServerEntry::new(name, address))?;
+    }
+    std::fs::write(marker, format!("{address}\n"))
+}
+
 /// The address of list row `index`: the saved servers, then the LAN games.
 fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option<String> {
     match servers.get(index) {
@@ -1720,6 +1746,50 @@ mod tests {
         // FaviconTexture refuses other sizes; other formats are not icons.
         assert!(icon_pixels(&png(32)).is_none());
         assert!(favicon_bytes(&serde_json::json!({ "favicon": encoded })).is_none());
+    }
+
+    #[test]
+    fn the_official_server_is_added_once_at_the_top() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-official-{}", std::process::id()));
+        let (name, address) = OFFICIAL_SERVER;
+        let file = dir.join("servers.dat");
+        let ips = || -> Vec<String> { servers::load(&file).into_iter().map(|s| s.ip).collect() };
+        let fresh = |list: &[ServerEntry]| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            if !list.is_empty() {
+                servers::save(&file, list).unwrap();
+            }
+        };
+        // A fresh list: just the official server, named like it.
+        fresh(&[]);
+        add_official_server(&dir).unwrap();
+        assert_eq!(servers::load(&file), [ServerEntry::new(name, address)]);
+        // An existing list: on top, the player's servers kept in their order.
+        let mine = [
+            ServerEntry::new("Mine", "127.0.0.1:2"),
+            ServerEntry::new("Other", "example.org"),
+        ];
+        fresh(&mine);
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), [address, "127.0.0.1:2", "example.org"]);
+        // Once only: a second start adds nothing.
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), [address, "127.0.0.1:2", "example.org"]);
+        // Already there under the player's own name and spelling: not duplicated.
+        fresh(&[
+            ServerEntry::new("SMP", "Horizon.Bunchy7s.dev:25565"),
+            mine[0].clone(),
+        ]);
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), ["Horizon.Bunchy7s.dev:25565", "127.0.0.1:2"]);
+        // Deleted by the player: never back.
+        fresh(&mine);
+        add_official_server(&dir).unwrap();
+        servers::save(&file, &mine).unwrap();
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), ["127.0.0.1:2", "example.org"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

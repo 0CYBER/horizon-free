@@ -486,6 +486,24 @@ pub fn create_experience(
     xp
 }
 
+/// The `MenuType` the block entity of a one-block storage container opens
+/// (`createMenu`): `ChestMenu.threeRows` for chests, trapped and copper chests
+/// and barrels, `ShulkerBoxMenu` for shulker boxes of any colour (its
+/// `ShulkerBoxSlot`s refuse shulker boxes), `DispenserMenu` for dispensers
+/// and droppers, `HopperMenu` for hoppers. None for other blocks.
+pub fn block_menu_type(block: &str) -> Option<&'static str> {
+    Some(match block {
+        "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => {
+            "minecraft:generic_9x3"
+        }
+        n if n.ends_with("copper_chest") => "minecraft:generic_9x3",
+        n if n.ends_with("shulker_box") => "minecraft:shulker_box",
+        "minecraft:dispenser" | "minecraft:dropper" => "minecraft:generic_3x3",
+        "minecraft:hopper" => "minecraft:hopper",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

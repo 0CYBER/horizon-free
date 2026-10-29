@@ -132,6 +132,12 @@ impl Game<'_> {
             "minecraft:glow_item_frame" => true,
             _ => return false,
         };
+        let invisible = stack.extra.as_ref().is_some_and(|extra| {
+            extra.other.iter().any(|(k, v)| {
+                (k == "minecraft:entity_data" || k == "entity_data")
+                    && horizon_client::save::number(v.get("Invisible")).unwrap_or(0) != 0
+            })
+        });
         let pos = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);
         let frame = ItemFrame {
             id: self.next_entity + 1,
@@ -142,7 +148,7 @@ impl Game<'_> {
             rotation: 0,
             drop_chance: 1.0,
             fixed: false,
-            invisible: false,
+            invisible,
             check_interval: 0,
         };
         if !self.frame_survives(&frame) {
