@@ -9697,6 +9697,12 @@ impl Game<'_> {
             self.saved_for_exit = true;
             return Ok(());
         }
+        if let Some(mut remote) = self.remote.take() {
+            // Minecraft.disconnect closes the connection, so the host sees a clean leave.
+            remote.session.disconnect();
+            self.saved_for_exit = true;
+            return Ok(());
+        }
         self.close_container();
         if self.remote.is_none() {
             self.stats.custom("leave_game", 1);
@@ -9704,15 +9710,14 @@ impl Game<'_> {
         self.lan_close(false);
         self.free_player_beds()?;
         self.save_game()?;
-        if let Some(mut remote) = self.remote.take() {
-            // Minecraft.disconnect closes the connection, so the host sees a clean leave.
-            remote.session.disconnect();
-        }
         self.saved_for_exit = true;
         Ok(())
     }
     fn close_world(&mut self) -> Result<()> {
         self.clear_waypoints();
+        if self.external_server() {
+            return self.leave_server(None);
+        }
         self.begin_closing_save(false)
     }
     fn finish_close_world(&mut self) -> Result<()> {
