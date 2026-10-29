@@ -3243,6 +3243,8 @@ impl Game<'_> {
         let mut resolved: Vec<(u128, String)> = Vec::new();
         // PlayerSkin.model of each resolved skin: the textures' `slim`.
         let mut slim = std::collections::HashSet::new();
+        // PlayerSkin.cape of each resolved skin.
+        let mut capes: HashMap<u128, String> = HashMap::new();
         for (uuid, textures) in entries {
             // PlayerInfo.createSkinLookup: only the local player's own skin
             // may be unsigned.
@@ -3256,10 +3258,24 @@ impl Game<'_> {
                 if textures.slim {
                     slim.insert(uuid);
                 }
+                if let Some(cape) = horizon_client::skins::cape(&textures) {
+                    capes.insert(uuid, cape);
+                }
                 resolved.push((uuid, skin));
             }
         }
         resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
+        // An offline name's cape from the launcher, where the profile has none.
+        if !capes.contains_key(&local)
+            && let Some(rgba) = horizon_client::skins::offline_cape()
+        {
+            const OFFLINE: &str = "capes/offline";
+            if !self.show_skin(OFFLINE) {
+                self.store_skin(OFFLINE.into(), rgba.to_vec());
+            }
+            capes.insert(local, OFFLINE.into());
+        }
+        capes.retain(|_, cape| self.again_skin(cape));
         // PlayerInfo.getSkin: the downloaded skin and its model, else the
         // profile's default skin (DefaultPlayerSkin.get), slim or wide.
         let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
@@ -3291,12 +3307,18 @@ impl Game<'_> {
             {
                 mob.skin = Some(skin);
                 mob.slim = is_slim;
+                mob.cape = capes.get(&uuid).cloned();
             }
         }
         if let Some(mob) = self.player_model.as_mut() {
             let (skin, is_slim) = skin_of(&skins, own);
             mob.skin = Some(skin);
             mob.slim = is_slim;
+            // Avatar.isModelPartShown(CAPE): the Skin Customization option.
+            mob.cape = capes
+                .get(&own)
+                .filter(|_| self.settings.file.bool("modelPart_cape"))
+                .cloned();
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3380,7 +3402,7 @@ impl Game<'_> {
             self.gui.atlas.sprites.remove(&old);
             slot
         };
-        let Some(rect) = self
+        let Some(mut rect) = self
             .gui
             .atlas
             .sprites
@@ -3397,6 +3419,10 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
+        // A cape is a 64x32 texture in the top half of the slot (skins::process_cape).
+        if location.starts_with("capes/") {
+            rect.v1 = (rect.v0 + rect.v1) / 2.0;
+        }
         self.gui.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }

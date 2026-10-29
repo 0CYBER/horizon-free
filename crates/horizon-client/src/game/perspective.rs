@@ -124,7 +124,8 @@ impl CameraType {
 }
 /// The player's model type (`PlayerModel` with the default skin).
 pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
-    horizon_client::mobs::load_model(root, "minecraft:player#main").map(|model| {
+    let models = horizon_client::mobs::EntityModelDocument::load(root).ok()?;
+    models.model("minecraft:player#main").map(|model| {
         Arc::new(MobType {
             id: "minecraft:player".into(),
             // Players render as a humanoid; the species only drives local AI.
@@ -158,10 +159,14 @@ pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
             ambient_interval: 80,
             flags: Default::default(),
             model: Arc::new(model),
-            // PlayerModel's slim arms, for slim skins.
-            layers: horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
-                .map(|slim| [("player_slim#main".to_owned(), Arc::new(slim))].into())
-                .unwrap_or_default(),
+            // PlayerModel's slim arms, for slim skins, and PlayerCapeModel.
+            layers: ["player_slim#main", "player#cape"]
+                .into_iter()
+                .filter_map(|key| {
+                    let model = models.model(&format!("minecraft:{key}"))?;
+                    Some((key.to_owned(), Arc::new(model)))
+                })
+                .collect(),
             texture: "entity/player/wide/steve".into(),
             brain: Brain::Passive,
             anim: Anim::Humanoid { zombie_arms: false },
@@ -357,6 +362,7 @@ impl Game<'_> {
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
+        let avatar = self.avatar;
         // LivingEntity.getBedOrientation: the model lies in the bed as
         // another player's does (`villager::sleep_pose`).
         let bed = self.sleeping.map_or(0, |head| self.bed_facing(head));
@@ -432,6 +438,13 @@ impl Game<'_> {
         m.extra.ints[5] = charge_duration;
         m.extra.elytra.tick(fall_flying, crouching, velocity);
         m.extra.swim.tick(visually_swimming, in_water);
+        // The local player's ClientAvatarState, its cloak in the model's frame
+        // (the model stands 0.125 lower while crouching).
+        m.extra.avatar = avatar;
+        if crouching {
+            m.extra.avatar.cloak[1] -= 0.125;
+            m.extra.avatar.cloak_o[1] -= 0.125;
+        }
         m.extra.swing_right_arm = swing_right_arm;
         m.hurt_time = hurt;
     }
@@ -483,14 +496,9 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
-        self.player_elytra_geometry(
-            m,
-            self.armor[1].as_ref().map(|s| &*s.item),
-            camera,
-            alpha as f32,
-            packed,
-            out,
-        );
+        let chest = self.armor[1].as_ref().map(|s| &*s.item);
+        self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
+        self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
@@ -555,14 +563,9 @@ impl Game<'_> {
             &self.player_armor_layers(),
             &mut verts,
         );
-        self.player_elytra_geometry(
-            &m,
-            self.armor[1].as_ref().map(|s| &*s.item),
-            camera,
-            1.0,
-            240 | 240 << 8,
-            &mut verts,
-        );
+        let chest = self.armor[1].as_ref().map(|s| &*s.item);
+        self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
+        self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
@@ -621,9 +624,12 @@ impl Game<'_> {
         let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
             return;
         };
+        // WingsLayer.getPlayerElytraTexture: a player's cape texture has its elytra.
+        let sprites = &self.gui.atlas.sprites;
+        let rect = m.cape.as_deref().and_then(|c| sprites.get(c));
         let (Some(model), Some(rect)) = (
             assets.player.get("elytra"),
-            self.gui.atlas.sprites.get(texture),
+            rect.or_else(|| sprites.get(texture)),
         ) else {
             return;
         };
@@ -647,6 +653,48 @@ impl Game<'_> {
             [rect.u0, rect.v0, rect.u1, rect.v1],
             light,
             0,
+            out,
+        );
+    }
+    /// `CapeLayer` for a player wearing `chest`: no cape under an elytra's
+    /// wings, and moved out over a chestplate.
+    pub(super) fn player_cape_geometry(
+        &self,
+        m: &Mob,
+        chest: Option<&str>,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let Some(rect) = m
+            .cape
+            .as_deref()
+            .and_then(|c| self.gui.atlas.sprites.get(c))
+        else {
+            return;
+        };
+        if horizon_client::mobs::trader::is_invisible(m) {
+            return;
+        }
+        let layers = chest
+            .and_then(|item| self.res.items().get(item))
+            .and_then(|i| i.equip_asset.as_ref())
+            .and_then(|asset| self.armor_stand_assets.equipment.get(asset));
+        if layers.is_some_and(|k| k.contains_key("wings")) {
+            return;
+        }
+        let mut base = horizon_client::mobs::render::base_transform(m, partial, camera);
+        if layers.is_some_and(|k| k.contains_key("humanoid")) {
+            base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.053125, 0.06875));
+        }
+        horizon_client::mobs::render::cape(
+            m,
+            partial,
+            base,
+            [rect.u0, rect.v0, rect.u1, rect.v1],
+            light,
+            self.res.mob_data(),
             out,
         );
     }

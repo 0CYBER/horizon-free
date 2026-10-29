@@ -4554,15 +4554,10 @@ impl Game<'_> {
                 out,
             );
             if &*mob.kind.id == "minecraft:player" {
-                // PlayerRenderer's WingsLayer and SpinAttackEffectLayer.
-                self.player_elytra_geometry(
-                    mob,
-                    mob.extra.chest.as_deref(),
-                    camera,
-                    alpha as f32,
-                    packed,
-                    out,
-                );
+                // PlayerRenderer's CapeLayer, WingsLayer and SpinAttackEffectLayer.
+                let chest = mob.extra.chest.as_deref();
+                self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
+                self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
             }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
