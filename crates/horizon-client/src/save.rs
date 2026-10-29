@@ -15,8 +15,10 @@
 //! `level.dat`) are migrated on open.
 use crate::{
     Result,
+    beehive::BeehiveExt,
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -182,6 +184,19 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
     horizon_world::datafix::files::upgrade_world(world)
         .map_err(|e| format!("upgrading {}: {e}", world.display()))?;
     Ok(())
+}
+/// Whether opening the world runs file fixes, which vanilla asks for a backup
+/// first (`BackupStatus.FILE_FIXING_REQUIRED`). Saves of 1.8 and before have no
+/// DataVersion, read as -1.
+pub fn needs_file_fixes(world: &Path) -> bool {
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return false;
+    };
+    let Some(data) = root.get("Data") else {
+        return false;
+    };
+    let version = number(data.get("DataVersion")).unwrap_or(-1);
+    i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
 }
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
@@ -2475,6 +2490,30 @@ impl WorldGen {
             bonus_chest: flag("bonus_chest", false),
         })
     }
+    /// The bundled world preset a saved world's overworld was generated
+    /// with, from its generator: `minecraft:amplified` and
+    /// `minecraft:large_biomes` by their noise settings, and
+    /// `minecraft:single_biome_surface` by a fixed biome source. Anything
+    /// else (and any world without settings) is `minecraft:normal`.
+    pub fn preset(world: &Path) -> &'static str {
+        let settings = world_gen_settings(world);
+        let generator = settings
+            .as_ref()
+            .and_then(|s| s.get("dimensions"))
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"));
+        let noise = text(generator.and_then(|g| g.get("settings")));
+        let fixed_biome = generator
+            .and_then(|g| g.get("biome_source"))
+            .and_then(|b| text(b.get("type")))
+            .is_some_and(|t| t == "minecraft:fixed");
+        match noise.as_deref() {
+            Some("minecraft:amplified") => "minecraft:amplified",
+            Some("minecraft:large_biomes") => "minecraft:large_biomes",
+            Some("minecraft:overworld") if fixed_biome => "minecraft:single_biome_surface",
+            _ => "minecraft:normal",
+        }
+    }
 }
 impl Default for WorldGen {
     fn default() -> Self {
@@ -2673,6 +2712,21 @@ pub struct Level {
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// `PrimaryLevelData.setDifficulty`: the level data holds the world's
+    /// difficulty, so the game and the file follow each other and a world
+    /// that was set to hard is hard when it is opened again.
+    pub fn set_difficulty(&mut self, difficulty: u8) {
+        self.difficulty = crate::title::DIFFICULTIES[difficulty as usize % 4].to_owned();
+    }
+
+    /// `PrimaryLevelData.getDifficulty`: the id of the level data's
+    /// difficulty (peaceful 0 .. hard 3), normal when it is not one of them.
+    pub fn difficulty_id(&self) -> u8 {
+        crate::title::DIFFICULTIES
+            .iter()
+            .position(|d| *d == self.difficulty)
+            .map_or(2, |i| i as u8)
+    }
     /// Initialize the offline single-player identity before saving or dropping items.
     pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
         *self.player_uuid.get_or_insert_with(|| {
@@ -3776,6 +3830,8 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    use crate::mobs::spawner::SpawnDataExt;
+
     #[test]
     fn points_of_interest_save_as_poi_sections() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
@@ -4916,6 +4972,36 @@ mod tests {
             section(Tag::Byte(0), None, Some(Tag::ByteArray(varied))),
         ]));
     }
+    /// #2571: the difficulty is a property of the world: the level data
+    /// holds it, so a world that was set to hard is hard when it is opened
+    /// again, and a world that was downloaded keeps the difficulty it was
+    /// made with.
+    #[test]
+    fn the_level_data_holds_the_difficulty() {
+        let dir = std::env::temp_dir().join(format!("horizon-difficulty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut level = Level {
+            name: "Test".into(),
+            ..Level::default()
+        };
+        // The world's difficulty is the level data's.
+        level.set_difficulty(3);
+        assert_eq!(level.difficulty, "hard");
+        assert_eq!(level.difficulty_id(), 3);
+        // It survives the save, so the world comes back with it.
+        level.write(&dir).unwrap();
+        let back = Level::read(&dir).unwrap();
+        assert_eq!(back.difficulty, "hard");
+        assert_eq!(back.difficulty_id(), 3);
+        // A world whose difficulty is not one of ours is normal.
+        let other = Level {
+            difficulty: "extreme".into(),
+            ..Level::default()
+        };
+        assert_eq!(other.difficulty_id(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn level_round_trips_through_the_vanilla_files() {
         let dir = std::env::temp_dir().join(format!("horizon-level-{}", std::process::id()));

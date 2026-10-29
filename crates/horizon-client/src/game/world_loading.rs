@@ -283,6 +283,27 @@ pub(super) fn world_data_used() {
     *PRELOAD.lock().unwrap_or_else(|e| e.into_inner()) = Preload::Used;
 }
 
+/// A server's world opens: the loot tables its first placed block or broken
+/// container needs (`loot_data`) are read on a helper thread while the
+/// connection is made, so the game thread never waits on them (~0.6 s on a
+/// phone). Kept from then on, as a local world keeps them.
+pub(super) fn preload_server_loot(resources: &std::path::Path) {
+    world_data_used();
+    if horizon_client::structure_blocks::loaded_loot_data().is_some() {
+        return;
+    }
+    let resources = resources.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("Loot preload".into())
+        .spawn(move || {
+            horizon_threads::behind_server();
+            let _ = horizon_client::structure_blocks::loot_data(&resources);
+        });
+    if let Err(e) = spawned {
+        log::warn!("Horizon: loot preload: {e}");
+    }
+}
+
 pub(super) fn make_streaming(
     res: &Resources,
     pack: &PackResources,
@@ -334,7 +355,8 @@ pub(super) fn make_streaming(
         // WorldOptions.generateStructures, from the world's settings.
         let structures =
             horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
-        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
+        let preset = horizon_client::save::WorldGen::preset(world_root);
+        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, preset, dim.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
         if dim == Dim::Overworld && structures {

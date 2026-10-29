@@ -797,6 +797,12 @@ impl Game<'_> {
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
+        // LivingEntity.die: a sleeper gets up, and its bed is free again.
+        if let Some(bed) = horizon_client::mobs::villager::sleeping_pos(m) {
+            self.wake_villager(m.id);
+            // The body may be gone already.
+            self.set_bed_occupied(bed, false);
+        }
         let killer = self.last_hurt_by_player.remove(&m.id);
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
@@ -1473,6 +1479,7 @@ impl Game<'_> {
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
                 // above trampled farmland breaks and drops.
                 MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,
+                MobEvent::BedOccupied { pos, occupied } => self.set_bed_occupied(pos, occupied),
                 MobEvent::SetDoorOpen { pos, open } => {
                     let pos = BlockPos::new(pos[0], pos[1], pos[2]);
                     self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
@@ -1643,7 +1650,7 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::Experience { at, amount } => self.spawn_breeding_orb(at, amount),
-                MobEvent::AxolotlSupportPlayer => {
+                MobEvent::AxolotlSupportPlayer { mob } => {
                     let previous = self
                         .potions
                         .effects
@@ -1662,6 +1669,12 @@ impl Game<'_> {
                         .effects
                         .list
                         .retain(|e| e.id != "mining_fatigue");
+                    let source = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == mob)
+                        .map(|m| self.mob_entity(m));
+                    self.trigger_effects_changed(source);
                 }
                 MobEvent::DolphinTreasure { mob } => {
                     // ServerLevel.findNearestMapStructure(#dolphin_located, 50).
@@ -3024,7 +3037,56 @@ impl Game<'_> {
                         .find(|m| m.id == id)
                         .map_or(0.0, |m| m.attrs.knockback_resistance),
                 };
-                let push = f64::from(p.bonus.punch) * 0.6 * (1.0 - resistance).max(0.0);
+                let knockback = if !hurt {
+                    0.0
+                } else if let Some(weapon) =
+                    p.arrow.as_ref().and_then(|a| a.fired_from_weapon.as_ref())
+                {
+                    let victim = match who {
+                        Who::Player => Some("minecraft:player"),
+                        Who::Mob(id) => self
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.kind.id.as_str()),
+                    };
+                    let owner = match p.owner {
+                        Some(Who::Player) => Some("minecraft:player"),
+                        Some(Who::Mob(id)) => self
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.kind.id.as_str()),
+                        None => None,
+                    };
+                    let arrow_type = if p
+                        .arrow
+                        .as_ref()
+                        .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+                    {
+                        "minecraft:spectral_arrow"
+                    } else {
+                        "minecraft:arrow"
+                    };
+                    let ctx = horizon_client::enchant::EffectContext {
+                        this: victim,
+                        attacker: owner,
+                        direct_attacker: Some(arrow_type),
+                        damage_type: Some("minecraft:arrow"),
+                        items: Some(self.res.items()),
+                        ..Default::default()
+                    };
+                    self.res.stations().enchantments.modify_value(
+                        Some(weapon),
+                        "minecraft:knockback",
+                        &ctx,
+                        &mut self.world.random,
+                        0.0,
+                    )
+                } else {
+                    p.bonus.punch as f32
+                };
+                let push = f64::from(knockback) * 0.6 * (1.0 - resistance).max(0.0);
                 if hurt && push > 0.0 && flight > 1e-6 {
                     let k = push / flight;
                     self.handle_mob_events(vec![MobEvent::Push {
@@ -4116,7 +4178,7 @@ impl Game<'_> {
                 .get(&stack.item)
                 .map_or(0, |i| i.max_damage);
             if max > 0 {
-                let loss = self.durability_loss(&stack, 16);
+                let loss = self.wear(&stack, 16);
                 let slot = self.held_slot();
                 if let Some(held) = self.stack_in_mut(slot).as_mut() {
                     held.damage += loss;
@@ -4155,7 +4217,10 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return Ok(false);
         };
-        let (velocity, on_ground) = (p.velocity, p.ground.on_ground);
+        // Projectile.shootFromRotation adds getKnownMovement: what the thrower
+        // last moved, not a velocity the server kept for a guest.
+        let on_ground = p.ground.on_ground;
+        let velocity = self.known_player_movement();
         let start = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
         let mut proj = Projectile::new(kind.clone(), start, Some(Who::Player));
         proj.shoot_from_rotation(
@@ -4740,6 +4805,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Explosion => "minecraft:explosion",
         K::Fall => "minecraft:fall",
         K::FallingBlock => "minecraft:falling_block",
+        K::FallingStalactite => "minecraft:falling_stalactite",
         K::OnFire => "minecraft:on_fire",
         K::InFire => "minecraft:in_fire",
         K::Lava => "minecraft:lava",
@@ -4775,6 +4841,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
         ominous_amplifier: None,
         stew_effects: Vec::new(),
         names: Vec::new(),
+        components: Vec::new(),
     }
 }
 /// A generated loot stack as a Horizon item stack.
@@ -4796,6 +4863,9 @@ fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
     }
     for (id, text) in &stack.names {
         item.data_mut().set_loot_name(id, text);
+    }
+    for (id, value) in &stack.components {
+        item.data_mut().set_loot_component(id, value);
     }
     item
 }

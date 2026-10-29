@@ -32,6 +32,12 @@ mod was tested on. In its own copy of the mod it sets `horizon_revision` to the 
 official mods (Zoom, FPS counter, Keystrokes, Minimap, Recipes) are made this way, so any of them build together
 with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
 
+API 2 adds the item panel beside container screens and its recipe pages (`native_panel_items`,
+`native_panel_recipes`, and the hook `native_panel_event` for the player's clicks, searches and keys over items), and
+the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_place_recipe`, `native_give`): what a
+recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
+mod shows one.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page, turn on Settings → Game → **Native mods (experimental)**,
@@ -66,7 +72,10 @@ trusting native code is the player's decision, never an agent's.
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
    saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
-   folder built from the command line, or mods of the default home, go to the **Native mods** instance).
+   folder built from the command line, or mods of the default home, go to the **Native mods** instance). That
+   instance gets each mod's settings from the default home the first time it plays it (its
+   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where the mod's
+   WebAssembly version kept them); nothing it already has is overwritten.
 
 ## Cache and disk
 

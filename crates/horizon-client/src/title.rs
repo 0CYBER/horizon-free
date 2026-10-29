@@ -96,6 +96,10 @@ pub enum Mode {
     Backup {
         world: WorldEntry,
     },
+    /// BackupConfirmScreen over a world whose file fixes are due.
+    BackupBeforeUpgrade {
+        world: WorldEntry,
+    },
     Delete {
         world: WorldEntry,
     },
@@ -153,6 +157,10 @@ pub struct Title {
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
+    /// The backup a `BackupBeforeUpgrade` asked for opens its world when done.
+    backup_then_open: bool,
+    /// The folder to open next, once that backup has finished.
+    open_request: Option<String>,
     /// EditWorldScreen's `SystemToast` (`WORLD_BACKUP`) and its slide.
     toast: Option<(crate::toasts::Slide, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
@@ -258,6 +266,8 @@ impl Title {
             message_lines: Cell::new(1),
             backup: None,
             backup_shown: Cell::new(false),
+            backup_then_open: false,
+            open_request: None,
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
             splash: choose_splash(
@@ -523,6 +533,10 @@ impl Title {
         if let Mode::Backup { world } = &self.mode {
             let folder = world.folder.clone();
             self.return_to_list(Some(&folder));
+            // EditWorldScreen opens the world after the backup, failed or not.
+            if std::mem::take(&mut self.backup_then_open) {
+                self.open_request = Some(folder.clone());
+            }
             let toast = match result {
                 Ok(bytes) => BackupToast::Created { folder, bytes },
                 Err(error) => BackupToast::Failed(error),
@@ -548,6 +562,21 @@ impl Title {
                 "minecraft:ui.toast.out"
             }
         })
+    }
+    /// The world a finished backup made before its upgrade opens next.
+    pub fn take_open_request(&mut self) -> Option<String> {
+        self.open_request.take()
+    }
+    /// `WorldOpenFlows.openWorldCheckVersionCompatibility`: a world whose file
+    /// fixes are due asks for a backup first; any other opens at once.
+    fn play(&mut self, world: WorldEntry) -> Action {
+        if crate::save::needs_file_fixes(&self.saves.join(&world.folder)) {
+            self.mode = Mode::BackupBeforeUpgrade { world };
+            return Action::None;
+        }
+        Action::Play {
+            folder: world.folder,
+        }
     }
     fn start_backup(&mut self, world: WorldEntry) {
         let (send, receive) = mpsc::channel();
@@ -908,6 +937,39 @@ impl Title {
                 true,
                 39,
             )],
+            Mode::BackupBeforeUpgrade { .. } => {
+                // BackupConfirmScreen.init: the buttons sit under the text at fixed offsets.
+                let y = 109.0 + self.message_lines.get() as f32 * 9.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 155.0,
+                        y,
+                        150.0,
+                        &lang::get_or(
+                            "selectWorld.backupJoinConfirmButton",
+                            "Create Backup and Load",
+                        ),
+                        true,
+                        40,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 5.0,
+                        y,
+                        150.0,
+                        &lang::get_or("selectWorld.backupJoinSkipButton", "I Know What I'm Doing!"),
+                        true,
+                        41,
+                    ),
+                    b(
+                        (w / 2.0).floor() - 75.0,
+                        y + 24.0,
+                        150.0,
+                        &lang::get_or("gui.cancel", "Cancel"),
+                        true,
+                        42,
+                    ),
+                ]
+            }
             Mode::Backup { .. } => Vec::new(),
             Mode::Multiplayer(screen) => screen
                 .buttons(w, h)
@@ -1192,6 +1254,24 @@ impl Title {
                     centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
                 }
             }
+            Mode::BackupBeforeUpgrade { .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let question = lang::get_or(
+                    "selectWorld.backupQuestion.file_fixing_required",
+                    "Create a backup before upgrading this world?",
+                );
+                let warning = lang::get_or(
+                    "selectWorld.backupWarning.file_fixing_required",
+                    "This world needs to be upgraded before you can play it. We strongly suggest creating a backup before continuing in case you experience world corruption.",
+                );
+                let lines = wrapped(atlas, &warning, w - 50.0);
+                self.message_lines.set(lines.len());
+                // BackupConfirmScreen.extractRenderState: the title at 50, the text from 70.
+                centered(atlas, batch, &question, 50.0, u32::MAX);
+                for (i, line) in lines.iter().enumerate() {
+                    centered(atlas, batch, line, 70.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
             Mode::Backup { .. } => {
                 self.backup_shown.set(true);
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
@@ -1383,12 +1463,24 @@ impl Title {
             (Mode::Main, Some(7)) => Action::Accessibility,
             (Mode::Main, Some(6)) => Action::Language,
             (Mode::Select { worlds, selected }, Some(10)) => {
-                match selected.and_then(|i| worlds.get(i)) {
-                    Some(world) => Action::Play {
-                        folder: world.folder.clone(),
-                    },
+                match selected.and_then(|i| worlds.get(i)).cloned() {
+                    Some(world) => self.play(world),
                     None => Action::None,
                 }
+            }
+            (Mode::BackupBeforeUpgrade { world }, Some(40)) => {
+                let world = world.clone();
+                self.backup_then_open = true;
+                self.start_backup(world);
+                Action::None
+            }
+            (Mode::BackupBeforeUpgrade { world }, Some(41)) => Action::Play {
+                folder: world.folder.clone(),
+            },
+            (Mode::BackupBeforeUpgrade { world }, Some(42)) => {
+                let folder = world.folder.clone();
+                self.return_to_list(Some(&folder));
+                Action::None
             }
             (Mode::Select { .. }, Some(11)) => {
                 self.create_return_to_main = false;
@@ -1453,13 +1545,13 @@ impl Title {
                     .world_row_at(worlds, (x, y), (w, h))
                     .and_then(|(row, rel)| {
                         let (index, world) = self.visible_worlds(worlds).nth(row)?;
-                        Some((index, world.folder.clone(), rel))
+                        Some((index, world.clone(), rel))
                     });
-                if let Some((index, folder, (rx, ry))) = chosen {
+                if let Some((index, world, (rx, ry))) = chosen {
                     // WorldListEntry.mouseClicked: the icon joins at once.
                     let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
                     if on_icon || *selected == Some(index) {
-                        return Action::Play { folder };
+                        return self.play(world);
                     }
                     if let Mode::Select { selected, .. } = &mut self.mode {
                         *selected = Some(index);
@@ -1788,7 +1880,9 @@ impl Title {
         }
         match &self.mode {
             Mode::Backup { .. } => {}
-            Mode::Edit { world, .. } | Mode::Delete { world } => {
+            Mode::Edit { world, .. }
+            | Mode::Delete { world }
+            | Mode::BackupBeforeUpgrade { world } => {
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
             }

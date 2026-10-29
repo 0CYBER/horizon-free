@@ -519,6 +519,7 @@ pub enum DamageKind {
     Explosion,
     Fall,
     FallingBlock,
+    FallingStalactite,
     OnFire,
     InFire,
     Lava,
@@ -668,6 +669,15 @@ pub struct Attrs {
 }
 /// `minecraft:wolf_armor`'s maximum damage.
 pub const WOLF_ARMOR_DURABILITY: i32 = 64;
+/// `NeutralMob.readPersistentAngerSaveData`: the anger runs until its end
+/// time, so a mob that is loaded again is angry for what is left of it.
+pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
+    if anger_end <= 0 {
+        return 0;
+    }
+    (anger_end - game_time).clamp(0, i64::from(i32::MAX)) as i32
+}
+
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
@@ -727,6 +737,13 @@ pub struct Extra {
     pub anim_ticks: i32,
     pub egg_time: i32,
     pub anger: i32,
+    /// `NeutralMob.getPersistentAngerEndTime`: the absolute game time the
+    /// anger ends at, -1 when the mob is calm. The save keeps it, so the
+    /// anger goes on while the chunk is unloaded.
+    pub anger_end: i64,
+    /// `NeutralMob.getPersistentAngerTarget`: the entity the mob is angry
+    /// at, which the save keeps with it.
+    pub angry_at: Option<Who>,
     pub carried: Option<horizon_world::registry::BlockStateId>,
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
@@ -737,6 +754,9 @@ pub struct Extra {
     pub chest: Option<Arc<str>>,
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
+    /// The worn armour stacks (head to feet): the dyed colour and the
+    /// trim of a piece are on the stack, not on its id.
+    pub armor: [Option<crate::items::ItemStack>; 4],
     pub using_item: i32,
     pub using_off_hand: bool,
     pub blocking: bool,
@@ -1181,6 +1201,12 @@ pub enum MobEvent {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
     },
+    /// `LivingEntity.startSleeping` / `stopSleeping`: the bed head at `pos`
+    /// gets `occupied` (`setBlockAndUpdate`; the foot follows it).
+    BedOccupied {
+        pos: [i32; 3],
+        occupied: bool,
+    },
     /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
     /// closes, both halves, with its sound and game event.
     SetDoorOpen {
@@ -1244,8 +1270,10 @@ pub enum MobEvent {
         at: [f64; 3],
         amount: u32,
     },
-    /// Regeneration support after an axolotl-assisted kill.
-    AxolotlSupportPlayer,
+    /// Regeneration support after an axolotl-assisted kill, from the axolotl `mob`.
+    AxolotlSupportPlayer {
+        mob: u32,
+    },
     /// A dolphin that was given a fish asks the game for the nearest
     /// shipwreck or ocean ruin (`DolphinSwimToTreasureGoal.start`): the game
     /// sets the dolphin's `extra.home` to it, or leaves it empty.
@@ -2069,8 +2097,10 @@ impl Mob {
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
-        if source.kind == DamageKind::FallingBlock
-            && !species::body_slot(self.species())
+        if matches!(
+            source.kind,
+            DamageKind::FallingBlock | DamageKind::FallingStalactite
+        ) && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;

@@ -1336,9 +1336,9 @@ fn species_ai_step(
         Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
-        Species::Villager => super::villager::ai_step(m, w),
+        Species::Villager => super::villager::ai_step(m, w, events),
         Species::WanderingTrader => {
-            super::villager::ai_step(m, w);
+            super::villager::ai_step(m, w, events);
             super::trader::ai_step(m, w);
         }
         Species::Shulker => {

@@ -4,12 +4,12 @@ use horizon_assets::{model::CuboidModel, resolve::ModelLibrary};
 use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 
 #[derive(Default)]
-pub(crate) struct ParsedModels {
+pub struct ParsedModels {
     models: BTreeMap<String, Arc<CuboidModel>>,
 }
 impl ParsedModels {
     /// Every `models/**.json` of a namespace directory, by identifier.
-    pub(crate) fn load(root: &Path) -> Self {
+    pub fn load(root: &Path) -> Self {
         let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
             return Self::default();
         };
@@ -57,14 +57,14 @@ impl ParsedModels {
 
     /// Blocks require every referenced resource, including parents. Items instead
     /// skip broken resources and use the resolver's missing-model fallback.
-    pub(crate) fn block_library(&self, root: &Path, pending: Vec<String>) -> Result<ModelLibrary> {
+    pub fn block_library(&self, root: &Path, pending: Vec<String>) -> Result<ModelLibrary> {
         self.block_models(root, pending, false)
     }
     /// [`Self::block_library`], but a model that does not read takes the
     /// built-in missing model, logged, as vanilla's model discovery does
     /// ("Missing block model"). Mods' content gets this; vanilla's resources
     /// always read.
-    pub(crate) fn block_library_or_missing(
+    pub fn block_library_or_missing(
         &self,
         root: &Path,
         pending: Vec<String>,
@@ -112,7 +112,7 @@ impl ParsedModels {
         }
         Ok(ModelLibrary::from_shared(models)?)
     }
-    pub(crate) fn into_item_library(self) -> std::result::Result<Arc<ModelLibrary>, String> {
+    pub fn into_item_library(self) -> std::result::Result<Arc<ModelLibrary>, String> {
         ModelLibrary::with_shared_item_generator(self.models)
             .map(Arc::new)
             .map_err(|e| format!("item models: {e:?}"))

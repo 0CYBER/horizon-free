@@ -1093,11 +1093,23 @@ impl Launcher {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        if self.client.is_some() || self.starting_client.is_some() {
+        if !self.can_start(&tag) {
             return;
         }
         self.starting_pack = None;
         self.start_client(tag);
+    }
+
+    /// Whether `tag` can start now ([`starts_now`]): prepared, no preparation under way, no game
+    /// running or starting.
+    pub(crate) fn can_start(&self, tag: &str) -> bool {
+        let running = self.client.is_some() || self.starting_client.is_some();
+        starts_now(backend::is_prepared(tag), self.preparing, running)
+    }
+
+    /// Whether the selected instance's version can start now.
+    pub(crate) fn can_start_selected(&self) -> bool {
+        self.selected().is_some_and(|tag| self.can_start(tag))
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -1504,6 +1516,13 @@ fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
         (false, Some(true)) => PlayPress::PrepareThenPlay,
         (false, _) => PlayPress::Nothing,
     }
+}
+
+/// Whether a shortcut that starts the game at once (a server's Join, a world's Play, a friend's
+/// code, a pack's Play) starts it now: only when Play would play. Never while a preparation runs:
+/// the game would open on half-written files.
+fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
+    play_press(prepared, None, preparing || running) == PlayPress::Play
 }
 
 /// The selected version once one has been removed: the saved choice if it is still installed,
@@ -2444,7 +2463,7 @@ impl Launcher {
                 &t,
             ));
         {
-            rows = rows.child(self.join_friend_row(prepared && !running, cx));
+            rows = rows.child(self.join_friend_row(self.can_start(&tag), cx));
             // The top bar shows who plays; a row only when there is something to do about it:
             // no account that owns the game (Play needs one), or offline.
             if self.owner_shown() == Some(false) {
@@ -4395,6 +4414,21 @@ mod tests {
         assert_eq!(play_press(false, None, false), PlayPress::Nothing);
         assert_eq!(play_press(false, Some(true), true), PlayPress::Nothing);
         assert_eq!(play_press(true, Some(true), true), PlayPress::Nothing);
+    }
+
+    /// A server's Join (and every other shortcut) waits like Play: not while the version's
+    /// first download and preparation run (#horizon-bugs, 0.2.23: a white window opened).
+    #[test]
+    fn shortcuts_start_only_when_play_would() {
+        use super::starts_now;
+        assert!(starts_now(true, false, false));
+        assert!(
+            !starts_now(false, true, false),
+            "first-time setup under way"
+        );
+        assert!(!starts_now(true, true, false), "prepared again under way");
+        assert!(!starts_now(false, false, false), "not prepared");
+        assert!(!starts_now(true, false, true), "already running");
     }
 
     #[test]
