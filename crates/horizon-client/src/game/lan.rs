@@ -69,7 +69,8 @@ pub(super) struct LanHost {
     pub play: HashMap<u32, super::lan_actions::GuestPlay>,
     /// Blocks broken this tick (their sound is a level event for the guests).
     pub broken: Vec<[f64; 3]>,
-    /// Hurt time, death and swing time (while swinging) of the mobs guests see.
+    /// Hurt time, death and swing time (while swinging) of the mobs guests
+    /// see; the players' hurt time by entity id.
     mob_state: HashMap<super::Dim, HashMap<u32, (i32, bool, Option<i32>)>>,
     /// The guest each mob sees as its player, when not the host (game/lan_mobs.rs).
     pub mob_players: HashMap<u32, u32>,
@@ -2018,6 +2019,34 @@ impl Game<'_> {
             }
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
+        // LivingEntity.hurtServer for a player: a hit that restarted the hurt
+        // time and was not blocked by a shield broadcasts the damage event,
+        // so the clients around (and the player's own) flash it red.
+        let host_player = self.player.as_ref().map(|p| {
+            (
+                host.host_entity,
+                [p.position.x, p.position.y, p.position.z],
+                p,
+            )
+        });
+        let guests = host.hub.guests.iter().filter(|g| host.hub.here(g));
+        let players: Vec<_> = host_player
+            .into_iter()
+            .chain(guests.filter_map(|g| g.motion.as_deref().map(|m| (g.entity_id, g.position, m))))
+            .map(|(id, at, p)| (id, at, p.health.hurt_animation_time, p.hurt_log.last()))
+            .collect();
+        for (id, at, hurt, record) in players {
+            let old = host
+                .mob_state
+                .get(&self.dim)
+                .and_then(|s| s.get(&(id as u32)));
+            if hurt > old.map_or(0, |o| o.0) {
+                // Starving keeps no record: any type flashes the same.
+                let kind = record.map_or("minecraft:generic", |r| r.source.as_str());
+                host.hub.damage_event(id, kind, None, None, at);
+            }
+            seen.insert(id as u32, (hurt, false, None));
+        }
         host.mob_state.insert(self.dim, seen);
         // Level.broadcastEntityEvent(player, 2) of a spear's stab.
         for attacker in kinetic_hits {
@@ -2126,6 +2155,11 @@ impl Game<'_> {
             m.limb_speed += ((dist * 4.0).min(1.0) - m.limb_speed) * 0.4;
             m.limb_position += m.limb_speed;
             m.age = m.age.wrapping_add(1);
+            // The hurt red flash (LivingEntity.hurtTime).
+            m.hurt_time = g
+                .motion
+                .as_ref()
+                .map_or(0, |p| p.health.hurt_animation_time);
             m.extra.main_hand = g
                 .inventory
                 .get(g.selected)
