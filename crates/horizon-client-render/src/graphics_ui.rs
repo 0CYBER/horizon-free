@@ -636,14 +636,19 @@ struct Widget {
 
 #[derive(Default)]
 pub struct GraphicsUi {
-    scroll: f32,
+    /// The list's scroll amount and its held scrollbar (`AbstractScrollArea`).
+    scroll: ui::Scroll,
     dragging: Option<Item>,
 }
 
 impl GraphicsUi {
     pub fn reset(&mut self) {
-        self.scroll = 0.0;
+        self.scroll = ui::Scroll::default();
         self.dragging = None;
+    }
+    /// The scrollbar's column: right of the descriptions.
+    fn scrollbar_x(w: f32) -> f32 {
+        STYLE.row_x(w) + STYLE.control_width + STYLE.gap + STYLE.text_width(w) + 6.0
     }
     fn bounds(h: f32) -> (f32, f32) {
         (STYLE.band, h - STYLE.band)
@@ -669,7 +674,7 @@ impl GraphicsUi {
         self.clamp_scroll(h, content);
         let (top, _) = Self::bounds(h);
         let x = STYLE.row_x(w);
-        let mut y = top + 4.0 - self.scroll;
+        let mut y = top + 4.0 - self.scroll.amount;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
         for row in extra_rows(level, s) {
@@ -714,7 +719,7 @@ impl GraphicsUi {
     }
     fn clamp_scroll(&mut self, h: f32, content: f32) {
         let (top, bottom) = Self::bounds(h);
-        self.scroll = self.scroll.clamp(0.0, (content - (bottom - top)).max(0.0));
+        self.scroll.clamp(top, bottom, content);
     }
     pub fn draw(
         &mut self,
@@ -811,11 +816,11 @@ impl GraphicsUi {
         ui::scrollbar(
             batch,
             atlas,
-            x + STYLE.control_width + STYLE.gap + STYLE.text_width(w) + 6.0,
+            Self::scrollbar_x(w),
             top,
             bottom,
             content,
-            self.scroll,
+            self.scroll.amount,
         );
         let title = match level {
             Level::Simple => "Graphics",
@@ -837,9 +842,14 @@ impl GraphicsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Action> {
-        let (widgets, _, _) = self.layout(level, s, w, h);
+        let (widgets, _, content) = self.layout(level, s, w, h);
         let (top, bottom) = Self::bounds(h);
         if drag {
+            // AbstractScrollArea.mouseDragged: the held scrollbar follows the pointer.
+            if self.scroll.held() {
+                self.scroll.drag(y, top, bottom, content);
+                return Vec::new();
+            }
             if let Some(item) = self.dragging
                 && let Some(wd) = widgets
                     .iter()
@@ -851,6 +861,13 @@ impl GraphicsUi {
             return Vec::new();
         }
         if right {
+            return Vec::new();
+        }
+        // AbstractScrollArea.updateScrolling: a press on the scrollbar holds it, silently.
+        if self
+            .scroll
+            .press((x, y), Self::scrollbar_x(w), top, bottom, content)
+        {
             return Vec::new();
         }
         for wd in widgets {
@@ -878,14 +895,16 @@ impl GraphicsUi {
         }
         Vec::new()
     }
+    /// Lets go of a slider (true: it plays its click) or the scrollbar.
     pub fn release(&mut self) -> bool {
+        self.scroll.release();
         self.dragging.take().is_some()
     }
     pub fn scroll(&mut self, level: Level, s: &Settings, h: f32, amount: f32) {
         let content = Self::content_height(level, s);
-        self.clamp_scroll(h, content);
-        self.scroll -= amount * 18.0;
-        self.clamp_scroll(h, content);
+        let (top, bottom) = Self::bounds(h);
+        self.scroll.clamp(top, bottom, content);
+        self.scroll.wheel(amount, 18.0, top, bottom, content);
     }
 }
 
@@ -972,18 +991,57 @@ mod tests {
             assert!(max > 4.5);
             for _ in 0..3 {
                 ui.scroll(level, &s, h, 1000.0);
-                assert_eq!(ui.scroll, 0.0);
+                assert_eq!(ui.scroll.amount, 0.0);
             }
             for _ in 0..3 {
                 ui.scroll(level, &s, h, -1000.0);
-                assert_eq!(ui.scroll, max);
+                assert_eq!(ui.scroll.amount, max);
             }
             ui.scroll(level, &s, h, 0.25);
-            assert_eq!(ui.scroll, max - 4.5);
+            assert_eq!(ui.scroll.amount, max - 4.5);
             ui.scroll(level, &s, h, 1000.0);
             ui.scroll(level, &s, h, -0.25);
-            assert_eq!(ui.scroll, 4.5);
+            assert_eq!(ui.scroll.amount, 4.5);
         }
+    }
+
+    #[test]
+    fn the_scrollbar_can_be_held_and_dragged() {
+        // #3552: AbstractScrollArea.updateScrolling holds the scrollbar on a press over its
+        // column, mouseDragged moves the list with the pointer, onRelease lets go.
+        let mut s = Settings::default();
+        let size = (480.0, 2.0 * STYLE.band + 60.0);
+        let (top, bottom) = GraphicsUi::bounds(size.1);
+        // On the scrollbar column, as `draw` paints it.
+        let x =
+            STYLE.row_x(size.0) + STYLE.control_width + STYLE.gap + STYLE.text_width(size.0) + 8.0;
+        let first_row = |ui: &mut GraphicsUi| {
+            ui.layout(Level::Advanced, &Settings::default(), size.0, size.1)
+                .0[0]
+                .y
+        };
+        let mut ui = GraphicsUi::default();
+        let start = first_row(&mut ui);
+        let at = |y| (x, y);
+        let press = |ui: &mut GraphicsUi, s: &mut Settings, y, drag| {
+            ui.click(Level::Advanced, s, at(y), size, [854, 480], drag, false)
+        };
+        // The press itself makes no sound and changes nothing.
+        assert!(press(&mut ui, &mut s, top + 5.0, false).is_empty());
+        assert!(press(&mut ui, &mut s, top + 15.0, true).is_empty());
+        let moved = first_row(&mut ui);
+        assert!(moved < start, "dragging down scrolls the list down");
+        // Past the bottom of the list: the last row.
+        press(&mut ui, &mut s, bottom + 50.0, true);
+        let content = GraphicsUi::content_height(Level::Advanced, &s);
+        assert_eq!(first_row(&mut ui), start - (content - (bottom - top)));
+        // Above the list: the first row again.
+        press(&mut ui, &mut s, top - 50.0, true);
+        assert_eq!(first_row(&mut ui), start);
+        // Released: drags no longer scroll, and no slider click plays.
+        assert!(!ui.release());
+        press(&mut ui, &mut s, bottom + 50.0, true);
+        assert_eq!(first_row(&mut ui), start);
     }
 
     #[test]
@@ -992,9 +1050,9 @@ mod tests {
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
             ui.scroll(level, &s, 2.0 * STYLE.band + 10.0, -1000.0);
-            assert!(ui.scroll > 0.0);
+            assert!(ui.scroll.amount > 0.0);
             let (widgets, headers, _) = ui.layout(level, &s, 480.0, 4000.0);
-            assert_eq!(ui.scroll, 0.0);
+            assert_eq!(ui.scroll.amount, 0.0);
             if let Some((y, _)) = headers.first() {
                 assert_eq!(*y, STYLE.band + 4.0);
             }
@@ -1004,7 +1062,7 @@ mod tests {
                 expected.iter().map(|w| w.y).collect::<Vec<_>>()
             );
             ui.scroll(level, &s, 4000.0, -1000.0);
-            assert_eq!(ui.scroll, 0.0);
+            assert_eq!(ui.scroll.amount, 0.0);
         }
     }
 
