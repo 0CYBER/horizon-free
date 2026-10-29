@@ -517,6 +517,16 @@ impl Game<'_> {
         if !triggers(&name) {
             return Ok(());
         }
+        // BellBlock.onExplosionHit: attemptToRing with no direction, so the bell
+        // rings toward its facing, not the face the burst came from,
+        // powered or not.
+        if &*name == "minecraft:bell" {
+            self.with_level(|b, level, ticks| {
+                b.bell_attempt_to_ring(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
+            });
+            self.process_level_events()?;
+            return Ok(());
+        }
         // Doors react in their lower half only; powered ones and pressed
         // buttons stay as they are.
         if name.ends_with("_door") && prop(self, "half").as_deref() != Some("lower") {
