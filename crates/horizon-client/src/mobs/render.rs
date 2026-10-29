@@ -1061,8 +1061,14 @@ fn red_overlay(m: &Mob) -> bool {
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     if avatar(m) {
-        // AvatarRenderer.scale, shared by the inventory and world renderer.
-        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
+        // AvatarRenderer.scale, shared by the inventory and world renderer, on
+        // top of the entity's own `scale` (`LivingEntityRenderer.submit`).
+        let own = if m.extra.model_scale > 0.0 {
+            m.extra.model_scale
+        } else {
+            1.0
+        };
+        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375 * own));
     }
     match m.species() {
         Species::Wither => {
