@@ -37,6 +37,18 @@ d=$(mktemp -d) && npm install --prefix "$d" playwright && npx --prefix "$d" play
 NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();for(const[f,w,h,o]of[["card",1280,640,"github-social-1280x640"]]){const p=await b.newPage({viewport:{width:w,height:h}});await p.goto("file://"+require("path").resolve("docs/media/brand/social/"+f+".html"));await p.waitForTimeout(300);await p.screenshot({path:"docs/media/brand/social/"+o+".png"})}await b.close()})()'
 ```
 
+## The README banner
+
+`docs/media/banner.webp` (1600x654) is the website's hero, a screenshot of playhorizon.dev in its
+dark theme. The navbar, the hero's buttons and its version line are hidden first: no launcher
+version goes stale, and the banner is the message and the landscape. The crop starts 56 px above
+the kicker, so no empty sky sits over the text. With Playwright, from the repository's root:
+
+```sh
+d=$(mktemp -d) && npm install --prefix "$d" playwright && npx --prefix "$d" playwright install chromium
+NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:1600,height:1000}});await p.goto("https://playhorizon.dev/",{waitUntil:"networkidle"});await p.click(".theme-toggle");await p.waitForTimeout(1200);await p.evaluate(()=>{for(const s of ["header",".hero-actions",".download-meta"]){const e=document.querySelector(s);if(e)e.style.display="none"}});await p.waitForTimeout(400);await p.screenshot({path:"docs/media/banner.webp",clip:{x:0,y:136,width:1600,height:654}});await b.close()})()'
+```
+
 ## Drawn in code
 
 | Where | What |
