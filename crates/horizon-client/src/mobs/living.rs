@@ -1310,13 +1310,13 @@ impl Mob {
         let distance = (dx * dx + dy * dy + dz * dz).sqrt() as f32;
         self.previous_limb_speed = self.limb_speed;
         if self.alive() {
-            // Creaking.updateWalkAnimation walks the model faster.
-            let target = if self.species() == super::Species::Creaking {
-                (distance * 25.0).min(3.0)
-            } else {
-                (distance * 4.0).min(1.0)
+            let (target, factor) = match self.species() {
+                // Creaking.updateWalkAnimation walks the model faster.
+                super::Species::Creaking => ((distance * 25.0).min(3.0), 0.4),
+                s if super::camel::is_camel(s) => super::camel::walk_target(self, distance),
+                _ => ((distance * 4.0).min(1.0), 0.4),
             };
-            self.limb_speed += (target - self.limb_speed) * 0.4;
+            self.limb_speed += (target - self.limb_speed) * factor;
             self.limb_position += self.limb_speed;
         } else {
             self.limb_speed = 0.0;

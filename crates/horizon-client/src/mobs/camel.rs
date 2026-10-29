@@ -194,6 +194,19 @@ pub fn passenger_attachment(m: &Mob) -> [f64; 3] {
     let height = body_anchor_y(m, true, m.height(), scale) as f32;
     [0.0, f64::from(height), f64::from(0.5 * scale)]
 }
+/// `Camel.updateWalkAnimation`: the speed the legs go toward and how fast
+/// they get there (`WalkAnimationState.update`) for `distance` blocks moved.
+/// A camel walks only while it stands and is not dashing, six times the
+/// distance up to 1, and eases there at 0.2 (not the default 0.4).
+pub fn walk_target(m: &Mob, distance: f32) -> (f32, f32) {
+    let dashing = m.anim.states[4].started.is_some();
+    let target = if !sitting(m) && !dashing {
+        (distance * 6.0).min(1.0)
+    } else {
+        0.0
+    };
+    (target, 0.2)
+}
 /// `Camel.refuseToMove`: sitting or getting up or down.
 pub fn refuse_to_move(m: &Mob) -> bool {
     sitting(m) || in_transition(m)
