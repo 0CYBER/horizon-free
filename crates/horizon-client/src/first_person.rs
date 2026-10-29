@@ -886,11 +886,51 @@ mod tests {
 
     #[test]
     fn equip_displacement_uses_the_visible_items_scale() {
+        use horizon_assets::item_model::{ClientItem, ItemModels, StackView};
+        use serde_json::json;
+
+        let mut models = ItemModels::default();
+        for (item, scale) in [("minecraft:spear", 1.95), ("minecraft:sword", 1.0)] {
+            models.definitions.insert(
+                item.into(),
+                ClientItem::decode(&json!({
+                    "model": { "type": "minecraft:empty" },
+                    "swap_animation_scale": scale,
+                }))
+                .unwrap(),
+            );
+            models.prototypes.insert(
+                item.into(),
+                [("minecraft:item_model".into(), json!(item))].into(),
+            );
+        }
+        let spear = StackView::new("minecraft:spear", 1);
+        let sword = StackView::new("minecraft:sword", 1);
         let height = 0.5;
-        // Vanilla spear item models use 1.95; a sword uses the default 1.0.
-        assert_eq!(equip_displacement(height, 1.95), 0.975);
-        assert_eq!(equip_displacement(height, 1.0), 0.5);
-        assert_eq!(equip_displacement(1.0, 1.95), 0.0);
+        // The model of the visible stack determines each hand's displacement.
+        assert_eq!(
+            equip_displacement(height, models.swap_animation_scale(&spear)),
+            0.975
+        );
+        assert_eq!(
+            equip_displacement(height, models.swap_animation_scale(&sword)),
+            0.5
+        );
+        assert_eq!(
+            equip_displacement(1.0, models.swap_animation_scale(&spear)),
+            0.0
+        );
+
+        // A component override (such as a resource-pack model) takes precedence.
+        let mut overridden = spear;
+        overridden.patch.insert(
+            "minecraft:item_model".into(),
+            Some(json!("minecraft:sword")),
+        );
+        assert_eq!(
+            equip_displacement(height, models.swap_animation_scale(&overridden)),
+            0.5
+        );
     }
     #[test]
     fn drawing_a_bow_or_holding_a_charged_crossbow_hides_a_hand() {
