@@ -44,6 +44,7 @@ const LONG_JUMP_COOLDOWN: &str = "long_jump_cooldown";
 /// look for a lily pad or big dripleaf first.
 const JUMP_WIDTH: i32 = 4;
 const JUMP_HEIGHT: i32 = 2;
+/// The goat's `MAX_JUMP_VELOCITY_MULTIPLIER` is the same number.
 const JUMP_VELOCITY_MULTIPLIER: f32 = 3.571_428_8;
 const PREFERRED_BLOCKS_CHANCE: f32 = 0.5;
 /// `GoatAi`'s `LongJumpToRandomPos`: `MAX_LONG_JUMP_WIDTH` and
@@ -385,6 +386,16 @@ fn sample_cooldown(m: &mut Mob, lr: &mut LegacyRandom, div: i32) {
     set_jump_cooldown(m, Some(i64::from(t)));
 }
 
+/// The jump sound each activity hands to `LongJumpToRandomPos`: the frog's, or
+/// the goat's, which has a screaming one.
+fn jump_sound(m: &Mob) -> &'static str {
+    match (m.species(), m.extra.screaming) {
+        (Species::Goat, true) => "entity.goat.screaming.long_jump",
+        (Species::Goat, false) => "entity.goat.long_jump",
+        _ => "entity.frog.long_jump",
+    }
+}
+
 /// `LivingEntity.setDiscardFriction`: the flag lives in the frog's or the
 /// goat's state.
 fn set_discard_friction(m: &mut Mob, on: bool) {
@@ -682,8 +693,7 @@ impl Goal for LongJump {
         m.velocity = jump.scale((len + boost) / len);
         self.mid_jump = true;
         let at = [m.position.x, m.position.y, m.position.z];
-        cx.events
-            .push(MobEvent::Sound("entity.frog.long_jump", at, 1.0, 1.0));
+        cx.events.push(MobEvent::Sound(jump_sound(m), at, 1.0, 1.0));
     }
 }
 
