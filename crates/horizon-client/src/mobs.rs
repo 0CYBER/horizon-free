@@ -2264,21 +2264,15 @@ impl Mob {
         ) * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
-                "speed" | "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
-                "slowness" | "minecraft:slowness" => {
-                    v *= (1.0 - 0.15 * f64::from(amp + 1)).max(0.0)
-                }
+                "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
+                "minecraft:slowness" => v *= (1.0 - 0.15 * f64::from(amp + 1)).max(0.0),
                 _ => {}
             }
         }
         v
     }
     pub fn has_effect(&self, effect: &str) -> bool {
-        let stripped = effect.strip_prefix("minecraft:").unwrap_or(effect);
-        self.extra
-            .effects
-            .iter()
-            .any(|e| e.0.strip_prefix("minecraft:").unwrap_or(e.0) == stripped)
+        self.extra.effects.iter().any(|e| e.0 == effect)
     }
     /// `LivingEntity.isCurrentlyGlowing`: the Glowing effect or the `Glowing` tag (on a
     /// server's client, `glowing` holds shared flag 6 instead).

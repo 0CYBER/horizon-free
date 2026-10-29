@@ -1479,11 +1479,7 @@ pub fn arrow_to_nbt(
         return None;
     };
     let base = Base {
-        id: if &*a.pickup_item.item == "minecraft:spectral_arrow" {
-            "minecraft:spectral_arrow"
-        } else {
-            "minecraft:arrow"
-        },
+        id: "minecraft:arrow",
         uuid,
         position: p.position,
         motion: p.velocity,
@@ -1542,9 +1538,7 @@ pub fn arrow_from_nbt(
     let kind = ProjectileKind::Arrow {
         base_damage: float(tag.get("damage")).unwrap_or(2.0),
         critical: flag(tag, "crit"),
-        effect: effect(&item).or_else(|| {
-            (&*item.item == "minecraft:spectral_arrow").then_some(("minecraft:glowing", 200))
-        }),
+        effect: effect(&item),
     };
     let mut p = Projectile::new(kind, position, from_player.then_some(Who::Player));
     p.velocity = motion(tag);

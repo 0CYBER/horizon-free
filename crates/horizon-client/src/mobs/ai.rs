@@ -1942,15 +1942,15 @@ fn tick_effects(m: &mut Mob) {
         let infinite = *ticks == -1;
         let count = if infinite { m.age as i32 } else { *ticks };
         match *effect {
-            "poison" | "minecraft:poison"
+            "minecraft:poison"
                 if count % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
             {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "wither" | "minecraft:wither" if count % interval(40) == 0 => {
+            "minecraft:wither" if count % interval(40) == 0 => {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "regeneration" | "minecraft:regeneration"
+            "minecraft:regeneration"
                 if count % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
             {
                 m.health = (m.health + 1.0).min(m.attrs.max_health);
