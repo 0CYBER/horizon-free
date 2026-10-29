@@ -365,7 +365,10 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
                                 pos: [x, y, z],
                                 drop: true,
                             });
-                            destroyed = true;
+                            // destroyBlock is true when setBlock changed the
+                            // cell: a liquid is already its fluid's block.
+                            let state = w.world.block(x, y, z);
+                            destroyed |= !w.facts.get(state).has_class("LiquidBlock");
                         }
                     }
                 }

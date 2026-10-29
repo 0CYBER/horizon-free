@@ -1241,7 +1241,8 @@ pub enum MobEvent {
         infested: bool,
         poof: Option<u32>,
     },
-    /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
+    /// `Level.destroyBlock(pos, drop)`: the block gives way to its fluid's
+    /// block (air when it has none). Sheep eating grass becomes dirt via SetBlock.
     BreakBlock {
         pos: [i32; 3],
         drop: bool,
