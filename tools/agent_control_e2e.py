@@ -8,12 +8,12 @@ small JSON-RPC client, and saves a screenshot of each run. The ui scenario drive
 widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
 the options scenario reads and sets options.txt values by key; the events scenario waits for
 states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
-golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
-pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
-the hotbar and from an item tab, and nothing in survival; the suggestions scenario checks
-slash-command Tab completion on single player's connected client after a fresh launch; the no-ai
-scenario turns No AI on in a scratch game home and checks that horizon-ctl, its MCP server and the
-game's control socket all refuse.
+golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport, then
+holds an eye of ender in use; the pick scenario middle-clicks slots (AbstractContainerScreen's
+cloning): a full stack in creative, from the hotbar and from an item tab, and nothing in survival;
+the suggestions scenario checks slash-command Tab completion on single player's connected client
+after a fresh launch; the no-ai scenario turns No AI on in a scratch game home and checks that
+horizon-ctl, its MCP server and the game's control socket all refuse.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -57,7 +57,7 @@ POSITIONAL = {
     'wait_for': ['condition', 'value'], 'open': ['world', 'seed', 'mode'], 'select': ['slot'],
     'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
     'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
-    'world_rename': ['folder', 'name'], 'world_delete': ['folder'],
+    'world_rename': ['folder', 'name'], 'world_delete': ['folder'], 'mouse': ['button', 'action'],
 }
 # Booleans the game takes as bare words.
 BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby']}
@@ -476,7 +476,21 @@ def consume_scenario(d, out):
     assert held(state) is None, state['held']
     assert moved != [0, 0, 0] and abs(moved[0]) <= 8 and abs(moved[2]) <= 8, moved
     d('screenshot', path=str(out / f'consume-{d.name}.png'))
-    return {'teleported': [round(m, 2) for m in moved]}
+    # EnderEyeItem.use: startUsingItem (getUseDuration 0) whether or not a stronghold is found, so a held
+    # button keeps the eye in use, slowing the player, and throws at most one eye until it lets go.
+    d('command', command='clear @s')
+    d('give', item='ender_eye', count=3)
+    d('command', command='tp @s ~ ~ ~ ~ -90')
+    d('mouse', button='right', action='down')
+    d('wait', ticks=12)
+    eye = d('state')
+    d('mouse', button='right', action='up')
+    d('wait', ticks=3)
+    released = d('state')
+    assert eye['using'] is not None, eye['using']
+    assert held(eye) == 'minecraft:ender_eye' and eye['held']['count'] >= 2, eye['held']
+    assert released['using'] is None, released['using']
+    return {'teleported': [round(m, 2) for m in moved], 'eye_use_ticks': eye['using']['ticks']}
 
 
 def pick_scenario(d, out):
