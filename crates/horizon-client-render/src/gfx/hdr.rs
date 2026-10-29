@@ -95,6 +95,12 @@ pub const TIERS: [Tier; 4] = [
 pub struct Hdr {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
+    /// Zeroes the frame's alpha once the world is kept (`keep_world`): what draws after,
+    /// the hand, HUD and menus, raises it, so HDR output knows where they cover the world.
+    clear_alpha: wgpu::RenderPipeline,
+    /// Scales the frame's alpha down to 1/255 where the hand drew (`mark_hand`), so HDR
+    /// output keeps the hand at the world's brightness.
+    hand_mark: wgpu::RenderPipeline,
     params: wgpu::Buffer,
     pub output: Output,
     /// The frame's format: what every other pipeline draws in.
@@ -108,6 +114,8 @@ pub struct Hdr {
     /// The display's black level, in nits: shadows are lifted onto it (`hdr.wgsl`).
     pub black: f32,
     pub tiers: [Tier; 4],
+    /// The HUD and menus' brightness, as a share of paper white (0.25..=1).
+    pub ui: f32,
 }
 
 impl Hdr {
@@ -173,6 +181,48 @@ impl Hdr {
             multiview_mask: None,
             cache: None,
         });
+        let alpha_pass = |label, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&device.create_pipeline_layout(&Default::default())),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_hdr"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_clear_alpha"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALPHA,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let clear_alpha = alpha_pass("Horizon HDR UI mask", None);
+        // Alpha times the blend constant (1/255): the hand's 1 becomes 1/255, the world's 0
+        // stays 0.
+        let scale_alpha = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::Constant,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let hand_mark = alpha_pass(
+            "Horizon HDR hand mark",
+            Some(wgpu::BlendState {
+                color: scale_alpha,
+                alpha: scale_alpha,
+            }),
+        );
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Horizon HDR parameters"),
             size: 80,
@@ -182,6 +232,8 @@ impl Hdr {
         Self {
             layout,
             pipeline,
+            clear_alpha,
+            hand_mark,
             params,
             output,
             format,
@@ -191,6 +243,7 @@ impl Hdr {
             peak: 1000.0,
             black: 0.0,
             tiers: TIERS,
+            ui: 1.0,
         }
     }
 
@@ -247,7 +300,9 @@ impl Hdr {
         self.targets.as_ref().unwrap().frame.clone()
     }
 
-    /// Keeps the world as drawn so far, before the hand and HUD cover it.
+    /// Keeps the world as drawn so far, before the hand and HUD cover it, then zeroes the
+    /// frame's alpha: the world's marks live on in the copy, and whatever draws from here
+    /// on raises the alpha where it covers the world.
     pub fn keep_world(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(t) = &self.targets else {
             return;
@@ -257,6 +312,56 @@ impl Hdr {
             t.world.as_image_copy(),
             t.frame.size(),
         );
+        let view = t.frame.create_view(&Default::default());
+        let attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Horizon HDR UI mask"),
+            color_attachments: &attachments,
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.clear_alpha);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// After the hand: its pixels' alpha goes down to 1/255, below anything the HUD and
+    /// menus leave, so HDR output tells the hand (the world's brightness, never lifted)
+    /// from the UI (UI Brightness).
+    pub fn mark_hand(&self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(t) = &self.targets else {
+            return;
+        };
+        let view = t.frame.create_view(&Default::default());
+        let attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Horizon HDR hand mark"),
+            color_attachments: &attachments,
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.hand_mark);
+        let a = 1.0 / 255.0;
+        pass.set_blend_constant(wgpu::Color {
+            r: a,
+            g: a,
+            b: a,
+            a,
+        });
+        pass.draw(0..3, 0..1);
     }
 
     /// Writes the finished frame to the swapchain image `target`.
@@ -280,6 +385,7 @@ impl Hdr {
             f32::from(u8::from(self.output == Output::Pq)),
         ]);
         params[5] = self.black.clamp(0.0, paper);
+        params[6] = self.ui.clamp(0.25, 1.0);
         for (i, t) in self.tiers.iter().enumerate() {
             params[8 + i] = t.share;
             params[12 + i] = t.start;

@@ -2069,6 +2069,7 @@ impl Game<'_> {
             return false;
         }
         self.world.block_entities.insert(key, new);
+        self.update_spawner_display(key);
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         true
     }

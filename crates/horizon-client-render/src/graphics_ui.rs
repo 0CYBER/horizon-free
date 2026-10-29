@@ -41,6 +41,7 @@ pub enum H {
     HdrBlackLevel,
     HdrPeak,
     HdrPaperWhite,
+    HdrUiBrightness,
     BatteryMode,
     GraphicsApi,
 }
@@ -251,6 +252,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "HDR: how bright white paper and menus look. Match your desktop.",
             ),
             h(
+                H::HdrUiBrightness,
+                None,
+                "HDR: how bright the HUD and menus are, against paper white.",
+            ),
+            h(
                 H::PresentMode,
                 None,
                 "How frames reach the screen while VSync is off.",
@@ -360,6 +366,7 @@ impl H {
             H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
             H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
             H::HdrBlackLevel => Some(g.hdr_black_level as f32 / 100.0),
+            H::HdrUiBrightness => Some((g.hdr_ui_brightness as f32 - 25.0) / 75.0),
             _ => None,
         }
     }
@@ -416,6 +423,7 @@ impl H {
                 "Black Level",
                 format!("{:.2} nits", g.hdr_black_level as f32 / 100.0),
             ),
+            H::HdrUiBrightness => labelled("UI Brightness", format!("{}%", g.hdr_ui_brightness)),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -441,6 +449,7 @@ impl H {
             H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
             H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
             H::HdrBlackLevel => g.hdr_black_level = (v * 100.0).round() as u32,
+            H::HdrUiBrightness => g.hdr_ui_brightness = (25.0 + (v * 15.0).round() * 5.0) as u32,
             _ => {}
         }
     }

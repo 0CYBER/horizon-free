@@ -3313,6 +3313,7 @@ impl Renderer {
         paper_white: f32,
         peak: f32,
         black: f32,
+        ui: f32,
         marker: &std::path::Path,
     ) {
         let output = self.hdr_output.filter(|_| on && self.surface.is_some());
@@ -3336,6 +3337,9 @@ impl Renderer {
                 ),
                 None => log::info!("Horizon renderer: HDR off"),
             }
+        }
+        if let Some(hdr) = &mut self.hdr {
+            hdr.ui = ui;
         }
         if let Some(hdr) = &mut self.hdr
             && (hdr.paper_white, hdr.peak, hdr.black) != (paper_white, peak, black)
@@ -5237,6 +5241,10 @@ impl Renderer {
                 ((world_quads + additive_quads) * 4) as i32,
                 0..1,
             );
+            drop(pass);
+            if let Some(hdr) = &self.hdr {
+                hdr.mark_hand(&mut encoder);
+            }
         }
         // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
         self.entity_outline.draw(
