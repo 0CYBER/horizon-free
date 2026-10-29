@@ -1150,6 +1150,35 @@ impl Game<'_> {
             self.spawn_orbs([at.x, at.y, at.z], value as u32);
             return;
         }
+        // AbstractThrownPotion.affectEntitiesAround: a water potion hurts an
+        // Enderman whose box meets the potion's box grown by (4, 2, 4) and
+        // that is less than 4 blocks away; Enderman.hurtWithCleanWater then
+        // makes it try to teleport (repeatedlyTryToTeleport).
+        if stack.potion() == Some("minecraft:water") {
+            let reach = Aabb::new(
+                Vec3::new(at.x - 0.125, at.y, at.z - 0.125),
+                Vec3::new(at.x + 0.125, at.y + 0.25, at.z + 0.125),
+            )
+            .inflate(Vec3::new(4.0, 2.0, 4.0));
+            for m in self.mobs.iter_mut() {
+                let (dx, dy, dz) = (
+                    m.position.x - at.x,
+                    m.position.y - at.y,
+                    m.position.z - at.z,
+                );
+                if &*m.kind.id == "minecraft:enderman"
+                    && m.alive()
+                    && reach.intersects(m.bounds())
+                    && dx * dx + dy * dy + dz * dz < 16.0
+                {
+                    m.hurt(1.0, Some([at.x, at.y, at.z]), &mut self.world.random);
+                    // repeatedlyTryToTeleport does nothing while it rides.
+                    if !m.extra.passenger {
+                        m.extra.counter2 = 64;
+                    }
+                }
+            }
+        }
         let lingering = &*stack.item == "minecraft:lingering_potion";
         // AbstractThrownPotion.onHit: level event 2007 and sound 1054 for a
         // potion with instant effects, 2002 and 1053 otherwise.
