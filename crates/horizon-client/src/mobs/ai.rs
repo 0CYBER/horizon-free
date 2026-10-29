@@ -507,6 +507,13 @@ pub fn tick(
         if m.species() == Species::Endermite {
             endermite_lifetime(m);
         }
+        // AbstractHorse.tick runs the stand counter down with or without AI.
+        if super::equine::is_equine(m.species())
+            && !super::camel::is_camel(m.species())
+            && !super::llama::is_llama(m.species())
+        {
+            super::equine::stand_tick(m);
+        }
     } else {
         ai_step(m, w, level_random, events);
     }

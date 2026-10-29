@@ -1230,7 +1230,7 @@ impl Game<'_> {
             }
         }
     }
-    /// Baked block faces with terrain shade or block-item diffuse lighting.
+    /// Baked block-state faces with default block tints and terrain shade or diffuse lighting.
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
@@ -1240,18 +1240,24 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        self.block_model_vertices_tinted(state, seed, m, light, diffuse, 0xFF_FFFF, out);
+        // BlockTintSource.color(state) with no level: each tinted face's default colour.
+        let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
+        let tables = &self.pack.context.tables;
+        let tint = |index: i32| tables.default_tint(state, index, grass);
+        self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, tint, out);
     }
-    /// `block_model_vertices` with `tint` (RGB) on the faces that have a tint index.
+    /// `block_model_vertices` with each face multiplied by `tint` of its
+    /// tint index (RGB, `None` for untinted faces) and lit by `light` of
+    /// each quad.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn block_model_vertices_tinted(
+    pub(super) fn tinted_block_model_vertices(
         &self,
         state: BlockStateId,
         seed: i64,
         m: glam::Mat4,
-        light: u32,
+        light: impl Fn(&horizon_assets::bake::ModelQuad) -> u32,
         diffuse: bool,
-        tint: u32,
+        tint: impl Fn(i32) -> Option<u32>,
         out: &mut Vec<Vertex>,
     ) {
         let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
@@ -1274,17 +1280,17 @@ impl Game<'_> {
                     D::North | D::South => 204,
                     D::West | D::East => 153,
                 };
-                let color = if diffuse {
+                let mut color = if diffuse {
                     u32::MAX
                 } else {
                     0xFF00_0000 | shade << 16 | shade << 8 | shade
                 };
-                let color = if face.quad.tint_index >= 0 {
-                    let tint = horizon_client::mobs::render::abgr(tint);
-                    horizon_client::hud_layout::multiply(color, tint)
-                } else {
-                    color
-                };
+                if let Some(t) = tint(face.quad.tint_index) {
+                    color = horizon_client::hud_layout::multiply(
+                        color,
+                        horizon_client::mobs::render::abgr(t),
+                    );
+                }
                 let normal = if diffuse {
                     use horizon_client::item_render::{direction_vector, transform_normal};
                     let n = transform_normal(m, direction_vector(face.quad.facing));
@@ -1293,6 +1299,7 @@ impl Game<'_> {
                 } else {
                     [0; 4]
                 };
+                let light = light(&face.quad);
                 let light = if diffuse {
                     let emission = u32::from(face.quad.light_emission) * 16;
                     (light & 0xFF) | (light >> 8 & 0xFF).max(emission) << 8

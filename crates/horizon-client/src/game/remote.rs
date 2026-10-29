@@ -39,6 +39,7 @@ use horizon_protocol::{
     text::{Language, plain},
 };
 use horizon_world::{
+    level::InteractionResult,
     nbt::Tag,
     registry::BlockStateId,
     stepped_interpolation::{Path, PosRot, Start, SteppedInterpolation},
@@ -563,6 +564,7 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        self.gui.atlas.object_skins.clear();
         self.server_packs_disconnect();
         self.code_of_conduct = None;
         self.reset_tutorial();
@@ -1383,10 +1385,21 @@ impl Game<'_> {
     }
     fn set_block(&mut self, pos: [i32; 3], state: i32) {
         let state = BlockStateId(state.max(0) as u32);
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
         if self.world.loaded(pos[0], pos[2])
             && self.world.set(pos[0], pos[1], pos[2], state).is_ok()
         {
             self.sync_block_entity((pos[0], pos[1], pos[2]), state);
+            // LevelChunk.setBlockState removes the block entity of a block
+            // that changes: the moving piston the client's moveBlocks made
+            // stops when the server places what it moved (#3002).
+            let facts = self.res.facts();
+            let moving = |s: BlockStateId| &*facts.get(s).name == "minecraft:moving_piston";
+            if moving(previous) && !moving(state) {
+                let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                self.block_ticks.moving_pistons.retain(|(p, _)| *p != at);
+                self.sync_moving_pistons();
+            }
         }
         // A block we just placed: play its place sound (the server skips the placer).
         if let Some((target, _)) = self.remote.as_ref().and_then(|r| r.placing)
@@ -2349,7 +2362,7 @@ impl Game<'_> {
                     for (slot, item, stack) in items {
                         let e = &mut m.extra;
                         match slot {
-                            0 => e.main_hand = item,
+                            0 => e.set_main_hand(item),
                             1 => e.off_hand = item,
                             2 => {
                                 e.feet = item;
@@ -3000,7 +3013,10 @@ impl Game<'_> {
                 let text = |t: &Tag| {
                     let json = horizon_client::scoreboard::tag_to_json(t);
                     let text = horizon_client::scoreboard::comp_text(&json);
-                    (!text.plain().is_empty()).then_some(text)
+                    text.spans
+                        .iter()
+                        .any(|span| !span.text.is_empty())
+                        .then_some(text)
                 };
                 self.tab_list.header = text(&p.header);
                 self.tab_list.footer = text(&p.footer);
@@ -3246,6 +3262,13 @@ impl Game<'_> {
                 .as_ref()
                 .and_then(|r| r.skins.get(&p.uuid).cloned())
                 .unwrap_or_else(|| horizon_client::tab_list::default_skin(p.uuid).to_owned());
+            self.gui
+                .atlas
+                .set_object_skin(format!("id:{:032x}", p.uuid), p.skin.clone());
+            self.gui.atlas.set_object_skin(
+                format!("name:{}", p.name.to_ascii_lowercase()),
+                p.skin.clone(),
+            );
         }
         let r = self.remote.as_ref()?;
         let upside_down = players
@@ -3257,6 +3280,32 @@ impl Game<'_> {
             .map(|p| p.uuid)
             .collect();
         Some((players, r.online_mode, upside_down))
+    }
+
+    /// Resolve inline `object:player` profiles through the same skin cache as
+    /// player heads on items. The next frame uses the uploaded atlas texture.
+    pub(super) fn resolve_inline_profiles(&mut self, profiles: &[serde_json::Value]) {
+        use horizon_client::skins;
+        for profile in profiles {
+            let skin = skins::head_skin(
+                profile,
+                &mut self.skin_profiles.borrow_mut(),
+                &mut self.skin_downloads.borrow_mut(),
+                |location| self.gui.atlas.sprites.contains_key(location),
+            );
+            let id = skins::parse_profile(profile).id;
+            self.gui
+                .atlas
+                .set_object_skin(format!("id:{id:032x}"), skin.clone());
+            let name = profile
+                .as_str()
+                .or_else(|| profile.get("name").and_then(serde_json::Value::as_str));
+            if let Some(name) = name {
+                self.gui
+                    .atlas
+                    .set_object_skin(format!("name:{}", name.to_ascii_lowercase()), skin);
+            }
+        }
     }
     /// The signed-in account's `textures`, once the services answered.
     fn own_textures(&self) -> Option<horizon_client::skins::Textures> {
@@ -4912,18 +4961,32 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
+            // ShelfBlock.useItemOn consumes a nonempty main-hand click client-side
+            // without predicting the inventory swap or swinging.
+            let shelf_reacts = hand == Hand::Main
+                && held.is_some()
+                && !(self.keys.contains(&KeyCode::ShiftLeft)
+                    && (self.stack_in(self.selected).is_some() || self.offhand.is_some()))
+                && self.shelf_hit(&hit).is_some();
             let spectator = self.spectator();
-            let (reacts, changes) = if hand == Hand::Main && !spectator {
+            let (result, changes) = if hand == Hand::Main && !spectator {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
                 // useItemOn runs for the off hand too (useWithoutItem doesn't):
-                // RespawnAnchorBlock.useItemOn charges an anchor with its glowstone.
+                // RespawnAnchorBlock.useItemOn charges an anchor with its
+                // glowstone, SUCCESS.
                 let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
                 let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
                 let charges =
                     !(sneaking && hands_full) && self.anchor_takes(hit.pos, held.as_ref());
-                (charges, DryUse::default())
+                let result = if charges {
+                    InteractionResult::Success
+                } else {
+                    InteractionResult::Pass
+                };
+                (result, DryUse::default())
             };
+            let reacts = result.consumes_action();
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -4951,9 +5014,17 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.use_target = Some(hit.pos);
             }
+            if shelf_reacts {
+                return true;
+            }
             if reacts {
                 self.predict_use(&changes, seq);
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
+                // MultiPlayerGameMode.useItemOn: SUCCESS SwingSource.CLIENT
+                // (a chest, barrel, furnace, …). CONSUME does not swing.
+                if result == InteractionResult::Success {
+                    self.with_hand(hand, Game::swing_arm);
+                }
             } else if self.predict_campfire_douse(hit.pos, held.as_ref(), seq) {
                 // CampfireBlock.useItemOn succeeded: this hand swings and the
                 // click ends, so a shield in the other hand is not raised.
@@ -4992,7 +5063,7 @@ impl Game<'_> {
                     // server's resend of the target it refused is no placement.
                     r.placing = None;
                 }
-                if reacts || placed.is_some() {
+                if placed.is_some() {
                     self.with_hand(hand, Game::swing_arm);
                 }
                 // BlockItem.place returns FAIL when placement is rejected:
@@ -5084,20 +5155,20 @@ impl Game<'_> {
         &mut self,
         hit: &super::Hit,
         held: Option<&ItemStack>,
-    ) -> (bool, DryUse) {
+    ) -> (InteractionResult, DryUse) {
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
-            return (false, DryUse::default());
+            return (InteractionResult::Pass, DryUse::default());
         }
         if self.jukebox_takes(hit.pos, held) {
-            return (true, DryUse::default());
+            return (InteractionResult::Success, DryUse::default());
         }
         // RespawnAnchorBlock.useItemOn: PASS when the off hand's glowstone is to
         // charge the anchor, so useWithoutItem doesn't run and the off hand's turn
         // comes (glowstone in this hand charges it in `use_item_on`).
         if !self.anchor_takes(hit.pos, held) && self.anchor_takes(hit.pos, self.offhand.as_ref()) {
-            return (false, DryUse::default());
+            return (InteractionResult::Pass, DryUse::default());
         }
         // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
         // (honey level 5) is SUCCESS, so the click ends after UseItemOn and
@@ -5107,7 +5178,7 @@ impl Game<'_> {
                 .hive_state(hit.pos)
                 .is_some_and(|(honey, _)| honey == Some(5))
         {
-            return (true, DryUse::default());
+            return (InteractionResult::Success, DryUse::default());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {
@@ -5121,18 +5192,16 @@ impl Game<'_> {
         let player = self.use_context();
         self.with_level(|b, level, _| {
             let mut level = DryLevel::new(level);
-            let reacts = b
-                .use_item_on(
-                    &mut level,
-                    &mut horizon_world::level::Ticks::default(),
-                    horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-                    face,
-                    horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-                    player,
-                    held.map(|s| &*s.item),
-                )
-                .consumes_action();
-            (reacts, (level.changed.into_iter().collect(), level.sounds))
+            let result = b.use_item_on(
+                &mut level,
+                &mut horizon_world::level::Ticks::default(),
+                horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                face,
+                horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+                player,
+                held.map(|s| &*s.item),
+            );
+            (result, (level.changed.into_iter().collect(), level.sounds))
         })
     }
 
