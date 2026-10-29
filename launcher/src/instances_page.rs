@@ -193,6 +193,9 @@ impl Launcher {
                 InstanceKind::Default | InstanceKind::Own => (
                     self.page == Page::Play && selected.as_ref() == Some(&i.id),
                     match (&tag, &i.version) {
+                        _ if i.java.is_some() => {
+                            format!("Minecraft {}", i.java.as_ref().map_or("", |j| &j.minecraft))
+                        }
                         (None, Some(own)) => trf("{version} is not installed", &[("version", own)]),
                         (None, None) => tr("No version installed").into(),
                         (Some(_), _) if !prepared => tr("Needs preparing").into(),
