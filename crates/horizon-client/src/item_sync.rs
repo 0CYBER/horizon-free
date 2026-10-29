@@ -465,6 +465,56 @@ mod tests {
         );
     }
 
+    /// An ominous bottle's `ominous_bottle_amplifier` reaches the client
+    /// through the packet's bytes, so its tooltip names the Bad Omen level.
+    #[test]
+    fn an_ominous_bottle_keeps_its_amplifier_across_the_wire() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); 80];
+        components[component::OMINOUS_BOTTLE_AMPLIFIER as usize] =
+            "minecraft:ominous_bottle_amplifier".into();
+        let items = ["minecraft:air", "minecraft:ominous_bottle"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic {
+            registries: Default::default(),
+        };
+        for amplifier in [None, Some(0), Some(3)] {
+            let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
+            if let Some(a) = amplifier {
+                bottle.data_mut().ominous_amplifier = Some(a);
+            }
+            let wire = crate::lan::guest::stack_to_network(
+                |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+                |_, _| None,
+                &Some(bottle),
+            );
+            let mut w = Writer::new();
+            Slot::write(&wire, &mut w);
+            let mut r = Reader::new(&w.data);
+            let read = Slot::read(&mut r).unwrap().unwrap();
+            assert_eq!(r.remaining(), 0);
+            let back = from_network(&read, &builtin, &dynamic);
+            assert_eq!(
+                back.data().and_then(|d| d.ominous_amplifier),
+                amplifier,
+                "{amplifier:?}"
+            );
+        }
+    }
+
     /// What a creative client sends (`stack_to_network`) comes back whole on
     /// the server: damage, both enchantment lists, repair cost, name, trim.
     #[test]

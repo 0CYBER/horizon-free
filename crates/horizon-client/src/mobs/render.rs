@@ -1229,6 +1229,48 @@ pub fn render_with(
         out,
     );
 }
+/// `CapeLayer.submit` with `PlayerCapeModel`: the player model's body posed
+/// as the player's, its cape turned by `ModelPart.rotateBy` with the cape's
+/// flap and leans. `base` is the player's root transform (moved out over a
+/// chestplate); `uv` the cape texture.
+#[allow(clippy::too_many_arguments)]
+pub fn cape(
+    m: &Mob,
+    alpha: f32,
+    base: glam::Mat4,
+    uv: [f32; 4],
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    let Some(model) = m.kind.layer("player#cape") else {
+        return;
+    };
+    let s = anim::state(m, alpha);
+    let mut poses = Poses::new(model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let a = f64::from(alpha);
+    let at = [
+        m.previous.x + (m.position.x - m.previous.x) * a,
+        m.previous.y + (m.position.y - m.previous.y) * a,
+        m.previous.z + (m.position.z - m.previous.z) * a,
+    ];
+    let body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
+    // LivingEntityRenderState.fallFlyingScale.
+    let ticks = m.extra.fall_fly_ticks as f32 + alpha;
+    let gliding = (ticks * ticks / 100.0).clamp(0.0, 1.0);
+    let [flap, lean, lean2] = m.extra.avatar.cape(alpha, at, body, gliding);
+    let pose = poses.get("cape");
+    let by = glam::Quat::from_rotation_y(-PI)
+        * glam::Quat::from_rotation_x((6.0 + lean / 2.0 + flap).to_radians())
+        * glam::Quat::from_rotation_z((lean2 / 2.0).to_radians())
+        * glam::Quat::from_rotation_y((180.0 - lean2 / 2.0).to_radians());
+    let now = glam::Quat::from_euler(glam::EulerRot::ZYX, pose[5], pose[4], pose[3]);
+    let (z, y, x) = (now * by).to_euler(glam::EulerRot::ZYX);
+    (pose[3], pose[4], pose[5]) = (x, y, z);
+    // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
+    draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
+}
 /// A mob drawn under `origin` instead of at its position (the spinning mob
 /// of `SpawnerRenderer.submitEntityInSpawner`).
 pub fn render_posed(
