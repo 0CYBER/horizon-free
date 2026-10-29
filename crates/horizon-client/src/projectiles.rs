@@ -66,6 +66,23 @@ pub enum ProjectileKind {
     },
 }
 impl ProjectileKind {
+    /// The width and height of its entity type's `sized(...)`.
+    pub fn size(&self) -> f64 {
+        match self {
+            Self::Arrow { .. } | Self::Trident => 0.5,
+            Self::Snowball
+            | Self::Egg
+            | Self::EnderPearl
+            | Self::LlamaSpit
+            | Self::Potion { .. } => 0.25,
+            Self::SmallFireball
+            | Self::WindCharge
+            | Self::BreezeWindCharge
+            | Self::ShulkerBullet { .. }
+            | Self::WitherSkull { .. } => 0.3125,
+            Self::LargeFireball { .. } => 1.0,
+        }
+    }
     /// Its entity type.
     pub fn id(&self) -> &'static str {
         match self {
@@ -750,9 +767,10 @@ impl Projectile {
             }
             ProjectileKind::Potion { .. } => "item/splash_potion",
             ProjectileKind::LlamaSpit => "entity/llama/llama_spit",
-            ProjectileKind::ShulkerBullet { .. } => "entity/shulker/spark",
-            // Drawn as `WindChargeModel` by the game.
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
+            // Drawn as `WindChargeModel` and `ShulkerBulletModel` by the game.
+            ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge
+            | ProjectileKind::ShulkerBullet { .. } => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
             // Drawn as their models by the game.

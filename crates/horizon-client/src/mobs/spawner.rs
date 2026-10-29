@@ -12,24 +12,11 @@ use super::{
     spawn_rules::{self, Reason},
     spawn_selection::{self, Category, NaturalLevel},
 };
+use crate::chunk::block_entity::Next;
+pub use crate::chunk::block_entity::{CustomSpawnRules, SpawnData, Spawner};
 use horizon_core::{geometry::Aabb, geometry::Vec3, random::RandomSource};
 use horizon_world::nbt::{Compound, JavaString, Tag};
 
-/// `SpawnData.CustomSpawnRules`: the block and sky light the spawn block
-/// must have (inclusive ranges within 0..=15).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CustomSpawnRules {
-    pub block: (i32, i32),
-    pub sky: (i32, i32),
-}
-/// `SpawnData`: the entity to spawn, optional light rules and an equipment
-/// table (kept as loaded).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SpawnData {
-    pub entity: Compound,
-    pub custom_spawn_rules: Option<CustomSpawnRules>,
-    pub equipment: Option<Tag>,
-}
 impl SpawnData {
     /// The `SpawnData` constructor: an `id` that is a valid identifier is
     /// stored normalised (`zombie` becomes `minecraft:zombie`), any other is
@@ -124,22 +111,7 @@ impl SpawnData {
     }
 }
 
-/// `Identifier.CODEC` parsing an entity id: lowercase namespace and path
-/// characters, `minecraft` when the namespace is left out.
-pub fn normalize_id(s: &str) -> Option<String> {
-    let (ns, path) = match s.split_once(':') {
-        Some((ns, path)) => (if ns.is_empty() { "minecraft" } else { ns }, path),
-        None => ("minecraft", s),
-    };
-    let ok = |c: char, slash: bool| {
-        c.is_ascii_lowercase()
-            || c.is_ascii_digit()
-            || matches!(c, '_' | '-' | '.')
-            || slash && c == '/'
-    };
-    (ns.chars().all(|c| ok(c, false)) && path.chars().all(|c| ok(c, true)))
-        .then(|| format!("{ns}:{path}"))
-}
+pub use horizon_client_core::identifier::normalize_id;
 
 /// How much a slime's or magma cube's box is scaled by the size its data
 /// loads (`Slime.readAdditionalSaveData`: Size + 1, kept in 1..=127), which
@@ -152,6 +124,34 @@ pub(crate) fn cube_scale(id: &str, entity: &Compound) -> f32 {
         .map_or(1, |size| (size as i32).saturating_add(1).clamp(1, 127)) as f32
 }
 
+/// `EquipmentTable.CODEC`: the loot table and the drop chance of each
+/// `EquipmentSlot` (`drops::SLOTS` order) the table names, `slot_drop_chances`
+/// being one number for every slot or a map by slot name.
+pub fn equipment_table(tag: &Tag) -> Option<(String, [Option<f32>; 8])> {
+    let chance = |t: &Tag| match t {
+        Tag::Float(v) => Some(f32::from_bits(*v)),
+        Tag::Double(v) => Some(f64::from_bits(*v) as f32),
+        Tag::Byte(v) => Some(f32::from(*v)),
+        Tag::Short(v) => Some(f32::from(*v)),
+        Tag::Int(v) => Some(*v as f32),
+        Tag::Long(v) => Some(*v as f32),
+        _ => None,
+    };
+    let Some(Tag::String(table)) = tag.get("loot_table") else {
+        return None;
+    };
+    let mut chances = [None; 8];
+    match tag.get("slot_drop_chances") {
+        Some(Tag::Compound(map)) => {
+            for (i, slot) in super::drops::SLOTS.iter().enumerate() {
+                chances[i] = map.get(&JavaString::from(*slot)).and_then(chance);
+            }
+        }
+        Some(all) => chances = [Some(chance(all)?); 8],
+        None => {}
+    }
+    Some((table.to_string_lossy(), chances))
+}
 /// A whole number from any numeric tag (`NumericTag.intValue`: floats floor).
 pub(crate) fn number(tag: Option<&Tag>) -> Option<i64> {
     Some(match tag? {
@@ -200,33 +200,6 @@ fn encode_range((lo, hi): (i32, i32)) -> Tag {
     }
 }
 
-/// Which `SpawnData` is next: one of the potentials (the same object in
-/// vanilla, so changing it changes the potential) or its own.
-#[derive(Clone, Debug, PartialEq)]
-enum Next {
-    Potential(usize),
-    Own(SpawnData),
-}
-
-/// `BaseSpawner`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Spawner {
-    pub spawn_delay: i32,
-    /// `SpawnPotentials`: data and weight.
-    pub potentials: Vec<(SpawnData, i32)>,
-    next: Option<Next>,
-    pub min_spawn_delay: i32,
-    pub max_spawn_delay: i32,
-    pub spawn_count: i32,
-    pub max_nearby_entities: i32,
-    pub required_player_range: i32,
-    pub spawn_range: i32,
-    /// The client copy's delay (`spawnDelay` on the client level), which
-    /// speeds the spin up as the next spawn nears.
-    pub client_delay: i32,
-    pub spin: f64,
-    pub o_spin: f64,
-}
 impl Default for Spawner {
     fn default() -> Self {
         Self {

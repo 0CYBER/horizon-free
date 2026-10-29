@@ -259,6 +259,7 @@ impl Game<'_> {
             Species::CamelHusk => "minecraft:entity.camel_husk.eat",
             Species::Donkey => "minecraft:entity.donkey.eat",
             Species::Mule => "minecraft:entity.mule.eat",
+            Species::Horse if m.is_baby() => "minecraft:entity.baby_horse.eat",
             _ => "minecraft:entity.horse.eat",
         };
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
@@ -273,10 +274,7 @@ impl Game<'_> {
     /// `LocalPlayer.aiStep`'s riding jump: the bar charges while jump is
     /// held; on release, the jump's strength (0 when there is none).
     pub(super) fn charge_mount_jump(&mut self, i: usize, keys: Keys) -> f32 {
-        // PlayerRideableJumping: horses, camels and nautili (the dash).
-        let saddled = self.mobs[i].extra.saddled
-            && (equine::is_equine(self.mobs[i].species())
-                || horizon_client::mobs::nautilus::is_nautilus(self.mobs[i].species()));
+        let saddled = self.mobs[i].extra.saddled && Self::jumps(self.mobs[i].species());
         let mut jump = 0.0;
         if saddled {
             let st = &mut self.mount;
@@ -340,7 +338,16 @@ impl Game<'_> {
             }
             // The nautilus plays its dash sound itself.
             if equine::is_equine(m.species()) {
-                let sound = "minecraft:entity.horse.jump";
+                // playJumpSound: Donkey and Mule have their own; a skeleton
+                // horse in water splashes.
+                let sound = match m.species() {
+                    Species::Donkey => "minecraft:entity.donkey.jump",
+                    Species::Mule => "minecraft:entity.mule.jump",
+                    Species::SkeletonHorse if m.fluids.in_water => {
+                        "minecraft:entity.skeleton_horse.jump_water"
+                    }
+                    _ => "minecraft:entity.horse.jump",
+                };
                 let at = m.center();
                 self.audio.play(sound, Some(at), 0.4, 1.0);
             }
@@ -485,10 +492,15 @@ impl Game<'_> {
             _ => {}
         }
     }
-    /// `Player.jumpableVehicle`: a saddled mount that jumps.
+    /// `PlayerRideableJumping`: horses, camels and nautili (the dash).
+    fn jumps(species: Species) -> bool {
+        equine::is_equine(species) || horizon_client::mobs::nautilus::is_nautilus(species)
+    }
+    /// `Player.jumpableVehicle`: a saddled mount that jumps (not a pig or a
+    /// strider, which a saddle only steers).
     pub(super) fn jumpable_mount(&self) -> bool {
         self.mount_index()
-            .is_some_and(|i| self.mobs[i].extra.saddled)
+            .is_some_and(|i| self.mobs[i].extra.saddled && Self::jumps(self.mobs[i].species()))
     }
     /// `willPrioritizeJumpInfo`: charging a jump or recharging.
     pub(super) fn mount_jumping(&self) -> bool {
@@ -513,8 +525,13 @@ impl Game<'_> {
         let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health);
         horizon_client::hud_layout::paint(batch, atlas, &draws);
         if jump_bar {
-            // JumpableVehicleBar: the cooldown shows while the jump recharges.
-            let cooldown = i32::from(self.mount.jump_ticks < 0);
+            // JumpableVehicleBar: `getJumpCooldown`, which only the camel's and
+            // the nautilus' dash have; a horse always shows the progress.
+            let cooldown = i32::from(
+                self.mount.jump_ticks < 0
+                    && (matches!(m.species(), Species::Camel | Species::CamelHusk)
+                        || horizon_client::mobs::nautilus::is_nautilus(m.species())),
+            );
             let draws =
                 horizon_client::hud_overlays::jump_bar(w, h, cooldown, self.mount.jump_scale);
             horizon_client::hud_layout::paint(batch, atlas, &draws);

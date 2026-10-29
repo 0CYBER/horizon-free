@@ -567,7 +567,13 @@ fn print_heart(
 /// The damage of a mob's direct hit on the player (others count as none).
 fn player_damage(e: &MobEvent) -> f32 {
     match e {
-        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::AttackPlayer(amount, _)
+        | MobEvent::AttackPlayerWithEffect { amount, .. }
+        | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => 10.0,
         _ => 0.0,
     }
 }
@@ -578,7 +584,13 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
         return false;
     };
     match e {
-        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::AttackPlayer(amount, _)
+        | MobEvent::AttackPlayerWithEffect { amount, .. }
+        | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => true,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
         MobEvent::Explode(at, radius, _) => {
             let d = Vec3::new(at[0], at[1], at[2])
@@ -1045,6 +1057,7 @@ pub fn main() -> horizon_client::Result<()> {
                 alive: true,
                 creative: s.creative,
                 sneaking: false,
+                swimming: false,
                 look: [0.0, 0.0, 1.0],
                 main_hand: s.hand.as_deref().map(Into::into),
                 off_hand: None,
@@ -1057,11 +1070,15 @@ pub fn main() -> horizon_client::Result<()> {
                 last_hurt: None,
                 velocity: Vec3::ZERO,
                 yaw: 0.0,
+                sprinting: false,
+                riding: false,
                 hero: false,
                 effects: Vec::new(),
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
+                sleeping: false,
+                sleep_timer: 0,
                 passenger: false,
             }
         });
@@ -1104,6 +1121,7 @@ pub fn main() -> horizon_client::Result<()> {
                     biomes: &biomes,
                     mob_griefing: true,
                     mob_drops: true,
+                    max_entity_cramming: 24,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,

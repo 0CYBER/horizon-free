@@ -82,11 +82,11 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 /// `DateTimeFormatter.ofPattern(pattern).format(now)` for the month, day,
-/// year and time letters item models use (UTC: no time zone database).
+/// year and time letters item models use, in the system time zone
+/// (`LocalTime` without a `time_zone`).
 pub(super) fn local_time(pattern: &str) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now = chrono::Local::now();
+    let secs = now.timestamp() + i64::from(now.offset().local_minus_utc());
     let (y, mo, d) = civil(secs.div_euclid(86_400));
     let s = secs.rem_euclid(86_400);
     let (h, mi, se) = (s / 3600, s / 60 % 60, s % 60);
@@ -172,7 +172,9 @@ fn use_duration(components: &Components) -> i32 {
         let seconds = c["consume_seconds"].as_f64().unwrap_or(1.6);
         return (seconds * 20.0) as i32;
     }
-    if components.get("minecraft:blocks_attacks").is_some() {
+    if components.get("minecraft:blocks_attacks").is_some()
+        || components.get("minecraft:kinetic_weapon").is_some()
+    {
         return 72_000;
     }
     let item_model = components
@@ -184,8 +186,9 @@ fn use_duration(components: &Components) -> i32 {
         | "minecraft:crossbow"
         | "minecraft:trident"
         | "minecraft:spyglass"
-        | "minecraft:goat_horn"
-        | "minecraft:brush" => 72_000,
+        | "minecraft:goat_horn" => 72_000,
+        // BrushItem.USE_DURATION.
+        "minecraft:brush" => 200,
         _ => 0,
     }
 }
@@ -253,6 +256,11 @@ impl Game<'_> {
         owner.main_arm_left = self.settings.main_hand_left;
         owner.is_local_player = true;
         owner.is_view_entity = true;
+        owner.last_death_location = self
+            .level
+            .last_death
+            .clone()
+            .map(|(dimension, pos)| GlobalPos { dimension, pos });
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
             && self.stack_in(slot) == Some(stack)
         {

@@ -223,6 +223,7 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
             display_health: int("displayHealth", 0),
             last_health_time: millis - i64::from(int("lastHealthAgo", 0)),
             health_blink_time: i64::from(int("healthBlinkTime", 0)),
+            ..HealthHud::default()
         };
         let kind = if has("minecraft:poison") {
             HeartKind::Poisoned

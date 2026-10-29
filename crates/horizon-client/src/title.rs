@@ -298,15 +298,23 @@ impl Title {
             options: WorldOptions::default(),
         }
     }
+    /// WorldSelectionList.handleNewLevels: a singleplayer list that comes
+    /// back empty (the last world deleted, say) opens a fresh Create New
+    /// World, whose Cancel goes to the title screen.
     fn return_to_list(&mut self, folder: Option<&str>) {
         let worlds = list_worlds(&self.saves);
+        *self.recent.borrow_mut() = None;
+        if worlds.is_empty() {
+            self.create_return_to_main = true;
+            self.mode = Self::new_world();
+            return;
+        }
         let selected = folder.and_then(|folder| {
             worlds
                 .iter()
                 .position(|w| w.folder == folder && self.matches_search(w))
         });
         self.mode = Mode::Select { worlds, selected };
-        *self.recent.borrow_mut() = None;
     }
     /// Deletes the world `Mode::Delete` asks about and goes back to the
     /// refreshed list; a failure (the world is open elsewhere, say) shows the
@@ -966,6 +974,11 @@ impl Title {
                 }
                 let version = format!("Horizon {} (Rust)", horizon_core::VANILLA_VERSION);
                 batch.text(atlas, &version, 2.0, h - 10.0, u32::MAX, true);
+                // A nightly names its build in the top-left corner, the one spot no button reaches at any GUI
+                // scale, so screenshots and reports say which build they come from.
+                if let Some(nightly) = horizon_core::release::nightly_label() {
+                    batch.text(atlas, &nightly, 2.0, 2.0, u32::MAX, true);
+                }
                 let notice = "Not affiliated with Mojang or Microsoft";
                 let tw = HudBatch::text_width(atlas, notice);
                 batch.text(atlas, notice, w - tw - 2.0, h - 10.0, u32::MAX, true);
@@ -1792,6 +1805,14 @@ impl Title {
             }
             Mode::Create { .. } => self.cancel_create(),
             _ => self.mode = Mode::Main,
+        }
+    }
+    /// `JoinMultiplayerScreen.keyPressed`: F5 refreshes the server list as
+    /// Refresh does (`refreshServerList`).
+    pub fn refresh_servers(&mut self) {
+        if let Mode::Multiplayer(screen @ crate::multiplayer::Screen::List { .. }) = &mut self.mode
+        {
+            *screen = crate::multiplayer::Screen::list(&self.saves);
         }
     }
 }

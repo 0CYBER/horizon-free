@@ -158,7 +158,10 @@ pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
             ambient_interval: 80,
             flags: Default::default(),
             model: Arc::new(model),
-            layers: Default::default(),
+            // PlayerModel's slim arms, for slim skins.
+            layers: horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
+                .map(|slim| [("player_slim#main".to_owned(), Arc::new(slim))].into())
+                .unwrap_or_default(),
             texture: "entity/player/wide/steve".into(),
             brain: Brain::Passive,
             anim: Anim::Humanoid { zombie_arms: false },
@@ -381,7 +384,15 @@ impl Game<'_> {
         m.head_pitch = pitch;
         let mut target = m.body_yaw;
         if dx * dx + dz * dz > 0.002_500_000_2 {
-            target = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+            // LivingEntity.tick: walking backwards the body faces away from
+            // the walk direction, not along it.
+            let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+            let facing = (wrap(yaw) - walk).abs();
+            target = if 95.0 < facing && facing < 265.0 {
+                walk - 180.0
+            } else {
+                walk
+            };
         }
         if swinging {
             target = yaw;
@@ -463,7 +474,14 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
-        self.player_elytra_geometry(m, camera, alpha as f32, packed, out);
+        self.player_elytra_geometry(
+            m,
+            self.armor[1].as_ref().map(|s| &*s.item),
+            camera,
+            alpha as f32,
+            packed,
+            out,
+        );
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
@@ -528,7 +546,14 @@ impl Game<'_> {
             &self.player_armor_layers(),
             &mut verts,
         );
-        self.player_elytra_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
+        self.player_elytra_geometry(
+            &m,
+            self.armor[1].as_ref().map(|s| &*s.item),
+            camera,
+            1.0,
+            240 | 240 << 8,
+            &mut verts,
+        );
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
@@ -567,17 +592,18 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
-    fn player_elytra_geometry(
+    /// `WingsLayer` for a player wearing `chest`.
+    pub(super) fn player_elytra_geometry(
         &self,
         m: &Mob,
+        chest: Option<&str>,
         camera: glam::DVec3,
         partial: f32,
         light: u32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
-        let Some(asset) = self.armor[1]
-            .as_ref()
-            .and_then(|s| self.res.items().get(&s.item))
+        let Some(asset) = chest
+            .and_then(|item| self.res.items().get(item))
             .and_then(|i| i.equip_asset.as_ref())
         else {
             return;
@@ -617,7 +643,7 @@ impl Game<'_> {
     }
     /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
     /// player (`SpinAttackEffectModel.setupAnim`).
-    fn spin_attack_geometry(
+    pub(super) fn spin_attack_geometry(
         &self,
         m: &Mob,
         camera: glam::DVec3,

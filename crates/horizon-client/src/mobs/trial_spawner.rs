@@ -13,6 +13,7 @@ use super::{
     spawn_selection,
     spawner::{self, SpawnData, SpawnerLevel, SpawnerSpawn},
 };
+pub use crate::chunk::block_entity::{ConfigSlot, TrialConfig, TrialSpawner};
 use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::nbt::{Compound, JavaString, Tag};
 use std::{collections::HashMap, path::Path, sync::OnceLock};
@@ -32,19 +33,6 @@ const TICKS_BETWEEN_ITEM_SPAWNERS: i64 = 160;
 /// Bad Omen.
 pub const TRIAL_OMEN_TICKS_PER_LEVEL: i32 = 18000;
 
-/// `TrialSpawnerConfig`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrialConfig {
-    pub spawn_range: i32,
-    pub total_mobs: f32,
-    pub simultaneous_mobs: f32,
-    pub total_mobs_added_per_player: f32,
-    pub simultaneous_mobs_added_per_player: f32,
-    pub ticks_between_spawn: i32,
-    pub spawn_potentials: Vec<(SpawnData, i32)>,
-    pub loot_tables_to_eject: Vec<(String, i32)>,
-    pub items_to_drop_when_ominous: String,
-}
 impl Default for TrialConfig {
     /// `TrialSpawnerConfig.Builder`'s defaults.
     fn default() -> Self {
@@ -117,6 +105,67 @@ impl TrialConfig {
             items_to_drop_when_ominous: identifier(tag.get("items_to_drop_when_ominous"))
                 .unwrap_or(d.items_to_drop_when_ominous),
         })
+    }
+    /// `TrialSpawnerConfig.DIRECT_CODEC`'s encoding: the fields that differ
+    /// from their defaults (`optionalFieldOf` with a default).
+    pub fn encode(&self) -> Tag {
+        let d = Self::default();
+        let mut out = Vec::new();
+        if self.spawn_range != d.spawn_range {
+            out.push(("spawn_range", Tag::Int(self.spawn_range)));
+        }
+        for (key, value, default) in [
+            ("total_mobs", self.total_mobs, d.total_mobs),
+            (
+                "simultaneous_mobs",
+                self.simultaneous_mobs,
+                d.simultaneous_mobs,
+            ),
+            (
+                "total_mobs_added_per_player",
+                self.total_mobs_added_per_player,
+                d.total_mobs_added_per_player,
+            ),
+            (
+                "simultaneous_mobs_added_per_player",
+                self.simultaneous_mobs_added_per_player,
+                d.simultaneous_mobs_added_per_player,
+            ),
+        ] {
+            if value != default {
+                out.push((key, Tag::Float(value.to_bits())));
+            }
+        }
+        if self.ticks_between_spawn != d.ticks_between_spawn {
+            out.push(("ticks_between_spawn", Tag::Int(self.ticks_between_spawn)));
+        }
+        let weighted = |data: Tag, weight: i32| {
+            Tag::compound(vec![("data", data), ("weight", Tag::Int(weight))])
+        };
+        if !self.spawn_potentials.is_empty() {
+            let list = self.spawn_potentials.iter();
+            out.push((
+                "spawn_potentials",
+                Tag::List(list.map(|(data, w)| weighted(data.encode(), *w)).collect()),
+            ));
+        }
+        if self.loot_tables_to_eject != d.loot_tables_to_eject {
+            let list = self.loot_tables_to_eject.iter();
+            out.push((
+                "loot_tables_to_eject",
+                Tag::List(
+                    list.map(|(id, w)| weighted(Tag::String(id.as_str().into()), *w))
+                        .collect(),
+                ),
+            ));
+        }
+        if self.items_to_drop_when_ominous != d.items_to_drop_when_ominous {
+            out.push((
+                "items_to_drop_when_ominous",
+                Tag::String(self.items_to_drop_when_ominous.as_str().into()),
+            ));
+        }
+        Tag::compound(out)
     }
     /// `calculateTargetTotalMobs`.
     pub fn target_total_mobs(&self, additional_players: i32) -> i32 {
@@ -200,15 +249,6 @@ fn identifier(t: Option<&Tag>) -> Option<String> {
         Tag::String(s) => spawner::normalize_id(&s.to_string_lossy()),
         _ => None,
     }
-}
-
-/// A `Holder<TrialSpawnerConfig>` as saved: a registry id
-/// (`minecraft:trial_chamber/breeze/normal`) or an inline config.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ConfigSlot {
-    /// The value as loaded, written back as is; None for the default.
-    pub saved: Option<Tag>,
-    pub config: TrialConfig,
 }
 
 /// `TrialSpawnerState`.
@@ -335,31 +375,6 @@ pub trait TrialSpawnerLevel: SpawnerLevel {
     fn seed(&self) -> i64;
 }
 
-/// `TrialSpawner` with its `TrialSpawnerStateData`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrialSpawner {
-    pub normal: ConfigSlot,
-    pub ominous: ConfigSlot,
-    pub target_cooldown_length: i32,
-    pub required_player_range: i32,
-    pub detected_players: Vec<Uuid>,
-    pub current_mobs: Vec<Uuid>,
-    pub cooldown_ends_at: i64,
-    pub next_mob_spawns_at: i64,
-    pub total_mobs_spawned: i32,
-    pub next_spawn_data: Option<SpawnData>,
-    pub ejecting_loot_table: Option<String>,
-    /// `isOminous`, set from the block on every server tick.
-    pub is_ominous: bool,
-    /// The server's display entity exists (`getOrCreateDisplayEntity`): it is
-    /// made once per loaded block entity and kept.
-    pub has_display: bool,
-    pub spin: f64,
-    pub o_spin: f64,
-    /// `getDispensingItems`, kept once rolled (not saved): the ominous items
-    /// and their weights (the rolled counts).
-    pub dispensing: Option<Vec<crate::items::ItemStack>>,
-}
 impl Default for TrialSpawner {
     fn default() -> Self {
         Self {
@@ -532,6 +547,18 @@ impl TrialSpawner {
         self.current_mobs.clear();
         self.next_spawn_data = None;
         self.reset_statistics();
+    }
+    /// `overrideEntityToSpawn` (a spawn egg's `setEntityId`): the data resets
+    /// and both configs spawn only `id` (`withSpawning`), saved inline as
+    /// `Holder.direct`. The caller then sets the state to `inactive`.
+    pub fn override_entity(&mut self, id: &str) {
+        self.reset();
+        for slot in [&mut self.normal, &mut self.ominous] {
+            let mut entity = Compound::new();
+            entity.insert("id".into(), Tag::String(id.into()));
+            slot.config.spawn_potentials = vec![(SpawnData::new(entity, None, None), 1)];
+            slot.saved = Some(slot.config.encode());
+        }
     }
     /// `getOrCreateNextSpawnData`: a potential at random, else empty data.
     fn next_or_create(
@@ -1074,6 +1101,37 @@ mod tests {
         let s = TrialSpawner::load_with(&tag("{}"), &|_| None);
         assert_eq!(s, TrialSpawner::default());
         assert!(s.save().is_empty());
+    }
+
+    #[test]
+    fn a_spawn_egg_overrides_both_configs_inline() {
+        let breeze = TrialConfig {
+            total_mobs: 2.0,
+            ..TrialConfig::default()
+        };
+        let registry = |_: &str| Some(breeze.clone());
+        let mut s = TrialSpawner::load_with(
+            &tag(
+                r#"{normal_config:"minecraft:trial_chamber/breeze/normal",spawn_data:{entity:{}},total_mobs_spawned:3}"#,
+            ),
+            &registry,
+        );
+        s.override_entity("minecraft:zombie");
+        assert_eq!(s.next_spawn_data, None);
+        assert_eq!(s.total_mobs_spawned, 0);
+        for slot in [&s.normal, &s.ominous] {
+            assert_eq!(slot.config.spawn_potentials.len(), 1);
+            assert_eq!(
+                slot.config.spawn_potentials[0].0.id().as_deref(),
+                Some("minecraft:zombie")
+            );
+            let saved = slot.saved.as_ref().expect("saved inline");
+            assert_eq!(TrialConfig::decode(saved).as_ref(), Some(&slot.config));
+        }
+        assert_eq!(
+            s.normal.saved.as_ref().and_then(|t| t.get("total_mobs")),
+            Some(&Tag::Float(2.0f32.to_bits()))
+        );
     }
 
     #[test]

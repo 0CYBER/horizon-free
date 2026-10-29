@@ -1,19 +1,13 @@
 //! Container block entities: chests/barrels (27 slots) and the three furnace
 //! kinds, ticking as `AbstractFurnaceBlockEntity.serverTick` with fuel times
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
-use crate::{
-    crafting::Recipes,
-    items::{ItemStack, Items},
+pub use crate::chunk::block_entity::{
+    Banner, Beacon, BlockEntity, Campfire, ChiseledBookshelf, Crafter, CreakingHeart, EndGateway,
+    Furnace, FurnaceKind, Jukebox, Lectern, Skull, SkullSkin,
 };
-use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use crate::items::ItemStack;
+use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FurnaceKind {
-    Furnace,
-    BlastFurnace,
-    Smoker,
-}
 impl FurnaceKind {
     pub fn recipe_type(self) -> &'static str {
         match self {
@@ -34,21 +28,6 @@ impl FurnaceKind {
         }
     }
 }
-#[derive(Clone, Debug)]
-pub struct Furnace {
-    pub kind: FurnaceKind,
-    /// input, fuel, result
-    pub items: [Option<ItemStack>; 3],
-    pub lit_remaining: i32,
-    pub lit_total: i32,
-    pub cooking_timer: i32,
-    pub cooking_total: i32,
-    pub speed: f32,
-    /// `AbstractFurnaceBlockEntity.recipesUsed`: how many of each recipe this furnace has
-    /// made since a player last took from its output. The experience is owed per recipe
-    /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
-    pub recipes_used: HashMap<String, u32>,
-}
 /// The key `recipes_used` keeps a recipe under: its full id, as vanilla's `ResourceKey<Recipe>`
 /// writes it in `RecipesUsed`. Horizon's own recipe ids are file names without the namespace, so
 /// keeping both forms would write a key twice, and vanilla refuses such a furnace
@@ -63,62 +42,6 @@ pub fn recipe_used_key(id: &str) -> String {
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
 
-#[derive(Clone, Debug)]
-pub enum BlockEntity {
-    Chest(Vec<Option<ItemStack>>),
-    Furnace(Furnace),
-    Brewing(Box<crate::brewing::BrewingStand>),
-    /// Signs and hanging signs (`SignBlockEntity`).
-    Sign(crate::signs::SignData),
-    /// `JukeboxBlockEntity`: the record and its `JukeboxSongPlayer`.
-    Jukebox(Jukebox),
-    /// `BeaconBlockEntity`.
-    Beacon(Box<Beacon>),
-    /// `LecternBlockEntity`: the book and the open page.
-    Lectern(Lectern),
-    /// Sculk sensors, shriekers and catalysts (`crate::sculk`).
-    Sculk(Box<crate::sculk::SculkEntity>),
-    /// `CreakingHeartBlockEntity`: its protector and the hurt emitter.
-    CreakingHeart(Box<CreakingHeart>),
-    /// `BannerBlockEntity`: the pattern layers.
-    Banner(Banner),
-    /// `CrafterBlockEntity`.
-    Crafter(Crafter),
-    /// `SpawnerBlockEntity` (`crate::mobs::spawner`).
-    Spawner(Box<crate::mobs::spawner::Spawner>),
-    /// `TrialSpawnerBlockEntity` (`crate::mobs::trial_spawner`).
-    TrialSpawner(Box<crate::mobs::trial_spawner::TrialSpawner>),
-    /// `VaultBlockEntity` (`crate::vault`).
-    Vault(Box<crate::vault::Vault>),
-    /// `BeehiveBlockEntity` of beehives and bee nests (`crate::beehive`).
-    Beehive(Box<crate::beehive::Beehive>),
-    /// `CommandBlockEntity` of the three command blocks (`crate::command_block`).
-    CommandBlock(Box<crate::command_block::CommandBlock>),
-    /// `CampfireBlockEntity` of campfires and soul campfires.
-    Campfire(Box<Campfire>),
-    /// `SkullBlockEntity` of every skull and head block.
-    Skull(Skull),
-    /// `TheEndGatewayBlockEntity`: its age and configured destination.
-    EndGateway(EndGateway),
-    /// `DaylightDetectorBlockEntity`: no data, only the ticker
-    /// (`DaylightDetectorBlock.tickEntity`).
-    DaylightDetector,
-}
-/// `TheEndGatewayBlockEntity`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct EndGateway {
-    pub age: i64,
-    pub exit_portal: Option<[i32; 3]>,
-    pub exact_teleport: bool,
-}
-/// `CampfireBlockEntity`: four cooking slots, each with its
-/// `cookingProgress` and `cookingTime` (the recipe's).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Campfire {
-    pub items: [Option<ItemStack>; 4],
-    pub progress: [i32; 4],
-    pub total: [i32; 4],
-}
 impl Campfire {
     /// `placeFood`'s slot: the first empty one, given the item's
     /// `campfire_cooking` time; it takes one item of `held`.
@@ -166,17 +89,6 @@ impl Campfire {
         changed
     }
 }
-/// `SkullBlockEntity`: the player profile the head shows (kept as loaded:
-/// a compound, or a string when it names a player only), the note block
-/// sound and `custom_name`.
-#[derive(Clone, Debug, Default)]
-pub struct Skull {
-    pub profile: Option<horizon_world::nbt::Tag>,
-    pub note_block_sound: Option<String>,
-    pub custom_name: Option<horizon_world::nbt::Tag>,
-    /// What `profile` draws, read from it once rather than every frame.
-    pub skin: Option<SkullSkin>,
-}
 impl Skull {
     pub fn new(
         profile: Option<horizon_world::nbt::Tag>,
@@ -191,18 +103,6 @@ impl Skull {
             skin,
         }
     }
-}
-/// `SkullBlockRenderer.getPlayerSkin` of a head's profile: its skin's URL
-/// with the `skins/<sha1>` sprite it downloads to, and the
-/// `DefaultPlayerSkin` drawn until that sprite is there (steve for a
-/// profile with no id).
-#[derive(Clone, Debug)]
-pub struct SkullSkin {
-    pub download: Option<(String, String)>,
-    /// `ResolvableProfile.nameOrId` when the profile is `Dynamic` (a name or
-    /// an id only): the key `skins::Resolver` resolves it by.
-    pub dynamic: Option<crate::skins::NameOrId>,
-    pub fallback: &'static str,
 }
 impl SkullSkin {
     pub fn of(profile: &horizon_world::nbt::Tag) -> Self {
@@ -231,18 +131,6 @@ impl SkullSkin {
 /// `*_skull` and `*_head` but the piston's head.
 fn is_skull(name: &str) -> bool {
     name.ends_with("_skull") || (name.ends_with("_head") && name != "minecraft:piston_head")
-}
-/// `CrafterBlockEntity`: nine slots that can be disabled, the powered flag
-/// and the ticks left in the crafting animation.
-#[derive(Clone, Debug, Default)]
-pub struct Crafter {
-    pub items: [Option<ItemStack>; 9],
-    pub disabled: [bool; 9],
-    pub triggered: bool,
-    pub crafting_ticks: i32,
-    /// The block state's `triggered` when last ticked (not saved): the block
-    /// entity flag follows it only when it changes (`CrafterBlock.neighborChanged`).
-    pub state_triggered: Option<bool>,
 }
 impl Crafter {
     /// `slotCanBeDisabled`: only empty slots.
@@ -282,48 +170,6 @@ impl Crafter {
                 }
         })
     }
-}
-#[derive(Clone, Debug, Default)]
-pub struct Banner {
-    pub layers: Vec<crate::banner::BannerLayer>,
-    pub name: Option<String>,
-    /// Components not consumed by BannerBlockEntity's implicit fields.
-    pub components: horizon_world::nbt::Compound,
-}
-/// `CreakingHeartBlockEntity` (the logic is in `game/creaking.rs`).
-#[derive(Clone, Debug, Default)]
-pub struct CreakingHeart {
-    /// The protector: its entity id once resolved, and its UUID (the saved form).
-    pub creaking: Option<(Option<u32>, [i32; 4])>,
-    pub ticks_existed: i64,
-    pub ticker: i32,
-    /// Ticks left of the hurt effect (`emitter`) and where it heads.
-    pub emitter: i32,
-    pub emitter_target: Option<[f64; 3]>,
-    pub output_signal: i32,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Lectern {
-    pub book: Option<ItemStack>,
-    pub page: i32,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Beacon {
-    pub levels: i32,
-    /// Effect ids (`minecraft:speed`).
-    pub primary: Option<String>,
-    pub secondary: Option<String>,
-    /// Beam sections (RGB colour, height) and the ones being rebuilt.
-    pub sections: Vec<(u32, i32)>,
-    pub checking: Vec<(u32, i32)>,
-    pub last_check_y: i32,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Jukebox {
-    pub record: Option<ItemStack>,
-    /// `ticks_since_song_started`, while a song plays.
-    pub ticks: i64,
-    pub playing: bool,
 }
 impl BlockEntity {
     pub fn for_block(name: &str) -> Option<Self> {
@@ -407,6 +253,9 @@ impl BlockEntity {
         if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
             return Some(Self::Campfire(Box::default()));
         }
+        if name == "minecraft:chiseled_bookshelf" {
+            return Some(Self::ChiseledBookshelf(Box::default()));
+        }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             n if n.ends_with("copper_chest") => 27,
@@ -447,6 +296,7 @@ impl BlockEntity {
             Self::EndGateway(_) => "minecraft:end_gateway",
             Self::DaylightDetector => "minecraft:daylight_detector",
             Self::Campfire(_) => "minecraft:campfire",
+            Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -471,6 +321,7 @@ impl BlockEntity {
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
             Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
+            Self::ChiseledBookshelf(b) => b.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -488,6 +339,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::DaylightDetector => &[],
             Self::Crafter(c) => &c.items,
+            Self::ChiseledBookshelf(b) => &b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -513,6 +365,7 @@ impl BlockEntity {
             | Self::Skull(_)
             | Self::DaylightDetector => &mut [],
             Self::Crafter(c) => &mut c.items,
+            Self::ChiseledBookshelf(b) => &mut b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -523,283 +376,7 @@ impl BlockEntity {
         }
     }
 }
-/// Evaluator for `context_int_provider` / `context_float_provider` values.
-pub struct Providers {
-    ints: HashMap<String, Value>,
-    floats: HashMap<String, Value>,
-}
-fn load_dir(dir: &Path, prefix: &str, out: &mut HashMap<String, Value>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        let name = p
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_owned();
-        if p.is_dir() {
-            load_dir(&p, &format!("{prefix}{name}/"), out);
-        } else if let Ok(bytes) = fs::read(&p)
-            && let Ok(v) = serde_json::from_slice(&bytes)
-        {
-            out.insert(format!("minecraft:{prefix}{name}"), v);
-        }
-    }
-}
-impl Providers {
-    pub fn load(root: &Path) -> Self {
-        let mut ints = HashMap::new();
-        let mut floats = HashMap::new();
-        load_dir(
-            &root.join("data/minecraft/context_int_provider"),
-            "",
-            &mut ints,
-        );
-        load_dir(
-            &root.join("data/minecraft/context_float_provider"),
-            "",
-            &mut floats,
-        );
-        Self { ints, floats }
-    }
-    fn eval(v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
-        if depth > 16 {
-            return 0.0;
-        }
-        match v {
-            Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            Value::String(name) => table
-                .get(name)
-                .map_or(0.0, |v| Self::eval(v, fast, table, depth + 1)),
-            Value::Object(o) => {
-                let f =
-                    |k: &str| Self::eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
-                match o.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "minecraft:div" => {
-                        let r = f("right");
-                        if r == 0.0 {
-                            0.0
-                        } else {
-                            (f("left") / r).trunc()
-                        }
-                    }
-                    "minecraft:mul" => f("left") * f("right"),
-                    "minecraft:add" | "minecraft:sum" => f("left") + f("right"),
-                    "minecraft:sub" => f("left") - f("right"),
-                    "minecraft:constant" => f("value"),
-                    "minecraft:conditional" => {
-                        // The only condition in the pinned data: block/fast_cooking.
-                        let condition = o.get("condition").and_then(Value::as_str)
-                            == Some("minecraft:block/fast_cooking");
-                        if condition && fast {
-                            f("on_true")
-                        } else {
-                            f("on_false")
-                        }
-                    }
-                    _ => 0.0,
-                }
-            }
-            _ => 0.0,
-        }
-    }
-    /// A plain `context_int_provider` value or reference (no context conditions).
-    pub fn int_value(&self, v: &Value) -> i32 {
-        Self::eval(v, false, &self.ints, 0) as i32
-    }
-    /// A plain `context_float_provider` value or reference; `default` when absent.
-    pub fn float_value(&self, v: &Value, default: f32) -> f32 {
-        if v.is_null() {
-            default
-        } else {
-            Self::eval(v, false, &self.floats, 0) as f32
-        }
-    }
-    #[cfg(test)]
-    pub fn empty() -> Self {
-        Self {
-            ints: HashMap::new(),
-            floats: HashMap::new(),
-        }
-    }
-    pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {
-        items
-            .get(&stack.item)
-            .and_then(|i| i.fuel.as_ref())
-            .map_or(0, |(time, _)| Self::eval(time, fast, &self.ints, 0) as i32)
-    }
-    pub fn speed(&self, items: &Items, stack: &ItemStack, fast: bool) -> f32 {
-        items
-            .get(&stack.item)
-            .and_then(|i| i.fuel.as_ref())
-            .map_or(1.0, |(_, speed)| {
-                Self::eval(speed, fast, &self.floats, 0) as f32
-            })
-    }
-}
-fn remainder(item: &str) -> Option<&'static str> {
-    match item {
-        "minecraft:lava_bucket" | "minecraft:water_bucket" | "minecraft:milk_bucket" => {
-            Some("minecraft:bucket")
-        }
-        _ => None,
-    }
-}
-impl Furnace {
-    /// `AbstractFurnaceBlockEntity.setItem` on the input slot: anything but
-    /// the same item with the same components restarts cooking, with the
-    /// total time of the new input's recipe (200 ticks without one).
-    pub fn set_input(&mut self, recipes: &Recipes, stack: Option<ItemStack>) {
-        let same = match (&self.items[0], &stack) {
-            (Some(old), Some(new)) => old.same_item_same_components(new),
-            _ => false,
-        };
-        self.items[0] = stack;
-        if !same {
-            self.cooking_total = self.items[0]
-                .as_ref()
-                .and_then(|input| recipes.cook(self.kind.recipe_type(), input))
-                .map_or(200, |recipe| total_time(recipe.time, self.speed));
-            self.cooking_timer = 0;
-        }
-    }
-    /// `recipesUsed`, each recipe with its `experience` (0 for one this data pack does
-    /// not have), in the order `getRecipesToAwardAndPopExperience` pays them.
-    pub fn recipe_experience(&self, recipes: &Recipes) -> Vec<(u32, f32)> {
-        self.recipes_used
-            .iter()
-            .map(|(id, count)| (*count, recipes.cooking_experience(id)))
-            .collect()
-    }
-    /// A menu click wrote its slots into `items`, and `before` was the input
-    /// slot until then: the menu called `setItem` on it only if it changed
-    /// (`Slot.setByPlayer`; partial takes and merges keep the stack).
-    pub fn input_clicked(&mut self, recipes: &Recipes, before: Option<ItemStack>) {
-        if self.items[0] != before {
-            let after = std::mem::replace(&mut self.items[0], before);
-            self.set_input(recipes, after);
-        }
-    }
-    /// One server tick. Returns `Some(lit)` when the LIT block state must change.
-    pub fn tick(
-        &mut self,
-        recipes: &Recipes,
-        items: &Items,
-        providers: &Providers,
-    ) -> Option<bool> {
-        let was_lit = self.lit_remaining > 0;
-        let mut lit = false;
-        if self.lit_remaining > 0 {
-            self.lit_remaining -= 1;
-            lit = self.lit_remaining > 0;
-        }
-        let fast = self.kind.fast();
-        let has_ingredient = self.items[0].is_some();
-        let has_fuel = self.items[1].is_some();
-        if lit || has_fuel && has_ingredient {
-            if let Some(ingredient) = self.items[0].clone() {
-                if let Some(recipe) = recipes.cook(self.kind.recipe_type(), &ingredient) {
-                    if self.cooking_timer == 0 {
-                        self.cooking_total = total_time(recipe.time, self.speed);
-                    }
-                    let max = items.get(&recipe.result.item).map_or(64, |i| i.max_stack);
-                    let can_burn = match &self.items[2] {
-                        None => true,
-                        Some(out) => {
-                            out.item == recipe.result.item && out.count + recipe.result.count <= max
-                        }
-                    };
-                    if can_burn {
-                        if !lit {
-                            let fuel = self.items[1].clone();
-                            let time = fuel
-                                .as_ref()
-                                .map_or(0, |f| providers.burn_time(items, f, fast));
-                            let speed = fuel
-                                .as_ref()
-                                .map_or(1.0, |f| providers.speed(items, f, fast));
-                            self.lit_remaining = time;
-                            self.lit_total = time;
-                            self.speed = speed;
-                            if self.cooking_total > 0 && self.cooking_timer < self.cooking_total {
-                                let ratio = self.cooking_timer as f32 / self.cooking_total as f32;
-                                self.cooking_total = total_time(recipe.time, self.speed);
-                                self.cooking_timer =
-                                    (ratio * self.cooking_total as f32).ceil() as i32;
-                            }
-                            if time > 0 {
-                                if let Some(f) = self.items[1].as_mut() {
-                                    let item = f.item.clone();
-                                    f.count -= 1;
-                                    if f.count == 0 {
-                                        self.items[1] = remainder(&item).map(|r| ItemStack {
-                                            item: Arc::from(r),
-                                            count: 1,
-                                            damage: 0,
-                                            extra: None,
-                                        });
-                                    }
-                                }
-                                lit = true;
-                            }
-                        }
-                        if lit {
-                            self.cooking_timer += 1;
-                            if self.cooking_timer >= self.cooking_total {
-                                self.cooking_timer = 0;
-                                self.cooking_total = total_time(recipe.time, self.speed);
-                                match &mut self.items[2] {
-                                    Some(out) => out.count += recipe.result.count,
-                                    None => self.items[2] = Some(recipe.result.clone()),
-                                }
-                                *self
-                                    .recipes_used
-                                    .entry(recipe_used_key(&recipe.id))
-                                    .or_insert(0) += 1;
-                                // AbstractFurnaceBlockEntity.burn: drying a wet sponge fills
-                                // the bucket in the fuel slot.
-                                if self.items[0]
-                                    .as_ref()
-                                    .is_some_and(|i| &*i.item == "minecraft:wet_sponge")
-                                    && self.items[1]
-                                        .as_ref()
-                                        .is_some_and(|f| &*f.item == "minecraft:bucket")
-                                {
-                                    self.items[1] =
-                                        Some(ItemStack::new("minecraft:water_bucket", 1));
-                                }
-                                if let Some(i) = self.items[0].as_mut() {
-                                    i.count -= 1;
-                                    if i.count == 0 {
-                                        self.items[0] = None;
-                                    }
-                                }
-                            }
-                        } else {
-                            self.cooking_timer = 0;
-                        }
-                    } else {
-                        self.cooking_timer = 0;
-                    }
-                }
-            } else {
-                self.cooking_timer = 0;
-            }
-        } else if self.cooking_timer > 0 {
-            self.cooking_timer = (self.cooking_timer - 2).clamp(0, self.cooking_total);
-        }
-        (was_lit != lit).then_some(lit)
-    }
-}
-fn total_time(time: u32, speed: f32) -> i32 {
-    if speed > 0.0 {
-        (time as f32 / speed).ceil() as i32
-    } else {
-        time as i32
-    }
-}
+pub use crate::providers::Providers;
 
 /// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
 /// more with the chance of what is left over (a level random draw only when there is some).
