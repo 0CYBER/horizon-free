@@ -4,7 +4,7 @@ use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     jmath,
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use std::sync::Arc;
 
@@ -16,6 +16,9 @@ pub const TARGET: u8 = 8;
 /// What goals may read and emit during a tick.
 pub struct Cx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
+    /// The level's random (`level.getRandom()`), for the draws vanilla's
+    /// behaviours make from it rather than from the mob's own.
+    pub lr: &'a mut LegacyRandom,
     pub events: &'a mut Vec<MobEvent>,
 }
 pub trait Goal: std::fmt::Debug {

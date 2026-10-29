@@ -1181,7 +1181,11 @@ fn server_ai_step(
     let mut targets = std::mem::take(&mut m.ai.targets);
     let mut goals = std::mem::take(&mut m.ai.goals);
     {
-        let mut cx = Cx { w, events };
+        let mut cx = Cx {
+            w,
+            lr: level_random,
+            events,
+        };
         if id_based % 2 != 0 && tick_count > 1 {
             targets.tick_running(m, &mut cx, false);
             goals.tick_running(m, &mut cx, false);
@@ -1222,7 +1226,11 @@ fn server_ai_step(
         super::animal_brain::tick(m, w, level_random, events);
     }
     {
-        let mut cx = Cx { w, events };
+        let mut cx = Cx {
+            w,
+            lr: level_random,
+            events,
+        };
         custom_server_ai_step(m, &mut cx);
     }
     if frozen {

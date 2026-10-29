@@ -13,7 +13,10 @@ use super::{
     },
     sync,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    random::{LegacyRandom, RandomSource},
+};
 
 const JUMP: usize = 0;
 const CROAK: usize = 1;
@@ -360,10 +363,11 @@ fn set_jump_cooldown(m: &mut Mob, ticks: Option<i64>) {
         (None, None) => {}
     }
 }
-/// `TIME_BETWEEN_LONG_JUMPS.sample`, divided as the caller asks.
-fn sample_cooldown(m: &mut Mob, div: i32) {
+/// `TIME_BETWEEN_LONG_JUMPS.sample` from the level's random, divided as the
+/// caller asks.
+fn sample_cooldown(m: &mut Mob, lr: &mut LegacyRandom, div: i32) {
     let (lo, hi) = TIME_BETWEEN_LONG_JUMPS;
-    let t = m.random.next_int_between_inclusive(lo, hi).unwrap_or(lo) / div;
+    let t = lr.next_int_between_inclusive(lo, hi).unwrap_or(lo) / div;
     set_jump_cooldown(m, Some(i64::from(t)));
 }
 
@@ -414,13 +418,14 @@ struct LongJump {
     in_air: Option<i32>,
 }
 impl LongJump {
-    /// `WeightedRandom.getRandomItem` over the candidates, removed once drawn.
-    fn draw(&mut self, m: &mut Mob) -> Option<Candidate> {
+    /// `WeightedRandom.getRandomItem` with the level's random over the
+    /// candidates, removed once drawn.
+    fn draw(&mut self, lr: &mut LegacyRandom) -> Option<Candidate> {
         let total: i32 = self.candidates.iter().map(|c| c.1).sum();
         if total == 0 {
             return None;
         }
-        let mut pick = m.random.next_int_bound(total).unwrap_or(0);
+        let mut pick = lr.next_int_bound(total).unwrap_or(0);
         let i = self.candidates.iter().position(|c| {
             pick -= c.1;
             pick < 0
@@ -429,12 +434,12 @@ impl LongJump {
     }
     /// `LongJumpToPreferredBlock.getJumpCandidate`: while it wants them, the
     /// first drawn spot over a preferred block, else the first one passed over.
-    fn candidate(&mut self, m: &mut Mob, w: &MobWorld) -> Option<Candidate> {
+    fn candidate(&mut self, w: &MobWorld, lr: &mut LegacyRandom) -> Option<Candidate> {
         if !self.wanting_preferred {
-            return self.draw(m);
+            return self.draw(lr);
         }
         while !self.candidates.is_empty() {
-            if let Some(c) = self.draw(m) {
+            if let Some(c) = self.draw(lr) {
                 let [x, y, z] = c.0;
                 if w.has_tag("minecraft:frog_prefer_jump_to", w.block_name(x, y - 1, z)) {
                     return Some(c);
@@ -446,9 +451,9 @@ impl LongJump {
     }
     /// `LongJumpToRandomPos.pickCandidate`: the first acceptable spot it can
     /// reach in an arc but not by an 8 block path.
-    fn pick(&mut self, m: &mut Mob, w: &MobWorld) {
+    fn pick(&mut self, m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
         while !self.candidates.is_empty() {
-            let Some((target, _)) = self.candidate(m, w) else {
+            let Some((target, _)) = self.candidate(w, lr) else {
                 continue;
             };
             let here = [m.position.x.floor() as i32, m.position.z.floor() as i32];
@@ -484,7 +489,7 @@ impl LongJump {
                     .push(MobEvent::Sound("entity.frog.step", at, 2.0, 1.0));
             }
             set_pose(m, sync::STANDING);
-            sample_cooldown(m, 1);
+            sample_cooldown(m, cx.lr, 1);
         }
         m.extra.frog.discard_friction = false;
         *self = Self::default();
@@ -506,11 +511,13 @@ fn candidates([x, y, z]: [i32; 3]) -> Vec<Candidate> {
     out
 }
 /// `LongJumpToRandomPos.calculateOptimalJumpVector`: the angles shuffled, the
-/// first arc that reaches the target clear of blocks.
-fn optimal_jump_vector(m: &mut Mob, w: &MobWorld, target: Vec3) -> Option<Vec3> {
+/// first arc that reaches the target clear of blocks. `Collections.shuffle`
+/// without a random draws from an unseeded one, not the mob's or the level's.
+fn optimal_jump_vector(m: &Mob, w: &MobWorld, target: Vec3) -> Option<Vec3> {
+    let mut random = crate::sound_engine::SoundEngine::unseeded();
     let mut angles = ALLOWED_ANGLES;
     for i in (2..=angles.len()).rev() {
-        let j = m.random.next_int_bound(i as i32).unwrap_or(0) as usize;
+        let j = random.next_int_bound(i as i32).unwrap_or(0) as usize;
         angles.swap(i - 1, j);
     }
     let max = (m.attrs.jump_strength * f64::from(JUMP_VELOCITY_MULTIPLIER)) as f32;
@@ -530,7 +537,11 @@ impl Goal for LongJump {
         true
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        // The activity: no cooldown and out of water.
+        // The activity: no cooldown and out of water. FrogAi.initJumpActivity
+        // also wants TEMPTING_PLAYER and BREED_TARGET absent, and the
+        // LAY_SPAWN activity (IS_PREGNANT) goes before LONG_JUMP.
+        // TODO: gate on them once frogs follow frog_food, breed and lay
+        // frogspawn here; none of the three exists for frogs yet.
         if jump_cooldown(m).is_some() || m.fluids.in_water {
             return false;
         }
@@ -543,7 +554,7 @@ impl Goal for LongJump {
         let can =
             m.on_ground && !m.fluids.in_lava && cx.w.block_name(x, y, z) != "minecraft:honey_block";
         if !can {
-            sample_cooldown(m, 2);
+            sample_cooldown(m, cx.lr, 2);
         }
         can
     }
@@ -563,7 +574,7 @@ impl Goal for LongJump {
         // LongJumpToPreferredBlock.start.
         self.wanting_preferred = m.random.next_float() < PREFERRED_BLOCKS_CHANCE;
     }
-    fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.mid_jump {
             // LongJumpMidJump starts the tick after the leap and runs until
             // the frog is on the ground again, for 100 ticks at most; water
@@ -585,7 +596,7 @@ impl Goal for LongJump {
             && !m.fluids.in_water
             && !(self.chosen.is_none() && self.candidates.is_empty());
         if !valid {
-            sample_cooldown(m, 2);
+            sample_cooldown(m, cx.lr, 2);
         }
         valid
     }
@@ -598,7 +609,7 @@ impl Goal for LongJump {
         }
         let Some(jump) = self.chosen else {
             self.tries -= 1;
-            self.pick(m, cx.w);
+            self.pick(m, cx.w, cx.lr);
             return;
         };
         m.look_at(self.look);
@@ -656,13 +667,12 @@ mod tests {
     /// list, and the drawn candidate is removed.
     #[test]
     fn a_draw_takes_the_weighted_candidate_out() {
-        let mut m = frog();
         let mut j = LongJump {
             candidates: vec![([0, 0, 0], 1), ([1, 0, 0], 4), ([2, 0, 0], 9)],
             ..LongJump::default()
         };
         let mut r = LegacyRandom::new(7);
-        m.random = r.clone();
+        let mut lr = r.clone();
         let pick = r.next_int_bound(14).unwrap();
         let want = if pick < 1 {
             0
@@ -671,20 +681,22 @@ mod tests {
         } else {
             2
         };
-        assert_eq!(j.draw(&mut m).unwrap().0, [want, 0, 0]);
+        assert_eq!(j.draw(&mut lr).unwrap().0, [want, 0, 0]);
         assert_eq!(j.candidates.len(), 2);
         assert!(!j.candidates.iter().any(|c| c.0 == [want, 0, 0]));
     }
 
     /// `CountDownCooldownTicks`: the memory falls by one a tick and is gone
     /// the tick after it reached 0; the sample is 100..=140, halved after a
-    /// failed search.
+    /// failed search, drawn from the level's random and not the frog's.
     #[test]
     fn the_long_jump_cooldown_counts_down_and_is_erased() {
         let mut m = frog();
-        sample_cooldown(&mut m, 2);
+        let own = m.random.state();
+        sample_cooldown(&mut m, &mut LegacyRandom::new(3), 2);
         let t = jump_cooldown(&m).unwrap();
         assert!((50..=70).contains(&t));
+        assert_eq!(m.random.state(), own);
         set_jump_cooldown(&mut m, Some(1));
         set_jump_cooldown(&mut m, Some(0));
         assert_eq!(jump_cooldown(&m), Some(0));
