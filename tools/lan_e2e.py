@@ -262,6 +262,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
              client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
              sends each target its packet).
+- popped_break_effects: a torch on the side of a block and sugar cane above one play their break sound once
+             for the miner and for the player around when the support is mined (#3747).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
 - falling:   an item, a falling block and primed TNT the host summons high up fall smoothly on the
@@ -8257,6 +8259,48 @@ def check_dig_sounds(host, guest, out):
 
 CHECKS += ['dig_sounds']
 CHECK_FNS['dig_sounds'] = check_dig_sounds
+
+
+def check_popped_break_effects(host, guest, out):
+    """Block.playerWillDestroy only skips the mined block's own level event: a block that pops off
+    when its support is mined (a torch on the side, sugar cane above) plays its break event (sound and
+    particles) for the miner too, once, as it does for the players around (#3747)."""
+    result = {}
+    spots = apart(host, guest)
+    cases = [('torch', 'minecraft:stone', 'minecraft:wall_torch[facing=north]', (0, 0, -1), 'minecraft:block.wood.break'),
+             ('cane', 'minecraft:sand', 'minecraft:sugar_cane', (0, 1, 0), 'minecraft:block.grass.break')]
+    for label, player in (('host', host), ('guest', guest)):
+        other = guest if label == 'host' else host
+        x, y, z = spots[label]
+        player('command', command='gamemode creative')
+        for name, support, popped, offset, sound in cases:
+            cell = (x, y + 1, z + 3)
+            host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 5} minecraft:air')
+            host('command', command=f'setblock {cell[0]} {cell[1] - 1} {cell[2]} minecraft:sand')
+            host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} {support}')
+            at = (cell[0] + offset[0], cell[1] + offset[1], cell[2] + offset[2])
+            if name == 'cane':
+                host('command', command=f'fill {x - 2} {cell[1] - 1} {cell[2] + 1} {x - 2} {cell[1] - 1} {cell[2] + 1} minecraft:water')
+                host('command', command=f'fill {cell[0] - 1} {cell[1]} {cell[2]} {cell[0] - 1} {cell[1]} {cell[2]} minecraft:water')
+                host('command', command=f'setblock {cell[0]} {cell[1] + 1} {cell[2]} minecraft:sugar_cane')
+            else:
+                host('command', command=f'setblock {at[0]} {at[1]} {at[2]} {popped}')
+            host.wait(10)
+            player.until(lambda: player.raw('block', *at)['block'], lambda b: b.startswith(popped.split('[')[0]))
+            before = {g.name: heard(g, sound) for g in (host, guest)}
+            player.raw('look-at', f'{cell[0] + 0.5:.2f}', f'{cell[1] + 0.5:.2f}', f'{cell[2] + 0.5:.2f}')
+            player.raw('mouse', 'left', 'click')
+            player.wait(15)
+            seen = {g.name: heard(g, sound) - before[g.name] for g in (host, guest)}
+            result[f'{label}-{name}'] = seen
+            assert host.raw('block', *at)['block'] == 'minecraft:air', f'{label}-{name}: the popped block stayed: {result}'
+            assert seen[player.name] == 1, f'{label}-{name}: the miner heard {seen[player.name]} break sounds: {result}'
+            assert seen[other.name] == 1, f'{label}-{name}: the other player heard {seen[other.name]}: {result}'
+    return result
+
+
+CHECKS += ['popped_break_effects']
+CHECK_FNS['popped_break_effects'] = check_popped_break_effects
 
 
 def check_keys_released(host, guest, out):
