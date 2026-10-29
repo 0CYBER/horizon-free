@@ -195,7 +195,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let state = self.state(pos);
         if self.b.is_block(state, self.b.named.moving_piston) {
             if let Some(piston) = self.moving_piston(pos) {
-                if piston.source && !piston.extending {
+                // `PistonMovingBlockEntity.getCollisionShape`: only a piston base.
+                if piston.source
+                    && !piston.extending
+                    && (self.b.is_block(piston.moved_state, self.b.named.piston)
+                        || self
+                            .b
+                            .is_block(piston.moved_state, self.b.named.sticky_piston))
+                {
                     return self
                         .b
                         .table
