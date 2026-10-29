@@ -592,6 +592,12 @@ fn stop_being_angry(m: &mut Mob) {
     m.extra.angry_at = None;
     m.extra.anger = 0;
 }
+/// `NeutralMob.playerDied`: the anger at the player who died ends.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if m.extra.angry_at == Some(Who::Player) {
+        stop_being_angry(m);
+    }
+}
 /// `NeutralMob.updatePersistentAnger(level, true)` from `Wolf.aiStep`: any
 /// target (the attacker, a pack-mate's attacker the `HurtByTargetGoal` alert
 /// gave it, prey, the owner's enemy) is the anger's target, and the 20 to 39

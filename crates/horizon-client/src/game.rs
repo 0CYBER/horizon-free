@@ -5633,6 +5633,12 @@ impl Game<'_> {
             self.level.last_death =
                 Some((self.dim.id().to_owned(), feet.map(|v| v.floor() as i32)));
             self.death_message();
+            // The mobs bound to a guest see that guest as their player.
+            let bindings = match self.lan.as_ref() {
+                Some(host) if !host.hub.guests.is_empty() => host.mob_players.clone(),
+                _ => Default::default(),
+            };
+            self.tell_neutral_mobs_player_died(feet, None, &bindings);
             // ServerPlayer.die: deaths, and the time-since counters restart.
             self.stats.custom("deaths", 1);
             self.score_player_died();

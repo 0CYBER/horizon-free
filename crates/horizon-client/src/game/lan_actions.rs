@@ -2343,6 +2343,7 @@ impl Game<'_> {
                 play.hook = None;
             }
         }
+        let here = host.hub.here(&host.hub.guests[gi]);
         let g = &mut host.hub.guests[gi];
         if g.health <= 0.0 && !g.dead {
             g.dead = true;
@@ -2359,6 +2360,11 @@ impl Game<'_> {
             let drops =
                 (g.game_mode != SPECTATOR).then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
             let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+            // ServerPlayer.die: the neutral mobs near a guest in this level
+            // forget their anger at them.
+            if here {
+                self.tell_neutral_mobs_player_died(at, Some(conn), &host.mob_players);
+            }
             // ServerPlayer.die: with showDeathMessages, the message goes to
             // the dying player's death screen and to everyone the team lets
             // see it; without it, the death screen gets an empty one.

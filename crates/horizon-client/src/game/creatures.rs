@@ -1905,6 +1905,34 @@ impl Game<'_> {
             self.spawn_orbs(at, amount);
         }
     }
+    /// `ServerPlayer.tellNeutralMobsThatIDied`: the mobs within 32 blocks
+    /// across and 10 up and down get `NeutralMob.playerDied`, when the
+    /// `forgive_dead_players` rule is on. A mob's `Who::Player` is the guest
+    /// it is bound to in `bindings` (game/lan_mobs.rs), else the host's
+    /// player, so only the mobs whose binding is `conn` (`None` for the
+    /// host's player) hear it.
+    pub(super) fn tell_neutral_mobs_player_died(
+        &mut self,
+        feet: [f64; 3],
+        conn: Option<u32>,
+        bindings: &std::collections::HashMap<u32, u32>,
+    ) {
+        // A client of someone else's world has the server's mobs only to show.
+        if self.remote.is_some() || !self.ui.rules.bool("forgive_dead_players") {
+            return;
+        }
+        let block = feet.map(f64::floor);
+        let area = Aabb::new(
+            Vec3::new(block[0], block[1], block[2]),
+            Vec3::new(block[0] + 1.0, block[1] + 1.0, block[2] + 1.0),
+        )
+        .inflate(Vec3::new(32.0, 10.0, 32.0));
+        for m in self.mobs.iter_mut() {
+            if bindings.get(&m.id).copied() == conn && m.bounds().intersects(area) {
+                horizon_client::mobs::ai::forgive_dead_player(m);
+            }
+        }
+    }
     /// Animal.spawnChildFromBreeding
     fn breed(
         &mut self,
