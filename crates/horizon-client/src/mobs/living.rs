@@ -879,9 +879,12 @@ impl Mob {
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
         let mut damage = (power * self.kind.fall_damage_multiplier).floor();
-        // Frog.calculateFallDamage: five points less than the base damage.
-        if self.species() == super::Species::Frog {
-            damage -= 5.0;
+        // Frog.calculateFallDamage: five points less than the base damage;
+        // Goat.calculateFallDamage: ten, so a long jump down a ledge is safe.
+        match self.species() {
+            super::Species::Frog => damage -= 5.0,
+            super::Species::Goat => damage -= 10.0,
+            _ => {}
         }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
