@@ -264,6 +264,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             return false;
         }
+        if b.is_block(state, b.named.bubble_column) {
+            // BubbleColumnBlock.pickupBlock: the column is removed, the bucket is water.
+            self.set_block(pos, b.air(), 11);
+            return true;
+        }
         if b.is_block(state, b.named.powder_snow) {
             // PowderSnowBlock.pickupBlock: the block breaks with its particles and sound.
             self.set_block(pos, b.air(), 11);
