@@ -1798,6 +1798,8 @@ trait SeededPipeline: Send + Sync {
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
+    /// The exact `end_island_decorated` origins in a chunk, without terrain.
+    fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]>;
     fn sea_level(&self) -> i32;
     fn surface_sample(
         &self,
@@ -1895,6 +1897,20 @@ where
     }
     fn data(&self) -> &Arc<GeneratorData> {
         &self.data
+    }
+    fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]> {
+        let Some(decoration) = &self.decoration else {
+            return Vec::new();
+        };
+        let mut resolver = self.source.resolver(
+            &self.climate,
+            self.router.get(RouterField::Erosion).as_ref(),
+        );
+        let mut context = SamplerContext::cached();
+        decoration.origins(self.seed, chunk, |position| {
+            let quart = [position[0] >> 2, position[1] >> 2, position[2] >> 2];
+            resolver.sample(&mut context, quart).ok() == Some("minecraft:small_end_islands")
+        })
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
@@ -2310,6 +2326,8 @@ where
                         _ => spans.push((min, band_min, fill)),
                     }
                 }
+                // Void cells still need a biome: the End's small islands are
+                // features over the void, and their biome is 2D there.
                 let biome = if let Some((height, _)) = top {
                     memo_biome(
                         &self.data,
@@ -2645,6 +2663,10 @@ impl OverworldGenerator {
     }
     pub fn data(&self) -> &Arc<GeneratorData> {
         self.pipeline.data()
+    }
+    /// The exact `end_island_decorated` origins in a chunk, without terrain.
+    pub fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]> {
+        self.pipeline.end_island_origins(chunk)
     }
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
