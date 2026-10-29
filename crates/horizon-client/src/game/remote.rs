@@ -698,8 +698,15 @@ impl Game<'_> {
         e.visible = p.flags & 2 != 0;
         let list = &mut self.potions.effects.list;
         match list.iter_mut().find(|x| x.id == id) {
+            // forceAddEffect's copyBlendState: an updated darkness keeps its fade.
             Some(existing) => *existing = e,
-            None => list.push(e),
+            None => {
+                if id == "darkness" {
+                    // ClientboundUpdateMobEffectPacket.shouldBlend (flag 8).
+                    self.sculk.darkness = super::sculk::darkness_blend_added(&e, p.flags & 8 != 0);
+                }
+                list.push(e);
+            }
         }
     }
     fn item_id(&self, name: &str) -> i32 {
@@ -1806,38 +1813,38 @@ impl Game<'_> {
         }
     }
 
-    /// `ClientPacketListener.handleUpdateAttributes` for a mob: its maximum
-    /// health (the hearts drawn over its mount) takes the server's value, from
-    /// `AttributeInstance.calculateValue`.
+    /// `ClientPacketListener.handleUpdateAttributes` for a mob, each value from
+    /// `AttributeInstance.calculateValue`: its maximum health (the hearts drawn
+    /// over its mount), and a player's or mannequin's `minecraft:scale`, which
+    /// scales its model (`LivingEntityRenderState.scale`) as the local player's
+    /// does: NPC plugins make their fake players bigger with it.
     fn remote_mob_attributes(&mut self, id: i32, values: &[play::AttributeSnapshot]) {
         let catalog = &self.motion.attributes;
-        let Some(max_health) = catalog.id("minecraft:max_health") else {
-            return;
-        };
-        let Some(s) = values
-            .iter()
-            .find(|s| s.attribute == max_health.registry_id())
-        else {
-            return;
-        };
-        let amounts = |op: i32| {
-            s.modifiers
+        let value = |name: &str| {
+            let attribute = catalog.id(name)?;
+            let s = values
                 .iter()
-                .filter(move |m| m.operation == op)
-                .map(|m| m.amount)
+                .find(|s| s.attribute == attribute.registry_id())?;
+            Some(
+                catalog
+                    .attribute(attribute)
+                    .definition
+                    .sanitize(snapshot_value(s)),
+            )
         };
-        let base = s.base + amounts(0).sum::<f64>();
-        let mut value = base + amounts(1).map(|a| base * a).sum::<f64>();
-        for amount in amounts(2) {
-            value *= 1.0 + amount;
-        }
-        let value = catalog.attribute(max_health).definition.sanitize(value);
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+        let (max_health, scale) = (value("minecraft:max_health"), value("minecraft:scale"));
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) else {
+            return;
+        };
+        if let Some(max_health) = max_health {
             horizon_client::mobs::finalize::set_base(
                 m,
                 horizon_client::mobs::finalize::Attr::MaxHealth,
-                value,
+                max_health,
             );
+        }
+        if let Some(scale) = scale {
+            m.extra.model_scale = scale as f32;
         }
     }
 
@@ -3302,12 +3309,25 @@ impl Game<'_> {
                 |location| self.gui.atlas.sprites.contains_key(location),
             );
             let id = skins::parse_profile(profile).id;
-            self.gui
-                .atlas
-                .set_object_skin(format!("id:{id:032x}"), skin.clone());
             let name = profile
                 .as_str()
                 .or_else(|| profile.get("name").and_then(serde_json::Value::as_str));
+            // The player list's skin for the same profile is drawn too.
+            let keys = [
+                Some(format!("id:{id:032x}")),
+                name.map(|n| format!("name:{}", n.to_ascii_lowercase())),
+            ];
+            for key in keys.iter().flatten() {
+                if let Some(listed) = self.gui.atlas.object_skins.get(key)
+                    && listed.starts_with("skins/")
+                {
+                    let listed = listed.clone();
+                    self.again_skin(&listed);
+                }
+            }
+            self.gui
+                .atlas
+                .set_object_skin(format!("id:{id:032x}"), skin.clone());
             if let Some(name) = name {
                 self.gui
                     .atlas
@@ -3375,18 +3395,16 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
-        resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
         // An offline name's cape from the launcher, where the profile has none.
         if !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
         {
             const OFFLINE: &str = "capes/offline";
-            if !self.show_skin(OFFLINE) {
+            if !self.skin_slots.contains(OFFLINE) {
                 self.store_skin(OFFLINE.into(), rgba.to_vec());
             }
             capes.insert(local, OFFLINE.into());
         }
-        capes.retain(|_, cape| self.again_skin(cape));
         // PlayerInfo.getSkin: the downloaded skin and its model, else the
         // profile's default skin (DefaultPlayerSkin.get), slim or wide.
         let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
@@ -3409,27 +3427,36 @@ impl Game<'_> {
         }) else {
             return;
         };
+        // Only the skins drawn hold atlas slots: the level's players, not
+        // every entry of a busy server's player list.
         for (id, uuid) in level {
-            let (skin, is_slim) = skin_of(&skins, uuid);
-            if let Some(mob) = self
+            let Some(i) = self
                 .mobs
-                .iter_mut()
-                .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
-            {
-                mob.skin = Some(skin);
-                mob.slim = is_slim;
-                mob.cape = capes.get(&uuid).cloned();
-            }
-        }
-        if let Some(mob) = self.player_model.as_mut() {
-            let (skin, is_slim) = skin_of(&skins, own);
+                .iter()
+                .position(|m| m.id == id && &*m.kind.id == "minecraft:player")
+            else {
+                continue;
+            };
+            let (skin, is_slim) = self.drawn_skin(uuid, skin_of(&skins, uuid));
+            let cape = capes.get(&uuid).filter(|c| self.again_skin(c)).cloned();
+            let mob = &mut self.mobs[i];
             mob.skin = Some(skin);
             mob.slim = is_slim;
+            mob.cape = cape;
+        }
+        if self.player_model.is_some() {
+            let (skin, is_slim) = self.drawn_skin(own, skin_of(&skins, own));
             // Avatar.isModelPartShown(CAPE): the Skin Customization option.
-            mob.cape = capes
+            let cape = capes
                 .get(&own)
                 .filter(|_| self.settings.file.bool("modelPart_cape"))
+                .filter(|c| self.again_skin(c))
                 .cloned();
+            if let Some(mob) = self.player_model.as_mut() {
+                mob.skin = Some(skin);
+                mob.slim = is_slim;
+                mob.cape = cape;
+            }
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3502,17 +3529,15 @@ impl Game<'_> {
             }
         }
     }
-    /// Puts a downloaded skin in an atlas skin slot: a free one, else the
-    /// least recently shown.
+    /// Puts a downloaded skin in an atlas skin slot (`SkinSlots::place`),
+    /// unless every slot holds a skin drawn in the last frame.
     pub(super) fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
-        use horizon_client::hud::SKIN_SLOTS;
-        let slot = if self.skin_slots.len() < SKIN_SLOTS {
-            self.skin_slots.len()
-        } else {
-            let (old, slot) = self.skin_slots.remove(0);
-            self.gui.atlas.sprites.remove(&old);
-            slot
+        let Some((slot, evicted)) = self.skin_slots.place(location.clone()) else {
+            return;
         };
+        if let Some(old) = evicted {
+            self.gui.atlas.sprites.remove(&old);
+        }
         let Some(mut rect) = self
             .gui
             .atlas
@@ -3534,21 +3559,38 @@ impl Game<'_> {
         if location.starts_with("capes/") {
             rect.v1 = (rect.v0 + rect.v1) / 2.0;
         }
-        self.gui.atlas.sprites.insert(location.clone(), rect);
-        self.skin_slots.push((location, slot));
+        self.gui.atlas.sprites.insert(location, rect);
     }
-    /// Whether a downloaded skin is in the atlas, marking it recently shown.
-    fn show_skin(&mut self, location: &str) -> bool {
-        let Some(i) = self.skin_slots.iter().position(|e| e.0 == location) else {
-            return false;
-        };
-        let e = self.skin_slots.remove(i);
-        self.skin_slots.push(e);
-        true
-    }
-    /// `show_skin`, or — its slot evicted — the image queued for upload again.
+    /// Whether a downloaded skin or cape is in the atlas to draw, marking it
+    /// drawn; if not (new, or its slot taken), its image is queued for upload
+    /// again and it is drawn from the next frame.
     fn again_skin(&mut self, location: &str) -> bool {
-        self.show_skin(location) || self.skin_downloads.borrow_mut().again(location)
+        let mut downloads = self.skin_downloads.borrow_mut();
+        if self.skin_slots.contains(location) {
+            downloads.drawn(location);
+            true
+        } else {
+            downloads.again(location);
+            false
+        }
+    }
+    /// A player's skin and model as drawn: the downloaded skin once it is in
+    /// the atlas, until then the profile's default (`DefaultPlayerSkin.get`),
+    /// as `PlayerInfo.getSkin` gives before the texture has loaded.
+    pub(super) fn drawn_skin(
+        &mut self,
+        uuid: u128,
+        (skin, slim): (String, bool),
+    ) -> (String, bool) {
+        if skin.starts_with("skins/") && !self.again_skin(&skin) {
+            let skin = horizon_client::tab_list::default_skin(uuid);
+            return (skin.to_owned(), skin.contains("/slim/"));
+        }
+        (skin, slim)
+    }
+    /// `drawn_skin` for a face in the player list or spectator menu.
+    pub(super) fn face_skin(&mut self, uuid: u128, skin: &str) -> String {
+        self.drawn_skin(uuid, (skin.to_owned(), false)).0
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
     /// ChatType.Bound.decorate: the chat type's translation, with the
@@ -3974,7 +4016,8 @@ impl Game<'_> {
         if let Some(head) = self.sleeping {
             player.position = Vec3::new(
                 f64::from(head[0]) + 0.5,
-                f64::from(head[1]) + 0.5625,
+                // setPosToBed: the bed's top (getSleepHeight) and 0.125 above it.
+                f64::from(head[1]) + 0.5625 + 0.125,
                 f64::from(head[2]) + 0.5,
             );
             player.velocity = Vec3::ZERO;
@@ -4740,6 +4783,11 @@ impl Game<'_> {
         if self.res.facts().is_air(state) {
             return;
         }
+        // startDestroyBlock refuses a restricted break before predicting it.
+        if self.remote_break_restricted() {
+            self.mining = None;
+            return;
+        }
         if self.creative {
             let seq = self.next_sequence();
             // DebugStickItem.canDestroyBlock never lets the client break the
@@ -4894,6 +4942,19 @@ impl Game<'_> {
         }
         self.mining = None;
     }
+    /// `Player.blockActionRestricted` as far as this client reads it: a
+    /// spectator never breaks, an adventure player only with a main-hand
+    /// item the server gave `can_break`. Whether its predicate matches the
+    /// block is left to the server, which sends the block back if not.
+    fn remote_break_restricted(&self) -> bool {
+        use horizon_protocol::item::{WirePatch, component::CAN_BREAK};
+        self.spectator()
+            || (!self.may_build()
+                && !self
+                    .held()
+                    .and_then(|s| s.wire_patch())
+                    .is_some_and(|p| WirePatch::adds(&p, CAN_BREAK)))
+    }
     /// Minecraft.startUseItem: use one crosshair target, then the item itself.
     fn remote_use(&mut self) {
         // Minecraft.startUseItem returns before resetting rightClickDelay
@@ -5019,6 +5080,12 @@ impl Game<'_> {
                 (result, changes)
             };
             let reacts = result.consumes_action();
+            // ArmorStandItem.useOn runs in startPrediction before the packet
+            // goes out (the server may spawn the stand at once).
+            let stand_fits = held
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:armor_stand")
+                && self.armor_stand_spawn(&hit).is_some();
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -5070,6 +5137,12 @@ impl Game<'_> {
                         g.using = Some((g.held_slot(), 0));
                     }
                 });
+                return true;
+            } else if stand_fits {
+                // ArmorStandItem.useOn on a client level: SUCCESS once the
+                // stand fits, before the server spawns it. This hand swings
+                // and the click ends.
+                self.with_hand(hand, Game::swing_arm);
                 return true;
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
@@ -5808,7 +5881,9 @@ impl Game<'_> {
             && let Some(hit) = self.pick()
         {
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            if !self.res.facts().is_air(state) {
+            if self.remote_break_restricted() {
+                // continueDestroyBlock returned false: no swing.
+            } else if !self.res.facts().is_air(state) {
                 self.remote_mining(false);
                 self.swing_arm();
                 self.send(S::Punch(Empty));
@@ -6982,8 +7057,50 @@ impl Remote {
     }
 }
 
+/// `AttributeInstance.calculateValue` before the attribute's range: the base,
+/// `ADD_VALUE`s, then `ADD_MULTIPLIED_BASE`s of that, then each
+/// `ADD_MULTIPLIED_TOTAL`.
+fn snapshot_value(s: &play::AttributeSnapshot) -> f64 {
+    let amounts = |op: i32| {
+        s.modifiers
+            .iter()
+            .filter(move |m| m.operation == op)
+            .map(|m| m.amount)
+    };
+    let base = s.base + amounts(0).sum::<f64>();
+    let mut value = base + amounts(1).map(|a| base * a).sum::<f64>();
+    for amount in amounts(2) {
+        value *= 1.0 + amount;
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
+    /// An NPC plugin's scale: a base the plugin sets, or a modifier on 1.
+    #[test]
+    fn attribute_values_add_then_multiply_as_vanilla() {
+        use horizon_protocol::packets::play::{AttributeModifier, AttributeSnapshot};
+        let modifier = |amount, operation| AttributeModifier {
+            id: "minecraft:proof".into(),
+            amount,
+            operation,
+        };
+        let snapshot = |base, modifiers| AttributeSnapshot {
+            attribute: 0,
+            base,
+            modifiers,
+        };
+        assert_eq!(super::snapshot_value(&snapshot(2.0, vec![])), 2.0);
+        assert_eq!(
+            super::snapshot_value(&snapshot(1.0, vec![modifier(1.0, 0)])),
+            2.0
+        );
+        // (1 + 1) * (1 + 0.5) from the base, then * (1 + 1) of the total.
+        let all = vec![modifier(1.0, 0), modifier(0.5, 1), modifier(1.0, 2)];
+        assert_eq!(super::snapshot_value(&snapshot(1.0, all)), 6.0);
+    }
+
     use super::Game;
 
     /// Q over a slot of the inventory on a server (#3357): the predicted THROW

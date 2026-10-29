@@ -2830,7 +2830,7 @@ mod axolotl_nbt_tests {
         assert_eq!(restored.health, 5.0);
         m.glowing = false;
         m.add_effect("glowing", 200, 0);
-        assert!(m.has_effect("glowing"));
+        assert!(m.has_effect("minecraft:glowing"));
         assert!(bucket_data(&m).get("Glowing").is_none());
         m.glowing = true;
         assert_eq!(number(bucket_data(&m).get("Glowing")), Some(1));
