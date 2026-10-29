@@ -8,8 +8,9 @@ use std::io::Read;
 use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
+// Version 4 mirrored every untouched directory file by file on Windows.
 // Version 3 could omit untouched vanilla directories on Windows (#1649, #1688).
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {

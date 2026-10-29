@@ -200,6 +200,9 @@ impl Game<'_> {
                     self.sync_agent_control();
                     self.ui.options.agent_status = self.agent_status_lines();
                 }
+                Event::SliderDrag => {
+                    self.apply_settings();
+                }
                 Event::CopyAgentDetails => {
                     use horizon_client::clipboard::Clipboard;
                     let text = self.agent_details();
@@ -269,7 +272,12 @@ impl Game<'_> {
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
-            r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
+            r.set_world_post(
+                s.horizon.resolution_scale as f32 / 100.0,
+                s.horizon.fxaa,
+                s.horizon.taa,
+                s.horizon.upscaling.ratio(),
+            );
             r.set_hdr(
                 s.horizon.hdr,
                 s.horizon.hdr_paper_white as f32,

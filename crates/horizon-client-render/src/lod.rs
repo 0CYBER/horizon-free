@@ -250,8 +250,17 @@ fn state_kinds(facts: &BlockFacts) -> Vec<u8> {
             let state = BlockStateId(i as u32);
             let f = facts.get(state);
             let fluid = matches!(&*f.name, "minecraft:water" | "minecraft:lava");
+            // Chorus is thin and non-solid but a visible part of the far End.
+            let chorus = matches!(
+                &*f.name,
+                "minecraft:chorus_plant" | "minecraft:chorus_flower"
+            );
             let kept = !facts.is_air(state)
-                && (f.solid_render || f.full_collision || f.name.ends_with("_leaves") || fluid);
+                && (f.solid_render
+                    || f.full_collision
+                    || f.name.ends_with("_leaves")
+                    || chorus
+                    || fluid);
             (u8::from(kept) * KEPT)
                 | (u8::from(fluid) * FLUID)
                 | (u8::from(state == facts.air) * AIR)
@@ -1810,6 +1819,23 @@ mod tests {
         for y in 55..64 {
             chunk.set(4, y, 4, water.0);
         }
+        // Chorus is thin and non-solid but must survive the visit summary.
+        let end_stone = assets
+            .registry
+            .default_state("minecraft:end_stone")
+            .unwrap();
+        let chorus = assets
+            .registry
+            .default_state("minecraft:chorus_plant")
+            .unwrap();
+        let flower = assets
+            .registry
+            .default_state("minecraft:chorus_flower")
+            .unwrap();
+        chunk.set(8, 70, 8, end_stone.0);
+        chunk.set(8, 71, 8, chorus.0);
+        chunk.set(8, 72, 8, chorus.0);
+        chunk.set(8, 73, 8, flower.0);
         lod.observe(Arc::new(chunk.clone()), &facts);
         receive_observed(&mut lod);
         let observed = &lod.saved[&(-1, -1)];
@@ -1817,6 +1843,16 @@ mod tests {
         assert_eq!(observed[0].surface.unwrap().state, stone);
         assert_eq!(observed[68].surface.unwrap().height, 55);
         assert_eq!(observed[68].surface.unwrap().water, Some((64, water)));
+        let chorus_column = &observed[8 * 16 + 8];
+        assert_eq!(chorus_column.surface.unwrap().state, flower);
+        assert_eq!(
+            chorus_column
+                .spans
+                .iter()
+                .map(|span| (span.min, span.max, span.state))
+                .collect::<Vec<_>>(),
+            vec![(70, 71, end_stone), (71, 73, chorus), (73, 74, flower)]
+        );
 
         let fine = TileKey {
             x: -1,

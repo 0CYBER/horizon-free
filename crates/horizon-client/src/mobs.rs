@@ -769,8 +769,13 @@ pub struct Extra {
     /// `LivingEntity.isAutoSpinAttack` (Riptide).
     pub auto_spin_attack: bool,
     pub main_hand_left: bool,
+    /// The skin layers a player hides (`PlayerModelPart` bits, set to
+    /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
+    pub hidden_model_parts: u8,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,
+    /// `ClientAvatarState` of a player: the cloak, bob and walked distance its cape swings with.
+    pub avatar: crate::camera::AvatarBob,
     /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
     /// for the right arm.
     pub swing_right_arm: Option<bool>,
@@ -965,6 +970,9 @@ pub struct Mob {
     pub skin: Option<String>,
     /// `PlayerSkin.model` is `SLIM`: the player model with 3-pixel arms.
     pub slim: bool,
+    /// `PlayerSkin.cape`: a player's cape texture, once every download of
+    /// its skin is ready.
+    pub cape: Option<String>,
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
@@ -1847,6 +1855,9 @@ pub struct MobWorld<'a> {
     /// Where each id stands in `others`, when the caller keeps one.
     pub others_index: Option<&'a crate::fast_hash::FxHashMap<u32, u32>>,
     pub daylight: bool,
+    /// The `gameplay/monsters_burn` attribute: the overworld day timeline's
+    /// step track, false in every other dimension.
+    pub monsters_burn: bool,
     pub game_time: i64,
     pub day_time: i64,
     pub raining: bool,
@@ -1960,6 +1971,7 @@ impl Mob {
             outbox: Vec::new(),
             skin: None,
             slim: false,
+            cape: None,
             profile: None,
             attrs: Attrs {
                 speed: kind.speed,
@@ -2731,6 +2743,8 @@ impl Mob {
     /// player from its synched pose and flags: the glide count, the wings
     /// (`elytraAnimationState`) and the swim amount (`updateSwimAmount`).
     pub fn tick_avatar_pose(&mut self, in_water: bool) {
+        let (p, v) = (self.previous, self.velocity);
+        let on_ground_alive = self.on_ground && self.alive();
         let e = &mut self.extra;
         e.fall_fly_ticks = if e.fall_flying {
             e.fall_fly_ticks + 1
@@ -2742,6 +2756,17 @@ impl Mob {
         let visually = e.synced_pose == 3 || (!e.fall_flying && e.synced_pose == 1);
         e.elytra.tick(e.fall_flying, e.crouching, self.velocity);
         e.swim.tick(visually, in_water);
+        // AbstractClientPlayer.tick's ClientAvatarState.tick (from where the
+        // player was before this tick's move), RemotePlayer.aiStep's
+        // updateBob and rideTick's resetBob.
+        e.avatar.tick([p.x, p.y, p.z]);
+        if e.passenger {
+            e.avatar.reset_bob();
+        } else {
+            let swimming = e.synced_pose == 3;
+            e.avatar
+                .update_bob(on_ground_alive && !swimming, [v.x, v.y, v.z]);
+        }
     }
 }
 
