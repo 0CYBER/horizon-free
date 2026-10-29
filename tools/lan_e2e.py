@@ -8437,6 +8437,46 @@ CHECKS += ['dig_sounds']
 CHECK_FNS['dig_sounds'] = check_dig_sounds
 
 
+def check_shulker_menu(host, guest, out):
+    """A shulker box opens a ShulkerBoxMenu (ShulkerBoxBlockEntity.createMenu), whose ShulkerBoxSlots
+    refuse shulker boxes. The server opened it as a 9x3 chest menu, which took them."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    box = (x, y, z + 2)
+    try:
+        guest('command', command='gamemode survival')
+        guest('command', command='clear @s')
+        guest('command', command='give @s minecraft:cobblestone 1')
+        guest('command', command='give @s minecraft:red_shulker_box 1')
+        guest('command', command=f'setblock {box[0]} {box[1]} {box[2]} minecraft:shulker_box')
+        guest.wait(10)
+        guest.raw('interact', *box)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        guest.wait(10)
+        # The cobblestone goes in; the red shulker box stays on the cursor.
+        mouse(guest, hotbar_slot(guest, 'minecraft:cobblestone'))
+        mouse(guest, 301)
+        mouse(guest, hotbar_slot(guest, 'minecraft:red_shulker_box'))
+        mouse(guest, 300)
+        guest.wait(10)
+        guest.shot(out, 'shulker-menu')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+        inside, size = open_container(guest, box, out, 'shulker-menu-after')
+        counts = guest('inventory')['counts']
+        stored = host('command', command=f'data get block {box[0]} {box[1]} {box[2]} Items')
+    finally:
+        guest('command', command=f'setblock {box[0]} {box[1]} {box[2]} minecraft:air')
+        guest('command', command='clear @s')
+    assert size == 27 and inside == {1: 'minecraft:cobblestone'}, f'the shulker box holds {inside} ({size})'
+    assert 'red_shulker_box' not in json.dumps(stored), f'the server stored {stored}'
+    assert counts.get('minecraft:red_shulker_box') == 1, f'inventory after: {counts}'
+    return {'inside': inside, 'inventory': counts}
+
+
+CHECKS += ['shulker_menu']
+CHECK_FNS['shulker_menu'] = check_shulker_menu
+
+
 def check_keys_released(host, guest, out):
     """Gui.setScreen -> KeyMapping.releaseAll: the screen shown after leaving a server releases every held
     key, so W and Space held through the disconnect don't walk and jump on in the next world (#3246)."""
