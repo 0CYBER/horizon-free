@@ -954,3 +954,48 @@ fn server_fields_edit_at_their_cursor() {
     };
     assert_eq!(address, "one ");
 }
+#[test]
+fn world_list_names_every_game_mode_and_hardcore_in_red() {
+    let f = Fixture::new();
+    f.world("Creative", "Creative");
+    let level = |folder: &str, game_type: i32, hardcore: bool| {
+        crate::save::write_dat(
+            &f.title.saves.join(folder).join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("LevelName", Tag::String(folder.into())),
+                    ("GameType", Tag::Int(game_type)),
+                    (
+                        "difficulty_settings",
+                        Tag::compound([
+                            ("difficulty", Tag::String("hard".into())),
+                            ("hardcore", Tag::Byte(i8::from(hardcore))),
+                        ]),
+                    ),
+                    (
+                        "Version",
+                        Tag::compound([("Name", Tag::String("26.3".into()))]),
+                    ),
+                ]),
+            )]),
+        )
+        .unwrap();
+    };
+    level("Hardcore", 0, true);
+    level("Adventure", 2, false);
+    level("Spectator", 3, false);
+    let worlds = list_worlds(&f.title.saves);
+    let info = |folder: &str| world_info(worlds.iter().find(|w| w.folder == folder).unwrap());
+
+    let hardcore = info("Hardcore");
+    assert_eq!(hardcore.plain(), "Hardcore Mode, Version: 26.3");
+    assert_eq!(hardcore.spans[0].text, "Hardcore Mode");
+    assert_eq!(hardcore.spans[0].style.color, Some(0xFF0000));
+    assert!(hardcore.spans[1..].iter().all(|s| s.style.color.is_none()));
+    assert_eq!(info("Adventure").plain(), "Adventure Mode, Version: 26.3");
+    assert_eq!(info("Spectator").plain(), "Spectator Mode, Version: 26.3");
+    let creative = info("Creative");
+    assert_eq!(creative.plain(), "Creative Mode, Commands, Version: 26.3");
+    assert!(creative.spans.iter().all(|s| s.style.color.is_none()));
+}
