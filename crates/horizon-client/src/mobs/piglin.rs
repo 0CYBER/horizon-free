@@ -1463,6 +1463,7 @@ pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
         25.0,
         m.extra.using_item as f32,
         m.main_arm_left(),
+        m.extra.passenger,
     );
 }
 /// `PiglinArmPose`.
@@ -1475,7 +1476,8 @@ pub enum PiglinPose {
     CrossbowCharge,
     AdmiringItem,
 }
-/// `PiglinModel.setupAnim`; `left` when the piglin's main arm is the left one.
+/// `PiglinModel.setupAnim`; `left` when the piglin's main arm is the left one
+/// and `passenger` when it rides something (`HumanoidModel`'s riding pose).
 pub fn piglin_pose(
     p: &mut Poses,
     s: &State,
@@ -1483,11 +1485,13 @@ pub fn piglin_pose(
     max_charge: f32,
     ticks: f32,
     left: bool,
+    passenger: bool,
 ) {
     use super::anim::{ArmPose, Hum, crossbow_charge, crossbow_hold, humanoid};
     let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
     h.weapon_swing = pose == PiglinPose::MeleeWeapon;
     h.left_main = left;
+    h.passenger = passenger;
     h.charge = (max_charge, ticks);
     humanoid(p, s, &h);
     ears(p, s);
