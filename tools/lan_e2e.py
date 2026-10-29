@@ -3582,7 +3582,7 @@ def check_flow_push(host, guest, out):
         host('command', command=f'fill {x+3} {y+1} {z+3} {x+5} {y+3} {z+5} minecraft:air')
         host.wait(40)
         for tag, px, pz in [(tags[0], x+1.5, z+0.5), (tags[1], x+4.5, z+4.5)]:
-            host('command', command=f'summon minecraft:pig {px} {y+0.1} {pz} {{NoAI:1b,Tags:["{tag}"]}}')
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {pz} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
         host.wait(40)
         flowing = fluid_pig_position(host, tags[0])[0] - (x + 1.5)
         still = fluid_pig_position(host, tags[1])[0] - (x + 4.5)
@@ -3606,7 +3606,7 @@ def check_bubble_column(host, guest, out):
         host('command', command=f'setblock {x} {y-1} {z} minecraft:soul_sand')
         host.wait(20)
         for tag, px in [(tags[0], x+0.5), (tags[1], x+3.5)]:
-            host('command', command=f'summon minecraft:pig {px} {y+0.1} {z+0.5} {{NoAI:1b,Tags:["{tag}"]}}')
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {z+0.5} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
         samples = {tag: [] for tag in tags}
         for _ in range(8):
             host.wait(5)
@@ -7533,7 +7533,7 @@ def check_boat_dismount_pose(host, guest, out):
     host('command', command=f'fill {x - 2} {y} {z - 2} {x + 8} {y + 4} {z + 8} minecraft:air')
     host('command', command=f'summon minecraft:oak_boat {bx} {y} {bz} {{Tags:["{tag}"]}}')
     for _ in range(2):
-        host('command', command=f'summon minecraft:husk {bx} {y} {bz} {{NoAI:1b,Tags:["{tag}"]}}')
+        host('command', command=f'summon minecraft:husk {bx} {y} {bz} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
         host.wait(5)
     try:
         host.wait(20)
