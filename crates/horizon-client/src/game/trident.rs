@@ -6,9 +6,11 @@
 use super::{Game, view_vector};
 use horizon_client::{
     collisions::SceneCollisions,
+    enchant::EffectContext,
     items::ItemStack,
     mesher::Vertex,
     mobs::{Damage, DamageKind, Who, anim::Poses},
+    projectiles::ProjectileWorld,
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, traverse_blocks},
@@ -21,7 +23,7 @@ pub(super) struct ThrownTrident {
     pub id: u32,
     pub(super) stack: ItemStack,
     pub(super) position: Vec3,
-    previous: Vec3,
+    pub(super) previous: Vec3,
     pub(super) velocity: Vec3,
     pub(super) yaw: f32,
     pub(super) pitch: f32,
@@ -32,6 +34,22 @@ pub(super) struct ThrownTrident {
     pub(super) no_physics: bool,
     returning: u32,
     creative_only: bool,
+    /// The entity id a server sent as its owner (the one Loyalty returns it to).
+    pub(super) owner: u32,
+    /// The guest that threw it (`Projectile.getOwner`); `None` for the host.
+    pub(super) guest: Option<u32>,
+}
+/// A player a trident can return to (its owner) or that can pick it up: this
+/// game's own, or a server's guest in this level, which is all a server has.
+struct Catcher {
+    /// The guest's connection; `None` for this game's player.
+    guest: Option<u32>,
+    /// The guest's entity id (unused for this game's player).
+    id: i32,
+    feet: Vec3,
+    eye: Vec3,
+    /// `Player.aiStep` touches things only while alive and not a spectator.
+    touches: bool,
 }
 impl ThrownTrident {
     /// A trident a server sent (`handleAddEntity`): placed and moved by it.
@@ -51,12 +69,72 @@ impl ThrownTrident {
             no_physics: false,
             returning: 0,
             creative_only: false,
+            owner: 0,
+            guest: None,
         }
     }
-    /// One tick of a server's client: the previous position, then `step`.
-    pub(super) fn remote_step(&mut self, step: impl FnOnce(Vec3) -> Vec3) {
+    /// `ThrownTrident.tick`'s Loyalty return: pulled up and towards the
+    /// owner's eye.
+    fn loyalty_pull(&mut self, owner_eye: Vec3) {
+        let v = Vec3::new(
+            owner_eye.x - self.position.x,
+            owner_eye.y - self.position.y,
+            owner_eye.z - self.position.z,
+        );
+        self.position.y += v.y * 0.015 * f64::from(self.loyalty);
+        let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1e-9);
+        let accel = 0.05 * f64::from(self.loyalty);
+        self.velocity = Vec3::new(
+            self.velocity.x * 0.95 + v.x / len * accel,
+            self.velocity.y * 0.95 + v.y / len * accel,
+            self.velocity.z * 0.95 + v.z / len * accel,
+        );
+    }
+    /// `ThrownTrident.tick` on a server's client: it flies on by itself
+    /// between the server's updates (`AbstractArrow.tick`: gravity and drag,
+    /// a block holds it), and Loyalty pulls it back to its owner; only the
+    /// server decides what it hits.
+    pub(super) fn remote_tick(&mut self, w: &impl ProjectileWorld, owner_eye: Option<Vec3>) {
         self.previous = self.position;
-        self.position = step(self.position);
+        if self.in_ground_time > 4 {
+            self.dealt_damage = true;
+        }
+        if self.loyalty > 0
+            && (self.dealt_damage || self.no_physics)
+            && let Some(eye) = owner_eye
+        {
+            self.no_physics = true;
+            self.in_ground = false;
+            self.loyalty_pull(eye);
+        }
+        if self.in_ground && !self.no_physics {
+            self.in_ground_time += 1;
+            return;
+        }
+        self.in_ground_time = 0;
+        let m = self.velocity;
+        let (x, z) = if self.no_physics {
+            (-m.x, -m.z)
+        } else {
+            (m.x, m.z)
+        };
+        self.yaw = x.atan2(z).to_degrees() as f32;
+        self.pitch = m.y.atan2(m.x.hypot(m.z)).to_degrees() as f32;
+        let to = self.position.add_vector(m);
+        if !self.no_physics
+            && let Some((at, _, _)) = w.clip(self.position, to)
+        {
+            self.position = at;
+            self.velocity = Vec3::ZERO;
+            self.in_ground = true;
+            return;
+        }
+        self.position = to;
+        // A trident's water inertia (0.99) equals the air drag.
+        self.velocity = self.velocity.scale(0.99);
+        if !self.no_physics {
+            self.velocity.y -= 0.05;
+        }
     }
 }
 const HALF: f64 = 0.25;
@@ -112,7 +190,7 @@ impl Game<'_> {
         }
         true
     }
-    fn in_water_or_rain(&self) -> bool {
+    fn in_water_or_rain(&mut self) -> bool {
         let Some(p) = &self.player else { return false };
         let (x, y, z) = (
             p.position.x.floor() as i32,
@@ -121,8 +199,8 @@ impl Game<'_> {
         );
         let water = self.res.facts().get(self.world.block(x, y, z)).fluid
             == horizon_client::blocks::Fluid::Water;
-        let sky = self.world.light(x, y + 1, z) >> 4 == 15;
-        water || (self.world.weather.raining && sky)
+        let (at, top) = (p.position, p.bounds().max_position().y);
+        water || self.in_rain(at, top)
     }
     /// The living entities a spinning player can touch this tick, for
     /// `LivingEntity.checkAutoSpinAttack` (none when not spinning).
@@ -159,7 +237,7 @@ impl Game<'_> {
     /// The `summon_entity` and `play_sound` effects of `channeling.json`: in a
     /// thunderstorm (`weather_check`) a spot that sees the sky (`can_see_sky`)
     /// gets a lightning bolt and the thunder sound.
-    fn channel_lightning(&mut self, at: [f64; 3]) {
+    fn channel_lightning(&mut self, at: [f64; 3], guest: Option<u32>) {
         // Level.isThundering: the thunder level, in dimensions with weather.
         if self.dim != super::Dim::Overworld || self.world.weather.levels(1.0).1 <= 0.9 {
             return;
@@ -174,13 +252,17 @@ impl Game<'_> {
             return;
         }
         self.spawn_bolt(at, false);
+        // The summon effect's owner is the thrower: LightningBolt.setCause.
+        if let Some(bolt) = self.bolts.last_mut() {
+            bolt.cause = Some(guest);
+        }
         self.audio
             .play("minecraft:item.trident.thunder", Some(at), 5.0, 1.0);
     }
     /// `minecraft:hit_block` of Channeling (`AbstractArrow.hitBlockEnchantmentEffects`):
     /// the block the trident's path first hits, if it is a lightning rod, with
     /// the hit location clamped into the block (`BlockPos.clampLocationWithin`).
-    fn channel_rod_hit(&mut self, from: Vec3, velocity: Vec3) {
+    fn channel_rod_hit(&mut self, from: Vec3, velocity: Vec3, guest: Option<u32>) {
         let to = Vec3::new(
             from.x + velocity.x,
             from.y + velocity.y,
@@ -213,11 +295,14 @@ impl Game<'_> {
         let edge = f64::from(1.0e-5f32);
         let clamp =
             |v: f64, origin: i32| v.clamp(f64::from(origin) + edge, f64::from(origin) + 1.0 - edge);
-        self.channel_lightning([
-            clamp(hit.location.x, hit.block.x),
-            clamp(hit.location.y, hit.block.y),
-            clamp(hit.location.z, hit.block.z),
-        ]);
+        self.channel_lightning(
+            [
+                clamp(hit.location.x, hit.block.x),
+                clamp(hit.location.y, hit.block.y),
+                clamp(hit.location.z, hit.block.z),
+            ],
+            guest,
+        );
     }
     /// `TridentItem.releaseUsing`.
     pub(super) fn release_trident(&mut self, ticks: u32) {
@@ -240,7 +325,12 @@ impl Game<'_> {
             if !self.in_water_or_rain() || self.riding.is_some() {
                 return;
             }
-            self.hurt_held_without_breaking(1);
+            // `hurtWithoutBreaking` and the sound belong to the server; a server's
+            // client only launches.
+            let server_client = self.remote.is_some();
+            if !server_client {
+                self.hurt_held_without_breaking(1);
+            }
             // trident_spin_attack_strength: 1.5 + 0.75 per level above the first.
             let strength = 1.5 + 0.75 * (riptide as f32 - 1.0);
             let d = view_vector(self.yaw, self.pitch);
@@ -253,12 +343,34 @@ impl Game<'_> {
                 // Player.startAutoSpinAttack(20, 8, stack).
                 p.auto_spin_attack_ticks = 20;
                 p.auto_spin_attack_dmg = 8.0;
-                if p.ground.on_ground {
-                    p.position.y += 1.2;
+            }
+            // `player.move(SELF, (0, 1.1999999, 0))` when on the ground: the lift
+            // stops at a ceiling.
+            let lift = self
+                .player
+                .as_ref()
+                .filter(|p| p.ground.on_ground)
+                .map(|p| p.bounds());
+            if let Some(bounds) = lift {
+                let mut scene = SceneCollisions {
+                    world: &self.world,
+                    binding: self.collision,
+                    subject: None,
+                };
+                let up = Vec3::new(0.0, f64::from(1.1999999f32), 0.0);
+                let moved = scene.resolve(bounds, up, 0.0, true).unwrap_or(Vec3::ZERO);
+                if let Some(p) = self.player.as_mut() {
+                    p.position.y += moved.y;
                 }
             }
-            let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));
-            self.audio.play(&sound, at, 1.0, 1.0);
+            if !server_client {
+                let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));
+                self.audio.play(&sound, at, 1.0, 1.0);
+            }
+            return;
+        }
+        // The server throws the trident.
+        if self.remote.is_some() {
             return;
         }
         // hurtWithoutBreaking (Unbreaking applies), then the thrown copy.
@@ -273,10 +385,9 @@ impl Game<'_> {
             start,
             Some(Who::Player),
         );
-        let (v, on_ground) = self
-            .player
-            .as_ref()
-            .map_or((Vec3::ZERO, true), |p| (p.velocity, p.ground.on_ground));
+        let (v, on_ground) = self.player.as_ref().map_or((Vec3::ZERO, true), |p| {
+            (self.known_player_movement(), p.ground.on_ground)
+        });
         projectile.shoot_from_rotation(
             &mut self.world.random,
             self.pitch,
@@ -302,17 +413,110 @@ impl Game<'_> {
             no_physics: false,
             returning: 0,
             creative_only: self.creative,
+            owner: 0,
+            guest: self.lan_acting,
         });
         self.player_projectile_shot();
         self.audio
             .play("minecraft:item.trident.throw", at, 1.0, 1.0);
     }
-    pub(super) fn tick_tridents(&mut self) {
-        let Some(eye) = self.eye_position() else {
+    /// The thrower's `PLAYER_HURT_ENTITY` for a trident hit: run as the
+    /// guest that threw it, and not at all once they have left.
+    fn thrower_hit(
+        &mut self,
+        guest: Option<u32>,
+        victim: &horizon_client::advancements::EntityView,
+        direct: horizon_client::advancements::EntityView,
+        damage: f32,
+    ) {
+        let Some(conn) = guest.filter(|c| self.lan_acting != Some(*c)) else {
+            self.player_hit(victim, "minecraft:trident", Some(direct), damage);
             return;
         };
-        let owner_eye = Vec3::new(eye[0], eye[1], eye[2]);
-        let feet = self.player.as_ref().map_or(owner_eye, |p| p.position);
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        self.as_guest(&mut host, conn, |g| {
+            g.player_hit(victim, "minecraft:trident", Some(direct), damage)
+        });
+        self.lan = Some(host);
+    }
+    /// The players tridents fly back to or land at: this game's player and the
+    /// guests in this level. A server has no player of its own, so its
+    /// tridents belong to guests.
+    fn trident_catchers(&self) -> Vec<Catcher> {
+        let mut out = Vec::new();
+        if let Some(eye) = self.eye_position() {
+            let feet = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
+            out.push(Catcher {
+                guest: None,
+                id: 0,
+                feet,
+                eye: Vec3::new(eye[0], eye[1], eye[2]),
+                touches: true,
+            });
+        }
+        if let Some(host) = self.lan.as_ref() {
+            for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+                let [x, y, z] = g.position;
+                out.push(Catcher {
+                    guest: Some(g.conn),
+                    id: g.entity_id,
+                    feet: Vec3::new(x, y, z),
+                    eye: Vec3::new(x, y + g.eye_height(), z),
+                    touches: !g.dead && !g.spectator(),
+                });
+            }
+        }
+        out
+    }
+    /// `AbstractArrow.playerTouch` for a trident that has landed or is
+    /// returning: the player takes the item (a creative thrower's trident is
+    /// only removed) and the rest that does not fit drops at their feet.
+    /// False when it could not be given.
+    fn trident_taken(&mut self, t: &ThrownTrident, by: &Catcher) -> bool {
+        if !t.creative_only {
+            let rest = match by.guest {
+                None => self.give(t.stack.clone()),
+                Some(conn) => {
+                    let Some(mut host) = self.lan.take() else {
+                        return false;
+                    };
+                    let rest = self.as_guest(&mut host, conn, |g| g.give(t.stack.clone()));
+                    // Player.take: the guest's client plays the pickup sound.
+                    if rest.is_some() {
+                        let at = [t.position.x, t.position.y, t.position.z];
+                        host.hub.take_item(t.id as i32, by.id, 1, at);
+                    }
+                    self.lan = Some(host);
+                    let Some(rest) = rest else {
+                        return false;
+                    };
+                    rest
+                }
+            };
+            if let Some(rest) = rest {
+                self.spawn_item(rest, [by.feet.x, by.feet.y, by.feet.z], [0.0; 3], 0);
+            }
+        }
+        if by.guest.is_none() {
+            let pitch = ((self.world.random.next_float() - self.world.random.next_float()) * 0.7
+                + 1.0)
+                * 2.0;
+            self.audio.play(
+                "minecraft:entity.item.pickup",
+                Some([by.feet.x, by.feet.y, by.feet.z]),
+                0.2,
+                pitch,
+            );
+        }
+        true
+    }
+    pub(super) fn tick_tridents(&mut self) {
+        if self.tridents.is_empty() {
+            return;
+        }
+        let catchers = self.trident_catchers();
         let mut i = 0;
         while i < self.tridents.len() {
             let mut t = self.tridents.remove(i);
@@ -320,22 +524,15 @@ impl Game<'_> {
             if t.in_ground_time > 4 {
                 t.dealt_damage = true;
             }
-            if t.loyalty > 0 && (t.dealt_damage || t.no_physics) {
+            // ThrownTrident.tick: Loyalty needs its owner, who is in this level.
+            let owner_eye = catchers.iter().find(|c| c.guest == t.guest).map(|c| c.eye);
+            if t.loyalty > 0
+                && (t.dealt_damage || t.no_physics)
+                && let Some(owner_eye) = owner_eye
+            {
                 t.no_physics = true;
                 t.in_ground = false;
-                let v = Vec3::new(
-                    owner_eye.x - t.position.x,
-                    owner_eye.y - t.position.y,
-                    owner_eye.z - t.position.z,
-                );
-                t.position.y += v.y * 0.015 * f64::from(t.loyalty);
-                let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1e-9);
-                let accel = 0.05 * f64::from(t.loyalty);
-                t.velocity = Vec3::new(
-                    t.velocity.x * 0.95 + v.x / len * accel,
-                    t.velocity.y * 0.95 + v.y / len * accel,
-                    t.velocity.z * 0.95 + v.z / len * accel,
-                );
+                t.loyalty_pull(owner_eye);
                 if t.returning == 0 {
                     self.audio.play(
                         "minecraft:item.trident.return",
@@ -367,11 +564,29 @@ impl Game<'_> {
                     }
                 }
                 if let Some((id, _)) = hit_mob {
-                    let impaling = t.stack.enchantment_level("minecraft:impaling") as f32;
-                    let aquatic = self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
-                        m.kind.flags.aquatic_swimmer || m.kind.flags.breathes_water
-                    });
-                    let damage = 8.0 + if aquatic { 2.5 * impaling } else { 0.0 };
+                    // ThrownTrident.getDamage: `EnchantmentHelper.modifyDamage` on 8
+                    // (impaling hits `#sensitive_to_impaling`, the aquatic tag).
+                    let victim = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| m.kind.id.clone());
+                    let ctx = EffectContext {
+                        this: victim.as_deref(),
+                        attacker: Some("minecraft:player"),
+                        direct_attacker: Some("minecraft:trident"),
+                        is_direct: true,
+                        damage_type: Some("minecraft:trident"),
+                        items: Some(self.res.items()),
+                        ..Default::default()
+                    };
+                    let damage = self.res.stations().enchantments.modify_value(
+                        Some(&t.stack),
+                        "minecraft:damage",
+                        &ctx,
+                        &mut self.world.random,
+                        8.0,
+                    );
                     t.dealt_damage = true;
                     let mut hurt_at = None;
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
@@ -392,7 +607,19 @@ impl Game<'_> {
                     if let Some(at) = hurt_at
                         && t.stack.enchantment_level("minecraft:channeling") > 0
                     {
-                        self.channel_lightning(at);
+                        self.channel_lightning(at, t.guest);
+                    }
+                    if hurt_at.is_some()
+                        && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                    {
+                        // LivingEntity.hurtServer: PLAYER_HURT_ENTITY.
+                        let victim = self.mob_entity(m);
+                        let direct = horizon_client::advancements::EntityView {
+                            kind: "minecraft:trident".into(),
+                            position: [t.position.x, t.position.y, t.position.z],
+                            ..Default::default()
+                        };
+                        self.thrower_hit(t.guest, &victim, direct, damage);
                     }
                     self.audio.play(
                         "minecraft:item.trident.hit",
@@ -424,7 +651,7 @@ impl Game<'_> {
                         );
                         if blocked {
                             if t.stack.enchantment_level("minecraft:channeling") > 0 {
-                                self.channel_rod_hit(from, flight);
+                                self.channel_rod_hit(from, flight, t.guest);
                             }
                             t.in_ground = true;
                             t.velocity = Vec3::ZERO;
@@ -450,28 +677,23 @@ impl Game<'_> {
                     t.pitch = t.velocity.y.atan2(h).to_degrees() as f32;
                 }
             }
-            // playerTouch: stuck or returning tridents go back to the player.
-            let near = (t.position.x - feet.x).abs() < 1.0
-                && (t.position.z - feet.z).abs() < 1.0
-                && t.position.y > feet.y - 1.0
-                && t.position.y < feet.y + 2.5;
-            if near && (t.in_ground || t.no_physics) {
-                if !t.creative_only {
-                    let stack = t.stack.clone();
-                    if let Some(rest) = self.give(stack) {
-                        self.spawn_item(rest, [feet.x, feet.y, feet.z], [0.0; 3], 0);
-                    }
+            // playerTouch: stuck or returning tridents go back to a player.
+            // ThrownTrident.playerTouch: only its owner takes it, or anyone
+            // once the owner is not in this level (`getOwner() == null`).
+            if t.in_ground || t.no_physics {
+                let near = |c: &&Catcher| {
+                    c.touches
+                        && (owner_eye.is_none() || c.guest == t.guest)
+                        && (t.position.x - c.feet.x).abs() < 1.0
+                        && (t.position.z - c.feet.z).abs() < 1.0
+                        && t.position.y > c.feet.y - 1.0
+                        && t.position.y < c.feet.y + 2.5
+                };
+                if let Some(by) = catchers.iter().find(near)
+                    && self.trident_taken(&t, by)
+                {
+                    continue;
                 }
-                let pitch =
-                    ((self.world.random.next_float() - self.world.random.next_float()) * 0.7 + 1.0)
-                        * 2.0;
-                self.audio.play(
-                    "minecraft:entity.item.pickup",
-                    Some([feet.x, feet.y, feet.z]),
-                    0.2,
-                    pitch,
-                );
-                continue;
             }
             self.tridents.insert(i, t);
             i += 1;
@@ -495,7 +717,7 @@ impl Game<'_> {
         let range = 10.0
             * super::entity_culling::default_range(
                 glam::DVec3::splat(2.0 * HALF),
-                self.settings.entity_distance,
+                self.view_scale(),
             );
         for t in &self.tridents {
             // EntityRenderer.shouldRender; ThrownTridentRenderer grows the box by 1.5.

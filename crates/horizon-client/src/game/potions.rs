@@ -2,7 +2,12 @@
 //! `Consumable`), throwing splash/lingering potions (`ThrownSplashPotion`),
 //! filling glass bottles (`BottleItem`), the per-tick effect application,
 //! effect attribute modifiers and the HUD effect icons (`Hud.extractEffects`).
-use super::{Game, Screen, item_draw::owner_at};
+use super::{
+    Game, Screen,
+    dragon::{Breath, FightPlayer, FightWho},
+    item_draw::owner_at,
+    remote_projectiles::cloud_client_tick,
+};
 use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
     block_entity_render::vertex_light,
@@ -12,8 +17,13 @@ use horizon_client::{
     hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
     mesher::Vertex,
+    particles::{ParticleOptions, ParticleType},
+    text::Text,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Direction, Vec3},
+    random::{LegacyRandom, RandomSource},
+};
 
 /// A thrown splash or lingering potion in flight.
 #[derive(Clone, Debug)]
@@ -26,9 +36,41 @@ pub(super) struct ThrownPotion {
     position: Vec3,
     velocity: Vec3,
     age: u32,
+    /// `Projectile.getOwner`'s display name: the player who threw it (none
+    /// for a dispenser's).
+    owner: Option<Text>,
+}
+/// `AreaEffectCloud` wait time set by `ThrownLingeringPotion.onHitAsPotion`.
+pub(super) const LINGERING_WAIT: i32 = 10;
+/// `AreaEffectCloud.DEFAULT_REAPPLICATION_DELAY`.
+const REAPPLICATION_DELAY: i32 = 20;
+/// An entity a cloud has affected (`AreaEffectCloud.victims`).
+#[derive(Clone, Copy, PartialEq)]
+enum Victim {
+    Mob(u32),
+    Player(FightWho),
+}
+/// What a lingering potion's `AreaEffectCloud` applies: the potion's effects
+/// (at the lingering item's 0.25 duration scale) and who it has affected.
+pub(super) struct PotionCloud {
+    effects: &'static [(&'static str, i32, i32)],
+    /// The potion's colour (`PotionContents.getColor`).
+    color: u32,
+    /// Each victim and the tick it can be affected again.
+    victims: Vec<(Victim, i32)>,
+    /// Who its instant damage names (`indirectMagic(cloud, owner)`): the
+    /// thrower, else the cloud.
+    source: Text,
+}
+impl PotionCloud {
+    /// `AreaEffectCloud.updateParticle`: an entity effect in the potion's colour.
+    pub(super) fn particle(&self) -> ParticleOptions {
+        let c = |shift: u32| (self.color >> shift & 255) as f32 / 255.0;
+        ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0])
+    }
 }
 /// A mob's effect ids carry the `minecraft:` namespace.
-fn mob_effect_id(id: &str) -> Option<&'static str> {
+pub(super) fn mob_effect_id(id: &str) -> Option<&'static str> {
     use std::{collections::HashMap, sync::OnceLock};
     static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     let id = id.trim_start_matches("minecraft:");
@@ -44,10 +86,212 @@ fn mob_effect_id(id: &str) -> Option<&'static str> {
     .get(id)
     .copied()
 }
+/// `LivingEntity.canBeAffected` with the mob overrides (`WitherBoss` and
+/// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,
+/// `Parched` weakness): the immune-to-infested and immune-to-oozing tags
+/// decide first, then the tag of mobs that ignore poison and regeneration.
+fn mob_can_be_affected(
+    tags: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    kind: &str,
+    effect: &str,
+) -> bool {
+    let effect = effect.trim_start_matches("minecraft:");
+    let kind = kind.trim_start_matches("minecraft:");
+    let overridden = match kind {
+        "wither" | "wither_skeleton" => effect == "wither",
+        "spider" | "cave_spider" | "nautilus" | "zombie_nautilus" => effect == "poison",
+        "parched" => effect == "weakness",
+        _ => false,
+    };
+    if overridden {
+        return false;
+    }
+    let in_tag = |tag: &str| {
+        tags.get(tag)
+            .is_some_and(|t| t.contains(&format!("minecraft:{kind}")))
+    };
+    if in_tag("minecraft:immune_to_infested") {
+        effect != "infested"
+    } else if in_tag("minecraft:immune_to_oozing") {
+        effect != "oozing"
+    } else {
+        !in_tag("minecraft:ignores_poison_and_regen")
+            || (effect != "regeneration" && effect != "poison")
+    }
+}
+/// `ThrownSplashPotion.onHitAsPotion`: the squared distance from the potion's
+/// box at the hit point to an entity's box grown by the hit margin
+/// (`ProjectileUtil.computeMargin`), for entities that meet the potion's box
+/// grown by (4, 2, 4); none when it is 16 or more.
+fn splash_distance_sqr(at: Vec3, age: u32, bounds: Aabb) -> Option<f64> {
+    let potion = Aabb::new(
+        Vec3::new(at.x - 0.125, at.y, at.z - 0.125),
+        Vec3::new(at.x + 0.125, at.y + 0.25, at.z + 0.125),
+    );
+    if !potion.inflate(Vec3::new(4.0, 2.0, 4.0)).intersects(bounds) {
+        return None;
+    }
+    let margin = ((f64::from(age) - 2.0) / 20.0).clamp(0.0, 0.3);
+    let d2 = potion.distance_squared_to_box(bounds.inflate(Vec3::new(margin, margin, margin)));
+    (d2 < 16.0).then_some(d2)
+}
 impl Game<'_> {
+    /// `LivingEntity.triggerOnDeathMobEffects` (`onMobRemoved` with the reason
+    /// KILLED) for what Oozing, Weaving and Wind Charged do when their bearer
+    /// dies. `bearer` is the dying mob's id, `player` whether it is a player,
+    /// `random` the dying mob's own (`mob.getRandom()`; the world's for the
+    /// player).
+    pub(super) fn effects_on_death(
+        &mut self,
+        effects: &[&str],
+        bounds: Aabb,
+        player: bool,
+        bearer: Option<u32>,
+        mut random: Option<&mut LegacyRandom>,
+    ) {
+        let feet = bounds.bottom_center();
+        if effects.contains(&"oozing") {
+            // OozingMobEffect.numberOfSlimesToSpawn: two, fewer when the
+            // slimes close by already fill the cramming limit.
+            let limit = self.ui.rules.int("max_entity_cramming");
+            let mut count = 2;
+            if limit >= 1 {
+                let near = bounds.inflate(Vec3::new(2.0, 2.0, 2.0));
+                let nearby = self
+                    .mobs
+                    .iter()
+                    .filter(|m| {
+                        m.species() == horizon_client::mobs::Species::Slime
+                            && Some(m.id) != bearer
+                            && m.bounds().intersects(near)
+                    })
+                    .count()
+                    .min(limit as usize) as i32;
+                count = (limit - nearby).clamp(0, count);
+            }
+            for _ in 0..count {
+                // spawnSlimeOffspring: a size 2 slime half a block up.
+                if let Some(id) = self.spawn_mob_for(
+                    "minecraft:slime",
+                    [feet.x, feet.y + 0.5, feet.z],
+                    false,
+                    true,
+                ) && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+                {
+                    horizon_client::mobs::cube::set_size(m, 2);
+                }
+            }
+        }
+        if effects.contains(&"weaving") && (player || self.ui.rules.bool("mob_griefing")) {
+            self.spawn_cobwebs_around(
+                [
+                    feet.x.floor() as i32,
+                    feet.y.floor() as i32,
+                    feet.z.floor() as i32,
+                ],
+                random.as_deref_mut(),
+            );
+        }
+        if effects.contains(&"wind_charged") {
+            // A burst centred at half the height, radius 3 to 5.
+            let center = [feet.x, feet.y + bounds.size().y / 2.0, feet.z];
+            let r = random.unwrap_or(&mut self.world.random);
+            let radius = 3.0 + r.next_float() * 2.0;
+            let _ = self.wind_burst(center, radius, 1.0, false, false);
+        }
+    }
+    /// `WeavingMobEffect.spawnCobwebsRandomlyAround`: two or three cobwebs in
+    /// free spaces with a solid floor, picked among 15 random blocks within one
+    /// block of `pos`.
+    fn spawn_cobwebs_around(&mut self, pos: [i32; 3], mut random: Option<&mut LegacyRandom>) {
+        let r = random.as_deref_mut().unwrap_or(&mut self.world.random);
+        let wanted = 2 + r.next_int_bound(2).unwrap_or(0) as usize;
+        let mut chosen: Vec<[i32; 3]> = Vec::new();
+        for _ in 0..15 {
+            let r = random.as_deref_mut().unwrap_or(&mut self.world.random);
+            let at = [
+                pos[0] - 1 + r.next_int_bound(3).unwrap_or(0),
+                pos[1] - 1 + r.next_int_bound(3).unwrap_or(0),
+                pos[2] - 1 + r.next_int_bound(3).unwrap_or(0),
+            ];
+            let facts = self.res.facts();
+            let here = facts.get(self.world.block(at[0], at[1], at[2]));
+            let below = facts.get(self.world.block(at[0], at[1] - 1, at[2]));
+            if !chosen.contains(&at)
+                && here.replaceable
+                && below.sturdy_full & (1 << Direction::Up as u8) != 0
+            {
+                chosen.push(at);
+                if chosen.len() >= wanted {
+                    break;
+                }
+            }
+        }
+        for at in chosen {
+            if self.set_state_named(at, "minecraft:cobweb", &[]).is_ok() {
+                self.level_event_at(3018, at, 0);
+            }
+        }
+    }
+    /// `InfestedMobEffect.onMobHurt` for the player: from half its height up,
+    /// along where it looks.
+    pub(super) fn player_infested(&mut self) {
+        if let Some(p) = self.player.as_ref() {
+            let at = [
+                p.position.x,
+                p.position.y + f64::from(p.dimensions.height) / 2.0,
+                p.position.z,
+            ];
+            let look = super::view_vector(self.yaw, self.pitch);
+            self.infested_hurt(at, look, None);
+        }
+    }
+    /// A living mob's own random (`Entity.random`), else the world's.
+    fn bearer_random(&mut self, bearer: Option<u32>) -> &mut LegacyRandom {
+        match bearer.and_then(|id| self.mobs.iter().position(|m| m.id == id)) {
+            Some(i) => &mut self.mobs[i].random,
+            None => &mut self.world.random,
+        }
+    }
+    /// `InfestedMobEffect.onMobHurt`: a 10% chance of one or two silverfish at
+    /// `at` (half the bearer's height up), thrown along its look direction.
+    /// The draws are the bearer's (`mob.getRandom()`): `bearer` is the mob,
+    /// none for the player (the world's random).
+    pub(super) fn infested_hurt(&mut self, at: [f64; 3], look: [f64; 3], bearer: Option<u32>) {
+        if self.bearer_random(bearer).next_float() > 0.1 {
+            return;
+        }
+        let count = 1 + self.bearer_random(bearer).next_int_bound(2).unwrap_or(0);
+        for _ in 0..count {
+            // Mth.randomBetween(-PI / 2, PI / 2), then the look direction
+            // scaled by (0.3, 0.45, 0.3) and turned about the y axis.
+            let half = std::f32::consts::FRAC_PI_2;
+            let angle = self.bearer_random(bearer).next_float() * (2.0 * half) - half;
+            let (sin, cos) = angle.sin_cos();
+            let (x, z) = (look[0] * 0.3, look[2] * 0.3);
+            let velocity = Vec3::new(
+                f64::from(x as f32 * cos + z as f32 * sin),
+                look[1] * 0.3 * 1.5,
+                f64::from(-x as f32 * sin + z as f32 * cos),
+            );
+            if let Some(id) = self.spawn_mob_for("minecraft:silverfish", at, false, true)
+                && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+            {
+                m.velocity = velocity;
+            }
+            self.audio
+                .play("minecraft:entity.silverfish.hurt", Some(at), 1.0, 1.0);
+        }
+    }
     /// A splash potion, lingering potion or experience bottle in flight (the
     /// player's throws and dispensers both end up here).
-    pub(super) fn launch_thrown(&mut self, stack: ItemStack, position: Vec3, velocity: Vec3) {
+    pub(super) fn launch_thrown(
+        &mut self,
+        stack: ItemStack,
+        position: Vec3,
+        velocity: Vec3,
+        owner: Option<Text>,
+    ) {
         self.potions.thrown.push(ThrownPotion {
             id: 0,
             stack,
@@ -55,6 +299,7 @@ impl Game<'_> {
             position,
             velocity,
             age: 0,
+            owner,
         });
     }
 }
@@ -135,6 +380,7 @@ impl PotionState {
             position: at,
             velocity,
             age: 0,
+            owner: None,
         });
     }
     /// ThrowableItemProjectile.DATA_ITEM_STACK: the potion it shows.
@@ -223,7 +469,7 @@ impl Game<'_> {
                     (f64::from(dir[1]) / l + jitter()) * power,
                     (f64::from(dir[2]) / l + jitter()) * power,
                 );
-                let pv = self.player.as_ref().map_or(Vec3::ZERO, |p| p.velocity);
+                let pv = self.known_player_movement();
                 let on_ground = self.player.as_ref().is_some_and(|p| p.ground.on_ground);
                 let v = Vec3::new(
                     v.x + pv.x,
@@ -237,6 +483,7 @@ impl Game<'_> {
                     },
                     Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
                     v,
+                    Some(self.player_display_text()),
                 );
                 self.swing_arm();
                 self.consume_held();
@@ -300,6 +547,7 @@ impl Game<'_> {
             return true;
         }
         self.using = None;
+        self.send_use_item_complete();
         self.post_entity_event("minecraft:drink", horizon_client::mobs::Who::Player);
         if ominous {
             self.drink_ominous_bottle(slot, stack);
@@ -377,6 +625,7 @@ impl Game<'_> {
         self.tick_mob_effects();
         if running {
             self.tick_thrown_potions();
+            self.tick_potion_clouds();
         }
     }
     /// `LivingEntity.tickEffects` (server side) for `self.player`, the local
@@ -387,13 +636,37 @@ impl Game<'_> {
             return;
         };
         if player.health.dead_or_dying() {
-            // LivingEntity.die → removeAllEffects.
+            // LivingEntity.die → removeAllEffects. Vanilla runs the effects
+            // that act on death (`onMobRemoved`) when the dead player is
+            // removed, up to 20 ticks later; here it is as the effects go.
+            let w = f64::from(player.dimensions.width) / 2.0;
+            let bounds = Aabb::new(
+                Vec3::new(
+                    player.position.x - w,
+                    player.position.y,
+                    player.position.z - w,
+                ),
+                Vec3::new(
+                    player.position.x + w,
+                    player.position.y + f64::from(player.dimensions.height),
+                    player.position.z + w,
+                ),
+            );
+            let ids: Vec<&'static str> = self.potions.effects.list.iter().map(|e| e.id).collect();
             self.potions.effects.clear();
+            if !ids.is_empty() {
+                self.effects_on_death(&ids, bounds, true, None, None);
+            }
         }
         // The omens act from inside the effect tick (BadOmenMobEffect,
         // RaidOmenMobEffect).
+        let absorption_empty = self
+            .player
+            .as_ref()
+            .is_some_and(|p| p.health.absorption() <= 0.0);
         let mut effects = std::mem::take(&mut self.potions.effects);
-        let (actions, raid_omen_added) = effects.tick_with(&mut |e| self.omen_tick(e));
+        let (actions, raid_omen_added) =
+            effects.tick_with(&mut |e| self.omen_tick(e), absorption_empty);
         self.potions.effects = effects;
         if raid_omen_added {
             self.raid_omen_added();
@@ -534,29 +807,177 @@ impl Game<'_> {
                 let state =
                     self.world
                         .block(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-                if self.res.facts().get(state).full_collision
-                    || self.mobs.iter().any(|m| {
-                        m.alive()
-                            && (m.position.x - p.x).abs() < m.kind.width / 2.0 + 0.125
-                            && (m.position.z - p.z).abs() < m.kind.width / 2.0 + 0.125
-                            && p.y >= m.position.y
-                            && p.y <= m.position.y + m.kind.height
-                    })
-                {
-                    hit = Some(p);
+                let mob = self.mobs.iter().find(|m| {
+                    m.alive()
+                        && (m.position.x - p.x).abs() < m.kind.width / 2.0 + 0.125
+                        && (m.position.z - p.z).abs() < m.kind.width / 2.0 + 0.125
+                        && p.y >= m.position.y
+                        && p.y <= m.position.y + m.kind.height
+                });
+                if self.res.facts().get(state).full_collision || mob.is_some() {
+                    hit = Some((p, mob.map(|m| m.position)));
                     break;
                 }
             }
-            if let Some(p) = hit {
-                landed.push((t.stack.clone(), p));
+            if let Some((p, mob)) = hit {
+                landed.push((t.stack.clone(), p, mob, t.age, t.owner.clone()));
                 return false;
             }
             t.position = next;
             t.age < 1200 && t.position.y > -128.0
         });
         self.potions.thrown = thrown;
-        for (stack, at) in landed {
-            self.splash(&stack, at);
+        for (stack, at, mob, age, owner) in landed {
+            self.splash(&stack, at, mob, age, owner);
+        }
+    }
+    /// `AreaEffectCloud.tick` for the lingering potions' clouds: the client
+    /// tick's particles, then the server tick.
+    fn tick_potion_clouds(&mut self) {
+        if self.breath_clouds.iter().all(|c| c.potion.is_none()) {
+            return;
+        }
+        let players: Vec<FightPlayer> = self
+            .fight_players()
+            .into_iter()
+            .filter(|p| p.alive)
+            .collect();
+        let mut clouds = std::mem::take(&mut self.breath_clouds);
+        clouds.retain_mut(|c| c.potion.is_none() || self.tick_potion_cloud(c, &players));
+        self.breath_clouds.append(&mut clouds);
+    }
+    /// `AreaEffectCloud.serverTick` for a lingering potion's cloud: after its
+    /// wait it shrinks, and every 5 ticks it affects the living entities in
+    /// its box and radius that were not affected in the last 20 ticks, each
+    /// taking some of its radius. False once it is gone.
+    fn tick_potion_cloud(&mut self, c: &mut Breath, players: &[FightPlayer]) -> bool {
+        c.age += 1;
+        let Some(potion) = c.potion.as_mut() else {
+            return true;
+        };
+        if c.age - LINGERING_WAIT >= c.duration {
+            return false;
+        }
+        let waiting = c.age < LINGERING_WAIT;
+        cloud_client_tick(
+            &mut self.particles,
+            c.at,
+            c.radius,
+            waiting,
+            &potion.particle(),
+        );
+        if waiting {
+            return true;
+        }
+        // setRadiusPerTick(-radius / duration).
+        c.radius += -3.0 / 600.0;
+        if c.radius < 0.5 {
+            return false;
+        }
+        if c.age % 5 != 0 {
+            return true;
+        }
+        potion.victims.retain(|(_, until)| c.age < *until);
+        let r = f64::from(c.radius);
+        let area = Aabb::new(
+            Vec3::new(c.at[0] - r, c.at[1], c.at[2] - r),
+            Vec3::new(c.at[0] + r, c.at[1] + 0.5, c.at[2] + r),
+        );
+        let mut inside = Vec::new();
+        for p in players.iter().filter(|p| p.bounds.intersects(area)) {
+            inside.push((Victim::Player(p.who), p.position.x, p.position.z));
+        }
+        let effects = potion.effects;
+        let tags = &self.res.stations().enchantments.entity_tags;
+        // Only mobs that at least one of the cloud's effects can affect are
+        // taken (`allEffects.stream().anyMatch(entity::canBeAffected)`), so
+        // the others neither become victims nor use up its radius.
+        for m in self.mobs.iter().filter(|m| {
+            m.alive()
+                && m.bounds().intersects(area)
+                && effects
+                    .iter()
+                    .any(|(id, ..)| mob_can_be_affected(tags, &m.kind.id, id))
+        }) {
+            inside.push((Victim::Mob(m.id), m.position.x, m.position.z));
+        }
+        for (victim, x, z) in inside {
+            let (dx, dz) = (x - c.at[0], z - c.at[2]);
+            if potion.victims.iter().any(|(v, _)| *v == victim)
+                || dx * dx + dz * dz > f64::from(c.radius * c.radius)
+            {
+                continue;
+            }
+            potion.victims.push((victim, c.age + REAPPLICATION_DELAY));
+            self.cloud_affect(victim, effects, c.at, &potion.source);
+            // setRadiusOnUse(-0.5).
+            c.radius -= 0.5;
+            if c.radius < 0.5 {
+                return false;
+            }
+        }
+        true
+    }
+    /// What a cloud puts on one entity: instant effects at half strength
+    /// (`applyInstantaneousEffect` with 0.5), the others for their duration
+    /// at the lingering item's 0.25 scale (`PotionContents.forEachEffect`).
+    fn cloud_affect(
+        &mut self,
+        victim: Victim,
+        effects: &'static [(&'static str, i32, i32)],
+        at: [f64; 3],
+        source: &Text,
+    ) {
+        let scaled = |duration: i32| ((f64::from(duration) * 0.25) as i32).max(1);
+        match victim {
+            Victim::Player(who) => self.as_fight_player(who, |g| {
+                for (id, duration, amp) in effects {
+                    let Some(e) = brewing::effect(id) else {
+                        continue;
+                    };
+                    if e.instant {
+                        if let Some(a) = horizon_client::effects::instant(id, *amp, 0.5) {
+                            g.apply_indirect_effect_action(a, source);
+                        }
+                    } else {
+                        g.add_player_effect(EffectInstance::new(e.id, scaled(*duration), *amp));
+                    }
+                }
+            }),
+            Victim::Mob(mob) => {
+                let Some(i) = self.mobs.iter().position(|m| m.id == mob) else {
+                    return;
+                };
+                // Undead invert healing and harming.
+                let tags = &self.res.stations().enchantments.entity_tags;
+                let inverted = tags
+                    .get("minecraft:inverted_healing_and_harm")
+                    .is_some_and(|t| t.contains(&self.mobs[i].kind.id));
+                for (id, duration, amp) in effects {
+                    let m = &mut self.mobs[i];
+                    match *id {
+                        "instant_damage" | "instant_health" => {
+                            let amount =
+                                |base: i32| (0.5 * f64::from(base << amp) + 0.5) as i32 as f32;
+                            if (*id == "instant_damage") != inverted {
+                                let harm = m.potion_harm(amount(6));
+                                m.hurt(harm, Some(at), &mut self.world.random);
+                            } else {
+                                m.health = (m.health + amount(4)).min(m.kind.max_health);
+                            }
+                        }
+                        _ => {
+                            // `LivingEntity.addEffect` refuses what the mob
+                            // cannot be affected by.
+                            if mob_can_be_affected(tags, &m.kind.id, id)
+                                && let Some(name) = mob_effect_id(id)
+                            {
+                                m.add_effect(name, scaled(*duration), *amp);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     /// `ThrowableProjectile.tick`'s `applyGravity` and `applyInertia`, which
@@ -658,31 +1079,46 @@ impl Game<'_> {
             self.submit_item_world(&state, pose, vertex_light(light), out);
         }
     }
+    /// `HealOrHarmMobEffect.applyInstantaneousEffect` with a source (a
+    /// potion or a cloud): indirectMagic, not plain magic.
+    fn apply_indirect_effect_action(&mut self, a: EffectAction, source: &Text) {
+        let a = match a {
+            EffectAction::Hurt("minecraft:magic", amount) => {
+                self.note_direct_entity("minecraft:indirect_magic", source.clone());
+                EffectAction::Hurt("minecraft:indirect_magic", amount)
+            }
+            a => a,
+        };
+        self.apply_effect_action(a);
+    }
     /// A splash potion's effects on the player in place, by their distance.
     fn splash_on_player(
         &mut self,
         effects: &'static [(&'static str, i32, i32)],
         at: Vec3,
-        scale: f64,
+        age: u32,
+        source: &Text,
     ) {
         if let Some(p) = self.player.as_ref() {
-            let center = Vec3::new(
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.height) / 2.0,
-                p.position.z,
+            let w = f64::from(p.dimensions.width) / 2.0;
+            let bounds = Aabb::new(
+                Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
+                Vec3::new(
+                    p.position.x + w,
+                    p.position.y + f64::from(p.dimensions.height),
+                    p.position.z + w,
+                ),
             );
-            let d2 =
-                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
-            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
+            if let Some(d2) = splash_distance_sqr(at, age, bounds) {
                 let intensity = 1.0 - d2.sqrt() / 4.0;
                 for (id, duration, amp) in effects {
                     let instant = brewing::effect(id).is_some_and(|e| e.instant);
                     if instant {
                         if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
-                            self.apply_effect_action(a);
+                            self.apply_indirect_effect_action(a, source);
                         }
                     } else {
-                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
+                        let d = (intensity * f64::from(*duration) + 0.5) as i32;
                         if d > 20
                             && let Some(e) = brewing::effect(id)
                         {
@@ -693,77 +1129,81 @@ impl Game<'_> {
             }
         }
     }
-    /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
-    fn splash(&mut self, stack: &ItemStack, at: Vec3) {
+    /// `ThrownSplashPotion.onHitAsPotion`, or `ThrownLingeringPotion.onHitAsPotion`
+    /// for a lingering potion; `mob` is where it hit a mob, `age` its age.
+    fn splash(
+        &mut self,
+        stack: &ItemStack,
+        at: Vec3,
+        mob: Option<Vec3>,
+        age: u32,
+        owner: Option<Text>,
+    ) {
+        let block = [at.x, at.y, at.z].map(|v| v.floor() as i32);
         if &*stack.item == "minecraft:experience_bottle" {
             // ThrownExperienceBottle.onHit: the water-coloured splash (level
-            // event 2002) and 3 to 11 experience.
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio.play(
-                "minecraft:entity.splash_potion.break",
-                Some([at.x, at.y, at.z]),
-                1.0,
-                pitch,
-            );
-            for _ in 0..8 {
-                let v = [
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                    0.2,
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                ];
-                let p = horizon_client::particles::Particle::terrain(
-                    &mut self.world.random,
-                    [at.x, at.y, at.z],
-                    v,
-                    "item/splash_potion".into(),
-                    0x38_5DC6,
-                );
-                self.particles.push(p);
-            }
+            // event 2002, its sound 1053) and 3 to 11 experience.
+            self.level_event_at(2002, block, 0xFF38_5DC6u32 as i32);
+            self.level_event_at(1053, block, 0);
             let r = &mut self.world.random;
             let value = 3 + r.next_int_bound(5).unwrap_or(0) + r.next_int_bound(5).unwrap_or(0);
             self.spawn_orbs([at.x, at.y, at.z], value as u32);
             return;
         }
         let lingering = &*stack.item == "minecraft:lingering_potion";
-        let event = if lingering {
-            "minecraft:entity.lingering_potion.break"
-        } else {
-            "minecraft:entity.splash_potion.break"
-        };
-        let pitch = self.world.random.next_float() * 0.1 + 0.9;
-        self.audio.play(event, Some([at.x, at.y, at.z]), 1.0, pitch);
+        // AbstractThrownPotion.onHit: level event 2007 and sound 1054 for a
+        // potion with instant effects, 2002 and 1053 otherwise.
+        let potion = stack.potion().and_then(brewing::potion);
+        let instant = potion.is_some_and(|d| {
+            d.effects
+                .iter()
+                .any(|(id, ..)| brewing::effect(id).is_some_and(|e| e.instant))
+        });
         let color = brewing::potion_color(stack.potion());
-        for _ in 0..8 {
-            let v = [
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                0.2,
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-            ];
-            let p = horizon_client::particles::Particle::terrain(
-                &mut self.world.random,
-                [at.x, at.y, at.z],
-                v,
-                "item/splash_potion".into(),
-                color,
-            );
-            self.particles.push(p);
-        }
-        let scale = if lingering { 0.25 } else { 1.0 };
-        let Some(def) = stack.potion().and_then(brewing::potion) else {
+        self.level_event_at(if instant { 2007 } else { 2002 }, block, color as i32);
+        self.level_event_at(if instant { 1054 } else { 1053 }, block, 0);
+        let Some(def) = potion else {
             return;
         };
+        if lingering {
+            // The cloud sits at the mob it hit (its feet), else the impact;
+            // radius 3, wait 10, 600 ticks, shrinking to nothing, and a
+            // potion with no effects leaves none.
+            if !def.effects.is_empty() {
+                let at = mob.unwrap_or(at);
+                self.breath_clouds.push(Breath {
+                    id: 0,
+                    at: [at.x, at.y, at.z],
+                    radius: 3.0,
+                    age: 0,
+                    duration: 600,
+                    from_dragon: false,
+                    potion: Some(PotionCloud {
+                        effects: def.effects,
+                        color,
+                        victims: Vec::new(),
+                        source: owner.unwrap_or_else(|| {
+                            Text::translate("entity.minecraft.area_effect_cloud", &[])
+                        }),
+                    }),
+                });
+            }
+            return;
+        }
         // Every player in range (`ThrownSplashPotion.applySplash` over
         // `LivingEntity`s, the players among them).
-        self.for_each_player(|g| g.splash_on_player(def.effects, at, scale));
+        // Instant damage is indirectMagic(potion, owner), which the death
+        // message names by the owner, else by the potion.
+        let source =
+            owner.unwrap_or_else(|| Text::translate("entity.minecraft.splash_potion", &[]));
+        self.for_each_player(|g| g.splash_on_player(def.effects, at, age, &source));
         // Mobs take the instant effects (undead invert healing and harming).
         let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();
         for (i, m) in self.mobs.iter().enumerate() {
-            let d2 = (m.position.x - at.x).powi(2)
-                + (m.position.y + m.kind.height / 2.0 - at.y).powi(2)
-                + (m.position.z - at.z).powi(2);
-            if m.alive() && d2 < 16.0 {
+            if m.alive()
+                && let Some(d2) = splash_distance_sqr(at, age, m.bounds())
+            {
                 let inverted = undead
                     .get("minecraft:inverted_healing_and_harm")
                     .is_some_and(|t| t.contains(&m.kind.id));
@@ -778,7 +1218,7 @@ impl Game<'_> {
                     _ => {
                         // `Potion.applySplash`: timed effects last in
                         // proportion to how close the mob was.
-                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
+                        let d = (intensity * f64::from(*duration) + 0.5) as i32;
                         if d > 20
                             && let Some(name) = mob_effect_id(id)
                         {
@@ -789,21 +1229,37 @@ impl Game<'_> {
                 };
                 let m = &mut self.mobs[i];
                 if harm {
-                    m.hurt(
-                        (intensity * f64::from(6 << amp)) as i32 as f32,
-                        Some([at.x, at.y, at.z]),
-                        &mut self.world.random,
-                    );
+                    let harm = m.potion_harm((intensity * f64::from(6 << amp) + 0.5) as i32 as f32);
+                    m.hurt(harm, Some([at.x, at.y, at.z]), &mut self.world.random);
                 } else {
-                    m.health = (m.health + (intensity * f64::from(4 << amp)) as i32 as f32)
+                    m.health = (m.health + (intensity * f64::from(4 << amp) + 0.5) as i32 as f32)
                         .min(m.kind.max_health);
                 }
             }
         }
     }
-    /// `Hud.extractEffects`: icons top-right, beneficial row then harmful row.
+    /// `Screen.showsActiveEffects`: the survival and creative inventories
+    /// draw their own effect list when `EffectsInInventory.canSeeEffects`
+    /// (32 or more pixels right of the screen).
+    fn screen_shows_active_effects(&self, batch: &HudBatch) -> bool {
+        let (ox, image_width) = match self.screen {
+            Screen::Inventory
+                if self.container.is_none() && self.craft_size == 2 && !self.mount_active() =>
+            {
+                (self.inventory_origin(batch).0, 176)
+            }
+            Screen::Creative => (
+                Self::creative_origin(batch).0,
+                horizon_client::creative::Creative::WIDTH as i32,
+            ),
+            _ => return false,
+        };
+        batch.width as i32 - (ox as i32 + image_width + 2) >= 32
+    }
+    /// `Hud.extractEffects`: icons top-right, beneficial row then harmful row;
+    /// every screen but the inventories keeps them.
     pub(super) fn draw_effect_icons(&self, batch: &mut HudBatch) {
-        if self.screen != Screen::Playing || self.potions.effects.list.is_empty() {
+        if self.potions.effects.list.is_empty() || self.screen_shows_active_effects(batch) {
             return;
         }
         let icons: Vec<hud_overlays::EffectIcon> = self

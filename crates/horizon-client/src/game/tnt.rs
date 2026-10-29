@@ -1,7 +1,7 @@
 //! Primed TNT (`PrimedTnt`): 80-tick fuse, gravity and drag, explosion of
 //! power 4, `TntRenderer` swell and white flash, and `TntBlock.useItemOn`
 //! (flint and steel / fire charge).
-use super::{Game, explosion::BlockInteraction};
+use super::Game;
 use horizon_client::{Result, collisions::SceneCollisions, items::ItemStack, mesher::Vertex};
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -178,7 +178,11 @@ impl Game<'_> {
                 ];
                 self.tnts.remove(i);
                 count -= 1;
-                self.server_explode(center, 4.0, BlockInteraction::Destroy, false)?;
+                // ExplosionInteraction.TNT: the tnt_explosion_drop_decay rule.
+                let interaction = self.destroy_type("tnt_explosion_drop_decay");
+                self.with_hive_emptying_blast(|g| {
+                    g.server_explode(center, 4.0, interaction, false)
+                })?;
             } else {
                 i += 1;
             }
@@ -252,7 +256,7 @@ impl Game<'_> {
         }
         let range = super::entity_culling::default_range(
             glam::DVec3::splat(PrimedTnt::SIZE),
-            self.settings.entity_distance,
+            self.view_scale(),
         );
         for t in &self.tnts {
             // EntityRenderer.shouldRender.
@@ -332,6 +336,8 @@ impl Game<'_> {
                         layer: if lit { 5 } else { 0 },
                         color,
                         light: packed,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

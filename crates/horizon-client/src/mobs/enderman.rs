@@ -97,10 +97,26 @@ pub fn teleport_to(
         return false;
     }
     let old = m.center();
+    let old_block = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
     m.position = Vec3::new(x, ny, z);
     m.previous = m.position;
     m.velocity = Vec3::ZERO;
     m.ai.nav.stop();
+    if !m.silent {
+        // Level event 2018: the portal trail, from the old block to the new
+        // one, packed as `BlockUtil.clampedPackDifferenceInPosition` does.
+        let new_block = [x.floor() as i32, ny.floor() as i32, z.floor() as i32];
+        let packed = |k: usize| ((new_block[k] - old_block[k]).clamp(-127, 127) + 127) & 255;
+        events.push(MobEvent::LevelEvent {
+            id: 2018,
+            pos: old_block,
+            data: packed(0) << 16 | packed(1) << 8 | packed(2),
+        });
+    }
     events.push(MobEvent::Sound("entity.enderman.teleport", old, 1.0, 1.0));
     events.push(MobEvent::Sound(
         "entity.enderman.teleport",
@@ -138,6 +154,15 @@ fn teleport_towards(
     let z = m.position.z + (m.random.next_double() - 0.5) * 8.0 - d[2] * 16.0;
     teleport_to(m, w, x, y, z, events)
 }
+/// `Enderman.SPEED_MODIFIER_ATTACKING`, an ADD_VALUE modifier `setTarget`
+/// adds while the enderman has a target.
+pub fn attacking_speed(m: &Mob) -> f64 {
+    if m.species() == Species::Enderman && m.ai.target.is_some() {
+        f64::from(0.15f32)
+    } else {
+        0.0
+    }
+}
 /// Enderman.customServerAiStep: in daylight, flee by teleporting. The End has a
 /// fixed time, so `Level.isBrightOutside` is never true there.
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
@@ -157,9 +182,10 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     // Being angry (target set) makes the head "creepy" (render).
     m.extra.flag = m.ai.target.is_some();
 }
-/// Enderman.hurtServer: projectiles miss (teleport away), others may teleport.
+/// Enderman.hurtServer: projectiles miss (teleport away) unless it rides
+/// something (`!isPassenger()`), others may teleport.
 pub fn on_damage(m: &mut Mob, source: &Damage) -> bool {
-    if source.is_projectile() {
+    if source.is_projectile() && !m.extra.passenger {
         // repeatedlyTryToTeleport is applied by the next AI step.
         m.extra.counter2 = 64;
         return false;
@@ -184,15 +210,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             }
         }
     }
-    if (m.fluids.in_water
-        || w.raining
-            && w.can_see_sky(
-                m.position.x.floor() as i32,
-                m.eye_y().floor() as i32,
-                m.position.z.floor() as i32,
-            ))
-        && m.alive()
-    {
+    if (m.fluids.in_water || super::ai::in_rain(m, w)) && m.alive() {
         // Hurt by water: teleport away.
         m.extra.counter2 = m.extra.counter2.max(1);
     }
@@ -414,6 +432,35 @@ impl Goal for LeaveBlock {
                 state: carried,
             });
             m.extra.carried = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::DamageKind;
+    use std::sync::Arc;
+
+    fn enderman() -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::Enderman;
+        Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0)
+    }
+
+    /// Enderman.hurtServer: a projectile makes a free enderman teleport away
+    /// unhurt, but one that rides something (`isPassenger`) takes the hit.
+    #[test]
+    fn projectiles_hit_a_seated_enderman() {
+        for kind in [DamageKind::Arrow, DamageKind::Thrown, DamageKind::Fireball] {
+            let mut free = enderman();
+            assert!(!on_damage(&mut free, &Damage::of(kind)), "{kind:?}");
+            assert_eq!(free.extra.counter2, 64);
+
+            let mut seated = enderman();
+            seated.extra.passenger = true;
+            assert!(on_damage(&mut seated, &Damage::of(kind)), "{kind:?}");
+            assert_eq!(seated.extra.counter2, 0, "no teleport while seated");
         }
     }
 }

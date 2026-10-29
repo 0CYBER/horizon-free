@@ -153,6 +153,8 @@ pub struct StructureSet {
     rings: Option<RingSections>,
     /// `"horizon:avoid_biomes"`: no start with one of these biomes near.
     avoid_biomes: Option<AvoidBiomes>,
+    /// `placement.locate_offset` (buried treasure's [9, 0, 9]).
+    locate_offset: [i32; 3],
 }
 
 /// `"horizon:exclusion_zone"`: no start within `chunk_count` chunks of a
@@ -275,16 +277,15 @@ fn terrain(name: Option<&str>) -> TerrainAdjustment {
         _ => TerrainAdjustment::None,
     }
 }
-fn pair(value: Option<&Value>, a: &str, b: &str, default: i32) -> [i32; 2] {
+/// A jigsaw field given as one number or as an object of two. In the object a
+/// missing `a` is 0 and a missing `b` is `missing_b` (`JigsawStructure.MaxDistance`
+/// and `DimensionPadding` default their second value, not copy the first).
+fn pair(value: Option<&Value>, a: &str, b: &str, default: i32, missing_b: i32) -> [i32; 2] {
     match value {
         Some(Value::Number(n)) => [n.as_i64().unwrap_or(0) as i32; 2],
         Some(Value::Object(o)) => {
-            let get = |k: &str| o.get(k).and_then(Value::as_i64).unwrap_or(0) as i32;
-            let first = get(a);
-            [
-                first,
-                o.get(b).and_then(Value::as_i64).map_or(first, |v| v as i32),
-            ]
+            let get = |k: &str| o.get(k).and_then(Value::as_i64).map(|v| v as i32);
+            [get(a).unwrap_or(0), get(b).unwrap_or(missing_b)]
         }
         _ => [default; 2],
     }
@@ -326,9 +327,11 @@ impl StructureRegistry {
                         "horizontal",
                         "vertical",
                         80,
+                        // DimensionType.Y_SIZE.
+                        4064,
                     ),
                     aliases: v["pool_aliases"].as_array().cloned().unwrap_or_default(),
-                    padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
+                    padding: pair(v.get("dimension_padding"), "bottom", "top", 0, 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                     checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
                     piece_limited: v
@@ -428,6 +431,10 @@ impl StructureRegistry {
                 placement,
                 salt: p["salt"].as_i64().unwrap_or(0) as i32,
                 frequency: p["frequency"].as_f64().unwrap_or(1.) as f32,
+                locate_offset: {
+                    let at = |i: usize| p["locate_offset"][i].as_i64().unwrap_or(0) as i32;
+                    [at(0), at(1), at(2)]
+                },
                 reduction: match p["frequency_reduction_method"].as_str() {
                     Some("legacy_type_1") => Reduction::Legacy1,
                     Some("legacy_type_2") => Reduction::Legacy2,
@@ -647,6 +654,12 @@ impl StructureSet {
             Placement::RandomSpread { spacing, .. } => Some(spacing),
             _ => None,
         }
+    }
+    /// StructurePlacement.getLocatePos: the chunk's corner at y 0, moved by
+    /// the set's `locate_offset`.
+    pub fn locate_pos(&self, chunk: ChunkPos) -> [i32; 3] {
+        let o = self.locate_offset;
+        [chunk.x * 16 + o[0], o[1], chunk.z * 16 + o[2]]
     }
 }
 fn reduce(method: Reduction, seed: i64, salt: i32, x: i32, z: i32, probability: f32) -> bool {
@@ -1376,6 +1389,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
     start: &StructureStart,
     world: &mut W,
     resources: &StructureResources,
+    blocks: &dyn crate::worldgen::structure::legacy::SolidRender,
     random: &mut R,
     chunk_box: BoundingBox,
     place_feature: &mut PlaceFeature<'_, W, R>,
@@ -1403,6 +1417,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
                     let mut context = PieceContext {
                         world,
                         resources,
+                        blocks,
                         random,
                         chunk_box,
                         chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),
@@ -1418,6 +1433,7 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
         let mut context = PieceContext {
             world,
             resources,
+            blocks,
             random,
             chunk_box,
             chunk: ChunkPos::new(chunk_box.min[0] >> 4, chunk_box.min[2] >> 4),

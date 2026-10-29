@@ -5,13 +5,14 @@
 //! attack (blocking, armour, knockback), when the `pvp` game rule allows it
 //! (`ServerPlayer.canHarmPlayer`, `isPvpAllowed`). A player's arrow on
 //! another player lands the same way.
-use super::{Game, lan::LanHost, lan_mobs::guest_bounds, ray_box, view_vector};
+use super::{Game, lan::LanHost, lan_mobs::guest_bounds, mace::Spared, ray_box};
 
 use horizon_client::{
     Result,
     mobs::Who,
     projectiles::{Hit, Projectile, ProjectileKind},
 };
+use horizon_core::geometry::{Aabb, Vec3};
 
 /// The player projectiles that meet other players: arrows (their hurt), and
 /// snowballs and eggs, which break on them (`Player.hurtServer` takes no 0
@@ -24,7 +25,7 @@ pub(super) fn meets_players(kind: &ProjectileKind) -> bool {
 }
 
 /// Who a player's attack lands on.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Victim {
     Host,
     Guest(u32),
@@ -37,7 +38,11 @@ pub(super) struct Strike {
     amount: f32,
     scale: f32,
     crit: bool,
+    /// `Player.attack`'s `magicBoost > 0`: the enchantments added damage.
+    magic: bool,
     from: [f64; 3],
+    /// `getSecondsToDisableBlocking` of the attacker's weapon.
+    disable_blocking: f32,
     sweep: Option<[f64; 3]>,
     /// `causeExtraKnockback`: its strength and direction (the attacker's
     /// yaw), and whether the hit is a sprinting knockback attack.
@@ -45,6 +50,24 @@ pub(super) struct Strike {
     knockback_attack: bool,
     /// The attacker's team, for the victim's `Player.canHarmPlayer`.
     team: Option<horizon_client::scoreboard::Team>,
+}
+
+/// A sweep attack's reach to the other players (`Player.doSweepAttack`),
+/// worked out as the attacker.
+#[derive(Clone)]
+pub(super) struct Sweep {
+    /// The attacking guest (none: the host).
+    attacker: Option<u32>,
+    from: [f64; 3],
+    /// The damage after the enchantments and the attack strength.
+    damage: f32,
+    /// The push along the attacker's yaw.
+    knockback: (f64, f64),
+    team: Option<horizon_client::scoreboard::Team>,
+    /// The target's box grown by (1, 0.25, 1).
+    pub(super) hit_box: Aabb,
+    /// The entity id of the player the sweep started from, which it spares.
+    pub(super) skip: Option<i32>,
 }
 
 impl Strike {
@@ -59,8 +82,7 @@ impl Game<'_> {
     /// The guest on the host's crosshair and how far, within reach.
     pub(super) fn guest_hit(&self) -> Option<(u32, f64)> {
         let host = self.lan.as_ref()?;
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach = if self.creative { 5.0 } else { 3.0 };
         host.hub
             .guests
@@ -84,9 +106,11 @@ impl Game<'_> {
         };
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
-            && strike.stops_sprint()
         {
-            self.stop_sprint_after_extra_knockback();
+            self.pvp_exhaustion();
+            if strike.stops_sprint() {
+                self.stop_sprint_after_extra_knockback();
+            }
         }
         self.lan = Some(host);
         true
@@ -104,28 +128,43 @@ impl Game<'_> {
             .map(|g| Victim::Guest(g.conn))
     }
 
-    /// The attacker's side of `Player.attack` (the host, or a guest swapped
-    /// in): the damage, the charge reset, the exhaustion and the swing.
-    pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
-        let p = self.player.as_ref()?;
-        let from = [p.position.x, p.position.y, p.position.z];
-        let (amount, scale, crit) = self.melee_damage("minecraft:player");
-        let sweep = self.sweep_attack_position(scale, crit);
-        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
-        let (xd, zd) = self.extra_knockback_direction();
-        self.attack_ticks = 0;
+    /// `Player.attack`'s `causeFoodExhaustion(0.1F)`, charged to the attacker
+    /// (the host, or a guest swapped in) only once the hit hurt the victim.
+    pub(super) fn pvp_exhaustion(&mut self) {
         if let Some(p) = self.player.as_mut()
             && !self.creative
         {
             p.cause_food_exhaustion(0.1);
         }
+    }
+
+    /// The attacker's side of `Player.attack` (the host, or a guest swapped
+    /// in): the damage, the charge reset and the swing.
+    pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
+        let p = self.player.as_ref()?;
+        let from = [p.position.x, p.position.y, p.position.z];
+        let (amount, scale, crit, magic) = self.melee_damage("minecraft:player", true);
+        let sweep = self.sweep_attack_position(scale, crit);
+        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
+        let (xd, zd) = self.extra_knockback_direction();
+        self.attack_ticks = 0;
         self.swing_arm();
+        // LivingEntity.getSecondsToDisableBlocking: the held weapon's value,
+        // none while another item is in use.
+        let disable_blocking = if self.using.is_some() {
+            0.0
+        } else {
+            self.attack_item_info()
+                .map_or(0.0, |i| i.disable_blocking_seconds)
+        };
         Some(Strike {
             attacker: self.lan_acting,
             amount,
             scale,
             crit,
+            magic,
             from,
+            disable_blocking,
             sweep,
             knockback: (strength, xd, zd),
             knockback_attack,
@@ -240,7 +279,9 @@ impl Game<'_> {
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
         let land = |g: &mut Self| {
+            g.combat.player_attacker = Some((s.from, s.disable_blocking));
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
+            g.combat.player_attacker = None;
             let (strength, xd, zd) = s.knockback;
             if hurt && strength > 0.0 {
                 g.knock_back_player(f64::from(strength), xd, zd);
@@ -257,7 +298,31 @@ impl Game<'_> {
         } else {
             Default::default()
         };
-        if hurt && s.crit {
+        // ServerPlayer.awardKillScore: the blow that kills a player.
+        if hurt {
+            let died = match victim {
+                // A totem that fired is applied on the next tick_totem, so the
+                // victim is still at zero health but is not dying.
+                Victim::Host => self
+                    .player
+                    .as_ref()
+                    .is_some_and(|p| p.health.dead_or_dying() && !p.health.totem_used),
+                Victim::Guest(conn) => host
+                    .hub
+                    .guest(conn)
+                    .and_then(|g| g.motion.as_deref())
+                    .is_some_and(|p| p.health.dead_or_dying() && !p.health.totem_used),
+            };
+            if died {
+                match s.attacker {
+                    Some(conn) => {
+                        self.as_guest(host, conn, |g| g.stats.custom("player_kills", 1));
+                    }
+                    None => self.stats.custom("player_kills", 1),
+                }
+            }
+        }
+        if hurt && (s.crit || s.magic) {
             let target = match victim {
                 Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
                 Victim::Guest(conn) => host
@@ -267,13 +332,17 @@ impl Game<'_> {
             };
             if let Some((id, p)) = target {
                 let d = p.dimensions;
-                self.critical_hit(
-                    s.attacker,
-                    id,
+                let (feet, width, height) = (
                     [p.position.x, p.position.y, p.position.z],
                     f64::from(d.width),
                     f64::from(d.height),
                 );
+                if s.crit {
+                    self.critical_hit(s.attacker, id, feet, width, height, false);
+                }
+                if s.magic {
+                    self.critical_hit(s.attacker, id, feet, width, height, true);
+                }
             }
         }
         // `Enchantment.doPostAttack`: thorns hurt the attacking player.
@@ -292,10 +361,129 @@ impl Game<'_> {
             (true, false, false) => "minecraft:entity.player.attack.weak",
         };
         if let Some(at) = s.sweep.filter(|_| hurt) {
-            self.sweep_attack(at, Some(s.from));
+            // The sweep around the player that was hit, as its attacker.
+            let (area, id) = match victim {
+                Victim::Host => (self.player.as_ref().map(|p| p.bounds()), host.host_entity),
+                Victim::Guest(conn) => {
+                    let g = host.hub.guest(conn);
+                    (g.map(guest_bounds), g.map_or(-1, |g| g.entity_id))
+                }
+            };
+            let target = area.map(|area| (area, Spared::Player(id)));
+            match s.attacker {
+                None => {
+                    // The host is checked out here: collect the sweep for the players.
+                    self.combat.sweeps = Some(Vec::new());
+                    self.sweep_attack(at, Some(s.from), target, s.scale);
+                    for sweep in self.combat.sweeps.take().unwrap_or_default() {
+                        self.sweep_players(host, &sweep);
+                    }
+                }
+                Some(conn) => {
+                    self.as_guest(host, conn, |g| {
+                        g.sweep_attack(at, Some(s.from), target, s.scale)
+                    });
+                }
+            }
         } else {
             self.audio.play(sound, Some(s.from), 1.0, 1.0);
         }
         hurt
+    }
+
+    /// The sweep of the player in place, for the players it reaches: the
+    /// damage (`1 + ratio * baseDamage`, plus the enchantments against a
+    /// player, scaled by the attack strength) and who hits. The box is set
+    /// by the caller.
+    pub(super) fn player_sweep(&mut self, base: f32, scale: f32) -> Sweep {
+        let from = self
+            .player
+            .as_ref()
+            .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
+        let damage = self.enchanted_damage("minecraft:player", base) * scale;
+        Sweep {
+            attacker: self.lan_acting,
+            from,
+            damage,
+            knockback: self.extra_knockback_direction(),
+            team: self.player_team().cloned(),
+            hit_box: Aabb::new(Vec3::ZERO, Vec3::ZERO),
+            skip: None,
+        }
+    }
+
+    /// A sweep from a mob hit reaches the other players. Inside a guest's
+    /// turn the host holds the other players (`as_guest`), so it waits for
+    /// the turn to end.
+    pub(super) fn sweep_other_players(&mut self, sweep: Sweep) {
+        if let Some(collect) = self.combat.sweeps.as_mut() {
+            collect.push(sweep);
+        } else if self.lan_acting.is_some() {
+            self.creatures.sweeps.push(sweep);
+        } else if let Some(mut host) = self.lan.take() {
+            self.sweep_players(&mut host, &sweep);
+            self.lan = Some(host);
+        }
+    }
+
+    /// The sweeps guests' turns put off.
+    pub(super) fn flush_sweeps(&mut self) {
+        for sweep in std::mem::take(&mut self.creatures.sweeps) {
+            self.sweep_other_players(sweep);
+        }
+    }
+
+    /// `Player.doSweepAttack` on the players: each other player in the box,
+    /// closer than 3 blocks (`distanceToSqr < 9`) and not an ally
+    /// (`isAlliedTo`), is hurt (`ServerPlayer.canHarmPlayer`: the `pvp` rule)
+    /// and pushed 0.4 along the attacker's yaw.
+    pub(super) fn sweep_players(&mut self, host: &mut LanHost, sweep: &Sweep) {
+        let from = Vec3::new(sweep.from[0], sweep.from[1], sweep.from[2]);
+        let mut victims = Vec::new();
+        if sweep.attacker.is_some()
+            && self.options.dedicated.is_none()
+            && !self.spectator()
+            && let Some(p) = self.player.as_ref()
+            && !p.health.dead_or_dying()
+            && p.bounds().intersects(sweep.hit_box)
+            && p.position.distance_squared(from) < 9.0
+        {
+            victims.push((Victim::Host, host.host_entity, self.player_team().cloned()));
+        }
+        for g in &host.hub.guests {
+            if host.hub.here(g)
+                && g.loaded
+                && !g.dead
+                && !g.spectator()
+                && sweep.attacker != Some(g.conn)
+                && guest_bounds(g).intersects(sweep.hit_box)
+                && Vec3::new(g.position[0], g.position[1], g.position[2]).distance_squared(from)
+                    < 9.0
+            {
+                let team = self.score.board.players_team(&g.name).cloned();
+                victims.push((Victim::Guest(g.conn), g.entity_id, team));
+            }
+        }
+        let (xd, zd) = sweep.knockback;
+        let land = |g: &mut Self| {
+            let hurt = g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack");
+            if hurt {
+                g.knock_back_player(0.4, xd, zd);
+            }
+        };
+        for (victim, id, team) in victims {
+            if sweep.skip == Some(id)
+                || horizon_client::scoreboard::teams_allied(team.as_ref(), sweep.team.as_ref())
+                || !self.ui.rules.bool("pvp")
+            {
+                continue;
+            }
+            match victim {
+                Victim::Host => land(self),
+                Victim::Guest(conn) => {
+                    self.guest_struck_by(host, conn, land);
+                }
+            }
+        }
     }
 }
