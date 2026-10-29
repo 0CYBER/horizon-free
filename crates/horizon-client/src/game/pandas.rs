@@ -73,6 +73,9 @@ impl Game<'_> {
         if panda::get_up(m) {
             return true;
         }
+        // A baby holding a golden_dandelion goes on to `AgeableMob.mobInteract`,
+        // which `interact_mob` answered before this; anything else that is not
+        // bamboo passes.
         if !m.kind.food.iter().any(|f| f == item) {
             return false;
         }
