@@ -1112,6 +1112,7 @@ pub fn main() -> horizon_client::Result<()> {
                     others_grid: $grid,
                     others_index: None,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,
+                    monsters_burn: !(12542..23460).contains(&world.day_time.rem_euclid(24000)),
                     game_time: world.game_time,
                     day_time: world.day_time,
                     raining: s.rain,

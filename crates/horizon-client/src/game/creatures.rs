@@ -460,6 +460,9 @@ impl Game<'_> {
             others_grid: None,
             others_index: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
+            // day.json: false from tick 12542, true from 23460 (a step track).
+            monsters_burn: self.dim == Dim::Overworld
+                && !(12542..23460).contains(&self.world.day_time.rem_euclid(24000)),
             game_time: self.world.game_time,
             day_time: self.world.day_time,
             raining: weather && rain > 0.2,
@@ -1176,13 +1179,20 @@ impl Game<'_> {
                     volume,
                     spread,
                 } => {
-                    // The client's own level random: nothing drawn from the server's.
-                    let mut r = horizon_core::random::LegacyRandom::new(
-                        self.world.game_time.wrapping_mul(341_873_128_712),
-                    );
-                    let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
-                    self.audio
-                        .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
+                    // WitherBoss.customServerAiStep: the spawn roar is global
+                    // level event 1023 at the block position.
+                    if sound == "entity.wither.spawn" {
+                        let pos = at.map(|v| v.floor() as i32);
+                        self.global_level_event(1023, pos, 0);
+                    } else {
+                        // The client's own level random: nothing drawn from the server's.
+                        let mut r = horizon_core::random::LegacyRandom::new(
+                            self.world.game_time.wrapping_mul(341_873_128_712),
+                        );
+                        let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
+                        self.audio
+                            .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
+                    }
                 }
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
@@ -2648,6 +2658,53 @@ impl Game<'_> {
             }
         }
     }
+    /// `onProjectileHit` of chorus flowers and decorated pots: an impact
+    /// projectile (`#impact_projectiles`) breaks the block when
+    /// `Projectile.mayInteract` and `Projectile.mayBreak` allow it, which takes
+    /// the `projectiles_can_break_blocks` rule and a shooter that may break
+    /// blocks (`canBreakBlockInAdventureMode`: never a mob, never an
+    /// adventure player). A pot is cracked first (flags 260), so it shatters.
+    fn projectile_breaks_block(&mut self, p: &Projectile, pos: [i32; 3]) {
+        use horizon_client::command::args::GameMode;
+        let impact = matches!(
+            p.kind,
+            ProjectileKind::Arrow { .. }
+                | ProjectileKind::Trident
+                | ProjectileKind::Snowball
+                | ProjectileKind::Egg
+                | ProjectileKind::SmallFireball
+                | ProjectileKind::LargeFireball { .. }
+                | ProjectileKind::WitherSkull { .. }
+                | ProjectileKind::WindCharge
+                | ProjectileKind::BreezeWindCharge
+        );
+        let shooter_may_break = match p.owner {
+            Some(Who::Player) => self.mode != GameMode::Adventure,
+            Some(Who::Mob(_)) => false,
+            None => true,
+        };
+        if !impact || !shooter_may_break || !self.ui.rules.bool("projectiles_can_break_blocks") {
+            return;
+        }
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        match &*self.res.facts().get(state).name {
+            "minecraft:chorus_flower" => {}
+            "minecraft:decorated_pot" => {
+                let registry = &self.pack.assets.registry;
+                let Some(mut pot) = registry.state(state).cloned() else {
+                    return;
+                };
+                pot.properties.insert("cracked".into(), "true".into());
+                let Ok(cracked) = registry.resolve(&pot) else {
+                    return;
+                };
+                self.with_level(|b, level, ticks| b.set_block(level, ticks, at, cracked, 260));
+            }
+            _ => return,
+        }
+        let _ = self.destroy_block_dropping(pos);
+    }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
         use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound, BlockReaction};
@@ -2812,6 +2869,7 @@ impl Game<'_> {
             && face != [0; 3]
         {
             self.bell_projectile_hit(p, pos, at, face);
+            self.projectile_breaks_block(p, pos);
         }
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),

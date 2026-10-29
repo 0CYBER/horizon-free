@@ -912,8 +912,9 @@ impl Game<'_> {
             // The blast's damage source carries the player, so the dragon
             // remembers them before the blast can kill it.
             self.fight.blast_by = by;
-            let _ =
-                self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
+            // EndCrystal.hurtServer: ExplosionInteraction.BLOCK.
+            let interaction = self.destroy_type("block_explosion_drop_decay");
+            let _ = self.server_explode(at, 6.0, interaction, false);
             self.fight.blast_by = None;
         }
         if respawn_crystal {
@@ -3222,10 +3223,12 @@ impl Game<'_> {
                 }
             }
         }
+        // DragonRespawnStage.SUMMONING_PILLARS: ExplosionInteraction.BLOCK.
+        let interaction = self.destroy_type("block_explosion_drop_decay");
         let _ = self.server_explode(
             [f64::from(cx) + 0.5, f64::from(h), f64::from(cz) + 0.5],
             5.0,
-            super::explosion::BlockInteraction::Destroy,
+            interaction,
             false,
         );
         // EndSpikeFeature.placeSpike with crystal_invulnerable and the beam.
