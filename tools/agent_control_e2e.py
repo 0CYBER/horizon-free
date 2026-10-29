@@ -305,6 +305,15 @@ def scenario(d, out):
         (out / f'{d.name}.png').write_bytes(shot['_image'])
     seen = d('looking_at')
     assert seen['kind'] == 'block' and seen['block']['pos'] == list(target), seen
+
+    # 6. Drop a plank: on a client of a server (single player's server thread) the server must
+    # throw it, not only the window's own world, so ask the server how many planks are left.
+    d('select', slot=planks_id)
+    planks_before = d('inventory')['counts'].get(planks_id, 0)
+    d('drop')
+    d('wait', ticks=5)
+    found = d('command', command=f'clear @s {planks_id} 0')['chat']
+    assert any(f'Found {planks_before - 1} ' in line for line in found), (planks_before, found)
     return {'tree': base, 'log': log_id, 'placed': target}
 
 

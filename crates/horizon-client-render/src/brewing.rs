@@ -386,4 +386,23 @@ mod tests {
         stand.tick(&brewing, &items, &providers);
         assert_eq!(stand.brew_time, 0);
     }
+
+    /// #3312: `PotionContents.getPotionDescription` names the effects with
+    /// translatable components, so a Russian game reads them from ru_ru.json
+    /// (the prepared one; skipped without it), as the tooltip's other lines.
+    #[test]
+    fn effect_lines_read_the_selected_language() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("assets/minecraft/lang/ru_ru.json").exists() {
+            return;
+        }
+        let ru = crate::lang::Language::load(&[&root], "ru_ru");
+        let translate = |key: &str| ru.get(key).map(str::to_owned);
+        let lines = tooltip(Some("minecraft:turtle_master"), 0.125, &translate);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].0.starts_with("Замедление IV ("), "{lines:?}");
+        assert!(lines[1].0.starts_with("Сопротивление III ("), "{lines:?}");
+    }
 }

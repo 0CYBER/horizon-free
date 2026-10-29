@@ -401,7 +401,7 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
 /// `WitherBoss.hurtServer` filter: not while charging, no arrows once
 /// powered, nothing from the undead.
 pub fn accepts(m: &mut Mob, kind: DamageKind, attacker: Option<Who>, others_undead: bool) -> bool {
-    if m.extra.counter > 0 && kind != DamageKind::Generic {
+    if m.extra.counter > 0 && !kind.bypasses_invulnerability() {
         return false;
     }
     if powered(m) && kind == DamageKind::Arrow {
