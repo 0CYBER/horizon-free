@@ -5904,7 +5904,7 @@ impl Game<'_> {
         match key {
             KeyCode::KeyT | KeyCode::Slash | KeyCode::Enter => {
                 // ChatScreen, over the server's command tree.
-                self.open_chat(if key == KeyCode::Slash { "/" } else { "" });
+                self.open_chat_method(if key == KeyCode::Slash { "/" } else { "" });
                 Ok(true)
             }
             KeyCode::KeyQ => {
