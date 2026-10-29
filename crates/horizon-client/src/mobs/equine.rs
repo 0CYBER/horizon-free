@@ -537,10 +537,15 @@ pub fn ridden_step(m: &mut Mob) {
     if m.species() == Species::HappyGhast {
         return super::happy_ghast::ridden(m);
     }
-    m.yaw = r.yaw;
-    m.head_pitch = r.pitch * 0.5;
-    m.body_yaw = r.yaw;
-    m.head_yaw = r.yaw;
+    // AbstractHorse.tickRidden: setRot(getRiddenRotation), then the body and
+    // head turn with it. A camel that refuses to move keeps its rotation
+    // (Camel.getRiddenRotation).
+    if !(super::camel::is_camel(m.species()) && super::camel::refuse_to_move(m)) {
+        m.yaw = r.yaw;
+        m.head_pitch = r.pitch * 0.5;
+    }
+    m.body_yaw = m.yaw;
+    m.head_yaw = m.yaw;
     m.ai.nav.stop();
 
     if matches!(m.species(), Species::Pig | Species::Strider) {
