@@ -1630,6 +1630,8 @@ struct Game<'a> {
     sign_edit: Option<sign_edit::SignEditor>,
     /// An open book, book and quill or lectern screen.
     book: Option<books::BookScreen>,
+    /// The last click on the book screen, for double clicks.
+    book_last_click: Option<std::time::Instant>,
     /// Lecterns whose page-turn pulse is running (ticks left).
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     /// LevelLoadingScreen.smoothedProgress while the player is not placed yet.
@@ -14368,6 +14370,7 @@ impl<'a> Game<'a> {
             pickups: Default::default(),
             sign_edit: None,
             book: None,
+            book_last_click: None,
             lectern_pulses: Vec::new(),
             loading_progress: 0.0,
             spawn_origin: None,
