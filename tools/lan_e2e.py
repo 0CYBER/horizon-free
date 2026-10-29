@@ -7940,7 +7940,8 @@ def check_team_push(host, guest, out):
     host 0.3 east of the guest pushes it west, unless the host's team has collisionRule never."""
     for g in (host, guest):
         g('command', command='gamemode survival')
-    x, y, z = pos_of(guest)
+    host_at, guest_at = pos_of(host), pos_of(guest)
+    x, y, z = guest_at
     x, z = x // 1 + 0.5, z // 1 + 0.5
     seen = {}
     try:
@@ -7960,6 +7961,11 @@ def check_team_push(host, guest, out):
             guest.wait(10)
     finally:
         host('command', command='team remove parity_ghosts')
+        # Back where they stood: later checks place the guest next to the host (face_each_other), and the
+        # host's last spot here put the guest inside the hill east of the spawn (pvp then hit the wall).
+        for g, (px, py, pz) in ((host, host_at), (guest, guest_at)):
+            g('command', command=f'tp @s {px:.4f} {py:.4f} {pz:.4f}')
+        guest.wait(10)
     assert seen['no team']['dx'] < -0.05, f'the host did not push the guest west: {seen}'
     assert abs(seen['never']['dx']) < 0.01 and abs(seen['never']['dz']) < 0.01, \
         f'a host on a collisionRule never team still pushed the guest: {seen}'
