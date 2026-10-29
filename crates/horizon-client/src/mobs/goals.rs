@@ -535,12 +535,23 @@ impl Mob {
         v: i32,
         away: [f64; 3],
     ) -> Option<[f64; 3]> {
+        self.land_random_pos_away_between(w, 0.0, f64::from(h), v, away)
+    }
+    /// `LandRandomPos.getPosAway(mob, minHorizontalDist, maxHorizontalDist, verticalDist, avoidPos)`.
+    pub fn land_random_pos_away_between(
+        &mut self,
+        w: &MobWorld,
+        min_h: f64,
+        max_h: f64,
+        v: i32,
+        away: [f64; 3],
+    ) -> Option<[f64; 3]> {
         let (mut xd, mut zd) = (self.position.x - away[0], self.position.z - away[2]);
         if xd == 0.0 && zd == 0.0 {
             xd = self.random.next_double() - 0.5;
             zd = self.random.next_double() - 0.5;
         }
-        self.land_pos_in_direction(w, h, v, xd, zd)
+        self.land_pos_in_direction(w, min_h, max_h, v, xd, zd)
     }
     /// `LandRandomPos.getPosTowards`: a spot within a quarter turn of the
     /// way to `to`, the best of ten tries.
@@ -552,32 +563,33 @@ impl Mob {
         to: [f64; 3],
     ) -> Option<[f64; 3]> {
         let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
-        self.land_pos_in_direction(w, h, v, xd, zd)
+        self.land_pos_in_direction(w, 0.0, f64::from(h), v, xd, zd)
     }
     /// `LandRandomPos.getPosInDirection`: ten tries within a quarter turn
     /// (`(float) (Math.PI / 2)`) of the direction `(xd, zd)`.
     fn land_pos_in_direction(
         &mut self,
         w: &MobWorld,
-        h: i32,
+        min_h: f64,
+        max_h: f64,
         v: i32,
         xd: f64,
         zd: f64,
     ) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {
             let d = m.random_direction_within(
-                0.0,
-                f64::from(h),
+                min_h,
+                max_h,
                 v,
                 0,
                 xd,
                 zd,
                 f64::from(std::f32::consts::FRAC_PI_2),
             )?;
-            let p = m.toward(f64::from(h), d);
+            let p = m.toward(max_h, d);
             if p[1] < crate::chunk::MIN_Y
                 || p[1] >= 320
-                || m.restricted(f64::from(h), p)
+                || m.restricted(max_h, p)
                 || !m.stable_destination(w, p)
             {
                 return None;

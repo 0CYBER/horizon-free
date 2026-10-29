@@ -1,9 +1,13 @@
-//! Mobs using a spear (`KineticWeapon`): `startUsingItem` of the main hand
-//! and the stab of every tick of the use (`KineticWeapon.damageEntities`).
+//! Mobs using a spear (`KineticWeapon`): `startUsingItem` of the main hand,
+//! the stab of every tick of the use (`KineticWeapon.damageEntities`) and
+//! what makes a mob use it: `SpearUseGoal` of zombies and zombified piglins.
 //! A mob's `using_item` counts the ticks of the use up from 1, which the
 //! living entity flags tell the clients (`mob_meta`), so the arm and the
 //! spear are drawn charging for them as well.
-use super::{Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who, gear};
+use super::{
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who, gear,
+    goals::{Cx, Goal, LOOK, MOVE, goal_clone, reduced},
+};
 use crate::spear::{Kinetic, REACH, hits_in_reach};
 use horizon_core::geometry::{Aabb, Vec3, trig::Mth};
 
@@ -283,4 +287,216 @@ fn cause_extra_knockback(m: &mut Mob, target: Who, power: f32, events: &mut Vec<
         z: f64::from(-(m.yaw * to_rad).mcos()),
     });
     m.velocity = Vec3::new(m.velocity.x * 0.6, m.velocity.y, m.velocity.z * 0.6);
+}
+
+/// `Mob.chargeSpeedModifier` of the mount: a zombie horse runs 1.4 times as
+/// fast with a charging rider, a camel husk 4 times.
+fn charge_speed_modifier(m: &Mob, w: &MobWorld) -> f32 {
+    match m.extra.mount.and_then(|id| w.seen(id)).map(|s| s.species) {
+        Some(Species::ZombieHorse) => 1.4,
+        Some(Species::CamelHusk) => 4.0,
+        _ => 1.0,
+    }
+}
+
+/// `Entity.isPassenger` as the 2 blocks it adds to the charge distances.
+fn passenger_distance(m: &Mob) -> i32 {
+    if m.extra.mount.is_some() { 2 } else { 0 }
+}
+
+/// `ableToAttack` of `SpearUseGoal` and the spear behaviours: a target and a
+/// kinetic weapon in the main hand.
+fn able_to_attack(m: &Mob, w: &MobWorld) -> bool {
+    m.target_info(w).is_some() && main_hand_kinetic(m).is_some()
+}
+
+/// `SpearUseGoal.SpearUseState`: where a charge is.
+#[derive(Clone, Debug)]
+struct SpearUseState {
+    engage_time: i32,
+    fleeing_time: i32,
+    away_pos: Option<[f64; 3]>,
+    done: bool,
+}
+impl SpearUseState {
+    /// `SpearUseState.<init>`: not engaged and not fleeing yet.
+    fn new() -> Self {
+        Self {
+            engage_time: -1,
+            fleeing_time: -1,
+            away_pos: None,
+            done: false,
+        }
+    }
+    /// `SpearUseState.notEngagedYet`.
+    fn not_engaged_yet(&self) -> bool {
+        self.engage_time < 0
+    }
+    /// `SpearUseState.startEngagement`: the spear stays down for `spear_down_time` goal ticks.
+    fn start_engagement(&mut self, spear_down_time: i32) {
+        self.engage_time = spear_down_time;
+    }
+    /// `SpearUseState.tickAndCheckEngagement`: whether the time ran out.
+    fn tick_and_check_engagement(&mut self) -> bool {
+        if self.engage_time > 0 {
+            self.engage_time -= 1;
+            if self.engage_time == 0 {
+                return true;
+            }
+        }
+        false
+    }
+    /// `SpearUseState.tickAndCheckFleeing`: whether it fled for too long.
+    fn tick_and_check_fleeing(&mut self) -> bool {
+        if self.fleeing_time > 0 {
+            self.fleeing_time += 1;
+            if self.fleeing_time > SpearUse::MAX_FLEEING_TIME {
+                self.done = true;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// `SpearUseGoal`: with a spear in hand and a target, walk up to the
+/// approach distance, lower the spear and charge until its use time ends,
+/// back off 9 to 11 blocks and start over.
+#[derive(Clone, Debug)]
+pub struct SpearUse {
+    speed_modifier_when_charging: f64,
+    speed_modifier_when_repositioning: f64,
+    approach_distance_sq: f32,
+    target_in_range_radius_sq: f32,
+    state: Option<SpearUseState>,
+}
+impl SpearUse {
+    /// `SpearUseGoal.MAX_FLEEING_TIME`: `reducedTickDelay(100)`.
+    const MAX_FLEEING_TIME: i32 = 50;
+
+    pub fn new(
+        speed_modifier_when_charging: f64,
+        speed_modifier_when_repositioning: f64,
+        approach_distance: f32,
+        target_in_range_radius: f32,
+    ) -> Self {
+        Self {
+            speed_modifier_when_charging,
+            speed_modifier_when_repositioning,
+            approach_distance_sq: approach_distance * approach_distance,
+            target_in_range_radius_sq: target_in_range_radius * target_in_range_radius,
+            state: None,
+        }
+    }
+
+    /// `SpearUseGoal.getKineticWeaponUseDuration`.
+    fn kinetic_weapon_use_duration(m: &Mob) -> i32 {
+        reduced(main_hand_kinetic(m).map_or(0, |k| k.damage_use_duration()))
+    }
+
+    /// The part of `SpearUseGoal.tick` that works on the state.
+    fn step(&self, state: &mut SpearUseState, m: &mut Mob, cx: &mut Cx) {
+        let Some(who) = m.ai.target else { return };
+        let Some(t) = cx.w.target_info(who) else {
+            return;
+        };
+        let target_dist_sqr = m.distance_sqr(t.position);
+        let speed_modifier = f64::from(charge_speed_modifier(m, cx.w));
+        let mount_distance = passenger_distance(m);
+        let at = [t.position.x, t.eye_y, t.position.z];
+        m.turn_to(at, 30.0, 30.0);
+        m.look_at_speed(at, 30.0, 30.0);
+        if state.not_engaged_yet() {
+            if target_dist_sqr > f64::from(self.approach_distance_sq) {
+                m.nav_move_to_entity(
+                    cx.w,
+                    [t.position.x, t.position.y, t.position.z],
+                    1,
+                    speed_modifier * self.speed_modifier_when_repositioning,
+                );
+                return;
+            }
+            state.start_engagement(Self::kinetic_weapon_use_duration(m));
+            start_using_item(m);
+        }
+        if state.tick_and_check_engagement() {
+            stop_using_item(m);
+            let distance = target_dist_sqr.sqrt();
+            state.away_pos = m.land_random_pos_away_between(
+                cx.w,
+                0.0_f64.max(f64::from(9 + mount_distance) - distance),
+                1.0_f64.max(f64::from(11 + mount_distance) - distance),
+                7,
+                [t.position.x, t.position.y, t.position.z],
+            );
+            state.fleeing_time = 1;
+        }
+        if !state.tick_and_check_fleeing() {
+            if let Some(away) = state.away_pos {
+                m.nav_move_to(
+                    cx.w,
+                    away,
+                    speed_modifier * self.speed_modifier_when_repositioning,
+                );
+                if m.ai.nav.is_done() {
+                    if state.fleeing_time > 0 {
+                        state.done = true;
+                        return;
+                    }
+                    state.away_pos = None;
+                }
+            } else {
+                m.nav_move_to_entity(
+                    cx.w,
+                    [t.position.x, t.position.y, t.position.z],
+                    1,
+                    speed_modifier * self.speed_modifier_when_charging,
+                );
+                if target_dist_sqr < f64::from(self.target_in_range_radius_sq) || m.ai.nav.is_done()
+                {
+                    let distance = target_dist_sqr.sqrt();
+                    state.away_pos = m.land_random_pos_away_between(
+                        cx.w,
+                        f64::from(6 + mount_distance) - distance,
+                        f64::from(7 + mount_distance) - distance,
+                        7,
+                        [t.position.x, t.position.y, t.position.z],
+                    );
+                }
+            }
+        }
+    }
+}
+impl Goal for SpearUse {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    /// `SpearUseGoal.canUse`: able to attack and not using an item.
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        able_to_attack(m, cx.w) && !is_using_item(m)
+    }
+    /// `SpearUseGoal.canContinueToUse`.
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.state.as_ref().is_some_and(|s| !s.done) && able_to_attack(m, cx.w)
+    }
+    /// `SpearUseGoal.start`: aggressive, with a new state.
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.aggressive = true;
+        self.state = Some(SpearUseState::new());
+    }
+    /// `SpearUseGoal.stop`: the navigation stops, the spear goes down.
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.nav_stop();
+        m.ai.aggressive = false;
+        self.state = None;
+        stop_using_item(m);
+    }
+    /// `SpearUseGoal.tick`.
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(mut state) = self.state.take() {
+            self.step(&mut state, m, cx);
+            self.state = Some(state);
+        }
+    }
 }

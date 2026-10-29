@@ -125,6 +125,12 @@ impl Kinetic {
         })
     }
 
+    /// `KineticWeapon.computeDamageUseDuration`: the delay and the time the
+    /// damage condition lasts.
+    pub fn damage_use_duration(&self) -> i32 {
+        self.delay_ticks + self.damage.max_duration_ticks
+    }
+
     /// The spear's `attack_animation`: a STAB (`SwingAnimationType` 2) as long
     /// as its attack duration.
     pub fn attack_animation(&self) -> SwingAnimation {
