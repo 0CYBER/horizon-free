@@ -1772,38 +1772,38 @@ impl Game<'_> {
         }
     }
 
-    /// `ClientPacketListener.handleUpdateAttributes` for a mob: its maximum
-    /// health (the hearts drawn over its mount) takes the server's value, from
-    /// `AttributeInstance.calculateValue`.
+    /// `ClientPacketListener.handleUpdateAttributes` for a mob, each value from
+    /// `AttributeInstance.calculateValue`: its maximum health (the hearts drawn
+    /// over its mount), and a player's or mannequin's `minecraft:scale`, which
+    /// scales its model (`LivingEntityRenderState.scale`) as the local player's
+    /// does: NPC plugins make their fake players bigger with it.
     fn remote_mob_attributes(&mut self, id: i32, values: &[play::AttributeSnapshot]) {
         let catalog = &self.motion.attributes;
-        let Some(max_health) = catalog.id("minecraft:max_health") else {
-            return;
-        };
-        let Some(s) = values
-            .iter()
-            .find(|s| s.attribute == max_health.registry_id())
-        else {
-            return;
-        };
-        let amounts = |op: i32| {
-            s.modifiers
+        let value = |name: &str| {
+            let attribute = catalog.id(name)?;
+            let s = values
                 .iter()
-                .filter(move |m| m.operation == op)
-                .map(|m| m.amount)
+                .find(|s| s.attribute == attribute.registry_id())?;
+            Some(
+                catalog
+                    .attribute(attribute)
+                    .definition
+                    .sanitize(snapshot_value(s)),
+            )
         };
-        let base = s.base + amounts(0).sum::<f64>();
-        let mut value = base + amounts(1).map(|a| base * a).sum::<f64>();
-        for amount in amounts(2) {
-            value *= 1.0 + amount;
-        }
-        let value = catalog.attribute(max_health).definition.sanitize(value);
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+        let (max_health, scale) = (value("minecraft:max_health"), value("minecraft:scale"));
+        let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) else {
+            return;
+        };
+        if let Some(max_health) = max_health {
             horizon_client::mobs::finalize::set_base(
                 m,
                 horizon_client::mobs::finalize::Attr::MaxHealth,
-                value,
+                max_health,
             );
+        }
+        if let Some(scale) = scale {
+            m.extra.model_scale = scale as f32;
         }
     }
 
@@ -6841,8 +6841,50 @@ impl Remote {
     }
 }
 
+/// `AttributeInstance.calculateValue` before the attribute's range: the base,
+/// `ADD_VALUE`s, then `ADD_MULTIPLIED_BASE`s of that, then each
+/// `ADD_MULTIPLIED_TOTAL`.
+fn snapshot_value(s: &play::AttributeSnapshot) -> f64 {
+    let amounts = |op: i32| {
+        s.modifiers
+            .iter()
+            .filter(move |m| m.operation == op)
+            .map(|m| m.amount)
+    };
+    let base = s.base + amounts(0).sum::<f64>();
+    let mut value = base + amounts(1).map(|a| base * a).sum::<f64>();
+    for amount in amounts(2) {
+        value *= 1.0 + amount;
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
+    /// An NPC plugin's scale: a base the plugin sets, or a modifier on 1.
+    #[test]
+    fn attribute_values_add_then_multiply_as_vanilla() {
+        use horizon_protocol::packets::play::{AttributeModifier, AttributeSnapshot};
+        let modifier = |amount, operation| AttributeModifier {
+            id: "minecraft:proof".into(),
+            amount,
+            operation,
+        };
+        let snapshot = |base, modifiers| AttributeSnapshot {
+            attribute: 0,
+            base,
+            modifiers,
+        };
+        assert_eq!(super::snapshot_value(&snapshot(2.0, vec![])), 2.0);
+        assert_eq!(
+            super::snapshot_value(&snapshot(1.0, vec![modifier(1.0, 0)])),
+            2.0
+        );
+        // (1 + 1) * (1 + 0.5) from the base, then * (1 + 1) of the total.
+        let all = vec![modifier(1.0, 0), modifier(0.5, 1), modifier(1.0, 2)];
+        assert_eq!(super::snapshot_value(&snapshot(1.0, all)), 6.0);
+    }
+
     use super::Game;
 
     #[test]
