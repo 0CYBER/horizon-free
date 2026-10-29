@@ -13991,6 +13991,7 @@ impl ApplicationHandler for Game<'_> {
                         server.set_distances(
                             self.settings.render_distance,
                             self.settings.simulation_distance,
+                            self.settings.entity_distance,
                         );
                     }
                     self.clock.end_frame(self.pause);
