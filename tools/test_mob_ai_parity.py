@@ -322,6 +322,10 @@ def scenarios():
                                 'mob minecraft:cod 2.5 -62 0.5 0 13 persistent noai'])
     add('axolotl_play_dead', 300, [POOL, 'player 12.5 -60 0.5', 'mob minecraft:axolotl 0.5 -62 0.5 0 28 persistent']
         + [f'hurt {t} 0' for t in range(4, 160, 12)])
+    # Fish swimming at random (#3631): RandomSwimmingGoal's position search in a sealed pool.
+    for species, seed in [('cod', 181), ('salmon', 182), ('tropical_fish', 183)]:
+        add(f'{species}_random_swim', 120, [POOL, 'player 12.5 -60 0.5',
+                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
     # A jobless villager outside a stone box, its composter inside and the doorway on the far
     # side: the path around needs more than the 256 nodes of the follow range (16 * 16); the
     # villager's setRequiredPathLength(48) raises PathFinder.maxVisitedNodes to 768.
