@@ -1905,10 +1905,33 @@ pub struct SaveDir {
     pub tables: OnceLock<Arc<SaveTables>>,
     /// The dimension's skylight and height, from its folder name.
     pub shape: LevelShape,
+    /// Which chunks each region file holds, for far terrain (`lod_saved`).
+    lod_regions: Mutex<crate::fast_hash::FxHashMap<(i32, i32), LodRegion>>,
+    /// Saved chunks decoded for far terrain, shared by its sampling threads
+    /// (`lod_surfaces_shared`), oldest first.
+    lod_decoded: Mutex<LodDecoded>,
 }
 fn is_forced_ticket(ticket: &Tag) -> bool {
     matches!(ticket.get("type"), Some(Tag::String(t)) if *t == JavaString::from("minecraft:forced"))
 }
+#[derive(Default)]
+struct LodDecoded {
+    chunks: crate::fast_hash::FxHashMap<(i32, i32), (std::time::Instant, LodSurfaces)>,
+    order: std::collections::VecDeque<(i32, i32)>,
+}
+/// Saved chunks kept decoded for far terrain (each tens of kilobytes), and
+/// for how long: edits saved later show after it.
+const LOD_DECODED: usize = 1024;
+const LOD_DECODED_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+/// A region file's saved chunks (bit `x + z * 32`), `None` without the file,
+/// as of `checked`.
+struct LodRegion {
+    checked: std::time::Instant,
+    chunks: Option<[u64; 16]>,
+}
+/// How long far terrain trusts a region file's chunk list: chunks saved after
+/// it was read show in the far view this long after.
+const LOD_REGION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 impl SaveDir {
     pub fn new(root: PathBuf) -> Self {
         let shape = LevelShape::for_dir(&root);
@@ -1923,6 +1946,8 @@ impl SaveDir {
             outstanding: Default::default(),
             tables: OnceLock::new(),
             shape,
+            lod_regions: Default::default(),
+            lod_decoded: Default::default(),
         }
     }
     /// 26.3's TicketStorage: persistent tickets live in each dimension's
@@ -1968,6 +1993,40 @@ impl SaveDir {
         }));
         put(&mut data, "tickets", Tag::List(tickets));
         write_saved_data(&self.root, "chunk_tickets", data)
+    }
+    /// Whether chunk `x z` is in its region file, from a chunk list kept
+    /// `LOD_REGION_TTL`. Far terrain asks for every column of the view: it
+    /// opened the region file each time, also where there is none, which
+    /// held the far view back for minutes.
+    fn lod_saved(&self, x: i32, z: i32) -> bool {
+        let key = (x >> 5, z >> 5);
+        let mut regions = self.lod_regions.lock().unwrap();
+        let fresh = regions
+            .get(&key)
+            .is_some_and(|region| region.checked.elapsed() < LOD_REGION_TTL);
+        if !fresh {
+            let chunks = RegionFile::open(self.region_path("region", key.0, key.1))
+                .ok()
+                .map(|region| {
+                    let mut bits = [0u64; 16];
+                    for (pos, _) in region.chunks() {
+                        let index = ((pos.x & 31) + (pos.z & 31) * 32) as usize;
+                        bits[index / 64] |= 1 << (index % 64);
+                    }
+                    bits
+                });
+            regions.insert(
+                key,
+                LodRegion {
+                    checked: std::time::Instant::now(),
+                    chunks,
+                },
+            );
+        }
+        let index = ((x & 31) + (z & 31) * 32) as usize;
+        regions[&key]
+            .chunks
+            .is_some_and(|bits| bits[index / 64] & (1 << (index % 64)) != 0)
     }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
         region_path(&self.root, folder, rx, rz)
@@ -3454,11 +3513,18 @@ pub struct Persistent<G> {
     pub biomes: Arc<Biomes>,
 }
 type LodSurfaces = Arc<[crate::lod::Column; 256]>;
+/// The coarsest far tile spacing whose columns read saved chunks: 16 blocks
+/// a column, and 4 with Reduced far detail (`LodSampler::set_approximate`).
+const SAVED_LOD_STRIDE: i32 = 16;
+const SAVED_LOD_STRIDE_REDUCED: i32 = 4;
 struct SavedLodSampler<G: ChunkGenerator> {
     generator: Arc<Persistent<G>>,
     inner: Box<dyn crate::streaming::LodSampler>,
     cache: std::collections::VecDeque<((i32, i32), Option<LodSurfaces>)>,
     details: Vec<crate::streaming::LodDetail>,
+    /// Reduced far detail: saved chunks only in tiles up to
+    /// `SAVED_LOD_STRIDE_REDUCED` blocks a column.
+    approximate: bool,
 }
 impl<G: ChunkGenerator> SavedLodSampler<G> {
     fn saved_columns(&mut self, key: (i32, i32)) -> Option<LodSurfaces> {
@@ -3466,7 +3532,7 @@ impl<G: ChunkGenerator> SavedLodSampler<G> {
             Some(index) => self.cache.remove(index).unwrap(),
             None => (
                 key,
-                self.generator.save.lod_surfaces(
+                self.generator.save.lod_surfaces_shared(
                     key.0,
                     key.1,
                     &self.generator.registry,
@@ -3487,9 +3553,11 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
             inner: self.inner.fork()?,
             cache: Default::default(),
             details: Vec::new(),
+            approximate: self.approximate,
         }))
     }
     fn set_approximate(&mut self, approximate: bool) {
+        self.approximate = approximate;
         self.inner.set_approximate(approximate);
     }
     fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
@@ -3514,7 +3582,18 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
     }
     fn grid(&mut self, x: i32, z: i32, stride: i32, side: usize) -> Vec<crate::lod::Column> {
         let mut columns = self.inner.grid(x, z, stride, side);
-        if stride <= 16 {
+        // Saved chunks show in tiles up to 16 blocks a column. With Reduced far
+        // detail only up to 4 (within about a kilometre): coarser tiles keep
+        // the generator's terrain, which saved chunks were made from, since
+        // decoding up to 256 saved chunks for each of them held the whole far
+        // view back for minutes in large saves. Edits that far away show once
+        // their tiles refine on approach.
+        let limit = if self.approximate {
+            SAVED_LOD_STRIDE_REDUCED
+        } else {
+            SAVED_LOD_STRIDE
+        };
+        if stride <= limit {
             for (index, column) in columns.iter_mut().enumerate() {
                 let (wx, wz) = (
                     x + (index % side) as i32 * stride,
@@ -3773,6 +3852,33 @@ fn decode_lod_surfaces(
 }
 
 impl SaveDir {
+    /// `lod_surfaces`, decoded once for all far sampling threads: each saved
+    /// chunk lies under far tiles of several levels, sampled on any thread.
+    fn lod_surfaces_shared(
+        &self,
+        x: i32,
+        z: i32,
+        assets: &crate::assets::Assets,
+        biomes: &Biomes,
+    ) -> Option<LodSurfaces> {
+        if let Some((at, columns)) = self.lod_decoded.lock().unwrap().chunks.get(&(x, z))
+            && at.elapsed() < LOD_DECODED_TTL
+        {
+            return Some(columns.clone());
+        }
+        let columns = self.lod_surfaces(x, z, assets, biomes)?;
+        let mut decoded = self.lod_decoded.lock().unwrap();
+        let fresh = (std::time::Instant::now(), columns.clone());
+        if decoded.chunks.insert((x, z), fresh).is_none() {
+            decoded.order.push_back((x, z));
+            while decoded.order.len() > LOD_DECODED {
+                if let Some(old) = decoded.order.pop_front() {
+                    decoded.chunks.remove(&old);
+                }
+            }
+        }
+        Some(columns)
+    }
     fn lod_surfaces(
         &self,
         x: i32,
@@ -3789,6 +3895,9 @@ impl SaveDir {
         let root = if let Some(record) = pending {
             record.tag().map(|tag| (*tag).clone())?
         } else {
+            if !self.lod_saved(x, z) {
+                return None;
+            }
             // Far-only reads must not populate the gameplay region cache across the whole view.
             let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
             region
@@ -3819,6 +3928,7 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
             inner,
             cache: Default::default(),
             details: Vec::new(),
+            approximate: false,
         })
     }
     fn load(&self, x: i32, z: i32) -> Option<Chunk> {
@@ -4358,6 +4468,7 @@ mod tests {
             inner: Box::new(SavedOnly(Vec::new())),
             cache: Default::default(),
             details: Vec::new(),
+            approximate: false,
         };
         use crate::streaming::LodSampler;
         sampler.request_detail(&[(-2, 3)], [-32, 48]);
