@@ -481,6 +481,12 @@ impl HandHeights {
     }
 }
 
+/// `FirstPersonHandsAndItemsRenderer.submit`: the displayed stack's model
+/// scales the interpolated equip displacement independently for each hand.
+pub fn equip_displacement(height: f32, swap_animation_scale: f32) -> f32 {
+    swap_animation_scale * (1.0 - height)
+}
+
 /// `LocalPlayer.xBob` and `yBob`: the hands lag behind the view when it
 /// turns. `LocalPlayer.applyInput` eases them halfway to the rotation every
 /// tick; `FirstPersonHandsAndItemsRenderer` turns the hands by a tenth of
@@ -877,6 +883,15 @@ impl Clicks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equip_displacement_uses_the_visible_items_scale() {
+        let height = 0.5;
+        // Vanilla spear item models use 1.95; a sword uses the default 1.0.
+        assert_eq!(equip_displacement(height, 1.95), 0.975);
+        assert_eq!(equip_displacement(height, 1.0), 0.5);
+        assert_eq!(equip_displacement(1.0, 1.95), 0.0);
+    }
     #[test]
     fn drawing_a_bow_or_holding_a_charged_crossbow_hides_a_hand() {
         let (bow, apple) = (
