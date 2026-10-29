@@ -660,6 +660,22 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.was_eye_in_water = m.fluids.eye_in_water;
     m.update_fluids(w, events);
+    // `Entity.baseTick`: a sprinting mob on dry land spawns its dust, whose
+    // position draws twice from the mob's random (even where nobody sees it).
+    if m.species() == Species::Cat
+        && m.extra.sprinting
+        && !m.fluids.in_water
+        && !m.fluids.in_lava
+        && m.alive()
+        && !w.facts.is_air(w.world.block(
+            m.position.x.floor() as i32,
+            (m.position.y - 0.2).floor() as i32,
+            m.position.z.floor() as i32,
+        ))
+    {
+        m.random.next_double();
+        m.random.next_double();
+    }
     if m.species() == Species::Drowned {
         super::undead::drowned_update_swimming(m, w);
     }
@@ -1304,6 +1320,11 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Bat => super::bat::server_ai_step(m, cx.w, cx.events),
         Species::Bee => super::bee::server_ai_step(m, cx),
         Species::Frog => super::frog::server_ai_step(m, cx.w),
+        // `Cat.customServerAiStep`: dashing at 1.33 is sprinting.
+        Species::Cat => {
+            m.extra.sprinting =
+                m.ai.mov.has_wanted() && (m.ai.mov.speed_modifier - 1.33).abs() < 1e-6;
+        }
         _ => {}
     }
 }
@@ -1483,6 +1504,9 @@ pub fn speed_bonus(m: &Mob) -> f64 {
         {
             1.5
         }
+        // `Cat.customServerAiStep`: a cat dashing at 1.33 is sprinting, which
+        // adds the `SPEED_MODIFIER_SPRINTING` +30% to its movement speed.
+        Species::Cat if m.extra.sprinting => 1.3,
         _ => 1.0,
     }
 }
