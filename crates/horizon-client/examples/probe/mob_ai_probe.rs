@@ -5,7 +5,7 @@
 //! usage: mob_ai_probe RESOURCES SCENARIOS OUTPUT
 use horizon_client::{
     assets::Assets,
-    beehive::HiveHost,
+    beehive::{BeehiveExt, HiveHost},
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, MIN_Y},
