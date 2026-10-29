@@ -94,6 +94,12 @@ pub enum ArrowEvent {
         position: Vec3,
         velocity: Vec3,
     },
+    /// `Arrow.makeParticle`: an entity-effect particle in the potion's colour,
+    /// placed by the arrow's own random.
+    EffectParticle {
+        color: u32,
+        position: Vec3,
+    },
     Sound {
         sound: ArrowSound,
         volume: f32,
@@ -521,6 +527,31 @@ impl Ticker<'_, '_, '_, '_> {
     fn trident(&self) -> bool {
         matches!(self.p.kind, ProjectileKind::Trident)
     }
+    /// `Arrow.getColor`: the potion's colour, None for a plain arrow
+    /// (`PotionContents.EMPTY`).
+    fn effect_color(&self) -> Option<u32> {
+        let potion = self.st.pickup_item.potion()?;
+        Some(crate::brewing::potion_color(Some(potion)))
+    }
+    /// `Arrow.makeParticle`: `amount` entity-effect particles in the arrow's
+    /// box (`getRandomX(0.5)`, `getRandomY()`, `getRandomZ(0.5)`), none for a
+    /// plain arrow.
+    fn make_particle(&mut self, amount: u32) {
+        let Some(color) = self.effect_color() else {
+            return;
+        };
+        for _ in 0..amount {
+            let at = self.position();
+            let width = 0.5;
+            let rx = (2.0 * self.st.random.next_double() - 1.0) * 0.5;
+            let ry = self.st.random.next_double();
+            let rz = (2.0 * self.st.random.next_double() - 1.0) * 0.5;
+            self.st.events.push(ArrowEvent::EffectParticle {
+                color,
+                position: Vec3::new(at.x + width * rx, at.y + 0.5 * ry, at.z + width * rz),
+            });
+        }
+    }
     fn tick(&mut self, targets: &[(Who, Aabb)]) -> Hit {
         // ThrownTrident.tick.
         if self.trident() && self.st.in_ground_time > 4 {
@@ -567,6 +598,10 @@ impl Ticker<'_, '_, '_, '_> {
             if !self.st.removed {
                 let at = self.position();
                 self.apply_effects_from_blocks(at, at);
+            }
+            // Arrow.tick: one particle every fifth tick while it is in the ground.
+            if self.st.in_ground_time % 5 == 0 {
+                self.make_particle(1);
             }
             return Hit::None;
         }
@@ -628,6 +663,8 @@ impl Ticker<'_, '_, '_, '_> {
             self.apply_effects_from_blocks(original, end);
         }
         self.finish();
+        // Arrow.tick: two particles per tick in flight.
+        self.make_particle(2);
         hit
     }
     /// The end of a tick in flight: drag and gravity, then `Projectile.tick`

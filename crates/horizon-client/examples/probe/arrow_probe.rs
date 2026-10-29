@@ -153,6 +153,9 @@ pub fn main() -> Result<()> {
                                 bits(position),
                                 bits(velocity)
                             )),
+                            ArrowEvent::EffectParticle { color, position } => {
+                                events.push(format!("effect {color:08x} {}", bits(position)))
+                            }
                             ArrowEvent::Sound {
                                 sound,
                                 volume,
