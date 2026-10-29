@@ -1914,6 +1914,7 @@ impl Game<'_> {
                 })
                 .clamp(-90.0, 90.0);
             }
+            C::PlayerLookAt(p) => self.remote_look_at(&p),
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
             C::ForgetLevelChunk(p) => {
@@ -3710,6 +3711,34 @@ impl Game<'_> {
         {
             handler.cancel();
         }
+    }
+    /// `ClientPacketListener.handleLookAt`: `Entity.lookAt` from this
+    /// player's feet or eyes, towards the packet's entity (its feet or eyes)
+    /// when this client tracks it, else towards the packet's point.
+    fn remote_look_at(&mut self, p: &play::PlayerLookAt) {
+        // `EntityAnchorArgument.Anchor`: 0 feet, 1 eyes.
+        const EYES: i32 = 1;
+        let Some(player) = self.player.as_ref() else {
+            return;
+        };
+        let mut from = [player.position.x, player.position.y, player.position.z];
+        if p.from == EYES {
+            from[1] += f64::from(player.dimensions.eye_height);
+        }
+        let to = p
+            .entity
+            .as_ref()
+            .and_then(|e| {
+                let m = self.mobs.iter().find(|m| m.id == e.id as u32)?;
+                let y = if e.anchor == EYES {
+                    m.eye_y()
+                } else {
+                    m.position.y
+                };
+                Some([m.position.x, y, m.position.z])
+            })
+            .unwrap_or(p.target);
+        (self.yaw, self.pitch) = look_at_rotation(from, to);
     }
     /// ClientPacketListener.handleMovePlayer.
     fn remote_teleport(&mut self, p: &play::PlayerPosition) -> Result<()> {
@@ -6553,6 +6582,18 @@ impl Game<'_> {
     }
 }
 
+/// `Entity.lookAt`'s rotation from `from` towards `to`, as (yaw, pitch).
+fn look_at_rotation(from: [f64; 3], to: [f64; 3]) -> (f32, f32) {
+    use horizon_core::geometry::trig::atan2;
+    let (dx, dy, dz) = (to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    let horizontal = (dx * dx + dz * dz).sqrt();
+    // `* 180.0F / (float)Math.PI` on the double.
+    let degrees = |r: f64| r * 180.0 / f64::from(std::f32::consts::PI);
+    let pitch = wrap_degrees((-degrees(atan2(dy, horizontal))) as f32);
+    let yaw = wrap_degrees(degrees(atan2(dz, dx)) as f32 - 90.0);
+    (yaw, pitch)
+}
+
 /// `Mth.wrapDegrees`.
 fn wrap_degrees(a: f32) -> f32 {
     let a = a % 360.0;
@@ -6962,6 +7003,43 @@ impl Remote {
 #[cfg(test)]
 mod tests {
     use super::Game;
+
+    /// `Entity.lookAt`: yaw 0 faces +Z, -90 faces +X; pitch -90 looks up.
+    #[test]
+    fn look_at_turns_towards_the_target() {
+        let close = |(yaw, pitch): (f32, f32), want: (f32, f32)| {
+            assert!(
+                (yaw - want.0).abs() < 1e-3 && (pitch - want.1).abs() < 1e-3,
+                "{yaw} {pitch}, want {want:?}"
+            );
+        };
+        let at = [10.0, 64.0, -5.0];
+        let off = |d: [f64; 3]| [at[0] + d[0], at[1] + d[1], at[2] + d[2]];
+        close(
+            super::look_at_rotation(at, off([0.0, 0.0, 3.0])),
+            (0.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([3.0, 0.0, 0.0])),
+            (-90.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([-3.0, 0.0, 0.0])),
+            (90.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([0.0, 0.0, -3.0])),
+            (-180.0, 0.0),
+        );
+        close(
+            super::look_at_rotation(at, off([0.0, 2.0, 2.0])),
+            (0.0, -45.0),
+        );
+        close(
+            super::look_at_rotation(at, off([0.0, -4.0, 4.0])),
+            (0.0, 45.0),
+        );
+    }
 
     /// Q over a slot of the inventory on a server (#3357): the predicted THROW
     /// drops the stack, so the player's hand swings, as `LivingEntity.drop`
