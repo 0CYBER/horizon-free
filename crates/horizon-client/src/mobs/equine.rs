@@ -877,8 +877,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mobs::finalize::base_value;
     use crate::mobs::Damage;
+    use crate::mobs::finalize::base_value;
     use crate::mobs::sensor_scan_tests::kind;
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
