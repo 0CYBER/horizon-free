@@ -14536,19 +14536,19 @@ impl Game<'_> {
     fn items(&self) -> &Items {
         match &self.world_tables {
             Some(t) => &t.items,
-            None => self.items(),
+            None => self.res.items(),
         }
     }
     fn recipes(&self) -> &Recipes {
         match &self.world_tables {
             Some(t) => &t.recipes,
-            None => self.recipes(),
+            None => self.res.recipes(),
         }
     }
     fn stations(&self) -> &horizon_client::stations::StationData {
         match &self.world_tables {
             Some(t) => &t.stations,
-            None => self.stations(),
+            None => self.res.stations(),
         }
     }
     /// The world's packs' content files, none without packs.
