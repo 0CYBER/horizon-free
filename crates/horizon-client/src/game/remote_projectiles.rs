@@ -121,7 +121,7 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     if p.stuck {
         return;
     }
-    let water = w.in_water(p.position);
+    let water = w.in_water(p.bounds());
     if water {
         p.velocity = p.velocity.scale(0.6);
     }
@@ -714,7 +714,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(Who, Aabb)] {
