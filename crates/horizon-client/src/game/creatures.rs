@@ -4236,14 +4236,7 @@ impl Game<'_> {
                 .get(&stack.item)
                 .map_or(0, |i| i.max_damage);
             if max > 0 {
-                let loss = self.wear(&stack, 16);
-                let slot = self.held_slot();
-                if let Some(held) = self.stack_in_mut(slot).as_mut() {
-                    held.damage += loss;
-                    if held.damage >= max {
-                        *self.stack_in_mut(slot) = None;
-                    }
-                }
+                self.damage_held(16);
             }
         }
         true
