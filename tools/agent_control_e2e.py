@@ -622,9 +622,32 @@ def manage_scenario(d, out):
     return {'worlds': len(worlds)}
 
 
+def pause_save_scenario(d, out):
+    # IntegratedServer.tickServer: the tick single player pauses saves everything ("Saving and pausing
+    # game...", #3280), so the world is on disk while the pause menu is open.
+    d('open', world='Paused', seed=7)
+    d('wait_for', condition='loaded', timeout=400)
+    d('wait_ready', seconds=400)
+    level = d.cwd / 'saves/Paused/level.dat'
+    d('wait', ticks=40)
+    playing = level.stat().st_mtime_ns
+    d('wait', ticks=40)
+    assert level.stat().st_mtime_ns == playing, 'level.dat was saved without a pause'
+    d('pause')
+    deadline = time.time() + 15
+    while level.stat().st_mtime_ns == playing and time.time() < deadline:
+        time.sleep(0.25)
+    saved = level.stat().st_mtime_ns != playing
+    shot = d('screenshot', path=str(out / f'{d.name}-pause-save.png'))
+    if '_image' in shot:
+        (out / f'{d.name}-pause-save.png').write_bytes(shot['_image'])
+    assert saved, 'pausing single player did not save level.dat'
+    return {'saved_on_pause': saved}
+
+
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
              'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario,
-             'manage': manage_scenario}
+             'manage': manage_scenario, 'pause-save': pause_save_scenario}
 
 
 REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
