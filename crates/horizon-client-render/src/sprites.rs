@@ -89,6 +89,8 @@ pub struct Sprites {
     /// textures under their own names, and one layer serves them all (the
     /// GPU's array may hold as few as 2048).
     still: std::collections::HashMap<(Vec<u8>, u32, [u32; 2], [bool; 4]), u32>,
+    /// Decoded textures kept on disk between launches ([`Sprites::with_disk_cache`]).
+    disk: Option<crate::sprite_cache::SpriteCache>,
 }
 /// Edge length of vanilla's block textures: the smallest array layer.
 pub const SPRITE_SIZE: u32 = 16;
@@ -111,6 +113,20 @@ pub(crate) fn resample(frame: &[u8], from: u32, to: u32) -> Vec<u8> {
     out
 }
 impl Sprites {
+    /// Sprites that reuse textures decoded by an earlier launch, kept in a
+    /// cache file in `root`.
+    pub fn with_disk_cache(root: &Path) -> Self {
+        Self {
+            disk: crate::sprite_cache::SpriteCache::open(root),
+            ..Self::default()
+        }
+    }
+    /// Write what this run decoded to the cache file.
+    pub fn save_disk_cache(&mut self) {
+        if let Some(disk) = &mut self.disk {
+            disk.save();
+        }
+    }
     /// How many array layers the textures take.
     pub fn count(&self) -> usize {
         self.native.len()
@@ -201,6 +217,21 @@ impl Sprites {
         }
     }
     fn load(&mut self, root: &Path, name: &str) -> Result<u32> {
+        let cached = self.disk.as_ref().and_then(|d| d.get(name)).cloned();
+        let decoded = match cached {
+            Some(decoded) => decoded,
+            None => {
+                let decoded = Self::decode(root, name)?;
+                if let Some(disk) = &mut self.disk {
+                    disk.insert(name, decoded.clone());
+                }
+                decoded
+            }
+        };
+        self.register(name, decoded)
+    }
+    /// Read and decode one texture and its `.mcmeta`.
+    fn decode(root: &Path, name: &str) -> Result<crate::sprite_cache::Decoded> {
         let (namespace, path) = name.split_once(':').ok_or("invalid sprite identifier")?;
         let path = root.join(format!("assets/{namespace}/textures/{path}.png"));
         let metadata = match fs::read_to_string(path.with_extension("png.mcmeta")) {
@@ -210,10 +241,13 @@ impl Sprites {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
-        let animation = metadata
+        let animation_text = metadata
             .as_ref()
             .and_then(|v| v.get("animation"))
-            .map(|v| AnimationMetadata::from_json(v.get()))
+            .map(|v| v.get().to_owned());
+        let animation = animation_text
+            .as_deref()
+            .map(AnimationMetadata::from_json)
             .transpose()?;
         let mut decoder = png::Decoder::new(BufReader::new(File::open(path)?));
         decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -247,7 +281,6 @@ impl Sprites {
             };
             pixels.extend(rgba);
         }
-        let layer = u32::try_from(self.native.len())?;
         let columns = info.width / width;
         let count = columns * (info.height / height);
         // Layers are square; a frame of another shape is nearest-resampled to
@@ -268,28 +301,56 @@ impl Sprites {
             }
             frames.push(frame);
         }
-        let settings = crate::mipmap::Settings {
-            native_size: side,
-            strategy: texture_section(metadata.as_ref())
+        let texture = texture_section(metadata.as_ref());
+        Ok(crate::sprite_cache::Decoded {
+            side,
+            frames,
+            animation: animation_text,
+            strategy: texture
                 .as_ref()
                 .and_then(|t| t["mipmap_strategy"].as_str())
                 .and_then(crate::mipmap::Strategy::parse)
                 .unwrap_or_default(),
-            alpha_cutoff_bias: texture_section(metadata.as_ref())
+            alpha_cutoff_bias: texture
                 .as_ref()
                 .and_then(|t| t["alpha_cutoff_bias"].as_f64())
                 .unwrap_or(0.0) as f32,
             has_transparent: pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
+            opaque: pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
+            translucent: pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[3] != 0 && p[3] != 255),
+        })
+    }
+    /// Give a decoded texture its layer (or the one an identical still has).
+    fn register(&mut self, name: &str, decoded: crate::sprite_cache::Decoded) -> Result<u32> {
+        let crate::sprite_cache::Decoded {
+            side,
+            frames,
+            animation: animation_text,
+            strategy,
+            alpha_cutoff_bias,
+            has_transparent,
+            opaque,
+            translucent,
+        } = decoded;
+        let animation = animation_text
+            .as_deref()
+            .map(AnimationMetadata::from_json)
+            .transpose()?;
+        let count = frames.len() as u32;
+        let layer = u32::try_from(self.native.len())?;
+        let settings = crate::mipmap::Settings {
+            native_size: side,
+            strategy,
+            alpha_cutoff_bias,
+            has_transparent,
             item: name
                 .split_once(':')
                 .is_some_and(|(_, p)| p.starts_with("item/")),
         };
-        let opaque = pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
-        let translucent = pixels
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .any(|p| p[3] != 0 && p[3] != 255);
         let still = (animation.is_none() && frames.len() == 1).then(|| {
             (
                 frames[0].clone(),

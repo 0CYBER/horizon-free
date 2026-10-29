@@ -45,6 +45,16 @@ pub(crate) enum Kind {
     Slider(f32),
     Cycle,
 }
+/// `PlayerModelPart` keys, in vanilla's bit order (`modelPart_*` in options.txt).
+const MODEL_PART_KEYS: [&str; 7] = [
+    "modelPart_cape",
+    "modelPart_jacket",
+    "modelPart_left_sleeve",
+    "modelPart_right_sleeve",
+    "modelPart_left_pants_leg",
+    "modelPart_right_pants_leg",
+    "modelPart_hat",
+];
 /// The Accessibility Settings page:
 /// `AccessibilityOptionsScreen.options`, with the Controls link inserted separately.
 pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
@@ -97,9 +107,15 @@ impl Opt {
                 | Opt::HideMatchedNames
                 | Opt::OnlySecureChat
                 | Opt::SaveChatDrafts
-                | Opt::DistortionEffects
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
+                // Saved, but no Horizon system reads them yet: no Realms, no
+                // friends list, no directional audio, no now-playing toast.
+                | Opt::RealmsNotifications
+                | Opt::InGameNotification
+                | Opt::SharePresence
+                | Opt::DirectionalAudio
+                | Opt::MusicToast
                 // Saved, but nothing in rendering reads them yet.
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
@@ -128,6 +144,13 @@ impl Opt {
             Opt::RotateWithMinecarts => "rotateWithMinecart",
             Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
             Opt::MusicFrequency => "musicFrequency",
+            Opt::ModelPart(i) => MODEL_PART_KEYS[i],
+            Opt::AllowServerListing => "allowServerListing",
+            Opt::RealmsNotifications => "realmsNotifications",
+            Opt::InGameNotification => "inGameNotification",
+            Opt::SharePresence => "sharePresence",
+            Opt::DirectionalAudio => "directionalAudio",
+            Opt::MusicToast => "musicToast",
             _ => return None,
         })
     }
@@ -225,6 +248,22 @@ impl Opt {
             Opt::PadGlyphs => "horizon.options.button_glyphs",
             Opt::PadMenuNav => "horizon.options.menu_navigation",
             Opt::PadKeyboard => "horizon.options.on_screen_keyboard",
+            Opt::ModelPart(i) => [
+                "options.modelPart.cape",
+                "options.modelPart.jacket",
+                "options.modelPart.left_sleeve",
+                "options.modelPart.right_sleeve",
+                "options.modelPart.left_pants_leg",
+                "options.modelPart.right_pants_leg",
+                "options.modelPart.hat",
+            ][i],
+            Opt::MainHand => "options.mainHand",
+            Opt::AllowServerListing => "options.allowServerListing",
+            Opt::RealmsNotifications => "options.realmsNotifications.button",
+            Opt::InGameNotification => "options.inGameNotification",
+            Opt::SharePresence => "options.sharePresence",
+            Opt::DirectionalAudio => "options.directionalAudio",
+            Opt::MusicToast => "options.musicToast",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -460,9 +499,29 @@ impl Opt {
             Opt::HideLightningFlashes => on_off(s.file.bool("hideLightningFlashes")),
             Opt::MonochromeLogo => on_off(s.file.bool("darkMojangStudiosBackground")),
             Opt::HideSplashTexts => on_off(s.file.bool("hideSplashTexts")),
-            Opt::HideMatchedNames | Opt::OnlySecureChat | Opt::SaveChatDrafts => {
-                on_off(s.file.bool(self.file_key().unwrap()))
-            }
+            Opt::HideMatchedNames
+            | Opt::OnlySecureChat
+            | Opt::SaveChatDrafts
+            | Opt::ModelPart(_)
+            | Opt::AllowServerListing
+            | Opt::RealmsNotifications
+            | Opt::InGameNotification
+            | Opt::DirectionalAudio => on_off(s.file.bool(self.file_key().unwrap())),
+            Opt::MainHand => tr(if s.main_hand_left {
+                "options.mainHand.left"
+            } else {
+                "options.mainHand.right"
+            }),
+            Opt::SharePresence => tr([
+                "options.sharePresence.none",
+                "options.sharePresence.limited",
+                "options.sharePresence.all",
+            ][s.file.int("sharePresence").clamp(0, 2) as usize]),
+            Opt::MusicToast => tr([
+                "options.musicToast.never",
+                "options.musicToast.pauseMenu",
+                "options.musicToast.pauseMenuAndToast",
+            ][s.file.int("musicToast").clamp(0, 2) as usize]),
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
@@ -579,12 +638,14 @@ impl Opt {
                 self.file_key().unwrap(),
                 crate::options_file::V::Double(f64::from(v).powi(2)),
             ),
-            Opt::DamageTilt | Opt::PanoramaSpeed | Opt::GlintSpeed | Opt::GlintStrength => {
-                s.file.set(
-                    self.file_key().unwrap(),
-                    crate::options_file::V::Double(f64::from(v)),
-                )
-            }
+            Opt::DistortionEffects
+            | Opt::DamageTilt
+            | Opt::PanoramaSpeed
+            | Opt::GlintSpeed
+            | Opt::GlintStrength => s.file.set(
+                self.file_key().unwrap(),
+                crate::options_file::V::Double(f64::from(v)),
+            ),
             Opt::Fov => s.fov = step(30.0, 110.0),
             Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
@@ -669,7 +730,12 @@ impl Opt {
             | Opt::HighContrastBlockOutlines
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
-            | Opt::SaveChatDrafts => {
+            | Opt::SaveChatDrafts
+            | Opt::ModelPart(_)
+            | Opt::AllowServerListing
+            | Opt::RealmsNotifications
+            | Opt::InGameNotification
+            | Opt::DirectionalAudio => {
                 let key = self.file_key().unwrap();
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
@@ -717,6 +783,17 @@ impl Opt {
                 let n = next(s.file.int("musicFrequency").clamp(0, 2) as u8, 3);
                 s.file
                     .set("musicFrequency", crate::options_file::V::Int(i32::from(n)));
+            }
+            Opt::MainHand => s.main_hand_left = !s.main_hand_left,
+            Opt::SharePresence => {
+                let n = next(s.file.int("sharePresence").clamp(0, 2) as u8, 3);
+                s.file
+                    .set("sharePresence", crate::options_file::V::Int(i32::from(n)));
+            }
+            Opt::MusicToast => {
+                let n = next(s.file.int("musicToast").clamp(0, 2) as u8, 3);
+                s.file
+                    .set("musicToast", crate::options_file::V::Int(i32::from(n)));
             }
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
@@ -855,6 +932,10 @@ pub enum Page {
     Horizon,
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
+    /// SkinCustomizationScreen: the skin layers and Main Hand.
+    Skin,
+    /// OnlineOptionsScreen: server listing, Realms and friends notifications.
+    Online,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -923,8 +1004,10 @@ pub enum Event {
     ButtonClick,
     /// Close the options screens (back to the pause menu or title).
     Close,
-    /// Settings changed: apply them.
+    /// Settings changed: apply and save them.
     Changed,
+    /// A slider is being dragged: apply settings live but defer saving.
+    SliderDrag,
     /// The language changed (reload translations).
     Language(String),
     /// The pack selection changed (reload resources).
@@ -939,6 +1022,9 @@ pub enum Event {
     /// Open the mod's own settings page (capability `ui`): the installed
     /// mod's index in `mods.installed`.
     ModSettings(usize),
+    /// Native mod `.0`'s page opened: the game asks the mod for its labels
+    /// again (they were made with the list, maybe in another language).
+    NativeSettings(usize),
     /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
     /// mod and refreshes the page.
     NativeButton(usize, usize),
@@ -1173,6 +1259,8 @@ impl OptionsUi {
             Page::Main => "options.title",
             Page::Video => "options.videoTitle",
             Page::Sound => "options.sounds.title",
+            Page::Skin => "options.skinCustomisation.title",
+            Page::Online => "options.online.title",
             Page::Controls => "controls.title",
             Page::KeyBinds => "controls.keybinds.title",
             Page::Mouse => "options.mouse_settings.title",
@@ -1432,13 +1520,29 @@ impl OptionsUi {
                 self.filter_option_rows(rows)
             }
             Page::Sound => {
+                // SoundOptionsScreen, without Audio Device: Horizon opens the
+                // output device itself and cannot switch it.
                 let mut rows = vec![Row::Big(Opt::Volume(0))];
                 let others: Vec<Opt> = (1..SOUND_SOURCES.len()).map(Opt::Volume).collect();
                 rows.extend(pairs(&others));
-                rows.extend(pairs(&[Opt::ShowSubtitles]));
-                // SoundOptionsScreen: Music Frequency starts the next row (with
-                // Music Toast, not in Horizon yet).
-                rows.extend(pairs(&[Opt::MusicFrequency]));
+                rows.extend(pairs(&[Opt::ShowSubtitles, Opt::DirectionalAudio]));
+                rows.extend(pairs(&[Opt::MusicFrequency, Opt::MusicToast]));
+                rows
+            }
+            Page::Skin => {
+                // SkinCustomizationScreen: the seven layers, then Main Hand.
+                let mut opts: Vec<Opt> = (0..MODEL_PART_KEYS.len()).map(Opt::ModelPart).collect();
+                opts.push(Opt::MainHand);
+                pairs(&opts)
+            }
+            Page::Online => {
+                // OnlineOptionsScreen without the Xbox and friends-list parts.
+                let mut rows = vec![Row::Header("options.online.friends.header")];
+                rows.extend(pairs(&[Opt::InGameNotification, Opt::SharePresence]));
+                rows.push(Row::Header("options.online.servers.header"));
+                rows.push(Row::Big(Opt::AllowServerListing));
+                rows.push(Row::Header("options.online.realms.header"));
+                rows.push(Row::Big(Opt::RealmsNotifications));
                 rows
             }
             Page::Controls => {
@@ -1633,15 +1737,15 @@ impl OptionsUi {
                     list: false,
                 });
                 out.push(option_widget(s, Opt::Fov, cx - 154.0, 29.0, 150.0));
-                out.push(inactive(button(
+                out.push(button(
                     cx + 4.0,
                     29.0,
                     150.0,
                     tr("options.online"),
-                    Act::None,
-                )));
+                    Act::Push(Page::Online),
+                ));
                 let entries = [
-                    ("options.skinCustomisation", None),
+                    ("options.skinCustomisation", Some(Page::Skin)),
                     ("options.sounds", Some(Page::Sound)),
                     ("options.video", Some(Page::Video)),
                     ("options.controls", Some(Page::Controls)),
@@ -2427,6 +2531,7 @@ impl OptionsUi {
                 match action {
                     Action::ButtonClick => events.push(Event::ButtonClick),
                     Action::Changed => events.push(Event::Changed),
+                    Action::SliderDrag => events.push(Event::SliderDrag),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
@@ -2507,7 +2612,7 @@ impl OptionsUi {
                 let v = ui::slider_value(wd.x, wd.w, x);
                 self.slider_value = Some((opt, v, Instant::now()));
                 set_slider(opt, s, v);
-                events.push(Event::Changed);
+                events.push(Event::SliderDrag);
             }
             return events;
         }
@@ -2612,6 +2717,7 @@ impl OptionsUi {
                             events.push(Event::ButtonClick);
                             if s.mods.installed.get(i).is_some_and(|m| m.native.is_some()) {
                                 self.push(Page::NativeMod(i));
+                                events.push(Event::NativeSettings(i));
                             } else {
                                 events.push(Event::ModSettings(i));
                             }
@@ -2643,7 +2749,7 @@ impl OptionsUi {
                     let v = ui::slider_value(wd.x, wd.w, x);
                     self.slider_value = Some((opt, v, Instant::now()));
                     set_slider(opt, s, v);
-                    events.push(Event::Changed);
+                    events.push(Event::SliderDrag);
                 }
                 WKind::LanguageRow { code, .. } => {
                     if self.language_choice.as_deref() == Some(code.as_str()) {
@@ -2676,7 +2782,7 @@ impl OptionsUi {
         let slider = self.dragging.take().is_some();
         let graphics_slider = self.graphics.release();
         if slider || graphics_slider {
-            vec![Event::ButtonClick]
+            vec![Event::ButtonClick, Event::Changed]
         } else {
             Vec::new()
         }
@@ -2692,7 +2798,7 @@ impl OptionsUi {
             return;
         }
         if let Some(level) = Self::graphics_level(self.page()) {
-            self.graphics.scroll(level, size.1, amount);
+            self.graphics.scroll(level, s, size.1, amount);
             return;
         }
         match &mut self.pack_screen {
@@ -3231,6 +3337,50 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_native_mods_page_asks_the_game_for_its_labels_again() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "native".into(),
+            title: "Native 1.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            has_settings: false,
+            native: Some(crate::mod_list::NativePage::default()),
+        });
+        ui.show(Page::Mods);
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let settings = widgets
+            .iter()
+            .find(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ModSettings(0),
+                        ..
+                    }
+                )
+            })
+            .expect("a native mod's row has a Settings button");
+        let events = ui.click(
+            &mut s,
+            &atlas,
+            settings.x + 1.0,
+            settings.y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        // Its labels were made with the list, maybe in another language.
+        assert_eq!(events.last(), Some(&Event::NativeSettings(0)));
+        assert_eq!(ui.page(), Page::NativeMod(0));
+    }
+
+    #[test]
     fn option_tooltip_keys_follow_value_dependent_descriptions() {
         let mut s = Settings::default();
         assert_eq!(
@@ -3666,22 +3816,22 @@ mod tests {
         let (x, y) = (slider.x + slider.w - 1.0, slider.y + 1.0);
         assert_eq!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
-            vec![Event::Changed]
+            vec![Event::SliderDrag]
         );
         assert_eq!(s.master_volume, 1.0);
-        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(ui.release().is_empty());
         assert_eq!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
-            vec![Event::Changed]
+            vec![Event::SliderDrag]
         );
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
                 ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
-                vec![Event::Changed]
+                vec![Event::SliderDrag]
             );
         }
-        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
                 .is_empty()

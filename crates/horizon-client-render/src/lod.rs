@@ -25,6 +25,16 @@ const MAX_SAVED: usize = 1024;
 /// (`Lod::observing`).
 pub const OBSERVE_AHEAD: usize = 8;
 const SAMPLE_JOBS: usize = 4;
+/// Threads that sample far tiles beside the mesher. Machines with 12 or more
+/// threads use up to 6 (measured: a cold 1024-chunk LoD loads about a quarter
+/// sooner than with 3); the rest keep a quarter of their threads, at most 3.
+fn sampling_threads(cores: usize) -> usize {
+    if cores >= 12 {
+        (cores / 2).min(6)
+    } else {
+        (cores / 4).clamp(1, 3)
+    }
+}
 /// While the near terrain loads on a machine with four threads or fewer, far
 /// terrain starts one sample job at most this often and no detail: it would
 /// otherwise take the cores the near chunks and the frame need.
@@ -250,8 +260,17 @@ fn state_kinds(facts: &BlockFacts) -> Vec<u8> {
             let state = BlockStateId(i as u32);
             let f = facts.get(state);
             let fluid = matches!(&*f.name, "minecraft:water" | "minecraft:lava");
+            // Chorus is thin and non-solid but a visible part of the far End.
+            let chorus = matches!(
+                &*f.name,
+                "minecraft:chorus_plant" | "minecraft:chorus_flower"
+            );
             let kept = !facts.is_air(state)
-                && (f.solid_render || f.full_collision || f.name.ends_with("_leaves") || fluid);
+                && (f.solid_render
+                    || f.full_collision
+                    || f.name.ends_with("_leaves")
+                    || chorus
+                    || fluid);
             (u8::from(kept) * KEPT)
                 | (u8::from(fluid) * FLUID)
                 | (u8::from(state == facts.air) * AIR)
@@ -541,6 +560,8 @@ pub struct Lod {
     detail_request_at: std::time::Instant,
     /// Four threads or fewer: far work waits for the near terrain (`hold`).
     small: bool,
+    /// Sample jobs that may be queued or running at once.
+    sample_jobs: usize,
     /// The near terrain is loading (`set_near_loading`).
     near_loading: bool,
     /// When `request_samples` last started a job while held.
@@ -561,6 +582,7 @@ pub struct Lod {
 }
 impl Lod {
     pub fn new(source: Arc<dyn LodSource>, context: Arc<WorkerContext>) -> Self {
+        let cores = thread::available_parallelism().map_or(1, |n| n.get());
         let shared = Arc::new(Shared {
             jobs: Mutex::new(VecDeque::new()),
             observed: Mutex::new(FxHashMap::default()),
@@ -574,10 +596,10 @@ impl Lod {
         let handle = thread::Builder::new()
             .name("Far terrain".into())
             .spawn(move || {
+                // Ticks and frames come first (horizon_threads).
+                horizon_threads::behind_server();
                 let mut sampler = source.sampler();
-                let count = thread::available_parallelism()
-                    .map_or(1, |n| n.get() / 4)
-                    .clamp(1, 3);
+                let count = sampling_threads(cores);
                 let mut sampling = Vec::new();
                 for _ in 0..count {
                     let Some(mut sample) = sampler.fork() else {
@@ -589,6 +611,7 @@ impl Lod {
                         thread::Builder::new()
                             .name("Far sampling".into())
                             .spawn(move || {
+                                horizon_threads::behind_server();
                                 loop {
                                     let key = {
                                         let mut jobs = shared.jobs.lock().unwrap();
@@ -737,7 +760,8 @@ impl Lod {
             detail_masks: FxHashMap::default(),
             detail_request_pending: false,
             detail_request_at: std::time::Instant::now(),
-            small: thread::available_parallelism().map_or(1, |n| n.get()) <= 4,
+            small: cores <= 4,
+            sample_jobs: SAMPLE_JOBS.max(sampling_threads(cores) + 1),
             near_loading: false,
             held_sample_at: std::time::Instant::now(),
             ready: FxHashMap::default(),
@@ -1234,7 +1258,13 @@ impl Lod {
                 self.pending.is_empty() && self.held_sample_at.elapsed() >= HELD_SAMPLE_STEP,
             )
         } else {
-            SAMPLE_JOBS.saturating_sub(self.pending.len())
+            // The extra sampling threads wait until the near terrain is in.
+            let slots = if self.near_loading {
+                SAMPLE_JOBS
+            } else {
+                self.sample_jobs
+            };
+            slots.saturating_sub(self.pending.len())
         };
         if free == 0 {
             return;
@@ -1282,8 +1312,8 @@ impl Lod {
         }
         // Only the first `free` keys not already pending are taken. A key is
         // listed at most twice (as a root and as a node), so the best
-        // `2 * (SAMPLE_JOBS + pending)` entries hold them, in order.
-        let best = 2 * (SAMPLE_JOBS + self.pending.len());
+        // `2 * (sample_jobs + pending)` entries hold them, in order.
+        let best = 2 * (self.sample_jobs + self.pending.len());
         if wanted.len() > best {
             wanted.select_nth_unstable(best);
             wanted.truncate(best);
@@ -1810,6 +1840,23 @@ mod tests {
         for y in 55..64 {
             chunk.set(4, y, 4, water.0);
         }
+        // Chorus is thin and non-solid but must survive the visit summary.
+        let end_stone = assets
+            .registry
+            .default_state("minecraft:end_stone")
+            .unwrap();
+        let chorus = assets
+            .registry
+            .default_state("minecraft:chorus_plant")
+            .unwrap();
+        let flower = assets
+            .registry
+            .default_state("minecraft:chorus_flower")
+            .unwrap();
+        chunk.set(8, 70, 8, end_stone.0);
+        chunk.set(8, 71, 8, chorus.0);
+        chunk.set(8, 72, 8, chorus.0);
+        chunk.set(8, 73, 8, flower.0);
         lod.observe(Arc::new(chunk.clone()), &facts);
         receive_observed(&mut lod);
         let observed = &lod.saved[&(-1, -1)];
@@ -1817,6 +1864,16 @@ mod tests {
         assert_eq!(observed[0].surface.unwrap().state, stone);
         assert_eq!(observed[68].surface.unwrap().height, 55);
         assert_eq!(observed[68].surface.unwrap().water, Some((64, water)));
+        let chorus_column = &observed[8 * 16 + 8];
+        assert_eq!(chorus_column.surface.unwrap().state, flower);
+        assert_eq!(
+            chorus_column
+                .spans
+                .iter()
+                .map(|span| (span.min, span.max, span.state))
+                .collect::<Vec<_>>(),
+            vec![(70, 71, end_stone), (71, 73, chorus), (73, 74, flower)]
+        );
 
         let fine = TileKey {
             x: -1,
@@ -1964,6 +2021,7 @@ mod tests {
         lod.ready
             .insert(parent, Arc::new(vec![Column::default(); 256]));
         lod.active = [parent].into_iter().collect();
+        lod.sample_jobs = SAMPLE_JOBS;
         lod.pending = (0..SAMPLE_JOBS - 1)
             .map(|i| TileKey {
                 x: 999 + i as i32,
@@ -2022,6 +2080,7 @@ mod tests {
         }
         lod.active = [near, far].into_iter().collect();
         lod.shared.jobs.lock().unwrap().clear();
+        lod.sample_jobs = SAMPLE_JOBS;
         lod.pending = (0..SAMPLE_JOBS - 1)
             .map(|i| TileKey {
                 x: 999 + i as i32,
@@ -2055,6 +2114,34 @@ mod tests {
             (1..=32).map(|x| (x, 0)).collect::<Vec<_>>(),
             "one unfinished fine tile must not starve neighbouring requests"
         );
+
+        // The extra sampling threads' slots open once the near terrain is in.
+        lod.small = false;
+        lod.sample_jobs = SAMPLE_JOBS + 3;
+        lod.plan = Plan::new([-256, -256], 2, 64);
+        lod.ready.clear();
+        lod.active.clear();
+        lod.pending.clear();
+        lod.meshing = true;
+        lod.shared.jobs.lock().unwrap().clear();
+        let queued = |lod: &mut Lod, near_loading: bool| {
+            lod.set_near_loading(near_loading);
+            lod.shared.jobs.lock().unwrap().clear();
+            lod.pending.clear();
+            lod.update([-256., 64., -256.], 0., 2, 64, Some(FxHashSet::default()));
+            let jobs = lod.shared.jobs.lock().unwrap();
+            jobs.iter()
+                .filter(|job| matches!(job, Job::Sample(_)))
+                .count()
+        };
+        assert_eq!(queued(&mut lod, true), SAMPLE_JOBS);
+        assert_eq!(queued(&mut lod, false), SAMPLE_JOBS + 3);
         Ok(())
+    }
+
+    #[test]
+    fn extra_sampling_threads_only_on_large_machines() {
+        assert_eq!([1, 2, 4, 8, 11].map(sampling_threads), [1, 1, 1, 2, 2]);
+        assert_eq!([12, 16, 64].map(sampling_threads), [6, 6, 6]);
     }
 }
