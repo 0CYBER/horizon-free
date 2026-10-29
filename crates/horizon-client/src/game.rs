@@ -15063,6 +15063,9 @@ fn load_resources(
             prepared_at.elapsed().as_millis()
         );
     }
+    // The block entity renderer's face visibility: the meshes' own, whose
+    // shapes already hold their faces, not a second load of the same tables.
+    let visibility = pack.context.tables.visibility.clone();
     let rest_loader = if menu {
         let resources = resources.clone();
         let root = root.clone();
@@ -15077,6 +15080,7 @@ fn load_resources(
                     &assets,
                     &behaviour_json,
                     &gameplay_projection,
+                    visibility,
                     &progress,
                     started,
                 )
@@ -15104,6 +15108,7 @@ fn load_resources(
             &assets,
             &behaviour_json,
             &gameplay_projection,
+            visibility,
             progress,
             started,
         )?;
@@ -15131,6 +15136,7 @@ fn load_world_rest(
     assets: &Assets,
     behaviour_json: &serde_json::Value,
     gameplay_projection: &[horizon_client::blocks::GameplayProjection],
+    visibility: horizon_world::block_render::FaceVisibility,
     progress: &Progress,
     started: Instant,
 ) -> Result<WorldRest> {
@@ -15166,10 +15172,12 @@ fn load_world_rest(
         recipes,
         transformers,
         providers: Providers::load(root),
-        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
-            root,
-            registry_owner.registry,
-        )?,
+        block_entity_render:
+            horizon_client::block_entity_render::BlockEntityRenderer::load_with_visibility(
+                root,
+                registry_owner.registry,
+                visibility,
+            )?,
         animate,
         fog,
         music: horizon_client::music::MusicTables::load(root),
