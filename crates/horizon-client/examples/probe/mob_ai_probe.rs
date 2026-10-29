@@ -5,7 +5,7 @@
 //! usage: mob_ai_probe RESOURCES SCENARIOS OUTPUT
 use horizon_client::{
     assets::Assets,
-    beehive::HiveHost,
+    beehive::{BeehiveExt, HiveHost},
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, MIN_Y},
@@ -1121,6 +1121,7 @@ pub fn main() -> horizon_client::Result<()> {
                     biomes: &biomes,
                     mob_griefing: true,
                     mob_drops: true,
+                    max_entity_cramming: 24,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,
