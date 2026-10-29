@@ -203,6 +203,13 @@ pub struct FogInputs<'a> {
     /// `BossHealthOverlay.shouldCreateWorldFog`: a boss bar with
     /// `createWorldFog` is shown (the Ender Dragon's).
     pub boss_world_fog: bool,
+    /// The camera entity is a spectator (`LavaFogEnvironment`).
+    pub spectator: bool,
+    /// The camera entity has Fire Resistance (`LavaFogEnvironment`).
+    pub fire_resistance: bool,
+    /// `GameRenderer.nightVisionScale` while Night Vision is on without
+    /// Darkness, else 0 (`FogRenderer.computeFogColor`'s brightenFactor).
+    pub night_vision: f32,
 }
 
 /// `FogRenderer.setupFog` + `computeFogColor`.
@@ -272,7 +279,11 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
         color[1] += (color[1] * 0.6 - color[1]) * t;
         color[2] += (color[2] * 0.6 - color[2]) * t;
     }
-    let brighten = if eye_in_water { water_vision } else { 0.0 };
+    let brighten = if eye_in_water {
+        water_vision
+    } else {
+        input.night_vision
+    };
     if color.iter().all(|&c| c != 0.0) {
         let scale = 1.0 / color[0].max(color[1]).max(color[2]);
         color = color.map(|c| c + (c * scale - c) * brighten);
@@ -288,10 +299,16 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     };
     match input.fog_type {
         FogType::Lava => {
-            fog.environmental_start = 0.25;
-            fog.environmental_end = 1.0;
-            fog.sky_end = 1.0;
-            fog.cloud_end = 1.0;
+            // LavaFogEnvironment.setupFog.
+            (fog.environmental_start, fog.environmental_end) = if input.spectator {
+                (-8.0, rd * 0.5)
+            } else if input.fire_resistance {
+                (0.0, 5.0)
+            } else {
+                (0.25, 1.0)
+            };
+            fog.sky_end = fog.environmental_end;
+            fog.cloud_end = fog.environmental_end;
         }
         FogType::PowderSnow => {
             fog.environmental_start = 0.0;
@@ -405,6 +422,9 @@ mod tests {
             darkness: None,
             darken_world: 0.0,
             boss_world_fog: false,
+            spectator: false,
+            fire_resistance: false,
+            night_vision: 0.0,
         }
     }
     #[test]

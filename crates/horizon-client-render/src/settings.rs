@@ -3,6 +3,7 @@
 //! The option screens live in `options_ui`.
 use crate::keybinds::KeyBinds;
 use crate::options_file::{OptionsFile, V};
+use horizon_protocol::packets::configuration::ClientInformation;
 use std::{fs, path::Path};
 
 pub use horizon_client_core::sound_source::SOUND_SOURCES;
@@ -448,6 +449,16 @@ impl Settings {
             file: f,
         }
     }
+    /// `Options.createInformation`: what the server learns about this player.
+    pub fn client_information(&self, view_distance: i8) -> ClientInformation {
+        ClientInformation {
+            chat_visibility: self.chat_visibility as i32,
+            model_customisation: self.file.model_customisation(),
+            main_hand: i32::from(!self.main_hand_left),
+            allows_listing: self.file.bool("allowServerListing"),
+            ..ClientInformation::new(view_distance)
+        }
+    }
     /// The options file reflecting the typed fields; values the game did not
     /// change keep their stored form.
     pub fn to_file(&self) -> OptionsFile {
@@ -706,6 +717,15 @@ pub enum Opt {
     PadGlyphs,
     PadMenuNav,
     PadKeyboard,
+    /// `options.modelPart.*`: one skin layer (index into `options_file::MODEL_PARTS`).
+    ModelPart(usize),
+    MainHand,
+    AllowServerListing,
+    RealmsNotifications,
+    InGameNotification,
+    SharePresence,
+    DirectionalAudio,
+    MusicToast,
 }
 
 #[cfg(test)]
