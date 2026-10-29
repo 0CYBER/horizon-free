@@ -8267,12 +8267,13 @@ def check_popped_break_effects(host, guest, out):
     particles) for the miner too, once, as it does for the players around (#3747)."""
     result = {}
     spots = apart(host, guest)
-    cases = [('torch', 'minecraft:stone', 'minecraft:wall_torch[facing=north]', (0, 0, -1), 'minecraft:block.wood.break'),
+    cases = [('torch', 'minecraft:dirt', 'minecraft:torch', (0, 1, 0), 'minecraft:block.wood.break'),
              ('cane', 'minecraft:sand', 'minecraft:sugar_cane', (0, 1, 0), 'minecraft:block.grass.break')]
     for label, player in (('host', host), ('guest', guest)):
         other = guest if label == 'host' else host
         x, y, z = spots[label]
-        player('command', command='gamemode creative')
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
         for name, support, popped, offset, sound in cases:
             cell = (x, y + 1, z + 3)
             host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 5} minecraft:air')
@@ -8289,8 +8290,10 @@ def check_popped_break_effects(host, guest, out):
             player.until(lambda: player.raw('block', *at)['block'], lambda b: b.startswith(popped.split('[')[0]))
             before = {g.name: heard(g, sound) for g in (host, guest)}
             player.raw('look-at', f'{cell[0] + 0.5:.2f}', f'{cell[1] + 0.5:.2f}', f'{cell[2] + 0.5:.2f}')
-            player.raw('mouse', 'left', 'click')
-            player.wait(15)
+            player.raw('mouse', 'left', 'down')
+            player.until(lambda: host.raw('block', *cell)['block'], lambda b: b == 'minecraft:air', ticks=120)
+            player.raw('mouse', 'left', 'up')
+            player.wait(10)
             seen = {g.name: heard(g, sound) - before[g.name] for g in (host, guest)}
             result[f'{label}-{name}'] = seen
             assert host.raw('block', *at)['block'] == 'minecraft:air', f'{label}-{name}: the popped block stayed: {result}'
