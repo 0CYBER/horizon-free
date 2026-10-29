@@ -185,5 +185,12 @@
   "Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.": "Mody natywne ze strony Mody są kompilowane do gry za pomocą Rusta launchera. Nie działają w izolacji: mogą zrobić wszystko, co ty na tym komputerze.",
   "{version} plays in this instance.": "Ta instancja używa wersji {version}.",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Mogą odczytywać, zmieniać i usuwać twoje pliki oraz korzystać z twoich kont i sieci, jak każdy uruchamiany program. Kompiluj je tylko wtedy, gdy ufasz ich autorom wymienionym na stronie Mody.",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "Kompilacja gry zajmuje za pierwszym razem około dziesięciu minut i kilka GB miejsca na dysku, a później kilka minut."
+  "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "Kompilacja gry zajmuje za pierwszym razem od 20 do 30 minut i kilka GB miejsca na dysku (pobiera Rust), a później kilka minut.",
+  "Delete…": "Usuń…",
+  "Install and turn on native mods": "Zainstaluj i włącz mody natywne",
+  "Keep": "Zachowaj",
+  "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version} (Java Edition). Za pierwszym razem Graj pobiera go od Mojang dla Twojego konta, razem z potrzebną Javą.",
+  "Move to Trash": "Przenieś do kosza",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Przenieść {name} do kosza razem z jego światami i ustawieniami? Możesz go stamtąd przywrócić.",
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Mody natywne kompilują się we własną wersję gry. Zainstalowanie jednego włącza mody natywne: potem budujesz z nim grę w Ustawienia > Mody natywne. Pierwsza kompilacja pobiera Rust i może potrwać od 20 do 30 minut; kolejne są szybsze."
 }

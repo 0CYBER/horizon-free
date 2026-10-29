@@ -2,7 +2,7 @@
 //! falling, `interactAt` equipment swaps by clicked height, the two-hit break
 //! of `hurtServer` (creative breaks at once), and `ArmorStandRenderer` with
 //! the default pose, the hit wobble and humanoid armor layers.
-use super::{Game, view_vector};
+use super::Game;
 use horizon_client::{
     entities::ArmorStand,
     items::ItemStack,
@@ -374,8 +374,7 @@ impl Game<'_> {
     }
     /// The armor stand under the crosshair, its distance and the hit point.
     pub(super) fn armor_stand_hit(&self) -> Option<(usize, f64, [f64; 3])> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64, [f64; 3])> = None;
         for (i, a) in self.armor_stands.iter().enumerate() {
@@ -617,9 +616,6 @@ impl Game<'_> {
         };
         for a in &self.armor_stands {
             let entity_start = out.len();
-            if a.invisible {
-                continue;
-            }
             // ArmorStand.shouldRenderAtSqrDistance: 256 times the box's mean
             // edge (4 for a marker's empty box), whatever the entity distance.
             // LivingEntityRenderer grows the culling box by 0.5 for a dragon head.
@@ -691,16 +687,20 @@ impl Game<'_> {
                 a.position.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            horizon_client::mobs::render::draw(
-                model,
-                base,
-                &poses,
-                wood,
-                0xFFFF_FFFF,
-                packed,
-                0,
-                out,
-            );
+            // LivingEntityRenderer.submit: an invisible stand has no body render type, but its
+            // layers (held items, custom head, armour) are submitted all the same.
+            if !a.invisible {
+                horizon_client::mobs::render::draw(
+                    model,
+                    base,
+                    &poses,
+                    wood,
+                    0xFFFF_FFFF,
+                    packed,
+                    0,
+                    out,
+                );
+            }
             self.armor_stand_items(a, model, base, &posed, packed, out);
             // HumanoidArmorLayer: head, chest, legs, feet.
             for (slot, layer) in [

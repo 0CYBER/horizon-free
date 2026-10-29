@@ -63,6 +63,9 @@ impl ResourceSource for Bundled {
             "assets/horizon/lang/pl_pl.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/pl_pl.json")
             }
+            "assets/horizon/lang/uk_ua.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/uk_ua.json")
+            }
             _ => return None,
         };
         Some(body.as_bytes().to_vec())
@@ -272,6 +275,11 @@ mod tests {
         let pl = Language::load(&[&empty], "pl_pl");
         assert_eq!(pl.get("horizon.options.controller"), Some("Kontroler"));
         assert_eq!(pl.get("horizon.options.vibration"), Some("Wibracje"));
+        let uk = Language::load(&[&empty], "uk_ua");
+        assert_eq!(
+            uk.get("horizon.options.on_screen_keyboard"),
+            Some("Екранна клавіатура")
+        );
     }
 
     #[test]
