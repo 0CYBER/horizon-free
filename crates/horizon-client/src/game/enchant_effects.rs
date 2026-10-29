@@ -541,7 +541,7 @@ impl Game<'_> {
     /// `ammo` is the item being fired: `Enchantment.itemContext` hands it to the
     /// `ammo_use` conditions as the tool, so Infinity only frees plain arrows.
     pub(super) fn bow_enchantments(&mut self, ammo: &str) -> (f64, bool) {
-        let Some(bow) = self.inventory[self.selected].clone() else {
+        let Some(bow) = self.held().cloned() else {
             return (0.0, false);
         };
         let e = &self.res.stations().enchantments;
@@ -576,7 +576,7 @@ impl Game<'_> {
     /// `EnchantmentHelper.onProjectileSpawned` ignite effects of the held bow
     /// (flame): the seconds the new arrow burns for.
     pub(super) fn bow_projectile_ignite(&mut self) -> Option<f32> {
-        let bow = self.inventory[self.selected].clone()?;
+        let bow = self.held().cloned()?;
         let ctx = EffectContext {
             this: Some("minecraft:arrow"),
             items: Some(self.res.items()),

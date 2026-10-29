@@ -10494,6 +10494,7 @@ impl Game<'_> {
         let ammo = arrow_slot
             .and_then(|i| self.stack_in(i).cloned())
             .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
+        let weapon = self.held().cloned();
         let (power_bonus, infinity) = self.bow_enchantments(&ammo.item);
         let kind = horizon_client::projectiles::ProjectileKind::Arrow {
             base_damage: 2.0 + power_bonus,
@@ -10514,6 +10515,7 @@ impl Game<'_> {
                 self.creative || infinity,
             ));
             a.set_owner(Some(horizon_client::mobs::Who::Player));
+            a.fired_from_weapon = weapon;
         }
         // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).
         if let Some(seconds) = self.bow_projectile_ignite()

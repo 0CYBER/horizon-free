@@ -3024,7 +3024,56 @@ impl Game<'_> {
                         .find(|m| m.id == id)
                         .map_or(0.0, |m| m.attrs.knockback_resistance),
                 };
-                let push = f64::from(p.bonus.punch) * 0.6 * (1.0 - resistance).max(0.0);
+                let knockback = if !hurt {
+                    0.0
+                } else if let Some(weapon) =
+                    p.arrow.as_ref().and_then(|a| a.fired_from_weapon.as_ref())
+                {
+                    let victim = match who {
+                        Who::Player => Some("minecraft:player"),
+                        Who::Mob(id) => self
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.kind.id.as_str()),
+                    };
+                    let owner = match p.owner {
+                        Some(Who::Player) => Some("minecraft:player"),
+                        Some(Who::Mob(id)) => self
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.kind.id.as_str()),
+                        None => None,
+                    };
+                    let arrow_type = if p
+                        .arrow
+                        .as_ref()
+                        .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+                    {
+                        "minecraft:spectral_arrow"
+                    } else {
+                        "minecraft:arrow"
+                    };
+                    let ctx = horizon_client::enchant::EffectContext {
+                        this: victim,
+                        attacker: owner,
+                        direct_attacker: Some(arrow_type),
+                        damage_type: Some("minecraft:arrow"),
+                        items: Some(self.res.items()),
+                        ..Default::default()
+                    };
+                    self.res.stations().enchantments.modify_value(
+                        Some(weapon),
+                        "minecraft:knockback",
+                        &ctx,
+                        &mut self.world.random,
+                        0.0,
+                    )
+                } else {
+                    p.bonus.punch as f32
+                };
+                let push = f64::from(knockback) * 0.6 * (1.0 - resistance).max(0.0);
                 if hurt && push > 0.0 && flight > 1e-6 {
                     let k = push / flight;
                     self.handle_mob_events(vec![MobEvent::Push {
