@@ -732,12 +732,21 @@ impl Game<'_> {
     fn allay_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
         let now = self.world.game_time;
         let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
-        allay::listen(&mut self.mobs[index], now, event, pos, ctx, |a, b| {
-            sculk::is_occluded(a, b, |p| {
-                let state = world.block(p.x, p.y, p.z);
-                occludes.get(state.0 as usize).copied().unwrap_or(false)
-            })
-        });
+        let dimension = self.dim.id();
+        allay::listen(
+            &mut self.mobs[index],
+            now,
+            event,
+            pos,
+            ctx,
+            dimension,
+            |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let state = world.block(p.x, p.y, p.z);
+                    occludes.get(state.0 as usize).copied().unwrap_or(false)
+                })
+            },
+        );
     }
 
     // ---- ticking ----

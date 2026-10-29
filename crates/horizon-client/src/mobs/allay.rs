@@ -89,6 +89,27 @@ pub fn register(m: &mut Mob) {
     g.add(5, LookAtPlayer::new(6.0));
     g.add(6, RandomLookAround::default());
 }
+/// `Entity.blockPosition`.
+fn block_pos(m: &Mob) -> [i32; 3] {
+    [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ]
+}
+/// `Allay.VibrationUser.canReceiveVibration`: not without AI; with no liked
+/// note block any note will do, with one only that block's, while the allay
+/// is within 1024 blocks of it in its dimension (`liked_noteblock_position`).
+pub fn can_receive_vibration(m: &Mob, dimension: &str, pos: [i32; 3]) -> bool {
+    if m.no_ai {
+        return false;
+    }
+    let Some(liked_noteblock_position) = m.extra.allay.as_ref().and_then(|st| st.noteblock) else {
+        return true;
+    };
+    liked_noteblock_position.is_close_enough(dimension, block_pos(m), MAX_NOTEBLOCK_DISTANCE)
+        && liked_noteblock_position.pos == pos
+}
 /// `AllayAi.getItemDepositPosition` for the liked note block: the centre of
 /// the block above it while the allay is within 1024 blocks of it, it is
 /// still a note block and the cooldown runs (`shouldDepositItemsAtLikedNoteblock`),
@@ -100,12 +121,7 @@ pub fn noteblock_deposit(
     is_note_block: impl Fn([i32; 3]) -> bool,
 ) -> Option<[f64; 3]> {
     let liked = m.extra.allay.as_ref()?.noteblock?;
-    let at = [
-        m.position.x.floor() as i32,
-        m.position.y.floor() as i32,
-        m.position.z.floor() as i32,
-    ];
-    if liked.is_close_enough(dimension, at, MAX_NOTEBLOCK_DISTANCE)
+    if liked.is_close_enough(dimension, block_pos(m), MAX_NOTEBLOCK_DISTANCE)
         && is_note_block(liked.pos)
         && m.extra.ints[2] > 0
     {
@@ -224,6 +240,7 @@ pub fn listen(
     event: &'static str,
     pos: [f64; 3],
     ctx: &Context,
+    dimension: &str,
     occluded: impl Fn([f64; 3], [f64; 3]) -> bool,
 ) {
     let eye = [m.position.x, m.eye_y(), m.position.z];
@@ -239,7 +256,10 @@ pub fn listen(
     if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > LISTENER_RADIUS * LISTENER_RADIUS {
         return;
     }
-    if !sculk::valid_vibration(sculk::allay_can_listen(event), event, ctx) || occluded(pos, eye) {
+    if !sculk::valid_vibration(sculk::allay_can_listen(event), event, ctx)
+        || !can_receive_vibration(m, dimension, block(pos).map(|v| v as i32))
+        || occluded(pos, eye)
+    {
         return;
     }
     let d = [pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]];
