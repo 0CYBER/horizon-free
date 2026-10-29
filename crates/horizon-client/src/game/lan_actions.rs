@@ -1317,6 +1317,9 @@ impl Game<'_> {
                 let g = &mut host.hub.guests[gi];
                 let old = g.menu_slot(slot);
                 g.set_menu_slot(slot, item.clone());
+                // InventoryMenu.setRemoteSlot: the client already has it, so broadcastChanges
+                // sends nothing back that could undo a click made since.
+                g.menu_sent[slot] = item.clone();
                 // InventoryMenu's ArmorSlot and off-hand slot: setByPlayer.
                 let equipment = match slot {
                     5..=8 => Some(["head", "chest", "legs", "feet"][slot - 5]),

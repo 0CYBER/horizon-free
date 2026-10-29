@@ -216,8 +216,8 @@ pub(super) struct Remote {
     /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
     show_death_screen: bool,
     player_type: Option<Arc<MobType>>,
-    /// Inventory (then the off hand) as last synchronised, for creative-mode
-    /// slot updates.
+    /// Inventory, off hand and armour as last synchronised, for creative-mode
+    /// slot updates (`creative_sync_stacks`).
     synced: Vec<Option<ItemStack>>,
     decode_errors: u32,
     clock: Option<i32>,
@@ -516,7 +516,7 @@ impl Game<'_> {
             death_message: None,
             show_death_screen: true,
             player_type,
-            synced: vec![None; 37],
+            synced: vec![None; CREATIVE_SYNCED],
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
@@ -2720,12 +2720,14 @@ impl Game<'_> {
                         self.hotbar_pop[pop] = 5;
                     }
                 }
+                let before = self.creative_stacks();
                 self.set_menu_slot(p.container, i32::from(p.slot), stack);
-                self.remote_synced();
+                self.remote_synced_since(&before);
             }
             C::SetCursorItem(p) => self.carried = self.to_stack(&p.item),
             C::SetPlayerInventory(p) => {
                 let stack = self.to_stack(&p.item);
+                let before = self.creative_stacks();
                 match p.slot {
                     0..=35 => self.inventory[p.slot as usize] = stack,
                     36..=39 => self.armor[3 - (p.slot - 36) as usize] = stack,
@@ -2733,7 +2735,7 @@ impl Game<'_> {
                     40 => self.offhand = stack,
                     _ => {}
                 }
-                self.remote_synced();
+                self.remote_synced_since(&before);
             }
             C::ContainerSetData(p) if self.open_menu_name(p.container) == "minecraft:lectern" => {
                 self.remote_lectern_page(i32::from(p.value));
@@ -4436,41 +4438,44 @@ impl Game<'_> {
         {
             out.push(packet);
         }
-        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot);
-        // `synced[36]` is the off hand.
+        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
         let mut creative_slots = Vec::new();
         if self.creative {
-            for i in 0..37 {
-                let stack = self.inventory.get(i).unwrap_or(&self.offhand);
-                if *stack != r.synced[i] {
+            let stacks = creative_sync_stacks(&self.inventory, &self.offhand, &self.armor);
+            for (i, stack) in stacks.into_iter().enumerate() {
+                if stack != r.synced[i] {
                     r.synced[i] = stack.clone();
-                    creative_slots.push(i);
+                    creative_slots.push((creative_sync_slot(i), stack));
                 }
             }
         }
         for packet in out {
             self.send(packet);
         }
-        for i in creative_slots {
-            // InventoryMenu's slots: the hotbar is 36..=44, the off hand 45.
-            let slot = match i {
-                0..9 => 36 + i,
-                36 => 45,
-                _ => i,
-            } as i16;
-            let item = self.to_network(self.inventory.get(i).unwrap_or(&self.offhand));
+        for (slot, stack) in creative_slots {
+            let item = self.to_network(&stack);
             self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
                 slot,
                 item,
             }));
         }
     }
+    fn creative_stacks(&self) -> Vec<Option<ItemStack>> {
+        creative_sync_stacks(&self.inventory, &self.offhand, &self.armor)
+    }
     /// Inventory as the server last described it.
     fn remote_synced(&mut self) {
-        let mut inventory = self.inventory.clone();
-        inventory.push(self.offhand.clone());
+        let stacks = self.creative_stacks();
         if let Some(r) = self.remote.as_mut() {
-            r.synced = inventory;
+            r.synced = stacks;
+        }
+    }
+    /// The slots a server packet changed since `before` are as the server has them; the
+    /// others keep what was last sent, so a creative click made since still goes out.
+    fn remote_synced_since(&mut self, before: &[Option<ItemStack>]) {
+        let now = self.creative_stacks();
+        if let Some(r) = self.remote.as_mut() {
+            mark_synced(&mut r.synced, before, now);
         }
     }
 
@@ -5588,6 +5593,14 @@ impl Game<'_> {
         } else {
             Input::Pickup
         };
+        if self.screen == Screen::Creative {
+            // CreativeModeInventoryScreen.slotClicked: the Survival Inventory tab clicks the
+            // player's own InventoryMenu, and its CreativeInventoryListener sends each slot that
+            // changed (SetCreativeModeSlot). No ContainerClick: a server holding the carried
+            // stack would give it back after the Destroy Item slot cleared it (#3307).
+            self.menu_click(Some(internal), i32::from(right), input);
+            return;
+        }
         self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
@@ -5744,6 +5757,12 @@ impl Game<'_> {
         } else {
             self.carried.take().expect("carried")
         };
+        self.remote_creative_throw(thrown);
+    }
+    /// `MultiPlayerGameMode.handleCreativeModeItemDrop`: a stack thrown out of the creative
+    /// screen goes to the server as a SetCreativeModeSlot to slot -1, which drops it from the
+    /// player's hand; the client only swings (`Player.drop` on a client).
+    pub(super) fn remote_creative_throw(&mut self, thrown: ItemStack) {
         if !self.creative {
             return;
         }
@@ -6233,6 +6252,50 @@ type Predicted = (
     Option<ItemStack>,
 );
 
+/// How many stacks the creative screen keeps in step with the server (`Remote::synced`).
+const CREATIVE_SYNCED: usize = 41;
+
+/// The player's stacks in `Remote::synced` order: the 36 inventory slots, the off hand, then
+/// the armour from the head down. `CreativeInventoryListener.slotChanged` sends every
+/// InventoryMenu slot the creative screen changes, the armour slots too.
+fn creative_sync_stacks(
+    inventory: &[Option<ItemStack>],
+    offhand: &Option<ItemStack>,
+    armor: &[Option<ItemStack>; 4],
+) -> Vec<Option<ItemStack>> {
+    let mut stacks: Vec<Option<ItemStack>> = inventory.iter().take(36).cloned().collect();
+    stacks.resize(36, None);
+    stacks.push(offhand.clone());
+    stacks.extend(armor.iter().cloned());
+    stacks
+}
+
+/// Entries of `creative_sync_stacks` that went from `before` to `now` are synced as `now`.
+fn mark_synced(
+    synced: &mut [Option<ItemStack>],
+    before: &[Option<ItemStack>],
+    now: Vec<Option<ItemStack>>,
+) {
+    for (i, stack) in now.into_iter().enumerate() {
+        if before.get(i) != Some(&stack)
+            && let Some(s) = synced.get_mut(i)
+        {
+            *s = stack;
+        }
+    }
+}
+
+/// InventoryMenu's slot for entry `i` of `creative_sync_stacks`: the hotbar is 36..=44, the
+/// main inventory 9..=35, the off hand 45 and the armour 5..=8 (head first).
+fn creative_sync_slot(i: usize) -> i16 {
+    (match i {
+        0..9 => 36 + i,
+        36 => 45,
+        37.. => 5 + (i - 37),
+        _ => i,
+    }) as i16
+}
+
 fn menu_items(m: &horizon_client::menu::Menu) -> Vec<Option<ItemStack>> {
     (0..m.slot_count()).map(|i| m.slot(i).cloned()).collect()
 }
@@ -6615,6 +6678,58 @@ mod tests {
                 assert_eq!(base.block_state(BlockPos::new(0, 1, 0)), base.air);
             }
         }
+    }
+
+    #[test]
+    fn the_creative_sync_covers_inventory_menu_slots_5_to_45_once_each() {
+        // CreativeInventoryListener sends every InventoryMenu slot but the crafting ones: the
+        // armour (5..=8), the inventory (9..=44) and the off hand (45).
+        let stack = |item: &str| Some(horizon_client::items::ItemStack::new(item, 1));
+        let inventory: Vec<_> = (0..36)
+            .map(|i| stack(&format!("minecraft:item_{i}")))
+            .collect();
+        let offhand = stack("minecraft:shield");
+        let armor = [
+            stack("minecraft:diamond_helmet"),
+            stack("minecraft:diamond_chestplate"),
+            stack("minecraft:diamond_leggings"),
+            stack("minecraft:diamond_boots"),
+        ];
+        let stacks = super::creative_sync_stacks(&inventory, &offhand, &armor);
+        assert_eq!(stacks.len(), super::CREATIVE_SYNCED);
+        let mut slots: Vec<i16> = (0..stacks.len()).map(super::creative_sync_slot).collect();
+        // Each entry goes to the menu slot that holds that stack.
+        for (i, &slot) in slots.iter().enumerate() {
+            let game_slot = Game::menu_slot("inventory", i32::from(slot)).unwrap();
+            let expected = match game_slot {
+                0..36 => &inventory[game_slot],
+                504 => &offhand,
+                500..504 => &armor[game_slot - 500],
+                _ => panic!("entry {i} went to game slot {game_slot}"),
+            };
+            assert_eq!(&stacks[i], expected, "entry {i}, menu slot {slot}");
+        }
+        slots.sort();
+        assert_eq!(slots, (5..=45).collect::<Vec<i16>>());
+    }
+
+    #[test]
+    fn a_server_slot_update_leaves_an_unsent_creative_click_to_be_sent() {
+        let stack = |item: &str| Some(horizon_client::items::ItemStack::new(item, 1));
+        let none = || vec![None; super::CREATIVE_SYNCED];
+        // Synced: nothing. A click puts a helmet on (entry 37, not sent yet), then the server
+        // sets hotbar slot 0 (a pickup): only that entry counts as synced.
+        let mut synced = none();
+        let mut before = none();
+        before[37] = stack("minecraft:diamond_helmet");
+        let mut now = before.clone();
+        now[0] = stack("minecraft:stick");
+        super::mark_synced(&mut synced, &before, now.clone());
+        assert_eq!(synced[0], now[0]);
+        assert_eq!(
+            synced[37], None,
+            "the helmet still differs, so the next tick sends it"
+        );
     }
 
     #[test]
