@@ -505,6 +505,15 @@ impl Game<'_> {
             );
         }
     }
+    /// `ServerLevel.getDestroyType`: a drop decay rule picks between decaying
+    /// and plain destruction.
+    pub(super) fn destroy_type(&self, rule: &str) -> BlockInteraction {
+        if self.ui.rules.bool(rule) {
+            BlockInteraction::DestroyWithDecay
+        } else {
+            BlockInteraction::Destroy
+        }
+    }
     /// Runs an explosion whose source empties the hives it destroys
     /// (`BeehiveBlock.getDrops`: primed TNT, creeper, wither skull, wither,
     /// TNT minecart).

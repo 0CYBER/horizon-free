@@ -181,5 +181,9 @@
   "These mods will run with full access to your computer": "Diese Mods erhalten vollen Zugriff auf deinen Computer",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Sie können deine Dateien lesen, ändern oder löschen und deine Konten sowie dein Netzwerk nutzen wie jedes andere Programm, das du ausführst. Kompiliere sie nur, wenn du ihren Autoren vertraust: Die Mods-Seite nennt sie.",
   "Mods: {mods}": "Mods: {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "Der Build kompiliert das Spiel: beim ersten Mal etwa zehn Minuten und einige GB Speicherplatz, danach einige Minuten."
+  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "Der Build kompiliert das Spiel: beim ersten Mal etwa zehn Minuten und einige GB Speicherplatz, danach einige Minuten.",
+  "Delete old versions automatically": "Alte Versionen automatisch löschen",
+  "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Behält die {count} neuesten, die verwendete und die von deinen Instanzen genutzten. Gelöschte Versionen lassen sich auf der Seite Versionen wieder installieren.",
+  "Installed versions use {size}.": "Installierte Versionen belegen {size}.",
+  "{size} on disk": "{size} auf dem Datenträger"
 }
