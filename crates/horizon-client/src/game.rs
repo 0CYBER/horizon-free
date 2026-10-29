@@ -7344,6 +7344,13 @@ impl Game<'_> {
                 let at = [p.position.x, p.position.y, p.position.z];
                 self.award_furnace_recipes(pos, at);
             }
+        } else if self.creative_inventory_open() {
+            // CreativeModeInventoryScreen.slotClicked's THROW on the Survival Inventory tab: the
+            // stack goes to the server (handleCreativeModeItemDrop), the slot follows with the
+            // others (SetCreativeModeSlot).
+            for stack in dropped {
+                self.remote_creative_throw(stack);
+            }
         }
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
@@ -7543,7 +7550,8 @@ impl Game<'_> {
                     return;
                 }
                 if let Some(moved) = self.last_quick_moved.clone() {
-                    if self.remote.is_some() {
+                    // The creative screen clicks its own menu, on a server too.
+                    if self.remote.is_some() && self.screen != Screen::Creative {
                         self.remote_quick_move_all(slot, &moved);
                     } else {
                         self.menu_session(|menu, env, to_menu| {
