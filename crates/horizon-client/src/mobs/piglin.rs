@@ -1283,9 +1283,6 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.ai.target = None;
         }
     }
-    if m.species() == Species::Piglin && m.extra.ints[0] > 0 {
-        m.extra.ints[0] -= 1;
-    }
     // Admiring disabled after being hit by a player.
     if m.extra.egg_time > 0 {
         m.extra.egg_time -= 1;
