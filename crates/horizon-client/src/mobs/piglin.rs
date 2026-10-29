@@ -1112,6 +1112,22 @@ fn throw_target(m: &mut Mob, who: Who, cx: &mut Cx) {
         velocity: [push.x, up, push.z],
     });
 }
+/// `HoglinAi.onHitTarget`: an adult that hits a piglin while piglins
+/// outnumber the hoglins around it retreats from that piglin and tells the
+/// hoglins it sees to. (The broadcast of the attack target otherwise is not
+/// ported.)
+fn on_hit_target(m: &mut Mob, who: Who, cx: &mut Cx) {
+    if m.is_baby() {
+        return;
+    }
+    let Some(at) = cx.w.target_info(who).map(|t| t.position) else {
+        return;
+    };
+    if species_of(cx.w, who) == Some(Species::Piglin) && piglins_outnumber_hoglins(m) {
+        set_avoid_target(m, cx.lr, who, at);
+        broadcast_retreat(m, cx.w, who, at, cx.events);
+    }
+}
 /// `HoglinBase.hurtAndThrowTarget`.
 pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     m.extra.anim_ticks = 10;
@@ -1121,6 +1137,9 @@ pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
         event: 4,
         at: [m.position.x, m.position.y, m.position.z],
     });
+    if m.species() == Species::Hoglin {
+        on_hit_target(m, who, cx);
+    }
     let attack = m.attrs.attack_damage;
     let amount = if !m.is_baby() && attack as i32 > 0 {
         attack / 2.0 + m.random.next_int_bound(attack as i32).unwrap_or(0) as f32
