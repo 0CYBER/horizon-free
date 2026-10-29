@@ -261,6 +261,16 @@ def scenarios():
     add('strider_cold', 200, ['mob minecraft:strider 0.5 -60 0.5 0 134 persistent'])
     add('strider_tempted', 200, [LAVA, 'player 9.5 -60 0.5 hand=minecraft:warped_fungus',
                                  'mob minecraft:strider 0.5 -61 0.5 0 135 persistent'])
+    # Wild ocelots (Ocelot.registerGoals + reassessTrustingGoals): alone, fleeing a survival player
+    # inside 16 blocks (OcelotAvoidEntityGoal, sprinting inside 7), ignoring a creative one, and drawn
+    # by raw cod (OcelotTemptGoal). Rabbits wait for RaidGardenGoal, whose first canUse draws from
+    # the rabbit's random.
+    add('ocelot_alone', 200, ['mob minecraft:ocelot 0.5 -60 0.5 0 181 persistent'])
+    add('ocelot_player', 200, ['player 6.5 -60 0.5', 'mob minecraft:ocelot 0.5 -60 0.5 0 182 persistent'])
+    add('ocelot_player_far', 200, ['player 14.5 -60 0.5', 'mob minecraft:ocelot 0.5 -60 0.5 0 183 persistent'])
+    add('ocelot_creative', 200, ['player 6.5 -60 0.5 creative', 'mob minecraft:ocelot 0.5 -60 0.5 0 184 persistent'])
+    add('ocelot_tempted', 200, ['player 8.5 -60 0.5 hand=minecraft:cod',
+                                'mob minecraft:ocelot 0.5 -60 0.5 0 185 persistent'])
     # Bats: hanging under a stone ceiling alone, woken by a player passing beneath, flying off with
     # nothing above, and fluttering about a closed cave where they may hang up again.
     CEILING = 'fill -6 -57 -6 6 -57 6 minecraft:stone'

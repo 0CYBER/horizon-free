@@ -739,7 +739,9 @@ pub struct Extra {
     /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
     /// sets its box (`Avatar.POSES`).
     pub avatar_pose: crate::pose::Pose,
-    /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
+    /// `Entity.isSprinting` (`Entity.DATA_SHARED_FLAGS_ID`'s flag 3): the dust a
+    /// player raises; a cat or ocelot dashing (`Cat/Ocelot.customServerAiStep`),
+    /// which `LivingEntity.setSprinting`'s speed modifier makes faster.
     pub sprinting: bool,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
@@ -2416,6 +2418,10 @@ impl Mob {
             self,
             witch::speed(self, self.attrs.speed) + enderman::attacking_speed(self),
         ) * self.speed_bonus();
+        // LivingEntity.SPEED_MODIFIER_SPRINTING: 0.3F, ADD_MULTIPLIED_TOTAL.
+        if self.extra.sprinting {
+            v *= 1.0 + f64::from(0.3f32);
+        }
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),

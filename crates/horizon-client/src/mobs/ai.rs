@@ -235,11 +235,10 @@ pub fn register(m: &mut Mob) {
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic if m.species() == Species::Fox => super::fox::register(m),
         Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
+        Family::Generic if m.species() == Species::Rabbit => super::rabbit::register(m),
+        Family::Generic if m.species() == Species::Ocelot => super::tame::register_ocelot(m),
         Family::Generic => {
             generic(m);
-            if m.species() == Species::Rabbit {
-                super::rabbit::register(m);
-            }
             if m.species() == Species::Frog {
                 // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true).
                 // The speed attribute is 1.0, so the controller's scaling is
@@ -390,9 +389,8 @@ fn generic(m: &mut Mob) {
             return;
         }
         g.add(0, Float);
-        let rabbit = m.kind.species == Species::Rabbit;
-        g.add(1, Panic::new(if rabbit { 2.2 } else { 1.25 }));
-        g.add(5, Stroll::avoiding_water(if rabbit { 0.6 } else { 1.0 }));
+        g.add(1, Panic::new(1.25));
+        g.add(5, Stroll::avoiding_water(1.0));
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
         if m.kind.species == Species::Armadillo {
@@ -658,6 +656,16 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
 }
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    // Entity.canSpawnSprintParticle / spawnSprintParticle (a dashing cat or
+    // ocelot): a server level drops the particle, but its spot is drawn
+    // from the mob's random first.
+    if m.extra.sprinting && !m.fluids.in_water && !m.fluids.in_lava && m.alive() {
+        let at = m.block_on_legacy(w);
+        let state = w.world.block(at[0], at[1], at[2]);
+        if w.facts.get(state).render_shape != crate::blocks::RenderShape::Invisible {
+            let _ = (m.random.next_double(), m.random.next_double());
+        }
+    }
     m.was_eye_in_water = m.fluids.eye_in_water;
     m.update_fluids(w, events);
     if m.species() == Species::Drowned {
@@ -1278,6 +1286,7 @@ fn armadillo_server_ai_step(m: &mut Mob, mob_drops: bool, events: &mut Vec<MobEv
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     match m.species() {
         Species::Rabbit => super::rabbit::server_ai_step(m),
+        Species::Cat | Species::Ocelot => super::tame::feline_server_ai_step(m),
         // Armadillo.customServerAiStep: the brain and its activity, then the scute.
         Species::Armadillo => {
             super::armadillo::server_ai_step(m, cx);
