@@ -1587,7 +1587,7 @@ impl Game<'_> {
     }
 
     fn tick_mob_sculk_events(&mut self) {
-        let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>)> = self
+        let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>, Option<u32>)> = self
             .mobs
             .iter()
             .filter(|m| m.alive())
@@ -1599,20 +1599,16 @@ impl Game<'_> {
                     m.fluids.in_water,
                     m.species(),
                     m.last_damage.map(|(_, t)| t),
+                    m.extra.mount,
                 )
             })
             .collect();
-        for (id, at, on_ground, in_water, species, damaged) in snapshot {
+        for (id, at, on_ground, in_water, species, damaged, vehicle) in snapshot {
             if on_ground {
                 self.step_on_redstone_ore(at, false);
             }
             // A mob first seen already riding raised its event when it spawned.
             let seen = self.sculk.steps.contains_key(&Who::Mob(id));
-            let vehicle = self
-                .mobs
-                .iter()
-                .find(|m| m.id == id)
-                .and_then(|m| m.extra.mount);
             self.mount_events(Who::Mob(id), vehicle, seen);
             let emits = !matches!(species, Species::Shulker);
             if emits {
