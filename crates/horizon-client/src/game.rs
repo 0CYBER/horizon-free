@@ -10822,14 +10822,16 @@ impl Game<'_> {
             // The main hand on its arm, the off hand on the other one.
             let left = self.settings.main_hand_left != (hand == Hand::Off);
             let Some(stack) = item else {
-                // Only the main hand's empty arm shows.
-                if hand == Hand::Off {
+                // renderArmWithItem: only the main hand's empty arm shows,
+                // on the main arm (the left one with the main hand set to
+                // left), and not while the player is invisible.
+                if hand == Hand::Off || self.potions.effects.get("invisibility").is_some() {
                     continue;
                 }
-                // renderPlayerArm (right arm)
+                // renderPlayerArm
                 let m = to_world
-                    * horizon_client::first_person::player_arm_pose(false, inverse_height, attack);
-                self.first_person_arm(false, m, packed, &mut out);
+                    * horizon_client::first_person::player_arm_pose(left, inverse_height, attack);
+                self.first_person_arm(left, m, packed, &mut out);
                 continue;
             };
             if let Some(id) = maps::map_id(&stack) {
