@@ -5,9 +5,10 @@ use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use horizon_launcher::instances;
 use horizon_launcher::native_mods;
+use horizon_launcher::other_launchers;
 use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Parser)]
@@ -314,6 +315,25 @@ enum InstanceCmd {
         /// The instance a pack goes into
         #[arg(long)]
         instance: Option<String>,
+    },
+    /// List the instances other launchers keep (Prism Launcher, MultiMC, the official
+    /// launcher), read without changing anything there
+    Others {
+        /// Look in this folder instead: a launcher's folder, its instances/ or one instance
+        #[arg(long)]
+        folder: Option<PathBuf>,
+    },
+    /// Copy another launcher's instance into a new Java instance: its Minecraft version and its
+    /// game folder (worlds, mods, packs, options); the other launcher's copy stays as it is
+    CopyFrom {
+        /// Its name, as `instance others` lists it
+        name: String,
+        /// Look in this folder instead: a launcher's folder, its instances/ or one instance
+        #[arg(long)]
+        folder: Option<PathBuf>,
+        /// The new instance's name (default: the same)
+        #[arg(long = "as")]
+        new_name: Option<String>,
     },
 }
 
@@ -2190,6 +2210,35 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The other launchers' instances in `folder`, else in their default folders.
+fn other_instances(folder: Option<&Path>) -> Result<Vec<other_launchers::Found>, String> {
+    use horizon_launcher::sources::{Folders, Os};
+    Ok(match folder {
+        Some(dir) if !dir.is_dir() => return Err(format!("{} isn't a folder.", dir.display())),
+        Some(dir) => other_launchers::in_folder(dir, None),
+        None => {
+            let folders = Folders::current().ok_or("No home folder.")?;
+            other_launchers::scan(Os::current(), &folders)
+        }
+    })
+}
+
+fn other_plays(f: &other_launchers::Found) -> String {
+    match &f.loader {
+        Some(l) => format!("Minecraft {} with {} {}", f.minecraft, l.name, l.version),
+        None => format!("Minecraft {}", f.minecraft),
+    }
+}
+
+fn other_json(f: &other_launchers::Found) -> serde_json::Value {
+    serde_json::json!({
+        "launcher": f.launcher, "name": f.name, "minecraft": f.minecraft,
+        "loader": f.loader.as_ref().map(|l| l.name),
+        "loader_version": f.loader.as_ref().map(|l| &l.version),
+        "game": f.game, "shared": f.shared,
+    })
+}
+
 fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
     use instances::Icon;
     let value = |i: &instances::Instance, selected: bool| {
@@ -2423,6 +2472,54 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     println!("{did}: {}", path.display());
                 }
             }
+        }
+        InstanceCmd::Others { folder } => {
+            let found = other_instances(folder.as_deref())?;
+            if as_json {
+                json(found.iter().map(other_json).collect());
+            } else if found.is_empty() {
+                println!("No other launcher's instance found.");
+            }
+            for f in found.iter().filter(|_| !as_json) {
+                println!(
+                    "{}  ({}, {})\n    {}",
+                    f.name,
+                    f.launcher,
+                    other_plays(f),
+                    f.game.display()
+                );
+            }
+        }
+        InstanceCmd::CopyFrom {
+            name,
+            folder,
+            new_name,
+        } => {
+            let found = other_instances(folder.as_deref())?;
+            let matching: Vec<_> = found.iter().filter(|f| f.name == name).collect();
+            let f = match matching[..] {
+                [one] => one,
+                [] => {
+                    return Err(format!(
+                        "No other launcher has an instance called {name}: \
+                         horizon-launcher instance others"
+                    ))
+                }
+                _ => {
+                    return Err(format!(
+                        "More than one launcher has an instance called {name}: say which \
+                         with --folder."
+                    ))
+                }
+            };
+            let made = other_launchers::import(f, new_name.as_deref().unwrap_or(&f.name))?;
+            if let Some(l) = f.loader.as_ref().filter(|_| !as_json) {
+                println!(
+                    "{} {} isn't installed for it yet: its mods are copied and wait for it.",
+                    l.name, l.version
+                );
+            }
+            changed(made);
         }
         InstanceCmd::Import { file, instance } => {
             use horizon_launcher::import::{self, Dropped};

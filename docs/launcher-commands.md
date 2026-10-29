@@ -478,6 +478,28 @@ Import what a file is, as dropping it on the window does: a shared instance (a .
 
 MCP: `instance_import`.
 
+## `horizon-launcher instance others`
+
+List the instances other launchers keep (Prism Launcher, MultiMC, the official launcher), read without changing anything there.
+
+    horizon-launcher instance others
+
+- `--folder`: Look in this folder instead: a launcher's folder, its instances/ or one instance
+
+MCP: `instance_others`.
+
+## `horizon-launcher instance copy-from`
+
+Copy another launcher's instance into a new Java instance: its Minecraft version and its game folder (worlds, mods, packs, options); the other launcher's copy stays as it is.
+
+    horizon-launcher instance copy-from <NAME>
+
+- `NAME`: Its name, as `instance others` lists it
+- `--folder`: Look in this folder instead: a launcher's folder, its instances/ or one instance
+- `--as`: The new instance's name (default: the same)
+
+MCP: `instance_copy_from`.
+
 ## `horizon-launcher worlds list`
 
 The worlds: name, mode, version, last played and size (the default).

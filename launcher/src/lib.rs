@@ -22,6 +22,7 @@ pub mod modpacks;
 pub mod mojang;
 pub mod native_mods;
 pub mod nightly;
+pub mod other_launchers;
 pub mod packs;
 pub mod process;
 pub mod proxy;
