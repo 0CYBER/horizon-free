@@ -872,13 +872,27 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// Whether the stand's box holds water (`isInWater`, from its fluid blocks).
-    pub fn in_water(&self, world: &World, facts: &BlockFacts) -> bool {
+    /// `isInWater`: some water block of the stand's box has its surface
+    /// (`FluidState.getHeight`, a full block under more water) at or above the
+    /// box's bottom, as `Entity.updateFluidHeightAndDoFluidPushing` counts it.
+    pub fn in_water(&self, world: &World, fluids: &crate::motion::FluidResources) -> bool {
         let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        let water = |x: i32, y: i32, z: i32| {
+            let state = fluids.fluid(world.block(x, y, z));
+            (state.kind() == horizon_world::fluid::FluidKind::Water).then_some(state)
+        };
         (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
             (lo.y.floor() as i32..hi.y.ceil() as i32).any(|y| {
-                (lo.z.floor() as i32..=hi.z.floor() as i32)
-                    .any(|z| facts.get(world.block(x, y, z)).fluid == Fluid::Water)
+                (lo.z.floor() as i32..=hi.z.floor() as i32).any(|z| {
+                    water(x, y, z).is_some_and(|state| {
+                        let height = if water(x, y + 1, z).is_some() {
+                            1.0
+                        } else {
+                            state.own_height()
+                        };
+                        f64::from(y) + f64::from(height) >= lo.y
+                    })
+                })
             })
         })
     }
@@ -898,6 +912,8 @@ impl ArmorStand {
             return;
         }
         let wanted = self.velocity;
+        // `travelInFluid` reads `isFalling` before the move and any push.
+        let falling = wanted.y <= 0.0;
         let mut y = wanted.y;
         if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
             self.position = Vec3::new(
@@ -917,7 +933,6 @@ impl ArmorStand {
             // with gravity / 16 (the stand is falling while its fall is not
             // already nearly stopped).
             let y = velocity.y * f64::from(0.8f32);
-            let falling = velocity.y <= 0.0;
             let adjusted =
                 if falling && (y - 0.005).abs() >= 0.003 && (y - 0.08 / 16.0).abs() < 0.003 {
                     -0.003
