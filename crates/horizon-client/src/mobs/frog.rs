@@ -144,13 +144,7 @@ fn can_eat(species: Species, size: i32) -> bool {
 
 /// `FrogAttackablesSensor` (every 20 ticks) and the memory timers.
 pub fn server_ai_step(m: &mut Mob, w: &MobWorld) {
-    // `CountDownCooldownTicks(LONG_JUMP_COOLDOWN_TICKS)`: one less each tick,
-    // erased the tick after it reaches 0.
-    match jump_cooldown(m) {
-        Some(t) if t > 0 => set_jump_cooldown(m, Some(t - 1)),
-        Some(_) => set_jump_cooldown(m, None),
-        None => {}
-    }
+    count_down_cooldown(m);
     let f = &mut m.extra.frog;
     f.unreachable.retain_mut(|(_, ttl)| {
         *ttl -= 1;
@@ -343,6 +337,16 @@ impl Goal for ShootTongue {
     }
 }
 
+/// `CountDownCooldownTicks.tick` of `LONG_JUMP_COOLDOWN_TICKS`: one less each
+/// tick, erased the tick after it reaches 0 (the core activity of a frog and
+/// a goat).
+pub(super) fn count_down_cooldown(m: &mut Mob) {
+    match jump_cooldown(m) {
+        Some(t) if t > 0 => set_jump_cooldown(m, Some(t - 1)),
+        Some(_) => set_jump_cooldown(m, None),
+        None => {}
+    }
+}
 /// `LONG_JUMP_COOLDOWN_TICKS`.
 fn jump_cooldown(m: &Mob) -> Option<i64> {
     m.extra
@@ -371,6 +375,24 @@ fn sample_cooldown(m: &mut Mob, lr: &mut LegacyRandom, div: i32) {
     set_jump_cooldown(m, Some(i64::from(t)));
 }
 
+/// `LivingEntity.setDiscardFriction`: the flag lives in the frog's or the
+/// goat's state.
+fn set_discard_friction(m: &mut Mob, on: bool) {
+    if m.species() == Species::Goat {
+        m.extra.goat.discard_friction = on;
+    } else {
+        m.extra.frog.discard_friction = on;
+    }
+}
+/// `Entity.setPose` to or from a long jump: a goat's box changes with it.
+fn set_jump_pose(m: &mut Mob, w: &MobWorld, id: u8) {
+    if m.species() == Species::Goat {
+        super::goat::set_pose(m, w, id);
+    } else {
+        set_pose(m, id);
+    }
+}
+
 /// `FrogAi.isAcceptableLandingSpot`: no fluid in the target, below or above
 /// it; a lily pad or big dripleaf (`frog_prefer_jump_to`) or a trapdoor; else
 /// `LongJumpToRandomPos.defaultAcceptableLandingSpot`: a solid block below
@@ -391,7 +413,13 @@ fn acceptable_landing(m: &Mob, w: &MobWorld, [x, y, z]: [i32; 3]) -> bool {
     {
         return true;
     }
-    w.facts.get(w.world.block(x, y - 1, z)).solid_render && m.malus(here) == 0.0
+    default_acceptable_landing(m, w, [x, y, z])
+}
+/// `LongJumpToRandomPos.defaultAcceptableLandingSpot`: a solid block below and
+/// a path type the mob walks without a malus.
+fn default_acceptable_landing(m: &Mob, w: &MobWorld, [x, y, z]: [i32; 3]) -> bool {
+    w.facts.get(w.world.block(x, y - 1, z)).solid_render
+        && m.malus(w.path_type_static(x, y, z)) == 0.0
 }
 
 /// `LongJumpToRandomPos.PossibleJump`: a block and its weight.
@@ -402,7 +430,7 @@ type Candidate = ([i32; 3], i32);
 /// holds the pose until it lands. One goal here, like the brain activity
 /// that keeps the idle croak and stroll from starting meanwhile.
 #[derive(Clone, Debug, Default)]
-struct LongJump {
+pub(super) struct LongJump {
     candidates: Vec<Candidate>,
     not_preferred: Vec<Candidate>,
     wanting_preferred: bool,
@@ -488,10 +516,10 @@ impl LongJump {
                 cx.events
                     .push(MobEvent::Sound("entity.frog.step", at, 2.0, 1.0));
             }
-            set_pose(m, sync::STANDING);
+            set_jump_pose(m, cx.w, sync::STANDING);
             sample_cooldown(m, cx.lr, 1);
         }
-        m.extra.frog.discard_friction = false;
+        set_discard_friction(m, false);
         *self = Self::default();
     }
 }
@@ -582,8 +610,8 @@ impl Goal for LongJump {
             match self.in_air {
                 None => {
                     self.in_air = Some(0);
-                    m.extra.frog.discard_friction = true;
-                    set_pose(m, sync::LONG_JUMPING);
+                    set_discard_friction(m, true);
+                    set_jump_pose(m, cx.w, sync::LONG_JUMPING);
                 }
                 Some(t) => self.in_air = Some(t + 1),
             }
@@ -620,7 +648,7 @@ impl Goal for LongJump {
         // The leap: the body's facing, no friction, the arc's velocity
         // lengthened by jump boost.
         m.yaw = m.body_yaw;
-        m.extra.frog.discard_friction = true;
+        set_discard_friction(m, true);
         let len = jump.length();
         let boost = m
             .extra

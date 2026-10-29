@@ -87,6 +87,8 @@ pub fn tick(m: &mut Mob) {
     if cooldown > 0 {
         set_ram_cooldown(m, cooldown - 1);
     }
+    // `CountDownCooldownTicks(LONG_JUMP_COOLDOWN_TICKS)` of the core activity.
+    super::frog::count_down_cooldown(m);
 }
 /// `RAM_COOLDOWN_TICKS`: 0 when absent.
 pub fn ram_cooldown(m: &Mob) -> i32 {
