@@ -11158,11 +11158,7 @@ impl Game<'_> {
     /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
     /// highest block in `blocks_motion_in_heightmap` or holding a fluid.
     fn rain_height(&self, x: i32, z: i32) -> i32 {
-        use horizon_world::{heightmap::HeightmapType, worldgen::terrain::TerrainBlockStates};
-        let properties = &self.pack.assets.properties;
-        self.world.motion_blocking(x, z, |s| {
-            HeightmapType::MotionBlocking.is_opaque(properties.heightmap_state(s))
-        })
+        render_tick::motion_blocking_height(&self.world, &self.pack.assets.properties, x, z)
     }
     fn tick_weather_effects(&mut self) {
         if self.flash > 0 {
