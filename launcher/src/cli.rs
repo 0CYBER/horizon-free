@@ -955,13 +955,13 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         }
         "language" => {
             use horizon_launcher::i18n::Language;
-            s.language = match value.trim() {
-                "system" | "default" => None,
-                code => Some(
-                    Language::parse(code)
-                        .ok_or_else(|| format!("{value}: say system, en, fr, ru, de, zh, es or uk"))?,
-                ),
-            }
+            s.language =
+                match value.trim() {
+                    "system" | "default" => None,
+                    code => Some(Language::parse(code).ok_or_else(|| {
+                        format!("{value}: say system, en, fr, ru, de, zh, es or uk")
+                    })?),
+                }
         }
         "proxy" => {
             if value == "default" || value.is_empty() {
