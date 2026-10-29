@@ -15,8 +15,10 @@
 //! `level.dat`) are migrated on open.
 use crate::{
     Result,
+    beehive::BeehiveExt,
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -3791,6 +3793,8 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    use crate::mobs::spawner::SpawnDataExt;
+
     #[test]
     fn points_of_interest_save_as_poi_sections() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
