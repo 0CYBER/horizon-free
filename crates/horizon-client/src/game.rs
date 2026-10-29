@@ -4215,8 +4215,15 @@ impl Game<'_> {
     }
     /// `Minecraft.startUseItem`: the main hand, then the off hand.
     fn use_item_as_player(&mut self) -> Result<Option<Hand>> {
-        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
+        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass),
+        // but on a server a spectator's use on a block opens the block's
+        // menu (ServerPlayerGameMode.useItemOn).
         if self.spectator() {
+            if matches!(self.guest_use, Some(GuestUse::OnBlock(_)))
+                && let Some(hit) = self.pick()
+            {
+                self.spectator_open_menu(hit.pos);
+            }
             return Ok(None);
         }
         // A carrot or warped fungus on a stick boosts the ridden pig or strider.

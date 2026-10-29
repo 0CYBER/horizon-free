@@ -1186,9 +1186,6 @@ impl Game<'_> {
             }
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
-                if spectator {
-                    return;
-                }
                 // handleUseItemOn: within reach, and the hit point within the block.
                 let inside = p
                     .cursor

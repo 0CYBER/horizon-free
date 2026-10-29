@@ -4812,7 +4812,8 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
-            let (reacts, changes) = if hand == Hand::Main {
+            let spectator = self.spectator();
+            let (reacts, changes) = if hand == Hand::Main && !spectator {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
                 // useItemOn runs for the off hand too (useWithoutItem doesn't):
@@ -4838,6 +4839,12 @@ impl Game<'_> {
                 world_border: false,
                 sequence: seq,
             }));
+            // MultiPlayerGameMode.performUseItemOn: a spectator's use predicts
+            // nothing and ends the click (CONSUME, no swing); the server opens
+            // the block's menu.
+            if spectator {
+                return true;
+            }
             // Only a predicted placement (predict_place) marks a cell whose
             // resend plays a place sound: an empty hand or a non-block item
             // places nothing (BlockItem.place is where the sound comes from).

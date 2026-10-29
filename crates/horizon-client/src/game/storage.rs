@@ -9,6 +9,51 @@ pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
 }
 impl Game<'_> {
+    /// `ServerPlayerGameMode.useItemOn` for a spectator: the block's menu
+    /// (`BlockState.getMenuProvider`) opens, and nothing else happens. The
+    /// lid, its sound and the `container_open` game event come from
+    /// `ContainerOpenersCounter`, which spectators never join
+    /// (`ChestBlockEntity.startOpen`); the stat, the piglins' anger and the
+    /// shulker box's room check are `useWithoutItem`'s, which is not called.
+    /// Only the block containers whose clicks the server takes back from a
+    /// spectator (`handleContainerClick`) open here: storage, the furnaces,
+    /// the brewing stand and the crafter.
+    pub(super) fn spectator_open_menu(&mut self, pos: [i32; 3]) {
+        let key = (pos[0], pos[1], pos[2]);
+        let name = self
+            .res
+            .facts()
+            .get(self.world.block(pos[0], pos[1], pos[2]))
+            .name
+            .clone();
+        let container = is_shulker_box(&name)
+            || matches!(
+                name.trim_start_matches("minecraft:"),
+                "chest"
+                    | "trapped_chest"
+                    | "barrel"
+                    | "hopper"
+                    | "dispenser"
+                    | "dropper"
+                    | "furnace"
+                    | "blast_furnace"
+                    | "smoker"
+                    | "brewing_stand"
+                    | "crafter"
+            );
+        // ChestBlock.getMenuProvider: none while either half is blocked.
+        if !container || self.chest_menu_blocked(key, &name) {
+            return;
+        }
+        let Some(entity) = BlockEntity::for_block(&name) else {
+            return;
+        };
+        self.world.block_entities.get_or_insert_with(key, || entity);
+        self.container = Some(key);
+        self.screen = super::Screen::Inventory;
+        self.capture(false);
+        self.right = false;
+    }
     /// The custom name of the open container, or its default title
     /// (a double chest is named by whichever half has a name).
     pub(super) fn container_title(&self, default: String) -> String {
