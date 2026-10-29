@@ -1657,6 +1657,9 @@ struct Game<'a> {
     /// Mobs a player hurt (`LivingEntity.lastHurtByPlayer`), with the guest
     /// it was by connection (None: the host).
     last_hurt_by_player: HashMap<u32, Option<u32>>,
+    /// Animals a player fed into love (`Animal.loveCause`), with the guest it was by
+    /// connection (None: the host). Breeding credits them, wherever they are.
+    love_cause: HashMap<u32, Option<u32>>,
     /// Mobs whose death (`LivingEntity.die`) has been handled.
     died: HashSet<u32>,
     /// Client-ticked block-entity animation state (`game/block_entity_anims.rs`).
@@ -9726,6 +9729,12 @@ impl Game<'_> {
             self.saved_for_exit = true;
             return Ok(());
         }
+        if let Some(mut remote) = self.remote.take() {
+            // Minecraft.disconnect closes the connection, so the host sees a clean leave.
+            remote.session.disconnect();
+            self.saved_for_exit = true;
+            return Ok(());
+        }
         self.close_container();
         if self.remote.is_none() {
             self.stats.custom("leave_game", 1);
@@ -9733,15 +9742,14 @@ impl Game<'_> {
         self.lan_close(false);
         self.free_player_beds()?;
         self.save_game()?;
-        if let Some(mut remote) = self.remote.take() {
-            // Minecraft.disconnect closes the connection, so the host sees a clean leave.
-            remote.session.disconnect();
-        }
         self.saved_for_exit = true;
         Ok(())
     }
     fn close_world(&mut self) -> Result<()> {
         self.clear_waypoints();
+        if self.external_server() {
+            return self.leave_server(None);
+        }
         self.begin_closing_save(false)
     }
     fn finish_close_world(&mut self) -> Result<()> {
@@ -9933,6 +9941,7 @@ impl Game<'_> {
         let (origin, dir) = self.aim()?;
         let mut t = 0.0;
         let mut last = origin.map(|v| v.floor() as i32);
+        let mut first = true;
         while t <= self.reach() {
             let p = [
                 origin[0] + dir[0] * t,
@@ -9940,7 +9949,9 @@ impl Game<'_> {
                 origin[2] + dir[2] * t,
             ];
             let b = p.map(|v| v.floor() as i32);
-            if b != last {
+            // `BlockGetter.traverseBlocks` visits the block the ray starts in
+            // first: the eyes' own water, under water (#3787).
+            if first || b != last {
                 let state = self.world.block(b[0], b[1], b[2]);
                 let f = self.res.facts().get(state);
                 let face = [last[0] - b[0], last[1] - b[1], last[2] - b[2]];
@@ -9950,13 +9961,25 @@ impl Game<'_> {
                     && !f.waterlogged
                     && f.render_shape != horizon_client::blocks::RenderShape::Model
                 {
-                    return Some(Hit {
-                        pos: b,
-                        face,
-                        point: p,
-                    });
-                }
-                if !self.res.facts().is_air(state) && f.fluid == Fluid::None {
+                    if !first {
+                        return Some(Hit {
+                            pos: b,
+                            face,
+                            point: p,
+                        });
+                    }
+                    let above = self.world.block(b[0], b[1] + 1, b[2]);
+                    let same_above = self.res.facts().get(above).fluid == f.fluid;
+                    if let Some((face, point)) =
+                        clip_start_source(origin, dir, self.reach(), b, same_above)
+                    {
+                        return Some(Hit {
+                            pos: b,
+                            face,
+                            point,
+                        });
+                    }
+                } else if !first && !self.res.facts().is_air(state) && f.fluid == Fluid::None {
                     return Some(Hit {
                         pos: b,
                         face,
@@ -9964,6 +9987,7 @@ impl Game<'_> {
                     });
                 }
                 last = b;
+                first = false;
             }
             t += 0.05;
         }
@@ -12649,7 +12673,6 @@ impl Game<'_> {
             // key.toggleGui is a KeyMapping: it clicks only with no screen open.
             KeyCode::F1 if self.screen == Screen::Playing => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
-            KeyCode::F2 => self.take_screenshot(),
             KeyCode::F5 if self.screen == Screen::Playing => self.cycle_camera(),
             KeyCode::KeyE
                 if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
@@ -13155,6 +13178,18 @@ impl ApplicationHandler for Game<'_> {
                 self.toggle_fullscreen();
             }
             return;
+        }
+        // A screenshot is a window shortcut too: vanilla takes it before a
+        // screen or a text box consumes the key (`handleGlobalKeyPress`), so
+        // it works with chat, a sign or a book open.
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.state == ElementState::Pressed
+            && let PhysicalKey::Code(key) = event.physical_key
+        {
+            self.last_input = Instant::now();
+            if self.screenshot_shortcut(key, event.repeat) {
+                return;
+            }
         }
         // KeyboardHandler.keyPress: the debug keys come before the game's.
         if let WindowEvent::KeyboardInput {
@@ -14388,6 +14423,7 @@ impl<'a> Game<'a> {
             attack_ticks: 100,
             attack_item: None,
             last_hurt_by_player: HashMap::new(),
+            love_cause: HashMap::new(),
             died: HashSet::new(),
             be_anims: {
                 let mut anims = horizon_client::block_entity_anim::BlockEntityAnims::default();
@@ -16114,6 +16150,64 @@ fn keyboard_button(playing: bool, action: KeyAction) -> Option<bool> {
     playing.then_some(action != KeyAction::Release)
 }
 
+/// `VoxelShape.clip` of a fluid source's shape for a ray that starts in the
+/// source's own block `cell`: the face and point it hits, in `pick_fluid`'s
+/// `Hit` terms. `FlowingFluid.getShape` is the whole block under the same
+/// fluid and `getOwnHeight` (8/9) tall otherwise. A start inside the shape
+/// (tested 1e-7 of the way along) hits at the start, on the face opposite
+/// `Direction.getApproximateNearest(dir)`; from above it, a ray going down
+/// enters through the top while still in this block.
+fn clip_start_source(
+    eye: [f64; 3],
+    dir: [f64; 3],
+    reach: f64,
+    cell: [i32; 3],
+    same_above: bool,
+) -> Option<([i32; 3], [f64; 3])> {
+    let height = if same_above {
+        1.0
+    } else {
+        f64::from(8.0f32 / 9.0f32)
+    };
+    let probe_y = eye[1] + dir[1] * reach * 1.0e-7;
+    if probe_y - f64::from(cell[1]) < height {
+        // Direction.values() order; the first of equal dot products wins.
+        let normals: [[i32; 3]; 6] = [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+            [-1, 0, 0],
+            [1, 0, 0],
+        ];
+        let mut nearest = normals[2];
+        let mut best = f64::NEG_INFINITY;
+        for n in normals {
+            let dot =
+                f64::from(n[0]) * dir[0] + f64::from(n[1]) * dir[1] + f64::from(n[2]) * dir[2];
+            if dot > best {
+                best = dot;
+                nearest = n;
+            }
+        }
+        return Some((nearest.map(|v| -v), eye));
+    }
+    if dir[1] >= 0.0 {
+        return None;
+    }
+    let t = (f64::from(cell[1]) + height - eye[1]) / dir[1];
+    if t > reach {
+        return None;
+    }
+    let point = [
+        eye[0] + dir[0] * t,
+        eye[1] + dir[1] * t,
+        eye[2] + dir[2] * t,
+    ];
+    (point[0].floor() as i32 == cell[0] && point[2].floor() as i32 == cell[2])
+        .then_some(([0, 1, 0], point))
+}
+
 fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Stats) {
     *adv = Default::default();
     *stats = Default::default();
@@ -16342,6 +16436,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Eyes under water: the ray hits the source the eyes are in, at the eyes
+    /// (#3787), whichever way it looks.
+    #[test]
+    fn a_ray_starting_inside_a_source_hits_it_at_the_start() {
+        let eye = [0.5, 65.62, 0.5];
+        let down = [0.0, -1.0, 0.0];
+        assert_eq!(
+            clip_start_source(eye, down, 4.5, [0, 65, 0], true),
+            Some(([0, 1, 0], eye))
+        );
+        // Without water above, 0.62 is still below the surface (8/9).
+        assert_eq!(
+            clip_start_source(eye, [0.0, 1.0, 0.0], 4.5, [0, 65, 0], false),
+            Some(([0, -1, 0], eye))
+        );
+        // Looking ahead, slightly down: SOUTH's dot product is largest.
+        let ahead = [0.0, -0.2f64, 0.98f64.sqrt()];
+        assert_eq!(
+            clip_start_source(eye, ahead, 4.5, [0, 65, 0], true),
+            Some(([0, 0, -1], eye))
+        );
+    }
+
+    /// Eyes above a surface source's 8/9: a ray going down enters it through
+    /// the top inside the block; level or rising rays miss it.
+    #[test]
+    fn a_ray_starting_above_a_source_surface_enters_through_the_top() {
+        let eye = [0.5, 65.95, 0.5];
+        let hit = clip_start_source(eye, [0.0, -1.0, 0.0], 4.5, [0, 65, 0], false);
+        let (face, point) = hit.unwrap();
+        assert_eq!(face, [0, 1, 0]);
+        assert!((point[1] - (65.0 + f64::from(8.0f32 / 9.0f32))).abs() < 1e-12);
+        assert_eq!(
+            clip_start_source(eye, [1.0, 0.0, 0.0], 4.5, [0, 65, 0], false),
+            None
+        );
+        // Leaves the block sideways before it comes down to the surface.
+        let shallow = [0.995f64.sqrt(), -0.0707, 0.0];
+        assert_eq!(
+            clip_start_source(eye, shallow, 4.5, [0, 65, 0], false),
+            None
+        );
     }
 
     #[test]

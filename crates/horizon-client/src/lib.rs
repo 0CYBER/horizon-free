@@ -24,6 +24,7 @@ pub mod banner;
 pub mod beehive;
 pub mod benchmark;
 pub mod block_entity_item;
+pub mod block_pattern;
 pub mod block_transform;
 pub mod boss_overlay;
 pub mod cauldron;

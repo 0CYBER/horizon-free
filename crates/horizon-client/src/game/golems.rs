@@ -85,24 +85,25 @@ impl Game<'_> {
         {
             m.extra.player_created = true;
         }
-        self.trigger_golem_summoned(id);
+        self.trigger_summoned(id, 5.0);
         self.update_pattern_blocks(&blocks)
     }
-    /// `CarvedPumpkinBlock.spawnGolemInWorld`: SUMMONED_ENTITY for each player
-    /// whose box is within 5 blocks of the golem's box (the local player here).
-    fn trigger_golem_summoned(&mut self, id: Option<u32>) {
-        let Some(golem) = id
+    /// SUMMONED_ENTITY for each player whose box is within `reach` blocks of
+    /// the built mob's box (the local player here): 5 for golems
+    /// (`CarvedPumpkinBlock.spawnGolemInWorld`), 50 for the wither
+    /// (`WitherSkullBlock.checkSpawn`).
+    pub(super) fn trigger_summoned(&mut self, id: Option<u32>, reach: f64) {
+        let Some(built) = id
             .and_then(|id| self.mobs.iter().find(|m| m.id == id))
             .cloned()
         else {
             return;
         };
         let me = self.player_entity();
-        let half = f64::from(golem.width()) / 2.0;
-        let height = f64::from(golem.height());
-        let reach = 5.0;
+        let half = f64::from(built.width()) / 2.0;
+        let height = f64::from(built.height());
         let [x, y, z] = me.position;
-        let p = golem.position;
+        let p = built.position;
         // The player's box is 0.6 wide and 1.8 tall.
         let near = x + 0.3 >= p.x - half - reach
             && x - 0.3 <= p.x + half + reach
@@ -111,7 +112,7 @@ impl Game<'_> {
             && z + 0.3 >= p.z - half - reach
             && z - 0.3 <= p.z + half + reach;
         if near {
-            let view = self.mob_entity(&golem);
+            let view = self.mob_entity(&built);
             self.trigger_entity("minecraft:summoned_entity", "entity", &view);
         }
     }
@@ -220,7 +221,7 @@ impl Game<'_> {
             f64::from(head[2]) + 0.5,
         ];
         let id = self.create_triggered("minecraft:copper_golem", at, 0.0);
-        self.trigger_golem_summoned(id);
+        self.trigger_summoned(id, 5.0);
         self.update_pattern_blocks(&cells)?;
         let direction = match facing.as_str() {
             "south" => horizon_core::geometry::Direction::South,
