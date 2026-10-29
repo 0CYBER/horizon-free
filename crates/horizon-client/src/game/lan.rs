@@ -801,6 +801,14 @@ fn mob_meta(
             }
             defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // Skeleton.DATA_STRAY_CONVERSION_ID (the first entry after Mob's):
+        // the shaking of the freezing conversion.
+        "minecraft:skeleton" => {
+            if e.counter2 > 0 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
         "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
         // Hoglin.DATA_IMMUNE_TO_ZOMBIFICATION (after AgeableMob's two) and

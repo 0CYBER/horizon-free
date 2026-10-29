@@ -129,6 +129,15 @@ pub struct JavaGame {
     pub window: Option<(u32, u32)>,
 }
 
+impl Instance {
+    /// Its variables for the game started as `program` and the commands around it
+    /// ([`crate::launch::instance_vars`]).
+    pub fn vars(&self, program: &std::ffi::OsStr) -> crate::launch::Vars {
+        let java = self.java.as_ref().map(|_| program);
+        crate::launch::instance_vars(&self.name, &self.id, &self.home, java)
+    }
+}
+
 impl JavaGame {
     /// What the mod browser installs for: its Minecraft version and its loader.
     pub fn target(&self) -> crate::browser::java_instance::Target {
