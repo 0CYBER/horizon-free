@@ -5080,6 +5080,7 @@ impl Game<'_> {
     /// `playSound(player, ...)`: the server sends them to the others only):
     /// honeycomb waxing copper, and an axe, hoe or shovel transforming a
     /// block (stripping, scraping, removing wax, tilling, making a path).
+    /// A cushion succeeds where it may be placed and spawns on the server.
     /// Whether the item's use succeeded, which ends the click.
     fn predict_item_on_block(&mut self, stack: &ItemStack, hit: &super::Hit) -> bool {
         let at = [
@@ -5107,6 +5108,15 @@ impl Game<'_> {
             self.transform_particle(&particle, hit.pos);
             self.audio.play(&sound, Some(at), 1.0, 1.0);
             true
+        } else if self
+            .res
+            .items()
+            .get(&stack.item)
+            .is_some_and(|i| i.cushion_color.is_some())
+        {
+            // CushionItem.useOn on a client level: SUCCESS once
+            // `canBePlacedAt` holds, before the server's own checks.
+            self.cushion_spawn(hit).is_some()
         } else {
             false
         }
