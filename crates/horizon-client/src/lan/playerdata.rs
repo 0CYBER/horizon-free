@@ -86,6 +86,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.respawn_elsewhere = level.respawn_elsewhere.clone();
     guest.saved = level.player_extra.clone();
     guest.seen_credits = level.seen_credits;
+    guest.last_death = level.last_death.clone();
     let extra = level.player_extra.as_ref();
     let short = |key: &str, default: i64| {
         extra
@@ -169,9 +170,10 @@ pub fn store(guest: &Guest, level: &mut Level, vehicle: Option<[i32; 4]>) {
     level.respawn_elsewhere = guest.respawn_elsewhere.clone();
     level.on_ground = guest.on_ground;
     level.seen_credits = guest.seen_credits;
+    level.last_death = guest.last_death.clone();
     level.player_extra = guest.saved.clone();
     // The vehicle the player rides (`ServerPlayer.saveParentVehicle`).
-    level.root_vehicle = vehicle;
+    level.root_vehicle = vehicle.or(guest.saved_vehicle);
     // The live body's fire, air and fall distance (Entity.saveWithoutId),
     // or what the file had while the player has no body yet.
     let body = guest

@@ -13,25 +13,35 @@ mod console;
 mod console_page;
 mod cull;
 mod datapacks_page;
+mod dev_options;
 mod export_page;
 mod game_tools;
 mod import_page;
 mod instances_page;
 mod internet;
+mod language_page;
+mod launch_page;
+mod line_edit;
 mod markdown;
 mod mcp;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
 mod multiplayer_page;
+mod owner_page;
 mod packs_page;
 mod partner;
 mod perf;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
+mod shortcut_page;
+mod skin_page;
+mod switch_page;
 mod theme;
+mod themes_page;
 mod titlebar;
+mod while_playing;
 mod worlds_page;
 
 use gpui::{
@@ -42,7 +52,9 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
+use horizon_launcher::native_mods;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -158,9 +170,24 @@ struct Launcher {
     /// The version being deleted on a background thread. It is already out of `installed`, so
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
     removing: Option<String>,
+    /// What each installed version takes on disk, measured on a thread for the Versions page, and
+    /// the installed list it was measured for.
+    disk: Vec<(String, u64)>,
+    disk_for: Vec<String>,
     install_error: Option<(String, String)>,
+    /// Native mods (`native_mods`): the build's step while it runs, why it failed, and the
+    /// warning before a build while it is open, with the mods it names.
+    native_step: Option<String>,
+    native_error: Option<String>,
+    native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
     confirm_remove: Option<String>,
     picker_open: bool,
+    /// The top bar's quick switch of who plays (`switch_page.rs`).
+    account_menu: bool,
+    /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
+    skin: Option<skin_page::SkinPanel>,
+    /// Why the last picture for Home's background was refused.
+    background_error: Option<String>,
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
@@ -185,8 +212,19 @@ struct Launcher {
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
     keychain: bool,
+    /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
+    /// none until the keychain has been read.
+    owner: Option<bool>,
+    /// Play was refused (or Home's Sign in pressed): the owner gate's screen is open.
+    owner_screen_open: bool,
+    /// Clicks on the sidebar's launcher version, and whether they revealed the developer options
+    /// (`dev_options`) for this run.
+    dev_clicks: u8,
+    dev_options: bool,
     /// The game is waiting for its session (a token renewal) before it starts.
     starting_client: Option<String>,
+    /// Play was pressed on a version not prepared yet: it starts once this preparation ends well.
+    play_when_prepared: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
     friend_code: String,
@@ -198,7 +236,7 @@ struct Launcher {
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
-    args_input: String,
+    args_input: line_edit::LineEdit,
     args_focused: bool,
     args_focus: FocusHandle,
     /// Settings' Proxy field, the same way (`proxy`).
@@ -245,8 +283,13 @@ struct Launcher {
     game_packs: packs_page::Packs,
     world_packs: datapacks_page::WorldPacks,
     export: Option<export_page::ExportPanel>,
+    launch: Option<launch_page::LaunchPanel>,
     importing: import_page::Importing,
     console: console_page::Console,
+    /// What the window did when the game started (`while_playing.rs`).
+    aside: while_playing::Aside,
+    /// The selected instance's desktop shortcut (`shortcut_page.rs`).
+    shortcuts: shortcut_page::Shortcuts,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -261,7 +304,7 @@ impl Launcher {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = channel();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            this.theme = Theme::for_appearance(this.settings.appearance, window.appearance());
+            this.theme = this.settings_theme(window);
             cx.notify();
         });
         cx.spawn(async move |this, cx| loop {
@@ -300,6 +343,7 @@ impl Launcher {
         })
         .detach();
         let mut settings = Settings::load();
+        i18n::set(settings.language());
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
         }
@@ -327,7 +371,7 @@ impl Launcher {
         // `window.appearance()`, so both draw the same look.
         titlebar::apply_appearance(window, settings.appearance);
         let mut this = Self {
-            theme: Theme::for_appearance(settings.appearance, window.appearance()),
+            theme: Theme::for_appearance(settings.appearance, settings.accent, window.appearance()),
             page: Page::from_env(),
             switches: 0,
             content_scroll: Scrollbar::default(),
@@ -351,10 +395,18 @@ impl Launcher {
             installed,
             installing: None,
             removing: None,
+            disk: Vec::new(),
+            disk_for: Vec::new(),
             install_error: None,
+            native_step: None,
+            native_error: None,
+            native_confirm: None,
             confirm_remove: None,
             picker_open: false,
-            args_input: settings.game_args.clone(),
+            account_menu: false,
+            skin: None,
+            background_error: None,
+            args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
             proxy_input: settings.proxy.clone().unwrap_or_default(),
@@ -377,7 +429,12 @@ impl Launcher {
             sign_in: None,
             sign_in_state: None,
             keychain: true,
+            owner: None,
+            owner_screen_open: false,
+            dev_clicks: 0,
+            dev_options: false,
             starting_client: None,
+            play_when_prepared: None,
             friend_code: String::new(),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
@@ -412,8 +469,11 @@ impl Launcher {
             game_packs: packs_page::Packs::default(),
             world_packs: datapacks_page::WorldPacks::default(),
             export: None,
+            launch: None,
             importing: Default::default(),
             console: Default::default(),
+            aside: while_playing::Aside::new(window.window_handle()),
+            shortcuts: Default::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -426,8 +486,11 @@ impl Launcher {
         let tx = this.tx.clone();
         let keychain_tx = this.tx.clone();
         // Asking the keychain can block (D-Bus), so not on this thread.
+        let accounts = this.accounts.clone();
         std::thread::spawn(move || {
-            let _ = keychain_tx.send(Msg::Keychain(account::store().persistent()));
+            let store = account::store();
+            let _ = keychain_tx.send(Msg::Keychain(store.persistent()));
+            let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
         });
         std::thread::spawn(move || {
             let reused = backend::reuse_prepared_everywhere();
@@ -444,8 +507,10 @@ impl Launcher {
     }
 
     fn go(&mut self, page: Page) {
-        // The game may have made up a name since: read it again (a small file, once a switch).
+        // The game may have made up a name since, and the CLI or another window may have
+        // changed the accounts: read them again (small files, once a switch).
         self.offline_name = offline_name();
+        self.accounts = Accounts::load();
         if page != self.page {
             self.page = page;
             self.switches += 1;
@@ -456,13 +521,14 @@ impl Launcher {
             }
         }
         self.picker_open = false;
+        self.account_menu = false;
     }
 
     fn check_updates(&mut self) {
         self.checked = Some(Instant::now());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(Msg::Updates(backend::check_updates()));
+            let _ = tx.send(Msg::Updates(backend::check_updates().map(Box::new)));
         });
     }
 
@@ -505,6 +571,56 @@ impl Launcher {
         self.install(&release);
     }
 
+    /// The native mods turned on in the instance Play starts, unpacked and checked, with their
+    /// bundles: what the warning names and the build compiles.
+    fn native_mods_to_build(
+        &self,
+    ) -> Result<(std::path::PathBuf, Vec<native_mods::Bundle>), String> {
+        let folder = native_mods::installed_mods(&instances::selected().home)?;
+        let found = native_mods::bundles(&folder)?;
+        Ok((folder, found))
+    }
+
+    /// Builds the selected instance's native mods, once the player accepted the warning. The
+    /// build reuses the game files of the version the instance plays, else the newest installed.
+    fn build_native(&mut self) {
+        if self.native_step.is_some() {
+            return;
+        }
+        self.native_confirm = None;
+        self.native_error = None;
+        let instance = instances::selected();
+        let base = instance
+            .version
+            .clone()
+            .filter(|v| !native_mods::is_native(v))
+            .or_else(|| {
+                self.installed
+                    .iter()
+                    .find(|t| backend::is_game_tag(t) || t.starts_with("nightly-"))
+                    .cloned()
+            });
+        let Some(base) = base else {
+            self.native_error = Some(tr("Install Horizon first.").into());
+            return;
+        };
+        let folder = match self.native_mods_to_build() {
+            Ok((folder, _)) => folder,
+            Err(e) => {
+                self.native_error = Some(e);
+                return;
+            }
+        };
+        self.native_step = Some(tr("Starting the build").into());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = native_mods::build(&base, &folder, Some(&instance), |step| {
+                let _ = tx.send(Msg::NativeProgress(step.label()));
+            });
+            let _ = tx.send(Msg::Native(result));
+        });
+    }
+
     fn fetch_releases(&mut self) {
         self.releases = Load::Loading;
         let tx = self.tx.clone();
@@ -520,7 +636,7 @@ impl Launcher {
             let updates = backend::releases_and_updates(|releases| {
                 let _ = tx.send(Msg::Releases(releases));
             });
-            let _ = tx.send(Msg::Updates(updates));
+            let _ = tx.send(Msg::Updates(updates.map(Box::new)));
         });
     }
 
@@ -559,19 +675,40 @@ impl Launcher {
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::Session(session) => {
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
-                        match session {
-                            Ok(Some(file)) => {
-                                cmd.arg("--session-file").arg(file);
+                        let (file, offline) = match session {
+                            Ok(pass) => pass,
+                            Err(account::NoOwner) => {
+                                self.owner = Some(false);
+                                self.owner_screen_open = true;
+                                self.client_error = Some(format!("{}.", tr(account::NEEDS_OWNER)));
+                                self.starting_pack = None;
+                                self.joining = None;
+                                self.quick_play = None;
+                                continue;
                             }
-                            Ok(None) => {}
-                            // Still play, offline, and say why.
-                            Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
+                        };
+                        // Past the gate by the developer option alone is no owner.
+                        if !self.settings.dev_offline {
+                            self.owner = Some(true);
+                        }
+                        if let Some(file) = file {
+                            cmd.arg("--session-file").arg(file);
+                        }
+                        // Still play, offline, and say why.
+                        if let Some(e) = offline {
+                            self.client_error = Some(format!("Playing offline: {e}"));
                         }
                         self.accounts = Accounts::load();
+                        // An offline name the player picked (the quick switch).
+                        if let Some(name) = self.accounts.name_arg() {
+                            cmd.arg("--name").arg(name);
+                        }
+                        cmd.envs(self.accounts.look_env());
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
@@ -601,11 +738,20 @@ impl Launcher {
                             cmd.arg(flag).arg(value);
                         }
                         backend::append_game_args(&mut cmd);
+                        // Last, around every argument: the instance's pre-launch command,
+                        // wrapper and variables.
+                        let launch = run
+                            .as_ref()
+                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id))
+                            .map(|i| i.launch)
+                            .unwrap_or_default();
+                        let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => {
                                 self.client = Some(r);
                                 self.client_run = run.map(|id| (id, Instant::now()));
+                                self.step_aside(cx);
                             }
                             Err(e) => self.client_error = Some(e),
                         }
@@ -637,6 +783,11 @@ impl Launcher {
                                 self.settings.selected = Some(tag);
                             }
                             self.settings.save();
+                            // After the save: the selected version is never pruned.
+                            let tx = self.tx.clone();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(Msg::Pruned(backend::prune_old_versions()));
+                            });
                         }
                         Err(e) => self.install_error = Some((tag, e)),
                     }
@@ -652,9 +803,15 @@ impl Launcher {
                         self.install_error = Some((tag, e));
                     }
                 }
+                Msg::DiskUse(disk) => self.disk = disk,
+                Msg::Pruned(gone) => {
+                    if !gone.is_empty() {
+                        self.installed = backend::installed();
+                    }
+                }
                 Msg::Updates(Ok(updates)) => {
                     self.update_error = None;
-                    self.updates = updates;
+                    self.updates = *updates;
                     if self.settings.auto_install() {
                         self.install_update();
                     }
@@ -663,6 +820,15 @@ impl Launcher {
                     }
                 }
                 Msg::Updates(Err(e)) => self.update_error = Some(e),
+                Msg::NativeProgress(step) => self.native_step = Some(step),
+                Msg::Native(result) => {
+                    self.native_step = None;
+                    self.installed = backend::installed();
+                    self.reload_instances();
+                    if let Err(e) = result {
+                        self.native_error = Some(e);
+                    }
+                }
                 Msg::LauncherProgress(p) => {
                     if let SelfUpdate::Downloading(_, f) = &mut self.self_update {
                         *f = p;
@@ -706,6 +872,13 @@ impl Launcher {
                     match job {
                         Job::Prepare => {
                             self.preparing = false;
+                            // Play pressed before the version was prepared plays now.
+                            if let Some(tag) = self.play_when_prepared.take() {
+                                if error.is_none() && backend::is_prepared(&tag) {
+                                    self.starting_pack = None;
+                                    self.start_client(tag);
+                                }
+                            }
                             if let (None, Some(started)) = (&error, self.prepare_started.take()) {
                                 self.perf.record_since("launcher.prepare_ms", started);
                             }
@@ -723,6 +896,7 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            self.come_back(cx);
                             // The game saved: last played, sizes and pictures changed.
                             self.worlds.stale();
                             self.multiplayer.stale();
@@ -784,6 +958,14 @@ impl Launcher {
             if changed_state {
                 if let SignInState::Done(Ok(_)) = state {
                     self.accounts = Accounts::load();
+                    // Sign-in refuses accounts that don't own the game.
+                    self.owner = Some(true);
+                    self.owner_screen_open = false;
+                    self.client_error = None;
+                    if !self.settings.owner_notice_seen {
+                        self.settings.owner_notice_seen = true;
+                        self.settings.save();
+                    }
                 }
                 self.sign_in_state = Some(state);
                 changed = true;
@@ -877,10 +1059,13 @@ impl Launcher {
         });
     }
 
-    fn prepare(&mut self) {
+    /// Prepares the selected version, its Minecraft files from the player's install or, for an
+    /// owner who asks, from Mojang.
+    fn prepare(&mut self, from: backend::MinecraftFrom) {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
+        horizon_launcher::mojang::CANCEL.store(false, Ordering::Relaxed);
         let minecraft = self
             .settings
             .minecraft_dir
@@ -896,7 +1081,7 @@ impl Launcher {
             let log = |line| {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
-            let result = backend::preparer(&tag, &minecraft, &log)
+            let result = backend::preparer(&tag, &minecraft, from, &log)
                 .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
                 .and_then(|(p, _)| match p {
                     backend::Preparer::Process(cmd) => {
@@ -925,11 +1110,23 @@ impl Launcher {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        if self.client.is_some() || self.starting_client.is_some() {
+        if !self.can_start(&tag) {
             return;
         }
         self.starting_pack = None;
         self.start_client(tag);
+    }
+
+    /// Whether `tag` can start now ([`starts_now`]): prepared, no preparation under way, no game
+    /// running or starting.
+    pub(crate) fn can_start(&self, tag: &str) -> bool {
+        let running = self.client.is_some() || self.starting_client.is_some();
+        starts_now(backend::is_prepared(tag), self.preparing, running)
+    }
+
+    /// Whether the selected instance's version can start now.
+    pub(crate) fn can_start_selected(&self) -> bool {
+        self.selected().is_some_and(|tag| self.can_start(tag))
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -947,23 +1144,20 @@ impl Launcher {
         self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
+        let offline_without_owner = self.settings.dev_offline;
         std::thread::spawn(move || {
             backend::complete_assets(&tag);
-            let session = (|| {
-                let mut accounts = Accounts::load();
-                let Some((a, secrets)) = account::session_for_launch(
-                    &account::Endpoints::live(),
-                    account::store(),
-                    &mut accounts,
-                )?
-                else {
-                    return Ok(None);
-                };
-                account::write_session_file(&backend::game_home().join("sessions"), &a, &secrets)
-                    .map(Some)
-            })();
+            let session = account::session_for_game(&backend::game_home(), offline_without_owner);
             let _ = tx.send(Msg::Session(session));
         });
+    }
+
+    /// Starts the Microsoft sign-in; Settings and the owner gate's screen show its code.
+    fn start_sign_in(&mut self) {
+        if let Some(old) = self.sign_in.replace(SignIn::start()) {
+            old.cancel();
+        }
+        self.sign_in_state = Some(SignInState::Starting);
     }
 
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
@@ -1156,6 +1350,8 @@ fn button(
     t: &Theme,
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
+    let label: SharedString = label.into();
+    let label = SharedString::from(tr(&label).to_string());
     let t = *t;
     let hover = match kind {
         Kind::Primary => t.on_face.opacity(0.10),
@@ -1199,7 +1395,7 @@ fn button(
             .items_center()
             .gap(px(8.))
             .pb(px(if kind == Kind::Ghost { 0. } else { 2. }))
-            .child(label.into()),
+            .child(label),
     );
     keyboard(track_hover(base, id), &t).active(|s| s.opacity(theme::PRESSED).top(px(1.)))
 }
@@ -1267,7 +1463,7 @@ fn section_title(label: &'static str, icon: &'static str, t: &Theme) -> Div {
         .child(
             blocks::pixel(18., FontWeight::SEMIBOLD)
                 .text_color(t.ink)
-                .child(label),
+                .child(tr(label)),
         )
 }
 
@@ -1313,9 +1509,37 @@ fn segments<T: Copy + PartialEq + 'static>(
                 .when(!active, |d| {
                     d.text_color(t.muted).hover(move |s| s.text_color(t.ink))
                 })
-                .child(div().relative().child(label))
+                .child(div().relative().child(tr(label)))
                 .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx))
         }))
+}
+
+/// What the Play button does for the selected version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlayPress {
+    Play,
+    /// Not prepared, for an account that owns the game: prepare it (from the player's install,
+    /// else downloaded from Mojang for that account), then play, as the official launcher does.
+    PrepareThenPlay,
+    /// Not prepared and no owner (signing in comes first), or busy preparing or playing.
+    Nothing,
+}
+
+/// `owner`: whether an account here owns the game, by the keychain (`Launcher::owner`).
+fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
+    match (prepared, owner) {
+        _ if busy => PlayPress::Nothing,
+        (true, _) => PlayPress::Play,
+        (false, Some(true)) => PlayPress::PrepareThenPlay,
+        (false, _) => PlayPress::Nothing,
+    }
+}
+
+/// Whether a shortcut that starts the game at once (a server's Join, a world's Play, a friend's
+/// code, a pack's Play) starts it now: only when Play would play. Never while a preparation runs:
+/// the game would open on half-written files.
+fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
+    play_press(prepared, None, preparing || running) == PlayPress::Play
 }
 
 /// The selected version once one has been removed: the saved choice if it is still installed,
@@ -1339,19 +1563,28 @@ fn page_header(title: &str, description: &str, t: &Theme) -> Div {
         .child(
             blocks::pixel(36., FontWeight::SEMIBOLD)
                 .text_color(t.ink)
-                .child(title.to_string()),
+                .child(tr(title).to_string()),
         )
         .child(
             text(theme::UI)
                 .max_w(px(520.))
                 .text_color(t.muted)
-                .child(description.to_string()),
+                .child(tr(description).to_string()),
         )
 }
 
 /// One row of a list, as its own panel: a name in the pixel face with an optional detail under
 /// it, then a value or a control on the right. Rows were numbered in the quiet look; `_n` keeps
 /// the call sites as they are.
+/// How an available update is named: a Nightly by its title ("Nightly 2026-10-28 · 0c02067"), a
+/// release by its tag.
+fn update_name(release: &Release) -> &str {
+    match release.nightly {
+        Some(_) => &release.name,
+        None => &release.tag,
+    }
+}
+
 fn index_row(
     _n: usize,
     name: impl IntoElement,
@@ -1488,9 +1721,9 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the mark and the name over the sidebar (in the title bar on Windows), the
-    /// pages with their icons, then the account playing and the Settings button.
-    fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
+    /// The top bar: the mark and name over the sidebar (in the title bar on Windows and Linux
+    /// client-side decorations), the pages with their icons, then the account and Settings.
+    fn topbar(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let mut nav = div().flex().flex_none().h_full().gap(px(2.));
         for (page, label, icon) in Page::ALL {
@@ -1528,7 +1761,7 @@ impl Launcher {
                     blocks::pixel(16., FontWeight::MEDIUM)
                         .relative()
                         .text_color(if active { t.ink } else { t.muted })
-                        .child(label),
+                        .child(tr(label)),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.go(page);
@@ -1536,14 +1769,9 @@ impl Launcher {
                 }));
             nav = nav.child(keyboard(track_hover(item, id), &t));
         }
-        // Only a signed-in account says "Microsoft account"; otherwise the name the game made up.
-        let (name, how) = match self.accounts.selected() {
-            Some(a) => (a.name.clone(), "Microsoft account"),
-            None => (
-                self.offline_name.clone().unwrap_or_else(|| "Player".into()),
-                "Offline",
-            ),
-        };
+        // Only a signed-in account says "Microsoft account"; otherwise an offline name, or the
+        // one the game made up.
+        let (name, how) = self.who_plays();
         let account = keyboard(div().id("account"), &t)
             .relative()
             .flex()
@@ -1582,9 +1810,17 @@ impl Launcher {
                     .child(text(theme::CAPTION).text_color(t.muted).child(how)),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.go(Page::Settings);
+                this.account_menu = !this.account_menu;
+                if this.account_menu {
+                    // Who can play may have changed elsewhere since the window opened.
+                    this.accounts = Accounts::load();
+                }
                 cx.notify();
             }));
+        let account = div()
+            .relative()
+            .child(account)
+            .children(self.account_menu(cx));
         let settings_open = self.page == Page::Settings;
         let settings = keyboard(div().id("nav-Settings"), &t)
             .relative()
@@ -1627,8 +1863,8 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
-            // Where the title bar is drawn here (Windows), it carries the mark and the name.
-            .when(!titlebar::DRAWN, |bar| {
+            // Custom title bars carry the mark and name above the sidebar.
+            .when(!titlebar::draws_brand(window), |bar| {
                 bar.child(
                     div()
                         .flex()
@@ -1659,7 +1895,7 @@ impl Launcher {
 
     /// The sidebar: Horizon and the imported modpacks, the player's servers, then the
     /// launcher's own update, the community links and its version.
-    fn sidebar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         self.load_packs();
         let heading = |label: String| {
@@ -1708,12 +1944,14 @@ impl Launcher {
                 this.open_instance_dialog(None);
                 cx.notify();
             }));
+        let items = self.instance_items(heading, cx);
+        let mut rows = items.len();
         let list = div()
             .flex()
             .flex_col()
             .gap(px(4.))
-            .child(heading("INSTANCES".into()).child(add))
-            .children(self.instance_items(heading, cx));
+            .child(heading(tr("INSTANCES").into()).child(add))
+            .children(items);
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
@@ -1721,8 +1959,10 @@ impl Launcher {
             .unwrap_or_else(|| self.side_servers.clone());
         let mut list = list;
         if !servers.is_empty() {
-            list = list.child(heading("SERVERS".into()));
+            list = list.child(heading(tr("SERVERS").into()));
         }
+        rows += servers.len();
+        let headings = 1 + usize::from(!servers.is_empty());
         for e in servers {
             let up = self.servers.is_up(&e.dir);
             let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
@@ -1747,10 +1987,10 @@ impl Launcher {
                             .flex_col()
                             .min_w_0()
                             .child(title(e.name.clone()))
-                            .child(sub(if up { "Running" } else { "Stopped" }.into())),
+                            .child(sub(tr(if up { "Running" } else { "Stopped" }).into())),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.servers.open = Some(dir.clone());
+                        this.open_server(dir.clone());
                         this.go(Page::Servers);
                         cx.notify();
                     })),
@@ -1812,12 +2052,20 @@ impl Launcher {
             }
             _ => {}
         }
-        // Sculk's banner, small, above the links: seen without scrolling, on every page but Servers, which
-        // shows it large. After a while on screen a "Hide" beside its label puts it away for good.
+        // Sculk's card above the links: seen without scrolling, on every page but Servers, which shows
+        // its wide banner. Tall where the sidebar has the height for it besides its rows (about 60
+        // high each, under headings of about 40) and the links, compact otherwise. After a while on
+        // screen a "Hide" beside its label puts it away for good.
         if self.page != Page::Servers && !self.settings.partner_hidden {
-            let mut side = div().relative().mb(px(8.)).child(partner::banner(
+            let free = f32::from(window.viewport_size().height)
+                - theme::TOPBAR
+                - 40. * headings as f32
+                - 60. * rows as f32
+                - 110.;
+            let mut side = div().relative().mb(px(8.)).child(partner::card(
                 "partner-side",
                 theme::SIDEBAR - 20.,
+                free < partner::TALL_HEIGHT,
                 &t,
             ));
             if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
@@ -1831,7 +2079,7 @@ impl Launcher {
                         text(theme::MICRO)
                             .text_color(t.muted)
                             .hover(move |s| s.text_color(t.ink))
-                            .child("HIDE"),
+                            .child(tr("HIDE")),
                     )
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.settings.partner_hidden = true;
@@ -1841,6 +2089,14 @@ impl Launcher {
                 side = side.child(keyboard(hide, &t));
             }
             foot = foot.child(side);
+        }
+        if !self.links.sponsor.is_empty() {
+            foot = foot.child(link(
+                "sponsor",
+                tr("Sponsor"),
+                "heart",
+                self.links.sponsor.clone(),
+            ));
         }
         if !self.links.discord.is_empty() {
             foot = foot.child(link(
@@ -1853,16 +2109,21 @@ impl Launcher {
         if !self.links.website.is_empty() {
             foot = foot.child(link(
                 "website",
-                "Website",
+                tr("Website"),
                 "globe",
                 self.links.website.clone(),
             ));
         }
         foot = foot.child(
             caps(format!("Launcher {}", backend::VERSION))
+                .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .text_color(t.muted),
+                .text_color(t.muted)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.version_clicked();
+                    cx.notify();
+                })),
         );
         div()
             .id("sidebar")
@@ -2018,7 +2279,7 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
-                .child(centered("No version installed yet.", &t).child(
+                .child(centered(tr("No version installed yet."), &t).child(
                     button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.go(Page::Versions);
@@ -2034,10 +2295,12 @@ impl Launcher {
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
         let play_label = if running { "Running" } else { "Play" };
+        // The label clears the icon in every language ("Играть" is wider than "Play").
         let mut play = button("play", play_label, Kind::Primary, &t)
             .min_w(px(200.))
             .h(px(60.))
-            .px(px(28.))
+            .pl(px(60.))
+            .pr(px(28.))
             .text_size(px(28.))
             .font_weight(FontWeight::SEMIBOLD)
             .child(
@@ -2047,14 +2310,23 @@ impl Launcher {
                     .top(px(17.))
                     .child(blocks::icon("play", 22., t.on_face)),
             );
-        if !prepared || self.preparing || running {
-            play = disabled(play);
-        } else {
-            play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.picker_open = false;
-                this.play();
-                cx.notify();
-            }));
+        match play_press(prepared, self.owner, self.preparing || running) {
+            PlayPress::Nothing => play = disabled(play),
+            PlayPress::Play => {
+                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker_open = false;
+                    this.play();
+                    cx.notify();
+                }))
+            }
+            PlayPress::PrepareThenPlay => {
+                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker_open = false;
+                    this.play_when_prepared = this.selected().cloned();
+                    this.prepare(backend::MinecraftFrom::Install);
+                    cx.notify();
+                }))
+            }
         }
         let actions = div()
             .flex()
@@ -2077,10 +2349,28 @@ impl Launcher {
                     .child(play),
             );
 
-        let resources_value = if self.preparing {
-            "Preparing…".to_string()
-        } else {
-            backend::resources_summary(prepared, !silent, &version)
+        // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
+        // owner there is nothing to play, so signing in comes first.
+        let first = (!prepared && !self.preparing)
+            .then_some(self.owner_shown())
+            .flatten();
+        // No launcher folder with Minecraft on this computer: an owner needs none.
+        let no_install = self.settings.minecraft_dir.is_none();
+        let resources_value = match first {
+            _ if self.preparing => tr("Preparing…").to_string(),
+            Some(true) if no_install => trf(
+                "Not prepared. Play downloads Minecraft {version} from Mojang for your account and prepares it.",
+                &[("version", &version)],
+            ),
+            Some(true) => trf(
+                "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.",
+                &[("version", &version)],
+            ),
+            Some(false) => trf(
+                "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.",
+                &[("version", &version)],
+            ),
+            None => backend::resources_summary(prepared, !silent, &version),
         };
         let mut prepare = button(
             "prepare",
@@ -2096,14 +2386,65 @@ impl Launcher {
             prepare = disabled(prepare);
         } else {
             prepare = prepare.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.prepare();
+                this.prepare(backend::MinecraftFrom::Install);
                 cx.notify();
             }));
         }
+        let prepare = match first {
+            Some(true) if no_install => div().child(
+                button(
+                    "prepare-download",
+                    "Download and prepare",
+                    Kind::Secondary,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.prepare(backend::MinecraftFrom::Mojang);
+                    cx.notify();
+                })),
+            ),
+            Some(true) => div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    button("prepare-install", "From my install", Kind::Ghost, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.prepare(backend::MinecraftFrom::Install);
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    button(
+                        "prepare-download",
+                        "Download and prepare",
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.prepare(backend::MinecraftFrom::Mojang);
+                        cx.notify();
+                    })),
+                ),
+            Some(false) => div().child(
+                button("prepare-sign-in", "Sign in", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.sign_in_to_play();
+                        cx.notify();
+                    },
+                )),
+            ),
+            None => div().child(prepare),
+        };
+        let owner = self.owner == Some(true);
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child("Not found. Choose the folder where your launcher keeps Minecraft.")
+                    .child(if owner {
+                        tr("None needed: Horizon downloads Minecraft from Mojang for your account.")
+                    } else {
+                        tr("Not found. Choose the folder where your launcher keeps Minecraft.")
+                    })
                     .into_any_element()
             },
             |p| {
@@ -2119,16 +2460,17 @@ impl Launcher {
             .child(section_title("Ready to play", "check", &t).mb(px(12.)))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
+            .children(self.launch_panel(cx))
             .child(index_row(
                 2,
-                "Resources",
+                tr("Resources"),
                 Some(div().child(resources_value).into_any_element()),
                 Some(prepare.into_any_element()),
                 &t,
             ))
             .child(index_row(
                 3,
-                "Minecraft folder",
+                tr("Minecraft folder"),
                 Some(minecraft),
                 Some(
                     button("choose-mc", "Choose…", Kind::Ghost, &t)
@@ -2138,16 +2480,35 @@ impl Launcher {
                 &t,
             ));
         {
-            rows = rows.child(self.join_friend_row(prepared && !running, cx));
+            rows = rows.child(self.join_friend_row(self.can_start(&tag), cx));
             // The top bar shows who plays; a row only when there is something to do about it:
-            // offline, in a build that can sign in.
-            if self.accounts.selected().is_none() && account::client_id().is_some() {
+            // no account that owns the game (Play needs one), or offline.
+            if self.owner_shown() == Some(false) {
                 rows = rows.child(index_row(
                     5,
-                    "Playing offline",
+                    tr("Microsoft account"),
                     Some(
                         div()
-                            .child("Online servers need a Microsoft account.")
+                            .child(format!("{}.", tr(account::NEEDS_OWNER)))
+                            .into_any_element(),
+                    ),
+                    Some(
+                        button("gate-sign-in", "Sign in", Kind::Primary, &t)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.sign_in_to_play();
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    ),
+                    &t,
+                ));
+            } else if self.accounts.selected().is_none() && account::client_id().is_some() {
+                rows = rows.child(index_row(
+                    5,
+                    tr("Playing offline"),
+                    Some(
+                        div()
+                            .child(tr("Online servers need a Microsoft account."))
                             .into_any_element(),
                     ),
                     Some(
@@ -2178,6 +2539,21 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
+        let picture = self.home_background();
+        let scene = match picture {
+            Some(path) => gpui::img(path)
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .object_fit(gpui::ObjectFit::Cover),
+            None => gpui::img(scene)
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .w(px(scene_width))
+                .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
+        };
         let banner = div()
             .relative()
             .flex()
@@ -2192,14 +2568,7 @@ impl Launcher {
             .bg(gpui::rgb(art::sky_top(t.dark)))
             .border_b_2()
             .border_color(t.outline)
-            .child(
-                gpui::img(scene)
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(scene_width))
-                    .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
-            )
+            .child(scene)
             .child(veil(90., 0.82, 0., 0.62))
             .child(veil(180., 0., 0.75, 1.))
             .child(div().relative().child(hero))
@@ -2209,12 +2578,33 @@ impl Launcher {
         // looks after pressing Prepare, not below the fold (#666).
         if self.preparing {
             let last = self.prepare_log.back().cloned().unwrap_or_default();
+            // A download from Mojang shows how far it is, and can stop (it goes on from there
+            // next time).
+            let download = horizon_launcher::mojang::progress();
+            let cancel = download.map(|_| {
+                button("download-cancel", "Cancel", Kind::Ghost, &t).on_click(|_, _, _| {
+                    horizon_launcher::mojang::CANCEL.store(true, Ordering::Relaxed)
+                })
+            });
             page = page.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(10.))
-                    .child(progress_bar(None, &t))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(progress_bar(
+                                download.map(|(done, total)| {
+                                    let f = done as f32 / total as f32;
+                                    (f, f)
+                                }),
+                                &t,
+                            ))
+                            .children(cancel),
+                    )
                     .child(
                         text(theme::MICRO)
                             .text_color(t.muted)
@@ -2224,7 +2614,7 @@ impl Launcher {
                     .child(
                         text(theme::CAPTION)
                             .text_color(t.muted)
-                            .child("The first preparation takes a few minutes."),
+                            .child(tr("The first preparation takes a few minutes.")),
                     ),
             );
         }
@@ -2318,11 +2708,11 @@ impl Launcher {
                 },
             )),
         );
-        let help = if crash.report.is_some() {
+        let help = tr(if crash.report.is_some() {
             "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing."
         } else {
             "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing."
-        };
+        });
         let mut body = div()
             .flex_1()
             .min_w_0()
@@ -2332,7 +2722,7 @@ impl Launcher {
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
-                    .child("Horizon crashed"),
+                    .child(tr("Horizon crashed")),
             );
         if !crash.summary.is_empty() {
             body = body.child(div().text_color(t.ink_soft).child(crash.summary));
@@ -2408,7 +2798,7 @@ impl Launcher {
                             .child(caps(format!("Minecraft {version}")).text_color(t.ink_soft))
                             .child(div().size(px(4.)).bg(t.muted))
                             .child(
-                                caps(if prepared { "Ready" } else { "Needs preparing" })
+                                caps(tr(if prepared { "Ready" } else { "Needs preparing" }))
                                     .text_color(if prepared { t.success } else { t.warn }),
                             ),
                     )
@@ -2445,7 +2835,7 @@ impl Launcher {
                 .text_size(px(theme::CAPTION.px))
                 .text_color(t.muted)
                 .child(div().size(px(6.)).rounded_full().bg(t.accent))
-                .child(format!("{} available", release.tag));
+                .child(format!("{} available", update_name(release)));
             hero = hero.child(match installing {
                 Some((_, p)) => line
                     .child(
@@ -2524,6 +2914,13 @@ impl Launcher {
                 cx.notify();
             }),
         );
+        let prune = switch("auto-prune", self.settings.auto_prune(), &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.prune_old_versions = Some(!this.settings.auto_prune());
+                this.settings.save();
+                cx.notify();
+            },
+        ));
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -2546,10 +2943,10 @@ impl Launcher {
             }),
         );
         let horizon = match (&self.updates.horizon, &self.update_error) {
-            (Some(r), _) => format!("{} available", r.tag),
+            (Some(r), _) => trf("{version} available", &[("version", update_name(r))]),
             (None, Some(e)) => e.clone(),
-            (None, None) if self.checked.is_some() => "Up to date".to_string(),
-            _ => "Checking…".to_string(),
+            (None, None) if self.checked.is_some() => tr("Up to date").to_string(),
+            _ => tr("Checking…").to_string(),
         };
         let horizon_action = self
             .updates
@@ -2566,18 +2963,36 @@ impl Launcher {
             });
         let launcher = match &self.self_update {
             SelfUpdate::Downloading(v, p) => {
-                format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
+                let done = format!("{:.0}", p * 100.);
+                let said = trf(
+                    "downloading {version}, {percent}%",
+                    &[("version", v), ("percent", &done)],
+                );
+                format!("{}  ·  {said}", backend::VERSION)
             }
-            SelfUpdate::Ready(v) => format!("Updated to {v}. Restart the launcher to use it."),
-            SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
+            SelfUpdate::Ready(v) => trf(
+                "Updated to {version}. Restart the launcher to use it.",
+                &[("version", v)],
+            ),
+            SelfUpdate::Failed(e) => format!(
+                "{}  ·  {}",
+                backend::VERSION,
+                trf("the update failed: {error}", &[("error", e)])
+            ),
             SelfUpdate::Idle => match &self.updates.launcher {
                 Some(r) => format!(
-                    "{}  ·  {} available",
+                    "{}  ·  {}",
                     backend::VERSION,
-                    backend::launcher_version(&r.tag).unwrap_or_default()
+                    trf(
+                        "{version} available",
+                        &[(
+                            "version",
+                            backend::launcher_version(&r.tag).unwrap_or_default()
+                        )]
+                    )
                 ),
                 None if self.checked.is_some() && self.update_error.is_none() => {
-                    format!("{}  ·  up to date", backend::VERSION)
+                    format!("{}  ·  {}", backend::VERSION, tr("up to date"))
                 }
                 None => backend::VERSION.to_string(),
             },
@@ -2602,8 +3017,9 @@ impl Launcher {
             ),
         };
         let mono = |s: String| div().font_family(theme::MONO).child(s).into_any_element();
-        let plain = |s: &str| div().child(s.to_string()).into_any_element();
+        let plain = |s: &str| div().child(tr(s).to_string()).into_any_element();
         let (accounts, n) = self.account_rows(cx);
+        let (offline, n) = self.offline_rows(n, cx);
         let appearance = segments(
             "appearance",
             &[
@@ -2620,7 +3036,7 @@ impl Launcher {
                         this.settings.appearance = choice;
                         this.settings.save();
                         titlebar::apply_appearance(window, choice);
-                        this.theme = Theme::for_appearance(choice, window.appearance());
+                        this.theme = this.settings_theme(window);
                         cx.notify();
                     });
                 }
@@ -2644,27 +3060,46 @@ impl Launcher {
                     .flex_col()
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
+                    .child(offline)
                     .child(group("Updates", "reload"))
                     .child(index_row(
                         n + 1,
-                        "Install new versions automatically",
+                        tr("Install new versions automatically"),
                         Some(plain(
                             "Your selected version only changes if you were playing the newest one.",
                         )),
                         Some(toggle.into_any_element()),
                         &t,
                     ))
+                    .child(index_row(
+                        n + 2,
+                        tr("Delete old versions automatically"),
+                        Some(
+                            div()
+                                .child(trf(
+                                    "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.",
+                                    &[("count", &self.settings.keep_newest().to_string())],
+                                ))
+                                .into_any_element(),
+                        ),
+                        Some(prune.into_any_element()),
+                        &t,
+                    ))
                     .child(group("Launcher", "monitor"))
                     .child(index_row(
                         n + 3,
-                        "Appearance",
+                        tr("Appearance"),
                         Some(plain("Dark by default. System follows your computer's light or dark.")),
                         Some(appearance.into_any_element()),
                         &t,
                     ))
+                    .child(self.accent_row(cx))
+                    .child(self.home_background_row(cx))
+                    .child(self.language_row(cx))
+                    .child(self.while_playing_row(n + 3, cx))
                     .child(index_row(
                         n + 3,
-                        "Show the opening",
+                        tr("Show the opening"),
                         Some(plain("The wordmark, while the release list loads.")),
                         Some(opening.into_any_element()),
                         &t,
@@ -2673,30 +3108,32 @@ impl Launcher {
                     .child(self.proxy_row(n + 4, cx))
                     .child(group("Game", "gamepad"))
                     .child(self.game_args_row(n + 5, cx))
+                    .child(self.native_mods_row(n + 5, cx))
                     .child(group("AI", "terminal"))
                     .child(self.no_ai_row(n + 6, cx))
                     .child(group("About", "info-box"))
                     .child(index_row(n + 7, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
                         n + 8,
-                        "Launcher",
+                        tr("Launcher"),
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
                         n + 9,
-                        "Data folder",
+                        tr("Data folder"),
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
                         n + 10,
-                        "Logs",
+                        tr("Logs"),
                         Some(mono(format!(
-                            "{}  ·  crash reports beside it",
-                            short(&backend::logs_dir())
+                            "{}  ·  {}",
+                            short(&backend::logs_dir()),
+                            tr("crash reports beside it")
                         ))),
                         Some(
                             button("open-logs", "Open", Kind::Secondary, &t)
@@ -2712,7 +3149,7 @@ impl Launcher {
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
                             n + 11,
-                            "Applications menu",
+                            tr("Applications menu"),
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
                             } else {
@@ -2725,10 +3162,114 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .children(self.agents_section(cx))
+            .children(self.dev_options_section(cx))
     }
 
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in
     /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
+    /// Settings' Native mods row (docs/native-mods.md): off by default. On, Build compiles the
+    /// native mods installed in the instance Play starts, after a warning that names them, and
+    /// that instance then plays the build.
+    fn native_mods_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let on = self.settings.native_mods;
+        let toggle =
+            switch("native-mods", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.settings.native_mods = !this.settings.native_mods;
+                this.native_confirm = None;
+                this.settings.save();
+                cx.notify();
+            }));
+        let mut detail = div().flex().flex_col().gap(px(4.)).child(
+            tr("Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.").to_string(),
+        );
+        if on {
+            let status = match (&self.native_step, &self.native_error) {
+                (Some(step), _) => Some(div().child(step.clone())),
+                (None, Some(e)) => Some(div().text_color(t.danger).child(e.clone())),
+                (None, None) => instances::selected()
+                    .version
+                    .filter(|v| native_mods::is_native(v))
+                    .map(|v| {
+                        div().child(trf("{version} plays in this instance.", &[("version", &v)]))
+                    }),
+            };
+            detail = detail.children(status);
+            if self.native_step.is_none() && self.native_confirm.is_none() {
+                detail = detail.child(div().flex().gap(px(8.)).mt(px(4.)).child(
+                    button("native-build", "Build", Kind::Primary, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
+                            cx.notify();
+                        },
+                    )),
+                ));
+            }
+            if let Some(mods) = &self.native_confirm {
+                detail = detail.child(self.native_warning(mods, cx));
+            }
+        }
+        index_row(
+            n,
+            tr("Native mods (experimental)"),
+            Some(detail.into_any_element()),
+            Some(toggle.into_any_element()),
+            &t,
+        )
+    }
+
+    /// The warning before a native build: what the mods can do and which mods. The build starts
+    /// only from its button.
+    fn native_warning(
+        &self,
+        mods: &Result<Vec<native_mods::Bundle>, String>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        let list = match mods {
+            Ok(found) => found
+                .iter()
+                .map(|b| format!("{} {}", b.id, b.version))
+                .collect::<Vec<_>>()
+                .join(", "),
+            Err(e) => e.clone(),
+        };
+        let panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .mt(px(8.))
+            .p(px(12.))
+            .bg(t.well)
+            .child(div().text_color(t.danger).child(tr("These mods will run with full access to your computer").to_string()))
+            .child(tr("They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.").to_string())
+            .child(trf("Mods: {mods}", &[("mods", &list)]))
+            .child(tr("The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.").to_string());
+        let mut buttons = div().flex().gap(px(8.)).mt(px(4.));
+        if mods.is_ok() {
+            buttons = buttons.child(
+                button(
+                    "native-trust",
+                    "I trust these mods: build",
+                    Kind::Primary,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.build_native();
+                    cx.notify();
+                })),
+            );
+        }
+        panel.child(buttons.child(
+            button("native-cancel", "Cancel", Kind::Secondary, &t).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    this.native_confirm = None;
+                    cx.notify();
+                },
+            )),
+        ))
+    }
+
     fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let focused = self.args_focused;
@@ -2747,46 +3288,32 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.args_input.is_empty() && !focused {
-                div()
-                    .text_color(t.muted)
-                    .child("For example --server-thread")
-            } else {
-                // The end of a long line stays in view while typing.
-                let chars: Vec<char> = self.args_input.chars().collect();
-                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.args_input,
+                &t,
+                focused,
+                false,
+                false,
+                "For example --server-thread",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.args_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "backspace" => {
-                        this.args_input.pop();
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.args_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited => {
+                        this.settings.game_args = this.args_input.text().to_string();
+                        this.settings.save();
                     }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.args_input.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.args_input.push_str(ch);
-                        }
-                    }
-                    _ => return,
+                    _ => {}
                 }
-                this.args_input.truncate(1024);
-                this.settings.game_args = this.args_input.clone();
-                this.settings.save();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.args_input);
         index_row(
             n,
             "Game arguments",
@@ -2902,8 +3429,11 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = None;
-                            let _ = this.accounts.save();
+                            let mut accounts = Accounts::load();
+                            accounts.selected = None;
+                            if accounts.save().is_ok() {
+                                this.accounts = accounts;
+                            }
                             cx.notify();
                         }),
                     ),
@@ -2913,8 +3443,7 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = Some(uuid.clone());
-                            let _ = this.accounts.save();
+                            this.play_as(account::Player::Microsoft(uuid.clone()));
                             cx.notify();
                         }),
                     ),
@@ -2923,11 +3452,15 @@ impl Launcher {
             actions = actions.child(
                 button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
-                        let store = account::store();
-                        if let Err(e) = this.accounts.remove(store, &uuid) {
-                            this.sign_in_state = Some(SignInState::Done(Err(e)));
+                        let mut accounts = Accounts::load();
+                        match accounts
+                            .remove(account::store(), &uuid)
+                            .and_then(|()| accounts.save())
+                        {
+                            Ok(()) => this.accounts = accounts,
+                            Err(e) => this.sign_in_state = Some(SignInState::Done(Err(e))),
                         }
-                        let _ = this.accounts.save();
+                        this.owner = Some(this.accounts.has_owner(account::store()));
                         cx.notify();
                     },
                 )),
@@ -2938,11 +3471,11 @@ impl Launcher {
                 a.name.clone(),
                 Some(
                     div()
-                        .child(if plays {
+                        .child(tr(if plays {
                             "Microsoft account · plays"
                         } else {
                             "Microsoft account · signed in"
-                        })
+                        }))
                         .into_any_element(),
                 ),
                 Some(actions.into_any_element()),
@@ -2955,15 +3488,15 @@ impl Launcher {
             Some(SignInState::Starting | SignInState::Code(_))
         );
         let detail = match &self.sign_in_state {
-            _ if !configured => div().child(account::NOT_CONFIGURED),
-            Some(SignInState::Starting) => div().child("Asking Microsoft…"),
+            _ if !configured => div().child(tr(account::NOT_CONFIGURED)),
+            Some(SignInState::Starting) => div().child(tr("Asking Microsoft…")),
             Some(SignInState::Code(code)) => div()
                 .flex()
                 .flex_col()
                 .gap(px(6.))
-                .child(format!(
-                    "Open {} in your browser and enter this code:",
-                    code.verification_uri
+                .child(trf(
+                    "Open {link} in your browser and enter this code:",
+                    &[("link", &code.verification_uri)],
                 ))
                 .child(
                     text(theme::HEADING)
@@ -2973,10 +3506,10 @@ impl Launcher {
                 ),
             Some(SignInState::Done(Ok(a))) => div().child(format!("Signed in as {}.", a.name)),
             Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
-            None if self.accounts.accounts.is_empty() => div().child(
-                "Sign in to play on online servers with your name and skin. Without an account the game plays offline.",
-            ),
-            None => div().child("Add another account."),
+            None if self.accounts.accounts.is_empty() => div().child(tr(
+                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
+            )),
+            None => div().child(tr("Add another account.")),
         };
         let detail = if self.keychain || self.accounts.accounts.is_empty() {
             detail
@@ -2989,8 +3522,7 @@ impl Launcher {
                 .child(div().child(account::NO_KEYCHAIN))
         };
         let action = if !configured {
-            // No client ID in this build: the button says what's coming and does nothing.
-            Some(button("sign-in", "Coming soon", Kind::Ghost, &t).into_any_element())
+            None
         } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
             let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
             Some(
@@ -3030,24 +3562,21 @@ impl Launcher {
             Some(
                 button("sign-in", "Sign in with Microsoft", Kind::Secondary, &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.sign_in = Some(SignIn::start());
-                        this.sign_in_state = Some(SignInState::Starting);
+                        this.start_sign_in();
                         cx.notify();
                     }))
                     .into_any_element(),
             )
         };
         n += 1;
-        let title = if !configured {
-            "Microsoft account (coming soon)"
-        } else if self.accounts.accounts.is_empty() {
+        let title = if self.accounts.accounts.is_empty() {
             "Microsoft account"
         } else {
             "Another account"
         };
         rows = rows.child(index_row(
             n,
-            title,
+            tr(title),
             Some(detail.into_any_element()),
             action,
             &t,
@@ -3076,7 +3605,7 @@ impl Launcher {
             .text_size(px(12.))
             .cursor_text()
             .child(if self.friend_code.is_empty() && !focused {
-                div().text_color(t.muted).child("Paste an invite code")
+                div().text_color(t.muted).child(tr("Paste an invite code"))
             } else {
                 // The end of a long code stays in view while typing.
                 let shown: String = {
@@ -3126,10 +3655,10 @@ impl Launcher {
         }
         index_row(
             4,
-            "Join a friend",
+            tr("Join a friend"),
             Some(
                 div()
-                    .child("Paste the code a friend shows when they invite you.")
+                    .child(tr("Paste the code a friend shows when they invite you."))
                     .into_any_element(),
             ),
             Some(
@@ -3173,7 +3702,36 @@ impl Launcher {
             "Builds from GitHub. Each one installs into its own folder.",
             &t,
         );
-        let page = div().flex().flex_col().gap(px(32.)).child(header);
+        // Measured again when the installed versions change.
+        if self.disk_for != self.installed {
+            self.disk_for = self.installed.clone();
+            let (tags, tx) = (self.installed.clone(), self.tx.clone());
+            std::thread::spawn(move || {
+                let disk = tags.into_iter().map(|t| {
+                    let n = backend::disk_use(&t);
+                    (t, n)
+                });
+                let _ = tx.send(Msg::DiskUse(disk.collect()));
+            });
+        }
+        let on_disk = |tag: &String| {
+            let found = self.disk.iter().find(|(t, _)| t == tag);
+            found
+                .filter(|_| self.installed.contains(tag))
+                .map(|(_, n)| *n)
+        };
+        let used: u64 = self.installed.iter().filter_map(on_disk).sum();
+        let page = div()
+            .flex()
+            .flex_col()
+            .gap(px(32.))
+            .child(header)
+            .children((used > 0).then(|| {
+                text(theme::UI).text_color(t.muted).child(trf(
+                    "Installed versions use {size}.",
+                    &[("size", &megabytes(used))],
+                ))
+            }));
         let releases = match &self.releases {
             Load::Loading => return page.child(centered("Loading releases…", &t)),
             Load::Failed(e) => {
@@ -3210,6 +3768,9 @@ impl Launcher {
                 let mut meta = vec![release.date.clone()];
                 if let Some((_, size)) = release.asset {
                     meta.push(megabytes(size));
+                }
+                if let Some(n) = on_disk(&tag) {
+                    meta.push(trf("{size} on disk", &[("size", &megabytes(n))]));
                 }
                 let summary = release
                     .name
@@ -3577,8 +4138,8 @@ impl Render for Launcher {
             window.focus(&self.root_focus);
         }
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
-        let topbar = self.topbar(cx);
-        let sidebar = self.sidebar(cx);
+        let topbar = self.topbar(window, cx);
+        let sidebar = self.sidebar(window, cx);
         let mut root = div()
             .id("root")
             .track_focus(&self.root_focus)
@@ -3671,6 +4232,9 @@ impl Render for Launcher {
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));
         }
+        if self.asking_owner() {
+            root = root.child(self.owner_screen(cx));
+        }
         if let Some(opening) = &self.opening {
             // The wordmark arrives letter by letter, then gives way to the launcher; a click or
             // a key skips ahead.
@@ -3732,6 +4296,7 @@ impl Render for Launcher {
             .bg(t.side)
             .children(titlebar::render(&t, window))
             .child(root.flex_1().min_h_0())
+            .children(titlebar::resize_handles(window))
     }
 }
 
@@ -3861,6 +4426,8 @@ fn main() {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(600.))),
                     titlebar: Some(titlebar::options()),
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     app_id: Some("horizon-launcher".into()),
                     ..Default::default()
                 },
@@ -3899,6 +4466,39 @@ mod tests {
             super::selection_after_removal(&[], Some("v0.2.47".into())),
             None
         );
+    }
+
+    /// An owner's Play works on a version not prepared yet: it prepares it (downloading
+    /// Minecraft from Mojang when this computer has no install), then plays. Without an owner
+    /// it stays off: signing in comes first.
+    #[test]
+    fn play_prepares_first_for_an_owner() {
+        use super::{play_press, PlayPress};
+        assert_eq!(play_press(true, Some(true), false), PlayPress::Play);
+        assert_eq!(play_press(true, None, false), PlayPress::Play);
+        assert_eq!(
+            play_press(false, Some(true), false),
+            PlayPress::PrepareThenPlay
+        );
+        assert_eq!(play_press(false, Some(false), false), PlayPress::Nothing);
+        assert_eq!(play_press(false, None, false), PlayPress::Nothing);
+        assert_eq!(play_press(false, Some(true), true), PlayPress::Nothing);
+        assert_eq!(play_press(true, Some(true), true), PlayPress::Nothing);
+    }
+
+    /// A server's Join (and every other shortcut) waits like Play: not while the version's
+    /// first download and preparation run (#horizon-bugs, 0.2.23: a white window opened).
+    #[test]
+    fn shortcuts_start_only_when_play_would() {
+        use super::starts_now;
+        assert!(starts_now(true, false, false));
+        assert!(
+            !starts_now(false, true, false),
+            "first-time setup under way"
+        );
+        assert!(!starts_now(true, true, false), "prepared again under way");
+        assert!(!starts_now(false, false, false), "not prepared");
+        assert!(!starts_now(true, false, true), "already running");
     }
 
     #[test]

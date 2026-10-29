@@ -2,11 +2,12 @@
 //! `ItemFrame.survives`, `interact` (put an item in, then rotate it),
 //! `hurtServer` (take the item out, then break the frame) and
 //! `ItemFrameRenderer` (the frame model and the item at a 45 degree step).
-use super::{Game, Hit, view_vector};
+use super::{Game, Hit};
 use horizon_assets::{bake::bake_model, model::CuboidModel, resolve::ModelLibrary};
 use horizon_client::{entities::ItemFrame, items::ItemStack, mesher::Vertex};
 use horizon_core::{
     geometry::{Aabb, Vec3},
+    position::BlockPos,
     random::RandomSource,
 };
 use std::sync::Arc;
@@ -159,8 +160,7 @@ impl Game<'_> {
     }
     /// The frame under the crosshair within reach and its distance.
     pub(super) fn frame_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, f) in self.item_frames.iter().enumerate() {
@@ -188,7 +188,7 @@ impl Game<'_> {
     /// Nearer than the targeted block?
     pub(super) fn before_block(&self, distance: f64) -> bool {
         self.pick().is_none_or(|h| {
-            let eye = self.eye_position().unwrap_or_default();
+            let eye = self.aim().map(|(eye, _)| eye).unwrap_or_default();
             (0..3)
                 .map(|a| (h.point[a] - eye[a]).powi(2))
                 .sum::<f64>()
@@ -223,6 +223,7 @@ impl Game<'_> {
         }
         let p = self.item_frames[i].pos;
         self.world.modified.insert((p[0] >> 4, p[2] >> 4));
+        self.frame_output_changed(p);
         self.swing_arm();
         true
     }
@@ -255,7 +256,16 @@ impl Game<'_> {
         }
         self.drop_frame_items(&f, with_frame, true);
         self.world.modified.insert((f.pos[0] >> 4, f.pos[2] >> 4));
+        if f.item.is_some() {
+            self.frame_output_changed(f.pos);
+        }
         true
+    }
+    /// `ItemFrame.setItem` / `setRotation`: `updateNeighbourForOutputSignal`, so
+    /// the comparators reading the frame take its new signal.
+    fn frame_output_changed(&mut self, pos: [i32; 3]) {
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
     }
     /// `ItemFrame.dropItem`: the frame (when breaking) and the held item.
     fn drop_frame_items(&mut self, f: &ItemFrame, with_frame: bool, by_player: bool) {
@@ -300,6 +310,9 @@ impl Game<'_> {
                     self.audio
                         .play(&sound(&f, "break"), Some(center(&f)), 1.0, 1.0);
                     self.drop_frame_items(&f, true, false);
+                    if f.item.is_some() {
+                        self.frame_output_changed(f.pos);
+                    }
                     continue;
                 }
             }
@@ -311,8 +324,9 @@ impl Game<'_> {
         let sprites = &self.gui.atlas.sprites;
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
-        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at 100%.
-        let range = 16.0 * 64.0 * f64::from(self.settings.entity_distance);
+        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at a view scale
+        // of 1.
+        let range = 16.0 * 64.0 * self.view_scale();
         for f in &self.item_frames {
             let entity_start = out.len();
             let map = f.item.as_ref().and_then(super::maps::map_id);
@@ -377,6 +391,8 @@ impl Game<'_> {
                             layer: 0,
                             color: 0xFFFF_FFFF,
                             light,
+
+                            glint_uv: [0.0, 0.0],
                         });
                     }
                 };
@@ -412,7 +428,9 @@ impl Game<'_> {
             if let Some(id) = map {
                 // ItemFrameRenderer: the map fills the face, in 90-degree steps.
                 let depth = if f.invisible { 0.5 } else { 0.4375 };
-                let item_light = if f.glow { 240 | 240 << 8 } else { packed };
+                // A glow frame's map is 15728850 = 0xF000D2 (sky coordinate 240,
+                // block coordinate 210), not full bright.
+                let item_light = if f.glow { 240 | 210 << 8 } else { packed };
                 let m = pose
                     * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
                     * glam::DMat4::from_rotation_z(
@@ -456,7 +474,7 @@ impl Game<'_> {
         }
         for (id, m, light) in maps {
             let entity_start = out.len();
-            self.map_vertices(id, m, light, out);
+            self.map_vertices(id, true, m, light, out);
             self.cull_entity_vertices(out, entity_start);
         }
     }

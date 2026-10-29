@@ -7,6 +7,7 @@ use super::Game;
 use horizon_client::{
     block_entity_anim::{
         BellEntity, ConduitServer, ConduitTarget, EndGateway, Shulker, ShulkerStatus, Ticker,
+        closer_to_center_than,
     },
     block_entity_render::BlockAnim,
     collisions::{SceneCollisions, no_collision_empty},
@@ -49,11 +50,16 @@ impl Game<'_> {
             }
             Some(Ticker::Bell) => {
                 let gathered = self.bell_gather(pos);
-                self.be_anims
-                    .bells
-                    .entry(pos)
-                    .or_default()
-                    .trigger_event(a, b, time, || gathered);
+                let rung =
+                    self.be_anims
+                        .bells
+                        .entry(pos)
+                        .or_default()
+                        .trigger_event(a, b, time, || gathered);
+                // The server's copy tells the living entities within 32 blocks.
+                if rung && self.remote.is_none() {
+                    self.bell_heard(pos, time);
+                }
             }
             Some(Ticker::Gateway) => {
                 let initial = self.gateway_loaded(pos);
@@ -76,23 +82,24 @@ impl Game<'_> {
     /// A player opened (`open`) or closed the container at `key`: the opener
     /// count block event (`ContainerOpenersCounter` / `ShulkerBoxBlockEntity`
     /// `startOpen`/`stopOpen`) for chests, ender chests and shulker boxes,
-    /// on both halves of a double chest (`CompoundContainer`).
-    pub(super) fn container_opener_event(&mut self, key: (i32, i32, i32), open: bool) {
+    /// on both halves of a double chest (`CompoundContainer`). True when the
+    /// count went from 0 to 1 or back to 0: the only moments the container
+    /// plays its open or close sound.
+    pub(super) fn container_opener_event(&mut self, key: (i32, i32, i32), open: bool) -> bool {
         // Spectators never count as openers.
-        if !self.spectator() {
-            self.container_openers_changed(key, open);
-        }
+        !self.spectator() && self.container_openers_changed(key, open)
     }
     /// `container_opener_event` for a player who is not a spectator (a guest).
-    pub(super) fn container_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
+    pub(super) fn container_openers_changed(&mut self, key: (i32, i32, i32), open: bool) -> bool {
         let pos = [key.0, key.1, key.2];
         let state = self.world.block(pos[0], pos[1], pos[2]).0;
         match self.be_anims.ticker(state) {
             Some(Ticker::Lid) => {
-                self.lid_openers_changed(key, open);
+                let edge = self.lid_openers_changed(key, open);
                 if let Some(other) = self.chest_other_half(key) {
                     self.lid_openers_changed(other, open);
                 }
+                edge
             }
             _ if self
                 .res
@@ -102,26 +109,27 @@ impl Game<'_> {
                 .as_ref()
                 == "minecraft:barrel" =>
             {
-                self.barrel_openers_changed(key, open);
+                self.barrel_openers_changed(key, open)
             }
             Some(Ticker::Shulker { .. }) => {
                 let shulker = self.be_anims.shulkers.entry(pos).or_default();
-                let (count, _) = if open {
+                let (count, edge) = if open {
                     shulker.start_open()
                 } else {
                     shulker.stop_open()
                 };
                 self.block_entity_event(pos, 1, count);
                 self.lan_block_event(pos, 1, count);
+                edge
             }
-            _ => {}
+            _ => false,
         }
     }
     /// `ContainerOpenersCounter.incrementOpeners` / `decrementOpeners` of the
     /// chest at `key` (the host and the guests are counted), then
     /// `ChestBlockEntity.signalOpenCount`: block event 1 with the count, here
-    /// and for the guests.
-    fn lid_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
+    /// and for the guests. True when the count crossed zero.
+    fn lid_openers_changed(&mut self, key: (i32, i32, i32), open: bool) -> bool {
         let (before, count) = self.count_opener(key, open);
         let pos = [key.0, key.1, key.2];
         self.block_entity_event(pos, 1, count);
@@ -139,12 +147,15 @@ impl Game<'_> {
                 b.update_neighbors_at(level, ticks, p.offset(0, -1, 0), block);
             });
         }
+        (before == 0) != (count == 0)
     }
     /// `BarrelBlockEntity.openersCounter`: the first opener opens the barrel
     /// (`open=true`), the last one to leave closes it (`updateBlockState`).
-    fn barrel_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
+    /// True when the count crossed zero.
+    fn barrel_openers_changed(&mut self, key: (i32, i32, i32), open: bool) -> bool {
         let (before, count) = self.count_opener(key, open);
-        if (before == 0) != (count == 0) {
+        let edge = (before == 0) != (count == 0);
+        if edge {
             self.set_bool_prop(
                 key,
                 "open",
@@ -152,6 +163,7 @@ impl Game<'_> {
                 horizon_world::level::flags::UPDATE_ALL,
             );
         }
+        edge
     }
     /// One opener more (`open`) or less at `key`: the count before and after
     /// (`ContainerOpenersCounter.incrementOpeners` / `decrementOpeners`).
@@ -193,6 +205,26 @@ impl Game<'_> {
             }
         }
         out
+    }
+    /// `BellBlockEntity.updateEntities`: every gathered entity alive within 32
+    /// blocks of the bell's centre gets `HEARD_BELL_TIME` (only villagers
+    /// have a brain that reads it).
+    fn bell_heard(&mut self, pos: [i32; 3], now: i64) {
+        let nearby = self
+            .be_anims
+            .bells
+            .get(&pos)
+            .and_then(|b| b.nearby.clone())
+            .unwrap_or_default();
+        for m in &mut self.mobs {
+            if m.alive()
+                && !m.removed
+                && nearby.contains(&u64::from(m.id))
+                && closer_to_center_than(pos, [m.position.x, m.position.y, m.position.z], 32.0)
+            {
+                horizon_client::mobs::villager_brain::heard_bell(m, now);
+            }
+        }
     }
     /// `ShulkerBoxBlock.canOpen`: a closed box opens only when its lid has
     /// room to rise (`level.noCollision` of the half-open lid box).
@@ -547,7 +579,7 @@ impl Game<'_> {
         });
     }
     /// `Entity.isInRain`: rain at the block position or at the top of the box.
-    fn in_rain(&mut self, at: Vec3, top: f64) -> bool {
+    pub(super) fn in_rain(&mut self, at: Vec3, top: f64) -> bool {
         let p = BlockPos::new(
             at.x.floor() as i32,
             at.y.floor() as i32,
@@ -725,21 +757,38 @@ impl Game<'_> {
     /// the player head at `pos`. The skin download is started here; while it
     /// is in flight (or when it cannot be got) the profile's default skin
     /// stands in. A head with no profile answers None: `SKIN_BY_TYPE`.
-    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<&str> {
+    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<String> {
         let Some(BlockEntity::Skull(skull)) =
             self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
         else {
             return None;
         };
         let skin = skull.skin.as_ref()?;
-        if let Some((url, location)) = &skin.download {
-            self.skin_downloads
-                .borrow_mut()
-                .state(skins::Kind::Skin, url);
-            if self.gui.atlas.sprites.contains_key(location) {
+        // The texture a packed or resolved `textures` property fetches: the
+        // download of a static profile, or the one the services answer for a
+        // `Dynamic` (name- or id-only) profile.
+        let download = skin.download.clone().or_else(|| {
+            let key = skin.dynamic.as_ref()?;
+            let skins::Resolve::Done(Some(profile)) = self.skin_profiles.borrow_mut().state(key)
+            else {
+                return None;
+            };
+            let (value, signature) = profile.textures()?;
+            let url = skins::unpack(&value, signature, &skins::TEXTURE_URIS).skin?;
+            let location = skins::skin_location(&skins::texture_hash(&url)?);
+            Some((url, location))
+        });
+        if let Some((url, location)) = download {
+            let mut downloads = self.skin_downloads.borrow_mut();
+            if self.gui.atlas.sprites.contains_key(&location) {
+                let _ = downloads.state(skins::Kind::Skin, &url);
                 return Some(location);
             }
+            // Its slot was evicted: offer the image again.
+            if downloads.state(skins::Kind::Skin, &url) == skins::Download::Ready {
+                downloads.again(&location);
+            }
         }
-        Some(skin.fallback)
+        Some(skin.fallback.to_owned())
     }
 }

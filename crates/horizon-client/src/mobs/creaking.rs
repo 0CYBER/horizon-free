@@ -118,6 +118,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage) -> bool {
         source.kind,
         DamageKind::PlayerAttack
             | DamageKind::MaceSmash
+            | DamageKind::Spear
             | DamageKind::MobAttack
             | DamageKind::Arrow
             | DamageKind::Thrown
@@ -152,8 +153,26 @@ pub fn sway(m: &mut Mob, events: &mut Vec<MobEvent>) {
 }
 /// `Creaking.doHurtTarget`: the attack animation (the sound is the
 /// `playAttackSound` that ends `Mob.doHurtTarget`).
-pub fn on_attack(m: &mut Mob, _events: &mut Vec<MobEvent>) {
+pub fn on_attack(m: &mut Mob, events: &mut Vec<MobEvent>) {
     m.extra.ints[ATTACKING] = ATTACK_TICKS;
+    broadcast(m, 4, events);
+}
+/// `Level.broadcastEntityEvent` for a creaking (guests run `entity_event`).
+fn broadcast(m: &Mob, event: i8, events: &mut Vec<MobEvent>) {
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
+}
+/// `Creaking.handleEntityEvent` on a client: 66 the invulnerability flash,
+/// 4 the attack swing (the sounds are the server's).
+pub fn entity_event(m: &mut Mob, event: u8) {
+    match event {
+        66 => m.extra.ints[INVULNERABLE] = INVULNERABILITY_TICKS,
+        4 => m.extra.ints[ATTACKING] = ATTACK_TICKS,
+        _ => {}
+    }
 }
 /// The heart this creaking is bound to protects it (`isProtector`); a link
 /// read from a save is trusted until the heart resolves it.
@@ -176,15 +195,12 @@ pub fn update(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if heart_bound(m) && m.alive() && !protected(m, w) {
         m.health = 0.0;
     }
-    for slot in [INVULNERABLE, ATTACKING] {
-        if m.extra.ints[slot] > 0 {
-            m.extra.ints[slot] -= 1;
-        }
+    // hurtServer set the invulnerability clock since the last tick: entity
+    // event 66.
+    if m.extra.ints[INVULNERABLE] == INVULNERABILITY_TICKS {
+        broadcast(m, 66, events);
     }
-    let age = m.age as f32;
-    m.anim.states[0].animate_when(m.extra.ints[ATTACKING] > 0, age);
-    m.anim.states[1].animate_when(m.extra.ints[INVULNERABLE] > 0, age);
-    m.anim.states[2].animate_when(tearing_down(m), age);
+    animate(m);
     if m.extra.counter & HURT != 0 {
         // hurtServer: sway, and the heart reacts to a player's hit.
         if protected(m, w) {
@@ -200,18 +216,6 @@ pub fn update(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         m.extra.counter &= !(HURT | HURT_BY_PLAYER);
     }
-    // checkEyeBlink: the eyes of a creaking falling apart flicker.
-    if m.death_time > m.extra.ints[NEXT_FLICKER] {
-        let glowing = m.extra.ints[EYES] != 0;
-        let (lo, hi) = if glowing {
-            (2, 8)
-        } else {
-            (m.death_time / 4, m.death_time / 2)
-        };
-        let span = (hi - lo + 1).max(1);
-        m.extra.ints[NEXT_FLICKER] = m.death_time + lo + m.random.next_int_bound(span).unwrap_or(0);
-        m.extra.ints[EYES] = i32::from(!glowing);
-    }
     if !m.alive() {
         return;
     }
@@ -224,6 +228,31 @@ pub fn update(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.voice("entity.creaking.freeze", events);
         }
         m.extra.flag2 = !now;
+    }
+}
+/// The clocks and keyframe states `Creaking.aiStep`, `setupAnimationStates`
+/// and `checkEyeBlink` run (the server's and a client's).
+pub fn animate(m: &mut Mob) {
+    for slot in [INVULNERABLE, ATTACKING] {
+        if m.extra.ints[slot] > 0 {
+            m.extra.ints[slot] -= 1;
+        }
+    }
+    let age = m.age as f32;
+    m.anim.states[0].animate_when(m.extra.ints[ATTACKING] > 0, age);
+    m.anim.states[1].animate_when(m.extra.ints[INVULNERABLE] > 0, age);
+    m.anim.states[2].animate_when(tearing_down(m), age);
+    // checkEyeBlink: the eyes of a creaking falling apart flicker.
+    if m.death_time > m.extra.ints[NEXT_FLICKER] {
+        let glowing = m.extra.ints[EYES] != 0;
+        let (lo, hi) = if glowing {
+            (2, 8)
+        } else {
+            (m.death_time / 4, m.death_time / 2)
+        };
+        let span = (hi - lo + 1).max(1);
+        m.extra.ints[NEXT_FLICKER] = m.death_time + lo + m.random.next_int_bound(span).unwrap_or(0);
+        m.extra.ints[EYES] = i32::from(!glowing);
     }
 }
 /// `Mob.stopInPlace`.

@@ -105,6 +105,7 @@ impl Game<'_> {
         match ty.trim_start_matches("minecraft:") {
             "player_attack" => DamageKind::PlayerAttack,
             "mace_smash" => DamageKind::MaceSmash,
+            "spear" => DamageKind::Spear,
             "mob_attack" | "mob_attack_no_aggro" => DamageKind::MobAttack,
             "arrow" => DamageKind::Arrow,
             "thrown" | "trident" | "mob_projectile" => DamageKind::Thrown,
@@ -118,7 +119,9 @@ impl Game<'_> {
             "dry_out" => DamageKind::DryOut,
             "magic" | "indirect_magic" | "dragon_breath" => DamageKind::Magic,
             "sting" => DamageKind::Sting,
-            "cactus" | "sweet_berry_bush" => DamageKind::Cactus,
+            "cactus" => DamageKind::Cactus,
+            "sweet_berry_bush" => DamageKind::SweetBerryBush,
+            "freeze" => DamageKind::Freeze,
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
             _ => DamageKind::Generic,
@@ -1218,7 +1221,7 @@ impl Game<'_> {
     /// LivingEntity.stopRiding for a mob: off its vehicle
     /// (Entity.removePassenger), then to where the vehicle lets it out
     /// (LivingEntity.dismountVehicle).
-    fn dismount_mob(&mut self, rider: u32) {
+    pub(in crate::game) fn dismount_mob(&mut self, rider: u32) {
         let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
             return;
         };

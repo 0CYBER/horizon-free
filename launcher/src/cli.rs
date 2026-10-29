@@ -24,6 +24,25 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum JavaCmd {
+    /// The Java runtimes Horizon downloaded from Mojang and the ones installed on this computer
+    List,
+    /// Download Mojang's Java runtime: a major (8, 16, 17, 21, 25) or a component name from a
+    /// version's JSON (java-runtime-delta)
+    Install { java: String },
+}
+
+#[derive(Subcommand)]
+enum RustCmd {
+    /// Whether it is installed, its version and whether this computer can link with it
+    Status,
+    /// Download the pinned toolchain from static.rust-lang.org (once), checked by SHA-256
+    Install,
+    /// Delete the toolchain and the native builds' Cargo home
+    Remove,
+}
+
+#[derive(Subcommand)]
 enum ServersCmd {
     /// The servers, their folder and whether they run
     List,
@@ -79,17 +98,41 @@ enum ServersCmd {
 enum AccountCmd {
     /// The signed-in accounts and which one plays
     List,
-    /// Sign in with a Microsoft account in your browser (device code)
+    /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
+    /// Minecraft: Java Edition
     SignIn,
     /// Sign out: the account's tokens leave the keychain
     SignOut {
         /// Its name or UUID
         who: String,
     },
-    /// Play as this account
+    /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline, without an account
-    Offline,
+    /// Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game:
+    /// as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game
+    /// made up
+    Offline { name: Option<String> },
+    /// Forget one of your offline names; its skin and cape go with it
+    ForgetOffline { name: String },
+    /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
+    /// PNG, the model. Kept by the launcher and given to the game when that name plays
+    Skin {
+        name: String,
+        /// The skin's PNG
+        file: Option<PathBuf>,
+        /// classic or slim arms
+        #[arg(long)]
+        model: Option<String>,
+        /// The cape's PNG
+        #[arg(long)]
+        cape: Option<PathBuf>,
+        /// Back to the default skin
+        #[arg(long)]
+        no_skin: bool,
+        /// Take the cape off
+        #[arg(long)]
+        no_cape: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +211,35 @@ enum InstanceCmd {
         /// The instance to copy (its name or id)
         #[arg(long)]
         copy: Option<String>,
+        /// Make a Minecraft: Java Edition instance of this version (1.21.4, latest or
+        /// latest-snapshot) instead of a Horizon one
+        #[arg(long, conflicts_with = "copy")]
+        minecraft: Option<String>,
+    },
+    /// The versions of Minecraft: Java Edition a Java instance can play, the newest first
+    Versions {
+        /// Snapshots too
+        #[arg(long)]
+        snapshots: bool,
+        /// Old betas and alphas too
+        #[arg(long)]
+        old: bool,
+    },
+    /// A Java instance's Java: its own Java home or the automatic pick, memory and JVM arguments
+    Java {
+        instance: String,
+        /// A Java home to run it on
+        #[arg(long, conflicts_with = "auto")]
+        home: Option<PathBuf>,
+        /// Go back to the Java the version needs, picked or downloaded by the launcher
+        #[arg(long)]
+        auto: bool,
+        /// The most memory the game may use, in MiB
+        #[arg(long)]
+        memory: Option<u32>,
+        /// Extra JVM arguments (one string; "" clears them)
+        #[arg(long, allow_hyphen_values = true)]
+        args: Option<String>,
     },
     /// Rename an instance (its folder stays)
     Rename { instance: String, name: String },
@@ -197,6 +269,37 @@ enum InstanceCmd {
         /// Where to write it (default: "<name>.mrpack" in the current folder)
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Show or set what runs around an instance's game: a shell command before it (the game
+    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
+    /// variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode,
+    /// MangoHud and the dedicated graphics card, when the computer has them
+    Launch {
+        instance: String,
+        #[arg(long)]
+        pre_launch: Option<String>,
+        #[arg(long)]
+        wrapper: Option<String>,
+        #[arg(long)]
+        env: Option<String>,
+        /// Linux: run it through GameMode (gamemoderun), on or off
+        #[arg(long)]
+        gamemode: Option<String>,
+        /// Linux: MangoHud's overlay, on or off
+        #[arg(long)]
+        mangohud: Option<String>,
+        /// Linux: the dedicated graphics card (DRI_PRIME, or NVIDIA's offload), on or off
+        #[arg(long)]
+        dedicated_gpu: Option<String>,
+    },
+    /// Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop
+    /// file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows
+    Shortcut {
+        /// The instance (default: the selected one)
+        instance: Option<String>,
+        /// Move the instance's shortcuts to the trash instead
+        #[arg(long)]
+        remove: bool,
     },
     /// Import what a file is, as dropping it on the window does: a shared instance (a .mrpack
     /// without mod loaders, such as `instance export` writes, or a game folder zip) becomes a
@@ -493,17 +596,21 @@ enum Cmd {
     Install { tag: String },
     /// Remove an installed version
     Remove { tag: String },
-    /// Prepare a version's resources from your own Minecraft install
+    /// Prepare a version's resources from your own Minecraft install, or from Mojang
     Prepare {
         /// The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App,
         /// ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "download")]
         minecraft: Option<PathBuf>,
+        /// Download Minecraft from Mojang for the signed-in account that owns it, instead of
+        /// using an install
+        #[arg(long)]
+        download: bool,
         /// The installed version (default: the selected one)
         #[arg(long)]
         version: Option<String>,
     },
-    /// Start the client
+    /// Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition)
     Play {
         #[arg(long)]
         version: Option<String>,
@@ -538,6 +645,25 @@ enum Cmd {
         #[arg(long)]
         accept_eula: bool,
     },
+    /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
+    /// revision they pin, with the launcher's own Rust, as the version the "Native mods" instance
+    /// plays. Not sandboxed: the mods' code runs with your rights
+    NativeBuild {
+        /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
+        /// (default: the native mods installed and turned on in the instance)
+        folder: Option<PathBuf>,
+        /// The instance whose installed native mods to build, and which then plays the build
+        /// (default: the selected one; the game's own home builds into the Native mods instance)
+        #[arg(long)]
+        instance: Option<String>,
+        /// The installed version whose game files the build reuses, and whose commit it builds on
+        /// when no mod pins one (default: the selected one)
+        #[arg(long)]
+        version: Option<String>,
+        /// You read the mods' source and trust it with full access to this computer
+        #[arg(long)]
+        trust_native_code: bool,
+    },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
     /// Show the Discord, sponsor and website links
@@ -549,7 +675,13 @@ enum Cmd {
     },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
-    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it)
+    /// on|off, prune-old-versions on|off (delete old versions after an install, keeping the
+    /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
+    /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
+    /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
+    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
+    /// shows Horizon's landscape)
     Settings {
         #[arg(value_parser = SETTING_KEYS)]
         key: Option<String>,
@@ -618,6 +750,11 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PacksCmd>,
     },
+    /// Java for Minecraft: Java Edition instances: list the runtimes, download Mojang's
+    Java {
+        #[command(subcommand)]
+        action: Option<JavaCmd>,
+    },
     /// The screenshots F2 took in an instance: list, delete
     Screenshots {
         #[command(subcommand)]
@@ -640,6 +777,12 @@ enum Cmd {
     Mods {
         #[command(subcommand)]
         action: Option<ModsCmd>,
+    },
+    /// The portable Rust toolchain native mods compile with (docs/native-mods.md): the launcher's
+    /// own, in its data folder, never installed on the system
+    Rust {
+        #[command(subcommand)]
+        action: Option<RustCmd>,
     },
     /// Servers hosted with horizon-server (the Servers page): list them, create one, or run any
     /// horizon-server command on one
@@ -686,13 +829,19 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 6] = [
+const SETTING_KEYS: [&str; 12] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
+    "prune-old-versions",
+    "keep-versions",
     "opening-animation",
     "proxy",
+    "while-playing",
+    "language",
+    "accent",
+    "background",
 ];
 
 fn on_off(value: &str) -> Result<bool, String> {
@@ -710,7 +859,49 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "minecraft-dir" => s.minecraft_dir = folder(value),
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
+        "prune-old-versions" => s.prune_old_versions = Some(on_off(value)?),
+        "keep-versions" => {
+            s.keep_versions = match value {
+                "default" => None,
+                n => Some(
+                    n.parse::<usize>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("{value}: say a number from 1, or default"))?,
+                ),
+            }
+        }
         "opening-animation" => s.skip_opening = !on_off(value)?,
+        "while-playing" => {
+            s.while_playing = backend::WhilePlaying::parse(value)
+                .ok_or_else(|| format!("{value}: say stay, minimize or hide"))?
+        }
+        "accent" => {
+            use horizon_launcher::themes::Accent;
+            s.accent = Accent::parse(value).ok_or_else(|| {
+                let names: Vec<_> = Accent::ALL.iter().map(|a| a.name()).collect();
+                format!("{value}: say {}", names.join(", "))
+            })?
+        }
+        "background" => {
+            s.background = match value.trim() {
+                "default" | "" => None,
+                file => Some(horizon_launcher::themes::keep_background(
+                    &backend::data_dir(),
+                    std::path::Path::new(file),
+                )?),
+            }
+        }
+        "language" => {
+            use horizon_launcher::i18n::Language;
+            s.language = match value.trim() {
+                "system" | "default" => None,
+                code => Some(
+                    Language::parse(code)
+                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
+                ),
+            }
+        }
         "proxy" => {
             if value == "default" || value.is_empty() {
                 s.proxy = None;
@@ -732,10 +923,16 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "minecraft_dir": s.minecraft_dir,
         "server_dir": backend::server_dir(None),
         "install_new_versions": s.install_new_versions.unwrap_or(true),
+        "prune_old_versions": s.auto_prune(),
+        "keep_versions": s.keep_newest(),
         "opening_animation": !s.skip_opening,
         "game_args": s.game_args,
         "proxy": s.proxy,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
+        "while_playing": s.while_playing.name(),
+        "language": s.language.map_or("system", |l| l.code()),
+        "accent": s.accent.name(),
+        "background": horizon_launcher::themes::background(&backend::data_dir(), s.background.as_deref()),
         "no_ai": backend::no_ai(),
     })
 }
@@ -873,15 +1070,54 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 );
             }
         }
+        Cmd::NativeBuild {
+            folder,
+            instance,
+            version,
+            trust_native_code,
+        } => {
+            if !trust_native_code {
+                return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
+            }
+            let base = backend::resolve_version(version.as_deref())?;
+            let started = std::time::Instant::now();
+            let target = match &instance {
+                Some(name) => instances::find(name)?,
+                None => instances::selected(),
+            };
+            let (folder, target) = match folder {
+                Some(folder) => (folder, None),
+                None => (
+                    horizon_launcher::native_mods::installed_mods(&target.home)?,
+                    Some(&target),
+                ),
+            };
+            let built = horizon_launcher::native_mods::build(&base, &folder, target, |step| {
+                eprintln!("{}", step.label())
+            })?;
+            println!(
+                "{built} built and selected for its instance ({:.0} s).",
+                started.elapsed().as_secs_f64()
+            );
+        }
         Cmd::Remove { tag } => {
             backend::remove_version(&tag)?;
             println!("Removed {tag}.");
         }
-        Cmd::Prepare { minecraft, version } => {
+        Cmd::Prepare {
+            minecraft,
+            download,
+            version,
+        } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
+            let from = if download {
+                backend::MinecraftFrom::Mojang
+            } else {
+                backend::MinecraftFrom::Install
+            };
             let (preparer, minecraft) =
-                backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
+                backend::preparer(&tag, &minecraft, from, &|line| eprintln!("{line}"))?;
             backend::sounds(&tag, &minecraft, &|line| println!("{line}"));
             match preparer {
                 backend::Preparer::Process(cmd) => attached(cmd)?,
@@ -922,7 +1158,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             cmd.args(arg);
             let started = std::time::Instant::now();
-            let played = attached(cmd);
+            let accounts = Accounts::load();
+            if let Some(name) = accounts.name_arg() {
+                cmd.arg("--name").arg(name);
+            }
+            cmd.envs(accounts.look_env());
+            let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }
@@ -1146,7 +1387,94 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
+        Cmd::Rust { action } => rust(action.unwrap_or(RustCmd::Status), as_json)?,
+        Cmd::Java { action } => java(action.unwrap_or(JavaCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
+    }
+    Ok(())
+}
+
+fn java(action: JavaCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::java;
+    match action {
+        JavaCmd::List => {
+            let mut all = java::mojang_runtimes(&java::runtimes_dir());
+            all.extend(java::installed());
+            if as_json {
+                json(serde_json::json!(all));
+            } else if all.is_empty() {
+                println!("No Java yet. Horizon downloads Mojang's when an instance needs it.");
+            } else {
+                for r in &all {
+                    let from = match r.source {
+                        java::Source::Mojang => "Mojang's, downloaded by Horizon",
+                        java::Source::Installed => "installed",
+                    };
+                    println!("Java {}  ({from})\n  {}", r.version, r.home.display());
+                }
+            }
+        }
+        JavaCmd::Install { java: which } => {
+            let need = java::Need::named(&which)?;
+            let runtime = java::install(&need, &|line| eprintln!("{line}"))?;
+            if as_json {
+                json(serde_json::json!(runtime));
+            } else {
+                println!(
+                    "Java {} is ready: {}",
+                    runtime.version,
+                    runtime.home.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rust(action: RustCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::rust_toolchain as rust;
+    match action {
+        RustCmd::Status => {
+            let installed = rust::installed();
+            let version = installed.as_ref().map(|t| t.version()).transpose()?;
+            let linker = rust::linker().err();
+            if as_json {
+                json(serde_json::json!({
+                    "pinned": rust::VERSION,
+                    "host": rust::host().map(|h| h.target),
+                    "installed": installed.as_ref().map(|t| t.dir.display().to_string()),
+                    "version": version,
+                    "linker": linker,
+                }));
+            } else {
+                match (&installed, &version) {
+                    (Some(t), Some(v)) => println!("{v} in {}", t.dir.display()),
+                    _ => println!(
+                        "Rust {} is not installed (`horizon-launcher rust install`).",
+                        rust::VERSION
+                    ),
+                }
+                println!(
+                    "{}",
+                    linker.unwrap_or_else(|| "This computer can link the game.".into())
+                );
+            }
+        }
+        RustCmd::Install => {
+            let shown = std::cell::Cell::new(0);
+            let toolchain = rust::install(|f| {
+                let percent = (f * 100.0) as u32;
+                if percent >= shown.get() + 10 {
+                    shown.set(percent);
+                    eprintln!("{percent}%");
+                }
+            })?;
+            println!("{} in {}", toolchain.version()?, toolchain.dir.display());
+        }
+        RustCmd::Remove => {
+            rust::remove()?;
+            println!("Removed the launcher's Rust toolchain and Cargo home.");
+        }
     }
     Ok(())
 }
@@ -1207,10 +1535,18 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "name": a.name, "uuid": a.uuid,
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                     })).collect::<Vec<_>>(),
+                    "offline": accounts.offline.iter().map(|n| serde_json::json!({
+                        "name": n,
+                        "selected": accounts.player() == account::Player::Offline(n.clone()),
+                    })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
+                    "owner": accounts.has_owner(account::store()),
                 }));
-            } else if accounts.accounts.is_empty() {
-                println!("No Microsoft account signed in: the game plays offline.");
+            } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
+                println!(
+                    "No Microsoft account signed in. Play needs one that owns Minecraft: Java \
+                     Edition: horizon-launcher account sign-in"
+                );
             } else {
                 for a in &accounts.accounts {
                     let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
@@ -1220,8 +1556,17 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     };
                     println!("{mark} {}  {}", a.name, a.uuid);
                 }
-                if accounts.selected().is_none() {
-                    println!("Playing offline (`account select NAME` to play as one).");
+                for n in &accounts.offline {
+                    let on = accounts.player() == account::Player::Offline(n.clone());
+                    println!("{} {n}  offline", if on { "*" } else { " " });
+                }
+                if accounts.player() == account::Player::GameName {
+                    println!(
+                        "Playing offline as the game's own name (`account select NAME` to switch)."
+                    );
+                }
+                if !accounts.has_owner(account::store()) {
+                    println!("{}.", account::NEEDS_OWNER);
                 }
             }
         }
@@ -1249,15 +1594,94 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            let a = find(&accounts, &who)?;
-            accounts.selected = Some(a.uuid);
+            let offline = accounts
+                .offline
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(&who))
+                .cloned();
+            let (player, name) = match (accounts.find(&who).cloned(), offline) {
+                (Some(a), _) => (account::Player::Microsoft(a.uuid), a.name),
+                (None, Some(n)) => (
+                    account::Player::Offline(n.clone()),
+                    format!("{n} (offline)"),
+                ),
+                (None, None) => return Err(find(&accounts, &who).unwrap_err()),
+            };
+            accounts.play_as(account::store(), player)?;
             accounts.save()?;
-            println!("The game plays as {}.", a.name);
+            println!("The game plays as {name}.");
         }
-        AccountCmd::Offline => {
-            accounts.selected = None;
+        AccountCmd::Offline { name } => {
+            let player = match name {
+                Some(n) => account::Player::Offline(n),
+                None => account::Player::GameName,
+            };
+            accounts.play_as(account::store(), player)?;
             accounts.save()?;
-            println!("The game plays offline.");
+            match accounts.name_arg() {
+                Some(n) => println!("The game plays offline as {n}."),
+                None => println!("The game plays offline, as the name it made up."),
+            }
+        }
+        AccountCmd::Skin {
+            name,
+            file,
+            model,
+            cape,
+            no_skin,
+            no_cape,
+        } => {
+            use horizon_launcher::skins::{self, Model};
+            let name = accounts
+                .offline
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(&name))
+                .cloned()
+                .ok_or_else(|| {
+                    format!("No offline name {name}: add it with `account offline {name}`.")
+                })?;
+            let model = match model.as_deref() {
+                None => None,
+                Some("classic") => Some(Model::Classic),
+                Some("slim") => Some(Model::Slim),
+                Some(m) => return Err(format!("{m}: say classic or slim")),
+            };
+            let mut look = accounts.look(&name);
+            if let Some(file) = &file {
+                skins::keep(&skins::dir(), &name, file, false)?;
+                look.skin = true;
+            }
+            if let Some(file) = &cape {
+                skins::keep(&skins::dir(), &name, file, true)?;
+                look.cape = true;
+            }
+            if let Some(m) = model {
+                look.model = m;
+            }
+            look.skin &= !no_skin;
+            look.cape &= !no_cape;
+            accounts
+                .looks
+                .insert(name.to_ascii_lowercase(), look.clone());
+            accounts.save()?;
+            if as_json {
+                json(serde_json::json!({
+                    "name": name, "skin": look.skin, "cape": look.cape, "model": look.model.name(),
+                }));
+            } else {
+                let say = |on: bool, what: &str| if on { what.to_string() } else { "none".into() };
+                println!(
+                    "{name}: skin {} ({} arms), cape {}",
+                    say(look.skin, "kept"),
+                    look.model.name(),
+                    say(look.cape, "kept")
+                );
+            }
+        }
+        AccountCmd::ForgetOffline { name } => {
+            accounts.remove_offline(&name, &horizon_launcher::skins::dir())?;
+            accounts.save()?;
+            println!("Forgot the offline name {name}.");
         }
     }
     Ok(())
@@ -1757,7 +2181,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
         serde_json::json!({
             "id": i.id, "name": i.name, "kind": format!("{:?}", i.kind).to_lowercase(),
             "home": i.home, "icon": i.icon, "group": i.group, "selected": selected,
-            "version": i.version, "played_secs": i.played.as_secs(),
+            "version": i.version, "java": i.java, "played_secs": i.played.as_secs(),
             "last_played_ms": i.last_played.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64),
         })
     };
@@ -1768,11 +2192,11 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .as_ref()
             .map(|g| format!("  [{g}]"))
             .unwrap_or_default();
-        let pinned = i
-            .version
-            .as_ref()
-            .map(|v| format!("  {v}"))
-            .unwrap_or_default();
+        let pinned = match (&i.java, &i.version) {
+            (Some(java), _) => format!("  Minecraft {} (Java Edition)", java.minecraft),
+            (None, Some(v)) => format!("  {v}"),
+            (None, None) => String::new(),
+        };
         let played = match i.last_played {
             Some(_) => format!("  {} played", instances::play_time(i.played)),
             None => String::new(),
@@ -1801,7 +2225,55 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 all.iter().for_each(|i| line(i, i.id == selected));
             }
         }
-        InstanceCmd::Create { name, copy } => changed(instances::create(&name, copy.as_deref())?),
+        InstanceCmd::Create {
+            name,
+            copy,
+            minecraft: None,
+        } => changed(instances::create(&name, copy.as_deref())?),
+        InstanceCmd::Create {
+            name,
+            minecraft: Some(version),
+            ..
+        } => {
+            let versions = horizon_launcher::minecraft_versions::load()?;
+            changed(instances::create_java(&name, &versions.find(&version)?.id)?)
+        }
+        InstanceCmd::Versions { snapshots, old } => {
+            let versions = horizon_launcher::minecraft_versions::load()?;
+            let shown: Vec<_> = versions.of(snapshots, old).collect();
+            if as_json {
+                json(serde_json::json!(shown));
+            } else {
+                for v in shown {
+                    let date = v.released.get(..10).unwrap_or("");
+                    println!("{}  {date}  {:?}", v.id, v.kind);
+                }
+            }
+        }
+        InstanceCmd::Java {
+            instance,
+            home,
+            auto,
+            memory,
+            args,
+        } => {
+            if instances::find(&instance)?.java.is_none() {
+                return Err(format!(
+                    "{instance} is a Horizon instance: Horizon is not a Java program."
+                ));
+            }
+            changed(instances::edit(&instance, |m| {
+                let java = m.java.get_or_insert_with(Default::default);
+                if auto {
+                    java.home = None;
+                }
+                java.home = home.or(java.home.take());
+                java.memory_mb = memory.or(java.memory_mb);
+                if let Some(args) = args {
+                    java.jvm_args = args.trim().to_string();
+                }
+            })?)
+        }
         InstanceCmd::Rename { instance, name } => {
             changed(instances::edit(&instance, |m| m.name = Some(name))?)
         }
@@ -1819,6 +2291,116 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+        InstanceCmd::Launch {
+            instance,
+            pre_launch,
+            wrapper,
+            env,
+            gamemode,
+            mangohud,
+            dedicated_gpu,
+        } => {
+            use horizon_launcher::launch;
+            let env = env.as_deref().map(launch::parse_env).transpose()?;
+            let [gamemode, mangohud, dedicated_gpu] =
+                [gamemode, mangohud, dedicated_gpu].map(|v| v.as_deref().map(on_off));
+            let [gamemode, mangohud, dedicated_gpu] = [
+                gamemode.transpose()?,
+                mangohud.transpose()?,
+                dedicated_gpu.transpose()?,
+            ];
+            let found = launch::Found::here();
+            for (on, has, name) in [
+                (gamemode, found.gamemode, "GameMode (gamemoderun)"),
+                (mangohud, found.mangohud, "MangoHud"),
+                (dedicated_gpu, found.two_gpus, "A second graphics card"),
+            ] {
+                if on == Some(true) && !has {
+                    eprintln!(
+                        "{name} isn't on this computer: the switch does nothing until it is."
+                    );
+                }
+            }
+            let changing = pre_launch.is_some()
+                || wrapper.is_some()
+                || env.is_some()
+                || gamemode.is_some()
+                || mangohud.is_some()
+                || dedicated_gpu.is_some();
+            let i = match changing {
+                false => instances::find(&instance)?,
+                true => instances::edit(&instance, |m| {
+                    if let Some(p) = pre_launch {
+                        m.launch.pre_launch = p.trim().to_string();
+                    }
+                    if let Some(w) = wrapper {
+                        m.launch.wrapper = w.trim().to_string();
+                    }
+                    if let Some(e) = env {
+                        m.launch.env = e;
+                    }
+                    if let Some(on) = gamemode {
+                        m.launch.gamemode = on;
+                    }
+                    if let Some(on) = mangohud {
+                        m.launch.mangohud = on;
+                    }
+                    if let Some(on) = dedicated_gpu {
+                        m.launch.dedicated_gpu = on;
+                    }
+                })?,
+            };
+            let l = &i.launch;
+            if as_json {
+                json(serde_json::json!({
+                    "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                    "gamemode": l.gamemode, "mangohud": l.mangohud, "dedicated_gpu": l.dedicated_gpu,
+                    "found": {
+                        "gamemode": found.gamemode, "mangohud": found.mangohud,
+                        "two_gpus": found.two_gpus, "nvidia": found.nvidia,
+                    },
+                }));
+            } else {
+                println!(
+                    "{}: {}",
+                    i.name,
+                    l.summary().unwrap_or("nothing around the game".into())
+                );
+                println!("  pre-launch: {}", l.pre_launch);
+                println!("  wrapper:    {}", l.wrapper);
+                println!("  env:        {}", launch::env_line(&l.env));
+                let yes = |b: bool| if b { "on" } else { "off" };
+                for (name, on, has) in [
+                    ("gamemode:", l.gamemode, found.gamemode),
+                    ("mangohud:", l.mangohud, found.mangohud),
+                    ("gpu:", l.dedicated_gpu, found.two_gpus),
+                ] {
+                    let note = if has { "" } else { " (not on this computer)" };
+                    println!("  {name:<11} {}{note}", yes(on));
+                }
+            }
+        }
+        InstanceCmd::Shortcut { instance, remove } => {
+            use horizon_launcher::shortcut;
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let paths = match remove {
+                false => shortcut::make(backend::exe_path(), &i.id, &i.name)?,
+                true => shortcut::remove(&i.id)?,
+            };
+            if as_json {
+                json(serde_json::json!({ "instance": i.id, "paths": paths }));
+            } else if remove && paths.is_empty() {
+                println!("{} has no shortcut.", i.name);
+            } else {
+                let did = if remove { "Moved to the trash" } else { "Made" };
+                for path in paths {
+                    println!("{did}: {}", path.display());
+                }
+            }
         }
         InstanceCmd::Import { file, instance } => {
             use horizon_launcher::import::{self, Dropped};

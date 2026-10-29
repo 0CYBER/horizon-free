@@ -145,6 +145,13 @@ class ParityRunnerTests(unittest.TestCase):
         with mock.patch.object(parity.sys, "platform", "darwin"):
             self.assertEqual(parity.platform_skips(config), {"options": "libm"})
 
+    def test_a_hosts_excludes_are_skipped_when_it_runs_parity_itself(self):
+        config = {"hosts": {"playhorizon": {"exclude": {"remote_fireworks": "starved"}}, "macmini": {"exclude": {}}}}
+        with mock.patch.object(parity.sys, "platform", "linux"):
+            self.assertEqual(parity.platform_skips(config, "playhorizon"), {"remote_fireworks": "starved"})
+            self.assertEqual(parity.platform_skips(config, "macmini"), {})
+            self.assertEqual(parity.platform_skips(config, "elsewhere"), {})
+
     def test_named_only_harnesses_are_listed_from_the_host_config(self):
         self.assertEqual(parity.named_only({"named_only": {"lan_integration": "slow"}}), {"lan_integration": "slow"})
         self.assertEqual(parity.named_only({}), {})
@@ -397,6 +404,38 @@ class KnownFlakyTests(unittest.TestCase):
         flaky = parity.known_flaky(parity.host_config())
         self.assertTrue(all(isinstance(reason, str) and len(reason) > 20 for reason in flaky.values()))
         self.assertTrue(set(flaky) <= {parity.base_name(name) for name in parity.harnesses()})
+
+
+
+class SoloTests(unittest.TestCase):
+    """Harnesses driving game windows run alone on a small machine (playhorizon's 4-CPU runner)."""
+
+    def executor(self, running):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(parity, "STATE_DIR", Path(tmp)):
+            local = parity.LocalExecutor(4, 1 << 40, 60)
+        local.solo = {"remote_fireworks"}
+        local.running = {label: {} for label in running}
+        return local
+
+    def test_a_solo_harness_waits_for_an_empty_machine_and_then_holds_it(self):
+        busy = self.executor(["food"])
+        self.assertFalse(busy.accepts("remote_fireworks"))
+        self.assertTrue(busy.accepts("light"))
+        self.assertEqual(busy.free(), 3)
+        self.assertTrue(self.executor([]).accepts("remote_fireworks"))
+        alone = self.executor(["remote_fireworks~2"])
+        self.assertEqual(alone.free(), 0)
+
+    def test_only_small_machines_and_listed_harnesses(self):
+        config = {"solo": {"remote_fireworks": "two game windows"}}
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": "1"}):
+            self.assertEqual(parity.solo_harnesses(config), {"remote_fireworks"})
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": "0"}):
+            self.assertEqual(parity.solo_harnesses(config), set())
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": ""}), mock.patch.object(parity, "SOLO_CPUS", 10 ** 6):
+            self.assertEqual(parity.solo_harnesses(config), {"remote_fireworks"})
+        solo = parity.host_config().get("solo", {})
+        self.assertTrue(solo and set(solo) <= {parity.base_name(name) for name in parity.harnesses()})
 
 
 if __name__ == "__main__":

@@ -1,0 +1,46 @@
+name: nightly command
+# `/nightly …` comments: the trusted reviewers in .github/trusted-reviewers.txt (and Ludovic) pick the pull requests
+# the Nightly holds (docs/release-flow.md "Nightly channel", tools/ci/nightly_set.py). This job only checks who asked,
+# saves the set on the nightly-state branch, starts `nightly build` and answers in the thread.
+#
+# Why no pull request's code runs here, though the token can write:
+# - `issue_comment` always runs this file from main, whoever comments and wherever; a pull request's own copy of it
+#   is never read.
+# - It checks out main and runs main's nightly_set.py. The comment's text and author reach it as env vars, never in
+#   a shell line.
+# - It never checks out, fetches or merges a pull request: it reads their file lists through the API. The merge
+#   happens in nightly-build.yml's `pick`, with git objects only; their code runs in its `build`, without secrets.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+jobs:
+  command:
+    # Every other comment skips here, before a runner starts.
+    if: startsWith(github.event.comment.body, '/nightly') && github.event.comment.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write       # the nightly-state branch (main is protected)
+      actions: write        # starts `nightly build`
+      issues: write         # answers in the thread
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            .github/CODEOWNERS
+            .github/trusted-reviewers.txt
+            tools/ci/nightly_set.py
+          sparse-checkout-cone-mode: false
+      - name: Run the command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ github.event.comment.body }}
+          AUTHOR: ${{ github.event.comment.user.login }}
+          ISSUE: ${{ github.event.issue.number }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+        run: python3 tools/ci/nightly_set.py command

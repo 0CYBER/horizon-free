@@ -151,6 +151,9 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
+                if uuid.is_some_and(|u| self.vehicle_by_uuid(u).is_some()) {
+                    continue;
+                }
                 if matches!(
                     kind.as_str(),
                     "minecraft:experience_orb"
@@ -193,12 +196,12 @@ impl Game<'_> {
                             if let Some(a) = p.arrow.as_mut() {
                                 a.last_state = in_block.and_then(|t| self.state_from_nbt(&t));
                             }
-                            self.creatures.projectiles.push(p);
+                            self.add_projectile(p);
                         }
                     }
                     "minecraft:fireball" | "minecraft:small_fireball" => {
                         if let Some(p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
-                            self.creatures.projectiles.push(p);
+                            self.add_projectile(p);
                         }
                     }
                     "minecraft:falling_block" => {
@@ -290,14 +293,22 @@ impl Game<'_> {
                     "minecraft:ender_dragon" => {
                         let seed = self.world.random.next_long();
                         if self.dragon.is_none()
-                            && let Some(d) = super::dragon::Dragon::from_nbt(&tag, seed)
+                            && let Some(mut d) = super::dragon::Dragon::from_nbt(&tag, seed)
                         {
+                            // EnderDragon's constructor takes its id and its
+                            // parts' from the entity counter.
+                            d.id = self.next_entity + 1;
+                            self.next_entity += 9;
                             self.dragon = Some(d);
                         }
                     }
                     "minecraft:end_crystal" => {
                         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
-                        if let Some(c) = super::dragon::Crystal::from_nbt(&tag, time) {
+                        if let Some(mut c) = super::dragon::Crystal::from_nbt(&tag, time) {
+                            // EndCrystal's constructor takes an id from the
+                            // entity counter.
+                            self.next_entity += 1;
+                            c.id = self.next_entity;
                             self.crystals.push(c);
                         }
                     }
@@ -355,8 +366,11 @@ impl Game<'_> {
     }
     /// A saved mob and, under `Passengers`, the mobs riding it.
     pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
-        self.next_entity += 1;
         let uuid = entity_nbt::uuid(&tag);
+        if let Some(id) = uuid.and_then(|u| self.vehicle_by_uuid(u)) {
+            return Some(id);
+        }
+        self.next_entity += 1;
         // Structure mobs that generation left to finish: saves from before
         // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
@@ -366,6 +380,12 @@ impl Game<'_> {
         }
         let riders = self.take_mob_passengers(&mut tag);
         let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
+        // `NeutralMob.readPersistentAngerSaveData`: the anger runs until its
+        // end time, and the mob is angry at the target again.
+        m.extra.anger = horizon_client::mobs::anger_left(m.extra.anger_end, self.world.game_time);
+        if m.extra.anger > 0 && m.extra.angry_at.is_some() {
+            m.ai.target = Some(horizon_client::mobs::Who::Player);
+        }
         m.extra.mount = mount;
         m.extra.passenger = mount.is_some();
         if finalize {
@@ -519,28 +539,9 @@ impl Game<'_> {
         }
         i
     }
-    /// The vehicle at the root of the rider chain (`Entity.getRootVehicle`):
-    /// the mob the ridden vehicle rides, when it rides one.
-    pub(super) fn root_vehicle(&self, id: u32) -> u32 {
-        let mut root = id;
-        for _ in 0..8 {
-            let Some(v) = self
-                .mobs
-                .iter()
-                .find(|m| m.id == root)
-                .and_then(|m| m.extra.mount)
-            else {
-                break;
-            };
-            root = v;
-        }
-        root
-    }
-    /// The UUID of the vehicle the player rides, for the player's file
-    /// (`ServerPlayer.saveParentVehicle`).
+    /// `RootVehicle.Attach` names the immediate mount, not the root of its tree.
     pub(super) fn root_vehicle_uuid(&mut self, id: Option<u32>) -> Option<[i32; 4]> {
-        let id = self.root_vehicle(id?);
-        Some(self.uuid_for(id))
+        Some(self.uuid_for(id?))
     }
     /// The vehicle with this UUID, among the ones in the world.
     pub(super) fn vehicle_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
@@ -555,6 +556,29 @@ impl Game<'_> {
             || self.carts.iter().any(|c| c.id == id);
         there.then_some(id)
     }
+    /// Vanilla stores the root entity in the player's file, outside chunk entities.
+    /// Keep the raw wrapper until attachment succeeds, including unsupported trees.
+    pub(super) fn restore_saved_vehicle(
+        &mut self,
+        uuid: [i32; 4],
+        raw: Option<&Tag>,
+    ) -> Option<u32> {
+        if let Some(id) = self.vehicle_by_uuid(uuid) {
+            return Some(id);
+        }
+        let tag = raw?.get("RootVehicle")?.get("Entity")?.clone();
+        let root_uuid = entity_nbt::uuid(&tag)?;
+        if self.vehicle_by_uuid(root_uuid).is_none() {
+            let at = entity_nbt::position(&tag)?;
+            let key = (
+                (at.x.floor() as i32).div_euclid(16),
+                (at.z.floor() as i32).div_euclid(16),
+            );
+            self.world.loaded_entities.push((key, vec![tag]));
+            self.spawn_loaded_entities();
+        }
+        self.vehicle_by_uuid(uuid)
+    }
     /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
     /// names, once the vehicle is in the world.
     pub(super) fn restore_root_vehicle(&mut self) {
@@ -564,9 +588,13 @@ impl Game<'_> {
         let Some(uuid) = self.pending_vehicle else {
             return;
         };
-        let Some(id) = self.vehicle_by_uuid(uuid) else {
+        let raw = self.level.player_extra.clone();
+        let Some(id) = self.restore_saved_vehicle(uuid, raw.as_ref()) else {
             return;
         };
+        if let Some(Tag::Compound(p)) = &mut self.level.player_extra {
+            p.remove(&"RootVehicle".into());
+        }
         self.pending_vehicle = None;
         self.riding = Some(id);
     }
@@ -574,6 +602,20 @@ impl Game<'_> {
     pub(super) fn mob_tree_nbt(&mut self, i: usize) -> Tag {
         let id = self.mobs[i].id;
         let uuid = self.uuid_for(id);
+        // `NeutralMob.addPersistentAngerSaveData`: the anger ends at an
+        // absolute game time, so it goes on while the chunk is unloaded, and
+        // the target is the entity the mob is angry at.
+        let anger = self.mobs[i].extra.anger;
+        self.mobs[i].extra.anger_end = if anger > 0 {
+            self.world.game_time + i64::from(anger)
+        } else {
+            -1
+        };
+        self.mobs[i].extra.angry_at = if anger > 0 {
+            self.mobs[i].ai.target
+        } else {
+            None
+        };
         let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
         self.write_leash(&mut tag, i);
         self.put_mob_passengers(&mut tag, id);
@@ -583,6 +625,14 @@ impl Game<'_> {
     pub(super) fn forget_entity(&mut self, id: u32) {
         self.persist.uuids.remove(&id);
         self.persist.raw.remove(&id);
+    }
+    /// The compound an entity without a Horizon entity ID was loaded with
+    /// (the crystals and the dragon), found again by type and position.
+    pub(super) fn persist_anon(&self, kind: &str, p: Vec3) -> (Option<[i32; 4]>, Option<&Tag>) {
+        self.persist
+            .anon
+            .get(&anon_key(kind, p))
+            .map_or((None, None), |(_, uuid, raw)| (*uuid, Some(raw)))
     }
     /// The compound an entity was loaded with (and commands have edited).
     pub(super) fn persist_raw(&self, id: u32) -> Option<&Tag> {
