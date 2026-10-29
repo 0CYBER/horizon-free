@@ -1174,8 +1174,7 @@ impl Game<'_> {
         );
     }
 }
-/// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time
-/// approximated as UTC).
+/// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, in local time).
 pub fn screenshot_name(dir: &std::path::Path) -> String {
     // Util.getFilenameFormattedDateTime: the local date and time.
     let base = chrono::Local::now().format("%Y-%m-%d_%H.%M.%S").to_string();
