@@ -1439,62 +1439,41 @@ fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
     }
 }
 
+/// GPUI's Wayland clipboard sends the last key press's serial, which a compositor ignores
+/// after a mouse click: hand the text to the desktop's own tool too, the first one present
+/// for this session (`wl-copy` on Wayland, `xclip` or `xsel` on X11).
 #[cfg(target_os = "linux")]
 fn sync_system_clipboard(text: String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const TOOLS: [(&str, &str, &[&str]); 3] = [
+        ("WAYLAND_DISPLAY", "wl-copy", &[]),
+        ("DISPLAY", "xclip", &["-selection", "clipboard"]),
+        ("DISPLAY", "xsel", &["--clipboard", "--input"]),
+    ];
     if text.is_empty() {
         return;
     }
+    // Off the UI thread: a tool can take its time.
     std::thread::spawn(move || {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            if let Ok(mut child) = Command::new("wl-copy")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                if let Ok(status) = child.wait() {
-                    if status.success() {
-                        return;
-                    }
-                }
+        for (session, tool, args) in TOOLS {
+            if std::env::var_os(session).is_none() {
+                continue;
             }
-        }
-
-        if std::env::var_os("DISPLAY").is_some() {
-            if let Ok(mut child) = Command::new("xclip")
-                .args(["-selection", "clipboard"])
+            let Ok(mut child) = Command::new(tool)
+                .args(args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                if let Ok(status) = child.wait() {
-                    if status.success() {
-                        return;
-                    }
-                }
+            else {
+                continue;
+            };
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
             }
-
-            if let Ok(mut child) = Command::new("xsel")
-                .args(["--clipboard", "--input"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                let _ = child.wait();
+            if child.wait().is_ok_and(|status| status.success()) {
+                return;
             }
         }
     });
