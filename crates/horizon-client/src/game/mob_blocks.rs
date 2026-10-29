@@ -152,6 +152,7 @@ impl Game<'_> {
         self.worn_block_geometry(mob, camera, alpha, light, out);
         self.worn_skull_geometry(mob, camera, alpha, light, out);
         self.golem_flower_geometry(mob, camera, alpha, light, out);
+        self.antenna_block_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
             && let Some((_, tint)) = self.block_face_sprite(state)
@@ -168,6 +169,43 @@ impl Game<'_> {
                 * glam::Mat4::from_rotation_y(90.0f32.to_radians());
             self.block_model_vertices_tinted(state, 42, t, light, true, tint, out);
         }
+    }
+    /// `BlockDecorationLayer.submit`: the block item in a copper golem's
+    /// antenna slot (a flower, or any block item), drawn at the antenna by
+    /// `CopperGolemModel.applyBlockOnAntennaTransform` with `NO_OVERLAY`. Only
+    /// the block's default state is drawn, not the item's block state component.
+    fn antenna_block_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        use glam::{Mat4, Vec3};
+        if mob.species() != Species::CopperGolem || horizon_client::mobs::trader::is_invisible(mob)
+        {
+            return;
+        }
+        let Some(stack) = mob.saddle_item() else {
+            return;
+        };
+        let Some(state) = self.pack.assets.registry.default_state(&stack.item) else {
+            return;
+        };
+        let Some(head) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        // UNIT_CUBE_BOTTOM_CENTER_TO_ANTENNA_CENTER: translation(-0.5, 0, -0.5)
+        // then rotateAround(Z 180, 0.5, 0.5, 0.5), which JOML post-multiplies.
+        let unit = Mat4::from_translation(Vec3::new(-0.5, 0.0, -0.5))
+            * Mat4::from_translation(Vec3::splat(0.5))
+            * Mat4::from_rotation_z(180.0f32.to_radians())
+            * Mat4::from_translation(Vec3::splat(-0.5));
+        let t = head * Mat4::from_translation(Vec3::new(0.0, -1.75, 0.0)) * unit;
+        self.block_model_vertices(state, 42, t, light, true, out);
     }
     /// `IronGolemFlowerLayer`: the poppy in the right arm while the golem
     /// offers it (`getOfferFlowerTick() > 0`), drawn with `NO_OVERLAY`.
