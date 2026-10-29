@@ -527,7 +527,7 @@ impl Mob {
             ]
         })
     }
-    /// LandRandomPos.getPosAway
+    /// `LandRandomPos.getPosAway`: a spot away from `away`, the best of ten tries.
     pub fn land_random_pos_away(
         &mut self,
         w: &MobWorld,
@@ -540,6 +540,30 @@ impl Mob {
             xd = self.random.next_double() - 0.5;
             zd = self.random.next_double() - 0.5;
         }
+        self.land_pos_in_direction(w, h, v, xd, zd)
+    }
+    /// `LandRandomPos.getPosTowards`: a spot within a quarter turn of the
+    /// way to `to`, the best of ten tries.
+    pub fn land_random_pos_towards(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        to: [f64; 3],
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
+        self.land_pos_in_direction(w, h, v, xd, zd)
+    }
+    /// `LandRandomPos.getPosInDirection`: ten tries within a quarter turn
+    /// (`(float) (Math.PI / 2)`) of the direction `(xd, zd)`.
+    fn land_pos_in_direction(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        xd: f64,
+        zd: f64,
+    ) -> Option<[f64; 3]> {
         self.pick_best(w, |m| {
             let d = m.random_direction_within(
                 0.0,
@@ -548,7 +572,7 @@ impl Mob {
                 0,
                 xd,
                 zd,
-                std::f64::consts::FRAC_PI_2,
+                f64::from(std::f32::consts::FRAC_PI_2),
             )?;
             let p = m.toward(f64::from(h), d);
             if p[1] < crate::chunk::MIN_Y
