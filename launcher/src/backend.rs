@@ -2424,9 +2424,15 @@ pub fn exe_path() -> &'static Path {
     EXE.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from(LAUNCHER_BINARY)))
 }
 
-/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
+/// This fork never replaces itself with an upstream launcher. Game updates are unaffected.
 pub fn self_update_allowed() -> bool {
-    !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
+    false
+}
+
+#[cfg(test)]
+#[test]
+fn fork_disables_launcher_self_updates() {
+    assert!(!self_update_allowed());
 }
 
 /// The version in `horizon-launcher --version`'s output (`horizon-launcher 0.1.5`).
