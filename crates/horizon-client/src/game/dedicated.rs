@@ -299,13 +299,14 @@ impl Lists {
 }
 
 /// The world presets of 26.3's `worldgen/world_preset`.
-const WORLD_PRESETS: [&str; 6] = [
+const WORLD_PRESETS: [&str; 7] = [
     "minecraft:normal",
     "minecraft:flat",
     "minecraft:large_biomes",
     "minecraft:amplified",
     "minecraft:single_biome_surface",
     "minecraft:debug_all_block_states",
+    "minecraft:flat_all_dimensions",
 ];
 
 /// Identifier.tryParse: `namespace:path`, or a path in `minecraft`.
