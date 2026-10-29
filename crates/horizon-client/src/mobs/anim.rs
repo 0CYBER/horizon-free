@@ -802,6 +802,20 @@ pub fn setup(
                 h.spear_ticks[using_side] = m.extra.using_item as f32 + s.partial;
             }
             humanoid(p, s, &h);
+            if player {
+                // PlayerModel.setupAnim: the layers the player hid (PlayerModelPart).
+                let hidden = m.extra.hidden_model_parts;
+                for (bit, part) in [
+                    (1, "jacket"),
+                    (2, "left_sleeve"),
+                    (3, "right_sleeve"),
+                    (4, "left_pants"),
+                    (5, "right_pants"),
+                    (6, "hat"),
+                ] {
+                    p.visible(part, hidden & (1 << bit) == 0);
+                }
+            }
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.
                 let sw = s.swing;

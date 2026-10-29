@@ -154,7 +154,11 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
             let body = String::from_utf8(body).unwrap();
             let (status, text) = {
                 let mut m = mock.lock().unwrap();
-                m.log.push((method.clone(), path.clone(), body.clone()));
+                // A bare `GET /` is a local tool probing every new port (T3 Code does, on the Mac
+                // mini), not the launcher: no endpoint here is the root.
+                if (method.as_str(), path.as_str()) != ("GET", "/") {
+                    m.log.push((method.clone(), path.clone(), body.clone()));
+                }
                 route(&mut m, &method, &path, &auth, &body)
             };
             let _ = write!(
@@ -698,5 +702,30 @@ fn offline_names_switch_with_accounts() {
     assert_eq!(
         serde_json::to_string(&old).unwrap(),
         r#"{"accounts":[],"selected":null}"#
+    );
+}
+
+#[test]
+fn the_java_edition_plays_as_an_owner_even_offline() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let player = java_player_with(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    assert_eq!(
+        (
+            player.name.as_str(),
+            player.uuid.as_str(),
+            player.token.as_str()
+        ),
+        ("Notch", UUID, "mc-token")
+    );
+    // No network: the last token of an account that owned the game.
+    let player = java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap();
+    assert_eq!(player.token, "mc-token");
+    // Never for an account that doesn't own it.
+    let mut accounts = signed_in(&store, &secrets("mc-token", false));
+    assert_eq!(
+        java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
+        NoOwner.to_string()
     );
 }

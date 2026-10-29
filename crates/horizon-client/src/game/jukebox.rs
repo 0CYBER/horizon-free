@@ -5,6 +5,7 @@
 use super::Game;
 use horizon_client::{
     containers::{BlockEntity, Jukebox},
+    first_person::Hand,
     items::ItemStack,
     mobs::Species,
     particles::{ParticleOptions, ParticleType},
@@ -64,6 +65,10 @@ impl Game<'_> {
             return false;
         }
         if self.jukebox(pos).is_some_and(|j| j.record.is_some()) {
+            // TRY_WITH_EMPTY_HAND: only the main hand goes on to useWithoutItem.
+            if self.hand != Hand::Main {
+                return false;
+            }
             self.eject_record(pos);
             return true;
         }
@@ -99,6 +104,30 @@ impl Game<'_> {
         // ServerPlayerGameMode.useItemOn: the action was consumed.
         self.trigger_block("minecraft:item_used_on_block", pos, stack);
         true
+    }
+    /// `JukeboxBlock.useItemOn` on this client's level for the main hand:
+    /// whether the jukebox at `pos` takes the click (`has_record` pops the
+    /// disc out, or a `jukebox_playable` item goes in). The server does the
+    /// rest, see `use_jukebox`.
+    pub(super) fn jukebox_takes(&self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if &*self.res.facts().get(state).name != "minecraft:jukebox" {
+            return false;
+        }
+        let has_record = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("has_record"))
+            .is_some_and(|v| v == "true");
+        has_record
+            || held.is_some_and(|stack| {
+                self.res
+                    .items()
+                    .get(&stack.item)
+                    .is_some_and(|i| i.jukebox_song.is_some())
+            })
     }
     /// Level event 1010: the song from the jukebox, and the "Now Playing" overlay.
     fn start_song(&mut self, pos: [i32; 3], song: &str) {
