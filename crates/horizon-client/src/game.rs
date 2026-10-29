@@ -6642,9 +6642,15 @@ impl Game<'_> {
                         }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let title = self.container_title(self.translate(key, fallback));
-                    let tw = HudBatch::text_width(atlas, &title);
-                    batch.text(
+                    // A server's furnace menu has the title it was given.
+                    let title = self.remote_menu_title().unwrap_or_else(|| {
+                        horizon_client::text::Text::literal(
+                            self.container_title(self.translate(key, fallback)),
+                        )
+                        .resolve_legacy()
+                    });
+                    let tw = atlas.font.width_text(&title);
+                    batch.text_styled(
                         atlas,
                         &title,
                         ox + (176.0 - tw) / 2.0,

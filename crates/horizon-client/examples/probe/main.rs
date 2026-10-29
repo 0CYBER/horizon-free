@@ -28,6 +28,7 @@ mod chest_pair_fixture;
 mod cloud_fixture;
 mod command_parse_fixture;
 mod container_screen_probe;
+mod container_title_fixture;
 mod creative_mining_probe;
 mod creative_search_fixture;
 mod cushion_placement_probe;
@@ -120,6 +121,7 @@ probes! {
     cloud_fixture,
     command_parse_fixture,
     container_screen_probe,
+    container_title_fixture,
     creative_search_fixture,
     emitter_particles_probe,
     enchanting_fixture,

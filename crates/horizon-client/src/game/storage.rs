@@ -415,8 +415,15 @@ impl Game<'_> {
                 256.0,
                 256.0,
             );
-            let title = self.translate("container.shulkerBox", "Shulker Box");
-            batch.text(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
+            // ShulkerBoxScreen draws the menu's title: the box's custom name
+            // (BaseContainerBlockEntity.getDisplayName) or its default name.
+            let title = self.remote_menu_title().unwrap_or_else(|| {
+                Text::literal(
+                    self.container_title(self.translate("container.shulkerBox", "Shulker Box")),
+                )
+                .resolve_legacy()
+            });
+            batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
             let inventory = self.translate("container.inventory", "Inventory");
             batch.text(atlas, &inventory, ox + 8.0, oy + 73.0, grey, false);
             return;
