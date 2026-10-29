@@ -11,7 +11,7 @@ use horizon_client::{
         spawner::SpawnerSpawn,
         trial_spawner::{
             Omen, TRIAL_OMEN_TICKS_PER_LEVEL, TrialEvent, TrialPlayer, TrialSpawner,
-            TrialSpawnerLevel, TrialState, Uuid,
+            TrialSpawnerExt, TrialSpawnerLevel, TrialState, Uuid,
         },
     },
 };
@@ -163,7 +163,7 @@ impl Game<'_> {
             let mut spawn = |l: &GameLevel, r: &SpawnerSpawn| {
                 let added = l.game.plan_spawner_mob(l, r, &mut planned)?;
                 let uuid = match planned.last_mut() {
-                    Some(Planned::Loaded(Tag::Compound(tag))) => {
+                    Some(Planned::Loaded(Tag::Compound(tag), _)) => {
                         let tag_uuid =
                             horizon_client::entity_nbt::uuid(&Tag::Compound(tag.clone()));
                         tag_uuid.unwrap_or_else(|| {
@@ -272,7 +272,7 @@ impl Game<'_> {
         Ok(())
     }
     /// `setState` (and `removeOminous`): the block's state and ominous flag.
-    fn set_trial_spawner_state(
+    pub(super) fn set_trial_spawner_state(
         &mut self,
         key: Pos,
         state: TrialState,

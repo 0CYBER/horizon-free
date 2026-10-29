@@ -24,6 +24,8 @@ fn stack(spec: &str) -> LootStack {
         exploration: None,
         ominous_amplifier: None,
         stew_effects: Vec::new(),
+        names: Vec::new(),
+        components: Vec::new(),
     };
     for e in parts {
         let (name, level) = e.rsplit_once(':').unwrap_or((e, "1"));

@@ -137,7 +137,9 @@ impl Game<'_> {
                 horizon_world::nbt::Tag::Int(horizon_world::DATA_VERSION),
             ),
         ]);
-        let _ = horizon_client::save::write_dat(&self.random_sequences_path(), tag);
+        if let Err(e) = horizon_client::save::write_dat(&self.random_sequences_path(), tag) {
+            log::warn!("the villager random sequences were not written: {e}");
+        }
     }
     /// `AbstractVillager.addOffersFromTradeSet` with the world's random
     /// sequence of the set, at the merchant's position.
@@ -245,7 +247,7 @@ impl Game<'_> {
             self.handle_mob_events(events)?;
             return Ok(true);
         }
-        self.stats.custom("talk_to_villager", 1);
+        self.stats.custom("talked_to_villager", 1);
         self.ensure_offers(index);
         let m = &self.mobs[index];
         let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
@@ -398,18 +400,21 @@ impl Game<'_> {
             .as_ref()
             .and_then(|s| s.merchant.as_ref())
             .and_then(|m| m.mob);
-        let session = self.merchant_apply(session, mob);
+        let (session, traded) = self.merchant_apply(session, mob);
+        self.merchant_traded(mob, &traded);
         if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
             m.session = session;
         }
     }
-    /// What a menu click's session did, applied to the world and its mob.
+    /// What a menu click's session did, applied to the world and its mob;
+    /// with the result of each trade made, for `merchant_traded`.
     pub(super) fn merchant_apply(
         &mut self,
         session: Box<merchant::Session>,
         mob: Option<u32>,
-    ) -> Box<merchant::Session> {
+    ) -> (Box<merchant::Session>, Vec<ItemStack>) {
         let mut session = session;
+        let mut traded = Vec::new();
         let events = std::mem::take(&mut session.events);
         let (villager, origin) = (session.villager, session.origin);
         if let Some(m) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
@@ -438,11 +443,26 @@ impl Game<'_> {
                     };
                     self.audio.play(sound, Some(origin), 1.0, pitch);
                 }
-                merchant::Event::Traded(_) => self.stats.custom("traded_with_villager", 1),
+                merchant::Event::Traded(index) => {
+                    traded.extend(session.offers.get(index).map(|o| o.result.clone()));
+                }
                 merchant::Event::TradeSound => {}
             }
         }
-        session
+        (session, traded)
+    }
+    /// `MerchantResultSlot.checkTakeAchievements` and `AbstractVillager.notifyTrade`
+    /// for each trade made: the statistic and the `villager_trade` trigger.
+    pub(super) fn merchant_traded(&mut self, mob: Option<u32>, results: &[ItemStack]) {
+        for result in results {
+            self.stats.custom("traded_with_villager", 1);
+            let villager = mob
+                .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+                .map(|m| self.mob_entity(m));
+            if let Some(villager) = villager {
+                self.trigger_trade(&villager, result);
+            }
+        }
     }
     /// `Villager.customServerAiStep`: the TRADE reputation event of the last
     /// trade, a tick later; the prices follow the new reputation.
@@ -765,7 +785,7 @@ impl Game<'_> {
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             let stack = self.slot_mut(i).clone();
-            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
+            self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);

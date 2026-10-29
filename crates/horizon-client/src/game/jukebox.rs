@@ -5,11 +5,17 @@
 use super::Game;
 use horizon_client::{
     containers::{BlockEntity, Jukebox},
+    first_person::Hand,
     items::ItemStack,
+    mobs::Species,
     particles::{ParticleOptions, ParticleType},
     text::Text,
 };
-use horizon_core::{position::BlockPos, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    position::BlockPos,
+    random::RandomSource,
+};
 use horizon_world::level::flags as level_flags;
 
 impl Game<'_> {
@@ -59,6 +65,10 @@ impl Game<'_> {
             return false;
         }
         if self.jukebox(pos).is_some_and(|j| j.record.is_some()) {
+            // TRY_WITH_EMPTY_HAND: only the main hand goes on to useWithoutItem.
+            if self.hand != Hand::Main {
+                return false;
+            }
             self.eject_record(pos);
             return true;
         }
@@ -79,6 +89,7 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        self.stats.custom("play_record", 1);
         self.world.block_entities.insert(
             (pos[0], pos[1], pos[2]),
             BlockEntity::Jukebox(Jukebox {
@@ -90,11 +101,37 @@ impl Game<'_> {
         self.set_has_record(pos, true);
         self.start_song(pos, &song);
         self.jukebox_changed(pos);
+        // ServerPlayerGameMode.useItemOn: the action was consumed.
+        self.trigger_block("minecraft:item_used_on_block", pos, stack);
         true
+    }
+    /// `JukeboxBlock.useItemOn` on this client's level for the main hand:
+    /// whether the jukebox at `pos` takes the click (`has_record` pops the
+    /// disc out, or a `jukebox_playable` item goes in). The server does the
+    /// rest, see `use_jukebox`.
+    pub(super) fn jukebox_takes(&self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if &*self.res.facts().get(state).name != "minecraft:jukebox" {
+            return false;
+        }
+        let has_record = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("has_record"))
+            .is_some_and(|v| v == "true");
+        has_record
+            || held.is_some_and(|stack| {
+                self.res
+                    .items()
+                    .get(&stack.item)
+                    .is_some_and(|i| i.jukebox_song.is_some())
+            })
     }
     /// Level event 1010: the song from the jukebox, and the "Now Playing" overlay.
     fn start_song(&mut self, pos: [i32; 3], song: &str) {
-        self.stop_song(pos);
+        self.stop_sound(pos);
         let Some(s) = self.res.items().songs.get(song).cloned() else {
             return;
         };
@@ -106,10 +143,36 @@ impl Game<'_> {
         self.titles
             .set_overlay(Text::translate("record.nowPlaying", &[description]), true);
         self.update_song_volumes();
+        self.notify_record_playing(pos, true);
+        if self.audio.capture.is_some() {
+            self.lan_songs.push((pos, Some(song.to_owned())));
+        }
     }
-    fn stop_song(&mut self, pos: [i32; 3]) {
+    fn stop_sound(&mut self, pos: [i32; 3]) {
         if let Some(id) = self.jukebox_sounds.remove(&(pos[0], pos[1], pos[2])) {
             self.audio.stop_and_release(id);
+        }
+    }
+    /// Level event 1011: the song ends, here and for the guests.
+    fn stop_song(&mut self, pos: [i32; 3]) {
+        self.stop_sound(pos);
+        self.notify_record_playing(pos, false);
+        if self.audio.capture.is_some() {
+            self.lan_songs.push((pos, None));
+        }
+    }
+    /// `LevelEventHandler.notifyNearbyEntities` (level events 1010 and 1011):
+    /// parrots within three blocks of the jukebox start or stop dancing.
+    pub(super) fn notify_record_playing(&mut self, pos: [i32; 3], playing: bool) {
+        let min = Vec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+        let area = Aabb::new(min, min.add_vector(Vec3::new(1.0, 1.0, 1.0)))
+            .inflate(Vec3::new(3.0, 3.0, 3.0));
+        for m in self
+            .mobs
+            .iter_mut()
+            .filter(|m| m.species() == Species::Parrot && m.bounds().intersects(area))
+        {
+            m.extra.party_jukebox = playing.then_some(pos);
         }
     }
     /// `popOutTheItem`: the disc above the jukebox, and the song stops.
