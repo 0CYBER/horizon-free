@@ -13,6 +13,7 @@ mod console;
 mod console_page;
 mod cull;
 mod datapacks_page;
+mod dev_options;
 mod export_page;
 mod game_tools;
 mod import_page;
@@ -53,7 +54,7 @@ use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
-use horizon_launcher::nightly;
+use horizon_launcher::native_mods;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -169,13 +170,16 @@ struct Launcher {
     /// The version being deleted on a background thread. It is already out of `installed`, so
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
     removing: Option<String>,
+    /// What each installed version takes on disk, measured on a thread for the Versions page, and
+    /// the installed list it was measured for.
+    disk: Vec<(String, u64)>,
+    disk_for: Vec<String>,
     install_error: Option<(String, String)>,
-    /// Nightly (`horizon_launcher::nightly`): how far the nightly being installed is, and why the
-    /// last check or install failed.
-    nightly_progress: Option<f32>,
-    nightly_error: Option<String>,
-    /// Play the Nightly instance once its first install ends: the player just turned Nightly on.
-    nightly_select: bool,
+    /// Native mods (`native_mods`): the build's step while it runs, why it failed, and the
+    /// warning before a build while it is open, with the mods it names.
+    native_step: Option<String>,
+    native_error: Option<String>,
+    native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
     confirm_remove: Option<String>,
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
@@ -213,8 +217,15 @@ struct Launcher {
     owner: Option<bool>,
     /// Play was refused (or Home's Sign in pressed): the owner gate's screen is open.
     owner_screen_open: bool,
-    /// The game is waiting for its session (a token renewal) before it starts.
+    /// Clicks on the sidebar's launcher version, and whether they revealed the developer options
+    /// (`dev_options`) for this run.
+    dev_clicks: u8,
+    dev_options: bool,
+    /// The game is waiting for its session (a token renewal), or a Java instance for its files
+    /// and Java (`start_java`), before it starts.
     starting_client: Option<String>,
+    /// Play was pressed on a version not prepared yet: it starts once this preparation ends well.
+    play_when_prepared: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
     friend_code: String,
@@ -385,10 +396,12 @@ impl Launcher {
             installed,
             installing: None,
             removing: None,
+            disk: Vec::new(),
+            disk_for: Vec::new(),
             install_error: None,
-            nightly_progress: None,
-            nightly_error: None,
-            nightly_select: false,
+            native_step: None,
+            native_error: None,
+            native_confirm: None,
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
@@ -419,7 +432,10 @@ impl Launcher {
             keychain: true,
             owner: None,
             owner_screen_open: false,
+            dev_clicks: 0,
+            dev_options: false,
             starting_client: None,
+            play_when_prepared: None,
             friend_code: String::new(),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
@@ -492,8 +508,10 @@ impl Launcher {
     }
 
     fn go(&mut self, page: Page) {
-        // The game may have made up a name since: read it again (a small file, once a switch).
+        // The game may have made up a name since, and the CLI or another window may have
+        // changed the accounts: read them again (small files, once a switch).
         self.offline_name = offline_name();
+        self.accounts = Accounts::load();
         if page != self.page {
             self.page = page;
             self.switches += 1;
@@ -511,7 +529,7 @@ impl Launcher {
         self.checked = Some(Instant::now());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(Msg::Updates(backend::check_updates()));
+            let _ = tx.send(Msg::Updates(backend::check_updates().map(Box::new)));
         });
     }
 
@@ -554,39 +572,54 @@ impl Launcher {
         self.install(&release);
     }
 
-    /// With Nightly on, installs the current nightly in the Nightly instance if it is new.
-    fn update_nightly(&mut self) {
-        if !self.settings.nightly || self.nightly_progress.is_some() {
-            return;
-        }
-        self.nightly_progress = Some(0.);
-        self.nightly_error = None;
-        let (tx, installed) = (self.tx.clone(), self.installed.clone());
-        std::thread::spawn(move || {
-            let result = nightly::latest().and_then(|latest| {
-                let Some(release) = nightly::update(latest, &installed) else {
-                    return Ok(None);
-                };
-                let progress = |p| {
-                    let _ = tx.send(Msg::NightlyProgress(p));
-                };
-                nightly::install(&release, progress).map(|_| Some(nightly::version_of(&release)))
-            });
-            let _ = tx.send(Msg::Nightly(result));
-        });
+    /// The native mods turned on in the instance Play starts, unpacked and checked, with their
+    /// bundles: what the warning names and the build compiles.
+    fn native_mods_to_build(
+        &self,
+    ) -> Result<(std::path::PathBuf, Vec<native_mods::Bundle>), String> {
+        let folder = native_mods::installed_mods(&instances::selected().home)?;
+        let found = native_mods::bundles(&folder)?;
+        Ok((folder, found))
     }
 
-    /// Turns Nightly on (install it, then play its instance) or off (play the release again; the
-    /// Nightly instance and its worlds stay).
-    fn set_nightly(&mut self, on: bool) {
-        self.settings.nightly = on;
-        if on {
-            self.nightly_select = true;
-        } else if self.settings.instance.as_deref() == Some(nightly::INSTANCE) {
-            self.settings.instance = None;
+    /// Builds the selected instance's native mods, once the player accepted the warning. The
+    /// build reuses the game files of the version the instance plays, else the newest installed.
+    fn build_native(&mut self) {
+        if self.native_step.is_some() {
+            return;
         }
-        self.settings.save();
-        self.update_nightly();
+        self.native_confirm = None;
+        self.native_error = None;
+        let instance = instances::selected();
+        let base = instance
+            .version
+            .clone()
+            .filter(|v| !native_mods::is_native(v))
+            .or_else(|| {
+                self.installed
+                    .iter()
+                    .find(|t| backend::is_game_tag(t) || t.starts_with("nightly-"))
+                    .cloned()
+            });
+        let Some(base) = base else {
+            self.native_error = Some(tr("Install Horizon first.").into());
+            return;
+        };
+        let folder = match self.native_mods_to_build() {
+            Ok((folder, _)) => folder,
+            Err(e) => {
+                self.native_error = Some(e);
+                return;
+            }
+        };
+        self.native_step = Some(tr("Starting the build").into());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = native_mods::build(&base, &folder, Some(&instance), |step| {
+                let _ = tx.send(Msg::NativeProgress(step.label()));
+            });
+            let _ = tx.send(Msg::Native(result));
+        });
     }
 
     fn fetch_releases(&mut self) {
@@ -604,7 +637,7 @@ impl Launcher {
             let updates = backend::releases_and_updates(|releases| {
                 let _ = tx.send(Msg::Releases(releases));
             });
-            let _ = tx.send(Msg::Updates(updates));
+            let _ = tx.send(Msg::Updates(updates.map(Box::new)));
         });
     }
 
@@ -645,6 +678,24 @@ impl Launcher {
                 Msg::Keychain(persistent) => self.keychain = persistent,
                 Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
+                Msg::JavaGame(id, home, cmd) => {
+                    self.starting_client = None;
+                    match cmd.and_then(|cmd| backend::spawn(Job::Client, cmd, self.tx.clone())) {
+                        Ok(r) => {
+                            self.client = Some(r);
+                            self.client_home = Some(home);
+                            self.client_run = Some((id, Instant::now()));
+                            self.step_aside(cx);
+                        }
+                        Err(e) => {
+                            if e == account::NoOwner.to_string() {
+                                self.owner = Some(false);
+                                self.owner_screen_open = true;
+                            }
+                            self.client_error = Some(e);
+                        }
+                    }
+                }
                 Msg::Session(session) => {
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
@@ -660,7 +711,10 @@ impl Launcher {
                                 continue;
                             }
                         };
-                        self.owner = Some(true);
+                        // Past the gate by the developer option alone is no owner.
+                        if !self.settings.dev_offline {
+                            self.owner = Some(true);
+                        }
                         if let Some(file) = file {
                             cmd.arg("--session-file").arg(file);
                         }
@@ -748,6 +802,11 @@ impl Launcher {
                                 self.settings.selected = Some(tag);
                             }
                             self.settings.save();
+                            // After the save: the selected version is never pruned.
+                            let tx = self.tx.clone();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(Msg::Pruned(backend::prune_old_versions()));
+                            });
                         }
                         Err(e) => self.install_error = Some((tag, e)),
                     }
@@ -763,39 +822,30 @@ impl Launcher {
                         self.install_error = Some((tag, e));
                     }
                 }
+                Msg::DiskUse(disk) => self.disk = disk,
+                Msg::Pruned(gone) => {
+                    if !gone.is_empty() {
+                        self.installed = backend::installed();
+                    }
+                }
                 Msg::Updates(Ok(updates)) => {
                     self.update_error = None;
-                    self.updates = updates;
+                    self.updates = *updates;
                     if self.settings.auto_install() {
                         self.install_update();
                     }
                     if let Some(release) = self.updates.launcher.clone() {
                         self.update_launcher(release);
                     }
-                    self.update_nightly();
                 }
                 Msg::Updates(Err(e)) => self.update_error = Some(e),
-                Msg::NightlyProgress(p) => self.nightly_progress = Some(p),
-                Msg::Nightly(result) => {
-                    self.nightly_progress = None;
+                Msg::NativeProgress(step) => self.native_step = Some(step),
+                Msg::Native(result) => {
+                    self.native_step = None;
                     self.installed = backend::installed();
                     self.reload_instances();
-                    match result {
-                        Ok(_)
-                            if self.nightly_select
-                                && self.settings.nightly
-                                && self
-                                    .instances
-                                    .list
-                                    .iter()
-                                    .any(|i| i.id == nightly::INSTANCE) =>
-                        {
-                            self.nightly_select = false;
-                            self.settings.instance = Some(nightly::INSTANCE.into());
-                            self.settings.save();
-                        }
-                        Ok(_) => {}
-                        Err(e) => self.nightly_error = Some(e),
+                    if let Err(e) = result {
+                        self.native_error = Some(e);
                     }
                 }
                 Msg::LauncherProgress(p) => {
@@ -820,6 +870,8 @@ impl Launcher {
                     }
                 }
                 Msg::PackDone(result) => self.pack_done(result),
+                // Old versions log their session; it never reaches the window.
+                Msg::Line(_, line) if line.contains("Session ID is") => {}
                 Msg::Line(job, line) => {
                     if job == Job::Client && line.starts_with(perf::GAME_FIRST_FRAME) {
                         if let Some(pressed) = self.play_pressed.take() {
@@ -841,6 +893,13 @@ impl Launcher {
                     match job {
                         Job::Prepare => {
                             self.preparing = false;
+                            // Play pressed before the version was prepared plays now.
+                            if let Some(tag) = self.play_when_prepared.take() {
+                                if error.is_none() && backend::is_prepared(&tag) {
+                                    self.starting_pack = None;
+                                    self.start_client(tag);
+                                }
+                            }
                             if let (None, Some(started)) = (&error, self.prepare_started.take()) {
                                 self.perf.record_since("launcher.prepare_ms", started);
                             }
@@ -1069,14 +1128,64 @@ impl Launcher {
     }
 
     fn play(&mut self) {
+        let java = self
+            .selected_instance()
+            .filter(|i| i.java.is_some())
+            .cloned();
+        if let Some(instance) = java {
+            // Mojang's game: no Horizon version or preparation, only no game already running.
+            // Joining and quick play are Horizon's.
+            self.joining = None;
+            self.quick_play = None;
+            if self.client.is_some() || self.starting_client.is_some() {
+                return;
+            }
+            self.starting_pack = None;
+            self.start_java(instance);
+            return;
+        }
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        if self.client.is_some() || self.starting_client.is_some() {
+        if !self.can_start(&tag) {
             return;
         }
         self.starting_pack = None;
         self.start_client(tag);
+    }
+
+    /// Starts a Java instance's Minecraft: its files and Java first (downloaded the first time,
+    /// their lines in the log), then `drain` starts the game when the command arrives.
+    fn start_java(&mut self, instance: instances::Instance) {
+        self.client_error = None;
+        self.crash = None;
+        self.prepare_log.clear();
+        self.client_started =
+            Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
+        self.starting_client = Some(instance.id.clone());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let log = |line: String| {
+                let _ = tx.send(Msg::Line(Job::Client, line));
+            };
+            let cmd = backend::java_game(&instance, &log)
+                .map(|cmd| horizon_launcher::launch::wrap(cmd, &instance.launch));
+            let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
+        });
+    }
+
+    /// Whether `tag` can start now ([`starts_now`]): prepared, no preparation under way, no game
+    /// running or starting.
+    pub(crate) fn can_start(&self, tag: &str) -> bool {
+        let running = self.client.is_some() || self.starting_client.is_some();
+        starts_now(backend::is_prepared(tag), self.preparing, running)
+    }
+
+    /// Whether the selected instance's version can start now, from a shortcut (a server's Join,
+    /// a world's Play, a friend's code): Horizon's only, never a Java instance.
+    pub(crate) fn can_start_selected(&self) -> bool {
+        self.selected_instance().is_none_or(|i| i.java.is_none())
+            && self.selected().is_some_and(|tag| self.can_start(tag))
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -1094,9 +1203,10 @@ impl Launcher {
         self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
+        let offline_without_owner = self.settings.dev_offline;
         std::thread::spawn(move || {
             backend::complete_assets(&tag);
-            let session = account::session_for_game(&backend::game_home());
+            let session = account::session_for_game(&backend::game_home(), offline_without_owner);
             let _ = tx.send(Msg::Session(session));
         });
     }
@@ -1352,17 +1462,61 @@ fn button(
 /// Copies to the clipboard, or into `HORIZON_LAUNCHER_CLIPBOARD` when a test run sets it
 /// (`horizon_launcher::desktop_seams`).
 fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
-    let Some(file) = horizon_launcher::desktop_seams::clipboard_file() else {
-        cx.write_to_clipboard(item);
+    if let Some(file) = horizon_launcher::desktop_seams::clipboard_file() {
+        let bytes = match item.entries().first() {
+            Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
+            _ => item.text().unwrap_or_default().into_bytes(),
+        };
+        if let Err(e) = std::fs::write(&file, bytes) {
+            eprintln!("{}: {e}", file.display());
+        }
         return;
-    };
-    let bytes = match item.entries().first() {
-        Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
-        _ => item.text().unwrap_or_default().into_bytes(),
-    };
-    if let Err(e) = std::fs::write(&file, bytes) {
-        eprintln!("{}: {e}", file.display());
     }
+    cx.write_to_clipboard(item.clone());
+    #[cfg(target_os = "linux")]
+    if let Some(text) = item.text() {
+        sync_system_clipboard(text);
+    }
+}
+
+/// GPUI's Wayland clipboard sends the last key press's serial, which a compositor ignores
+/// after a mouse click: hand the text to the desktop's own tool too, the first one present
+/// for this session (`wl-copy` on Wayland, `xclip` or `xsel` on X11).
+#[cfg(target_os = "linux")]
+fn sync_system_clipboard(text: String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const TOOLS: [(&str, &str, &[&str]); 3] = [
+        ("WAYLAND_DISPLAY", "wl-copy", &[]),
+        ("DISPLAY", "xclip", &["-selection", "clipboard"]),
+        ("DISPLAY", "xsel", &["--clipboard", "--input"]),
+    ];
+    if text.is_empty() {
+        return;
+    }
+    // Off the UI thread: a tool can take its time.
+    std::thread::spawn(move || {
+        for (session, tool, args) in TOOLS {
+            if std::env::var_os(session).is_none() {
+                continue;
+            }
+            let Ok(mut child) = Command::new(tool)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                continue;
+            };
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if child.wait().is_ok_and(|status| status.success()) {
+                return;
+            }
+        }
+    });
 }
 
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
@@ -1463,6 +1617,34 @@ fn segments<T: Copy + PartialEq + 'static>(
         }))
 }
 
+/// What the Play button does for the selected version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlayPress {
+    Play,
+    /// Not prepared, for an account that owns the game: prepare it (from the player's install,
+    /// else downloaded from Mojang for that account), then play, as the official launcher does.
+    PrepareThenPlay,
+    /// Not prepared and no owner (signing in comes first), or busy preparing or playing.
+    Nothing,
+}
+
+/// `owner`: whether an account here owns the game, by the keychain (`Launcher::owner`).
+fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
+    match (prepared, owner) {
+        _ if busy => PlayPress::Nothing,
+        (true, _) => PlayPress::Play,
+        (false, Some(true)) => PlayPress::PrepareThenPlay,
+        (false, _) => PlayPress::Nothing,
+    }
+}
+
+/// Whether a shortcut that starts the game at once (a server's Join, a world's Play, a friend's
+/// code, a pack's Play) starts it now: only when Play would play. Never while a preparation runs:
+/// the game would open on half-written files.
+fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
+    play_press(prepared, None, preparing || running) == PlayPress::Play
+}
+
 /// The selected version once one has been removed: the saved choice if it is still installed,
 /// else the newest left.
 fn selection_after_removal(installed: &[String], saved: Option<String>) -> Option<String> {
@@ -1497,6 +1679,15 @@ fn page_header(title: &str, description: &str, t: &Theme) -> Div {
 /// One row of a list, as its own panel: a name in the pixel face with an optional detail under
 /// it, then a value or a control on the right. Rows were numbered in the quiet look; `_n` keeps
 /// the call sites as they are.
+/// How an available update is named: a Nightly by its title ("Nightly 2026-10-28 · 0c02067"), a
+/// release by its tag.
+fn update_name(release: &Release) -> &str {
+    match release.nightly {
+        Some(_) => &release.name,
+        None => &release.tag,
+    }
+}
+
 fn index_row(
     _n: usize,
     name: impl IntoElement,
@@ -1723,6 +1914,10 @@ impl Launcher {
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.account_menu = !this.account_menu;
+                if this.account_menu {
+                    // Who can play may have changed elsewhere since the window opened.
+                    this.accounts = Accounts::load();
+                }
                 cx.notify();
             }));
         let account = div()
@@ -1898,7 +2093,7 @@ impl Launcher {
                             .child(sub(tr(if up { "Running" } else { "Stopped" }).into())),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.servers.open = Some(dir.clone());
+                        this.open_server(dir.clone());
                         this.go(Page::Servers);
                         cx.notify();
                     })),
@@ -1998,6 +2193,14 @@ impl Launcher {
             }
             foot = foot.child(side);
         }
+        if !self.links.sponsor.is_empty() {
+            foot = foot.child(link(
+                "sponsor",
+                tr("Sponsor"),
+                "heart",
+                self.links.sponsor.clone(),
+            ));
+        }
         if !self.links.discord.is_empty() {
             foot = foot.child(link(
                 "discord",
@@ -2016,9 +2219,14 @@ impl Launcher {
         }
         foot = foot.child(
             caps(format!("Launcher {}", backend::VERSION))
+                .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .text_color(t.muted),
+                .text_color(t.muted)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.version_clicked();
+                    cx.notify();
+                })),
         );
         div()
             .id("sidebar")
@@ -2162,7 +2370,13 @@ impl Launcher {
 
     fn play_page(&mut self, banner_width: f32, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let Some(tag) = self.selected().cloned() else {
+        // A Java instance plays Mojang's game: no Horizon version, nothing of Horizon's to prepare.
+        let java = self.selected_instance().and_then(|i| i.java.clone());
+        let Some(tag) = self
+            .selected()
+            .cloned()
+            .or_else(|| java.is_some().then(String::new))
+        else {
             // No hero without a version: the page starts below the top bar like the others.
             return div()
                 .flex()
@@ -2186,8 +2400,13 @@ impl Launcher {
         let prepared = backend::is_prepared(&tag);
         // Prepared without sounds (#1035): Prepare again is the fix, so it stands out.
         let silent = prepared && !backend::has_sounds(&tag);
-        let version = backend::game_version(&tag);
-        let hero = self.hero(&tag, &version, prepared, cx);
+        let version = java
+            .as_ref()
+            .map_or_else(|| backend::game_version(&tag), |j| j.minecraft.clone());
+        let hero = match java {
+            Some(_) => self.hero("", &version, true, cx),
+            None => self.hero(&tag, &version, prepared, cx),
+        };
         let running = self.client.is_some() || self.starting_client.is_some();
         let play_label = if running { "Running" } else { "Play" };
         // The label clears the icon in every language ("Играть" is wider than "Play").
@@ -2205,14 +2424,27 @@ impl Launcher {
                     .top(px(17.))
                     .child(blocks::icon("play", 22., t.on_face)),
             );
-        if !prepared || self.preparing || running {
-            play = disabled(play);
-        } else {
-            play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.picker_open = false;
-                this.play();
-                cx.notify();
-            }));
+        match play_press(
+            prepared || java.is_some(),
+            self.owner,
+            self.preparing || running,
+        ) {
+            PlayPress::Nothing => play = disabled(play),
+            PlayPress::Play => {
+                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker_open = false;
+                    this.play();
+                    cx.notify();
+                }))
+            }
+            PlayPress::PrepareThenPlay => {
+                play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker_open = false;
+                    this.play_when_prepared = this.selected().cloned();
+                    this.prepare(backend::MinecraftFrom::Install);
+                    cx.notify();
+                }))
+            }
         }
         let actions = div()
             .flex()
@@ -2238,10 +2470,16 @@ impl Launcher {
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
         // owner there is nothing to play, so signing in comes first.
         let first = (!prepared && !self.preparing)
-            .then_some(self.owner)
+            .then_some(self.owner_shown())
             .flatten();
+        // No launcher folder with Minecraft on this computer: an owner needs none.
+        let no_install = self.settings.minecraft_dir.is_none();
         let resources_value = match first {
             _ if self.preparing => tr("Preparing…").to_string(),
+            Some(true) if no_install => trf(
+                "Not prepared. Play downloads Minecraft {version} from Mojang for your account and prepares it.",
+                &[("version", &version)],
+            ),
             Some(true) => trf(
                 "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.",
                 &[("version", &version)],
@@ -2271,6 +2509,18 @@ impl Launcher {
             }));
         }
         let prepare = match first {
+            Some(true) if no_install => div().child(
+                button(
+                    "prepare-download",
+                    "Download and prepare",
+                    Kind::Secondary,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.prepare(backend::MinecraftFrom::Mojang);
+                    cx.notify();
+                })),
+            ),
             Some(true) => div()
                 .flex()
                 .gap(px(8.))
@@ -2304,12 +2554,15 @@ impl Launcher {
             ),
             None => div().child(prepare),
         };
+        let owner = self.owner == Some(true);
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child(tr(
-                        "Not found. Choose the folder where your launcher keeps Minecraft.",
-                    ))
+                    .child(if owner {
+                        tr("None needed: Horizon downloads Minecraft from Mojang for your account.")
+                    } else {
+                        tr("Not found. Choose the folder where your launcher keeps Minecraft.")
+                    })
                     .into_any_element()
             },
             |p| {
@@ -2325,15 +2578,31 @@ impl Launcher {
             .child(section_title("Ready to play", "check", &t).mb(px(12.)))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
-            .children(self.launch_panel(cx))
-            .child(index_row(
+            .children(self.launch_panel(cx));
+        rows = match &java {
+            Some(java) => rows.child(index_row(
                 2,
-                tr("Resources"),
-                Some(div().child(resources_value).into_any_element()),
-                Some(prepare.into_any_element()),
+                tr("Game"),
+                Some(
+                    div()
+                        .child(trf(
+                            "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.",
+                            &[("version", &java.minecraft)],
+                        ))
+                        .into_any_element(),
+                ),
+                None,
                 &t,
-            ))
-            .child(index_row(
+            )),
+            None => rows
+                .child(index_row(
+                    2,
+                    tr("Resources"),
+                    Some(div().child(resources_value).into_any_element()),
+                    Some(prepare.into_any_element()),
+                    &t,
+                ))
+                .child(index_row(
                 3,
                 tr("Minecraft folder"),
                 Some(minecraft),
@@ -2343,12 +2612,15 @@ impl Launcher {
                         .into_any_element(),
                 ),
                 &t,
-            ));
+            )),
+        };
         {
-            rows = rows.child(self.join_friend_row(prepared && !running, cx));
+            if java.is_none() {
+                rows = rows.child(self.join_friend_row(self.can_start(&tag), cx));
+            }
             // The top bar shows who plays; a row only when there is something to do about it:
             // no account that owns the game (Play needs one), or offline.
-            if self.owner == Some(false) {
+            if self.owner_shown() == Some(false) {
                 rows = rows.child(index_row(
                     5,
                     tr("Microsoft account"),
@@ -2624,7 +2896,8 @@ impl Launcher {
             .child(body)
     }
 
-    /// The Play page's focal point: what will start, and a line from its notes.
+    /// The Play page's focal point: what will start, and a line from its notes. No `tag`: a Java
+    /// instance's Minecraft.
     fn hero(&self, tag: &str, version: &str, prepared: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let summary = match &self.releases {
@@ -2634,7 +2907,11 @@ impl Launcher {
                 .and_then(|r| backend::notes_summary(&r.body)),
             _ => None,
         };
-        let title = "Horizon";
+        let title = if tag.is_empty() {
+            "Minecraft"
+        } else {
+            "Horizon"
+        };
         // Never squeezed by the rows below: the ping notice can make it tall.
         let mut hero = div()
             .flex()
@@ -2700,7 +2977,7 @@ impl Launcher {
                 .text_size(px(theme::CAPTION.px))
                 .text_color(t.muted)
                 .child(div().size(px(6.)).rounded_full().bg(t.accent))
-                .child(format!("{} available", release.tag));
+                .child(format!("{} available", update_name(release)));
             hero = hero.child(match installing {
                 Some((_, p)) => line
                     .child(
@@ -2779,6 +3056,13 @@ impl Launcher {
                 cx.notify();
             }),
         );
+        let prune = switch("auto-prune", self.settings.auto_prune(), &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.prune_old_versions = Some(!this.settings.auto_prune());
+                this.settings.save();
+                cx.notify();
+            },
+        ));
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -2801,7 +3085,7 @@ impl Launcher {
             }),
         );
         let horizon = match (&self.updates.horizon, &self.update_error) {
-            (Some(r), _) => trf("{version} available", &[("version", &r.tag)]),
+            (Some(r), _) => trf("{version} available", &[("version", update_name(r))]),
             (None, Some(e)) => e.clone(),
             (None, None) if self.checked.is_some() => tr("Up to date").to_string(),
             _ => tr("Checking…").to_string(),
@@ -2929,7 +3213,20 @@ impl Launcher {
                         Some(toggle.into_any_element()),
                         &t,
                     ))
-                    .child(self.nightly_row(n + 2, cx))
+                    .child(index_row(
+                        n + 2,
+                        tr("Delete old versions automatically"),
+                        Some(
+                            div()
+                                .child(trf(
+                                    "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.",
+                                    &[("count", &self.settings.keep_newest().to_string())],
+                                ))
+                                .into_any_element(),
+                        ),
+                        Some(prune.into_any_element()),
+                        &t,
+                    ))
                     .child(group("Launcher", "monitor"))
                     .child(index_row(
                         n + 3,
@@ -2953,6 +3250,7 @@ impl Launcher {
                     .child(self.proxy_row(n + 4, cx))
                     .child(group("Game", "gamepad"))
                     .child(self.game_args_row(n + 5, cx))
+                    .child(self.native_mods_row(n + 5, cx))
                     .child(group("AI", "terminal"))
                     .child(self.no_ai_row(n + 6, cx))
                     .child(group("About", "info-box"))
@@ -3006,61 +3304,114 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .children(self.agents_section(cx))
+            .children(self.dev_options_section(cx))
     }
 
-    /// Settings' Nightly row: off by default; on, the nightly build installs and updates in its
-    /// own instance, and the release stays one click away (the Horizon instance).
-    fn nightly_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
+    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
+    /// Settings' Native mods row (docs/native-mods.md): off by default. On, Build compiles the
+    /// native mods installed in the instance Play starts, after a warning that names them, and
+    /// that instance then plays the build.
+    fn native_mods_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let on = self.settings.nightly;
+        let on = self.settings.native_mods;
         let toggle =
-            switch("nightly", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.set_nightly(!this.settings.nightly);
+            switch("native-mods", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.settings.native_mods = !this.settings.native_mods;
+                this.native_confirm = None;
+                this.settings.save();
                 cx.notify();
             }));
-        let what = tr(
-            "Can include pull requests not reviewed yet, picked by trusted reviewers; may break.",
+        let mut detail = div().flex().flex_col().gap(px(4.)).child(
+            tr("Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.").to_string(),
         );
-        let status = match (&self.nightly_progress, &self.nightly_error) {
-            _ if !on => tr("Plays in its own Nightly instance: your worlds and the release stay as they are.")
-                .to_string(),
-            (Some(p), _) => trf(
-                "Installing the nightly, {percent}%",
-                &[("percent", &format!("{:.0}", p * 100.))],
-            ),
-            (None, Some(e)) => trf("The nightly could not be installed: {error}", &[("error", e)]),
-            (None, None) => match self
-                .instances
-                .list
-                .iter()
-                .find(|i| i.id == nightly::INSTANCE)
-                .and_then(|i| i.version.clone())
-            {
-                Some(version) => trf(
-                    "{version} in the Nightly instance. Choose Horizon in the sidebar to play the release.",
-                    &[("version", &version)],
-                ),
-                None => tr("No nightly build yet.").to_string(),
-            },
-        };
+        if on {
+            let status = match (&self.native_step, &self.native_error) {
+                (Some(step), _) => Some(div().child(step.clone())),
+                (None, Some(e)) => Some(div().text_color(t.danger).child(e.clone())),
+                (None, None) => instances::selected()
+                    .version
+                    .filter(|v| native_mods::is_native(v))
+                    .map(|v| {
+                        div().child(trf("{version} plays in this instance.", &[("version", &v)]))
+                    }),
+            };
+            detail = detail.children(status);
+            if self.native_step.is_none() && self.native_confirm.is_none() {
+                detail = detail.child(div().flex().gap(px(8.)).mt(px(4.)).child(
+                    button("native-build", "Build", Kind::Primary, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
+                            cx.notify();
+                        },
+                    )),
+                ));
+            }
+            if let Some(mods) = &self.native_confirm {
+                detail = detail.child(self.native_warning(mods, cx));
+            }
+        }
         index_row(
             n,
-            tr("Nightly builds"),
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(what.to_string())
-                    .child(status)
-                    .into_any_element(),
-            ),
+            tr("Native mods (experimental)"),
+            Some(detail.into_any_element()),
             Some(toggle.into_any_element()),
             &t,
         )
     }
 
-    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
-    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
+    /// The warning before a native build: what the mods can do and which mods. The build starts
+    /// only from its button.
+    fn native_warning(
+        &self,
+        mods: &Result<Vec<native_mods::Bundle>, String>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        let list = match mods {
+            Ok(found) => found
+                .iter()
+                .map(|b| format!("{} {}", b.id, b.version))
+                .collect::<Vec<_>>()
+                .join(", "),
+            Err(e) => e.clone(),
+        };
+        let panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .mt(px(8.))
+            .p(px(12.))
+            .bg(t.well)
+            .child(div().text_color(t.danger).child(tr("These mods will run with full access to your computer").to_string()))
+            .child(tr("They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.").to_string())
+            .child(trf("Mods: {mods}", &[("mods", &list)]))
+            .child(tr("The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.").to_string());
+        let mut buttons = div().flex().gap(px(8.)).mt(px(4.));
+        if mods.is_ok() {
+            buttons = buttons.child(
+                button(
+                    "native-trust",
+                    "I trust these mods: build",
+                    Kind::Primary,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.build_native();
+                    cx.notify();
+                })),
+            );
+        }
+        panel.child(buttons.child(
+            button("native-cancel", "Cancel", Kind::Secondary, &t).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    this.native_confirm = None;
+                    cx.notify();
+                },
+            )),
+        ))
+    }
+
     fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let focused = self.args_focused;
@@ -3220,8 +3571,11 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = None;
-                            let _ = this.accounts.save();
+                            let mut accounts = Accounts::load();
+                            accounts.selected = None;
+                            if accounts.save().is_ok() {
+                                this.accounts = accounts;
+                            }
                             cx.notify();
                         }),
                     ),
@@ -3231,8 +3585,7 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.accounts.selected = Some(uuid.clone());
-                            let _ = this.accounts.save();
+                            this.play_as(account::Player::Microsoft(uuid.clone()));
                             cx.notify();
                         }),
                     ),
@@ -3241,12 +3594,15 @@ impl Launcher {
             actions = actions.child(
                 button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
-                        let store = account::store();
-                        if let Err(e) = this.accounts.remove(store, &uuid) {
-                            this.sign_in_state = Some(SignInState::Done(Err(e)));
+                        let mut accounts = Accounts::load();
+                        match accounts
+                            .remove(account::store(), &uuid)
+                            .and_then(|()| accounts.save())
+                        {
+                            Ok(()) => this.accounts = accounts,
+                            Err(e) => this.sign_in_state = Some(SignInState::Done(Err(e))),
                         }
-                        let _ = this.accounts.save();
-                        this.owner = Some(this.accounts.has_owner(store));
+                        this.owner = Some(this.accounts.has_owner(account::store()));
                         cx.notify();
                     },
                 )),
@@ -3488,7 +3844,36 @@ impl Launcher {
             "Builds from GitHub. Each one installs into its own folder.",
             &t,
         );
-        let page = div().flex().flex_col().gap(px(32.)).child(header);
+        // Measured again when the installed versions change.
+        if self.disk_for != self.installed {
+            self.disk_for = self.installed.clone();
+            let (tags, tx) = (self.installed.clone(), self.tx.clone());
+            std::thread::spawn(move || {
+                let disk = tags.into_iter().map(|t| {
+                    let n = backend::disk_use(&t);
+                    (t, n)
+                });
+                let _ = tx.send(Msg::DiskUse(disk.collect()));
+            });
+        }
+        let on_disk = |tag: &String| {
+            let found = self.disk.iter().find(|(t, _)| t == tag);
+            found
+                .filter(|_| self.installed.contains(tag))
+                .map(|(_, n)| *n)
+        };
+        let used: u64 = self.installed.iter().filter_map(on_disk).sum();
+        let page = div()
+            .flex()
+            .flex_col()
+            .gap(px(32.))
+            .child(header)
+            .children((used > 0).then(|| {
+                text(theme::UI).text_color(t.muted).child(trf(
+                    "Installed versions use {size}.",
+                    &[("size", &megabytes(used))],
+                ))
+            }));
         let releases = match &self.releases {
             Load::Loading => return page.child(centered("Loading releases…", &t)),
             Load::Failed(e) => {
@@ -3525,6 +3910,9 @@ impl Launcher {
                 let mut meta = vec![release.date.clone()];
                 if let Some((_, size)) = release.asset {
                     meta.push(megabytes(size));
+                }
+                if let Some(n) = on_disk(&tag) {
+                    meta.push(trf("{size} on disk", &[("size", &megabytes(n))]));
                 }
                 let summary = release
                     .name
@@ -4220,6 +4608,39 @@ mod tests {
             super::selection_after_removal(&[], Some("v0.2.47".into())),
             None
         );
+    }
+
+    /// An owner's Play works on a version not prepared yet: it prepares it (downloading
+    /// Minecraft from Mojang when this computer has no install), then plays. Without an owner
+    /// it stays off: signing in comes first.
+    #[test]
+    fn play_prepares_first_for_an_owner() {
+        use super::{play_press, PlayPress};
+        assert_eq!(play_press(true, Some(true), false), PlayPress::Play);
+        assert_eq!(play_press(true, None, false), PlayPress::Play);
+        assert_eq!(
+            play_press(false, Some(true), false),
+            PlayPress::PrepareThenPlay
+        );
+        assert_eq!(play_press(false, Some(false), false), PlayPress::Nothing);
+        assert_eq!(play_press(false, None, false), PlayPress::Nothing);
+        assert_eq!(play_press(false, Some(true), true), PlayPress::Nothing);
+        assert_eq!(play_press(true, Some(true), true), PlayPress::Nothing);
+    }
+
+    /// A server's Join (and every other shortcut) waits like Play: not while the version's
+    /// first download and preparation run (#horizon-bugs, 0.2.23: a white window opened).
+    #[test]
+    fn shortcuts_start_only_when_play_would() {
+        use super::starts_now;
+        assert!(starts_now(true, false, false));
+        assert!(
+            !starts_now(false, true, false),
+            "first-time setup under way"
+        );
+        assert!(!starts_now(true, true, false), "prepared again under way");
+        assert!(!starts_now(false, false, false), "not prepared");
+        assert!(!starts_now(true, false, true), "already running");
     }
 
     #[test]
