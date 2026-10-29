@@ -57,6 +57,9 @@ pub struct Registries {
     /// `ClientSuggestionProvider.getSelectedEntities`: the UUID of the
     /// entity under the crosshair (`Entity.getStringUUID`), if any.
     pub selected_entities: Vec<String>,
+    /// `ClientSuggestionProvider.getAbsoluteCoordinates`: the exact point of
+    /// that block hit, each coordinate as `%.2f` (`Locale.ROOT`).
+    pub target_point: Option<[String; 3]>,
     /// Every registry's element and tag ids (`minecraft:item` -> ...), as
     /// the server's registry access and reloadable registries hold them.
     pub by_registry: BTreeMap<String, RegistryIds>,

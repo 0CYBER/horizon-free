@@ -114,8 +114,11 @@ class UntrustedBuildTests(unittest.TestCase):
     def setUp(self):
         self.game = (WORKFLOWS / "game-build.yml").read_text()
 
-    def test_only_the_release_is_trusted(self):
-        self.assertIn("trusted: true", (WORKFLOWS / "release.yml").read_text())
+    def test_no_nightly_build_is_trusted(self):
+        # The train only starts `nightly build` (Nightly only since 2026-10-28); it builds nothing itself.
+        release = (WORKFLOWS / "release.yml").read_text()
+        self.assertNotIn("game-build.yml", release)
+        self.assertIn("gh workflow run nightly-build.yml", release)
         nightly_build = (WORKFLOWS / "nightly-build.yml").read_text()
         self.assertIn("trusted: false", nightly_build)
         self.assertNotIn("trusted: true", nightly_build)
@@ -129,9 +132,10 @@ class UntrustedBuildTests(unittest.TestCase):
     def test_an_untrusted_build_never_runs_on_the_release_runner(self):
         runs_on = [line for line in self.game.splitlines() if "runs-on:" in line]
         self.assertEqual(len(runs_on), 2)
-        pr_runner = "fromJSON('[\"self-hosted\", \"macOS\", \"horizon-game\"]')"
+        # The nightly's own runner: never the release runner, and never behind pull requests' parity queue.
+        nightly_runner = "fromJSON('[\"self-hosted\", \"macOS\", \"horizon-nightly\"]')"
         for line in runs_on:
-            self.assertIn(f"inputs.trusted && vars.MAC_RUNNER || {pr_runner}", line)
+            self.assertIn(f"inputs.trusted && vars.MAC_RUNNER || {nightly_runner}", line)
 
     def test_a_trusted_build_never_reads_the_shared_sccache(self):
         calls = self.game.count("bash tools/ci/runner-env.sh")
