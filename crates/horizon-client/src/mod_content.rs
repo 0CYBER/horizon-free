@@ -19,7 +19,7 @@ use horizon_mods::content::{Block, Content, Rarity};
 use horizon_world::nbt::{self, JavaString, Limits, Tag};
 use serde::{Deserialize, Serialize, de};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt, fs,
     ops::Range,
     path::{Path, PathBuf},
@@ -129,6 +129,11 @@ impl J {
             _ => None,
         }
     }
+    fn remove(&mut self, key: &str) {
+        if let J::Obj(o) = self {
+            o.retain(|(k, _)| k != key);
+        }
+    }
     fn get_mut(&mut self, key: &str) -> Option<&mut J> {
         match self {
             J::Obj(o) => o.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v),
@@ -235,6 +240,7 @@ struct NewItem {
     rename: Rename,
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
+    components: Vec<(String, J)>,
 }
 
 struct Plan<'a> {
@@ -246,6 +252,26 @@ struct Plan<'a> {
     defaults: BTreeMap<String, u32>,
     /// The gameplay rows' sound objects, by block, for `sounds` overrides.
     sounds: BTreeMap<String, J>,
+}
+
+/// An item's component patch on its entry; `known` holds every type a vanilla item has, so typos fail.
+fn patch_components(
+    entry: &mut J,
+    patch: &[(String, J)],
+    known: &BTreeSet<String>,
+) -> std::result::Result<(), String> {
+    for (key, value) in patch {
+        let kind = key.strip_prefix('!').unwrap_or(key);
+        if !known.contains(kind) {
+            return Err(format!("{kind} is no component a vanilla item has"));
+        }
+        if kind == key {
+            entry.set(key, value.clone());
+        } else {
+            entry.remove(kind);
+        }
+    }
+    Ok(())
 }
 
 fn read_json(path: &Path) -> Result<J> {
@@ -356,6 +382,7 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(item, &b.decl.id),
                     max_stack_size: None,
                     rarity: None,
+                    components: Vec::new(),
                 });
             }
         }
@@ -365,6 +392,12 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(&i.template, &i.id),
                     max_stack_size: i.max_stack_size,
                     rarity: i.rarity,
+                    components: i
+                        .components
+                        .iter()
+                        .map(|(k, v)| Ok((k.clone(), serde_json::from_value(v.clone())?)))
+                        .collect::<std::result::Result<_, serde_json::Error>>()
+                        .map_err(|e| format!("{}: {e}", i.id))?,
                 });
             }
         }
@@ -458,7 +491,18 @@ impl<'a> Plan<'a> {
 
     /// Adds each new item's copy of its template's entry to a map by name;
     /// `components` applies the overrides (items.json).
-    fn items(&self, map: &mut J, components: bool) {
+    fn items(&self, map: &mut J, components: bool) -> Result<()> {
+        let known: BTreeSet<String> = match map {
+            J::Obj(entries) if components => entries
+                .iter()
+                .filter_map(|(_, v)| match v {
+                    J::Obj(c) => Some(c.iter().map(|(k, _)| k.clone())),
+                    _ => None,
+                })
+                .flatten()
+                .collect(),
+            _ => BTreeSet::new(),
+        };
         for i in &self.items {
             let Some(v) = map.get(&i.rename.from) else {
                 continue;
@@ -478,9 +522,12 @@ impl<'a> Plan<'a> {
                     };
                     v.set("minecraft:rarity", J::Str(r.into()));
                 }
+                patch_components(&mut v, &i.components, &known)
+                    .map_err(|e| format!("{}: {e}", i.rename.to))?;
             }
             map.set(&i.rename.to, v);
         }
+        Ok(())
     }
 
     /// One JSON table, rewritten.
@@ -521,7 +568,7 @@ impl<'a> Plan<'a> {
                         blocks.push(v);
                     }
                 }
-                self.items(doc.at("items").ok_or("no items")?, false);
+                self.items(doc.at("items").ok_or("no items")?, false)?;
                 for odds in ["fire/burnOdds", "fire/igniteOdds"] {
                     if let Some(map) = doc.at(odds) {
                         self.names(map, false);
@@ -537,7 +584,7 @@ impl<'a> Plan<'a> {
                     self.names(map, false);
                 }
             }
-            "items.json" => self.items(doc, true),
+            "items.json" => self.items(doc, true)?,
             "registries.json" => {
                 // Network ids: the game and its server map items and blocks through
                 // this report, so new ones get the ids after vanilla's, in plan order.

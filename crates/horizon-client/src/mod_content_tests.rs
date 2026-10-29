@@ -34,6 +34,40 @@ fn json_keeps_key_order_and_numbers() {
 }
 
 #[test]
+fn item_components_patch_the_template_entry() {
+    let mut entry: J =
+        serde_json::from_str(r#"{"minecraft:max_damage": 250, "minecraft:repairable": {}}"#)
+            .unwrap();
+    let known: BTreeSet<String> = [
+        "minecraft:max_damage",
+        "minecraft:repairable",
+        "minecraft:food",
+    ]
+    .map(str::to_owned)
+    .into();
+    let patch = |text: &str| -> Vec<(String, J)> {
+        let J::Obj(o) = serde_json::from_str(text).unwrap() else {
+            unreachable!()
+        };
+        o
+    };
+    patch_components(
+        &mut entry,
+        &patch(r#"{"minecraft:max_damage": 900, "!minecraft:repairable": {}, "minecraft:food": {"nutrition": 4}}"#),
+        &known,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&entry).unwrap(),
+        r#"{"minecraft:max_damage":900,"minecraft:food":{"nutrition":4}}"#
+    );
+    for typo in [r#"{"minecraft:fod": {}}"#, r#"{"!minecraft:fod": {}}"#] {
+        let e = patch_components(&mut entry, &patch(typo), &known).unwrap_err();
+        assert_eq!(e, "minecraft:fod is no component a vanilla item has");
+    }
+}
+
+#[test]
 fn tags_merge_without_repeats() {
     let vanilla = r#"{"values": ["minecraft:stone"]}"#;
     let more = [
@@ -61,7 +95,7 @@ fn prepared() -> Option<PathBuf> {
 /// A content mod folder: a full block, a door and an item-less glass from
 /// templates, an item, a vanilla tag addition and a language file.
 fn ruby_mod(dir: &Path) -> ContentMod {
-    let files: [(&str, &str); 8] = [
+    let files: [(&str, &str); 9] = [
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
@@ -82,6 +116,14 @@ fn ruby_mod(dir: &Path) -> ContentMod {
         (
             "data/ruby/horizon/item/ruby.json",
             r#"{"template": "minecraft:diamond", "max_stack_size": 16, "rarity": "rare"}"#,
+        ),
+        (
+            "data/ruby/horizon/item/ruby_sword.json",
+            r#"{"template": "minecraft:iron_sword", "components": {"minecraft:max_damage": 900,
+                "minecraft:attribute_modifiers": [{"type": "minecraft:attack_damage",
+                    "id": "minecraft:base_attack_damage", "amount": 7.0,
+                    "operation": "add_value", "slot": "mainhand"}],
+                "!minecraft:repairable": {}}}"#,
         ),
         // Carried-over tags name blocks left out and other mods' ids too.
         (
@@ -252,6 +294,12 @@ fn content_root_loads_with_every_table() {
     assert_eq!(ruby_block.block, Some(ruby));
     let gem = &items.items["ruby:ruby"];
     assert_eq!(gem.max_stack, 16);
+    let sword = &items.items["ruby:ruby_sword"];
+    let iron_sword = &items.items["minecraft:iron_sword"];
+    assert_eq!((sword.max_damage, iron_sword.max_damage), (900, 250));
+    assert_eq!(sword.modifiers.len(), 1);
+    assert_eq!(sword.modifiers[0].2, 7.0);
+    assert_eq!(sword.tool.len(), iron_sword.tool.len());
     assert!(!items.items.contains_key("ruby:ruby_glass"));
     let pickaxe = &items.block_tags["minecraft:mineable/pickaxe"];
     assert!(pickaxe.contains("ruby:ruby_block"));
