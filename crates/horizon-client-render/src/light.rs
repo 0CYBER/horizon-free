@@ -828,6 +828,23 @@ pub fn relight(
     relight_region(&mut region, tables, sky_light, positions, force, changed);
     region.finish();
 }
+/// The columns `changed` touched that border a loaded column not lit yet
+/// (`unlit`). `relight` reads and writes only lit columns, so an edit's
+/// darkening can take away light such a neighbour sends in and never put it
+/// back, and nothing relights the column when that neighbour's own light
+/// lands: an air block at 0 beside one at 6 (#2786). Vanilla's light engine
+/// keeps one light storage for every chunk, so its edits and its chunk
+/// lighting see each other. These columns need a full light job, which
+/// lights them from the blocks of their whole 3x3, that neighbour's included.
+pub fn beside_unlit(changed: &LightChanges, unlit: impl Fn(i32, i32) -> bool) -> Vec<(i32, i32)> {
+    let mut columns: Vec<(i32, i32)> = changed.sections().map(|(x, _, z)| (x, z)).collect();
+    columns.sort_unstable();
+    columns.dedup();
+    columns.retain(|&(x, z)| {
+        (-1..=1).any(|dz| (-1..=1).any(|dx| (dx, dz) != (0, 0) && unlit(x + dx, z + dz)))
+    });
+    columns
+}
 fn relight_region(
     world: &mut Region,
     tables: &LightTables,
@@ -1071,6 +1088,70 @@ mod tests {
         );
         // Without the shape test the room would be lit (slabs have no dampening).
         assert_eq!(sky(&w, 8, 2, 8), 0, "the full bottom face stops sky light");
+    }
+    /// #2786: (1, 0) is loaded but its own light job hasn't landed; (0, 0)
+    /// was lit from the 3x3's blocks, its torch's light and the far torch's
+    /// in (1, 0) both. Taking its torch away darkens everything the torch
+    /// lit, the far torch's light at the border too, and `relight` cannot
+    /// bring that back from a column it doesn't read. Columns like that are
+    /// lit again whole; without it the border stays at 0 for good once
+    /// (1, 0)'s light lands beside it.
+    #[test]
+    fn an_edit_beside_a_column_not_lit_yet_lights_the_column_again() {
+        let tables = tables();
+        let mut w: HashMap<(i32, i32), Arc<Chunk>> = HashMap::new();
+        for z in -1..=1 {
+            for x in -1..=1 {
+                let mut c = Chunk::empty(x, z);
+                for y in MIN_Y..0 {
+                    for i in 0..256 {
+                        c.set(i & 15, y, i >> 4, STONE);
+                    }
+                }
+                if (x, z) == (0, 0) {
+                    c.set(14, 0, 8, TORCH);
+                } else if (x, z) == (1, 0) {
+                    c.set(6, 0, 8, TORCH);
+                }
+                w.insert((x, z), Arc::new(c));
+            }
+        }
+        let light = |w: &HashMap<(i32, i32), Arc<Chunk>>, (x, z): (i32, i32)| {
+            let region: [[Option<&Chunk>; 3]; 3] = std::array::from_fn(|dz| {
+                std::array::from_fn(|dx| {
+                    w.get(&(x + dx as i32 - 1, z + dz as i32 - 1)).map(|c| &**c)
+                })
+            });
+            light_chunk(&region, &tables, true)
+        };
+        let keys: Vec<_> = w.keys().copied().collect();
+        for key in &keys {
+            let lights = light(&w, *key);
+            let c = Arc::make_mut(w.get_mut(key).unwrap());
+            apply_lighting(c, lights);
+            c.lit = *key != (1, 0);
+        }
+        // The far torch at x 22 gives 7 at x 15; (0, 0)'s own torch gives 13.
+        assert_eq!(block(&w, 15, 0, 8), 13);
+
+        Arc::make_mut(w.get_mut(&(0, 0)).unwrap()).set(14, 0, 8, AIR);
+        let mut changed = LightChanges::default();
+        relight(&mut w, &tables, true, &[(14, 0, 8)], false, &mut changed);
+        let again = beside_unlit(&changed, |x, z| w.get(&(x, z)).is_some_and(|c| !c.lit));
+        for &key in &again {
+            let lights = light(&w, key);
+            let c = Arc::make_mut(w.get_mut(&key).unwrap());
+            apply_relighting(c, lights, &mut LightChanges::default());
+        }
+        // (1, 0)'s own job lands.
+        let lights = light(&w, (1, 0));
+        let c = Arc::make_mut(w.get_mut(&(1, 0)).unwrap());
+        apply_lighting(c, lights);
+        c.lit = true;
+        assert_eq!(block(&w, 16, 0, 8), 8);
+        assert_eq!(block(&w, 15, 0, 8), 7, "air beside 8 across the border");
+        assert_eq!(block(&w, 14, 0, 8), 6);
+        assert!(again.contains(&(0, 0)), "{again:?}");
     }
     #[test]
     fn relight_keeps_unchanged_and_unlit_sections() {
