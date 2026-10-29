@@ -44,6 +44,48 @@ pub struct Launch<'a> {
     pub player: &'a Player,
     /// `osx`, `linux` or `windows`, as version files name systems.
     pub os: &'a str,
+    /// The window's size (`--width`, `--height`); none: the game's own 854×480.
+    pub window: Option<(u32, u32)>,
+    /// A server to join once the game has started: `host` or `host:port`.
+    pub server: Option<&'a str>,
+}
+
+impl Launch<'_> {
+    /// The optional features of a version's argument rules this launch turns on
+    /// (<https://minecraft.wiki/w/Client.json>).
+    fn features(&self) -> Vec<&'static str> {
+        let mut on = Vec::new();
+        if self.window.is_some() {
+            on.push("has_custom_resolution");
+        }
+        if self.server.is_some() {
+            on.push("is_quick_play_multiplayer");
+        }
+        on
+    }
+}
+
+/// `host:port` as the game's arguments before 1.20 take it: `--server host --port port`
+/// (25565 when none is given; an IPv6 address keeps its own colons).
+fn host_and_port(address: &str) -> (&str, u16) {
+    match address.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') || host.ends_with(']') => match port.parse() {
+            Ok(port) => (host.trim_matches(['[', ']']), port),
+            Err(_) => (address, 25565),
+        },
+        _ => (address, 25565),
+    }
+}
+
+/// Whether one of `args`' rules asks for `feature`.
+fn mentions(args: &Value, feature: &str) -> bool {
+    args.as_array().into_iter().flatten().any(|a| {
+        a["rules"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|r| r["features"].get(feature).is_some())
+    })
 }
 
 /// This system's name in version files.
@@ -56,8 +98,8 @@ pub fn os_name() -> &'static str {
 }
 
 /// Whether a rule list lets this system in: the last matching rule decides; no rules allow.
-/// Every optional feature (demo, custom resolution, quick play) is off.
-fn allowed(rules: &Value, os: &str) -> bool {
+/// The optional features (demo, custom resolution, quick play) are on only when named in `on`.
+fn allowed(rules: &Value, os: &str, on: &[&str]) -> bool {
     let Some(rules) = rules.as_array() else {
         return true;
     };
@@ -72,9 +114,10 @@ fn allowed(rules: &Value, os: &str) -> bool {
         let system = &rule["os"];
         let matches = system["name"].as_str().is_none_or(|n| n == os)
             && system["arch"].as_str().is_none_or(arch_matches)
-            && rule["features"]
-                .as_object()
-                .is_none_or(|f| f.values().all(|v| v == false));
+            && rule["features"].as_object().is_none_or(|f| {
+                f.iter()
+                    .all(|(name, v)| v.as_bool() == Some(on.contains(&name.as_str())))
+            });
         if matches {
             allow = rule["action"] == "allow";
         }
@@ -174,7 +217,7 @@ pub fn classpath(version: &Value, minecraft: &Path, os: &str) -> Result<Vec<Path
     let jar = version["jar"].as_str().unwrap_or(id);
     let mut paths: Vec<PathBuf> = Vec::new();
     for library in version["libraries"].as_array().into_iter().flatten() {
-        if !allowed(&library["rules"], os) {
+        if !allowed(&library["rules"], os, &[]) {
             continue;
         }
         if let Some(path) = library["downloads"]["artifact"]["path"].as_str() {
@@ -203,7 +246,7 @@ pub fn unpack_natives(
 ) -> Result<(), String> {
     fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
     for library in version["libraries"].as_array().into_iter().flatten() {
-        if !allowed(&library["rules"], os) {
+        if !allowed(&library["rules"], os, &[]) {
             continue;
         }
         let Some(key) = mojang::native_classifier(library, os) else {
@@ -275,12 +318,12 @@ pub fn game_assets(version: &Value, minecraft: &Path, game_dir: &Path) -> Result
 }
 
 /// The arguments of one list (`arguments.jvm` or `arguments.game`), their rules applied.
-fn list(args: &Value, os: &str) -> Vec<String> {
+fn list(args: &Value, os: &str, on: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
     for arg in args.as_array().into_iter().flatten() {
         match arg {
             Value::String(s) => out.push(s.clone()),
-            Value::Object(o) if allowed(&o["rules"], os) => match &o["value"] {
+            Value::Object(o) if allowed(&o["rules"], os, on) => match &o["value"] {
                 Value::String(s) => out.push(s.clone()),
                 Value::Array(values) => {
                     out.extend(values.iter().filter_map(Value::as_str).map(String::from))
@@ -366,6 +409,18 @@ pub fn command(version: &Value, launch: &Launch) -> Result<Command, String> {
                 .join(separator),
         ),
         ("launcher_name", "horizon-launcher".into()),
+        (
+            "resolution_width",
+            launch.window.map(|w| w.0.to_string()).unwrap_or_default(),
+        ),
+        (
+            "resolution_height",
+            launch.window.map(|w| w.1.to_string()).unwrap_or_default(),
+        ),
+        (
+            "quickPlayMultiplayer",
+            launch.server.unwrap_or_default().to_string(),
+        ),
         ("launcher_version", env!("CARGO_PKG_VERSION").into()),
     ]);
     let mut jvm = vec![
@@ -398,8 +453,27 @@ pub fn command(version: &Value, launch: &Launch) -> Result<Command, String> {
         );
         game.extend(line.split_whitespace().map(String::from));
     }
-    jvm_list.extend(list(&arguments["jvm"], launch.os));
-    game.extend(list(&arguments["game"], launch.os));
+    let on = launch.features();
+    jvm_list.extend(list(&arguments["jvm"], launch.os, &on));
+    game.extend(list(&arguments["game"], launch.os, &on));
+    // Versions whose rules don't ask for them still take the arguments (since 1.6.1): the
+    // window's size, and before 1.20 (23w14a) a server as `--server` and `--port`.
+    // <https://minecraft.wiki/w/Java_Edition_client_command_line_arguments>
+    if let Some((width, height)) = launch
+        .window
+        .filter(|_| !mentions(&arguments["game"], "has_custom_resolution"))
+    {
+        game.extend(["--width".into(), width.to_string()]);
+        game.extend(["--height".into(), height.to_string()]);
+    }
+    if let Some(server) = launch
+        .server
+        .filter(|_| !mentions(&arguments["game"], "is_quick_play_multiplayer"))
+    {
+        let (host, port) = host_and_port(server);
+        game.extend(["--server".into(), host.to_string()]);
+        game.extend(["--port".into(), port.to_string()]);
+    }
     jvm.extend(jvm_list.iter().map(|a| fill(a, &vars)));
     jvm.extend(launch.jvm_args.iter().cloned());
     let mut cmd = Command::new(launch.java);
