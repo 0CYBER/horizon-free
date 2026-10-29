@@ -1173,7 +1173,7 @@ impl Game<'_> {
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
                         self.particles
                             .send_particles(&options, at, spread, speed, count);
-                        self.lan_level_particles(&options, at, spread, speed, count);
+                        self.lan_level_particles(&options, at, spread, speed, count, None);
                     }
                 }
                 MobEvent::Sound(name, at, volume, pitch)

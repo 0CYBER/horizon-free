@@ -525,6 +525,37 @@ impl Game<'_> {
         }
         hurt
     }
+    /// `ArmorStand.showBreakingParticles`: ten oak plank crumbs from the box,
+    /// spread by a quarter of its width and height, sent like `sendParticles`.
+    fn show_breaking_particles(&mut self, at: [f64; 3], width: f64, height: f64) {
+        let Some(state) = self
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:oak_planks")
+        else {
+            return;
+        };
+        let block = [
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        ];
+        let Some((sprite, tint)) = self.particle_sprite(state, block) else {
+            return;
+        };
+        let options = horizon_client::particles::ParticleOptions::block(
+            horizon_client::particles::ParticleType::Block,
+            sprite,
+            tint,
+        );
+        // Entity.getY(2/3): the box's height is scaled by 2/3 from the feet.
+        let centre = [at[0], at[1] + height * (2.0 / 3.0), at[2]];
+        let spread = [width / 4.0, height / 4.0, width / 4.0];
+        self.particles
+            .send_particles(&options, centre, spread, 0.05, 10);
+        self.lan_level_particles(&options, centre, spread, 0.05, 10, Some(state));
+    }
     /// `ArmorStand.hurtServer` for a player's attack (also a sweep's): a
     /// creative player breaks it, otherwise the first hit wobbles it and a
     /// second within five ticks breaks it.
@@ -533,9 +564,11 @@ impl Game<'_> {
         let at = self.armor_stands[i].position;
         let at = [at.x, at.y, at.z];
         if self.creative {
+            let (width, height) = stand_box(&self.armor_stands[i]);
             self.armor_stands.remove(i);
             self.audio
                 .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+            self.show_breaking_particles(at, f64::from(width), f64::from(height));
             return true;
         }
         if time - self.armor_stands[i].last_hit > 5 {
@@ -547,8 +580,10 @@ impl Game<'_> {
         }
         // brokenByPlayer: the stand item, then brokenByAnything: the equipment.
         let a = self.armor_stands.remove(i);
+        let (width, height) = stand_box(&a);
         self.audio
             .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+        self.show_breaking_particles(at, f64::from(width), f64::from(height));
         let center = [at[0], at[1] + if a.small { 0.4875 } else { 0.9875 }, at[2]];
         let stand = ItemStack {
             item: Arc::from("minecraft:armor_stand"),
@@ -981,6 +1016,14 @@ impl Game<'_> {
                 self.resolve_item(stack, DisplayContext::Head, Some(&owner), a.id as i32 + 5);
             self.submit_item_world(&state, pose, light, out);
         }
+    }
+}
+/// `ArmorStand.getBbWidth` and `getBbHeight`: a marker has no box, a small stand is half size.
+fn stand_box(a: &ArmorStand) -> (f32, f32) {
+    match (a.marker, a.small) {
+        (true, _) => (0.0, 0.0),
+        (false, true) => (0.25, 0.9875),
+        (false, false) => (0.5, 1.975),
     }
 }
 /// `AbstractSkullBlock.getType` of a skull item.
