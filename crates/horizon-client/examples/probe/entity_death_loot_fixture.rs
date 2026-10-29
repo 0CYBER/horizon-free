@@ -134,7 +134,7 @@ pub fn main() -> horizon_client::Result<()> {
                     let item: Option<Arc<str>> = Some(Arc::from(s.item.as_str()));
                     let index = match *slot {
                         "mainhand" => {
-                            m.extra.main_hand = item;
+                            m.extra.set_main_hand(item);
                             Some(gear::MAIN)
                         }
                         "offhand" => {

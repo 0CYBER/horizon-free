@@ -181,9 +181,15 @@ pub fn compatible(meta: &serde_json::Value) -> bool {
 /// `PackCompatibility.forVersion`: too old, too new, compatible, or unknown
 /// when the metadata names no format.
 pub fn compatibility(meta: &serde_json::Value) -> crate::pack_screen::Compat {
+    compatibility_for(meta, RESOURCE_FORMAT)
+}
+/// `compatibility` against `current`, the resource or the data pack format.
+pub fn compatibility_for(
+    meta: &serde_json::Value,
+    current: (i64, i64),
+) -> crate::pack_screen::Compat {
     use crate::pack_screen::Compat;
     let pack = &meta["pack"];
-    let current = RESOURCE_FORMAT;
     let range = if let (Some(min), Some(max)) = (
         format_of(&pack["min_format"]),
         format_of(&pack["max_format"]),
@@ -275,6 +281,10 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
     serde_json::from_slice(&bytes).ok()
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
+    pack_for(id, title, source, RESOURCE_FORMAT)
+}
+/// A pack whose compatibility is against `format`.
+fn pack_for(id: String, title: Text, source: Source, format: (i64, i64)) -> Option<Pack> {
     let meta = read_meta(&source)?;
     let (raw_description, description_style) = component_root(&meta["pack"]["description"]);
     Some(Pack {
@@ -284,7 +294,7 @@ fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
         raw_description,
         description_style,
         compatible: compatible(&meta),
-        compatibility: compatibility(&meta),
+        compatibility: compatibility_for(&meta, format),
         overlays: overlays_of(&meta),
         filter: filter_of(&meta),
         source,
@@ -305,7 +315,13 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
             out.push(p);
         }
     }
-    let mut user: Vec<Pack> = fs::read_dir(packs_dir)
+    out.extend(folder(packs_dir, RESOURCE_FORMAT));
+    out
+}
+/// The packs (folders and zips) in `dir`, by name, as `FolderRepositorySource`
+/// finds them; their compatibility is against `format`.
+pub fn folder(dir: &Path, format: (i64, i64)) -> Vec<Pack> {
+    let mut user: Vec<Pack> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -319,12 +335,11 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
             } else {
                 return None;
             };
-            pack(format!("file/{name}"), Text::literal(name), source)
+            pack_for(format!("file/{name}"), Text::literal(name), source, format)
         })
         .collect();
     user.sort_by(|a, b| a.id.cmp(&b.id));
-    out.extend(user);
-    out
+    user
 }
 /// A file a pack provides: its path (folder packs) and its name inside the pack.
 type Provided = (Option<PathBuf>, String);
@@ -451,6 +466,22 @@ fn build_overlay_uncached(
             files.insert(name, (i, provided));
         }
     }
+    // FallbackResourceManager: a file's `.mcmeta` counts only from the pack that
+    // supplies the file or one above it; vanilla's own sits below every pack.
+    let hidden: BTreeSet<String> = files
+        .iter()
+        .filter(|(name, _)| !name.ends_with(".mcmeta"))
+        .filter_map(|(name, (owner, _))| {
+            let meta = format!("{name}.mcmeta");
+            match files.get(&meta) {
+                Some((meta_owner, _)) if meta_owner >= owner => None,
+                _ => Some(meta),
+            }
+        })
+        .collect();
+    for name in &hidden {
+        files.remove(name);
+    }
     // Vanilla sits below every pack, so filters hide its files too.
     let filters: Vec<&Filter> = packs.iter().flat_map(|p| &p.filter).collect();
     let touched_dirs: BTreeSet<String> = files
@@ -502,6 +533,7 @@ fn build_overlay_uncached(
         vanilla: &Path,
         out: &Path,
         touched: &BTreeSet<String>,
+        hidden: &BTreeSet<String>,
         files: &BTreeMap<String, (usize, Provided)>,
         merged: &BTreeMap<String, Vec<u8>>,
         filters: &[&Filter],
@@ -538,6 +570,9 @@ fn build_overlay_uncached(
         }
         for name in names {
             let child = format!("{prefix}{name}");
+            if hidden.contains(&child) {
+                continue;
+            }
             if let Some(bytes) = merged.get(&child) {
                 fs::write(out.join(&child), bytes)?;
             } else if let Some((owner, (path, inner))) = files.get(&child) {
@@ -568,6 +603,7 @@ fn build_overlay_uncached(
                     vanilla,
                     out,
                     touched,
+                    hidden,
                     files,
                     merged,
                     filters,
@@ -591,6 +627,7 @@ fn build_overlay_uncached(
         vanilla,
         out,
         &touched_dirs,
+        &hidden,
         &files,
         &merged,
         &filters,
@@ -781,7 +818,9 @@ impl SelectionModel {
     /// `available` in any order; `selected` as options.txt lists them,
     /// bottom first.
     pub fn new(mut available: Vec<Selectable>, selected: &[String]) -> Self {
-        // PackRepository.available is a TreeMap by id (String.compareTo).
+        // PackRepository.discoverAvailable: every source's packs go into one
+        // TreeMap by id (String.compareTo), so `file/` packs sort among the
+        // built-in ones.
         available.sort_by(|a, b| a.id.encode_utf16().cmp(b.id.encode_utf16()));
         available.dedup_by(|a, b| a.id == b.id);
         let mut m = Self {

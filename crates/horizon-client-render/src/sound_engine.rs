@@ -58,6 +58,8 @@ pub enum Ticking {
     Bee { bee: u32, aggressive: bool },
     /// `GuardianAttackSoundInstance`.
     GuardianAttack { guardian: u32 },
+    /// `ElytraOnPlayerSoundInstance`: ticks since it started.
+    Elytra { time: i32 },
 }
 /// What a minecart's sound instances read about it.
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +97,12 @@ pub struct TickContext {
     pub mobs: Vec<MobSound>,
     /// `!tickRateManager().runsNormally()`.
     pub frozen: bool,
+    /// The player's position.
+    pub player_position: [f64; 3],
+    /// `getDeltaMovement().lengthSqr()` of the player.
+    pub player_speed_sqr: f64,
+    /// `isFallFlying()` of the player.
+    pub player_fall_flying: bool,
 }
 /// `AbstractSoundInstance` and its subclasses' fields.
 #[derive(Clone, Debug)]
@@ -390,6 +398,24 @@ impl SoundInstance {
         };
         s
     }
+    /// `new ElytraOnPlayerSoundInstance(player)`: looping at volume 0.1 until
+    /// its first tick.
+    pub fn elytra(position: [f64; 3], random: LegacyRandom) -> Self {
+        let mut s = Self::new(
+            "minecraft:item.elytra.flying",
+            PLAYERS,
+            0.1,
+            1.0,
+            random,
+            true,
+            0,
+            Attenuation::Linear,
+            position,
+            false,
+        );
+        s.ticking = Ticking::Elytra { time: 0 };
+        s
+    }
     pub fn tickable(&self) -> bool {
         self.ticking != Ticking::No
     }
@@ -493,6 +519,37 @@ impl SoundInstance {
                     self.pitch = 0.0;
                     self.volume = 0.0;
                 }
+            }
+            Ticking::Elytra { time } => {
+                *time += 1;
+                let time = *time;
+                if ctx.player_removed || (time > 20 && !ctx.player_fall_flying) {
+                    self.stop();
+                    return;
+                }
+                let [x, y, z] = ctx.player_position;
+                self.position = [
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(z as f32),
+                ];
+                let speed = ctx.player_speed_sqr as f32;
+                self.volume = if speed >= 1.0e-7 {
+                    (speed / 4.0).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                // Silent for a second, then a second's fade in.
+                if time < 20 {
+                    self.volume = 0.0;
+                } else if time < 40 {
+                    self.volume *= (time - 20) as f32 / 20.0;
+                }
+                self.pitch = if self.volume > 0.8 {
+                    1.0 + (self.volume - 0.8)
+                } else {
+                    1.0
+                };
             }
             Ticking::GuardianAttack { guardian } => {
                 let id = *guardian;
