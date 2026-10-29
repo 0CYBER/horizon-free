@@ -7,6 +7,7 @@ use super::Game;
 use horizon_client::lan::{
     entity::{EntityState, Riding, States},
     hub::Hub,
+    playerdata::ints_uuid,
 };
 use horizon_protocol::entity_data::{Value, serializer};
 use horizon_world::nbt::Tag;
@@ -153,8 +154,15 @@ impl Game<'_> {
             );
             e.head_yaw = a.yaw;
             e.velocity = [a.velocity.x, a.velocity.y, a.velocity.z];
+            let mut flags = 0i8;
             if a.fire_ticks > 0 {
-                e.meta.push((0, serializer::BYTE, Value::Byte(1)));
+                flags |= 1;
+            }
+            if a.invisible {
+                flags |= 0x20;
+            }
+            if flags != 0 {
+                e.meta.push((0, serializer::BYTE, Value::Byte(flags)));
             }
             // LivingEntity.DATA_HEALTH_ID: 1 until the stand's max health is set.
             e.meta.push((9, serializer::FLOAT, Value::Float(a.health)));
@@ -221,6 +229,9 @@ impl Game<'_> {
                 _ => 0.0,
             };
             e.data = i32::from(f.facing);
+            if f.invisible {
+                e.meta.push((0, serializer::BYTE, Value::Byte(0x20)));
+            }
             // HangingEntity.DATA_DIRECTION, south by default.
             if f.facing != 3 {
                 e.meta
@@ -288,6 +299,16 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
+    /// `ClientboundAddEntityPacket(Entity, ServerEntity, int)`: the entity's
+    /// own UUID (`Entity.getUUID`), the one `/data`, saves and UUID
+    /// selectors use, so a client can name it back (the crosshair UUID that
+    /// `ClientSuggestionProvider.getSelectedEntities` suggests).
+    pub(super) fn lan_entity_uuids(&mut self, states: &mut States) {
+        for e in states.as_mut_slice() {
+            e.uuid = ints_uuid(self.uuid_for(e.id as u32));
+        }
+    }
+
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {

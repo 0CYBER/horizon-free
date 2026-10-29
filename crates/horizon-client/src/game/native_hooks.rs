@@ -506,8 +506,8 @@ impl Game<'_> {
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
         self.native_mods(&mut mods);
-        // A WebAssembly mod of the same id doesn't run (`start_mods`): the
-        // native row stands for it, and alone toggles its `mod.<id>` line.
+        // A WebAssembly mod of the same id: the native row stands for it,
+        // and alone toggles its `mod.<id>` line.
         self.settings
             .mods
             .installed
@@ -525,7 +525,6 @@ impl Game<'_> {
                 description: m.description,
                 problem: None,
                 dev: false,
-                has_settings: false,
                 native: Some(page),
             });
         }
@@ -575,11 +574,11 @@ impl Game<'_> {
         self.native_wheel(steps, &mut claimed);
         claimed
     }
-    /// A client mod's command: a native mod's first, then a WebAssembly mod's.
+    /// A native mod's command.
     pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
         let mut ran = false;
         self.native_command(command, &mut ran);
-        ran || self.mod_command(command)
+        ran
     }
     /// The zoom in effect while playing (a native mod's); the spyglass's own
     /// view wins.

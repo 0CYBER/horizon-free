@@ -740,7 +740,7 @@ enum Cmd {
     /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
     /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port
     /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
-    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// system|en|fr|ru|de|zh|es|uk (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
     /// shows Horizon's landscape)
     Settings {
@@ -955,13 +955,13 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         }
         "language" => {
             use horizon_launcher::i18n::Language;
-            s.language = match value.trim() {
-                "system" | "default" => None,
-                code => Some(
-                    Language::parse(code)
-                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
-                ),
-            }
+            s.language =
+                match value.trim() {
+                    "system" | "default" => None,
+                    code => Some(Language::parse(code).ok_or_else(|| {
+                        format!("{value}: say system, en, fr, ru, de, zh, es or uk")
+                    })?),
+                }
         }
         "proxy" => {
             if value == "default" || value.is_empty() {
@@ -1215,6 +1215,9 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 });
                 let mut cmd =
                     backend::java_game(&instance, server.as_deref(), &|line| eprintln!("{line}"))?;
+                if let Some(e) = account::take_unsaved() {
+                    eprintln!("{e}");
+                }
                 cmd.args(arg);
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
@@ -1672,8 +1675,8 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             accounts.add(account::store(), signed_in.clone(), &secrets)?;
             accounts.save()?;
             println!("Signed in as {}.", signed_in.name);
-            if !account::store().persistent() {
-                eprintln!("{}", account::NO_KEYCHAIN);
+            if let Some(said) = account::no_keychain() {
+                eprintln!("{said}");
             }
         }
         AccountCmd::SignOut { who } => {
@@ -3218,6 +3221,22 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn settings_accepts_german_and_chinese() {
+        use crate::i18n::Language;
+        let mut settings = backend::Settings::default();
+        for (code, language) in [("de", Language::German), ("zh", Language::Chinese)] {
+            set_setting(&mut settings, "language", code).unwrap();
+            assert_eq!(settings.language, Some(language));
+        }
+        assert_eq!(
+            set_setting(&mut settings, "language", "xx").unwrap_err(),
+            "xx: say system, en, fr, ru, de, zh, es or uk"
+        );
+        set_setting(&mut settings, "language", "system").unwrap();
+        assert_eq!(settings.language, None);
+    }
 
     #[test]
     fn play_takes_extra_arguments_that_start_with_hyphens() {

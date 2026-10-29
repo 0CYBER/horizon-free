@@ -43,6 +43,7 @@ pub use entity_batch::{
     TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
     WATER_MASK_OVERLAY,
 };
+pub use view::{View, ViewSet};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -69,6 +70,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod animate;
 mod arena;
+pub mod compositor;
 mod cull;
 mod end_sky;
 mod flat;
@@ -92,12 +94,14 @@ pub mod pack_uniforms;
 mod pack_weather;
 mod page_runs;
 pub mod panorama;
+mod readback;
 mod resident;
 mod stars;
 mod sunrise_fan;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
+mod view;
 mod wgsl_prefix;
 mod world_post;
 
@@ -353,6 +357,14 @@ struct BorderUniform {
     color: [f32; 4],
     offset: [f32; 4],
 }
+/// A frame to save as a PNG: F2's screenshot, an agent's `game_screenshot`,
+/// or the icon the Select World list shows.
+pub struct ScreenshotRequest {
+    pub path: PathBuf,
+    /// `GameRenderer.takeAutoScreenshot`: centre-crop the frame to a square
+    /// and average it down to this size. `None` saves the frame as drawn.
+    pub size: Option<[u32; 2]>,
+}
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -380,6 +392,11 @@ pub struct Renderer {
     pub last_wait: std::time::Duration,
     /// CPU time of the last `render`, waits excluded.
     pub last_encode: std::time::Duration,
+    /// What the system says about the window's display, watched only while HDR output
+    /// is on; before `window`, so it's dropped first.
+    display: DisplayWatch,
+    /// The watch was just made: the settings' Auto values take what it reported.
+    display_fresh: bool,
     window: Arc<Window>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -566,6 +583,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
+    /// Where a screenshot's frame is drawn when the swapchain cannot be read back.
+    readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -575,8 +594,8 @@ pub struct Renderer {
     pub section_draw_calls: usize,
     pub uploaded_bytes: u64,
     started: Instant,
-    /// Write the next presented frame to this PNG path (control socket).
-    pub screenshot: Option<PathBuf>,
+    /// The next frame to write to a PNG path (control socket, F2, world icon).
+    pub screenshot: Option<ScreenshotRequest>,
     /// Outcome of the last screenshot: frame size, or the error.
     pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
     /// Brightness option (lightmap gamma), 0..1.
@@ -1168,6 +1187,7 @@ impl Renderer {
             }
             surface.configure(&device, &config);
             let hdr_output = hdr::output(&caps);
+            crate::graphics::offer_hdr(hdr_output.is_some());
             if previous.is_none() {
                 log::info!(
                     "Horizon renderer: HDR output {}",
@@ -2580,6 +2600,8 @@ impl Renderer {
             ));
         }
         Ok(Self {
+            display: DisplayWatch::default(),
+            display_fresh: false,
             instance,
             adapter,
             surface,
@@ -2722,6 +2744,7 @@ impl Renderer {
             pack_terrain_flat: false,
             hud,
             menu_blur: None,
+            readback: readback::Readback::default(),
             info,
             suspended: !drawable_size(size.width, size.height, max_side),
             drawn_sections: 0,
@@ -3241,7 +3264,7 @@ impl Renderer {
     ) {
         surface.configure(device, config);
         if let Some(hdr) = hdr {
-            horizon_hdr::set_metadata(device, surface, hdr.paper_white, hdr.peak);
+            horizon_hdr::set_metadata(device, surface, hdr.paper_white, hdr.peak, hdr.black);
         }
     }
     fn configure_surface(&self) {
@@ -3256,7 +3279,7 @@ impl Renderer {
     }
     fn send_hdr_metadata(&self) {
         if let (Some(surface), Some(hdr)) = (&self.surface, &self.hdr) {
-            horizon_hdr::set_metadata(&self.device, surface, hdr.paper_white, hdr.peak);
+            horizon_hdr::set_metadata(&self.device, surface, hdr.paper_white, hdr.peak, hdr.black);
         }
     }
     /// The swapchain's configuration: `config` (what every pipeline draws in), or
@@ -3286,7 +3309,15 @@ impl Renderer {
     }
     /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
-    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32, marker: &std::path::Path) {
+    pub fn set_hdr(
+        &mut self,
+        on: bool,
+        paper_white: f32,
+        peak: f32,
+        black: f32,
+        ui: f32,
+        marker: &std::path::Path,
+    ) {
         let output = self.hdr_output.filter(|_| on && self.surface.is_some());
         if output.is_some() != self.hdr.is_some() {
             // If the game dies before HDR output shows a frame, the marker is still there at
@@ -3297,6 +3328,16 @@ impl Renderer {
             } else if let Some(marker) = self.hdr_marker.take() {
                 let _ = std::fs::remove_file(marker);
             }
+            // Only HDR output asks the system about the display, so with HDR off the
+            // game never waits on the compositor for it.
+            self.display = if output.is_some() {
+                let (watch, now) = DisplayWatch::new(&self.window);
+                crate::graphics::report(now);
+                self.display_fresh = true;
+                watch
+            } else {
+                DisplayWatch::default()
+            };
             let format = self.config.format.remove_srgb_suffix();
             self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
@@ -3309,16 +3350,35 @@ impl Renderer {
                 None => log::info!("Horizon renderer: HDR off"),
             }
         }
+        if let Some(hdr) = &mut self.hdr {
+            hdr.ui = ui;
+        }
         if let Some(hdr) = &mut self.hdr
-            && (hdr.paper_white, hdr.peak) != (paper_white, peak)
+            && (hdr.paper_white, hdr.peak, hdr.black) != (paper_white, peak, black)
         {
             hdr.paper_white = paper_white;
             hdr.peak = peak;
+            hdr.black = black;
             self.send_hdr_metadata();
         }
     }
+    /// Whether what the system reports for the display changed (another output, the
+    /// player recalibrating the desktop): the settings' Auto values follow it then, so
+    /// apply them again.
+    pub fn display_changed(&mut self) -> bool {
+        flush_display_log();
+        if std::mem::take(&mut self.display_fresh) {
+            return true;
+        }
+        let Some(now) = self.display.changed() else {
+            return false;
+        };
+        crate::graphics::report(now);
+        true
+    }
     /// `upscale`: output pixels per rendered pixel, for TAA to rebuild (1: native).
     pub fn set_world_post(&mut self, scale: f32, antialias: bool, taa: bool, upscale: f32) {
+        let taa = taa && self.world_post.supports_taa();
         self.world_post.scale = scale.clamp(0.25, 2.0);
         self.world_post.antialias = antialias && !taa;
         self.world_post.taa = taa;
@@ -3518,14 +3578,14 @@ impl Renderer {
             &self.lightmap_sampler,
         );
     }
-    pub fn view_projection(&self, frame: &Frame) -> Mat4 {
-        self.projection(
+    /// The views `render` draws `frame` from.
+    pub fn views(&self, frame: &Frame) -> ViewSet {
+        ViewSet::single(self.screen_view(
             frame.fov_degrees,
             frame.yaw,
             frame.pitch,
-            frame.bob * frame.spin,
             frame.depth_far,
-        )
+        ))
     }
     /// The view frustum `render` will cull with, for culling geometry built
     /// before the frame (entities, block entities) the same way.
@@ -3537,13 +3597,14 @@ impl Renderer {
         bob: Mat4,
         depth_far: f32,
     ) -> Frustum {
+        let views = ViewSet::single(self.screen_view(fov_degrees, yaw, pitch, depth_far));
         Frustum {
-            planes: frustum(self.projection(fov_degrees, yaw, pitch, bob, depth_far)),
+            planes: frustum(views.cull().view_proj(bob)),
         }
     }
-    fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, far: f32) -> Mat4 {
+    fn screen_view(&self, fov_degrees: f32, yaw: f32, pitch: f32, far: f32) -> View {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        world_projection(fov_degrees, aspect, far) * bob * crate::camera::view_matrix(yaw, pitch)
+        View::screen(yaw, pitch, fov_degrees, aspect, far)
     }
     fn update_lightmap(
         &mut self,
@@ -3675,7 +3736,12 @@ impl Renderer {
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
             (Some(_), Some(hdr)) => hdr.frame(&self.device, size),
-            (Some(f), None) => f.texture.clone(),
+            // A screenshot of a swapchain without COPY_SRC (OpenGL) draws
+            // into a texture that has it, then onto the swapchain.
+            (Some(f), None) => self
+                .readback
+                .target(&self.device, &f.texture, self.screenshot.is_some())
+                .unwrap_or_else(|| f.texture.clone()),
             (None, _) => self.offscreen.clone().ok_or("no offscreen target")?,
         };
         // One command buffer for the frame, after the section copies staged
@@ -3703,7 +3769,9 @@ impl Renderer {
             frame.block_flicker,
             frame.boss_darken,
         );
-        let view_proj = self.view_projection(frame);
+        let views = self.views(frame);
+        let pose = frame.bob * frame.spin;
+        let view_proj = views.primary().view_proj(pose);
         // TAA runs where the world post pass does, not under a shader pack's own.
         let taa = !frame.title
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
@@ -3723,8 +3791,7 @@ impl Renderer {
                 frame.pitch,
             );
         }
-        let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
+        let view = views.primary().view;
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
@@ -3777,8 +3844,8 @@ impl Renderer {
             misc: [
                 1.0 - frame.sky.sky_light_factor,
                 frame.game_time,
-                aspect,
-                (frame.fov_degrees.to_radians() / 2.0).tan(),
+                views.primary().aspect,
+                views.primary().tan_half_fov,
             ],
             inverse_view: view.inverse().to_cols_array_2d(),
             sunrise: frame.sky.sunrise_color,
@@ -3841,14 +3908,15 @@ impl Renderer {
             bytemuck::bytes_of(&crosshair_globals),
         );
         // Frustum culling and camera-relative origins.
+        let cull_proj = views.cull().view_proj(pose);
         let view = Frustum {
-            planes: frustum(view_proj),
+            planes: frustum(cull_proj),
         };
         let camera = frame.camera;
         let camera_section = camera_section(camera);
         // Solid quads facing away from the eye are left out: the bob moves
         // the eye off `camera`, so it is found from the projection.
-        let eye = projection_center(view_proj).filter(|_| self.sides_on);
+        let eye = projection_center(cull_proj).filter(|_| self.sides_on);
         let culling = !frame.title && frame.cave_culling;
         if culling {
             crate::spans::time("occlusion", || {
@@ -5195,6 +5263,10 @@ impl Renderer {
                 ((world_quads + additive_quads) * 4) as i32,
                 0..1,
             );
+            drop(pass);
+            if let Some(hdr) = &self.hdr {
+                hdr.mark_hand(&mut encoder);
+            }
         }
         // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
         self.entity_outline.draw(
@@ -5203,6 +5275,13 @@ impl Renderer {
             &self.entity_group,
             &self.indices,
         );
+        // The world icon grabs here: after the level and the hand, before
+        // the effects and the HUD draw over them (`tryTakeScreenshotIfNeeded`
+        // runs right after `renderLevel`).
+        let readback = self
+            .screenshot
+            .take_if(|request| request.size.is_some())
+            .and_then(|request| self.take_readback(request, &mut encoder, &target_texture));
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5306,23 +5385,19 @@ impl Renderer {
                 (&view_target, self.config.format.remove_srgb_suffix()),
             );
         }
-        let readback = self.screenshot.take().and_then(|path| {
-            // The copy and PNG writer both assume 8-bit pixels; a float surface would make
-            // the row stride too small for the copy and abort in validation.
-            if self.config.format.block_copy_size(None) == Some(4) {
-                Some((path, self.copy_frame(&mut encoder, &target_texture)))
-            } else {
-                self.screenshot_result = Some(Err(format!(
-                    "screenshots need a 32-bit surface format, not {:?}",
-                    self.config.format
-                )));
-                None
-            }
+        let readback = readback.or_else(|| {
+            self.screenshot
+                .take()
+                .and_then(|request| self.take_readback(request, &mut encoder, &target_texture))
         });
         self.uploads.finish(&encoder);
         if has_section_copies {
             self.section_copy_bytes = 0;
             self.section_uploads.finish(&encoder);
+        }
+        if let Some(f) = &surface_frame {
+            self.readback
+                .present(&self.device, &mut encoder, &f.texture);
         }
         if let (Some(hdr), Some(f)) = (&self.hdr, &surface_frame) {
             hdr.present(&self.queue, &mut encoder, &f.texture, !frame.title);
@@ -5344,9 +5419,9 @@ impl Renderer {
         if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
             timer.submitted(&self.queue);
         }
-        if let Some((path, buffer)) = readback {
+        if let Some((request, buffer)) = readback {
             self.screenshot_result = Some(
-                self.write_screenshot(&path, &buffer)
+                self.write_screenshot(&request, &buffer)
                     .map_err(|e| e.to_string()),
             );
         }
@@ -5396,43 +5471,68 @@ impl Renderer {
         Ok(true)
     }
 }
+/// Bytes per row of a `width`-pixel frame read back at 4 bytes a pixel.
+fn padded_row(width: u32) -> u32 {
+    (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+}
+/// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
+fn copy_frame(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    [width, height]: [u32; 2],
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Horizon screenshot"),
+        size: u64::from(padded_row(width)) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row(width)),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    buffer
+}
 impl Renderer {
-    fn padded_row(&self) -> u32 {
-        (self.config.width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-    }
-    fn copy_frame(
-        &self,
+    /// Take a screenshot request: queue the frame's copy, or report why the
+    /// frame cannot be read back.
+    fn take_readback(
+        &mut self,
+        request: ScreenshotRequest,
         encoder: &mut wgpu::CommandEncoder,
         texture: &wgpu::Texture,
-    ) -> wgpu::Buffer {
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Horizon screenshot"),
-            size: u64::from(self.padded_row()) * u64::from(self.config.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.padded_row()),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width: self.config.width,
-                height: self.config.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        buffer
-    }
-    fn write_screenshot(&self, path: &std::path::Path, buffer: &wgpu::Buffer) -> Result<[u32; 2]> {
-        if !self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
-            return Err("this surface does not support frame readback".into());
+    ) -> Option<(ScreenshotRequest, wgpu::Buffer)> {
+        // The copy and PNG writer both assume 8-bit pixels; a float surface would make
+        // the row stride too small for the copy and abort in validation.
+        if self.config.format.block_copy_size(None) == Some(4) {
+            let size = [self.config.width, self.config.height];
+            Some((request, copy_frame(&self.device, encoder, texture, size)))
+        } else {
+            self.screenshot_result = Some(Err(format!(
+                "screenshots need a 32-bit surface format, not {:?}",
+                self.config.format
+            )));
+            None
         }
+    }
+    fn write_screenshot(
+        &self,
+        request: &ScreenshotRequest,
+        buffer: &wgpu::Buffer,
+    ) -> Result<[u32; 2]> {
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = sender.send(r);
@@ -5447,7 +5547,7 @@ impl Renderer {
         let (width, height, row) = (
             self.config.width,
             self.config.height,
-            self.padded_row() as usize,
+            padded_row(self.config.width) as usize,
         );
         let bgra = matches!(
             self.config.format.remove_srgb_suffix(),
@@ -5467,8 +5567,18 @@ impl Renderer {
             }
         }
         buffer.unmap();
+        // NativeImage.resizeSubRectTo on takeAutoScreenshot's grab: the icon
+        // is the frame's centre square averaged down to its size.
+        let (width, height, pixels) = match request.size {
+            Some(size) => (
+                size[0],
+                size[1],
+                square_downscale(&pixels, self.config.width, self.config.height, size),
+            ),
+            None => (self.config.width, self.config.height, pixels),
+        };
         let mut encoder = png::Encoder::new(
-            std::io::BufWriter::new(std::fs::File::create(path)?),
+            std::io::BufWriter::new(std::fs::File::create(&request.path)?),
             width,
             height,
         );
@@ -5477,6 +5587,42 @@ impl Renderer {
         encoder.write_header()?.write_image_data(&pixels)?;
         Ok([width, height])
     }
+}
+/// Centre-crop the frame to a square and average it down to `size`.
+pub(crate) fn square_downscale(pixels: &[u8], width: u32, height: u32, size: [u32; 2]) -> Vec<u8> {
+    let (side, cx, cy) = if width > height {
+        (height, (width - height) / 2, 0)
+    } else {
+        (width, 0, (height - width) / 2)
+    };
+    let [tw, th] = size;
+    let mut out = vec![0u8; (tw * th * 4) as usize];
+    for ty in 0..th {
+        let y0 = cy + ty * side / th;
+        let y1 = cy + (ty + 1) * side / th;
+        for tx in 0..tw {
+            let x0 = cx + tx * side / tw;
+            let x1 = cx + (tx + 1) * side / tw;
+            let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let p = ((y * width + x) * 4) as usize;
+                    r += u32::from(pixels[p]);
+                    g += u32::from(pixels[p + 1]);
+                    b += u32::from(pixels[p + 2]);
+                }
+            }
+            let count = (x1 - x0) * (y1 - y0);
+            let o = ((ty * tw + tx) * 4) as usize;
+            out[o..o + 4].copy_from_slice(&[
+                (r / count) as u8,
+                (g / count) as u8,
+                (b / count) as u8,
+                255,
+            ]);
+        }
+    }
+    out
 }
 /// Camera-relative clip planes (`Frustum`).
 #[derive(Clone, Copy, Debug)]
@@ -6006,5 +6152,105 @@ mod sprite_upload_tests {
             let (chain, _) = mip_chain(animation.pixels(0), size, &[], 0, 1);
             assert_eq!(chain.capacity(), chain.len());
         }
+    }
+}
+
+/// What the system says about the window's display, kept up to date: on Wayland, the
+/// compositor's preferred image description of the surface.
+#[derive(Default)]
+struct DisplayWatch {
+    #[cfg(target_os = "linux")]
+    wayland: Option<horizon_hdr::wayland::Watch>,
+}
+impl DisplayWatch {
+    /// Starts watching, with what the system reports now.
+    fn new(window: &Window) -> (Self, Option<crate::graphics::Reported>) {
+        #[cfg(target_os = "linux")]
+        if let Some((wayland, now)) = horizon_hdr::wayland::Watch::new(window) {
+            let watch = Self {
+                wayland: Some(wayland),
+            };
+            return (watch, now.map(reported));
+        }
+        let _ = window;
+        (Self::default(), None)
+    }
+    /// What the system reports, if that changed since the last call.
+    fn changed(&mut self) -> Option<Option<crate::graphics::Reported>> {
+        #[cfg(target_os = "linux")]
+        if let Some(wayland) = &mut self.wayland {
+            return wayland.changed().map(|now| now.map(reported));
+        }
+        None
+    }
+}
+
+/// The log of what the system reports about the display: one line per change. The
+/// renderer is made anew a few times while the game starts and each asks again, and a
+/// slider dragged in the desktop's settings changes the values many times a second, so
+/// a change within [`DISPLAY_LOG_QUIET`] of the last line waits until the values have
+/// held that long, and only the one they settled on is logged.
+struct DisplayLog {
+    last: String,
+    at: Option<std::time::Instant>,
+    pending: Option<(String, std::time::Instant)>,
+}
+static DISPLAY_LOG: std::sync::Mutex<DisplayLog> = std::sync::Mutex::new(DisplayLog {
+    last: String::new(),
+    at: None,
+    pending: None,
+});
+const DISPLAY_LOG_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+// Only Wayland's HDR reports call it so far.
+#[cfg(target_os = "linux")]
+fn log_display(line: String) {
+    let now = std::time::Instant::now();
+    let mut log = DISPLAY_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if line == log.last {
+        log.pending = None;
+    } else if log.at.is_none_or(|at| now - at >= DISPLAY_LOG_QUIET) {
+        log::info!("{line}");
+        (log.last, log.at, log.pending) = (line, Some(now), None);
+    } else {
+        log.pending = Some((line, now));
+    }
+}
+/// Logs a change [`log_display`] held back, once the values have held for
+/// [`DISPLAY_LOG_QUIET`].
+fn flush_display_log() {
+    let now = std::time::Instant::now();
+    let mut log = DISPLAY_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, since)) = &log.pending
+        && now - *since >= DISPLAY_LOG_QUIET
+        && let Some((line, _)) = log.pending.take()
+    {
+        log::info!("{line}");
+        (log.last, log.at) = (line, Some(now));
+    }
+}
+
+/// What a compositor's luminances mean in HDR output's scale.
+///
+/// KWin maps content's reference white (203 nits in PQ, BT.2408) onto its own, so the
+/// desktop's white is 203 there and the peak is the target's maximum over that ratio.
+/// Checked on KWin. Hyprland (0.57) reports the standard 203, and shows HDR windows below
+/// the SDR white of its desktop (which it doesn't report), so Auto can't match its desktop
+/// there. Other compositors are unchecked. The peak is kept within the settings' lowest and
+/// PQ's top, so the metadata never ends below the black level.
+#[cfg(target_os = "linux")]
+fn reported(l: horizon_hdr::wayland::Luminances) -> crate::graphics::Reported {
+    let peak = (l.target_max * 203.0 / l.reference.max(1.0)).round() as u32;
+    log_display(format!(
+        "Horizon renderer: the compositor shows this window with reference white {} nits, \
+         {}..{} nits: peak {peak} nits in HDR output's scale",
+        l.reference, l.target_min, l.target_max,
+    ));
+    crate::graphics::Reported {
+        paper_white: 203,
+        peak: peak.clamp(200, 10_000),
     }
 }

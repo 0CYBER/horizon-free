@@ -626,7 +626,9 @@ impl Game<'_> {
             }) => Some(key),
             _ => None,
         };
-        self.command_block_screen = host_command_block;
+        // A command block the guest's use opened (Player.openCommandBlock).
+        let guest_command_block =
+            std::mem::replace(&mut self.command_block_screen, host_command_block).map(|s| s.pos());
         // A mount inventory the guest's action opened (shift + use, or the
         // inventory key while riding).
         let guest_mount = std::mem::replace(&mut self.mount_menu, host_mount_menu).opened_mob();
@@ -675,9 +677,7 @@ impl Game<'_> {
         let new_mode = self.mode_id();
         self.mode = mode;
         self.creative = creative;
-        self.selected = std::mem::replace(&mut g.selected, selected);
-        // `g.selected` now holds the host's value: swap the inventories back.
-        std::mem::swap(&mut self.selected, &mut g.selected);
+        g.selected = std::mem::replace(&mut self.selected, selected);
         std::mem::swap(&mut self.inventory, &mut g.inventory);
         std::mem::swap(&mut self.armor, &mut g.armor);
         std::mem::swap(&mut self.offhand, &mut g.offhand);
@@ -778,6 +778,9 @@ impl Game<'_> {
         }
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
+        }
+        if let Some(pos) = guest_command_block {
+            self.lan_open_command_block(host, conn, pos);
         }
         if let Some(pos) = opened_table {
             self.lan_open_crafting(host, conn, pos);
@@ -891,6 +894,12 @@ impl Game<'_> {
             .and_then(|g| slots.read(&self.world, g))
         else {
             return false;
+        };
+        // The block entity's createMenu: a shulker box opens a ShulkerBoxMenu
+        // (not a 9x3 ChestMenu), whose slots refuse shulker boxes.
+        let menu = match slots {
+            Slots::Block(_) => horizon_client::containers::block_menu_type(name).unwrap_or(menu),
+            _ => menu,
         };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
@@ -1892,10 +1901,6 @@ impl Game<'_> {
             );
             return;
         }
-        // A server mod's command, for every player whatever their level.
-        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
-            return;
-        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
@@ -2035,8 +2040,11 @@ impl Game<'_> {
         let d = vanilla::game_dispatcher();
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let parse = d.parse(command, &self.ui.registries);
-        let ((start, end), suggestions) = d.suggestions(&parse, command.len(), &self.ui.registries);
+        let ((start, end), mut suggestions) =
+            d.suggestions(&parse, command.len(), &self.ui.registries);
         self.ui.registries.permission = level;
+        // ServerCommandSuggestionsProvider.limitSuggestionCount.
+        suggestions.truncate(1000);
         let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;
         let mut w = horizon_protocol::buf::Writer::new();
         w.varint(id);
