@@ -46,6 +46,26 @@ fn tool(name: &str) -> Option<ItemStack> {
     }
 }
 
+/// An equipment asset's first humanoid layers as files under the root, as worn armour reads them.
+fn equipment_textures(root: &Path, asset: &str) -> Value {
+    let (ns, path) = asset.split_once(':').unwrap_or(("minecraft", asset));
+    let Ok(doc) = fs::read(root.join(format!("assets/{ns}/equipment/{path}.json"))) else {
+        return Value::Null;
+    };
+    let doc: Value = serde_json::from_slice(&doc).unwrap_or_default();
+    let mut out = Map::new();
+    for kind in ["humanoid", "humanoid_leggings"] {
+        if let Some(texture) = doc["layers"][kind][0]["texture"].as_str() {
+            let (tns, tpath) = texture.split_once(':').unwrap_or(("minecraft", texture));
+            let file = root.join(format!(
+                "assets/{tns}/textures/entity/equipment/{kind}/{tpath}.png"
+            ));
+            out.insert(kind.into(), json!(file.exists().then_some(file)));
+        }
+    }
+    Value::Object(out)
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [base, work, out, wanted @ ..] = args.as_slice() else {
@@ -226,6 +246,7 @@ fn main() -> Result<()> {
                         "repairable": repairable,
                         "equip_slot": i.equip_slot,
                         "equip_asset": i.equip_asset,
+                        "equipment": i.equip_asset.as_deref().map(|a| equipment_textures(&root, a)),
                         "food": i.food.map(|(nutrition, saturation)| json!({"nutrition": nutrition, "saturation": saturation})),
                     })
                 }

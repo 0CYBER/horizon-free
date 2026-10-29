@@ -95,6 +95,55 @@ pub struct Item {
 pub struct Armor {
     /// `head`, `chest`, `legs` or `feet`.
     pub slot: String,
+    /// The armour material's id: the 26.3 equipment asset it becomes.
+    #[serde(default)]
+    pub material: String,
+    #[serde(default)]
+    pub equip_sound: Option<String>,
+    #[serde(default)]
+    pub layers: Vec<ArmorLayer>,
+}
+
+/// A 1.21.1 armour layer's textures: `<ns>:textures/models/armor/<name>_layer_1.png` and `_layer_2`.
+#[derive(Debug, Deserialize)]
+pub struct ArmorLayer {
+    pub texture: String,
+    pub texture_legs: String,
+    #[serde(default)]
+    pub dyeable: bool,
+}
+
+impl Armor {
+    /// The 26.3 equipment asset of the material (`layers` by kind), and the 1.21.1 textures to copy, as (from, to) paths in the mod.
+    pub fn equipment(&self) -> Option<(Value, Vec<(String, String)>)> {
+        self.material.split_once(':')?;
+        let mut copies = Vec::new();
+        let mut kinds = Map::new();
+        for (kind, legs) in [("humanoid", false), ("humanoid_leggings", true)] {
+            let mut list = Vec::new();
+            for layer in &self.layers {
+                let texture = if legs {
+                    &layer.texture_legs
+                } else {
+                    &layer.texture
+                };
+                let (ns, path) = texture.split_once(':')?;
+                let file = path.strip_prefix("textures/models/armor/")?;
+                let name = file.strip_suffix(if legs { "_layer_2.png" } else { "_layer_1.png" })?;
+                copies.push((
+                    format!("assets/{ns}/{path}"),
+                    format!("assets/{ns}/textures/entity/equipment/{kind}/{name}.png"),
+                ));
+                let mut entry = json!({"texture": format!("{ns}:{name}")});
+                if layer.dyeable {
+                    entry["dyeable"] = json!({});
+                }
+                list.push(entry);
+            }
+            kinds.insert(kind.into(), Value::Array(list));
+        }
+        Some((json!({"layers": kinds}), copies))
+    }
 }
 
 /// The vanilla item standing in for an item of a vanilla class, for the behaviour the class gives.
@@ -466,6 +515,17 @@ impl Facts {
             };
             want.insert("minecraft:repairable".into(), items);
         }
+        if let Some(armor) = item.armor.as_ref().filter(|a| !a.material.is_empty()) {
+            let mut equippable = base
+                .and_then(|b| b.get("minecraft:equippable"))
+                .cloned()
+                .unwrap_or_else(|| json!({"slot": armor.slot}));
+            equippable["asset_id"] = json!(armor.material);
+            if let Some(sound) = &armor.equip_sound {
+                equippable["equip_sound"] = json!(sound);
+            }
+            want.insert("minecraft:equippable".into(), equippable);
+        }
         let mut patch = Map::new();
         for (key, value) in want {
             let had = base.and_then(|b| b.get(&key));
@@ -678,6 +738,52 @@ mod tests {
         // Facts without components (exported before they were) keep the plain template.
         let (gem, _) = facts.item("m:gem").unwrap();
         assert_eq!(gem, json!({"template": "minecraft:stick"}));
+    }
+
+    #[test]
+    fn armour_materials_become_equipment_assets() {
+        let armor: Armor = serde_json::from_value(json!({"slot": "legs", "material": "m:ruby",
+            "equip_sound": "minecraft:item.armor.equip_diamond", "layers": [
+                {"texture": "m:textures/models/armor/ruby_layer_1.png",
+                 "texture_legs": "m:textures/models/armor/ruby_layer_2.png", "dyeable": false},
+                {"texture": "m:textures/models/armor/ruby_overlay_layer_1.png",
+                 "texture_legs": "m:textures/models/armor/ruby_overlay_layer_2.png", "dyeable": true}]}))
+        .unwrap();
+        let (asset, copies) = armor.equipment().unwrap();
+        assert_eq!(
+            asset["layers"]["humanoid_leggings"],
+            json!([{"texture": "m:ruby"}, {"texture": "m:ruby_overlay", "dyeable": {}}])
+        );
+        assert_eq!(
+            copies[2],
+            (
+                "assets/m/textures/models/armor/ruby_layer_2.png".to_owned(),
+                "assets/m/textures/entity/equipment/humanoid_leggings/ruby.png".to_owned()
+            )
+        );
+        let mut facts: Facts =
+            serde_json::from_value(json!({"blocks": {}, "items": {"m:ruby_leggings": {
+            "class": "net.minecraft.world.item.ArmorItem", "max_stack_size": 1, "rarity": "common",
+            "components": {"minecraft:max_damage": 300}, "armor": armor_json()}}}))
+            .unwrap();
+        facts.vanilla_items = serde_json::from_value(json!({"minecraft:iron_leggings": {
+            "minecraft:equippable": {"asset_id": "minecraft:iron", "equip_sound": "minecraft:item.armor.equip_iron", "slot": "legs"}}}))
+        .unwrap();
+        let (decl, _) = facts.item("m:ruby_leggings").unwrap();
+        assert_eq!(
+            decl["components"]["minecraft:equippable"],
+            json!({"asset_id": "m:ruby", "equip_sound": "minecraft:item.armor.equip_diamond", "slot": "legs"})
+        );
+        // Layers outside models/armor/ have no 26.3 place to go.
+        let odd: Armor =
+            serde_json::from_value(json!({"slot": "head", "material": "m:odd", "layers": [
+            {"texture": "m:textures/odd.png", "texture_legs": "m:textures/odd.png"}]}))
+            .unwrap();
+        assert!(odd.equipment().is_none());
+    }
+
+    fn armor_json() -> Value {
+        json!({"slot": "legs", "material": "m:ruby", "equip_sound": "minecraft:item.armor.equip_diamond"})
     }
 
     #[test]

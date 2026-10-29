@@ -52,6 +52,8 @@ pub struct Report {
     /// Blocks left out, and why.
     pub blocks_unknown: BTreeMap<String, String>,
     pub items: usize,
+    /// Equipment assets written from 1.21.1 armour materials.
+    pub equipment: usize,
     /// Items left out, and why (oracle only).
     pub items_unknown: BTreeMap<String, String>,
     /// Convention (`c:`) tags the recipes use, filled in from the oracle.
@@ -1064,6 +1066,42 @@ pub fn carry(
                     report.items_unknown.insert(name.to_owned(), e);
                 }
             }
+        }
+        // 26.3 draws worn armour from an equipment asset per material, in the mod's own namespaces.
+        let mut materials = BTreeSet::new();
+        for (full, item) in facts.items.range(prefix.clone()..) {
+            if !full.starts_with(&prefix) {
+                break;
+            }
+            let Some(armor) = &item.armor else { continue };
+            let Some((ns, path)) = armor.material.split_once(':') else {
+                continue;
+            };
+            if !owned.contains(&ns) || !materials.insert(armor.material.clone()) {
+                continue;
+            }
+            let Some((asset, copies)) = armor.equipment() else {
+                report
+                    .differences
+                    .entry(full[prefix.len()..].to_owned())
+                    .or_default()
+                    .push(format!(
+                        "armour layers of {} not in models/armor/",
+                        armor.material
+                    ));
+                continue;
+            };
+            for (from, to) in copies {
+                if let Ok(bytes) = fs::read(inside.join(&from)) {
+                    write(&inside.join(to), &bytes)?;
+                }
+            }
+            let text = serde_json::to_vec_pretty(&asset).unwrap_or_default();
+            write(
+                &inside.join(format!("assets/{ns}/equipment/{path}.json")),
+                &text,
+            )?;
+            report.equipment += 1;
         }
         // Convention tags are NeoForge's and the pack's: the recipes get the
         // members the oracle saw, those of vanilla and of this mod.
