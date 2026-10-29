@@ -94,6 +94,16 @@ fn agent(url: &str) -> ureq::Agent {
     .build()
 }
 
+/// A file's body, from the network as the launcher reaches it.
+pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    get(url)?
+        .into_reader()
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
 pub(crate) fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
@@ -1310,8 +1320,10 @@ pub fn download_version_for_owner(
 /// version downloaded from Mojang the first time (then it starts offline too), the Java it needs
 /// (the instance's own, else one found here, else Mojang's, downloaded), and the game in the
 /// instance's folder. The caller wraps it (`launch::wrap`) and never logs it: it holds the token.
+/// A Java instance's game, ready to start; `server` (`host[:port]`) is joined once it has.
 pub fn java_game(
     instance: &crate::instances::Instance,
+    server: Option<&str>,
     log: &dyn Fn(String),
 ) -> Result<Command, String> {
     let game = instance.java.as_ref().ok_or_else(|| {
@@ -1323,19 +1335,35 @@ pub fn java_game(
     let player = account::java_player()?;
     let minecraft = data_dir().join("minecraft");
     let id = mojang::relative(&game.minecraft)?;
-    let versions = minecraft.join("versions").join(&id);
-    let downloaded = versions.join(".downloaded");
-    if !downloaded.is_file() {
+    let natives = minecraft.join("natives").join(&id);
+    // Each version and loader profile is fetched once; it then starts offline too.
+    let downloaded = |id: &str| -> Result<PathBuf, String> {
+        Ok(minecraft
+            .join("versions")
+            .join(mojang::relative(id)?)
+            .join(".downloaded"))
+    };
+    let marker = downloaded(&game.minecraft)?;
+    if !marker.is_file() {
         let listed = crate::minecraft_versions::load()?;
         let version = listed.find(&game.minecraft)?;
         download_version_for_owner(&version.id, &version.sha1, log)?;
-        fs::write(&downloaded, "").map_err(|e| format!("{}: {e}", downloaded.display()))?;
+        fs::write(&marker, "").map_err(|e| format!("{}: {e}", marker.display()))?;
     }
-    let file = versions.join(format!("{}.json", game.minecraft));
-    let version: serde_json::Value = fs::read_to_string(&file)
-        .map_err(|e| e.to_string())
-        .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut start = game.minecraft.clone();
+    if let Some(loader) = &game.loader {
+        start = loader.kind.profile_id(&loader.version, &game.minecraft);
+        let marker = downloaded(&start)?;
+        if !marker.is_file() {
+            start = crate::loaders::install(loader, &game.minecraft, &minecraft, &get_bytes, log)?;
+            fs::write(downloaded(&start)?, "").map_err(|e| e.to_string())?;
+        }
+    }
+    let file = minecraft
+        .join("versions")
+        .join(mojang::relative(&start)?)
+        .join(format!("{start}.json"));
+    let version = crate::java_launch::resolve(crate::java_launch::read(&file)?, &minecraft)?;
     let need = crate::java::Need::of(&version);
     let found = crate::java::pick(
         &need,
@@ -1357,7 +1385,7 @@ pub fn java_game(
         &crate::java_launch::Launch {
             minecraft: &minecraft,
             game_dir: &instance.home,
-            natives: &minecraft.join("natives").join(&id),
+            natives: &natives,
             java: &runtime.java(),
             memory_mb: game
                 .memory_mb
@@ -1365,6 +1393,8 @@ pub fn java_game(
             jvm_args: &jvm_args,
             player: &player,
             os: crate::java_launch::os_name(),
+            window: game.window,
+            server,
         },
     )
 }
@@ -2161,6 +2191,9 @@ pub fn client(tag: &str) -> Result<Command, String> {
     if let Some(e) = offline {
         eprintln!("Playing offline: {e}");
     }
+    if let Some(e) = account::take_unsaved() {
+        eprintln!("{e}");
+    }
     append_game_args(&mut cmd);
     Ok(cmd)
 }
@@ -2722,8 +2755,9 @@ pub enum Msg {
     LauncherUpdated(Result<(), String>),
     /// `reuse_prepared_everywhere` prepared these versions.
     Reused(Vec<(String, String)>),
-    /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
-    Keychain(bool),
+    /// None when secrets are kept in the OS keychain, else what to say: they last only until
+    /// the launcher closes, and why.
+    Keychain(Option<String>),
     /// Whether an account in the launcher owned the game at its last check (the owner gate).
     Owner(bool),
     /// The owner gate's answer for the game about to start: the selected account's session
@@ -2741,7 +2775,12 @@ pub enum Msg {
     Native(Result<String, String>),
     /// A Java instance's game is ready to start (`java_game`, wrapped): the instance's id and
     /// game folder, and the command or why not.
-    JavaGame(String, PathBuf, Result<Command, String>),
+    /// A Java instance's game ready to start, and its variables for the post-exit command.
+    JavaGame(
+        String,
+        PathBuf,
+        Result<(Command, crate::launch::Vars), String>,
+    ),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
