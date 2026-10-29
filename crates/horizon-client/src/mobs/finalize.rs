@@ -505,7 +505,9 @@ fn effect_modifier(effect: &str, amplifier: i32, a: Attr) -> Option<(f64, Op)> {
         ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
         ("weakness", Attr::AttackDamage) => Some((-4.0 * level, Op::AddValue)),
         ("speed", Attr::MovementSpeed) => Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal)),
-        ("slowness", Attr::MovementSpeed) => Some((-0.15 * level, Op::AddMultipliedTotal)),
+        ("slowness", Attr::MovementSpeed) => {
+            Some((f64::from(-0.15f32) * level, Op::AddMultipliedTotal))
+        }
         ("health_boost", Attr::MaxHealth) => Some((4.0 * level, Op::AddValue)),
         _ => None,
     }
@@ -2218,12 +2220,12 @@ mod tests {
         assert_eq!(op, Op::AddValue);
         let (amount, _) = modifier("weakness", 1, Attr::AttackDamage);
         assert!(close(amount, -8.0));
-        // MobEffects.SLOWNESS: movement speed -0.15 per level, ADD_MULTIPLIED_TOTAL.
+        // MobEffects.SLOWNESS: movement speed -0.15F per level, ADD_MULTIPLIED_TOTAL.
         let (amount, op) = modifier("minecraft:slowness", 0, Attr::MovementSpeed);
-        assert!(close(amount, -0.15));
+        assert!(close(amount, f64::from(-0.15f32)));
         assert_eq!(op, Op::AddMultipliedTotal);
         let (amount, _) = modifier("slowness", 1, Attr::MovementSpeed);
-        assert!(close(amount, -0.3));
+        assert!(close(amount, f64::from(-0.15f32) * 2.0));
         // MobEffects.HEALTH_BOOST: max health +4 per level, ADD_VALUE.
         let (amount, op) = modifier("minecraft:health_boost", 0, Attr::MaxHealth);
         assert!(close(amount, 4.0));
