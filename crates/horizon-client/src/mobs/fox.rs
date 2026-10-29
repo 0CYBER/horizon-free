@@ -88,7 +88,7 @@ pub fn register(m: &mut Mob) {
     g.add(6, SeekShelter::new(1.25));
     g.add(
         7,
-        Wrap::new(MeleeAttack::new(1.2, true))
+        Wrap::new(MeleeAttack::new(1.2, true).bite("entity.fox.bite"))
             .when(
                 |m| !flag(m, SITTING | SLEEPING | CROUCHING | FACEPLANTED),
                 false,
