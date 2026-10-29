@@ -3103,3 +3103,51 @@ mod neutral_anger_tests {
         assert_eq!(crate::mobs::anger_left(3000, 4000), 0);
     }
 }
+
+#[cfg(test)]
+mod held_item_name_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_a_named_item_does_not_restore_its_old_name_on_save() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let types = data
+            .types
+            .into_iter()
+            .map(|(id, kind)| (id, Arc::new(kind)))
+            .collect();
+        let mut mob = Mob::new(1, Arc::clone(&types["minecraft:zombie"]), Vec3::ZERO, 0.0);
+        let mut sword = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
+        sword.data_mut().custom_name = Some("Old Sword".into());
+        mob.extra.set_main_hand_stack(Some(sword));
+        let raw = mob_to_nbt(&mob, [1, 2, 3, 4], None);
+        let mut loaded = mob_from_nbt(&raw, &types, 2).unwrap();
+        assert_eq!(
+            loaded.extra.main_hand_stack().unwrap().custom_name(),
+            Some("Old Sword")
+        );
+        loaded
+            .extra
+            .set_main_hand(Some("minecraft:diamond_sword".into()));
+        let saved = mob_to_nbt(&loaded, [1, 2, 3, 4], Some(&raw));
+        let restored = mob_from_nbt(&saved, &types, 3).unwrap();
+        assert_eq!(
+            restored.extra.main_hand.as_deref(),
+            Some("minecraft:diamond_sword")
+        );
+        assert!(
+            restored
+                .extra
+                .main_hand_stack()
+                .unwrap()
+                .custom_name()
+                .is_none()
+        );
+    }
+}
