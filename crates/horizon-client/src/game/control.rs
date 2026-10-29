@@ -343,8 +343,10 @@ impl Game<'_> {
                 // hook does.
                 let action = arg(2)?;
                 self.mod_key(physical, action != "up", action == "repeat");
+                self.native_key_event(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.mod_key(physical, false, false);
+                    self.native_key_event(physical, false, false);
                 }
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(self.screen, Screen::Chat | Screen::Options);
@@ -359,7 +361,8 @@ impl Game<'_> {
                                 if action != "up" {
                                     self.play_mouse(button, true)?;
                                 }
-                                if action != "down" {
+                                // A repeat keeps the key held, as the window's.
+                                if action == "up" || action == "tap" {
                                     self.play_mouse(button, false)?;
                                 }
                             }

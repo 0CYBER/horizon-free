@@ -334,25 +334,43 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
         return Err("Xbox Live refused the sign-in.".into());
     };
     let xuid = claims.and_then(|c| str_field(c, "xid"));
+    let (token, expires_in) = minecraft_token(ep, &format!("XBL3.0 x={uhs};{xsts_token}"))?;
+    Ok(Minecraft {
+        token,
+        expires_at: now() + expires_in,
+        xuid,
+    })
+}
+
+/// The Minecraft access token and its lifetime from the XSTS one (`XBL3.0 x=<uhs>;<token>`).
+/// `launcher/login` first: a new account's token from `login_with_xbox` names no profile, so
+/// joining an online-mode server answers "Profile not found" (found and diagnosed by
+/// martipops). `login_with_xbox` stays the fallback, so a sign-in that worked before still does
+/// when the other refuses.
+fn minecraft_token(ep: &Endpoints, xtoken: &str) -> Result<(String, u64), String> {
+    let lifetime = |v: &Value| v.get("expires_in").and_then(Value::as_u64).unwrap_or(86400);
+    let launcher = send(
+        request_to("POST", &format!("{}/launcher/login", ep.minecraft)),
+        Some(Body::Json(
+            json!({ "xtoken": xtoken, "platform": "PC_LAUNCHER" }),
+        )),
+        "the Minecraft services",
+    );
+    if let Ok((200, v)) = &launcher {
+        if let Some(token) = str_field(v, "access_token") {
+            return Ok((token, lifetime(v)));
+        }
+    }
     let (status, mc) = send(
         request_to(
             "POST",
             &format!("{}/authentication/login_with_xbox", ep.minecraft),
         ),
-        Some(Body::Json(
-            json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") }),
-        )),
+        Some(Body::Json(json!({ "identityToken": xtoken }))),
         "the Minecraft services",
     )?;
     match (status, str_field(&mc, "access_token")) {
-        (200, Some(token)) => Ok(Minecraft {
-            token,
-            expires_at: now()
-                + mc.get("expires_in")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(86400),
-            xuid,
-        }),
+        (200, Some(token)) => Ok((token, lifetime(&mc))),
         // New Azure apps are refused until Mojang approves them (Minecraft API access).
         (403, _) => Err(
             "The Minecraft services refused this launcher: its app is not approved by Mojang yet."
@@ -574,7 +592,24 @@ pub struct SystemStore;
 impl SystemStore {
     fn keyring() -> Result<oo7::Keyring, String> {
         futures_lite::future::block_on(async {
-            let keyring = oo7::Keyring::new().await.map_err(|e| e.to_string())?;
+            // `oo7::Keyring::new` takes `GTK_USE_PORTAL=1` (set by many KDE desktops) for a
+            // sandbox, and then keeps the secrets in a file under a key the Secret portal gives
+            // per app id. Outside a sandbox that id comes from how the launcher was started (the
+            // menu or a terminal), so the file opened in one start and not the next (#3249).
+            // Flatpak (`/.flatpak-info`) and Snap (`$SNAP`) keep the portal's file.
+            let sandboxed =
+                Path::new("/.flatpak-info").exists() || std::env::var_os("SNAP").is_some();
+            let keyring = if sandboxed {
+                oo7::Keyring::new().await.map_err(|e| e.to_string())?
+            } else {
+                let service = oo7::dbus::Service::new().await.map_err(|e| e.to_string())?;
+                oo7::Keyring::DBus(
+                    service
+                        .default_collection()
+                        .await
+                        .map_err(|e| e.to_string())?,
+                )
+            };
             keyring.unlock().await.map_err(|e| e.to_string())?;
             Ok(keyring)
         })
@@ -729,7 +764,23 @@ impl SecretStore for SystemStore {
 
 pub const NO_KEYCHAIN: &str = "No keychain available: you are signed in until the launcher closes, then you will have to sign in again.";
 
-/// The keychain if it answers, else memory for this run (said once in the UI with NO_KEYCHAIN).
+/// What the keychain answered when [`store`] fell back to memory.
+static NO_KEYCHAIN_WHY: OnceLock<String> = OnceLock::new();
+
+/// What the window and the CLI say when sign-ins last only this run: [`NO_KEYCHAIN`] and why.
+/// None while the keychain keeps them.
+pub fn no_keychain() -> Option<String> {
+    if store().persistent() {
+        return None;
+    }
+    Some(match NO_KEYCHAIN_WHY.get() {
+        Some(why) => format!("{NO_KEYCHAIN} The keychain said: {why}"),
+        None => NO_KEYCHAIN.into(),
+    })
+}
+
+/// The keychain if it answers, else memory for this run (said in the UI with [`no_keychain`]).
+/// Never a file of its own: secrets are kept by the system or not at all.
 pub fn store() -> &'static dyn SecretStore {
     static STORE: OnceLock<Box<dyn SecretStore>> = OnceLock::new();
     STORE
@@ -744,9 +795,15 @@ pub fn store() -> &'static dyn SecretStore {
                     target_os = "windows"
                 )
             ))]
-            if std::env::var_os("HORIZON_NO_KEYCHAIN").is_none() && SystemStore.get("probe").is_ok()
             {
-                return Box::new(SystemStore);
+                let why = match std::env::var_os("HORIZON_NO_KEYCHAIN") {
+                    Some(_) => "HORIZON_NO_KEYCHAIN is set.".to_string(),
+                    None => match SystemStore.get("probe") {
+                        Ok(_) => return Box::new(SystemStore),
+                        Err(e) => e,
+                    },
+                };
+                let _ = NO_KEYCHAIN_WHY.set(why);
             }
             Box::<MemoryStore>::default()
         })
@@ -869,6 +926,18 @@ impl Accounts {
     /// Plays as `who`: an account, an offline name (kept, only beside an account that owns the
     /// game), or the game's own name.
     pub fn play_as(&mut self, store: &dyn SecretStore, who: Player) -> Result<(), String> {
+        self.play_as_with(store, who, false)
+    }
+
+    /// [`Self::play_as`], where `offline_without_owner` (the window's hidden developer option,
+    /// `backend::Settings::dev_offline`) lets an offline name play without an account that owns
+    /// the game.
+    pub fn play_as_with(
+        &mut self,
+        store: &dyn SecretStore,
+        who: Player,
+        offline_without_owner: bool,
+    ) -> Result<(), String> {
         match who {
             Player::Microsoft(uuid) => {
                 if !self.accounts.iter().any(|a| a.uuid == uuid) {
@@ -877,7 +946,7 @@ impl Accounts {
                 self.selected = Some(uuid);
             }
             Player::Offline(name) => {
-                if !self.has_owner(store) {
+                if !offline_without_owner && !self.has_owner(store) {
                     return Err(OFFLINE_NEEDS_OWNER.into());
                 }
                 let name = self.add_offline(&name)?;
@@ -907,14 +976,16 @@ impl Accounts {
         Ok(name.to_string())
     }
 
-    /// Forgets an offline name; if it was playing, the game's own name plays.
-    pub fn remove_offline(&mut self, name: &str) -> Result<(), String> {
+    /// Forgets an offline name: its look and its skin and cape files (`skins`) go with it; if
+    /// it was playing, the game's own name plays.
+    pub fn remove_offline(&mut self, name: &str, skins_dir: &Path) -> Result<(), String> {
         let before = self.offline.len();
         self.offline.retain(|n| !n.eq_ignore_ascii_case(name));
         self.looks.remove(&name.to_ascii_lowercase());
         if self.offline.len() == before {
             return Err(format!("No offline name {name}."));
         }
+        crate::skins::forget(skins_dir, name);
         if self
             .offline_selected
             .as_ref()
@@ -988,6 +1059,17 @@ pub struct Launch {
     /// An account the services said owns the game just now, the selected one first: who the
     /// launcher may download the game for.
     pub owner: Option<(Account, Secrets)>,
+    /// A renewed sign-in the keychain refused to keep: it plays now, and may have to sign in
+    /// again next time.
+    pub unsaved: Option<String>,
+}
+
+/// The last [`Launch::unsaved`], for the window or the terminal to show once.
+static UNSAVED: Mutex<Option<String>> = Mutex::new(None);
+
+/// What the last launch couldn't save in the keychain, once.
+pub fn take_unsaved() -> Option<String> {
+    UNSAVED.lock().ok()?.take()
 }
 
 /// The owner gate: the game starts only while an account in the launcher owns Minecraft: Java
@@ -1040,8 +1122,18 @@ pub fn launch(
         let after = serde_json::to_string(&secrets).ok();
         if after != before {
             if let Some(text) = after {
-                // A store that refuses costs only this answer: the next launch asks again.
-                let _ = store.set(&account.uuid, &text);
+                // The game still starts; the player hears why the next launch may ask again.
+                if let Err(e) = store.set(&account.uuid, &text) {
+                    let said = format!(
+                        "{}'s renewed sign-in couldn't be saved in the keychain ({e}): you may \
+                         have to sign in again next time.",
+                        account.name
+                    );
+                    if let Ok(mut last) = UNSAVED.lock() {
+                        *last = Some(said.clone());
+                    }
+                    pass.unsaved = Some(said);
+                }
             }
         }
     }
@@ -1049,6 +1141,23 @@ pub fn launch(
         Ok(pass)
     } else {
         Err(NoOwner)
+    }
+}
+
+/// The owner gate before the game starts. With the window's hidden developer option
+/// (`backend::Settings::dev_offline`, `offline_without_owner`) no owner is no refusal: the game
+/// starts offline, without a session and without an `owner`. Downloads never come through here:
+/// `backend::download_for_owner` asks [`launch`] itself, so the option never downloads the game.
+pub fn launch_for_game(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    accounts: &mut Accounts,
+    offline_without_owner: bool,
+) -> Result<Launch, NoOwner> {
+    match launch(ep, client_id, store, accounts) {
+        Err(NoOwner) if offline_without_owner => Ok(Launch::default()),
+        pass => pass,
     }
 }
 
@@ -1146,13 +1255,18 @@ impl SignIn {
 
 /// The owner gate for the game about to start, then the selected account's session in a file
 /// for it: the file (none: offline) and why the account plays offline this time, if it does.
-pub fn session_for_game(game_home: &Path) -> Result<(Option<PathBuf>, Option<String>), NoOwner> {
+/// `offline_without_owner`: see [`launch_for_game`].
+pub fn session_for_game(
+    game_home: &Path,
+    offline_without_owner: bool,
+) -> Result<(Option<PathBuf>, Option<String>), NoOwner> {
     let mut accounts = Accounts::load();
-    let pass = launch(
+    let pass = launch_for_game(
         &Endpoints::live(),
         client_id().as_deref(),
         store(),
         &mut accounts,
+        offline_without_owner,
     )?;
     let _ = accounts.save();
     let Some((account, secrets)) = pass.session else {
@@ -1162,6 +1276,48 @@ pub fn session_for_game(game_home: &Path) -> Result<(Option<PathBuf>, Option<Str
         Ok(file) => Ok((Some(file), None)),
         Err(e) => Ok((None, Some(e))),
     }
+}
+
+/// Who plays the real Minecraft: Java Edition (a Java instance), past the owner gate itself
+/// ([`launch`]): the selected account when it owns the game, else one that does. With no answer
+/// from the services, an account that owned it plays with its last token. Mojang's game takes the
+/// token on its command line, as Mojang's launcher gives it; that command is never logged.
+pub fn java_player() -> Result<crate::java_launch::Player, String> {
+    let mut accounts = Accounts::load();
+    let player = java_player_with(
+        &Endpoints::live(),
+        client_id().as_deref(),
+        store(),
+        &mut accounts,
+    );
+    let _ = accounts.save();
+    player
+}
+
+fn java_player_with(
+    ep: &Endpoints,
+    client_id: Option<&str>,
+    store: &dyn SecretStore,
+    accounts: &mut Accounts,
+) -> Result<crate::java_launch::Player, String> {
+    let pass = launch(ep, client_id, store, accounts).map_err(|e| e.to_string())?;
+    let kept = || {
+        let order = accounts.selected().into_iter().chain(&accounts.accounts);
+        order
+            .into_iter()
+            .find_map(|a| Some((a.clone(), secrets_in(store, &a.uuid).filter(|s| s.owns)?)))
+    };
+    let (account, secrets) = pass
+        .session
+        .or(pass.owner)
+        .or_else(kept)
+        .ok_or_else(|| NoOwner.to_string())?;
+    Ok(crate::java_launch::Player {
+        name: account.name,
+        uuid: account.uuid,
+        token: secrets.minecraft_token,
+        xuid: secrets.xuid.unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]
