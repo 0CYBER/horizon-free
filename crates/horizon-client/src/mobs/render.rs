@@ -691,10 +691,12 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             true,
         ),
-        // The copper golem's eyes glow (LivingEntityEmissiveLayer, eyes render type).
+        // The copper golem's eyes glow: CopperGolemRenderer's
+        // LivingEntityEmissiveLayer (eyes render type) draws on a model baked
+        // from ModelLayers.COPPER_GOLEM, the body's, not COPPER_GOLEM_EYES.
         S::CopperGolem => {
             let eyes = super::copper_golem::eye_texture(m);
-            push(&mut v, "copper_golem#eyes", &eyes, white, true);
+            push(&mut v, &m.kind.model_key(), &eyes, white, true);
         }
         S::Spider | S::CaveSpider => push(
             &mut v,
@@ -1007,7 +1009,7 @@ fn shaking(m: &Mob) -> bool {
     match m.species() {
         Species::Strider => super::strider::suffocating(m),
         Species::ZombieVillager => super::zombie_villager::is_converting(m),
-        Species::Zombie | Species::Husk => m.extra.counter2 > 0,
+        Species::Zombie | Species::Husk | Species::Skeleton => m.extra.counter2 > 0,
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
             !m.extra.flag2 && m.extra.counter2 > 0
         }
@@ -1228,6 +1230,48 @@ pub fn render_with(
         extra,
         out,
     );
+}
+/// `CapeLayer.submit` with `PlayerCapeModel`: the player model's body posed
+/// as the player's, its cape turned by `ModelPart.rotateBy` with the cape's
+/// flap and leans. `base` is the player's root transform (moved out over a
+/// chestplate); `uv` the cape texture.
+#[allow(clippy::too_many_arguments)]
+pub fn cape(
+    m: &Mob,
+    alpha: f32,
+    base: glam::Mat4,
+    uv: [f32; 4],
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    let Some(model) = m.kind.layer("player#cape") else {
+        return;
+    };
+    let s = anim::state(m, alpha);
+    let mut poses = Poses::new(model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let a = f64::from(alpha);
+    let at = [
+        m.previous.x + (m.position.x - m.previous.x) * a,
+        m.previous.y + (m.position.y - m.previous.y) * a,
+        m.previous.z + (m.position.z - m.previous.z) * a,
+    ];
+    let body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
+    // LivingEntityRenderState.fallFlyingScale.
+    let ticks = m.extra.fall_fly_ticks as f32 + alpha;
+    let gliding = (ticks * ticks / 100.0).clamp(0.0, 1.0);
+    let [flap, lean, lean2] = m.extra.avatar.cape(alpha, at, body, gliding);
+    let pose = poses.get("cape");
+    let by = glam::Quat::from_rotation_y(-PI)
+        * glam::Quat::from_rotation_x((6.0 + lean / 2.0 + flap).to_radians())
+        * glam::Quat::from_rotation_z((lean2 / 2.0).to_radians())
+        * glam::Quat::from_rotation_y((180.0 - lean2 / 2.0).to_radians());
+    let now = glam::Quat::from_euler(glam::EulerRot::ZYX, pose[5], pose[4], pose[3]);
+    let (z, y, x) = (now * by).to_euler(glam::EulerRot::ZYX);
+    (pose[3], pose[4], pose[5]) = (x, y, z);
+    // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
+    draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
 /// A mob drawn under `origin` instead of at its position (the spinning mob
 /// of `SpawnerRenderer.submitEntityInSpawner`).
@@ -1526,6 +1570,43 @@ pub fn part_transform(
     anim::setup(m, &s, &mut poses, &data.animations);
     part_matrix(&model, base, &poses, part, 0.0)
 }
+/// `FoxHeldItemLayer`: the item sits at the head's position under the render
+/// state's head roll, yaw and pitch (not the posed head's, which differ while
+/// it sleeps), pushed out to the mouth.
+fn fox_item_transform(m: &Mob, alpha: f32, camera: glam::DVec3, data: &MobData) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let head = *poses.get("head");
+    let fox = super::fox::pose(m, alpha);
+    let baby = m.is_baby();
+    let mut t = base_transform(m, alpha, camera)
+        * Mat4::from_translation(Vec3::new(head[0], head[1], head[2]) / 16.0);
+    if baby {
+        t *= Mat4::from_scale(Vec3::splat(0.75));
+    }
+    t *= Mat4::from_rotation_z(fox.head_roll_angle)
+        * Mat4::from_rotation_y(s.y_rot.to_radians())
+        * Mat4::from_rotation_x(s.x_rot.to_radians());
+    let (x, y, z) = match (baby, fox.sleeping) {
+        (true, true) => (0.4, 0.26, 0.15),
+        (true, false) => (0.06, 0.26, -0.5),
+        (false, true) => (0.46, 0.26, 0.22),
+        (false, false) => (0.06, 0.27, -0.5),
+    };
+    t *= Mat4::from_translation(Vec3::new(x, y, z)) * Mat4::from_rotation_x(90.0f32.to_radians());
+    if fox.sleeping {
+        t *= Mat4::from_rotation_z(90.0f32.to_radians());
+    }
+    t
+}
 /// The pose a mob's held item is submitted under (`ItemInHandLayer`:
 /// `translateToHand`, then the hand offset; the item model adds its own
 /// display transform), or `None` when the mob shows no held items.
@@ -1541,6 +1622,10 @@ pub fn held_item_transform(
         return super::panda::item_offset(m, alpha)
             .filter(|_| !left)
             .map(|offset| base_transform(m, alpha, camera) * offset);
+    }
+    // FoxHeldItemLayer: the main hand's item in its mouth.
+    if m.species() == Species::Fox {
+        return (!left).then(|| fox_item_transform(m, alpha, camera, data));
     }
     if !super::illager::shows_item(m) {
         return None;
@@ -1698,6 +1783,58 @@ mod tests {
                 "a swallowed block still hides the default core"
             );
             assert!(vertices.iter().all(|v| v.uv[0] >= 0.5));
+        }
+    }
+    /// CopperGolemRenderer: the emissive eye layer draws the eye texture on
+    /// the body's model, every polygon of it, at each oxidation level. The
+    /// prepared `copper_golem#eyes` model has no polygons, so the eyes
+    /// showed the body texture's black sockets.
+    #[test]
+    fn copper_golem_eyes_are_drawn_on_the_body_model() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:copper_golem"].clone());
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        let atlas = |name: &str| {
+            Some(if name.contains("copper_golem_eyes") {
+                [0.5, 0.5, 0.75, 0.75]
+            } else {
+                [0.0, 0.0, 0.25, 0.25]
+            })
+        };
+        for variant in 0..4 {
+            let mut mob = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+            mob.extra.variant = variant;
+            let mut vertices = Vec::new();
+            render(
+                &mob,
+                0.5,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xf0f0,
+                &data,
+                &mut vertices,
+            );
+            let body = vertices.iter().filter(|v| v.uv[0] <= 0.25).count();
+            let eyes = vertices.iter().filter(|v| v.uv[0] >= 0.5).count();
+            assert!(body > 0, "variant {variant}: no body drawn");
+            assert_eq!(
+                eyes, body,
+                "variant {variant}: the eye layer covers the body"
+            );
         }
     }
     /// `VexModel.translateToHand`: the held item is drawn at 0.55 scale and

@@ -907,6 +907,8 @@ pub fn setup(
 #[cfg(test)]
 mod flight_pose_tests {
     use super::*;
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
 
     #[test]
     fn blocking_arm_follows_the_head_with_limits_in_both_hands() {
@@ -1049,5 +1051,63 @@ mod flight_pose_tests {
         let mut dry = make();
         humanoid(&mut dry, &state, &Hum::new(ArmPose::Empty, ArmPose::Empty));
         assert_eq!(dry.get("head")[3], 30.0f32.to_radians());
+    }
+
+    /// A player: a humanoid model with a shield in its main hand.
+    fn player() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.anim = Anim::Humanoid { zombie_arms: false };
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    #[test]
+    fn a_raised_shield_holds_the_arm_across_the_body() {
+        // AvatarRenderer.getArmPose: the used item's use animation decides
+        // the arm's pose, and a shield (an item with `blocks_attacks`) uses
+        // the BLOCK animation, so the arm is held up across the body
+        // (#2289).
+        let state = State {
+            pos: 0.0,
+            speed: 0.0,
+            age: 0.0,
+            y_rot: 0.0,
+            x_rot: 0.0,
+            swing: 0.0,
+            baby: false,
+            partial: 0.0,
+        };
+        let mut p = Poses {
+            map: ["head", "right_arm", "left_arm"]
+                .into_iter()
+                .map(|n| (n.to_string(), [0.0; 9]))
+                .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:shield".into());
+        m.extra.using_item = 20;
+        m.extra.blocking = true;
+        setup(&m, &state, &mut p, &HashMap::new());
+        // HumanoidModel.setupAnim's BLOCK pose.
+        assert!((p.get("right_arm")[3] + 0.942_477_9).abs() < 1e-6);
+        assert!((p.get("right_arm")[4] + FRAC_PI_6).abs() < 1e-6);
+        // An item that does not block attacks leaves the arm holding it.
+        let mut m = player();
+        m.extra.main_hand = Some("minecraft:stick".into());
+        m.extra.using_item = 20;
+        let mut p = Poses {
+            map: ["head", "right_arm", "left_arm"]
+                .into_iter()
+                .map(|n| (n.to_string(), [0.0; 9]))
+                .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        setup(&m, &state, &mut p, &HashMap::new());
+        assert!((p.get("right_arm")[3] + PI / 10.0).abs() < 1e-6);
     }
 }

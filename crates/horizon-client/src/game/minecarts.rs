@@ -1230,6 +1230,21 @@ impl Game<'_> {
     ) {
         self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, |_| None, out);
     }
+    /// `block_model_vertices` with `tint` (RGB) on the faces that have a tint index.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn block_model_vertices_tinted(
+        &self,
+        state: BlockStateId,
+        seed: i64,
+        m: glam::Mat4,
+        light: u32,
+        diffuse: bool,
+        tint: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        let tint = |index: i32| (index >= 0).then_some(tint);
+        self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, tint, out);
+    }
     /// `block_model_vertices` with each face multiplied by `tint` of its
     /// tint index (RGB, `None` for untinted faces) and lit by `light` of
     /// each quad.

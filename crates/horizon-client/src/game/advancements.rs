@@ -588,10 +588,17 @@ impl Game<'_> {
                             .announced
                             .push(Text::translate(key, &[player, name]));
                     }
-                    None => self.system_message(Text::translate(
-                        key,
-                        &[Text::literal(super::chat::PLAYER_NAME), name],
-                    )),
+                    None => {
+                        let text = Text::translate(key, &[self.player_display_text(), name]);
+                        // The guests hear of the host's advancement too.
+                        if let Some(host) = &self.lan {
+                            host.hub
+                                .system_message(horizon_client::lan::data::component_nbt(
+                                    &text.component(),
+                                ));
+                        }
+                        self.system_message(text);
+                    }
                 }
             }
         }

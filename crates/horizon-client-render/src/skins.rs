@@ -491,13 +491,67 @@ pub fn texture_hash(url: &str) -> Option<String> {
 /// `SkinManager.TextureCache.registerTexture`: the texture id of a skin,
 /// `skins/` and the SHA-1 of its hash's UTF-16 code units.
 pub fn skin_location(hash: &str) -> String {
+    location("skins/", hash)
+}
+/// `registerTexture` in the cape cache: `capes/` and the same SHA-1.
+pub fn cape_location(hash: &str) -> String {
+    location("capes/", hash)
+}
+fn location(prefix: &str, hash: &str) -> String {
     let units: Vec<u8> = hash.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let digest = sha1(&units);
-    let mut out = String::from("skins/");
+    let mut out = String::from(prefix);
     for b in digest {
         out.push_str(&format!("{b:02x}"));
     }
     out
+}
+
+/// `PlayerSkin.cape`: the cape texture of textures whose lookup gave a skin
+/// (every download ready), if they name one.
+pub fn cape(textures: &Textures) -> Option<String> {
+    textures
+        .cape
+        .as_deref()
+        .and_then(texture_hash)
+        .map(|hash| cape_location(&hash))
+}
+
+/// A cape in a 64x64 skin slot: the 64x32 picture (or the older 22x17,
+/// which has the same layout) in its top half. Vanilla draws a cape of any
+/// size; a larger one is scaled down to 64x32 here.
+pub fn process_cape(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return None;
+    }
+    let mut img = vec![0u8; 64 * 64 * 4];
+    let (fit_w, fit_h) = if w <= 64 && h <= 32 { (w, h) } else { (64, 32) };
+    for y in 0..fit_h {
+        for x in 0..fit_w {
+            let (sx, sy) = (x * w / fit_w, y * h / fit_h);
+            let (s, d) = ((sy * w + sx) * 4, (y * 64 + x) * 4);
+            img[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+        }
+    }
+    Some(img)
+}
+
+/// The cape the launcher gives an offline name (`HORIZON_OFFLINE_CAPE`, a
+/// PNG's path; launcher/src/skins.rs), read once as `process_cape` lays it out.
+pub fn offline_cape() -> Option<&'static [u8]> {
+    static CAPE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    CAPE.get_or_init(|| {
+        let path = std::env::var_os("HORIZON_OFFLINE_CAPE").filter(|p| !p.is_empty())?;
+        let image = std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string()))
+            .and_then(|(w, h, rgba)| process_cape(w, h, &rgba).ok_or("not an image".into()));
+        image
+            .inspect_err(|e| eprintln!("Horizon: no offline cape ({}): {e}", path.display()))
+            .ok()
+    })
+    .as_deref()
 }
 
 /// Where a texture download stands.
@@ -650,9 +704,10 @@ impl Downloader {
         while let Ok((key, image)) = self.done.try_recv() {
             let state = match image {
                 Some(rgba) => {
-                    if key.0 == Kind::Skin {
-                        let location = skin_location(&key.1);
-                        self.queue(location, rgba);
+                    match key.0 {
+                        Kind::Skin => self.queue(skin_location(&key.1), rgba),
+                        Kind::Cape => self.queue(cape_location(&key.1), rgba),
+                        Kind::Elytra => {}
                     }
                     Download::Ready
                 }
@@ -685,7 +740,8 @@ impl Downloader {
                 .and_then(|b| crate::hud::decode_bytes(&b).ok())
                 .and_then(|(w, h, rgba)| match kind {
                     Kind::Skin => process_legacy_skin(w, h, &rgba),
-                    _ => Some(rgba),
+                    Kind::Cape => process_cape(w, h, &rgba),
+                    Kind::Elytra => Some(rgba),
                 });
             let _ = send.send((key, image));
         });
@@ -716,16 +772,21 @@ impl Downloader {
         if self.queued.contains(location) {
             return true;
         }
-        let Some(digest) = location.strip_prefix("skins/") else {
-            return false;
-        };
+        let (digest, process): (_, fn(u32, u32, &[u8]) -> Option<Vec<u8>>) =
+            if let Some(digest) = location.strip_prefix("skins/") {
+                (digest, process_legacy_skin)
+            } else if let Some(digest) = location.strip_prefix("capes/") {
+                (digest, process_cape)
+            } else {
+                return false;
+            };
         let image = self.images.get(location).cloned().or_else(|| {
             let file = self
                 .root
                 .join(if digest.len() > 2 { &digest[..2] } else { "xx" })
                 .join(digest);
             let (w, h, rgba) = crate::hud::decode_bytes(&std::fs::read(&file).ok()?).ok()?;
-            process_legacy_skin(w, h, &rgba)
+            process(w, h, &rgba)
         });
         let Some(image) = image else {
             return false;
@@ -959,6 +1020,31 @@ mod tests {
         d.queue("skins/def".into(), vec![4]);
         assert!(d.again("skins/def"));
         assert_eq!(d.take_ready(), vec![("skins/def".to_owned(), vec![4])]);
+    }
+
+    /// A cape fills the top half of a 64x64 slot; a larger one is scaled to 64x32.
+    #[test]
+    fn capes_fill_the_top_half_of_a_slot() {
+        let at = |x: usize, y: usize| (y * 64 + x) * 4;
+        let legacy = super::process_cape(22, 17, &[7; 22 * 17 * 4]).unwrap();
+        assert_eq!(legacy.len(), 64 * 64 * 4);
+        assert_eq!(legacy[at(21, 16)], 7);
+        assert_eq!(legacy[at(22, 16)], 0);
+        let mut hd = vec![0u8; 128 * 64 * 4];
+        hd[(62 * 128 + 126) * 4] = 9;
+        let hd = super::process_cape(128, 64, &hd).unwrap();
+        assert_eq!(hd[at(63, 31)], 9);
+        assert_eq!(hd[at(0, 32)], 0);
+        assert!(super::process_cape(64, 32, &[0; 4]).is_none());
+        let textures = super::Textures {
+            cape: Some("http://textures.minecraft.net/texture/abc".into()),
+            ..Default::default()
+        };
+        let cape = super::cape(&textures).unwrap();
+        assert_eq!(
+            cape["capes/".len()..],
+            super::skin_location("abc")["skins/".len()..]
+        );
     }
 
     #[test]

@@ -124,14 +124,26 @@ pub struct JavaGame {
     /// The mod loader it plays with, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loader: Option<crate::loaders::Loader>,
+    /// The game window's size, width then height; none: the game's own 854×480.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<(u32, u32)>,
+}
+
+impl Instance {
+    /// Its variables for the game started as `program` and the commands around it
+    /// ([`crate::launch::instance_vars`]).
+    pub fn vars(&self, program: &std::ffi::OsStr) -> crate::launch::Vars {
+        let java = self.java.as_ref().map(|_| program);
+        crate::launch::instance_vars(&self.name, &self.id, &self.home, java)
+    }
 }
 
 impl JavaGame {
-    /// What the mod browser installs for: its Minecraft version (vanilla: no loader).
+    /// What the mod browser installs for: its Minecraft version and its loader.
     pub fn target(&self) -> crate::browser::java_instance::Target {
         crate::browser::java_instance::Target {
             minecraft: self.minecraft.clone(),
-            loader: None,
+            loader: self.loader.as_ref().map(|l| l.kind.id().to_string()),
         }
     }
 }
