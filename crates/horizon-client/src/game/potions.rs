@@ -1162,6 +1162,33 @@ impl Game<'_> {
         let color = brewing::potion_color(stack.potion());
         self.level_event_at(if instant { 2007 } else { 2002 }, block, color as i32);
         self.level_event_at(if instant { 1054 } else { 1053 }, block, 0);
+        // AbstractThrownPotion.affectEntitiesAround: a water potion (the only
+        // #rehydrates_axolotls) refills the air of the axolotls in the
+        // projectile's box inflated by 4, 2 and 4 (Axolotl.rehydrate, 1800).
+        if stack.potion() == Some("minecraft:water") {
+            let (lo, hi) = (
+                [at.x - 0.125 - 4.0, at.y - 2.0, at.z - 0.125 - 4.0],
+                [at.x + 0.125 + 4.0, at.y + 0.25 + 2.0, at.z + 0.125 + 4.0],
+            );
+            for m in self
+                .mobs
+                .iter_mut()
+                .filter(|m| m.species() == horizon_client::mobs::Species::Axolotl && !m.removed)
+            {
+                let (w, h, _) = m.dims();
+                let half = w / 2.0;
+                let (x, y, z) = (m.position.x, m.position.y, m.position.z);
+                if x - half < hi[0]
+                    && x + half > lo[0]
+                    && y < hi[1]
+                    && y + h > lo[1]
+                    && z - half < hi[2]
+                    && z + half > lo[2]
+                {
+                    m.air = (m.air + 1800).min(horizon_client::mobs::axolotl::MAX_AIR);
+                }
+            }
+        }
         let Some(def) = potion else {
             return;
         };
