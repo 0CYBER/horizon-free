@@ -339,6 +339,9 @@ impl Game<'_> {
         // The day timeline: firefly bush sounds from 12600 to 23400.
         let firefly_bush_sounds = self.dim == Dim::Overworld
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
+        // EnvironmentAttributes.CREAKING_ACTIVE: the same overworld night.
+        let creaking_active = self.dim == Dim::Overworld
+            && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         let tables = &self.pack.context.tables;
         let model_offset = |state, x, z| tables.offset(state, x, z);
         let gateway_particles = |state, p| {
@@ -358,6 +361,7 @@ impl Game<'_> {
             raining_at: &raining_at,
             height_no_leaves: &height_no_leaves,
             firefly_bush_sounds,
+            creaking_active,
             sky_darken: self.sky_darken(),
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
             model_offset: &model_offset,
