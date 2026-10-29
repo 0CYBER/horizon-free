@@ -377,6 +377,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
         let avatar = self.avatar;
+        let previous_position = self.previous_position;
         // LivingEntity.getBedOrientation: the model lies in the bed as
         // another player's does (`villager::sleep_pose`).
         let bed = self.sleeping.map_or(0, |head| self.bed_facing(head));
@@ -385,22 +386,13 @@ impl Game<'_> {
         };
         m.extra.ints[1] = bed;
         m.extra.model_scale = scale;
-        let at = Vec3::new(
-            position.x,
-            position.y - if crouching { 0.125 } else { 0.0 },
-            position.z,
-        );
-        let (dx, dy, dz) = (
-            at.x - m.position.x,
-            at.y - m.position.y,
-            at.z - m.position.z,
-        );
-        let walked = player_walk_distance(m.position, at);
-        m.previous = m.position;
+        // The crouch flag is still last tick's here.
+        let (from, at) =
+            player_model_positions(previous_position, position, m.extra.crouching, crouching);
+        m.previous = from;
         m.position = at;
-        if dx * dx + dy * dy + dz * dz > 100.0 {
-            m.previous = at;
-        }
+        let (dx, dz) = (at.x - m.previous.x, at.z - m.previous.z);
+        let walked = player_walk_distance(m.previous, at);
         m.previous_yaw = m.yaw;
         m.previous_body_yaw = m.body_yaw;
         m.previous_head_yaw = m.head_yaw;
@@ -851,6 +843,27 @@ fn player_preview_quads(
     quads
 }
 
+/// The player's model's old and new positions for a tick: the player's old
+/// (`Entity.xo`, `yo`, `zo`) and new positions, each 0.125 lower while
+/// crouching. The model is the player itself in vanilla, so
+/// `EntityRenderer.extractRenderState` lerps it from the same old position
+/// `Camera.setup` does, however far it moved: at Levitation 255 (12.75 blocks
+/// a tick) the body keeps up with the camera. A teleport or respawn resets
+/// the old position, and the model jumps with it.
+fn player_model_positions(
+    previous_position: Vec3,
+    position: Vec3,
+    was_crouching: bool,
+    crouching: bool,
+) -> (Vec3, Vec3) {
+    let drop =
+        |p: Vec3, crouching: bool| Vec3::new(p.x, p.y - if crouching { 0.125 } else { 0.0 }, p.z);
+    (
+        drop(previous_position, was_crouching),
+        drop(position, crouching),
+    )
+}
+
 /// The distance `LivingEntity.calculateEntityAnimation` walks the player's
 /// model for a move from `from` to `to`. `omnidirectionalAirMover()` is false
 /// for every player (`Entity`'s, not overridden), so only the horizontal
@@ -864,6 +877,26 @@ fn player_walk_distance(from: Vec3, to: Vec3) -> f32 {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+    #[test]
+    fn the_player_model_rises_with_the_camera_at_levitation_255() {
+        // LivingEntity.travel at Levitation 255: 0.05 * 255 blocks a tick.
+        let from = Vec3::new(0.5, 80.0, 0.5);
+        let to = Vec3::new(0.5, 92.75, 0.5);
+        // The camera lerps from the old position: so does the body.
+        assert_eq!(
+            player_model_positions(from, to, false, false),
+            (from, to),
+            "the body jumps instead of rising (#3616)"
+        );
+        // Any distance, crouching on both ends.
+        let far = Vec3::new(40.5, 80.0, 0.5);
+        assert_eq!(
+            player_model_positions(from, far, true, true),
+            (Vec3::new(0.5, 79.875, 0.5), Vec3::new(40.5, 79.875, 0.5)),
+        );
+        // A teleport resets the old position to the new one: no sweep.
+        assert_eq!(player_model_positions(to, to, false, false), (to, to));
+    }
     #[test]
     fn flying_straight_up_does_not_walk_the_player_model() {
         let from = Vec3::new(0.5, 80.0, 0.5);
