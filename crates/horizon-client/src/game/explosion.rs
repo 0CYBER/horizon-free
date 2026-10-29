@@ -382,9 +382,14 @@ impl Game<'_> {
             }
             self.lan = Some(host);
         }
-        // Mobs.
+        // Mobs, but not the one exploding (`getEntities(source, box)`): a
+        // wither's spawn blast neither hurts nor pushes it.
+        let spared = exploding.filter(|_| self.combat.explosion_source_named);
         let mut mobs = std::mem::take(&mut self.mobs);
-        for m in mobs.iter_mut().filter(|m| m.alive()) {
+        for m in mobs
+            .iter_mut()
+            .filter(|m| m.alive() && spared != Some(m.id))
+        {
             let hurtable = teams_allow(self, self.mob_team(m.id));
             let feet = [m.position.x, m.position.y, m.position.z];
             let dist = distance(feet) / diameter;

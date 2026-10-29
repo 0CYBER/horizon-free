@@ -334,3 +334,65 @@ fn a_java_instance_plays_one_minecraft_version_in_its_own_folder() {
     assert_eq!(edited.java.unwrap().memory_mb, Some(6144));
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// Delete moves an instance's folder to the Trash and forgets it; one deleted outside the
+/// launcher is forgotten when the list is next read (#horizon-bugs: an instance that stayed).
+#[test]
+fn deleted_instances_go_to_the_trash_and_are_forgotten() {
+    let root = scratch("delete");
+    let (home, data, trash) = (root.join("home"), root.join("data"), root.join("trash"));
+    player_home(&home);
+    let to_trash = |p: &Path| crate::desktop_seams::to_folder(p, &trash);
+    let survival = create_in(&home, &data, "Survival", None, None).unwrap();
+    put(&survival.home.join("saves/Base/level.dat"), "base");
+    edit_in(&home, &data, "Survival", |m| m.group = Some("Mine".into())).unwrap();
+    let gone = delete_in(&home, &data, "Survival", &to_trash).unwrap();
+    assert_eq!(gone.id, "survival");
+    assert_eq!(
+        fs::read(trash.join("survival/saves/Base/level.dat")).unwrap(),
+        b"base"
+    );
+    assert!(find_in(&list_in(&home, &data), "Survival").is_err());
+    assert!(!Store::load(&data).instances.contains_key("survival"));
+    // The game's home stays; an imported pack goes like an instance.
+    assert!(delete_in(&home, &data, DEFAULT, &to_trash)
+        .unwrap_err()
+        .contains("can't be deleted"));
+    assert!(home.join("saves/World/level.dat").is_file());
+    delete_in(&home, &data, "small-pack", &to_trash).unwrap();
+    assert!(trash
+        .join("small-pack/home/saves/Modded/level.dat")
+        .is_file());
+    // A folder removed by hand: its choices are dropped, a new one of that name starts clean.
+    create_in(&home, &data, "Skyblock", None, None).unwrap();
+    edit_in(&home, &data, "Skyblock", |m| m.group = Some("Old".into())).unwrap();
+    fs::remove_dir_all(home.join(OWN).join("skyblock")).unwrap();
+    assert!(find_in(&list_in(&home, &data), "Skyblock").is_err());
+    assert!(!Store::load(&data).instances.contains_key("skyblock"));
+    let again = create_in(&home, &data, "Skyblock", None, None).unwrap();
+    assert_eq!(again.group, None);
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_mod_browser_installs_for_the_instance_loader() {
+    let vanilla = JavaGame {
+        minecraft: "1.21.1".into(),
+        ..JavaGame::default()
+    };
+    assert_eq!(vanilla.target().loader, None);
+    let quilt = JavaGame {
+        loader: Some(crate::loaders::Loader {
+            kind: crate::loaders::Kind::Quilt,
+            version: "0.30.1".into(),
+        }),
+        ..vanilla
+    };
+    let target = quilt.target();
+    assert_eq!(
+        (target.minecraft.as_str(), target.loader.as_deref()),
+        ("1.21.1", Some("quilt"))
+    );
+    // A Quilt instance takes Fabric mods too.
+    assert!(target.accepts("fabric") && !target.accepts("neoforge"));
+}

@@ -3675,7 +3675,16 @@ fn decode_lod_surfaces(
                             descriptor.name.as_str(),
                             "minecraft:water" | "minecraft:lava"
                         );
-                        (state, fluid, properties.blocks_motion_in_heightmap())
+                        // Chorus is thin and non-solid but still far-End detail.
+                        let chorus = matches!(
+                            descriptor.name.as_str(),
+                            "minecraft:chorus_plant" | "minecraft:chorus_flower"
+                        );
+                        (
+                            state,
+                            fluid,
+                            fluid || properties.blocks_motion_in_heightmap() || chorus,
+                        )
                     }))
                 })
                 .collect::<Option<_>>()?;
@@ -3699,10 +3708,10 @@ fn decode_lod_surfaces(
                     for y in (0..16).rev() {
                         let index = y * 256 + cell;
                         let palette_index = lod_palette_index(blocks, index, 4096, 4)?;
-                        let Some((state, fluid, solid)) = palette[palette_index] else {
+                        let Some((state, fluid, kept)) = palette[palette_index] else {
                             continue;
                         };
-                        if !solid && !fluid {
+                        if !kept {
                             continue;
                         }
                         let biome = section
@@ -4174,6 +4183,18 @@ mod tests {
             .registry
             .default_state("minecraft:oak_leaves")
             .unwrap();
+        let end_stone = assets
+            .registry
+            .default_state("minecraft:end_stone")
+            .unwrap();
+        let chorus = assets
+            .registry
+            .default_state("minecraft:chorus_plant")
+            .unwrap();
+        let flower = assets
+            .registry
+            .default_state("minecraft:chorus_flower")
+            .unwrap();
         let mut chunk = Chunk::empty(-2, 3);
         chunk.set(0, 109, 0, stone.0);
         chunk.set(3, 121, 5, stone.0);
@@ -4200,6 +4221,10 @@ mod tests {
         for y in 55..64 {
             chunk.set(4, y, 4, water.0);
         }
+        // Chorus is thin and non-solid but still part of the far End.
+        chunk.set(12, 100, 2, end_stone.0);
+        chunk.set(12, 101, 2, chorus.0);
+        chunk.set(12, 102, 2, flower.0);
         let mut saved = encode(&chunk, assets.registry, &biomes);
         put(
             &mut saved.tag,
@@ -4257,6 +4282,25 @@ mod tests {
         let underwater = surfaces[4 * 16 + 4].surface.unwrap();
         assert_eq!((underwater.height, underwater.state), (55, sand));
         assert_eq!(underwater.water, Some((64, water)));
+        let chorus_column = &surfaces[2 * 16 + 12];
+        assert_eq!(
+            chorus_column
+                .surface
+                .map(|surface| (surface.height, surface.state)),
+            Some((103, flower))
+        );
+        assert_eq!(
+            chorus_column
+                .spans
+                .iter()
+                .map(|span| (span.min, span.max, span.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (100, 101, end_stone),
+                (101, 102, chorus),
+                (102, 103, flower)
+            ]
+        );
         assert!(surfaces[15].surface.is_none(), "saved void stays empty");
         assert!(
             reopened.regions.lock().unwrap().is_empty(),

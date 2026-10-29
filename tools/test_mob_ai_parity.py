@@ -66,6 +66,8 @@ def scenarios():
     # Night: undead do not burn, monsters seek darkness.
     add('zombie_night', 200, ['player 10.5 -60 0.5', 'mob minecraft:zombie 0.5 -60 0.5 0 31 persistent'], 'time=18000')
     add('skeleton_day_burn', 120, ['mob minecraft:skeleton 0.5 -60 0.5 0 32 persistent'])
+    # NoAI only skips serverAiStep: Mob.aiStep's burnUndead still sets a NoAI zombie alight (#3430).
+    add('zombie_noai_day_burn', 120, ['mob minecraft:zombie 0.5 -60 0.5 0 33 persistent noai'])
     # The wither (summoned, not built: no invulnerable spawn phase).
     add('wither_player', 200, ['player 10.5 -60 0.5', 'mob minecraft:wither 0.5 -58 0.5 0 41 persistent'])
     # A villager with a job site, a bed and a bell.
@@ -233,6 +235,22 @@ def scenarios():
                 f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent{baby}',
                 f'feed 20 0 minecraft:{food}', f'feed 40 0 minecraft:{food}',
             ])
+    # The player uses a sword on untamed horses (#2697): Horse, AbstractChestedHorse and
+    # ZombieHorse.mobInteract make them mad (makeMad: rear, angry sound) instead of taking the
+    # rider, not while one still stands; an untamed skeleton horse ignores it (SkeletonHorse).
+    # The zombie horse goes at night (it burns by day), the skeleton horse stops before its
+    # first step sound (Horizon plays the block's).
+    for species, seed, babies, ticks, opts in [
+            ('horse', 180, True, 80, ''), ('donkey', 181, True, 80, ''), ('mule', 182, False, 80, ''),
+            ('zombie_horse', 183, False, 80, 'time=18000'), ('llama', 184, True, 80, ''),
+            ('skeleton_horse', 185, False, 45, '')]:
+        for baby in ('', ' baby') if babies else ('',):
+            add(f'sword_{species}{baby.replace(" ", "_")}', ticks, [
+                'player 3.5 -60 0.5',
+                f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent{baby}',
+                'interact 20 0 minecraft:iron_sword', 'interact 30 0 minecraft:iron_sword',
+                'interact 40 0 minecraft:iron_sword',
+            ], opts)
     # Striders: standing on a lava pool (floatStrider), walking from cold grass to it
     # (StriderGoToLavaGoal, suffocating), and drawn by a player holding warped fungus.
     LAVA = 'fill -5 -63 -5 5 -61 5 minecraft:lava'
