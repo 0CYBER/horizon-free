@@ -1230,7 +1230,7 @@ impl Game<'_> {
             }
         }
     }
-    /// Baked block faces with terrain shade or block-item diffuse lighting.
+    /// Baked block-state faces with default block tints and terrain shade or diffuse lighting.
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
@@ -1240,21 +1240,10 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, |_| None, out);
-    }
-    /// `block_model_vertices` with `tint` (RGB) on the faces that have a tint index.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn block_model_vertices_tinted(
-        &self,
-        state: BlockStateId,
-        seed: i64,
-        m: glam::Mat4,
-        light: u32,
-        diffuse: bool,
-        tint: u32,
-        out: &mut Vec<Vertex>,
-    ) {
-        let tint = |index: i32| (index >= 0).then_some(tint);
+        // BlockTintSource.color(state) with no level: each tinted face's default colour.
+        let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
+        let tables = &self.pack.context.tables;
+        let tint = |index: i32| tables.default_tint(state, index, grass);
         self.tinted_block_model_vertices(state, seed, m, |_| light, diffuse, tint, out);
     }
     /// `block_model_vertices` with each face multiplied by `tint` of its
