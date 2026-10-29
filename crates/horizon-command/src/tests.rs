@@ -256,6 +256,45 @@ fn suggestions_like_vanilla() {
     assert_eq!(suggestions("time set 5"), ["d", "s", "t"]);
     assert!(suggestions("time set ").contains(&"minecraft:day".to_owned()));
 }
+/// ClientSuggestionProvider: block and column positions offer the targeted
+/// block (`getRelevantCoordinates`), `Vec3` and `Vec2` the exact hit point
+/// with two decimals (`getAbsoluteCoordinates`); with no block hit, `~`.
+#[test]
+fn coordinates_suggest_the_crosshair_block_or_hit_point() {
+    let d = vanilla::dispatcher();
+    let suggest = |reg: &Registries, input: &str| -> Vec<String> {
+        let parse = d.parse(input, reg);
+        d.suggestions(&parse, input.len(), reg)
+            .1
+            .into_iter()
+            .map(|s| s.text)
+            .collect()
+    };
+    let mut hit = reg();
+    hit.target_block = Some([-29, 73, 8]);
+    hit.target_point = Some(["-28.77".into(), "73.28".into(), "8.00".into()]);
+    assert_eq!(suggest(&hit, "setblock "), ["-29", "-29 73", "-29 73 8"]);
+    assert_eq!(
+        suggest(&hit, "summon minecraft:pig "),
+        ["-28.77", "-28.77 73.28", "-28.77 73.28 8.00"]
+    );
+    assert_eq!(
+        suggest(&hit, "summon minecraft:pig -28.77 "),
+        ["-28.77 73.28", "-28.77 73.28 8.00"]
+    );
+    // Vec2Argument: x and z.
+    assert_eq!(
+        suggest(&hit, "worldborder center "),
+        ["-28.77", "-28.77 8.00"]
+    );
+    // An entity in front of the block (or no hit): the defaults.
+    let none = reg();
+    assert_eq!(suggest(&none, "setblock "), ["~", "~ ~", "~ ~ ~"]);
+    assert_eq!(
+        suggest(&none, "summon minecraft:pig "),
+        ["~", "~ ~", "~ ~ ~"]
+    );
+}
 #[test]
 fn smart_usage_matches_brigadier() {
     let d = vanilla::dispatcher();

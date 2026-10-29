@@ -6,8 +6,9 @@ is a `horizon-mixin.toml` and a few `.rs` helpers that hook into named functions
 RETURN, MODIFY_ARG, OVERWRITE...; the tool's README lists them). A port such as Veinminer is three HEAD hooks and
 one module. Start a mod from [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template).
 
-Native mods are native code with the player's rights, not sandboxed. The launcher offers them off by default, behind
-a warning, reviewed before the registry lists one, and in a game of their own, built for the instance they are installed in.
+Native mods are native code with the player's rights, not sandboxed. The launcher turns them on only when the player
+installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review; and
+they play in a game of their own, built for the instance they are installed in.
 
 ## Pinned to a Nightly
 
@@ -106,13 +107,19 @@ Measured 2026-10-29 on Windows 11 (Ryzen 7 9800X3D, 16 threads), the same mod an
 | Crates in the launcher's Cargo home | 657 MB |
 | First build: release profile, the whole game | 6 min 57 s of compiling, 8 min 3 s in all; `native/target/` 2.0 GB |
 
+Measured 2026-10-28 on Linux (an x86_64 server with no Rust of its own), Zoom on Horizon `1149c92`, 3 jobs while CI
+ran: `rust install` in 11 s (592 MB), the first build in 12 min 9 s. The built game ran Zoom's proof (under `xvfb-run`:
+the game needs a display even with `--offscreen`).
+
 Only the native builds an instance plays are kept (`native_mods::prune`); `native/target/` stays for the next one.
 
 ## Trust
 
-- **Off by default.** The command needs `--trust-native-code`; the window shows a warning in red before every
-  build: the mods run with full access to the computer, and their ids and versions. The Mods page says who made
-  each one, and "Not made or endorsed by the Horizon project" for any mod not Horizon's own.
+- **Off until the player installs one.** Settings → Game → Native mods stays off for a player who never installs a
+  native mod; the first install shows the notice and turns it on. The command needs `--trust-native-code`; the window
+  shows a warning in red before every build: the mods run with full access to the computer, and their ids and
+  versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
+  Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
   has read the source: the `.hnmod` *is* the source (only `.rs` and `.toml`, checked without running anything),
   pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
@@ -134,4 +141,3 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 
 - Rebuild after the mods or the Nightly change (asking first, as it compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
-- Linux: the toolchain is pinned, but a full game build on it is unproven. Windows builds and plays (above).

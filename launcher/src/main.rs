@@ -236,6 +236,8 @@ struct Launcher {
     quick_play: Option<(&'static str, String)>,
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
+    /// The running game's instance variables, for its post-exit command.
+    client_vars: horizon_launcher::launch::Vars,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
     args_input: line_edit::LineEdit,
     args_focused: bool,
@@ -442,6 +444,7 @@ impl Launcher {
             joining: None,
             quick_play: None,
             client_run: None,
+            client_vars: Vec::new(),
             collection: collection::Collection::load(),
             agents: agents_page::AgentsUi::default(),
             playing: None,
@@ -680,7 +683,11 @@ impl Launcher {
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::JavaGame(id, home, cmd) => {
                     self.starting_client = None;
-                    match cmd.and_then(|cmd| backend::spawn(Job::Client, cmd, self.tx.clone())) {
+                    let spawned = cmd.and_then(|(cmd, vars)| {
+                        self.client_vars = vars;
+                        backend::spawn(Job::Client, cmd, self.tx.clone())
+                    });
+                    match spawned {
                         Ok(r) => {
                             self.client = Some(r);
                             self.client_home = Some(home);
@@ -759,11 +766,15 @@ impl Launcher {
                         backend::append_game_args(&mut cmd);
                         // Last, around every argument: the instance's pre-launch command,
                         // wrapper and variables.
-                        let launch = run
+                        let instance = run
                             .as_ref()
-                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id))
-                            .map(|i| i.launch)
+                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id));
+                        self.client_vars = instance
+                            .as_ref()
+                            .map(|i| i.vars(cmd.get_program()))
                             .unwrap_or_default();
+                        cmd.envs(self.client_vars.iter().map(|(k, v)| (k, v)));
+                        let launch = instance.map(|i| i.launch).unwrap_or_default();
                         let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
@@ -923,9 +934,16 @@ impl Launcher {
                             self.multiplayer.stale();
                             self.screenshots.stale();
                             self.game_packs.stale();
+                            let vars = std::mem::take(&mut self.client_vars);
                             if let Some((id, started)) = self.client_run.take() {
                                 if let Err(e) = instances::record_play(&id, started.elapsed()) {
                                     eprintln!("Play time not saved: {e}");
+                                }
+                                if let Some(i) = instances::list().into_iter().find(|i| i.id == id)
+                                {
+                                    horizon_launcher::launch::run_after_exit(
+                                        &i.launch, &i.home, &vars,
+                                    );
                                 }
                                 self.reload_instances();
                             }
@@ -1168,8 +1186,11 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, &log)
-                .map(|cmd| horizon_launcher::launch::wrap(cmd, &instance.launch));
+            let cmd = backend::java_game(&instance, None, &log).map(|mut cmd| {
+                let vars = instance.vars(cmd.get_program());
+                cmd.envs(vars.iter().map(|(k, v)| (k, v)));
+                (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
+            });
             let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
         });
     }
@@ -1462,17 +1483,61 @@ fn button(
 /// Copies to the clipboard, or into `HORIZON_LAUNCHER_CLIPBOARD` when a test run sets it
 /// (`horizon_launcher::desktop_seams`).
 fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
-    let Some(file) = horizon_launcher::desktop_seams::clipboard_file() else {
-        cx.write_to_clipboard(item);
+    if let Some(file) = horizon_launcher::desktop_seams::clipboard_file() {
+        let bytes = match item.entries().first() {
+            Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
+            _ => item.text().unwrap_or_default().into_bytes(),
+        };
+        if let Err(e) = std::fs::write(&file, bytes) {
+            eprintln!("{}: {e}", file.display());
+        }
         return;
-    };
-    let bytes = match item.entries().first() {
-        Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
-        _ => item.text().unwrap_or_default().into_bytes(),
-    };
-    if let Err(e) = std::fs::write(&file, bytes) {
-        eprintln!("{}: {e}", file.display());
     }
+    cx.write_to_clipboard(item.clone());
+    #[cfg(target_os = "linux")]
+    if let Some(text) = item.text() {
+        sync_system_clipboard(text);
+    }
+}
+
+/// GPUI's Wayland clipboard sends the last key press's serial, which a compositor ignores
+/// after a mouse click: hand the text to the desktop's own tool too, the first one present
+/// for this session (`wl-copy` on Wayland, `xclip` or `xsel` on X11).
+#[cfg(target_os = "linux")]
+fn sync_system_clipboard(text: String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const TOOLS: [(&str, &str, &[&str]); 3] = [
+        ("WAYLAND_DISPLAY", "wl-copy", &[]),
+        ("DISPLAY", "xclip", &["-selection", "clipboard"]),
+        ("DISPLAY", "xsel", &["--clipboard", "--input"]),
+    ];
+    if text.is_empty() {
+        return;
+    }
+    // Off the UI thread: a tool can take its time.
+    std::thread::spawn(move || {
+        for (session, tool, args) in TOOLS {
+            if std::env::var_os(session).is_none() {
+                continue;
+            }
+            let Ok(mut child) = Command::new(tool)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                continue;
+            };
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if child.wait().is_ok_and(|status| status.success()) {
+                return;
+            }
+        }
+    });
 }
 
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
