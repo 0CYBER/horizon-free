@@ -1122,7 +1122,10 @@ impl Game<'_> {
             dedicated: false,
             integrated: false,
         };
-        let net = NetConfig::lan(settings.port, motd, MAX_PLAYERS);
+        let net = NetConfig {
+            online: horizon_client::lan::OnlineMode::lan(),
+            ..NetConfig::lan(settings.port, motd, MAX_PLAYERS)
+        };
         self.lan_host(settings, net, config, Some(host_uuid))
     }
     /// Start the network side and the play-state hub: for the LAN (with the
