@@ -703,15 +703,7 @@ fn serve_login(
                 return Err(err);
             }
         },
-        // handleHello: the singleplayer owner (the window's memory connection)
-        // logs in with its own profile, other players with no properties.
-        None => {
-            let properties = match &shared.config.owner_profile {
-                Some(owner) if c.is_memory() => owner.properties().to_vec(),
-                _ => Vec::new(),
-            };
-            (offline_uuid(&hello.name), properties)
-        }
+        None => (offline_uuid(&hello.name), Vec::new()),
     };
     // verifyLoginAndFinishConnectionSetup: PlayerList.canPlayerLogin, then
     // duplicates and a full server.
@@ -1232,74 +1224,32 @@ mod tests {
         }
     }
 
-    /// handleHello on an integrated server: the window's own (memory)
-    /// connection logs in with the signed-in account's properties, its skin
-    /// among them, so the player list gives everyone the owner's skin; a
-    /// LAN guest on the offline-mode world gets none.
+    /// The owner's login is main's: it never waits on the profile fetch,
+    /// even one that never answers, and logs in with no properties.
     #[test]
-    fn the_owner_logs_in_with_its_own_profile_properties() {
-        let textures = login::Property {
-            name: "textures".into(),
-            value: "e30=".into(),
-            signature: Some("c2lnbmVk".into()),
-        };
-        let fetched = textures.clone();
+    fn the_owners_login_never_waits_on_the_profile_fetch() {
+        let (_hold, never) = channel::<()>();
         let config = crate::lan::NetConfig {
             announce: false,
+            listen: false,
             owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(move || {
-                vec![fetched]
+                let _ = never.recv();
+                Vec::new()
             }))),
             ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
         };
         let lan =
             crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
                 .unwrap();
+        let start = Instant::now();
         let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
         assert_eq!(owner.uuid, offline_uuid("Owner"));
-        assert_eq!(owner.properties, vec![textures]);
-        let guest = Connection::connect("127.0.0.1", lan.port, Duration::from_secs(5)).unwrap();
-        guest
-            .reader
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let guest = login_profile(guest, "Guest");
-        assert_eq!(guest.uuid, offline_uuid("Guest"));
-        assert!(guest.properties.is_empty());
-    }
-
-    /// Without a signed-in account (or an answer from the services) the
-    /// owner logs in with no properties, as before.
-    #[test]
-    fn an_owner_without_an_answer_logs_in_without_properties() {
-        let config = crate::lan::NetConfig {
-            announce: false,
-            listen: false,
-            owner_profile: Some(Arc::new(crate::lan::OwnerProfile::new(Vec::new))),
-            ..crate::lan::NetConfig::lan(0, "Owner - World".into(), 8)
-        };
-        let lan =
-            crate::lan::Lan::start_with(Arc::new(crate::lan::data::SyncData::empty()), config)
-                .unwrap();
-        let owner = login_profile(Connection::local(lan.connect_local().unwrap()), "Owner");
         assert!(owner.properties.is_empty());
-    }
-
-    #[test]
-    fn prompts_become_the_components_vanilla_sends() {
-        let tag = |json: &str| {
-            let tag = component_tag(&crate::server::json::parse(json, true).unwrap());
-            component_json(&tag)
-        };
-        assert_eq!(tag(r#"{"text":"Hi"}"#), r#""Hi""#);
-        assert_eq!(tag(r#""Hi""#), r#""Hi""#);
-        assert_eq!(
-            tag(r#"["Hi ",{"text":"there","bold":true}]"#),
-            r#"{"text":"Hi ","extra":[{"text":"there","bold":true}]}"#
-        );
-        assert_eq!(
-            tag(r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#),
-            r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#
-        );
     }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {

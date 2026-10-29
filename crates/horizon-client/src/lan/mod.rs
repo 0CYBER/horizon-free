@@ -183,17 +183,14 @@ impl NetConfig {
 
 /// `IntegratedServer.getSingleplayerProfile` (`Minecraft.getGameProfile`):
 /// the signed-in account's profile properties, its signed `textures` among
-/// them, which the owner logs in with so the player list gives everyone on
-/// the world, LAN guests included, the owner's skin. Fetched in the
-/// background from startup and waited for by the owner's login, as
-/// `Minecraft.profileFuture` is, but never longer than `OWNER_PROFILE_WAIT`:
-/// past that the owner plays without properties (the default skin to others).
+/// them, which the player list gives the owner so that LAN guests see the
+/// owner's skin. Fetched in the background from the world's start; nothing
+/// waits for it: until it answers (or when it fails) the owner is listed
+/// without properties, as before.
 pub struct OwnerProfile {
     properties: std::sync::OnceLock<Vec<horizon_protocol::packets::login::Property>>,
-    fetch: Mutex<Option<Receiver<Vec<horizon_protocol::packets::login::Property>>>>,
+    fetch: Mutex<Receiver<Vec<horizon_protocol::packets::login::Property>>>,
 }
-
-const OWNER_PROFILE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl OwnerProfile {
     pub fn new(
@@ -207,18 +204,24 @@ impl OwnerProfile {
             });
         Self {
             properties: std::sync::OnceLock::new(),
-            fetch: Mutex::new(Some(receive)),
+            fetch: Mutex::new(receive),
         }
     }
-    /// The owner's properties (none when the services couldn't be reached
-    /// in time).
+    /// The owner's properties once fetched; empty while the fetch is out
+    /// or when it failed. Never blocks.
     pub fn properties(&self) -> &[horizon_protocol::packets::login::Property] {
-        self.properties.get_or_init(|| {
-            let receive = self.fetch.lock().ok().and_then(|mut r| r.take());
-            receive
-                .and_then(|r| r.recv_timeout(OWNER_PROFILE_WAIT).ok())
-                .unwrap_or_default()
-        })
+        if let Some(properties) = self.properties.get() {
+            return properties;
+        }
+        let received = self.fetch.lock().ok().and_then(|r| match r.try_recv() {
+            Ok(properties) => Some(properties),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Vec::new()),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        });
+        match received {
+            Some(properties) => self.properties.get_or_init(|| properties),
+            None => &[],
+        }
     }
 }
 
