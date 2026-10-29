@@ -769,6 +769,9 @@ pub struct Extra {
     /// `LivingEntity.isAutoSpinAttack` (Riptide).
     pub auto_spin_attack: bool,
     pub main_hand_left: bool,
+    /// The skin layers a player hides (`PlayerModelPart` bits, set to
+    /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
+    pub hidden_model_parts: u8,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,
     /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
