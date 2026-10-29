@@ -494,7 +494,9 @@ pub fn tick(
     }
     if m.no_ai {
         // Mob.aiStep still runs without AI (only serverAiStep is skipped),
-        // so the endermite's life keeps counting.
+        // so undead still burn in daylight and the endermite's life keeps
+        // counting.
+        burn_undead(m, w);
         if m.species() == Species::Endermite {
             endermite_lifetime(m);
         }
@@ -1049,10 +1051,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             }
         }
     }
-    // Mob.aiStep: undead burn in daylight.
-    if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
-        m.ignite_for_ticks(160);
-    }
+    burn_undead(m, w);
     species_ai_step(m, w, level_random, events);
 }
 impl Mob {
@@ -1149,6 +1148,13 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         if self_pushable {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
         }
+    }
+}
+/// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
+/// or without AI (`NoAI` only skips `serverAiStep`).
+fn burn_undead(m: &mut Mob, w: &MobWorld) {
+    if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
+        m.ignite_for_ticks(160);
     }
 }
 fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {

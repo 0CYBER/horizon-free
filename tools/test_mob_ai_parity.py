@@ -66,6 +66,8 @@ def scenarios():
     # Night: undead do not burn, monsters seek darkness.
     add('zombie_night', 200, ['player 10.5 -60 0.5', 'mob minecraft:zombie 0.5 -60 0.5 0 31 persistent'], 'time=18000')
     add('skeleton_day_burn', 120, ['mob minecraft:skeleton 0.5 -60 0.5 0 32 persistent'])
+    # NoAI only skips serverAiStep: Mob.aiStep's burnUndead still sets a NoAI zombie alight (#3430).
+    add('zombie_noai_day_burn', 120, ['mob minecraft:zombie 0.5 -60 0.5 0 33 persistent noai'])
     # The wither (summoned, not built: no invulnerable spawn phase).
     add('wither_player', 200, ['player 10.5 -60 0.5', 'mob minecraft:wither 0.5 -58 0.5 0 41 persistent'])
     # A villager with a job site, a bed and a bell.
