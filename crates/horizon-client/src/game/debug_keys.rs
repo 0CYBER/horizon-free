@@ -416,6 +416,13 @@ impl Game<'_> {
                 ],
             );
         }
+        // Horizon's own: HDR's output while the setting is on, under the GPU (a group of its
+        // own would move others to the other column).
+        if self.settings.horizon.hdr
+            && let Some(r) = self.renderer.as_ref()
+        {
+            d.group("system", [r.hdr_line()]);
+        }
         // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
         let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
             debug_overlay::shader_pass_lines(&r.shader_pass_times())

@@ -1151,7 +1151,14 @@ impl Renderer {
                 ));
             }
             surface.configure(&device, &config);
-            (config, caps.present_modes.clone(), hdr::output(&caps))
+            let hdr_output = hdr::output(&caps);
+            if previous.is_none() {
+                log::info!(
+                    "Horizon renderer: HDR output {}",
+                    hdr_output.map_or("not offered by this display", hdr::Output::name)
+                );
+            }
+            (config, caps.present_modes.clone(), hdr_output)
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
             let config = wgpu::SurfaceConfiguration {
@@ -3245,6 +3252,19 @@ impl Renderer {
         }
         config
     }
+    /// The F3 screen's HDR line while the setting is on: the swapchain HDR presents to with
+    /// its paper white and peak, or that the surface offers none.
+    pub fn hdr_line(&self) -> String {
+        match &self.hdr {
+            Some(hdr) => format!(
+                "HDR: {}, {}/{} nits",
+                hdr.output.name(),
+                hdr.paper_white.round(),
+                hdr.peak.round()
+            ),
+            None => "HDR: not offered by this display".into(),
+        }
+    }
     /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
     pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32, marker: &std::path::Path) {
@@ -3261,6 +3281,14 @@ impl Renderer {
             let format = self.config.format.remove_srgb_suffix();
             self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
+            match output {
+                Some(output) => log::info!(
+                    "Horizon renderer: HDR on: {} ({:?}), {paper_white}/{peak} nits",
+                    output.name(),
+                    output.format()
+                ),
+                None => log::info!("Horizon renderer: HDR off"),
+            }
         }
         if let Some(hdr) = &mut self.hdr
             && (hdr.paper_white, hdr.peak) != (paper_white, peak)
