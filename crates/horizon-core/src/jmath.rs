@@ -91,7 +91,7 @@ pub fn cbrt(x: f64) -> f64 {
 
 /// `Math.atan2`.
 pub fn atan2(y: f64, x: f64) -> f64 {
-    fdlibm::atan2(y, x)
+    crate::geometry::trig::fdlibm_atan2(y, x)
 }
 
 /// `Math.atan`.
@@ -331,91 +331,6 @@ pub mod fdlibm {
             f64::from_bits(((1023 + k) as u64) << 52) * w
         } else {
             w
-        }
-    }
-
-    // ====================================================
-    // Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
-    //
-    // Developed at SunSoft, a Sun Microsystems, Inc. business.
-    // Permission to use, copy, modify, and distribute this
-    // software is freely granted, provided that this notice
-    // is preserved.
-    // ====================================================
-    /// fdlibm's `e_atan2.c` (`StrictMath.atan2`). `libm::atan2` returns one
-    /// ulp less when `x < 0` and `|y/x| > 2^60`
-    pub fn atan2(y: f64, x: f64) -> f64 {
-        const TINY: f64 = 1.0e-300;
-        const PI_O_4: f64 = 7.8539816339744827900e-01;
-        const PI_O_2: f64 = 1.5707963267948965580e+00;
-        const PI: f64 = 3.1415926535897931160e+00;
-        const PI_LO: f64 = 1.2246467991473531772e-16;
-        let hx = hi(x);
-        let ix = hx & 0x7fff_ffff;
-        let lx = x.to_bits() as u32;
-        let hy = hi(y);
-        let iy = hy & 0x7fff_ffff;
-        let ly = y.to_bits() as u32;
-        if (ix as u32 | ((lx | lx.wrapping_neg()) >> 31)) > 0x7ff0_0000
-            || (iy as u32 | ((ly | ly.wrapping_neg()) >> 31)) > 0x7ff0_0000
-        {
-            return x + y;
-        }
-        if (hx.wrapping_sub(0x3ff0_0000) as u32 | lx) == 0 {
-            return libm::atan(y);
-        }
-        let m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
-        if (iy as u32 | ly) == 0 {
-            return match m {
-                0 | 1 => y,
-                2 => PI + TINY,
-                _ => -PI - TINY,
-            };
-        }
-        if (ix as u32 | lx) == 0 {
-            return if hy < 0 {
-                -PI_O_2 - TINY
-            } else {
-                PI_O_2 + TINY
-            };
-        }
-        if ix == 0x7ff0_0000 {
-            return if iy == 0x7ff0_0000 {
-                match m {
-                    0 => PI_O_4 + TINY,
-                    1 => -PI_O_4 - TINY,
-                    2 => 3.0 * PI_O_4 + TINY,
-                    _ => -3.0 * PI_O_4 - TINY,
-                }
-            } else {
-                match m {
-                    0 => 0.0,
-                    1 => -0.0,
-                    2 => PI + TINY,
-                    _ => -PI - TINY,
-                }
-            };
-        }
-        if iy == 0x7ff0_0000 {
-            return if hy < 0 {
-                -PI_O_2 - TINY
-            } else {
-                PI_O_2 + TINY
-            };
-        }
-        let k = (iy - ix) >> 20;
-        let z = if k > 60 {
-            PI_O_2 + 0.5 * PI_LO
-        } else if hx < 0 && k < -60 {
-            0.0
-        } else {
-            libm::atan((y / x).abs())
-        };
-        match m {
-            0 => z,
-            1 => -z,
-            2 => PI - (z - PI_LO),
-            _ => (z - PI_LO) - PI,
         }
     }
 }
@@ -705,88 +620,88 @@ mod tests {
         // (y bits, x bits, StrictMath.atan2 bits) from HotSpot 25: x < 0 and
         // |y/x| > 2^60, where libm::atan2 rounds one ulp lower,
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x440e8aff5d1e293c, 0xc007e9768e83b37e, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x440c610b44a22b37, 0xbfb07327bcb4c280, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x43eb71600e035874, 0xbfeaff77e5a9ea38, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x440edb2112965d8f, 0xbffaec4345ac33b1, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x3ff0000000000000, 0x8000000000000001, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0xbff0000000000000, 0x8000000000000001, 0xbff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x7fefffffffffffff, 0xbff0000000000000, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0xffefffffffffffff, 0xbff0000000000000, 0xbff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x38fd955bf292fbac, 0xb4f940da66879af2, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0xf8954a6a9b403072, 0xf49292c2e2d50436, 0xbff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x07e155d47eb507f2, 0x83d22629ee8e8471, 0x3ff921fb54442d19),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0xd2471cd599853356, 0xce403e2e72061985, 0xbff921fb54442d19),
         );
         // and the other quadrants and special cases, which it already matched
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x440e8aff5d1e293c, 0x4007e9768e83b37e, 0x3ff921fb54442d18),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0xc40e8aff5d1e293c, 0x4007e9768e83b37e, 0xbff921fb54442d18),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x0000000000000000, 0xbff0000000000000, 0x400921fb54442d18),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x8000000000000000, 0xbff0000000000000, 0xc00921fb54442d18),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x3ff0000000000000, 0x3ff0000000000000, 0x3fe921fb54442d18),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x3ff0000000000000, 0xc410000000000000, 0x400921fb54442d18),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x3e7ad7f29abcaf48, 0xc0f86a0000000000, 0x400921fb5444244c),
         );
         check2(
-            fdlibm::atan2,
+            super::atan2,
             (0x7ff0000000000000, 0xfff0000000000000, 0x4002d97c7f3321d2),
         );
         // NaN payloads may differ, so only NaN-ness is checked.
-        assert!(fdlibm::atan2(f64::NAN, 1.0).is_nan());
-        assert!(fdlibm::atan2(1.0, f64::NAN).is_nan());
+        assert!(super::atan2(f64::NAN, 1.0).is_nan());
+        assert!(super::atan2(1.0, f64::NAN).is_nan());
     }
 }
