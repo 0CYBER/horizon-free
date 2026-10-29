@@ -2031,9 +2031,15 @@ impl Game<'_> {
             // getBreedOffspring creates the baby without finalizeSpawn: it keeps
             // the default (`classic`) sound variant.
             child.extra.sound_variant = None;
+            // Fox.getBreedOffspring runs no finalizeSpawn: nothing in the
+            // baby fox's mouth.
+            if p.species() == Species::Fox {
+                child.extra.main_hand = None;
+            }
             // Goat.getBreedOffspring: GoatAi.initMemories, then the baby
             // screams if the parent a coin toss picks does, or on a 2% roll.
             if p.species() == Species::Goat {
+                child.extra.lost_horns = [false; 2];
                 horizon_client::mobs::finalize::goat_init_memories(child, &mut self.world.random);
                 let pick_parent = self.world.random.next_boolean();
                 let parent_screams = if pick_parent {
