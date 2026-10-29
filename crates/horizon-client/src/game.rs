@@ -8223,11 +8223,8 @@ impl Game<'_> {
                     p.z + (q.z - p.z) * a,
                 )
             };
-            let mut casters: Vec<(glam::DVec3, &str)> = self
-                .mobs
-                .iter()
-                .map(|m| (lerp(m.previous, m.position), m.kind.id.as_str()))
-                .collect();
+            let mut casters: Vec<(glam::DVec3, &str)> =
+                horizon_client::shadows::mob_casters(&self.mobs, a).collect();
             casters.extend(
                 self.dropped
                     .iter()
