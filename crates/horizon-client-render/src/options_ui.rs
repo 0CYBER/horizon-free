@@ -84,6 +84,27 @@ pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::HighContrastBlockOutlines,
 ];
 
+/// `ControlsScreen.options`: the controls added by Java Edition 26.3, in
+/// their vanilla order. The macOS-only Control-click switch is omitted on
+/// other platforms just as `InputQuirks.EMULATE_RIGHT_CLICK_WITH_CTRL_KEY`
+/// does in Java.
+pub(crate) fn vanilla_control_options() -> Vec<Opt> {
+    let mut options = vec![
+        Opt::ToggleCrouch,
+        Opt::ToggleSprint,
+        Opt::ToggleAttack,
+        Opt::ToggleUse,
+        Opt::AutoJump,
+        Opt::SprintWindow,
+        Opt::QuitShortcuts,
+    ];
+    if cfg!(target_os = "macos") {
+        options.push(Opt::CtrlClickEmulatesRightClick);
+    }
+    options.push(Opt::OperatorItemsTab);
+    options
+}
+
 /// `MouseSettingsScreen.options` in Java Edition 26.3, in vanilla order.
 pub(crate) const MOUSE_OPTIONS: &[Opt] = &[
     Opt::Sensitivity,
@@ -120,6 +141,11 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
+                // Saved, but the creative tabs, the quit keys and the mouse
+                // don't read them yet.
+                | Opt::OperatorItemsTab
+                | Opt::QuitShortcuts
+                | Opt::CtrlClickEmulatesRightClick
         )
     }
     fn file_key(self) -> Option<&'static str> {
@@ -144,6 +170,10 @@ impl Opt {
             Opt::RotateWithMinecarts => "rotateWithMinecart",
             Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
             Opt::MusicFrequency => "musicFrequency",
+            Opt::SoundDevice => "soundDevice",
+            Opt::OperatorItemsTab => "operatorItemsTab",
+            Opt::QuitShortcuts => "quitShortcuts",
+            Opt::CtrlClickEmulatesRightClick => "ctrlClickEmulatesRightClick",
             Opt::ModelPart(i) => MODEL_PART_KEYS[i],
             Opt::AllowServerListing => "allowServerListing",
             Opt::RealmsNotifications => "realmsNotifications",
@@ -167,6 +197,7 @@ impl Opt {
             Opt::DiscreteScroll => "options.discrete_mouse_scroll",
             Opt::AllowCursorChanges => "options.allowCursorChanges",
             Opt::Volume(_) => "soundCategory.master",
+            Opt::SoundDevice => "options.audioDevice",
             Opt::GuiScale => "options.guiScale",
             Opt::ViewBobbing => "options.viewBobbing",
             Opt::Gamma => "options.gamma",
@@ -194,7 +225,13 @@ impl Opt {
             Opt::MenuBlur => "options.accessibility.menu_background_blurriness",
             Opt::ToggleCrouch => "key.sneak",
             Opt::ToggleSprint => "key.sprint",
+            Opt::ToggleAttack => "key.attack",
+            Opt::ToggleUse => "key.use",
             Opt::AutoJump => "options.autoJump",
+            Opt::SprintWindow => "options.sprintWindow",
+            Opt::QuitShortcuts => "options.quitShortcuts",
+            Opt::CtrlClickEmulatesRightClick => "options.ctrlClickEmulatesRightClick",
+            Opt::OperatorItemsTab => "options.operatorItemsTab",
             Opt::ChatVisibility => "options.chat.visibility",
             Opt::ChatColors => "options.chat.color",
             Opt::ChatLinks => "options.chat.links",
@@ -278,7 +315,11 @@ impl Opt {
             | Opt::GlintStrength
             | Opt::PanoramaSpeed => Kind::Slider(s.file.double(self.file_key().unwrap()) as f32),
             Opt::Fov => unit(s.fov, 30.0, 110.0),
-            Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 64.0),
+            Opt::RenderDistance => unit(
+                s.render_distance as f32,
+                2.0,
+                crate::options_file::MAX_RENDER_DISTANCE as f32,
+            ),
             Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
             Opt::Sensitivity => Kind::Slider(s.sensitivity),
             Opt::WheelSensitivity => unit(s.mouse_wheel_sensitivity, 0.01, 10.0),
@@ -308,6 +349,7 @@ impl Opt {
             Opt::PadLookSensitivity => Kind::Slider(s.controller.look_sensitivity),
             Opt::PadMoveDeadzone => unit(s.controller.move_deadzone, 0.0, 0.5),
             Opt::PadLookDeadzone => unit(s.controller.look_deadzone, 0.0, 0.5),
+            Opt::SprintWindow => unit(s.sprint_window as f32, 0.0, 10.0),
             _ => Kind::Cycle,
         }
     }
@@ -356,6 +398,14 @@ impl Opt {
                 }
             }
             Opt::PanoramaSpeed => percent(c, s.file.double("panoramaScrollSpeed") as f32),
+            Opt::SprintWindow => {
+                let value = if s.sprint_window == 0 {
+                    tr("options.off")
+                } else {
+                    Text::tr("options.value", &[&s.sprint_window])
+                };
+                generic(c, value)
+            }
             Opt::Fov => match s.fov as i32 {
                 70 => generic(c, tr("options.fov.min")),
                 110 => generic(c, tr("options.fov.max")),
@@ -573,7 +623,20 @@ impl Opt {
             } else {
                 "options.key.hold"
             }),
+            Opt::ToggleAttack => tr(if s.toggle_attack {
+                "options.key.toggle"
+            } else {
+                "options.key.hold"
+            }),
+            Opt::ToggleUse => tr(if s.toggle_use {
+                "options.key.toggle"
+            } else {
+                "options.key.hold"
+            }),
             Opt::AutoJump => on_off(s.auto_jump),
+            Opt::QuitShortcuts => on_off(s.quit_shortcuts),
+            Opt::CtrlClickEmulatesRightClick => on_off(s.ctrl_click_emulates_right_click),
+            Opt::OperatorItemsTab => on_off(s.operator_items_tab),
             Opt::ChatVisibility => tr([
                 "options.chat.visibility.full",
                 "options.chat.visibility.system",
@@ -586,6 +649,13 @@ impl Opt {
             Opt::ReducedDebugInfo => on_off(s.reduced_debug_info),
             Opt::HighContrast => on_off(s.high_contrast),
             Opt::ShowSubtitles => on_off(s.show_subtitles),
+            Opt::SoundDevice => {
+                if s.sound_device.is_empty() {
+                    tr("options.audioDevice.default")
+                } else {
+                    Text::literal(&s.sound_device)
+                }
+            }
             Opt::MusicFrequency => tr([
                 "options.music_frequency.default",
                 "options.music_frequency.frequent",
@@ -647,7 +717,10 @@ impl Opt {
                 crate::options_file::V::Double(f64::from(v)),
             ),
             Opt::Fov => s.fov = step(30.0, 110.0),
-            Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
+            Opt::RenderDistance => {
+                s.render_distance =
+                    step(2.0, crate::options_file::MAX_RENDER_DISTANCE as f32) as i32
+            }
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
             Opt::Sensitivity => s.sensitivity = v,
             Opt::WheelSensitivity => s.mouse_wheel_sensitivity = 0.01 + v * 9.99,
@@ -674,6 +747,7 @@ impl Opt {
             Opt::PadLookSensitivity => s.controller.look_sensitivity = v,
             Opt::PadMoveDeadzone => s.controller.move_deadzone = step(0.0, 50.0) / 100.0,
             Opt::PadLookDeadzone => s.controller.look_deadzone = step(0.0, 50.0) / 100.0,
+            Opt::SprintWindow => s.sprint_window = step(0.0, 10.0) as i32,
             _ => {}
         }
         if self.affects_preset() {
@@ -770,7 +844,14 @@ impl Opt {
             Opt::ChunkBuilder => s.prioritize_chunk_updates = next(s.prioritize_chunk_updates, 3),
             Opt::ToggleCrouch => s.toggle_crouch = !s.toggle_crouch,
             Opt::ToggleSprint => s.toggle_sprint = !s.toggle_sprint,
+            Opt::ToggleAttack => s.toggle_attack = !s.toggle_attack,
+            Opt::ToggleUse => s.toggle_use = !s.toggle_use,
             Opt::AutoJump => s.auto_jump = !s.auto_jump,
+            Opt::QuitShortcuts => s.quit_shortcuts = !s.quit_shortcuts,
+            Opt::CtrlClickEmulatesRightClick => {
+                s.ctrl_click_emulates_right_click = !s.ctrl_click_emulates_right_click
+            }
+            Opt::OperatorItemsTab => s.operator_items_tab = !s.operator_items_tab,
             Opt::ChatVisibility => s.chat_visibility = next(s.chat_visibility, 3),
             Opt::ChatColors => s.chat_colors = !s.chat_colors,
             Opt::ChatLinks => s.chat_links = !s.chat_links,
@@ -779,6 +860,23 @@ impl Opt {
             Opt::ReducedDebugInfo => s.reduced_debug_info = !s.reduced_debug_info,
             Opt::HighContrast => s.high_contrast = !s.high_contrast,
             Opt::ShowSubtitles => s.show_subtitles = !s.show_subtitles,
+            Opt::SoundDevice => {
+                let devices = crate::audio::output_devices();
+                let mut all = vec![String::new()];
+                for d in devices {
+                    if !all.contains(&d) {
+                        all.push(d);
+                    }
+                }
+                let current_idx = all.iter().position(|d| d == &s.sound_device).unwrap_or(0);
+                let count = all.len();
+                let next_idx = if back {
+                    (current_idx + count - 1) % count
+                } else {
+                    (current_idx + 1) % count
+                };
+                s.sound_device = all[next_idx].clone();
+            }
             Opt::MusicFrequency => {
                 let n = next(s.file.int("musicFrequency").clamp(0, 2) as u8, 3);
                 s.file
@@ -921,6 +1019,7 @@ pub enum Page {
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
+    GraphicsHdr,
     /// Horizon's controller settings and button binds.
     Controller,
     PadBinds,
@@ -1287,7 +1386,10 @@ impl OptionsUi {
         if page == Page::Packs {
             self.pack_screen = None;
         }
-        if matches!(page, Page::Graphics | Page::GraphicsAdvanced) {
+        if matches!(
+            page,
+            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr
+        ) {
             self.graphics.reset();
         }
     }
@@ -1296,6 +1398,7 @@ impl OptionsUi {
         match page {
             Page::Graphics => Some(crate::graphics_ui::Level::Simple),
             Page::GraphicsAdvanced => Some(crate::graphics_ui::Level::Advanced),
+            Page::GraphicsHdr => Some(crate::graphics_ui::Level::Hdr),
             _ => None,
         }
     }
@@ -1317,7 +1420,7 @@ impl OptionsUi {
             Page::Mods => "horizon.pages.mods",
             Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "horizon.pages.shader_packs",
-            Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
+            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr => "options.videoTitle",
             Page::Controller => "horizon.pages.controller",
             Page::PadBinds => "horizon.pages.controller_binds",
             Page::Extras => "horizon.pages.extras",
@@ -1574,6 +1677,7 @@ impl OptionsUi {
                 rows.extend(pairs(&others));
                 rows.extend(pairs(&[Opt::ShowSubtitles, Opt::DirectionalAudio]));
                 rows.extend(pairs(&[Opt::MusicFrequency, Opt::MusicToast]));
+                rows.push(Row::Big(Opt::SoundDevice));
                 rows
             }
             Page::Skin => {
@@ -1609,11 +1713,8 @@ impl OptionsUi {
                         Act::Push(Page::KeyBinds),
                     )),
                 )];
-                rows.extend(pairs(&[
-                    Opt::ToggleCrouch,
-                    Opt::ToggleSprint,
-                    Opt::AutoJump,
-                ]));
+                let controls = vanilla_control_options();
+                rows.extend(pairs(&controls));
                 // Horizon's controller page, after vanilla's rows.
                 rows.push(Row::Buttons(
                     button(
@@ -2568,6 +2669,7 @@ impl OptionsUi {
                     Action::Changed => events.push(Event::Changed),
                     Action::SliderDrag => events.push(Event::SliderDrag),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
+                    Action::OpenHdr => self.push(Page::GraphicsHdr),
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
                             && self.stack[self.stack.len() - 2] == Page::Graphics
@@ -3205,9 +3307,47 @@ mod tests {
     }
 
     #[test]
+    fn controls_match_java_26_3_option_order() {
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Controls);
+        let options =
+            ui.list_rows(&Settings::default())
+                .into_iter()
+                .fold(Vec::new(), |mut options, row| {
+                    match row {
+                        Row::Big(opt) => options.push(opt),
+                        Row::Pair(a, b) => {
+                            options.push(a);
+                            options.extend(b);
+                        }
+                        _ => {}
+                    }
+                    options
+                });
+        assert_eq!(options, vanilla_control_options());
+    }
+
+    #[test]
+    fn sprint_window_and_new_control_switches_round_trip() {
+        let mut settings = Settings::default();
+        set_slider(Opt::SprintWindow, &mut settings, 0.5);
+        settings.operator_items_tab = true;
+        settings.quit_shortcuts = false;
+        settings.ctrl_click_emulates_right_click = true;
+        settings.toggle_attack = true;
+        settings.toggle_use = true;
+        let loaded = Settings::parse(&settings.serialize());
+        assert_eq!(loaded.sprint_window, 5);
+        assert!(loaded.operator_items_tab);
+        assert!(!loaded.quit_shortcuts);
+        assert!(loaded.ctrl_click_emulates_right_click);
+        assert!(loaded.toggle_attack && loaded.toggle_use);
+    }
+
+    #[test]
     fn render_distance_slider_round_trips_through_extended_options_range() {
         let mut s = Settings::default();
-        for (position, distance) in [(0.0, 2), (0.5, 33), (1.0, 64)] {
+        for (position, distance) in [(0.0, 2), (0.5, 65), (1.0, 128)] {
             set_slider(Opt::RenderDistance, &mut s, position);
             assert_eq!(s.render_distance, distance);
             let reloaded = Settings::parse(&s.serialize());
@@ -3218,10 +3358,10 @@ mod tests {
             );
         }
         let mut file = crate::options_file::OptionsFile::default();
-        file.set_text("renderDistance", "64").unwrap();
-        assert!(file.set_text("renderDistance", "65").is_err());
+        file.set_text("renderDistance", "128").unwrap();
+        assert!(file.set_text("renderDistance", "129").is_err());
         assert!(file.set_text("renderDistance", "1").is_err());
-        assert_eq!(file.int("renderDistance"), 64);
+        assert_eq!(file.int("renderDistance"), 128);
     }
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
@@ -4477,5 +4617,30 @@ mod tests {
         }
         ui.stack = vec![Page::Main, Page::Controls];
         assert!(pushes(&mut ui).contains(&Page::Controller));
+    }
+
+    #[test]
+    fn sound_device_button_in_sound_page_and_cycles() {
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Sound);
+        let rows = ui.list_rows(&s);
+        assert!(
+            rows.iter().any(|r| matches!(r, Row::Big(Opt::SoundDevice))),
+            "Sound page should contain Row::Big(Opt::SoundDevice)"
+        );
+        assert_eq!(s.sound_device, "");
+        let devices = crate::audio::output_devices();
+        let count = 1 + devices.len();
+        // Cycling forward 'count' times wraps around back to the initial selection ("")
+        for _ in 0..count {
+            Opt::SoundDevice.cycle(&mut s, false, [854, 480]);
+        }
+        assert_eq!(s.sound_device, "");
+        // Cycling backward 'count' times also wraps around back to ""
+        for _ in 0..count {
+            Opt::SoundDevice.cycle(&mut s, true, [854, 480]);
+        }
+        assert_eq!(s.sound_device, "");
     }
 }

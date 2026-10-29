@@ -1383,7 +1383,10 @@ fn version_tag(tag: &str) -> Div {
         .text_size(px(22.))
         .line_height(px(28.))
         .font_weight(FontWeight::MEDIUM)
-        .child(tag.trim_start_matches('v').to_string())
+        .child(
+            horizon_launcher::nightly::label(tag)
+                .unwrap_or_else(|| tag.trim_start_matches('v').to_string()),
+        )
 }
 
 /// Horizon's mark: two stems, their reflection below, and the horizon across in the accent.
