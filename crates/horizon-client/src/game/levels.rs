@@ -463,6 +463,7 @@ impl Game<'_> {
                         .is_some_and(|p| !p.streaming.forced.is_empty())
                 };
                 guests.iter().any(|g| g.dimension == d.id())
+                    || self.player_bed_levels().any(|b| b == *d)
                     || forced
                     || self.pregen_level() == Some(*d)
                     // A pending portal arrival keeps its destination level
