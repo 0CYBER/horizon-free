@@ -857,7 +857,7 @@ impl Game<'_> {
         }
         self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
-        self.villager_murdered(m, by_player);
+        self.villager_murdered(m, by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
         self.create_wither_rose(m);
