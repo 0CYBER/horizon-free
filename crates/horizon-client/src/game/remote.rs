@@ -4086,6 +4086,21 @@ impl Game<'_> {
                     self.audio
                         .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
                 }
+                // LivingEntity.causeFallDamage on the client's own level: the
+                // fall sound is heard here (LocalPlayer.playSound); the
+                // server's copy skips this player (Player.playSound).
+                horizon_client::motion::MotionEvent::Fall(
+                    horizon_client::landing::FallEvent::Sound {
+                        sound,
+                        volume,
+                        pitch,
+                        ..
+                    },
+                ) => {
+                    if let Some(name) = sound.player_fall_sound() {
+                        self.audio.play(name, Some(feet), volume, pitch);
+                    }
+                }
                 _ => {}
             }
         }
