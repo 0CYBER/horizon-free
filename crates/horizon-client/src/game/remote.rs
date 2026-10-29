@@ -378,7 +378,7 @@ impl Game<'_> {
         );
         self.server_packs_connect(local.is_none().then_some(address), user);
         let session = match local {
-            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
+            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone(), root.clone()),
             None => {
                 self.extras_connecting(address, name);
                 match cookies {
@@ -389,8 +389,16 @@ impl Game<'_> {
                         view,
                         lang.clone(),
                         cookies,
+                        root.clone(),
                     ),
-                    None => Session::connect(address, name, auth.clone(), view, lang.clone()),
+                    None => Session::connect(
+                        address,
+                        name,
+                        auth.clone(),
+                        view,
+                        lang.clone(),
+                        root.clone(),
+                    ),
                 }
             }
         };
@@ -1385,10 +1393,21 @@ impl Game<'_> {
     }
     fn set_block(&mut self, pos: [i32; 3], state: i32) {
         let state = BlockStateId(state.max(0) as u32);
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
         if self.world.loaded(pos[0], pos[2])
             && self.world.set(pos[0], pos[1], pos[2], state).is_ok()
         {
             self.sync_block_entity((pos[0], pos[1], pos[2]), state);
+            // LevelChunk.setBlockState removes the block entity of a block
+            // that changes: the moving piston the client's moveBlocks made
+            // stops when the server places what it moved (#3002).
+            let facts = self.res.facts();
+            let moving = |s: BlockStateId| &*facts.get(s).name == "minecraft:moving_piston";
+            if moving(previous) && !moving(state) {
+                let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                self.block_ticks.moving_pistons.retain(|(p, _)| *p != at);
+                self.sync_moving_pistons();
+            }
         }
         // A block we just placed: play its place sound (the server skips the placer).
         if let Some((target, _)) = self.remote.as_ref().and_then(|r| r.placing)
@@ -2351,7 +2370,7 @@ impl Game<'_> {
                     for (slot, item, stack) in items {
                         let e = &mut m.extra;
                         match slot {
-                            0 => e.main_hand = item,
+                            0 => e.set_main_hand(item),
                             1 => e.off_hand = item,
                             2 => {
                                 e.feet = item;
@@ -4241,6 +4260,7 @@ impl Game<'_> {
     fn tick_remote_entities(&mut self, running: bool) {
         if running {
             self.tick_text_displays();
+            self.tick_remote_ominous_item_spawners();
         }
         // EntityFluidInteraction.update for the entities this window only displays: the
         // server never sends the fluid contact, and the renderers read it (cod, salmon and

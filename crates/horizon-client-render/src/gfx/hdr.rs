@@ -60,6 +60,38 @@ struct Targets {
     group: wgpu::BindGroup,
 }
 
+/// How one tier of light sources (`mesher::hdr_tier`) shines: `share` of the headroom for
+/// its brightest pixels, lifted from brightness `start` (none) to `full` (all of it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tier {
+    pub share: f32,
+    pub start: f32,
+    pub full: f32,
+}
+/// Low, incandescent, bright and very bright.
+pub const TIERS: [Tier; 4] = [
+    Tier {
+        share: 0.2,
+        start: 0.08,
+        full: 0.09,
+    },
+    Tier {
+        share: 0.5,
+        start: 0.14,
+        full: 0.38,
+    },
+    Tier {
+        share: 0.6,
+        start: 0.14,
+        full: 0.38,
+    },
+    Tier {
+        share: 1.0,
+        start: 0.14,
+        full: 0.38,
+    },
+];
+
 pub struct Hdr {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
@@ -74,13 +106,14 @@ pub struct Hdr {
     /// The frame's format: what every other pipeline draws in.
     format: wgpu::TextureFormat,
     targets: Option<Targets>,
-    /// `HORIZON_HDR_DEBUG=1`: paint expanded pixels magenta.
+    /// `HORIZON_HDR_DEBUG=1`: grey what isn't expanded, tint what is magenta.
     debug: bool,
     /// Paper white and peak brightness, in nits.
     pub paper_white: f32,
     pub peak: f32,
     /// The display's black level, in nits: shadows are lifted onto it (`hdr.wgsl`).
     pub black: f32,
+    pub tiers: [Tier; 4],
     /// The HUD and menus' brightness, as a share of paper white (0.25..=1).
     pub ui: f32,
 }
@@ -192,7 +225,7 @@ impl Hdr {
         );
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Horizon HDR parameters"),
-            size: 32,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -209,6 +242,7 @@ impl Hdr {
             paper_white: 200.0,
             peak: 1000.0,
             black: 0.0,
+            tiers: TIERS,
             ui: 1.0,
         }
     }
@@ -342,16 +376,21 @@ impl Hdr {
             return;
         };
         let paper = self.paper_white.max(1.0);
-        let params = [
+        let mut params = [0.0; 20];
+        params[..5].copy_from_slice(&[
             paper / 80.0,
             (self.peak / paper).max(1.0),
             f32::from(u8::from(world)),
             f32::from(u8::from(self.debug)),
             f32::from(u8::from(self.output == Output::Pq)),
-            self.black.clamp(0.0, paper),
-            self.ui.clamp(0.25, 1.0),
-            0.0,
-        ];
+        ]);
+        params[5] = self.black.clamp(0.0, paper);
+        params[6] = self.ui.clamp(0.25, 1.0);
+        for (i, t) in self.tiers.iter().enumerate() {
+            params[8 + i] = t.share;
+            params[12 + i] = t.start;
+            params[16 + i] = t.full;
+        }
         queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
         let view = target.create_view(&Default::default());
         let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -378,6 +417,24 @@ impl Hdr {
 mod tests {
     use super::{Output, pick};
     use wgpu::{SurfaceColorSpaces as S, TextureFormat as F};
+
+    #[test]
+    fn hdr_shaders_validate() {
+        let entity = crate::overlay::wgsl_constants() + include_str!("../entity.wgsl");
+        for source in [
+            include_str!("../hdr.wgsl"),
+            include_str!("../terrain.wgsl"),
+            &entity,
+        ] {
+            let module = naga::front::wgsl::parse_str(source).unwrap();
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap();
+        }
+    }
 
     fn caps(offered: &[(F, S)]) -> wgpu::SurfaceCapabilities {
         wgpu::SurfaceCapabilities {
