@@ -35,6 +35,41 @@ impl Default for SignText {
         }
     }
 }
+/// The click events `SignBlockEntity.executeClickCommandsIfPresent` acts on.
+#[derive(Debug, PartialEq)]
+pub enum ClickAction<'a> {
+    /// `ClickEvent.RunCommand`.
+    RunCommand(String),
+    /// `ClickEvent.ShowDialog`: a registry id or the dialog itself.
+    ShowDialog(&'a Tag),
+    /// `ClickEvent.Custom`.
+    Custom {
+        id: String,
+        payload: Option<&'a Tag>,
+    },
+}
+/// A saved `click_event` as its action: the three a sign acts on, read the
+/// way `ClickEvent.CODEC` does; any other action or a malformed one is None.
+pub fn click_action(event: &Tag) -> Option<ClickAction<'_>> {
+    let Some(Tag::String(action)) = event.get("action") else {
+        return None;
+    };
+    match action.to_string_lossy().as_str() {
+        "run_command" => match event.get("command") {
+            Some(Tag::String(command)) => Some(ClickAction::RunCommand(command.to_string_lossy())),
+            _ => None,
+        },
+        "show_dialog" => event.get("dialog").map(ClickAction::ShowDialog),
+        "custom" => match event.get("id") {
+            Some(Tag::String(id)) => Some(ClickAction::Custom {
+                id: id.to_string_lossy(),
+                payload: event.get("payload"),
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 impl SignText {
     pub fn is_empty(&self) -> bool {
         self.lines.iter().all(String::is_empty)
@@ -42,6 +77,14 @@ impl SignText {
     /// `DyeColor.getTextColor` of this side.
     pub fn text_color(&self) -> u32 {
         DYE_TEXT[usize::from(self.color.min(15))].1
+    }
+    /// `SignText.hasAnyClickCommands`: a line whose style has a `run_command`
+    /// click event.
+    pub fn has_any_click_commands(&self) -> bool {
+        self.click
+            .iter()
+            .flatten()
+            .any(|event| matches!(click_action(event), Some(ClickAction::RunCommand(_))))
     }
     /// `AbstractSignRenderer.getDarkColor`.
     pub fn dark_color(&self) -> u32 {
