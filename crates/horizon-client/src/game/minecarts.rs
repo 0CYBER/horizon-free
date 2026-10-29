@@ -4,7 +4,7 @@
 //! `MinecartItem` placement, `VehicleEntity` breaking, the chest, hopper,
 //! furnace and TNT variants, saving, and `AbstractMinecartRenderer`'s old
 //! rail-following render with the display block.
-use super::{Game, Hit, Keys, view_vector};
+use super::{Game, Hit, Keys};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
@@ -998,8 +998,7 @@ impl Game<'_> {
         true
     }
     pub(super) fn cart_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, c) in self.carts.iter().enumerate() {

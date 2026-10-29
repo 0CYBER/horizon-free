@@ -494,8 +494,7 @@ impl Game<'_> {
         if !self.mods.mods.wants_raycast() {
             return None;
         }
-        let eye = self.eye_position()?;
-        let dir = super::view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach = f64::from(horizon_mods::RAYCAST_MAX);
         let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
             Some(hit) => (

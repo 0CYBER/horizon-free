@@ -664,10 +664,9 @@ impl Game<'_> {
         if !self.boat_models.has(wood, chest) {
             return false;
         }
-        let Some(eye) = self.eye_position() else {
+        let Some((eye, dir)) = self.aim() else {
             return false;
         };
-        let dir = view_vector(self.yaw, self.pitch);
         let reach = self.reach();
         // ClipContext.Fluid.ANY: the first fluid surface (water or lava) or
         // block along the ray.
@@ -744,8 +743,7 @@ impl Game<'_> {
         true
     }
     pub(super) fn boat_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, b) in self.boats.iter().enumerate() {
