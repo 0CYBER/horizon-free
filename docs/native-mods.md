@@ -184,3 +184,12 @@ each was built or last used): switching a mod off and on again plays the kept bu
 - Rebuild after the mods change, and offer **Update** when `update_for` finds a newer Horizon (asking first, as it
   compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
+
+## Named hook catalog (draft)
+
+`native-hooks.json` maps stable hook names and contract versions to the current
+source targets. A contract includes the signature, call timing and behavior.
+Keep an existing contract or add a new version when it changes incompatibly.
+The catalog does not cover helper methods or arbitrary private game code.
+Named injection resolution needs a matching horizon-mixins change; existing raw
+targets and the `hooks` metadata continue to work as before.
