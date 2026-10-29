@@ -28,7 +28,7 @@ no Microsoft sign-in"); release builds have it.
    `api.minecraftservices.com/authentication/login_with_xbox` (HTTP 403, "Invalid app registration")
    until Mojang approves them. Apply with the form linked from https://aka.ms/mce-reviewappid
    (Minecraft Java "App ID review"), giving the client ID above, the app name, the project URL
-   (https://github.com/ludovic111/horizon) and a short description ("open-source Minecraft Java
+   (https://github.com/horizon-rust/horizon) and a short description ("open-source Minecraft Java
    Edition client written in Rust; signs players in to join online-mode servers"). Approval takes
    days to weeks; sign-in fails at the Minecraft step with "This app is not approved by Mojang yet"
    until then.
