@@ -479,11 +479,21 @@ impl DataStore {
     /// included, each function once).
     pub fn tag_functions(&self, id: &str) -> Vec<String> {
         let mut out = Vec::new();
-        self.expand(id, &mut out, 0);
+        let mut seen_fns = std::collections::HashSet::new();
+        let mut seen_tags = std::collections::HashSet::new();
+        self.expand(id, &mut out, &mut seen_fns, &mut seen_tags);
         out
     }
-    fn expand(&self, id: &str, out: &mut Vec<String>, depth: usize) {
-        if depth > 16 {
+    /// Depth-first walk keeping first-seen order. Each tag is expanded at most
+    /// once, so reference cycles end and nesting depth is not capped.
+    fn expand<'a>(
+        &'a self,
+        id: &'a str,
+        out: &mut Vec<String>,
+        seen_fns: &mut std::collections::HashSet<&'a str>,
+        seen_tags: &mut std::collections::HashSet<&'a str>,
+    ) {
+        if !seen_tags.insert(id) {
             return;
         }
         let Some(entries) = self.function_tags.get(id) else {
@@ -491,9 +501,9 @@ impl DataStore {
         };
         for (e, required) in entries {
             match e.strip_prefix('#') {
-                Some(inner) => self.expand(inner, out, depth + 1),
+                Some(inner) => self.expand(inner, out, seen_fns, seen_tags),
                 None => {
-                    if (self.functions.contains_key(e) || *required) && !out.contains(e) {
+                    if (self.functions.contains_key(e) || *required) && seen_fns.insert(e) {
                         out.push(e.clone());
                     }
                 }
@@ -765,6 +775,40 @@ mod tests {
         );
         assert!(store.predicates.contains_key("mine:p"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tag_resolution_dedupes_fast_ends_cycles_and_nests_deeply() {
+        let mut store = DataStore::default();
+        let big: Vec<(String, bool)> = (0..50_000)
+            .map(|i| (format!("t:f{}", i % 25_000), true))
+            .collect();
+        store.function_tags.insert("t:big".into(), big);
+        let start = std::time::Instant::now();
+        let got = store.tag_functions("t:big");
+        assert_eq!(got.len(), 25_000);
+        assert_eq!(got[0], "t:f0");
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        // A cycle terminates and keeps first-seen order.
+        store.function_tags.insert(
+            "t:a".into(),
+            vec![("#t:b".into(), true), ("t:x".into(), true)],
+        );
+        store.function_tags.insert(
+            "t:b".into(),
+            vec![("#t:a".into(), true), ("t:y".into(), true)],
+        );
+        assert_eq!(store.tag_functions("t:a"), ["t:y", "t:x"]);
+        // Nesting deeper than the old cap of 16 still resolves.
+        for i in 0..40 {
+            store
+                .function_tags
+                .insert(format!("d:{i}"), vec![(format!("#d:{}", i + 1), true)]);
+        }
+        store
+            .function_tags
+            .insert("d:40".into(), vec![("t:deep".into(), true)]);
+        assert_eq!(store.tag_functions("d:0"), ["t:deep"]);
     }
 
     #[test]
