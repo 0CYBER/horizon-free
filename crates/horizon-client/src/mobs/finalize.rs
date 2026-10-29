@@ -497,22 +497,26 @@ pub fn transient(m: &Mob, a: Attr) -> Option<(f64, Op)> {
         _ => None,
     }
 }
-/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`,
-/// scaled by the amplifier plus one): strength and speed.
+/// The attribute modifier one status effect grants (`MobEffect.addAttributeModifier`),
+/// scaled by the amplifier plus one; `None` when the effect does not touch `a`.
+fn effect_modifier(effect: &str, amplifier: i32, a: Attr) -> Option<(f64, Op)> {
+    let level = f64::from(amplifier + 1);
+    match (effect.trim_start_matches("minecraft:"), a) {
+        ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
+        ("weakness", Attr::AttackDamage) => Some((-4.0 * level, Op::AddValue)),
+        ("speed", Attr::MovementSpeed) => Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal)),
+        ("slowness", Attr::MovementSpeed) => Some((-0.15 * level, Op::AddMultipliedTotal)),
+        ("health_boost", Attr::MaxHealth) => Some((4.0 * level, Op::AddValue)),
+        _ => None,
+    }
+}
+/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`),
+/// scaled by the amplifier plus one.
 fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
     m.extra
         .effects
         .iter()
-        .filter_map(move |&(effect, _, amplifier)| {
-            let level = f64::from(amplifier + 1);
-            match (effect.trim_start_matches("minecraft:"), a) {
-                ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
-                ("speed", Attr::MovementSpeed) => {
-                    Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal))
-                }
-                _ => None,
-            }
-        })
+        .filter_map(move |&(effect, _, amplifier)| effect_modifier(effect, amplifier, a))
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
@@ -2197,6 +2201,41 @@ mod tests {
             "minecraft:cow"
         ));
         assert!(!spawn_egg_is_for("minecraft:stick", "minecraft:cow"));
+    }
+    /// #3887: Weakness and Slowness (and Health Boost) carry attribute
+    /// modifiers in vanilla (`MobEffects`), and every effect's amount is
+    /// scaled by the amplifier plus one (`MobEffect.addAttributeModifier`);
+    /// before this only strength and speed were mapped.
+    #[test]
+    fn weakness_slowness_and_health_boost_carry_attribute_modifiers() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let modifier = |effect: &str, amplifier: i32, attr: Attr| {
+            effect_modifier(effect, amplifier, attr).expect("the effect should carry a modifier")
+        };
+        // MobEffects.WEAKNESS: attack damage -4 per level, ADD_VALUE.
+        let (amount, op) = modifier("minecraft:weakness", 0, Attr::AttackDamage);
+        assert!(close(amount, -4.0));
+        assert_eq!(op, Op::AddValue);
+        let (amount, _) = modifier("weakness", 1, Attr::AttackDamage);
+        assert!(close(amount, -8.0));
+        // MobEffects.SLOWNESS: movement speed -0.15 per level, ADD_MULTIPLIED_TOTAL.
+        let (amount, op) = modifier("minecraft:slowness", 0, Attr::MovementSpeed);
+        assert!(close(amount, -0.15));
+        assert_eq!(op, Op::AddMultipliedTotal);
+        let (amount, _) = modifier("slowness", 1, Attr::MovementSpeed);
+        assert!(close(amount, -0.3));
+        // MobEffects.HEALTH_BOOST: max health +4 per level, ADD_VALUE.
+        let (amount, op) = modifier("minecraft:health_boost", 0, Attr::MaxHealth);
+        assert!(close(amount, 4.0));
+        assert_eq!(op, Op::AddValue);
+        // The effects that already worked keep their vanilla amounts.
+        let (amount, _) = modifier("strength", 0, Attr::AttackDamage);
+        assert!(close(amount, 3.0));
+        let (amount, _) = modifier("speed", 0, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(0.2f32)));
+        // An effect does not touch attributes it does not modify.
+        assert!(effect_modifier("weakness", 0, Attr::MovementSpeed).is_none());
+        assert!(effect_modifier("poison", 0, Attr::AttackDamage).is_none());
     }
     #[test]
     fn reasons_round_trip() {
