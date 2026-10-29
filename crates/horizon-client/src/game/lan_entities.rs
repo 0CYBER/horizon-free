@@ -123,8 +123,12 @@ impl Game<'_> {
             e.meta = vehicle_meta(c.hurt_time, c.hurt_dir, c.damage);
             match c.kind {
                 // MinecartFurnace.DATA_ID_FUEL.
-                super::minecarts::CartKind::Furnace if c.fuel > 0 => {
-                    e.meta.push((13, serializer::BOOLEAN, Value::Bool(true)));
+                super::minecarts::CartKind::Furnace => {
+                    e.defaults
+                        .push((13, serializer::BOOLEAN, Value::Bool(false)));
+                    if c.fuel > 0 {
+                        e.meta.push((13, serializer::BOOLEAN, Value::Bool(true)));
+                    }
                 }
                 // MinecartCommandBlock.DATA_ID_COMMAND_NAME.
                 super::minecarts::CartKind::CommandBlock => {
