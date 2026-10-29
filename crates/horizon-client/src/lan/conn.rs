@@ -785,8 +785,9 @@ fn login_and_configure(
             channel: "minecraft:brand".into(),
             data: {
                 let mut w = horizon_protocol::buf::Writer::new();
-                // MinecraftServer.getServerModName.
-                w.string("vanilla");
+                // MinecraftServer.getServerModName: "vanilla" there; a modded
+                // server names itself, and Horizon's says "horizon", as its client does.
+                w.string("horizon");
                 w.data
             },
         }),
