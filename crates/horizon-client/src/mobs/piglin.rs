@@ -191,9 +191,9 @@ fn piglin_sense(m: &mut Mob, w: &MobWorld) {
     b.nemesis = nemesis;
     b.sees_loved = loved;
 }
-/// `Brain.getActiveNonCoreActivity` after `setActiveActivityToFirstValid`:
-/// a piglin's list is admiring, fighting, avoiding, celebrating and idle, a
-/// hoglin's fighting, avoiding and idle. An activity is valid while the
+/// `Brain.setActiveActivityToFirstValid`: the first valid activity of a
+/// piglin's list (admiring, fighting, avoiding, celebrating, idle) or of a
+/// hoglin's (fighting, avoiding, idle). An activity is valid while the
 /// memory it requires is there.
 pub fn activity(m: &Mob) -> Activity {
     let b = &m.extra.piglin;
@@ -212,10 +212,10 @@ pub fn activity(m: &Mob) -> Activity {
         Activity::Idle
     }
 }
-/// `Brain.forgetOutdatedMemories` for the avoid target, which also keeps
-/// track of where it stands, then the avoid target's copies of the core
-/// activity, the retreat's `EraseMemoryIf`, and `updateActivity`'s record of
-/// the activity, at the end of `customServerAiStep`'s brain.
+/// `Brain.forgetOutdatedMemories`: the avoid target expires (and keeps
+/// track of where it stands), then come the core activity's copies into it,
+/// the retreat activity's `EraseMemoryIf` and `updateActivity`, at the end of
+/// `customServerAiStep`'s brain.
 pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     let expired = match m.extra.piglin.avoid.as_mut() {
         Some(a) => {
@@ -311,7 +311,7 @@ fn piglin_sound(m: &Mob, w: &MobWorld, activity: Activity) -> &'static str {
 pub fn avoid_target(m: &Mob) -> Option<Who> {
     m.extra.piglin.avoid.map(|a| a.who)
 }
-/// `AVOID_TARGET` for `ticks` more ticks (`Brain.setMemoryWithExpiry`).
+/// `Brain.setMemoryWithExpiry`: `AVOID_TARGET` for `ticks` more ticks.
 fn remember_avoid(m: &mut Mob, who: Who, at: Vec3, ticks: i32) {
     let mut ttl = Ttl::default();
     ttl.set(ticks);
@@ -329,8 +329,8 @@ fn near_zombified(m: &Mob, w: &MobWorld) -> Option<(Who, Vec3)> {
     let at = w.target_info(who)?.position;
     (m.distance_sqr(at) < 36.0).then_some((who, at))
 }
-/// `PiglinAi.babyAvoidNemesis` and `PiglinAi.avoidZombified`, the core
-/// activity's `CopyMemoryWithExpiry` into `AVOID_TARGET`: a baby avoids a
+/// `PiglinAi.babyAvoidNemesis` and `PiglinAi.avoidZombified`: the core
+/// activity's `CopyMemoryWithExpiry` into `AVOID_TARGET`. A baby avoids a
 /// wither skeleton or wither it sees, anyone a zombified piglin or zoglin
 /// that is near. Each tick it applies draws its expiry from the level random.
 fn copy_to_avoid(m: &mut Mob, cx: &mut Cx) {
@@ -356,7 +356,7 @@ pub fn piglins_outnumber_hoglins(m: &Mob) -> bool {
 pub fn hoglins_outnumber_piglins(m: &Mob) -> bool {
     m.extra.piglin.hoglins > m.extra.piglin.piglins + 1
 }
-/// `HoglinAi.wantsToStopFleeing` and `PiglinAi.wantsToStopFleeing`, the
+/// `HoglinAi.wantsToStopFleeing` and `PiglinAi.wantsToStopFleeing`: the
 /// retreat activity's `EraseMemoryIf`. A hoglin stops once it is an adult
 /// and piglins no longer outnumber hoglins; a piglin once the hoglins it
 /// avoids no longer outnumber piglins, or the zombified mob it avoids is not
@@ -446,9 +446,9 @@ pub fn receive_retreat(m: &mut Mob, from: Who, at: [f64; 3]) {
         .retreats
         .push((from, Vec3::new(at[0], at[1], at[2])));
 }
-/// `HoglinAi.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget`
-/// (`BehaviorUtils`) with 4 blocks: `other` is more than 4 blocks further
-/// away than the attack target.
+/// `BehaviorUtils.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget` with
+/// 4 blocks: `other` is more than 4 blocks further away than the attack
+/// target.
 fn much_further_than_target(m: &Mob, w: &MobWorld, other: Vec3) -> bool {
     let Some(current) =
         m.ai.target
@@ -474,7 +474,7 @@ fn attackable(m: &mut Mob, w: &MobWorld, who: Who, check_sight: bool) -> bool {
         }
     }
 }
-/// `HoglinAi.maybeRetaliate`'s tests for an adult: it does not take on a
+/// `HoglinAi.maybeRetaliate`: the tests for an adult. It does not take on a
 /// piglin while it retreats, nor a hoglin, nor an attacker more than 4
 /// blocks further away than its target, nor one it cannot attack.
 fn hoglin_retaliates(m: &mut Mob, w: &MobWorld, by: Who, at: Vec3) -> bool {
@@ -486,10 +486,10 @@ fn hoglin_retaliates(m: &mut Mob, w: &MobWorld, by: Who, at: Vec3) -> bool {
         && !much_further_than_target(m, w, at)
         && attackable(m, w, by, true)
 }
-/// `Hoglin.hurtServer`'s `HoglinAi.wasHurtBy`: a hit ends the pacified
-/// state; a baby retreats from the attacker, an adult retaliates when
-/// `maybeRetaliate` allows. The hurt-by goal does the retaliating, so a hit
-/// that does not get it is used up.
+/// `HoglinAi.wasHurtBy`, which `Hoglin.hurtServer` calls: a hit ends the
+/// pacified state; a baby retreats from the attacker, an adult retaliates
+/// when `maybeRetaliate` allows. The hurt-by goal does the retaliating, so a
+/// hit that does not get it is used up.
 fn hoglin_hurt(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, by: Who) {
     m.extra.ints[0] = 0;
     let Some(at) = w.target_info(by).map(|t| t.position) else {
@@ -513,8 +513,8 @@ pub fn stop_admiring(m: &mut Mob) {
         m.extra.using_item = i32::from(m.extra.off_hand.is_some() && m.extra.using_item > 0);
     }
 }
-/// `avoidTarget.getType() == attacker.getType()`: both the player, or both
-/// mobs of one species.
+/// Whether two entities are of one type: both the player, or both mobs of
+/// one species.
 fn same_type(w: &MobWorld, a: Who, b: Who) -> bool {
     match (a, b) {
         (Who::Player, Who::Player) => true,
@@ -524,7 +524,7 @@ fn same_type(w: &MobWorld, a: Who, b: Who) -> bool {
         _ => false,
     }
 }
-/// `PiglinAi.broadcastAngerTarget`, as a baby's hit calls it: the adult
+/// `PiglinAi.broadcastAngerTarget`: as a baby's hit calls it, the adult
 /// piglins around it that have no target (brutes too, unless the attacker is
 /// a hoglin, which they cannot hunt) take the attacker as theirs.
 fn broadcast_anger(m: &Mob, w: &MobWorld, by: Who, at: Vec3, events: &mut Vec<MobEvent>) {
@@ -550,17 +550,17 @@ fn broadcast_anger(m: &Mob, w: &MobWorld, by: Who, at: Vec3, events: &mut Vec<Mo
         events.push(MobEvent::SetTarget { mob, target: by });
     }
 }
-/// `PiglinAi.maybeRetaliate`'s tests: not while retreating, only against an
-/// attacker it can attack and that is not more than 4 blocks further away
+/// `PiglinAi.maybeRetaliate`: the tests. Not while retreating, only against
+/// an attacker it can attack and that is not more than 4 blocks further away
 /// than its target.
 fn piglin_retaliates(m: &mut Mob, w: &MobWorld, by: Who, at: Vec3) -> bool {
     m.extra.piglin.activity != Activity::Avoid
         && attackable(m, w, by, false)
         && !much_further_than_target(m, w, at)
 }
-/// `Piglin.hurtServer`'s `PiglinAi.wasHurtBy`: another piglin's hit changes
-/// nothing. Any other ends the admiring, the celebration and the dance, and
-/// an avoid target of another kind. A baby flees the attacker for 5 seconds
+/// `PiglinAi.wasHurtBy`, which `Piglin.hurtServer` calls: another piglin's
+/// hit changes nothing. Any other ends the admiring, the celebration and the
+/// dance, and an avoid target of another kind. A baby flees the attacker for 5 seconds
 /// and calls the adults around it; an adult retreats from a hoglin when
 /// hoglins outnumber piglins and otherwise retaliates when `maybeRetaliate`
 /// allows. The hurt-by goal does the retaliating, so a hit that does not get
@@ -1069,9 +1069,9 @@ impl Goal for PiglinAvoidRepellent {
         m.nav_move_to_path(path, 1.0);
     }
 }
-/// `PiglinAi.isPlayerHoldingLovedItem`, as `SetEntityLookTarget.create(.., 14.0)`
-/// of the idle and celebrate activities uses it: turn to look at the player
-/// in sight within 14 blocks who holds gold.
+/// `PiglinAi.isPlayerHoldingLovedItem`: the idle and celebrate activities'
+/// `SetEntityLookTarget.create(.., 14.0)` turns to look at the player in
+/// sight within 14 blocks who holds gold.
 #[derive(Clone, Debug)]
 struct LookAtLoved;
 impl LookAtLoved {
