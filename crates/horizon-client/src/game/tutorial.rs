@@ -204,7 +204,13 @@ impl super::Game<'_> {
     }
 
     pub(super) fn tutorial_get_item(&mut self, stack: Option<&horizon_client::items::ItemStack>) {
-        if self.options.dedicated.is_some() || self.title.is_some() || self.player.is_none() {
+        // The server thread's settings are a stale copy of the window's: its
+        // guests' tutorial is their own client's to record.
+        if self.options.dedicated.is_some()
+            || self.serving.is_some()
+            || self.title.is_some()
+            || self.player.is_none()
+        {
             return;
         }
         let Some(stack) = stack else { return };
@@ -222,7 +228,13 @@ impl super::Game<'_> {
         state: horizon_world::registry::BlockStateId,
         progress: f32,
     ) {
-        if self.options.dedicated.is_some() || self.title.is_some() || self.player.is_none() {
+        // The server thread's settings are a stale copy of the window's: its
+        // guests' tutorial is their own client's to record.
+        if self.options.dedicated.is_some()
+            || self.serving.is_some()
+            || self.title.is_some()
+            || self.player.is_none()
+        {
             return;
         }
         let name = &self.res.facts().get(state).name;
@@ -234,7 +246,11 @@ impl super::Game<'_> {
 
     pub(super) fn tick_tutorial(&mut self) {
         use winit::keyboard::KeyCode;
-        if self.title.is_some() || self.player.is_none() || self.options.dedicated.is_some() {
+        if self.title.is_some()
+            || self.player.is_none()
+            || self.options.dedicated.is_some()
+            || self.serving.is_some()
+        {
             return;
         }
         if self.screen == super::Screen::Playing
