@@ -973,7 +973,7 @@ impl Game<'_> {
         }
     }
     /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
-    fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
+    pub(super) fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
         let split = self
             .gui
             .atlas
