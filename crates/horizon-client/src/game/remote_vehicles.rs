@@ -108,6 +108,11 @@ impl Game<'_> {
         };
         let vehicle_id = vehicle as u32;
         for m in &mut self.mobs {
+            // `Entity.isVehicle` (the saddle reins of a ridden horse): the
+            // server sends no rider on the mob itself, only this list.
+            if m.id == vehicle_id {
+                m.extra.rider = passengers.first().map(|&p| p as u32);
+            }
             if m.extra.mount == Some(vehicle_id) && !passengers.contains(&(m.id as i32)) {
                 m.extra.mount = None;
                 m.extra.passenger = false;

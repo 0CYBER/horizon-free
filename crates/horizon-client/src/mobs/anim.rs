@@ -861,6 +861,11 @@ pub fn setup(
                     p.visible(part, false);
                 }
             }
+            // EquineSaddleModel.setupAnim: the reins show only while ridden
+            // (`isRidden` is `Entity.isVehicle`: a player or a mob rides it).
+            for part in ["left_saddle_line", "right_saddle_line"] {
+                p.visible(part, m.rider.is_some() || m.extra.rider.is_some());
+            }
         }
         Anim::Hoglin => super::piglin::hoglin_anim(m, s, p),
         Anim::Blaze => super::nether::blaze_anim(s, p),
