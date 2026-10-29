@@ -16,13 +16,16 @@
 //! - run its client side animation in `client_tick`, sharing the function
 //!   with the server's `ai_step` where the server computes the same.
 use super::{
-    Mob, Species, allay, axolotl, breeze, camel, copper_golem, creaking, golem, guardian, piglin,
-    ravager, shulker, sniffer, warden,
+    Mob, Species, allay, armadillo, axolotl, breeze, camel, copper_golem, creaking, equine, frog,
+    goat, golem, guardian, piglin, ravager, shulker, sniffer, undead, villager, warden,
 };
 
 // `Pose.id` of the poses mobs take.
 pub const STANDING: u8 = 0;
+pub const SLEEPING: u8 = 2;
 pub const LONG_JUMPING: u8 = 6;
+pub const CROAKING: u8 = 8;
+pub const USING_TONGUE: u8 = 9;
 pub const SITTING: u8 = 10;
 pub const ROARING: u8 = 11;
 pub const SNIFFING: u8 = 12;
@@ -39,14 +42,18 @@ pub fn pose_id(m: &Mob) -> u8 {
         Species::Warden => warden::pose_id(m),
         Species::Breeze => breeze::pose_id(m),
         Species::Camel | Species::CamelHusk if camel::sitting(m) => SITTING,
+        Species::Frog => m.extra.pose,
+        // LivingEntity.startSleeping: the pose, with the bed in index 14.
+        Species::Villager if villager::sleeping(m) => SLEEPING,
         _ => STANDING,
     }
 }
 
 /// `Entity.onSyncedDataUpdated(DATA_POSE)` on a client.
 pub fn set_pose(m: &mut Mob, id: u8) {
-    m.extra.pose = id;
+    let old = std::mem::replace(&mut m.extra.pose, id);
     match m.species() {
+        Species::Frog if old != id => frog::pose_changed(m),
         Species::Warden => warden::set_pose_id(m, id),
         Species::Breeze => breeze::set_pose_id(m, id),
         _ => {}
@@ -80,6 +87,11 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
         Species::CopperGolem if !m.no_ai => {
             copper_golem::animate(m);
         }
+        Species::Armadillo => armadillo::tick(m),
+        Species::Frog => frog::tick(m),
+        Species::Goat => goat::tick(m),
+        s if equine::grazes(s) => equine::client_tick(m),
+        Species::Drowned => undead::drowned_client_tick(m),
         _ => {}
     }
 }
@@ -87,6 +99,12 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
 /// `handleEntityEvent` of the mob types that start animations by an event
 /// (`ClientboundEntityEventPacket` for a mob of a client).
 pub fn entity_event(m: &mut Mob, event: u8) {
+    if m.species() == Species::Armadillo {
+        armadillo::entity_event(m, event);
+    }
+    if m.species() == Species::Goat {
+        goat::entity_event(m, event);
+    }
     let age = m.age as f32;
     match m.species() {
         Species::Warden => match event {

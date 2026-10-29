@@ -378,9 +378,10 @@ impl Game<'_> {
         if pos[1] < 63 || !self.can_see_sky(pos) {
             return;
         }
-        // DifficultyInstance.isHarderThan(random * 3) at normal difficulty.
+        // `getCurrentDifficultyAt(playerPos).isHarderThan(random * 3)`.
+        let difficulty = self.local_difficulty([position.x, position.y, position.z]);
         let r = &mut self.world.random;
-        if r.next_float() * 3.0 >= 2.0 {
+        if difficulty.effective <= r.next_float() * 3.0 {
             return;
         }
         if r.next_int_bound(since_rest.max(1)).unwrap_or(0) < 72000 {

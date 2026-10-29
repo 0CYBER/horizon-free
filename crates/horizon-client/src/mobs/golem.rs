@@ -6,7 +6,7 @@ use super::{
     anim::{Poses, State},
     goals::{
         Cx, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack, NearestTarget, Prey,
-        RandomLookAround, Stroll, goal_clone,
+        RandomLookAround, Stroll, goal_clone, reduced,
     },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
@@ -60,7 +60,7 @@ impl Goal for DefendVillage {
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let Some(p) = &cx.w.player else { return false };
-        if !p.alive || p.creative || p.spectator {
+        if !p.alive || p.creative || p.spectator || m.spares_players() {
             return false;
         }
         // The box around the golem: 10 across, 8 up and down.
@@ -81,9 +81,10 @@ impl Goal for DefendVillage {
         bad && m.sees(cx.w, Who::Player)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let spares = m.spares_players();
         m.target_info(cx.w).is_some_and(|t| {
             t.alive
-                && !(t.is_player && t.creative)
+                && !(t.is_player && (t.creative || spares))
                 && m.position.distance_squared(t.position) <= 64.0 * 64.0
         })
     }
@@ -158,7 +159,8 @@ impl Goal for OfferFlower {
         self.ticks > 0
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.ticks = 400;
+        // adjustedTickDelay(400): the goal ticks every other game tick.
+        self.ticks = reduced(400);
         m.extra.counter = 400;
         // IronGolem.offerFlower(true): entity event 11.
         entity_event(m, 11, cx);
@@ -341,12 +343,12 @@ fn snowball_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let zd = t.position.z - m.position.z;
     let yo = (xd * xd + zd * zd).sqrt() * 0.2;
     let mut p = Projectile::new(ProjectileKind::Snowball, start, Some(Who::Mob(m.id)));
-    // rangedAttackUncertainty: 14 - 4 * difficulty (normal: 6).
+    // SnowGolem.rangedAttackUncertainty: 12 on every difficulty.
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + yo - start.y, zd],
         1.6,
-        6.0,
+        12.0,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 0.4 / (m.random.next_float() * 0.4 + 0.8);

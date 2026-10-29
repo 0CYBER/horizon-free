@@ -145,6 +145,13 @@ class ParityRunnerTests(unittest.TestCase):
         with mock.patch.object(parity.sys, "platform", "darwin"):
             self.assertEqual(parity.platform_skips(config), {"options": "libm"})
 
+    def test_a_hosts_excludes_are_skipped_when_it_runs_parity_itself(self):
+        config = {"hosts": {"playhorizon": {"exclude": {"remote_fireworks": "starved"}}, "macmini": {"exclude": {}}}}
+        with mock.patch.object(parity.sys, "platform", "linux"):
+            self.assertEqual(parity.platform_skips(config, "playhorizon"), {"remote_fireworks": "starved"})
+            self.assertEqual(parity.platform_skips(config, "macmini"), {})
+            self.assertEqual(parity.platform_skips(config, "elsewhere"), {})
+
     def test_named_only_harnesses_are_listed_from_the_host_config(self):
         self.assertEqual(parity.named_only({"named_only": {"lan_integration": "slow"}}), {"lan_integration": "slow"})
         self.assertEqual(parity.named_only({}), {})

@@ -188,9 +188,9 @@ def main():
              'default by options_probe; the slider/persistence unit regression checks that intentional extension.')
     harness.differential(
         'rust-options-parity', 'VanillaOptionsOracle', 'options_probe', make_cases, scope,
-        sources=[lab.ROOT / 'crates/horizon-client/src/options_file.rs', lab.ROOT / 'crates/horizon-client/src/options_fixes.rs',
-                 lab.ROOT / 'crates/horizon-client/src/java_text.rs', lab.ROOT / 'crates/horizon-client/src/key_names.rs',
-                 lab.ROOT / 'crates/horizon-client/src/keybinds.rs'])
+        sources=[lab.ROOT / 'crates/horizon-client-render/src/options_file.rs', lab.ROOT / 'crates/horizon-client-render/src/options_fixes.rs',
+                 lab.ROOT / 'crates/horizon-client-render/src/java_text.rs', lab.ROOT / 'crates/horizon-client-input/src/key_names.rs',
+                 lab.ROOT / 'crates/horizon-client-input/src/keybinds.rs'])
 
 
 if __name__ == '__main__':

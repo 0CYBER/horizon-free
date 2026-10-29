@@ -288,6 +288,9 @@ pub struct Menu {
     pub player_sounds: Vec<&'static str>,
     /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
     pub crafted: Vec<String>,
+    /// Potions taken from a brewing stand's bottle slots
+    /// (`PotionSlot.onTake`), for the caller.
+    pub brewed: Vec<ItemStack>,
     /// `LivingEntity.onEquipItem` calls that change the item: the
     /// `EquipmentSlot` name and the new stack, in order, for the caller.
     pub equipped: Vec<(&'static str, Option<ItemStack>)>,
@@ -683,6 +686,7 @@ impl Menu {
             sounds: Vec::new(),
             player_sounds: Vec::new(),
             crafted: Vec::new(),
+            brewed: Vec::new(),
             equipped: Vec::new(),
             merchant: None,
             stone: Stonecutter::default(),
@@ -1504,7 +1508,17 @@ impl Menu {
     }
 
     /// `ResultSlot.onTake` and the other `Slot.onTake` overrides.
-    fn on_take(&mut self, env: &Env, s: usize) {
+    fn on_take(&mut self, env: &Env, s: usize, taken: &ItemStack) {
+        if self.slots[s].role == Role::Potion {
+            // BrewingStandMenu.PotionSlot.onTake: a stack with potion contents.
+            if matches!(
+                &*taken.item,
+                "minecraft:potion" | "minecraft:splash_potion" | "minecraft:lingering_potion"
+            ) {
+                self.brewed.push(taken.clone());
+            }
+            return;
+        }
         if self.slots[s].role == Role::MerchantResult {
             self.merchant_take(env);
             return;
@@ -1671,7 +1685,7 @@ impl Menu {
         max_amount: u32,
     ) -> Option<ItemStack> {
         let mut result = self.try_remove(env, s, amount, max_amount)?;
-        self.on_take(env, s);
+        self.on_take(env, s, &result);
         if self.slots[s].role == Role::CartoResult {
             Self::map_crafted(env, &mut result);
         }
@@ -2346,7 +2360,7 @@ impl Menu {
             return None;
         }
         if after_take || matches!(self.kind, Kind::Inventory | Kind::Crafting) {
-            self.on_take(env, index);
+            self.on_take(env, index, &clicked);
         }
         // What the result slot's move left over is dropped.
         if (index == 0 && matches!(self.kind, Kind::Inventory | Kind::Crafting))
@@ -2594,7 +2608,7 @@ impl Menu {
                     };
                     if let Some(mut taken) = self.try_remove(env, s, amount, u32::MAX) {
                         self.carried = Some(taken.clone());
-                        self.on_take(env, s);
+                        self.on_take(env, s, &taken);
                         if self.slots[s].role == Role::CartoResult {
                             // onTake's onCraftedBy edits the carried stack.
                             Self::map_crafted(env, &mut taken);
@@ -2628,7 +2642,7 @@ impl Menu {
                             if let Some(c) = self.carried.as_mut() {
                                 c.count += taken.count;
                             }
-                            self.on_take(env, s);
+                            self.on_take(env, s, &taken);
                             if self.slots[s].role == Role::CartoResult {
                                 // onCraftedBy edits the taken stack, not the carried one.
                                 Self::map_crafted(env, &mut taken);
@@ -2656,7 +2670,7 @@ impl Menu {
                 if self.may_pickup(env, target) {
                     self.containers[PLAYER][inv_slot] = Some(taken.clone());
                     self.set_by_player(env, target, None);
-                    self.on_take(env, target);
+                    self.on_take(env, target, &taken);
                     if self.slots[target].role == Role::CartoResult
                         && let Some(stack) = self.containers[PLAYER][inv_slot].as_mut()
                     {
@@ -2684,14 +2698,14 @@ impl Menu {
                         let part = split(&mut source, max);
                         self.containers[PLAYER][inv_slot] = Some(source);
                         self.set_by_player(env, target, Some(part));
-                        self.on_take(env, target);
+                        self.on_take(env, target, &taken);
                         if !self.inventory_add(env, &mut taken) {
                             self.drop_stack(&taken);
                         }
                     } else {
-                        self.containers[PLAYER][inv_slot] = Some(taken);
+                        self.containers[PLAYER][inv_slot] = Some(taken.clone());
                         self.set_by_player(env, target, Some(source));
-                        self.on_take(env, target);
+                        self.on_take(env, target, &taken);
                     }
                 }
             }

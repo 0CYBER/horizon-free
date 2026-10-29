@@ -204,6 +204,8 @@ impl Game<'_> {
                     layer: overlay,
                     color,
                     light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -384,13 +386,15 @@ impl Game<'_> {
                 owner.use_item_remaining_ticks = 72_000 - mob.extra.using_item;
                 owner.crossbow_charge_duration = 25;
             }
-            let context = if left {
-                horizon_assets::item_model::DisplayContext::ThirdPersonLeftHand
-            } else {
-                horizon_assets::item_model::DisplayContext::ThirdPersonRightHand
+            use horizon_assets::item_model::DisplayContext as Context;
+            // PandaHoldsItemLayer shows the item as it lies on the ground.
+            let (context, ordinal) = match (mob.species(), left) {
+                (Species::Panda, _) => (Context::Ground, 7),
+                (_, true) => (Context::ThirdPersonLeftHand, 1),
+                (_, false) => (Context::ThirdPersonRightHand, 2),
             };
             // `updateForLiving`: seeded by the entity id plus the context ordinal.
-            let seed = mob.id as i32 + if left { 1 } else { 2 };
+            let seed = mob.id as i32 + ordinal;
             let state = self.resolve_item(&stack, context, Some(&owner), seed);
             if lit {
                 self.submit_item_world(&state, t, light, out);

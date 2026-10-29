@@ -127,8 +127,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
+                    // BrushableBlock.tick checks the brush reset first (the
+                    // caller keeps the brush counts).
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "brushable",
+                    });
                     if self.is_free(self.below_state(pos)) && pos.y >= self.level.min_y() {
-                        self.falling_block_fall(pos, state);
+                        self.falling_block_fall(pos, state, None);
                     }
                 }
                 Class::Farmland => {
@@ -505,7 +512,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         );
         if distance == 7 {
             if b.table.int(state, b.props.distance) == 7 {
-                self.falling_block_fall(pos, next);
+                self.falling_block_fall(pos, next, None);
             } else {
                 self.destroy_block(pos, true, 512);
             }
@@ -1145,7 +1152,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let block = b.block(state);
-        if self.rand_int(4) != 0 {
+        // The spread_vines rule, checked before the roll.
+        if !self.level.game_rules().spread_vines || self.rand_int(4) != 0 {
             return;
         }
         let direction = Direction::ALL[self.rand_int(6) as usize];
@@ -1478,6 +1486,80 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let block = b.table.block_by_name(&format!("minecraft:{next}"))?;
         Some(b.table.with_properties_of(block, state))
     }
+    /// `WeatheringCopper.getPrevious` (and `getFirst` by repeating it) by
+    /// registry naming: the block one oxidation step back.
+    fn copper_previous_name(path: &str) -> Option<String> {
+        if let Some(rest) = path.strip_prefix("oxidized_") {
+            Some(format!("weathered_{rest}"))
+        } else if let Some(rest) = path.strip_prefix("weathered_") {
+            Some(format!("exposed_{rest}"))
+        } else {
+            path.strip_prefix("exposed_").map(|rest| {
+                if rest == "copper" {
+                    "copper_block".to_owned()
+                } else {
+                    rest.to_owned()
+                }
+            })
+        }
+    }
+    fn copper_stepped(&self, state: BlockStateId, all_the_way: bool) -> Option<BlockStateId> {
+        let b = self.b;
+        let name = &*b.table.info(b.block(state)).name;
+        let mut path = Self::copper_previous_name(name.strip_prefix("minecraft:")?)?;
+        while all_the_way && let Some(earlier) = Self::copper_previous_name(&path) {
+            path = earlier;
+        }
+        let block = b.table.block_by_name(&format!("minecraft:{path}"))?;
+        Some(b.table.with_properties_of(block, state))
+    }
+    /// `LightningBolt.clearCopperOnLightningStrike`: the struck copper goes
+    /// back to unoxidized, then 3 to 5 random walks of up to 8 steps each
+    /// scrape one step of oxidation off the weathering copper they land on.
+    /// A waxed block is left as it is but still starts the walks.
+    pub(crate) fn lightning_clear_copper(&mut self, struck: BlockPos) {
+        let b = self.b;
+        let state = self.state(struck);
+        let weathering = b
+            .data(state)
+            .implements(super::classes::Interface::WeatheringCopper);
+        let waxed = b.table.name(state).starts_with("minecraft:waxed_");
+        if !(weathering || waxed) {
+            return;
+        }
+        if weathering && let Some(first) = self.copper_stepped(state, true) {
+            self.set_block_and_update(struck, first);
+        }
+        for _ in 0..self.rand_int(3) + 3 {
+            let mut at = struck;
+            for _ in 0..self.rand_int(8) + 1 {
+                // randomStepCleaningCopper: up to 10 random blocks in the
+                // 3x3x3 cube around the walk's position.
+                let mut next = None;
+                for _ in 0..10 {
+                    let x = at.x - 1 + self.rand_int(3);
+                    let y = at.y - 1 + self.rand_int(3);
+                    let z = at.z - 1 + self.rand_int(3);
+                    let candidate = BlockPos::new(x, y, z);
+                    let state = self.state(candidate);
+                    if b.data(state)
+                        .implements(super::classes::Interface::WeatheringCopper)
+                    {
+                        if let Some(previous) = self.copper_stepped(state, false) {
+                            self.set_block_and_update(candidate, previous);
+                        }
+                        self.level_event(3002, candidate, -1);
+                        next = Some(candidate);
+                        break;
+                    }
+                }
+                match next {
+                    Some(p) => at = p,
+                    None => break,
+                }
+            }
+        }
+    }
 }
 
 /// `Biome.Precipitation` at a position.
@@ -1660,6 +1742,15 @@ impl Behaviours {
         pos: BlockPos,
     ) {
         self.sim(level, ticks).random_tick_at(pos);
+    }
+    /// `LightningBolt.clearCopperOnLightningStrike` for the block at `struck`.
+    pub fn lightning_clear_copper<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        struck: BlockPos,
+    ) {
+        self.sim(level, ticks).lightning_clear_copper(struck);
     }
     /// Run one scheduled block tick at `pos` immediately (no queue check).
     pub fn scheduled_block_tick<L: LevelAccess + ?Sized>(

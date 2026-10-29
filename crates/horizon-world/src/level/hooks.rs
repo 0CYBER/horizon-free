@@ -1,7 +1,7 @@
 //! `neighborChanged`, `onPlace`, `affectNeighborsAfterRemoval` and
 //! `updateIndirectNeighbourShapes` for the overriding vanilla classes.
 use super::{
-    LevelAccess, Sim,
+    LevelAccess, LevelEvent, Sim,
     classes::Class,
     states::BlockId,
     update::{below, rel},
@@ -189,6 +189,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.schedule_tick(pos, block, 1);
                 }
                 Class::Shelf => self.shelf_on_place(pos, state, old),
+                // CarvedPumpkinBlock.onPlace: a pumpkin placed by any means may
+                // complete a golem; the caller builds it.
+                Class::CarvedPumpkin if !same => self.emit(LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "golem",
+                }),
                 Class::SnifferEgg => {
                     let boosted = b.is_block(self.below_state(pos), b.named.moss_block);
                     if boosted {
@@ -386,7 +393,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     /// `ServerPlayerGameMode.destroyBlock`: `playerWillDestroy` then
     /// `removeBlock`. Drops are the caller's (tool-dependent loot).
-    pub(crate) fn player_destroy(&mut self, pos: BlockPos, creative: bool) -> bool {
+    pub(crate) fn player_destroy(
+        &mut self,
+        pos: BlockPos,
+        creative: bool,
+        correct_tool: bool,
+    ) -> bool {
         let b = self.b;
         let p = b.props;
         let state = self.state(pos);
@@ -394,8 +406,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         }
         let data = b.data(state);
-        if creative
-            && (data.is(Class::DoublePlant) || data.is(Class::Door))
+        // DoorBlock also clears the bottom half when the tool would not drop it.
+        if ((creative && data.is(Class::DoublePlant))
+            || (data.is(Class::Door) && (creative || !correct_tool)))
             && b.table.text(state, p.half) == "upper"
         {
             let bottom = below(pos);
@@ -432,6 +445,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         self.game_event(pos, "minecraft:block_destroy");
         self.remove_block(pos, false)
+    }
+    /// `IceBlock.playerDestroy` (after the drops): mined ice turns into water
+    /// when it sits over a solid block or a liquid, unless the tool prevents
+    /// ice melting (silk touch). In the nether, where water evaporates, the
+    /// block stays air.
+    pub(crate) fn ice_destroyed_by_player(
+        &mut self,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+        prevents_melting: bool,
+    ) {
+        let b = self.b;
+        if !b.data(destroyed).is(Class::Ice)
+            || prevents_melting
+            || self.level.dimension() == super::Dimension::Nether
+        {
+            return;
+        }
+        let below = self.below_state(pos);
+        if b.in_set(below, &b.tags.blocks_motion) || b.liquid(below) {
+            let water = b.default_of(b.named.water);
+            self.set_block_and_update(pos, water);
+        }
     }
     /// `entityInside` for entity-sensing blocks.
     pub(crate) fn entity_inside(&mut self, pos: BlockPos) {
