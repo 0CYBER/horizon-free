@@ -186,13 +186,54 @@ impl Toolchain {
 
 /// Whether the player's environment variable `name` stays out of a build: it would pick another
 /// Rust or wrap it (rustup, `RUSTC_WRAPPER`), or change the compiler's flags (`RUSTFLAGS`, a
-/// profile, incremental, the build's target, linker or jobs: `CARGO_BUILD_*`, `CARGO_TARGET_*`),
+/// profile, incremental, the build's target or linker: `CARGO_BUILD_*` but the jobs,
+/// `CARGO_TARGET_*`),
 /// so the build would differ from the release's and recompile everything after any change.
 pub fn scrubbed(name: &str) -> bool {
     const PREFIXES: [&str; 3] = ["CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_"];
     // Windows' variable names ignore case.
     let name = name.to_ascii_uppercase();
+    // The number of jobs changes no flag: a player may still limit it.
+    if name == "CARGO_BUILD_JOBS" {
+        return false;
+    }
     SCRUBBED.contains(&name.as_str()) || PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// Runs `cmd` (a build) below the player's own programs, so the desktop and a game in play stay
+/// smooth while it compiles; with the computer otherwise idle it still gets every core. Unix: nice
+/// 19, and on Linux the idle I/O class too; Windows: below-normal priority.
+pub fn low_priority(cmd: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: between fork and exec the closure only makes two system calls, which are
+        // async-signal-safe, on the child itself; a failure (not allowed) leaves the priority.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+                #[cfg(target_os = "linux")]
+                {
+                    const IOPRIO_WHO_PROCESS: libc::c_long = 1;
+                    const IOPRIO_CLASS_IDLE: libc::c_long = 3;
+                    libc::syscall(
+                        libc::SYS_ioprio_set,
+                        IOPRIO_WHO_PROCESS,
+                        0 as libc::c_long,
+                        IOPRIO_CLASS_IDLE << 13,
+                    );
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        cmd.creation_flags(BELOW_NORMAL_PRIORITY_CLASS);
+    }
+    cmd
 }
 
 const SCRUBBED: [&str; 8] = [
@@ -472,6 +513,7 @@ mod tests {
             assert!(scrubbed(name), "{name}");
         }
         for name in [
+            "CARGO_BUILD_JOBS",
             "PATH",
             "HOME",
             "CARGO_HOME",
@@ -482,6 +524,22 @@ mod tests {
         ] {
             assert!(!scrubbed(name), "{name}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn builds_run_at_the_lowest_priority() {
+        // `nice` alone prints the niceness it runs at; ionice -p the I/O class of a process.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "nice; ionice -p $$ 2>/dev/null || echo idle"]);
+        let out = low_priority(&mut cmd).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some("19"), "{text}");
+        assert!(
+            lines.next().is_some_and(|l| l.starts_with("idle")),
+            "{text}"
+        );
     }
 
     #[test]

@@ -27,8 +27,12 @@ const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
 pub const MIXINS_REV: &str = "0d6b103c70633d8fd9443d8d0acd3aadaacedb06";
-/// The profile and features of the release's own game (game-build.yml).
-const PROFILE: &str = "release";
+/// The profile builds use: the workspace's `fast` (the release's optimizations without its
+/// link-time ones, incremental), so a rebuild recompiles and links only what the mods changed.
+/// A revision without it builds with `release` ([`profile_of`]).
+const PROFILE: &str = "fast";
+const FALLBACK_PROFILE: &str = "release";
+/// The features of the release's own game (game-build.yml).
 const FEATURES: &str = "horizon-client/mods";
 
 /// Whether Native mods are on after an install into a game folder whose list is `installed`:
@@ -335,6 +339,16 @@ fn has_mods_feature(source: &Path) -> bool {
     value.get("features").and_then(|f| f.get("mods")).is_some()
 }
 
+/// The profile the source at `source` builds with: [`PROFILE`] where its Cargo.toml has it.
+fn profile_of(source: &Path) -> &'static str {
+    let text = fs::read_to_string(source.join("Cargo.toml")).unwrap_or_default();
+    let value: toml::Table = text.parse().unwrap_or_default();
+    match value.get("profile").and_then(|p| p.get(PROFILE)) {
+        Some(_) => PROFILE,
+        None => FALLBACK_PROFILE,
+    }
+}
+
 /// The Horizon commit `version` (an installed release or Nightly) was built from, from GitHub.
 pub fn revision_of(version: &str) -> Result<String, String> {
     let reference = match version.strip_prefix("nightly-") {
@@ -552,6 +566,7 @@ fn tool(rust: &Toolchain, rev: &str) -> Result<PathBuf, String> {
         .join(format!("horizon-mixins{}", std::env::consts::EXE_SUFFIX));
     if !bin.is_file() {
         let mut cmd = rust.command(&rust.cargo());
+        rust_toolchain::low_priority(&mut cmd);
         cmd.args([
             "install", "--locked", "--git", MIXINS_GIT, "--rev", rev, "--root",
         ])
@@ -577,6 +592,7 @@ fn apply(rust: &Toolchain, tool: &Path, source: &Path, mods: &Path, out: &Path) 
 /// the workspace's own (`stage/.cargo/config.toml`, when it has one) applies.
 fn compile(rust: &Toolchain, stage: &Path, target: &Path) -> Command {
     let mut cmd = rust.command(&rust.cargo());
+    rust_toolchain::low_priority(&mut cmd);
     cmd.env("CARGO_TARGET_DIR", target);
     cmd.arg("build");
     let config = stage.join(".cargo").join("config.toml");
@@ -584,7 +600,7 @@ fn compile(rust: &Toolchain, stage: &Path, target: &Path) -> Command {
         cmd.arg("--config").arg(config);
     }
     cmd.arg("--manifest-path").arg(stage.join("Cargo.toml"));
-    cmd.args(["--locked", "--profile", PROFILE]);
+    cmd.args(["--locked", "--profile", profile_of(stage)]);
     if has_mods_feature(stage) {
         cmd.args(["--features", FEATURES]);
     }
@@ -730,6 +746,7 @@ pub fn build(
         sync(&fresh, &stage)?;
         let _ = fs::remove_dir_all(&fresh);
         let target = real.join("target");
+        let profile = profile_of(&stage);
         let mut crates = 0;
         run(
             compile(&rust, &stage, &target),
@@ -749,9 +766,10 @@ pub fn build(
             "horizon_mixins": mixins,
             "hooks": mods.iter().find_map(|m| m.hooks),
             "rust": rust_toolchain::VERSION,
+            "profile": profile,
             "mods": mods.iter().map(|m| serde_json::json!({"id": m.id, "version": m.version})).collect::<Vec<_>>(),
         });
-        let binary = target.join(PROFILE).join(backend::CLIENT);
+        let binary = target.join(profile).join(backend::CLIENT);
         install(base, &version, &binary, &about)?;
     } else {
         // Used again: it counts as the newest of the builds kept (`prune`).
@@ -792,7 +810,9 @@ fn install(
         let copied = if entry.path().is_dir() {
             backend::copy_dir(&entry.path(), &to)
         } else {
+            // A clone is a new file: horizon-ctl and horizon-server keep their permissions.
             horizon_prepare::clone_or_copy(&entry.path(), &to)
+                .and_then(|()| fs::set_permissions(&to, entry.metadata()?.permissions()))
         };
         copied.map_err(|e| format!("Could not copy {}: {e}", entry.path().display()))?;
     }
@@ -1277,6 +1297,26 @@ mod tests {
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args[1], "--config");
         assert_eq!(args[2], stage.join(".cargo/config.toml"));
+    }
+
+    #[test]
+    fn builds_use_the_fast_profile_where_the_source_has_it() {
+        let d = dir("profile");
+        assert_eq!(profile_of(&d), "release");
+        fs::write(d.join("Cargo.toml"), "[profile.release]\nlto = \"thin\"\n").unwrap();
+        assert_eq!(profile_of(&d), "release");
+        fs::write(
+            d.join("Cargo.toml"),
+            "[profile.release]\nlto = \"thin\"\n[profile.fast]\ninherits = \"release\"\n",
+        )
+        .unwrap();
+        assert_eq!(profile_of(&d), "fast");
+        let rust = Toolchain {
+            dir: PathBuf::from("/rust/1.99.1-x"),
+        };
+        let cmd = compile(&rust, &d, Path::new("/native/target"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert!(args.windows(2).any(|w| w == ["--profile", "fast"]));
     }
 
     #[test]

@@ -2754,6 +2754,7 @@ dependencies = [
  "horizon-world",
  "image",
  "keyring",
+ "libc",
  "objc2-app-kit",
  "oo7",
  "proc-macro2",
