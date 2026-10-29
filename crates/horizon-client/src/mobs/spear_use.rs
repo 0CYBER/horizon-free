@@ -519,6 +519,10 @@ pub enum SpearStatus {
 pub struct Memories {
     /// `SPEAR_STATUS`.
     pub status: Option<SpearStatus>,
+    /// `SPEAR_ENGAGE_TIME`: ticks of the charge left.
+    pub engage_time: Option<i32>,
+    /// `SPEAR_CHARGE_POSITION`: where the charge goes to reposition.
+    pub charge_position: Option<[f64; 3]>,
 }
 
 /// A piglin's `LOOK_TARGET` of an `EntityTracker(target, true)`: its eyes
@@ -568,6 +572,50 @@ fn approach_stop(m: &mut Mob) {
     m.extra.piglin.spear.status = Some(SpearStatus::Charging);
 }
 
+/// `SpearAttack.checkExtraStartConditions`: the status is CHARGING, able to
+/// attack and not using an item.
+fn attack_check_extra_start_conditions(m: &Mob, w: &MobWorld) -> bool {
+    m.extra.piglin.spear.status.unwrap_or(SpearStatus::Approach) == SpearStatus::Charging
+        && able_to_attack(m, w)
+        && !is_using_item(m)
+}
+
+/// `SpearAttack.getKineticWeaponUseDuration`.
+fn attack_kinetic_weapon_use_duration(m: &Mob) -> i32 {
+    main_hand_kinetic(m).map_or(0, |k| k.damage_use_duration())
+}
+
+/// `SpearAttack.start`: aggressive, the charge lasts the weapon's use time,
+/// and the spear goes up.
+fn attack_start(m: &mut Mob) {
+    m.ai.aggressive = true;
+    m.extra.piglin.spear.engage_time = Some(attack_kinetic_weapon_use_duration(m));
+    m.extra.piglin.spear.charge_position = None;
+    start_using_item(m);
+}
+
+/// `SpearAttack.canStillUse`: time left to charge and able to attack.
+fn attack_can_still_use(m: &Mob, w: &MobWorld) -> bool {
+    m.extra.piglin.spear.engage_time.unwrap_or(0) > 0 && able_to_attack(m, w)
+}
+
+/// `SpearAttack.tick`: look at the target and count the charge down.
+fn attack_tick(m: &mut Mob, cx: &mut Cx) {
+    let Some(t) = m.target_info(cx.w) else { return };
+    look_at_target(m, [t.position.x, t.eye_y, t.position.z]);
+    let left = m.extra.piglin.spear.engage_time.unwrap_or(0) - 1;
+    m.extra.piglin.spear.engage_time = Some(left);
+}
+
+/// `SpearAttack.stop`: the walk ends, the spear goes down and the retreat is next.
+fn attack_stop(m: &mut Mob) {
+    m.nav_stop();
+    stop_using_item(m);
+    m.extra.piglin.spear.charge_position = None;
+    m.extra.piglin.spear.engage_time = None;
+    m.extra.piglin.spear.status = Some(SpearStatus::Retreat);
+}
+
 /// The spear behaviours of a piglin's fight activity, `SpearApproach`,
 /// `SpearAttack` and `SpearRetreat`: each starts on the `SPEAR_STATUS` the
 /// one before it leaves. The goal runs them in the order of `Brain.tick`:
@@ -577,6 +625,7 @@ fn approach_stop(m: &mut Mob) {
 #[derive(Clone, Debug)]
 pub struct PiglinSpear {
     approach: Timed,
+    attack: Timed,
 }
 impl PiglinSpear {
     /// `new SpearApproach(1.0, 10.0F)`: the squared approach distance.
@@ -588,6 +637,7 @@ impl PiglinSpear {
         Self {
             // `Behavior(Map)`: a duration of 60 ticks (which `timedOut` ignores).
             approach: Timed::new(60, 60),
+            attack: Timed::new(60, 60),
         }
     }
 
@@ -621,6 +671,10 @@ impl Goal for PiglinSpear {
             self.approach.running = false;
             approach_stop(m);
         }
+        if self.attack.running {
+            self.attack.running = false;
+            attack_stop(m);
+        }
     }
     /// `Brain.tick`'s `startEachNonRunningBehavior`, then `tickEachRunningBehavior`.
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
@@ -632,12 +686,27 @@ impl Goal for PiglinSpear {
             self.approach.begin(cx.lr, now);
             approach_start(m);
         }
+        if !self.attack.running
+            && m.extra.piglin.spear.status.is_some()
+            && attack_check_extra_start_conditions(m, cx.w)
+        {
+            self.attack.begin(cx.lr, now);
+            attack_start(m);
+        }
         if self.approach.running {
             if approach_can_still_use(m, cx.w) {
                 approach_tick(m, cx);
             } else {
                 self.approach.running = false;
                 approach_stop(m);
+            }
+        }
+        if self.attack.running {
+            if attack_can_still_use(m, cx.w) {
+                attack_tick(m, cx);
+            } else {
+                self.attack.running = false;
+                attack_stop(m);
             }
         }
     }
