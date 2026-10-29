@@ -307,6 +307,88 @@ fn wants_to_stop_fleeing(m: &Mob, w: &MobWorld) -> bool {
         _ => false,
     }
 }
+/// `PiglinAi.RETREAT_DURATION` and `HoglinAi.RETREAT_DURATION`:
+/// `TimeUtil.rangeOfSeconds(5, 20)`, sampled from the level random.
+fn retreat_duration(lr: &mut LegacyRandom) -> i32 {
+    lr.next_int_between_inclusive(100, 400).unwrap_or(100)
+}
+/// `PiglinAi.TIME_BETWEEN_HUNTS` (30 to 120 seconds) sampled from the level
+/// random.
+fn hunt_wait(lr: &mut LegacyRandom) -> i32 {
+    lr.next_int_between_inclusive(600, 2400).unwrap_or(600)
+}
+/// `HoglinAi.setAvoidTarget`: forget the attack target and the walk, and
+/// avoid `who`, standing at `at`, for a while.
+pub fn set_avoid_target(m: &mut Mob, lr: &mut LegacyRandom, who: Who, at: Vec3) {
+    m.ai.target = None;
+    m.nav_stop();
+    let ticks = retreat_duration(lr);
+    remember_avoid(m, who, at, ticks);
+}
+/// `PiglinAi.setAvoidTargetAndDontHuntForAWhile`: forget the anger, the
+/// attack target and the walk, avoid `who` for a while and start the
+/// `HUNTED_RECENTLY` wait (`dontKillAnyMoreHoglinsForAWhile`).
+pub fn set_avoid_target_and_dont_hunt(m: &mut Mob, lr: &mut LegacyRandom, who: Who, at: Vec3) {
+    m.extra.anger = 0;
+    set_avoid_target(m, lr, who, at);
+    m.extra.ints[0] = hunt_wait(lr);
+}
+/// `HoglinAi.retreatFromNearestTarget` and `PiglinAi.retreatFromNearestTarget`:
+/// retreat from the nearest of the new target, the avoid target and the
+/// attack target (`BehaviorUtils.getNearestTarget`: the first one only when
+/// it is strictly closer).
+pub fn retreat_from_nearest(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, who: Who, at: Vec3) {
+    let mut nearest = (who, at);
+    let avoid = m.extra.piglin.avoid.map(|a| (a.who, a.at));
+    let attack =
+        m.ai.target
+            .and_then(|t| w.target_info(t).map(|i| (t, i.position)));
+    for other in [avoid, attack].into_iter().flatten() {
+        if m.distance_sqr(other.1) < m.distance_sqr(nearest.1) {
+            nearest = other;
+        }
+    }
+    if m.species() == Species::Hoglin {
+        set_avoid_target(m, lr, nearest.0, nearest.1);
+    } else {
+        set_avoid_target_and_dont_hunt(m, lr, nearest.0, nearest.1);
+    }
+}
+/// `HoglinAi.broadcastRetreat` and `PiglinAi.broadcastRetreat`: every adult
+/// hoglin (for a piglin, every adult piglin but the brutes) this one sees
+/// retreats from `who` too, once its tick starts.
+pub fn broadcast_retreat(m: &Mob, w: &MobWorld, who: Who, at: Vec3, events: &mut Vec<MobEvent>) {
+    for &id in &m.extra.piglin.adults {
+        if m.species() == Species::Piglin
+            && !w.seen(id).is_some_and(|s| s.species == Species::Piglin)
+        {
+            continue;
+        }
+        events.push(MobEvent::Retreat {
+            mob: id,
+            from: who,
+            at: [at.x, at.y, at.z],
+        });
+    }
+}
+/// What `broadcastRetreat` asks of a mob: it handles the retreat when its
+/// next tick starts.
+pub fn receive_retreat(m: &mut Mob, from: Who, at: [f64; 3]) {
+    m.extra
+        .piglin
+        .retreats
+        .push((from, Vec3::new(at[0], at[1], at[2])));
+}
+/// What a piglin or hoglin handles before its goals run: the retreats other
+/// mobs broadcast to it and, for a piglin, its celebration.
+pub fn before_goals(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
+    for (from, at) in std::mem::take(&mut m.extra.piglin.retreats) {
+        retreat_from_nearest(m, w, lr, from, at);
+    }
+    if m.species() == Species::Piglin {
+        celebrate(m, w);
+    }
+}
 /// What kind of mob `who` is: none for the player.
 fn species_of(w: &MobWorld, who: Who) -> Option<Species> {
     match who {

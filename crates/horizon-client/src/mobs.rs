@@ -1251,6 +1251,14 @@ pub enum MobEvent {
         target: u32,
         ticks: i32,
     },
+    /// `HoglinAi.broadcastRetreat` and `PiglinAi.broadcastRetreat` for one
+    /// adult that sees the broadcaster: it retreats from `from`, standing at
+    /// `at`, or from what it already avoids or attacks if that is nearer.
+    Retreat {
+        mob: u32,
+        from: Who,
+        at: [f64; 3],
+    },
     Projectile(crate::projectiles::Projectile),
     /// Spawn a new mob (breeding, slime splitting, chicken eggs...).
     Spawn(Box<Mob>),
@@ -1818,6 +1826,12 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
                     villager_brain::lock_gaze_half(m, Who::Mob(partner));
+                }
+                events.remove(i);
+            }
+            MobEvent::Retreat { mob, from, at } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    piglin::receive_retreat(m, from, at);
                 }
                 events.remove(i);
             }

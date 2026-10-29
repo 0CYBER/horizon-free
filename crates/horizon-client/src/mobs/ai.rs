@@ -989,8 +989,8 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     let immobile = (m.species() == Species::Ravager && super::ravager::immobile(m))
         || super::equine::immobile(m)
         || m.species() == Species::Mannequin;
-    if m.species() == Species::Piglin && m.alive() {
-        super::piglin::celebrate(m, w);
+    if matches!(m.species(), Species::Piglin | Species::Hoglin) && m.alive() {
+        super::piglin::before_goals(m, w, level_random);
     }
     if m.alive() && !immobile {
         server_ai_step(m, w, level_random, events);
