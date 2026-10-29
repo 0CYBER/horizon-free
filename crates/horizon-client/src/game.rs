@@ -555,6 +555,7 @@ struct Mining {
     progress: f32,
     ticks: u32,
 }
+#[derive(Clone, Copy)]
 struct Hit {
     pos: [i32; 3],
     face: [i32; 3],
@@ -1948,6 +1949,10 @@ struct Game<'a> {
     world_icon: Option<WorldIcon>,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
+    /// `Minecraft.hitResult` while the clicks of a tick act (game/remote.rs
+    /// `remote_handle_input`): picked once, so a creative break does not
+    /// move the use that follows it past the broken block.
+    tick_hit: Option<Option<Hit>>,
     /// The part of a right click a guest's packet asks for (game/lan_actions.rs).
     guest_use: Option<GuestUse>,
     /// Level events of this tick for the guests, and the guest acting now.
@@ -2198,12 +2203,11 @@ impl Game<'_> {
     /// each block's outline shape (`BlockGetter.clip` with `ClipContext.Block.OUTLINE`).
     fn pick(&self) -> Option<Hit> {
         // A guest of a hosted world acts on the block their client targeted.
-        if let Some(hit) = &self.forced_hit {
-            return Some(Hit {
-                pos: hit.pos,
-                face: hit.face,
-                point: hit.point,
-            });
+        if let Some(hit) = self.forced_hit {
+            return Some(hit);
+        }
+        if let Some(hit) = self.tick_hit {
+            return hit;
         }
         let (origin, dir) = self.aim()?;
         self.clip_ray(origin, dir, self.reach())
@@ -14547,6 +14551,7 @@ impl<'a> Game<'a> {
             pending_save: None,
             world_icon: None,
             forced_hit: None,
+            tick_hit: None,
             guest_use: None,
             lan_events: Vec::new(),
             lan_songs: Vec::new(),

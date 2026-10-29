@@ -6870,6 +6870,12 @@ impl horizon_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_
 }
 
 impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_, '_> {
+    fn pick_hit_result(&mut self) {
+        self.0.tick_hit = Some(self.0.pick());
+    }
+    fn release_hit_result(&mut self) {
+        self.0.tick_hit = None;
+    }
     fn using_item(&self) -> bool {
         self.0.using.is_some()
     }
