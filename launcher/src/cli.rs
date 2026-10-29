@@ -2672,7 +2672,8 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 new_name.as_deref().unwrap_or(&f.name),
                 minecraft.as_deref(),
             )?;
-            if let Some(l) = f.loader.as_ref().filter(|_| !as_json) {
+            let unsupported = other_launchers::loader(f).is_none();
+            if let Some(l) = f.loader.as_ref().filter(|_| unsupported && !as_json) {
                 println!(
                     "{} {} isn't installed for it yet: its mods are copied and wait for it.",
                     l.name, l.version

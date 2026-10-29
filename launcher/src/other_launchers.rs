@@ -27,6 +27,7 @@
 //! Neither app describes where it records an instance's Minecraft version, so the player names
 //! it when copying one.
 use crate::instances::{self, Instance};
+use crate::loaders;
 use crate::sources::{self, Folders, Os};
 use serde_json::Value;
 use std::fs;
@@ -381,8 +382,18 @@ pub fn copy_game(found: &Found, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The loader `found` runs, when Horizon installs it (Fabric, Quilt): at the same version.
+pub fn loader(found: &Found) -> Option<loaders::Loader> {
+    let l = found.loader.as_ref()?;
+    Some(loaders::Loader {
+        kind: loaders::Kind::parse(l.name).ok()?,
+        version: l.version.clone(),
+    })
+}
+
 /// A new Java instance named `name` playing what `found` plays (or `minecraft`, the version the
-/// player names), with a copy of its game folder.
+/// player names), with its loader when Horizon installs it ([`loader`]) and a copy of its game
+/// folder.
 pub fn import(found: &Found, name: &str, minecraft: Option<&str>) -> Result<Instance, String> {
     let Some(minecraft) = minecraft.or(found.minecraft.as_deref()) else {
         return Err(format!(
@@ -397,7 +408,12 @@ pub fn import(found: &Found, name: &str, minecraft: Option<&str>) -> Result<Inst
         let _ = instances::delete(&instance.id);
         return Err(format!("Could not copy {}: {e}", found.game.display()));
     }
-    Ok(instance)
+    match loader(found) {
+        Some(l) => instances::edit(&instance.id, |m| {
+            m.java.get_or_insert_with(Default::default).loader = Some(l)
+        }),
+        None => Ok(instance),
+    }
 }
 
 #[cfg(test)]
