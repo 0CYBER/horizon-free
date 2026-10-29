@@ -2552,6 +2552,10 @@ impl Hub {
         let g = &mut self.guests[i];
         // PlayerList.respawn: into the level in place (the respawn level).
         g.dimension = self.config.dimension.clone();
+        // ServerLevel.removePlayerImmediately: the dead player's
+        // Entity.setRemoved (KILLED) stops its riding; the new player rides
+        // nothing.
+        g.stop_riding();
         // ServerLevel.removePlayerImmediately: every entity paired with the dead player is
         // removed (ServerEntity.removePairing, one packet each). Its chunks are dropped
         // without ForgetLevelChunk (PlayerChunkSender.dropChunk skips dead players): the
