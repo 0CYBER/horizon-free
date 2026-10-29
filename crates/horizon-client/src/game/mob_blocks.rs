@@ -1,6 +1,5 @@
 //! Blocks mobs carry: block items in a hand (`ItemInHandLayer`) and the
-//! block an enderman holds (`CarriedBlockLayer`), drawn through the same
-//! item model pipeline as inventory and dropped block items. Also the block
+//! block state an enderman holds (`CarriedBlockLayer`). Also the block
 //! models mobs wear (`SnowGolemHeadLayer`, `MushroomCowMushroomLayer`).
 use super::Game;
 use horizon_client::{
@@ -9,8 +8,7 @@ use horizon_client::{
     mobs::{Mob, Species, render},
 };
 
-/// `CarriedBlockLayer.submit`, adapted from unit-cube block coordinates to
-/// the item pipeline, which centers the model by translating (-0.5, -0.5, -0.5).
+/// `CarriedBlockLayer.submit`: block models use coordinates in [0, 1].
 fn carried_block_matrix(base: glam::Mat4) -> glam::Mat4 {
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.6875, -0.75))
         * glam::Mat4::from_rotation_x(20.0f32.to_radians())
@@ -18,8 +16,6 @@ fn carried_block_matrix(base: glam::Mat4) -> glam::Mat4 {
         * glam::Mat4::from_translation(glam::Vec3::new(0.25, 0.1875, 0.25))
         * glam::Mat4::from_scale(glam::Vec3::new(-0.5, -0.5, 0.5))
         * glam::Mat4::from_rotation_y(90.0f32.to_radians())
-        // Cancel item centering: vanilla submits the block in [0, 1], not [-0.5, 0.5].
-        * glam::Mat4::from_translation(glam::Vec3::splat(0.5))
 }
 
 /// `CustomHeadLayer.translateToHead` and the banner's `head` display.
@@ -169,15 +165,8 @@ impl Game<'_> {
             // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint.
             let base = render::base_transform(mob, alpha as f32, camera);
             let t = carried_block_matrix(base);
-            // Resolve the inventory model's textures and per-quad tints.
-            let stack = ItemStack::new(&self.res.facts().get(state).name, 1);
-            let item = self.resolve_item(
-                &stack,
-                horizon_assets::item_model::DisplayContext::None,
-                None,
-                0,
-            );
-            self.submit_item_world(&item, t, light, out);
+            // Preserve cross models (flowers, fungi) and state properties (facing).
+            self.block_model_vertices(state, 42, t, light, true, out);
         }
     }
     /// `SnowGolemHeadLayer` and `MushroomCowMushroomLayer`: the carved pumpkin
@@ -343,7 +332,7 @@ mod tests {
     use glam::{Mat4, Vec3};
 
     #[test]
-    fn carried_item_vertices_match_vanilla_block_coordinates() {
+    fn carried_block_vertices_match_vanilla_block_coordinates() {
         // Captured from 26.3 CarriedBlockLayer.submit with an identity PoseStack:
         // origin, three unit axes, opposite corner, and the block's center.
         let samples = [
@@ -354,18 +343,15 @@ mod tests {
             (Vec3::ONE, Vec3::new(-0.3535534, 0.3938461, -0.85688126)),
             (Vec3::splat(0.5), Vec3::new(0.0, 0.6287693, -0.77137625)),
         ];
-        let item_center = horizon_client::item_render::glam_matrix(
-            &horizon_assets::item_bake::item_transform_matrix(None, false),
-        );
         for base in [
             Mat4::IDENTITY,
             Mat4::from_translation(Vec3::new(3.0, 2.0, -7.0))
                 * Mat4::from_rotation_y(1.2)
                 * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0)),
         ] {
-            let item = carried_block_matrix(base) * item_center;
+            let block = carried_block_matrix(base);
             for (point, expected) in samples {
-                let actual = item.transform_point3(point);
+                let actual = block.transform_point3(point);
                 let expected = base.transform_point3(expected);
                 assert!(
                     actual.abs_diff_eq(expected, 1e-6),

@@ -1215,7 +1215,7 @@ impl Game<'_> {
             }
         }
     }
-    /// Baked block faces with terrain shade or block-item diffuse lighting.
+    /// Baked block-state faces with default block tints and terrain shade or diffuse lighting.
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
@@ -1249,6 +1249,20 @@ impl Game<'_> {
                     u32::MAX
                 } else {
                     0xFF00_0000 | shade << 16 | shade << 8 | shade
+                };
+                let tint = self.pack.context.tables.default_tint(
+                    state,
+                    face.quad.tint_index,
+                    self.pack.item_renderer.grass_color(0.5, 1.0) as u32,
+                );
+                let color = if let Some(tint) = tint {
+                    let tint = horizon_client::mobs::render::abgr(tint);
+                    let channel = |shift: u32| {
+                        ((color >> shift & 255) * (tint >> shift & 255) / 255) << shift
+                    };
+                    0xFF00_0000 | channel(0) | channel(8) | channel(16)
+                } else {
+                    color
                 };
                 let normal = if diffuse {
                     use horizon_client::item_render::{direction_vector, transform_normal};
