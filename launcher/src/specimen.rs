@@ -2,8 +2,9 @@
 //! stops, for checking the tokens in the real renderer (`HORIZON_LAUNCHER_PAGE=specimen`; not a
 //! page players reach).
 use crate::blocks::icon;
+use crate::plate::{alpha, cut, plate};
 use crate::theme::{self, night, Theme};
-use gpui::{div, prelude::*, px, rgb, rgba, Div, FontWeight, Hsla, Rgba};
+use gpui::{div, prelude::*, px, rgb, Div, FontWeight, Hsla, Rgba};
 use horizon_theme::{contrast, MICRO};
 use std::sync::LazyLock;
 
@@ -16,10 +17,6 @@ pub fn wanted() -> bool {
 
 /// Each sky stop's share of the window's height, top to bottom.
 const BANDS: [f32; 6] = [0.2, 0.18, 0.17, 0.15, 0.15, 0.15];
-
-fn alpha(c: u32, a: f32) -> Rgba {
-    rgba(c << 8 | (a * 255.).round() as u32)
-}
 
 fn text(step: horizon_theme::Step, color: impl Into<Hsla>) -> Div {
     div()
@@ -42,29 +39,24 @@ fn mono(color: Hsla) -> Div {
         .text_color(color)
 }
 
-/// A plate over the sky: rounded, or with its corners cut in pixel steps (two steps of
-/// [`night::PIXEL_CORNER`]), built of strips that don't overlap so the plate's opacity stays even.
-fn plate(n: &night::Night, pixel: bool) -> Div {
-    let fill = alpha(n.card, n.card_alpha);
-    if !pixel {
-        return div()
-            .relative()
-            .bg(fill)
-            .rounded(px(night::RADIUS_PLATE))
-            .border_1()
-            .border_color(alpha(n.stroke, n.stroke_alpha));
-    }
-    let s = night::PIXEL_CORNER;
-    let strip = |inset: f32| div().h(px(s)).mx(px(inset)).bg(fill);
-    div()
-        .relative()
-        .flex()
-        .flex_col()
-        .child(strip(2. * s))
-        .child(strip(s))
-        .child(div().flex_1().bg(fill))
-        .child(strip(s))
-        .child(strip(2. * s))
+/// A control in the two shapes the specimen compares at 1x: rounded at [`night::RADIUS_CONTROL`],
+/// or cut in one [`night::PIXEL_CORNER`] step like the plates (the main action's shape).
+fn control(pixel: bool, h: f32, fill: Option<Rgba>, stroke: Option<(Rgba, f32)>) -> Div {
+    let d = if pixel {
+        cut(night::PIXEL_CORNER, 1, fill, stroke)
+    } else {
+        let d = div().rounded(px(night::RADIUS_CONTROL));
+        let d = match fill {
+            Some(f) => d.bg(f),
+            None => d,
+        };
+        match stroke {
+            Some((c, w)) if w >= 2. => d.border_2().border_color(c),
+            Some((c, _)) => d.border_1().border_color(c),
+            None => d,
+        }
+    };
+    d.flex().items_center().gap(px(10.)).h(px(h)).px(px(16.))
 }
 
 pub fn render(t: &Theme) -> Div {
@@ -126,7 +118,7 @@ pub fn render(t: &Theme) -> Div {
                 .gap(px(10.))
                 .items_baseline()
                 .child(text(night::UI, ink_soft).child("Играть · Моды · Серверы"))
-                .child(mono(muted).child("no Cyrillic upstream: system fallback")),
+                .child(mono(muted).child("Geist's Cyrillic, merged in")),
         );
     let swatch = |name: &'static str, c: u32| {
         let ratio = contrast(c, worst);
@@ -165,7 +157,7 @@ pub fn render(t: &Theme) -> Div {
             .child(div().size(px(6.)).bg(rgb(c)))
             .child(text(night::CAPTION, ink_soft).child(label))
     };
-    let colours = plate(&n, false)
+    let colours = plate(&n)
         .flex()
         .flex_col()
         .gap(px(4.))
@@ -196,14 +188,8 @@ pub fn render(t: &Theme) -> Div {
                 .gap(px(10.))
                 .mt(px(18.))
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .h(px(night::PLAY))
+                    control(true, night::PLAY, Some(rgb(n.accent)), None)
                         .px(px(26.))
-                        .rounded(px(night::RADIUS_CONTROL))
-                        .bg(rgb(n.accent))
                         .child(icon("play", 20., rgb(n.on_accent).into()))
                         .child(text(night::TITLE, rgb(n.on_accent)).child("Play")),
                 )
@@ -227,25 +213,55 @@ pub fn render(t: &Theme) -> Div {
                 .child(chip("Update to 0.3.1", n.warn))
                 .child(chip("Crashed: see log", n.danger)),
         );
-    let corner = |pixel: bool, label: &'static str| {
-        plate(&n, pixel).w(px(214.)).h(px(96.)).child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .flex_col()
-                .justify_center()
-                .px(px(18.))
-                .child(text(night::UI, ink).child(label))
-                .child(mono(muted).child(if pixel {
-                    "4 px steps, crisp"
-                } else {
-                    "radius 12, 1 px stroke"
-                })),
-        )
+    let field_fill = alpha(n.page, 0.6);
+    let field_stroke = (alpha(n.stroke, 2. * n.stroke_alpha), 1.);
+    let controls = |pixel: bool| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .child(
+                mono(muted)
+                    .w(px(64.))
+                    .child(if pixel { "4 px step" } else { "radius 8" }),
+            )
+            .child(
+                control(pixel, night::PLAY, Some(rgb(n.accent)), None)
+                    .child(icon("play", 20., rgb(n.on_accent).into()))
+                    .child(text(night::TITLE, rgb(n.on_accent)).child("Play")),
+            )
+            .child(
+                control(
+                    pixel,
+                    theme::CONTROL,
+                    Some(alpha(n.card_hi, n.card_hi_alpha)),
+                    None,
+                )
+                .child(text(night::UI, ink).child("Spring Valley")),
+            )
+            .child(
+                control(pixel, theme::CONTROL, Some(field_fill), Some(field_stroke))
+                    .w(px(150.))
+                    .child(text(night::UI, muted).child("Search mods")),
+            )
+            .child(
+                control(pixel, theme::CONTROL, None, Some((rgb(n.accent_hi), 2.)))
+                    .child(text(night::UI, ink_soft).child("Folder")),
+            )
+            .child(
+                control(pixel, 26., Some(alpha(n.card_hi, n.card_hi_alpha)), None)
+                    .px(px(10.))
+                    .child(text(night::CAPTION, ink_soft).child("Update")),
+            )
     };
+    let comparison = plate(&n)
+        .flex()
+        .flex_col()
+        .gap(px(14.))
+        .p(px(20.))
+        .child(mono(muted).child("controls at 1x: rounded, or cut like the plates"))
+        .child(controls(false))
+        .child(controls(true));
     let stops = div()
         .flex()
         .flex_col()
@@ -279,13 +295,7 @@ pub fn render(t: &Theme) -> Div {
                         .flex_col()
                         .justify_between()
                         .child(type_column)
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(16.))
-                                .child(corner(false, "Rounded plate"))
-                                .child(corner(true, "Pixel corner plate")),
-                        ),
+                        .child(comparison),
                 )
                 .child(
                     div()
@@ -294,7 +304,7 @@ pub fn render(t: &Theme) -> Div {
                         .justify_between()
                         .items_end()
                         .child(colours)
-                        .child(plate(&n, false).p(px(12.)).child(stops)),
+                        .child(plate(&n).p(px(12.)).child(stops)),
                 ),
         )
 }

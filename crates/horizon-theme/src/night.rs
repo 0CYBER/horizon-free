@@ -28,11 +28,13 @@ pub const CAPTION: Step = step("night-caption", 12., Web::Fixed, 1.4, 0., 400, f
 /// A screen uses two or three of these, plus [`crate::MICRO`] for paths and counts.
 pub const TYPE: [Step; 4] = [DISPLAY, TITLE, UI, CAPTION];
 
-/// Corners: plates, then controls (buttons, fields). Pills are [`crate::RADIUS_PILL`], for chips
-/// only. A plate can instead cut its corners in [`PIXEL_CORNER`] steps, like the sky's art.
-pub const RADIUS_PLATE: f32 = 12.;
-pub const RADIUS_CONTROL: f32 = 8.;
+/// Corners. A plate cuts each corner in two [`PIXEL_CORNER`] steps, like the sky's art, and its
+/// 1 px stroke follows the steps. The main action (an accent fill: Play, Create, Install) cuts one
+/// step. Other controls (buttons, fields, focus rings) round at [`RADIUS_CONTROL`]: at 1x a step
+/// vanishes on a pale fill and reads as notches on a thin ring. Pills are [`crate::RADIUS_PILL`],
+/// for chips only.
 pub const PIXEL_CORNER: f32 = 4.;
+pub const RADIUS_CONTROL: f32 = 8.;
 /// The main action (Play) is taller than the other controls.
 pub const PLAY: f32 = 56.;
 

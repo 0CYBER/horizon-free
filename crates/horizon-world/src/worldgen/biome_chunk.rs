@@ -57,6 +57,11 @@ impl<T: Clone> BiomeChunk<T> {
         let section = ((y - bottom) >> 2) as usize;
         &self.sections[section][index(quart[0], y, quart[2])]
     }
+    /// The quart Ys `noise_biome` clamps to: the lowest and the highest.
+    pub fn quart_range(&self) -> (i32, i32) {
+        let bottom = self.min_y >> 2;
+        (bottom, bottom + (self.height >> 2) - 1)
+    }
     /// Fill the sections intersecting inclusive generation bounds. Sections are
     /// visited bottom to top; each resolver sees X/Y/Z loop order. A failed
     /// section retains its previous values while earlier sections stay committed.
@@ -182,6 +187,9 @@ impl<T: Clone> BiomeRegion<T> {
     }
     pub fn quart_at_block(&self, block: BlockPos) -> [i32; 3] {
         self.zoom.quart_at_block(block)
+    }
+    pub fn zoom(&self) -> BiomeZoom {
+        self.zoom
     }
     /// Distinct values currently stored anywhere in the chunk. The result is
     /// sorted by biome identity; callers must not use this order as registry order.
