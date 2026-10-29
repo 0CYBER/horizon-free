@@ -939,6 +939,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
         Species::Piglin if m.ai.target.is_some() => "entity.piglin.angry",
         Species::Hoglin if m.ai.target.is_some() => "entity.hoglin.angry",
+        // Zoglin.getAmbientSound: with an attack target, the angry sound.
+        Species::Zoglin if m.ai.target.is_some() => "entity.zoglin.angry",
         _ => voice_sounds(m)[0],
     };
     let _ = w;
