@@ -1,0 +1,322 @@
+//! The command that starts the real Minecraft: Java Edition, read from its version JSON as the
+//! official launcher reads it: the main class, the classpath of this system's libraries and the
+//! client jar, the JVM and game arguments with their rules and `${…}` placeholders (or the old
+//! `minecraftArguments` line), an old version's natives unpacked into a folder of their own, and
+//! the logging setup Mojang gives (for 1.7 to 1.18, the one that keeps Log4Shell out).
+//!
+//! The files are where `mojang::download` puts them: `versions/`, `libraries/` and `assets/` in
+//! one game folder. Nothing here reaches the network.
+
+use crate::mojang;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Who plays: the account's name, UUID, Minecraft access token and Xbox user id.
+pub struct Player {
+    pub name: String,
+    pub uuid: String,
+    pub token: String,
+    pub xuid: String,
+}
+
+/// Everything the command needs besides the version JSON.
+pub struct Launch<'a> {
+    /// Holds `versions/`, `libraries/`, `assets/`.
+    pub minecraft: &'a Path,
+    /// The instance's game folder (saves, options.txt, mods).
+    pub game_dir: &'a Path,
+    /// Where an old version's natives are unpacked.
+    pub natives: &'a Path,
+    /// The `java` program.
+    pub java: &'a Path,
+    pub memory_mb: u32,
+    /// The player's own JVM arguments.
+    pub jvm_args: &'a [String],
+    pub player: &'a Player,
+    /// `osx`, `linux` or `windows`, as version files name systems.
+    pub os: &'a str,
+}
+
+/// This system's name in version files.
+pub fn os_name() -> &'static str {
+    match crate::sources::Os::current() {
+        crate::sources::Os::Linux => "linux",
+        crate::sources::Os::MacOs => "osx",
+        crate::sources::Os::Windows => "windows",
+    }
+}
+
+/// Whether a rule list lets this system in: the last matching rule decides; no rules allow.
+/// Every optional feature (demo, custom resolution, quick play) is off.
+fn allowed(rules: &Value, os: &str) -> bool {
+    let Some(rules) = rules.as_array() else {
+        return true;
+    };
+    let arch_matches = |arch: &str| match arch {
+        "x86" => cfg!(target_arch = "x86"),
+        "arm64" | "aarch64" => cfg!(target_arch = "aarch64"),
+        "x86_64" | "amd64" => cfg!(target_arch = "x86_64"),
+        _ => false,
+    };
+    let mut allow = false;
+    for rule in rules {
+        let system = &rule["os"];
+        let matches = system["name"].as_str().is_none_or(|n| n == os)
+            && system["arch"].as_str().is_none_or(arch_matches)
+            && rule["features"]
+                .as_object()
+                .is_none_or(|f| f.values().all(|v| v == false));
+        if matches {
+            allow = rule["action"] == "allow";
+        }
+    }
+    allow
+}
+
+/// The libraries this system uses, then the client jar.
+pub fn classpath(version: &Value, minecraft: &Path, os: &str) -> Result<Vec<PathBuf>, String> {
+    let id = version["id"].as_str().ok_or("The version file has no id")?;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for library in version["libraries"].as_array().into_iter().flatten() {
+        if !allowed(&library["rules"], os) {
+            continue;
+        }
+        if let Some(path) = library["downloads"]["artifact"]["path"].as_str() {
+            let path = minecraft.join("libraries").join(mojang::relative(path)?);
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths.push(
+        minecraft
+            .join("versions")
+            .join(mojang::relative(id)?)
+            .join(format!("{id}.jar")),
+    );
+    Ok(paths)
+}
+
+/// Unpacks this system's natives of an old version (a library's classifier) into `to`, without
+/// what the library's `extract.exclude` names (META-INF/). Versions since 1.19 have none.
+pub fn unpack_natives(
+    version: &Value,
+    minecraft: &Path,
+    os: &str,
+    to: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    for library in version["libraries"].as_array().into_iter().flatten() {
+        if !allowed(&library["rules"], os) {
+            continue;
+        }
+        let Some(key) = mojang::native_classifier(library, os) else {
+            continue;
+        };
+        let Some(path) = library["downloads"]["classifiers"][key.as_str()]["path"].as_str() else {
+            continue;
+        };
+        let jar = minecraft.join("libraries").join(mojang::relative(path)?);
+        let exclude: Vec<&str> = library["extract"]["exclude"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let file = fs::File::open(&jar).map_err(|e| format!("{}: {e}", jar.display()))?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar.display()))?;
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+            let Some(name) = entry.enclosed_name() else {
+                continue;
+            };
+            let text = name.to_string_lossy().replace('\\', "/");
+            if entry.is_dir() || exclude.iter().any(|x| text.starts_with(x)) {
+                continue;
+            }
+            let out = to.join(&name);
+            fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
+            let mut file = fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            std::io::copy(&mut entry, &mut file).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Where an old version reads its assets by name (`virtual` indexes, `map_to_resources`), with
+/// the objects copied there once; the asset store itself for every other version.
+pub fn game_assets(version: &Value, minecraft: &Path, game_dir: &Path) -> Result<PathBuf, String> {
+    let id = version["assetIndex"]["id"].as_str().unwrap_or("legacy");
+    let assets = minecraft.join("assets");
+    let index = assets
+        .join("indexes")
+        .join(mojang::relative(&format!("{id}.json"))?);
+    let Ok(text) = fs::read_to_string(&index) else {
+        return Ok(assets);
+    };
+    let index: Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", index.display()))?;
+    let to = if index["map_to_resources"] == true {
+        game_dir.join("resources")
+    } else if index["virtual"] == true {
+        assets.join("virtual").join(mojang::relative(id)?)
+    } else {
+        return Ok(assets);
+    };
+    for (name, object) in index["objects"].as_object().into_iter().flatten() {
+        let Some(hash) = object["hash"].as_str().filter(|h| h.len() == 40) else {
+            continue;
+        };
+        let out = to.join(mojang::relative(name)?);
+        if !out.is_file() {
+            let from = assets.join("objects").join(&hash[..2]).join(hash);
+            fs::create_dir_all(out.parent().unwrap())
+                .and_then(|_| fs::copy(&from, &out))
+                .map_err(|e| format!("{}: {e}", from.display()))?;
+        }
+    }
+    Ok(to)
+}
+
+/// The arguments of one list (`arguments.jvm` or `arguments.game`), their rules applied.
+fn list(args: &Value, os: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for arg in args.as_array().into_iter().flatten() {
+        match arg {
+            Value::String(s) => out.push(s.clone()),
+            Value::Object(o) if allowed(&o["rules"], os) => match &o["value"] {
+                Value::String(s) => out.push(s.clone()),
+                Value::Array(values) => {
+                    out.extend(values.iter().filter_map(Value::as_str).map(String::from))
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `${name}` replaced by its value; an unknown one stays as written.
+fn fill(arg: &str, vars: &HashMap<&str, String>) -> String {
+    let mut out = String::new();
+    let mut rest = arg;
+    while let Some(start) = rest.find("${") {
+        let Some(len) = rest[start..].find('}') else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let key = &rest[start + 2..start + len];
+        match vars.get(key) {
+            Some(value) => out.push_str(value),
+            None => out.push_str(&rest[start..start + len + 1]),
+        }
+        rest = &rest[start + len + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The command that starts `version` (its JSON) as `launch` says, run in the game folder.
+/// Unpacks natives and lays out old assets first.
+pub fn command(version: &Value, launch: &Launch) -> Result<Command, String> {
+    let id = version["id"].as_str().ok_or("The version file has no id")?;
+    let main = version["mainClass"]
+        .as_str()
+        .ok_or("The version file has no mainClass")?;
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    let classpath = classpath(version, launch.minecraft, launch.os)?;
+    unpack_natives(version, launch.minecraft, launch.os, launch.natives)?;
+    let assets = launch.minecraft.join("assets");
+    let game_assets = game_assets(version, launch.minecraft, launch.game_dir)?;
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    let p = launch.player;
+    let vars: HashMap<&str, String> = HashMap::from([
+        ("auth_player_name", p.name.clone()),
+        ("auth_uuid", p.uuid.clone()),
+        ("auth_access_token", p.token.clone()),
+        ("auth_session", format!("token:{}:{}", p.token, p.uuid)),
+        ("auth_xuid", p.xuid.clone()),
+        ("clientid", String::new()),
+        ("user_type", "msa".into()),
+        ("user_properties", "{}".into()),
+        ("version_name", id.to_string()),
+        (
+            "version_type",
+            version["type"].as_str().unwrap_or("release").into(),
+        ),
+        ("game_directory", path(launch.game_dir)),
+        ("assets_root", path(&assets)),
+        ("game_assets", path(&game_assets)),
+        (
+            "assets_index_name",
+            version["assetIndex"]["id"]
+                .as_str()
+                .unwrap_or("legacy")
+                .into(),
+        ),
+        ("natives_directory", path(launch.natives)),
+        (
+            "library_directory",
+            path(&launch.minecraft.join("libraries")),
+        ),
+        ("classpath_separator", separator.into()),
+        (
+            "classpath",
+            classpath
+                .iter()
+                .map(|c| path(c))
+                .collect::<Vec<_>>()
+                .join(separator),
+        ),
+        ("launcher_name", "horizon-launcher".into()),
+        ("launcher_version", env!("CARGO_PKG_VERSION").into()),
+    ]);
+    let mut jvm = vec![
+        format!("-Xmx{}M", launch.memory_mb),
+        // Whatever the logging setup, never look names up in log messages.
+        "-Dlog4j2.formatMsgNoLookups=true".to_string(),
+    ];
+    let logging = &version["logging"]["client"];
+    if let (Some(arg), Some(file)) = (logging["argument"].as_str(), logging["file"]["id"].as_str())
+    {
+        let config = launch
+            .minecraft
+            .join("assets")
+            .join("log_configs")
+            .join(mojang::relative(file)?);
+        jvm.push(arg.replace("${path}", &path(&config)));
+    }
+    let (jvm_list, game) = match version["arguments"].as_object() {
+        Some(a) => (list(&a["jvm"], launch.os), list(&a["game"], launch.os)),
+        // Before 1.13: one line of game arguments, and the JVM's natives and classpath.
+        None => (
+            vec![
+                "-Djava.library.path=${natives_directory}".into(),
+                "-cp".into(),
+                "${classpath}".into(),
+            ],
+            version["minecraftArguments"]
+                .as_str()
+                .unwrap_or("")
+                .split_whitespace()
+                .map(String::from)
+                .collect(),
+        ),
+    };
+    jvm.extend(jvm_list.iter().map(|a| fill(a, &vars)));
+    jvm.extend(launch.jvm_args.iter().cloned());
+    let mut cmd = Command::new(launch.java);
+    cmd.current_dir(launch.game_dir)
+        .args(&jvm)
+        .arg(main)
+        .args(game.iter().map(|a| fill(a, &vars)));
+    Ok(cmd)
+}
+
+#[cfg(test)]
+#[path = "java_launch/tests.rs"]
+mod tests;

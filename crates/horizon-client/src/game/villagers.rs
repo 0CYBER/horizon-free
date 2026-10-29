@@ -148,7 +148,7 @@ impl Game<'_> {
             // VillagerMakeLove: entity event 13 for the partner, then the parent.
             for i in [ib, ia] {
                 let id = self.mobs[i].id;
-                self.villager_particles(id, "angry_villager");
+                self.mob_event_particles(id, 13);
             }
             return;
         };
@@ -173,12 +173,31 @@ impl Game<'_> {
             child.extra.bed = Some(bed);
         }
         // VillagerMakeLove.giveBirth: entity event 12 for the child.
-        self.villager_particles(id, "heart");
+        self.mob_event_particles(id, 12);
     }
-    /// `Villager.handleEntityEvent` 12, 13, 14 and 42:
-    /// `AbstractVillager.addParticlesAroundSelf`.
-    pub(super) fn villager_particles(&mut self, id: u32, kind: &'static str) {
-        self.particles_around_mob(id, kind, horizon_client::particles::Burst::VILLAGER);
+    /// `Level.broadcastEntityEvent` of an event whose `handleEntityEvent`
+    /// draws particles about the mob (villager 12, 13 and 14, taming 6 and 7,
+    /// love 18): the guests get the byte, and this game draws it as its own
+    /// client would.
+    pub(super) fn mob_event_particles(&mut self, id: u32, event: i8) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let at = [m.position.x, m.position.y, m.position.z];
+        self.lan_entity_event(id as i32, event, at);
+        self.entity_event_particles(id, event);
+    }
+    /// `handleEntityEvent(event)`'s particles about mob `id`
+    /// (`Villager`, `TamableAnimal`, `AbstractHorse`, `Animal`, `Allay`).
+    pub(super) fn entity_event_particles(&mut self, id: u32, event: i8) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if let Some((kind, burst)) =
+            horizon_client::particles::entity_event_burst(&m.kind.id, event as u8)
+        {
+            self.particles_around_mob(id, kind, burst);
+        }
     }
     /// `particles::around_self` about mob `id`.
     pub(super) fn particles_around_mob(
@@ -221,6 +240,67 @@ impl Game<'_> {
         }
     }
 
+    /// `NearestItemSensor.doTick` for the villagers whose sensor is due: the
+    /// nearest dropped item within 32 blocks that `Villager.wantsToPickUp`
+    /// accepts and the villager sees, or none.
+    pub(super) fn villager_item_sense(&mut self) {
+        if self.dropped.is_empty() {
+            for m in &mut self.mobs {
+                if m.species() == Species::Villager && villager_brain::take_item_scan(m) {
+                    villager_brain::set_wanted_item(m, None);
+                }
+            }
+            return;
+        }
+        let picks_up = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:villager_picks_up")
+            .cloned();
+        let mut due = Vec::new();
+        for (i, m) in self.mobs.iter_mut().enumerate() {
+            if m.species() == Species::Villager && villager_brain::take_item_scan(m) {
+                due.push(i);
+            }
+        }
+        if due.is_empty() {
+            return;
+        }
+        let w = self.mob_world_base(&[]);
+        let mut found = Vec::new();
+        for i in due {
+            let m = &self.mobs[i];
+            let area = m.bounds().inflate(Vec3::new(32.0, 16.0, 32.0));
+            let requested = villager::requested_items(m);
+            let eye = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+            let mut best: Option<(f64, Vec3)> = None;
+            for e in &self.dropped {
+                let d = e.position.distance_squared(m.position);
+                if best.is_some_and(|(b, _)| d >= b)
+                    || !e.bounds().intersects(area)
+                    || d >= 32.0 * 32.0
+                {
+                    continue;
+                }
+                let item = &e.stack.item;
+                let wants = villager::food_points(item) > 0
+                    || picks_up.as_ref().is_some_and(|t| t.contains(&**item))
+                    || requested.contains(&&**item);
+                let fits =
+                    villager::ext(m).is_none_or(|x| x.can_add(&e.stack, self.item_max_stack(item)));
+                // ItemEntity's eye height is 0.2125.
+                let at = Vec3::new(e.position.x, e.position.y + 0.2125, e.position.z);
+                if wants && fits && w.line_of_sight(eye, at) {
+                    best = Some((d, e.position));
+                }
+            }
+            found.push((i, best.map(|(_, p)| [p.x, p.y, p.z])));
+        }
+        for (i, at) in found {
+            villager_brain::set_wanted_item(&mut self.mobs[i], at);
+        }
+    }
     /// `Mob.aiStep` item pickup for villagers (`InventoryCarrier`): food,
     /// seeds and what their profession wants, from within a block.
     pub(super) fn villager_pickups(&mut self) {
@@ -315,7 +395,7 @@ impl Game<'_> {
         }
         // Villager.setLastHurtByMob: entity event 13.
         for id in angry {
-            self.villager_particles(id, "angry_villager");
+            self.mob_event_particles(id, 13);
         }
     }
     /// `Villager.tellWitnessesThatIWasMurdered`: the villagers that saw a
@@ -370,7 +450,7 @@ impl Game<'_> {
             gossip::REPUTATION_CHANGE_PER_TRADE,
         );
         // Villager.customServerAiStep after a trade: entity event 14.
-        self.villager_particles(id, "happy_villager");
+        self.mob_event_particles(id, 14);
     }
     /// `Villager.getPlayerReputation` of the local player.
     pub(super) fn villager_reputation(&self, id: u32) -> i32 {
@@ -388,5 +468,37 @@ impl Game<'_> {
     /// The Hero of the Village amplifier of the player, if any.
     pub(super) fn hero_amplifier(&self) -> Option<i32> {
         self.potions.effects.amplifier("hero_of_the_village")
+    }
+    /// `AbstractBedBlock.kickVillagerOutOfBed`: the first sleeping villager
+    /// whose box touches the bed's head block wakes up
+    /// (`Villager.stopSleeping`). Whether one did.
+    pub(super) fn kick_villager_out_of_bed(&mut self, head: [i32; 3]) -> bool {
+        let min = Vec3::new(f64::from(head[0]), f64::from(head[1]), f64::from(head[2]));
+        let max = Vec3::new(min.x + 1.0, min.y + 1.0, min.z + 1.0);
+        let Some(i) = self.mobs.iter().position(|m| {
+            m.species() == Species::Villager
+                && villager::sleeping(m)
+                && m.bounds().intersects_corners(min, max)
+        }) else {
+            return false;
+        };
+        let id = self.mobs[i].id;
+        self.wake_villager(id);
+        true
+    }
+    /// `LivingEntity.stopSleeping` for the villager `id`, outside its own
+    /// tick: it stands up and its bed is no longer occupied.
+    pub(super) fn wake_villager(&mut self, id: u32) {
+        let Some(i) = self.mobs.iter().position(|m| m.id == id) else {
+            return;
+        };
+        let mut mobs = std::mem::take(&mut self.mobs);
+        let mut events = Vec::new();
+        villager::stop_sleeping(&mut mobs[i], &self.mob_world_base(&[]), &mut events);
+        villager_brain::woken(&mut mobs[i], self.world.game_time);
+        self.mobs = mobs;
+        if let Err(e) = self.handle_mob_events(events) {
+            log::warn!("waking villager {id}: {e}");
+        }
     }
 }

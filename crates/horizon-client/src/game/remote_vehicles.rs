@@ -9,7 +9,7 @@
 //! server (`LocalPlayer.tick`: `ServerboundMoveVehiclePacket`,
 //! `AbstractBoat.tick`: `ServerboundPaddleBoatPacket`). A minecart moves on
 //! the server with the rider's input, and the rider sits in it.
-use super::{Game, Keys, ray_box, view_vector};
+use super::{Game, Keys, ray_box};
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
@@ -26,8 +26,7 @@ impl Game<'_> {
     /// The nearest boat, minecart, item frame, armor stand or painting the
     /// view hits within reach; also End crystals when attacking.
     pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let at = |d: f64| {
             [
                 eye[0] + dir[0] * d,
@@ -128,6 +127,17 @@ impl Game<'_> {
         } else if self.riding == Some(vehicle_id) {
             // The server takes the player out, then teleports it.
             self.riding = None;
+            // HappyGhast.removePassenger: a still timeout of 10 (the server's
+            // STAYS_STILL confirms it), and the rider lands on top of the ghast
+            // (`place_ghast_under`).
+            if let Some(m) = self.mobs.iter_mut().find(|m| {
+                m.id == vehicle_id && m.species() == horizon_client::mobs::Species::HappyGhast
+            }) {
+                m.extra.counter = 10;
+                if let Some(r) = self.remote.as_mut() {
+                    r.ghast_dismount = Some(vehicle_id);
+                }
+            }
         }
     }
 

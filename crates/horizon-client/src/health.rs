@@ -25,19 +25,7 @@ use std::{fs, io, path::Path};
 pub(crate) type Attributes = LiveAttributes<Box<dyn FnMut() -> i32>>;
 pub(crate) type State = HurtState<DamageTypeId>;
 
-#[derive(Clone, Copy, Debug)]
-pub struct HealthRules {
-    pub difficulty: Difficulty,
-    pub natural_regeneration: bool,
-}
-impl Default for HealthRules {
-    fn default() -> Self {
-        Self {
-            difficulty: Difficulty::Normal,
-            natural_regeneration: true,
-        }
-    }
-}
+pub use crate::world::HealthRules;
 pub struct HealthResources {
     pub damage: Catalog,
     pub ids: PlayerFloatIds,
@@ -170,6 +158,12 @@ pub struct PlayerHealth {
     pub hurt: State,
     /// Client hurt animation; fully blocked hits only refresh the server's hurt state.
     pub hurt_animation_time: i32,
+    /// `Player.hurtDir` on a client: the yaw `ClientboundHurtAnimationPacket`
+    /// gave, which `GameRenderer.bobHurt` tilts the camera around.
+    pub hurt_dir: f32,
+    /// `ServerPlayer.hurtDir` of a hit the player's client hasn't been told
+    /// of yet (`indicateDamage`).
+    pub indicated_dir: Option<f32>,
     pub dead: bool,
     pub sync_velocity: bool,
     pub game_time: i64,
@@ -220,6 +214,8 @@ impl PlayerHealth {
                 last_stamp: 0,
             },
             hurt_animation_time: 0,
+            hurt_dir: 0.0,
+            indicated_dir: None,
             dead: false,
             sync_velocity: false,
             game_time: 0,
@@ -266,6 +262,18 @@ impl PlayerHealth {
         self.hurt.hurt_duration = 10;
         self.hurt.hurt_time = 10;
         self.hurt_animation_time = 10;
+    }
+    /// `LivingEntity.animateHurt(yaw)` on a player: the tilt restarts around
+    /// `yaw` (`Player.animateHurt` keeps it as `hurtDir`).
+    pub fn animate_hurt_dir(&mut self, yaw: f32) {
+        self.animate_hurt();
+        self.hurt_dir = yaw;
+    }
+    /// `ServerPlayer.indicateDamage`: the hit's direction relative to where
+    /// the player looks, kept for the packet to its client.
+    pub fn indicate_damage(&mut self, xd: f64, zd: f64, yaw: f32) {
+        use horizon_core::geometry::trig::{RAD_TO_DEG, atan2};
+        self.indicated_dir = Some((atan2(zd, xd) * f64::from(RAD_TO_DEG) - f64::from(yaw)) as f32);
     }
     /// `LocalPlayer.hurtTo` with `flashOnSetHealth`: a drop below the current
     /// health starts the hurt animation; `damageCooldownTime` (20 on a drop,
@@ -369,6 +377,13 @@ impl PlayerMotion {
         }
         if outcome.hurt {
             h.hurt_animation_time = h.hurt.hurt_time;
+        }
+        // `dealDefaultKnockback` ends in `indicateDamage` unless blocked: a
+        // hit with no direction of its own (`xd` and `zd` zero) is sent as
+        // the opposite of the player's yaw. A hit that has a direction
+        // replaces this (`mob_hits_player`).
+        if outcome.knockback && outcome.blocked <= 0.0 {
+            h.indicate_damage(0.0, 0.0, self.yaw);
         }
         let after = h.health() + h.absorption();
         if self.hurt_log.len() >= HURT_LOG {
@@ -633,8 +648,13 @@ impl ImmunityWorld for Environment<'_> {
     fn enchantment_immunity(&mut self) -> io::Result<bool> {
         Ok(false)
     }
-    fn damage_rule(&mut self, _: DamageRule) -> io::Result<bool> {
-        Ok(true)
+    fn damage_rule(&mut self, rule: DamageRule) -> io::Result<bool> {
+        Ok(match rule {
+            DamageRule::Drowning => self.rules.drowning_damage,
+            DamageRule::Fall => self.rules.fall_damage,
+            DamageRule::Fire => self.rules.fire_damage,
+            DamageRule::Freeze => self.rules.freeze_damage,
+        })
     }
     fn changing_dimension(&mut self) -> io::Result<bool> {
         Ok(false)

@@ -299,13 +299,14 @@ impl Lists {
 }
 
 /// The world presets of 26.3's `worldgen/world_preset`.
-const WORLD_PRESETS: [&str; 6] = [
+const WORLD_PRESETS: [&str; 7] = [
     "minecraft:normal",
     "minecraft:flat",
     "minecraft:large_biomes",
     "minecraft:amplified",
     "minecraft:single_biome_surface",
     "minecraft:debug_all_block_states",
+    "minecraft:flat_all_dimensions",
 ];
 
 /// Identifier.tryParse: `namespace:path`, or a path in `minecraft`.
@@ -412,6 +413,8 @@ struct ServerState {
     paused: bool,
     /// `broadcast-console-to-ops`.
     broadcast_console: bool,
+    /// `op-permission-level`: what `/op` grants (operatorUserPermissions).
+    op_level: i32,
 }
 
 /// The dedicated-only commands' replies vanilla sends with `broadcast`
@@ -573,6 +576,14 @@ impl Game<'_> {
         // DedicatedServer.initServer: worldData.setGameType; forceDifficulty.
         self.set_default_game_mode(game_mode);
         self.ui.difficulty = props.difficulty as u8;
+        // DedicatedServer.initServer: a legacy `announce-player-achievements`
+        // sets the show_advancement_messages rule once, as the file is read.
+        if let Some(announce) = props.announce_player_achievements {
+            self.ui.rules.set(
+                "show_advancement_messages",
+                horizon_client::gamerules::Value::Bool(announce),
+            );
+        }
         self.settings.render_distance = props.view_distance.clamp(2, 32);
         self.settings.simulation_distance = props.simulation_distance.clamp(2, 32);
         // Nothing is kept around the spawn while nobody is on.
@@ -664,6 +675,9 @@ impl Game<'_> {
             return Ok(());
         }
         self.sync_ops(&lists);
+        if let Some(host) = self.lan.as_mut() {
+            host.hub.spawn_protection = props.spawn_protection;
+        }
         log(
             "INFO",
             &format!(
@@ -686,6 +700,7 @@ impl Game<'_> {
             ticks: Default::default(),
             paused: false,
             broadcast_console: props.broadcast_console_to_ops,
+            op_level: props.op_permission_level,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
@@ -980,7 +995,7 @@ impl Game<'_> {
                 let Some(user) = self.resolve(rest[0]) else {
                     return;
                 };
-                let level = 4;
+                let level = state.op_level;
                 let changed = {
                     let mut l = state.lists.lock().unwrap();
                     if command == "op" {
@@ -1006,6 +1021,10 @@ impl Game<'_> {
                 self.console_reply(Text::translate(key, &[lit(&user.name)]));
                 let lists = state.lists.clone();
                 self.sync_ops(&lists);
+                // DeOpCommands.deopPlayers.
+                if command == "deop" && changed {
+                    self.kick_unlisted_players(&lists);
+                }
             }
             "whitelist" => self.console_whitelist(state, &rest),
             "ban" if !rest.is_empty() => {
@@ -1217,6 +1236,7 @@ impl Game<'_> {
             ["on"] | ["off"] => {
                 let on = rest[0] == "on";
                 let mut l = state.lists.lock().unwrap();
+                let turned_on = on && !l.use_whitelist;
                 let key = match (on, l.use_whitelist) {
                     (true, true) => "commands.whitelist.alreadyOn",
                     (true, false) => "commands.whitelist.enabled",
@@ -1227,6 +1247,10 @@ impl Game<'_> {
                 drop(l);
                 self.store_property("white-list", on.to_string());
                 self.console_reply(Text::translate(key, &[]));
+                if turned_on {
+                    let lists = state.lists.clone();
+                    self.kick_unlisted_players(&lists);
+                }
             }
             ["list"] => {
                 let names: Vec<String> = state
@@ -1250,6 +1274,8 @@ impl Game<'_> {
             ["reload"] => {
                 let _ = state.lists.lock().unwrap().white.load();
                 self.console_reply(Text::translate("commands.whitelist.reloaded", &[]));
+                let lists = state.lists.clone();
+                self.kick_unlisted_players(&lists);
             }
             ["add", name] | ["remove", name] => {
                 let Some(user) = self.resolve(name) else {
@@ -1275,6 +1301,10 @@ impl Game<'_> {
                     Vec::new()
                 };
                 self.console_reply(Text::translate(key, &args));
+                if ok && rest[0] == "remove" {
+                    let lists = state.lists.clone();
+                    self.kick_unlisted_players(&lists);
+                }
             }
             _ => self.console_reply(Text::translate("command.unknown.argument", &[])),
         }
@@ -1287,6 +1317,38 @@ impl Game<'_> {
             && let Ok(p) = p.update(key, value)
         {
             let _ = p.store(&path);
+        }
+    }
+
+    /// MinecraftServer.kickUnlistedPlayers: with `enforce-whitelist` and the
+    /// whitelist on, whoever is online and not on the whitelist file is
+    /// disconnected (operators are not spared here).
+    fn kick_unlisted_players(&mut self, lists: &Arc<Mutex<Lists>>) {
+        let unlisted: Vec<u128> = {
+            let l = lists.lock().unwrap();
+            let Some(host) = self.lan.as_ref() else {
+                return;
+            };
+            if !(l.enforce_whitelist && l.use_whitelist) {
+                return;
+            }
+            host.hub
+                .guests
+                .iter()
+                .filter(|g| {
+                    !l.white.contains(&NameAndId {
+                        id: g.uuid,
+                        name: g.name.clone(),
+                    })
+                })
+                .map(|g| g.uuid)
+                .collect()
+        };
+        for uuid in unlisted {
+            self.kick_uuid(
+                uuid,
+                translatable("multiplayer.disconnect.not_whitelisted", &[]),
+            );
         }
     }
 
@@ -1348,6 +1410,8 @@ impl Game<'_> {
         }
         std::thread::sleep(Duration::from_millis(100));
         log("INFO", "Saving worlds");
+        // ServerPlayer.disconnect: nobody is left in a bed.
+        self.free_player_beds()?;
         self.save_game()?;
         self.log_saved_levels();
         self.lan_close(false);

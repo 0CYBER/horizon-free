@@ -4,7 +4,10 @@
 //! language used by every screen.
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,15 +26,24 @@ impl LanguageInfo {
 #[derive(Default)]
 pub struct Language {
     pub code: String,
+    /// `LanguageInfo.bidirectional`: text without a strong character reads
+    /// right to left (`ClientLanguage.defaultRightToLeft`).
+    bidirectional: bool,
     map: HashMap<String, String>,
 }
 pub const DEFAULT: &str = "en_us";
 
 static CURRENT: RwLock<Option<Arc<Language>>> = RwLock::new(None);
+/// The current language's `bidirectional`, read for every drawn string.
+static BIDIRECTIONAL: AtomicBool = AtomicBool::new(false);
 
 /// A source of resource files: the prepared root plus packs, highest priority last.
 pub trait ResourceSource {
     fn read(&self, path: &str) -> Option<Vec<u8>>;
+    /// Whether `path` is there, without reading it where the source can tell.
+    fn exists(&self, path: &str) -> bool {
+        self.read(path).is_some()
+    }
     /// The namespaces under `assets/` (resource packs may add their own).
     fn namespaces(&self) -> Vec<String> {
         vec!["minecraft".into()]
@@ -59,6 +71,9 @@ impl ResourceSource for Bundled {
 impl ResourceSource for std::path::PathBuf {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         std::fs::read(self.join(path)).ok()
+    }
+    fn exists(&self, path: &str) -> bool {
+        self.join(path).is_file()
     }
     fn namespaces(&self) -> Vec<String> {
         std::fs::read_dir(self.join("assets"))
@@ -134,8 +149,12 @@ impl Language {
         {
             apply_deprecated(&mut map, &bytes);
         }
+        let bidirectional = available(sources)
+            .iter()
+            .any(|info| info.code == code && info.bidirectional);
         Self {
             code: code.to_owned(),
+            bidirectional,
             map,
         }
     }
@@ -178,7 +197,7 @@ pub fn available(sources: &[&dyn ResourceSource]) -> Vec<LanguageInfo> {
             for (code, info) in value["language"].as_object().into_iter().flatten() {
                 // Only languages whose file exists somewhere are selectable.
                 let file = format!("assets/minecraft/lang/{code}.json");
-                if code != DEFAULT && !sources.iter().any(|s| s.read(&file).is_some()) {
+                if code != DEFAULT && !sources.iter().any(|s| s.exists(&file)) {
                     continue;
                 }
                 found.insert(
@@ -197,10 +216,15 @@ pub fn available(sources: &[&dyn ResourceSource]) -> Vec<LanguageInfo> {
 }
 
 pub fn set(language: Language) {
+    BIDIRECTIONAL.store(language.bidirectional, Ordering::Relaxed);
     *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(language));
 }
 pub fn current() -> Option<Arc<Language>> {
     CURRENT.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+/// `ClientLanguage.defaultRightToLeft` of the current language.
+pub fn bidirectional() -> bool {
+    BIDIRECTIONAL.load(Ordering::Relaxed)
 }
 pub fn code() -> String {
     current().map_or_else(|| DEFAULT.to_owned(), |l| l.code.clone())
@@ -266,5 +290,27 @@ mod tests {
             ["en_us", "fr_fr"]
         );
         assert_eq!(langs[1].label(), "Français (France)");
+    }
+
+    #[test]
+    fn languages_are_listed_without_reading_their_files() {
+        struct NoLangReads;
+        impl ResourceSource for NoLangReads {
+            fn read(&self, path: &str) -> Option<Vec<u8>> {
+                assert!(!path.contains("/lang/"), "read {path}");
+                (path == "assets/pack.mcmeta").then(|| {
+                    br#"{"language":{"fr_fr":{"name":"French"},"de_de":{"name":"German"}}}"#
+                        .to_vec()
+                })
+            }
+            fn exists(&self, path: &str) -> bool {
+                path == "assets/minecraft/lang/fr_fr.json"
+            }
+        }
+        let langs = available(&[&NoLangReads]);
+        assert_eq!(
+            langs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>(),
+            ["en_us", "fr_fr"]
+        );
     }
 }
