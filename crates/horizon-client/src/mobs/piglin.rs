@@ -323,7 +323,7 @@ impl Goal for Admire {
         MOVE | LOOK
     }
     fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.extra.using_item > 0
+        m.extra.using_item > 0 && m.extra.off_hand.is_some()
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         m.nav_stop();
@@ -509,7 +509,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.egg_time > 0 {
         m.extra.egg_time -= 1;
     }
-    if m.extra.using_item > 0 {
+    // The admired item is in the off hand; a spear in use counts up instead.
+    if m.extra.using_item > 0 && m.extra.off_hand.is_some() {
         m.extra.using_item -= 1;
         if m.extra.using_item == 0 {
             events.push(MobEvent::FinishAdmiring { mob: m.id });
@@ -647,7 +648,7 @@ pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     // Piglin.getArmPose: dancing comes first.
     let pose = if m.extra.scratch[0] > 0 {
         PiglinPose::Dancing
-    } else if m.extra.using_item > 0 {
+    } else if m.extra.using_item > 0 && m.extra.off_hand.is_some() {
         PiglinPose::AdmiringItem
     } else if m.extra.flag {
         PiglinPose::CrossbowCharge

@@ -455,6 +455,8 @@ pub fn tick(
         m.removed = true;
         return false;
     }
+    // `Entity.computeSpeed`: what it moved in the last tick.
+    let known_speed = m.position.subtract(m.previous);
     m.previous = m.position;
     m.previous_yaw = m.yaw;
     m.previous_body_yaw = m.body_yaw;
@@ -498,6 +500,10 @@ pub fn tick(
             super::creaking::tear_down(m, events);
         }
         return false;
+    }
+    // LivingEntity.tick: updatingUsingItem, the stab of a spear in use.
+    if m.alive() {
+        super::spear_use::update_using_item(m, w, known_speed, events);
     }
     if m.no_ai {
         // Mob.aiStep still runs without AI (only serverAiStep is skipped),
