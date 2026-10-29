@@ -312,6 +312,12 @@ pub fn set_dark_ticks(m: &mut Mob, ticks: i32) {
     m.extra.counter = ticks;
 }
 
+/// `GlowSquid.hurtServer`: a hit that went through dims the squid for 100
+/// ticks (called after `Squid.hurtServer`'s ink).
+pub fn hurt_server(m: &mut Mob) {
+    set_dark_ticks(m, 100);
+}
+
 /// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
 pub fn squid_cycle_event(m: &mut Mob) {
     if matches!(m.species(), Species::Squid | Species::GlowSquid) {
