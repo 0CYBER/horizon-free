@@ -602,6 +602,7 @@ impl Item {
 pub enum Action {
     ButtonClick,
     Changed,
+    SliderDrag,
     OpenAdvanced,
     OpenSimple,
     Done,
@@ -833,7 +834,7 @@ impl GraphicsUi {
                     .find(|wd| matches!(wd.target, Target::Item(i) if i == item))
             {
                 item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
-                return vec![Action::Changed];
+                return vec![Action::SliderDrag];
             }
             return Vec::new();
         }
@@ -855,11 +856,11 @@ impl GraphicsUi {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
                         item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
+                        vec![Action::SliderDrag]
                     } else {
                         item.cycle(s, right, framebuffer);
-                        return vec![Action::ButtonClick, Action::Changed];
+                        vec![Action::ButtonClick, Action::Changed]
                     }
-                    vec![Action::Changed]
                 }
             };
         }
@@ -930,7 +931,7 @@ mod tests {
                 false,
                 false
             ),
-            vec![Action::Changed]
+            vec![Action::SliderDrag]
         );
         assert_eq!(
             ui.click(
@@ -942,7 +943,7 @@ mod tests {
                 true,
                 false
             ),
-            vec![Action::Changed]
+            vec![Action::SliderDrag]
         );
         assert!(ui.release());
         assert!(!ui.release());
