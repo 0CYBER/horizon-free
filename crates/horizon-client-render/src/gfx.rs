@@ -533,7 +533,7 @@ pub struct Renderer {
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
-    /// Resolution scale and FXAA (Horizon settings).
+    /// Resolution scale, FXAA and TAA (Horizon settings).
     world_post: world_post::Post,
     /// HDR output (Horizon setting): `Some` while the swapchain is HDR.
     hdr: Option<hdr::Hdr>,
@@ -3252,9 +3252,12 @@ impl Renderer {
             self.send_hdr_metadata();
         }
     }
-    pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
+    /// `upscale`: output pixels per rendered pixel, for TAA to rebuild (1: native).
+    pub fn set_world_post(&mut self, scale: f32, antialias: bool, taa: bool, upscale: f32) {
         self.world_post.scale = scale.clamp(0.25, 2.0);
-        self.world_post.antialias = antialias;
+        self.world_post.antialias = antialias && !taa;
+        self.world_post.taa = taa;
+        self.world_post.upscale = if taa { upscale.clamp(1.0, 4.0) } else { 1.0 };
     }
     /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`;
     /// `block_ids` gives each block sprite layer's `mc_Entity` (id, fluid) pair.
@@ -3636,6 +3639,16 @@ impl Renderer {
             frame.boss_darken,
         );
         let view_proj = self.view_projection(frame);
+        // TAA runs where the world post pass does, not under a shader pack's own.
+        let taa = !frame.title
+            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
+            && self.native.as_ref().is_none_or(|n| n.post.is_none());
+        let jittered = self.world_post.jitter(
+            [self.config.width, self.config.height],
+            taa,
+            view_proj,
+            frame.camera,
+        ) * view_proj;
         if frame.title {
             self.panorama.prepare(
                 &self.queue,
@@ -3687,7 +3700,7 @@ impl Renderer {
             )
         };
         let globals = Globals {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: jittered.to_cols_array_2d(),
             fog_color,
             fog,
             sky_color: [
@@ -4319,7 +4332,7 @@ impl Renderer {
             self.stars.prepare(
                 &mut self.uploads,
                 &mut encoder,
-                view_proj * rotation,
+                jittered * rotation,
                 brightness,
             );
         }
@@ -4492,6 +4505,8 @@ impl Renderer {
                 .flatten();
         }
         let pack_reads_world = pack_post || native_post;
+        // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
+        let keep_depth = pack_reads_world || (taa && self.world_post.taa);
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         // The shadow camera's lists, drawn by the pack's shadow programs.
@@ -4643,8 +4658,7 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // Phase 2 of occlusion culling draws over it; a shader pack reads it.
-                        store: if cull.is_some() || pack_reads_world {
+                        store: if cull.is_some() || keep_depth {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -4719,7 +4733,7 @@ impl Renderer {
                                 &mut encoder,
                                 world_view,
                                 world_depth,
-                                pack_reads_world,
+                                keep_depth,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pack_frame(&mut pass);
@@ -4749,7 +4763,7 @@ impl Renderer {
                                 &mut encoder,
                                 world_view,
                                 world_depth,
-                                pack_reads_world,
+                                keep_depth,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pack_frame(&mut pass);
@@ -5062,7 +5076,8 @@ impl Renderer {
                 native.timing.as_mut(),
             );
         } else if scaled.is_some() {
-            self.world_post.finish(&mut encoder, &view_target);
+            self.world_post
+                .finish(&self.queue, &mut encoder, &view_target);
         }
         if let Some(hdr) = &self.hdr {
             hdr.keep_world(&mut encoder);

@@ -220,6 +220,61 @@ impl FarDetail {
     }
 }
 
+/// TAA upscaling: the world renders this much smaller than the resolution scale's size,
+/// and TAA builds the full-size picture from the jittered frames (FSR's and DLSS's ratios).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Upscaling {
+    #[default]
+    Native,
+    Quality,
+    Balanced,
+    Performance,
+    UltraPerformance,
+}
+impl Upscaling {
+    pub const ALL: [Upscaling; 5] = [
+        Upscaling::Native,
+        Upscaling::Quality,
+        Upscaling::Balanced,
+        Upscaling::Performance,
+        Upscaling::UltraPerformance,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Upscaling::Native => "native",
+            Upscaling::Quality => "quality",
+            Upscaling::Balanced => "balanced",
+            Upscaling::Performance => "performance",
+            Upscaling::UltraPerformance => "ultraPerformance",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Upscaling::Native => "Native",
+            Upscaling::Quality => "Quality",
+            Upscaling::Balanced => "Balanced",
+            Upscaling::Performance => "Performance",
+            Upscaling::UltraPerformance => "Ultra Performance",
+        }
+    }
+    /// Output pixels per rendered pixel, along each axis.
+    pub fn ratio(self) -> f32 {
+        match self {
+            Upscaling::Native => 1.0,
+            Upscaling::Quality => 1.5,
+            Upscaling::Balanced => 1.7,
+            Upscaling::Performance => 2.0,
+            Upscaling::UltraPerformance => 3.0,
+        }
+    }
+    fn parse(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|u| u.name() == s)
+            .unwrap_or_default()
+    }
+}
+
 static REDUCED_SUGGESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the settings suggest Reduced far detail: set when the renderer
 /// starts, on the GPUs `lod_capped` names (far terrain slows them most).
@@ -282,6 +337,10 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
+    /// TAA over the world (FXAA is off while it is on).
+    pub taa: bool,
+    /// TAA upscaling; anything but `Native` comes with `taa` on.
+    pub upscaling: Upscaling,
     /// HDR output (HDR10, or scRGB), where the display path offers it.
     pub hdr: bool,
     /// HDR paper white (where SDR white sits), in nits.
@@ -319,6 +378,8 @@ impl Default for Graphics {
             overlay: Overlay::Off,
             resolution_scale: 100,
             fxaa: false,
+            taa: false,
+            upscaling: Upscaling::Native,
             hdr: false,
             hdr_paper_white: 200,
             hdr_peak: 1000,
@@ -381,6 +442,8 @@ impl Graphics {
                 "workers" => g.workers = number(g.workers).min(64),
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
+                "taa" => g.taa = flag(g.taa),
+                "upscaling" => g.upscaling = Upscaling::parse(value),
                 "hdr" => g.hdr = flag(g.hdr),
                 "hdrPaperWhite" => g.hdr_paper_white = number(g.hdr_paper_white).clamp(80, 480),
                 "hdrPeak" => g.hdr_peak = number(g.hdr_peak).clamp(200, 2000),
@@ -401,7 +464,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -426,6 +489,8 @@ impl Graphics {
             },
             self.resolution_scale,
             bool_text(self.fxaa),
+            bool_text(self.taa),
+            self.upscaling.name(),
             bool_text(self.hdr),
             self.hdr_paper_white,
             self.hdr_peak,
@@ -541,6 +606,8 @@ mod tests {
             overlay: Overlay::Graph,
             resolution_scale: 75,
             fxaa: true,
+            taa: true,
+            upscaling: Upscaling::Balanced,
             hdr: true,
             hdr_paper_white: 240,
             hdr_peak: 1400,

@@ -21,11 +21,11 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | Quality | smooth lighting, mipmap levels, biome blend, clouds, cloud distance, weather radius, particles, entity shadows, cutout leaves | `options.txt` |
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
-| | resolution scale, anti-aliasing (FXAA), HDR, paper white, peak brightness, present mode, frame pacing | `horizon-graphics.txt` |
+| | resolution scale, anti-aliasing (FXAA or TAA), TAA upscaling, HDR, paper white, peak brightness, present mode, frame pacing | `horizon-graphics.txt` |
 | Performance | battery mode, worker threads, upload budget per frame | `horizon-graphics.txt` |
 | Overlay | performance overlay: FPS, frame/CPU/GPU times, frame-time graph | `horizon-graphics.txt` |
 
-`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, HDR off, the present mode following VSync. VSync on always waits for the display (Fifo), in a window and in fullscreen, as in vanilla; the present mode setting chooses how frames are shown only while VSync is off. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
+`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no anti-aliasing, HDR off, the present mode following VSync. VSync on always waits for the display (Fifo), in a window and in fullscreen, as in vanilla; the present mode setting chooses how frames are shown only while VSync is off. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
 
 **Battery mode** (Performance, off by default) is for laptops and handhelds: at most 60 frames per second in a world, 30 in menus without a world or while another window has focus, and half the automatic worker threads (chunks load slower). It changes only when frames are drawn: what they show and the game's 20 ticks per second stay as they are.
 
@@ -49,7 +49,11 @@ Ordinary Overworld atmospheric fog extends with the selected LOD distance. Fog O
 
 The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. The official Far View mod (`mods/official/far-view`, [mods.md](mods.md)) turns the same distant terrain on from the mod browser, with its own distance and detail; the setting, when on, wins. Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
 
-Not implemented: anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
+Anti-aliasing cycles Off, FXAA and TAA (`fxaa` and `taa` in `horizon-graphics.txt`). TAA jitters the world's projection by a sub-pixel offset each frame (Halton 2, 3 over 8 frames) and blends the frame into a history reprojected through the depth buffer, clamped to the frame's 3×3 neighbourhood. Its motion vectors come from the camera alone, so mobs and other moving things rely on the clamp and can trail slightly. It runs at the resolution scale, before the hand and HUD, and is off under a shader pack, which does its own.
+
+Upscaling (`upscaling` in `horizon-graphics.txt`) renders the world smaller than the resolution scale's size and lets TAA rebuild it at that size: Native 1×, Quality 1.5×, Balanced 1.7×, Performance 2× and Ultra Performance 3× fewer pixels along each axis (FSR's and DLSS's ratios). The jitter then runs over 8 frames per output pixel, and each frame counts in an output pixel by how near its sample lands. The button shows only while Anti-aliasing is TAA; leaving TAA goes back to Native. Textures keep the mipmap level of the smaller frame, so far blocks are softer than at Native.
+
+Not implemented: anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA or TAA instead) and exclusive fullscreen (fullscreen is borderless).
 
 ## Benchmark
 
