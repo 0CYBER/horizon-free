@@ -41,6 +41,15 @@ struct TaaUniform {
     jitter: [f32; 4],
 }
 
+/// TAA's GPU resources, absent when the device cannot compile the shader
+/// (the OpenGL backend's naga GLSL emitter does not support `textureLoad`
+/// from depth textures).
+struct TaaResources {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+    uniform: wgpu::Buffer,
+}
+
 pub struct Post {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -57,9 +66,7 @@ pub struct Post {
     /// TAA runs this frame (`jitter`): not on the title screen or under a shader pack.
     taa_on: bool,
     target: Option<WorldTarget>,
-    taa_layout: wgpu::BindGroupLayout,
-    taa_pipeline: wgpu::RenderPipeline,
-    taa_uniform: wgpu::Buffer,
+    taa_resources: Option<TaaResources>,
     /// Frames jittered so far (the Halton index), and which history the next resolve writes.
     taa_frame: u32,
     /// The last TAA frame's unjittered `view_proj` and camera, `None` once a frame ran without it.
@@ -105,38 +112,9 @@ impl Post {
             count: None,
         };
         let float = wgpu::TextureSampleType::Float { filterable: true };
-        let taa_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Horizon TAA bindings"),
-            entries: &[
-                texture(0, float),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                texture(2, float),
-                texture(3, wgpu::TextureSampleType::Depth),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Horizon post"),
             bind_group_layouts: &[Some(&layout)],
-            ..Default::default()
-        });
-        let taa_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Horizon TAA"),
-            bind_group_layouts: &[Some(&taa_layout)],
             ..Default::default()
         });
         let pipeline = |entry: &str, layout: &wgpu::PipelineLayout, format| {
@@ -166,6 +144,88 @@ impl Post {
                 cache: None,
             })
         };
+        // The OpenGL backend's GLSL translator does not support textureLoad
+        // from depth textures: on devices running through OpenGL (such as older
+        // Intel GPUs on Linux), TAA cannot compile its pipeline.
+        let taa_resources = {
+            let taa_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Horizon TAA bindings"),
+                entries: &[
+                    texture(0, float),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    texture(2, float),
+                    texture(3, wgpu::TextureSampleType::Depth),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let taa_pipeline_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Horizon TAA"),
+                    bind_group_layouts: &[Some(&taa_layout)],
+                    ..Default::default()
+                });
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let taa_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Horizon TAA"),
+                layout: Some(&taa_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_post"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_taa"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: HISTORY_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+            let internal = pollster::block_on(internal.pop());
+            match internal.or(pollster::block_on(validation.pop())) {
+                None => {
+                    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Horizon TAA"),
+                        size: std::mem::size_of::<TaaUniform>() as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    Some(TaaResources {
+                        layout: taa_layout,
+                        pipeline: taa_pipeline,
+                        uniform,
+                    })
+                }
+                Some(e) => {
+                    log::warn!("Horizon renderer: temporal anti-aliasing unavailable ({e})");
+                    None
+                }
+            }
+        };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Horizon post"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -175,15 +235,7 @@ impl Post {
         Self {
             copy: pipeline("fs_copy", &pipeline_layout, format),
             fxaa: pipeline("fs_fxaa", &pipeline_layout, format),
-            taa_pipeline: pipeline("fs_taa", &taa_pipeline_layout, HISTORY_FORMAT),
-            taa_uniform: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Horizon TAA"),
-                size: std::mem::size_of::<TaaUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
             layout,
-            taa_layout,
             sampler,
             format,
             scale: 1.0,
@@ -192,10 +244,16 @@ impl Post {
             upscale: 1.0,
             taa_on: false,
             target: None,
+            taa_resources,
             taa_frame: 0,
             taa_previous: None,
             taa_this_frame: bytemuck::Zeroable::zeroed(),
         }
+    }
+
+    /// Whether TAA is supported on this GPU/backend.
+    pub fn supports_taa(&self) -> bool {
+        self.taa_resources.is_some()
     }
 
     /// The world's rendered size and the size it is shown at (TAA's history).
@@ -212,7 +270,7 @@ impl Post {
     /// world's projection (identity while `on` is false); `view_proj` is the unjittered
     /// projection, relative to `camera`. Call it before `prepare`, once per frame.
     pub fn jitter(&mut self, window: [u32; 2], on: bool, view_proj: Mat4, camera: DVec3) -> Mat4 {
-        self.taa_on = on && self.taa;
+        self.taa_on = on && self.taa && self.taa_resources.is_some();
         if !self.taa_on {
             self.taa_previous = None;
             return Mat4::IDENTITY;
@@ -290,7 +348,8 @@ impl Post {
             )
             .create_view(&Default::default());
             let group = self.bind(device, &color);
-            let taa = history_size.map(|output| {
+            let taa = history_size.and_then(|output| {
+                let res = self.taa_resources.as_ref()?;
                 let history = [0, 1].map(|_| {
                     make_tex("TAA history", output, HISTORY_FORMAT, sampled)
                         .create_view(&Default::default())
@@ -298,7 +357,7 @@ impl Post {
                 let resolve = [0, 1].map(|i| {
                     device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("Horizon TAA"),
-                        layout: &self.taa_layout,
+                        layout: &res.layout,
                         entries: &[
                             wgpu::BindGroupEntry {
                                 binding: 0,
@@ -318,18 +377,18 @@ impl Post {
                             },
                             wgpu::BindGroupEntry {
                                 binding: 4,
-                                resource: self.taa_uniform.as_entire_binding(),
+                                resource: res.uniform.as_entire_binding(),
                             },
                         ],
                     })
                 });
                 let show = [0, 1].map(|i| self.bind(device, &history[i]));
-                History {
+                Some(History {
                     size: output,
                     history,
                     resolve,
                     show,
-                }
+                })
             });
             // New textures: no history yet.
             self.taa_this_frame.jitter[2] = 1.0;
@@ -381,12 +440,12 @@ impl Post {
             self.finish_with(encoder, screen, &target.group);
             return;
         };
+        let Some(res) = &self.taa_resources else {
+            self.finish_with(encoder, screen, &target.group);
+            return;
+        };
         let i = (self.taa_frame % 2) as usize;
-        queue.write_buffer(
-            &self.taa_uniform,
-            0,
-            bytemuck::bytes_of(&self.taa_this_frame),
-        );
+        queue.write_buffer(&res.uniform, 0, bytemuck::bytes_of(&self.taa_this_frame));
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &taa.history[i],
             resolve_target: None,
@@ -401,7 +460,7 @@ impl Post {
             color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(&self.taa_pipeline);
+        pass.set_pipeline(&res.pipeline);
         pass.set_bind_group(0, &taa.resolve[i], &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
@@ -484,5 +543,22 @@ mod tests {
             [halton(1, 2), halton(2, 2), halton(3, 2)],
             [0.5, 0.25, 0.75]
         );
+    }
+
+    fn test_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
+        pollster::block_on(adapter.request_device(&Default::default())).ok()
+    }
+
+    #[test]
+    fn world_post_pipelines_compile_or_fall_back() {
+        let Some((device, _)) = test_device() else {
+            return;
+        };
+        let post = Post::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        // Copy and FXAA pipelines always compile; TAA compiles if supported by backend.
+        let _ = post.supports_taa();
     }
 }

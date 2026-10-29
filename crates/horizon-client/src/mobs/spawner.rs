@@ -766,4 +766,11 @@ mod tests {
         assert_eq!(light_limit(Some(&tag("[I;9,2]"))), None);
         assert_eq!(encode_range((3, 3)), Tag::Int(3));
     }
+
+    #[test]
+    fn spawner_defaults_empty() {
+        let s = Spawner::default();
+        assert_eq!(s.next_data(), None);
+        assert!(s.potentials.is_empty());
+    }
 }

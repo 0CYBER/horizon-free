@@ -13,13 +13,15 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`, and, for the
   launcher, `HORIZON_LAUNCHER_TRASH`, `HORIZON_LAUNCHER_CLIPBOARD` and `HORIZON_LAUNCHER_DESKTOP` pointing into the scratch home. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
-- **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
-  Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
-  contributor's agent names its own person and tool (issues: "Filed by", reviews: "Review by"). Every
-  comment starts with `🤖 Agent:`. Never write as Ludovic or as anyone else.
+- **Mark what an agent posts.** A PR body starts with a line naming the person whose agent opened it and
+  the tool: `> 🤖 Opened by <login>'s AI agent (<tool, model>), not by <login> personally.`, where `<login>`
+  is the GitHub account the PR is opened from (`gh api user --jq .login`). Issues say "Filed by", reviews
+  "Review by". Every comment starts with `🤖 Agent:`. Write only as the person you work for: the lines on
+  this page that name Ludovic are for his own agents (account `ludovic111`), never for anyone else's.
 - **Attribution.** Commits end with a `Co-Authored-By:` line for the agent that wrote them, and PR bodies
-  with that agent's own "Generated with" line. Ludovic's agents use
-  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and
+  with that agent's own "Generated with" line. Example, Ludovic's agents (Claude Code on `ludovic111`):
+  first line `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, commits
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, last line
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
@@ -74,7 +76,7 @@ cargo build --profile fast -p horizon-client        # optimized, quick to link: 
 python3 tools/parity.py --changed origin/main       # the harnesses your branch can affect (CI's parity job)
 python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cover these files, without running them
 python3 tools/parity.py mob_ai sculk       # named harnesses
-python3 tools/lan_e2e.py --check chest     # two real games over LAN (server-thread host); --in-frame compares the fallback
+python3 tools/lan_e2e.py --check chest     # two real games over LAN (server-thread host)
 python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 ```
 
@@ -167,17 +169,18 @@ the same `horizon_client::<module>` paths), `G:` = bin (`crates/horizon-client/s
    "Server thread" with one level per dimension; the window joins it as a client through memory (`remote`),
    exactly as a LAN guest or a dedicated server's player does. This is what players run. Open
    `[server-thread]` issues list the gaps left.
-2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`):** the window's `Game` ticks
-   the world itself, one level that follows the player (`fn enter_dimension`). Deterministic rule fixtures still use this path; player-facing integration uses the default server thread.
+2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`): DEPRECATED, never use it, it
+   will be removed soon.** The window's `Game` ticks the world itself, one level that follows the player
+   (`fn enter_dimension`). Compatibility does not matter: don't add features or fixes for it, don't write new
+   tests against it, and move code off it when you touch it. The deterministic rule fixtures still run on it
+   until they are ported.
 
-LAN guests and dedicated servers always use the server code, so a fix there serves both. Test both paths
-when you touch player-facing gameplay:
+LAN guests and dedicated servers always use the server code, so a fix there serves both. Test the server
+thread when you touch player-facing gameplay:
 
 ```sh
 cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --in-frame    # in-frame
 python3 tools/lan_e2e.py --check <name>                  # host on its server thread, guest is a server client
-python3 tools/lan_e2e.py --in-frame --check <name>       # comparison (portals, levels, distance, lava need server-thread mode)
 python3 tools/parity.py dedicated_server server_entities server_player_damage
 ```
 
