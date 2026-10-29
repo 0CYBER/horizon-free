@@ -529,14 +529,19 @@ impl StationRecipes {
                     addition: ingredient(&v["addition"], items),
                     pattern: v["pattern"].as_str().unwrap_or("").to_owned(),
                 }),
-                "minecraft:stonecutting" => stonecutting.push(Stonecutting {
-                    id,
-                    input: ingredient(&v["ingredient"], items),
-                    result: ItemStack::new(
-                        v["result"]["id"].as_str().unwrap_or("minecraft:air"),
-                        v["result"]["count"].as_u64().unwrap_or(1) as u32,
-                    ),
-                }),
+                "minecraft:stonecutting" => {
+                    // A result count outside 1..=99 fails vanilla's codec: no recipe.
+                    if let Some(count) = crate::crafting::template_count(&v["result"]) {
+                        stonecutting.push(Stonecutting {
+                            id,
+                            input: ingredient(&v["ingredient"], items),
+                            result: ItemStack::new(
+                                v["result"]["id"].as_str().unwrap_or("minecraft:air"),
+                                count,
+                            ),
+                        });
+                    }
+                }
                 _ => {}
             }
         }
