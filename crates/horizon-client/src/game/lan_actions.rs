@@ -895,6 +895,12 @@ impl Game<'_> {
         else {
             return false;
         };
+        // The block entity's createMenu: a shulker box opens a ShulkerBoxMenu
+        // (not a 9x3 ChestMenu), whose slots refuse shulker boxes.
+        let menu = match slots {
+            Slots::Block(_) => horizon_client::containers::block_menu_type(name).unwrap_or(menu),
+            _ => menu,
+        };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
