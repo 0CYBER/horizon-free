@@ -21,10 +21,18 @@ pub enum Language {
     Russian,
     #[serde(rename = "de")]
     German,
+    #[serde(rename = "pl")]
+    Polish,
 }
 
 impl Language {
-    pub const ALL: [Language; 4] = [Self::English, Self::French, Self::Russian, Self::German];
+    pub const ALL: [Language; 5] = [
+        Self::English,
+        Self::French,
+        Self::Russian,
+        Self::German,
+        Self::Polish,
+    ];
 
     /// Its code in `settings.json` and on the command line.
     pub fn code(self) -> &'static str {
@@ -33,6 +41,7 @@ impl Language {
             Self::French => "fr",
             Self::Russian => "ru",
             Self::German => "de",
+            Self::Polish => "pl",
         }
     }
 
@@ -43,6 +52,7 @@ impl Language {
             Self::French => "Français",
             Self::Russian => "Русский",
             Self::German => "Deutsch",
+            Self::Polish => "Polski",
         }
     }
 
@@ -74,6 +84,7 @@ impl Language {
             Self::French => include_str!("../lang/fr.json"),
             Self::Russian => include_str!("../lang/ru.json"),
             Self::German => include_str!("../lang/de.json"),
+            Self::Polish => include_str!("../lang/pl.json"),
         }
     }
 }

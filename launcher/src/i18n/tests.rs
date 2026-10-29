@@ -89,7 +89,12 @@ fn holes(s: &str) -> BTreeSet<&str> {
 fn every_language_has_every_string_the_code_asks_for() {
     let (asked, all) = strings();
     assert!(asked.contains("Language"), "the scan finds tr(\"…\")");
-    for language in [Language::French, Language::Russian, Language::German] {
+    for language in [
+        Language::French,
+        Language::Russian,
+        Language::German,
+        Language::Polish,
+    ] {
         let table: HashMap<String, String> = serde_json::from_str(language.source())
             .unwrap_or_else(|e| panic!("lang/{}.json: {e}", language.code()));
         let missing: Vec<_> = asked.iter().filter(|s| !table.contains_key(*s)).collect();
@@ -117,6 +122,8 @@ fn every_language_has_every_string_the_code_asks_for() {
 
 #[test]
 fn the_system_language_is_the_first_one_the_launcher_has() {
+    assert_eq!(Language::pick(["pl-PL", "en-US"]), Language::Polish);
+    assert_eq!(Language::parse("pl_PL.UTF-8"), Some(Language::Polish));
     assert_eq!(Language::pick(["fr-CH", "en-US"]), Language::French);
     assert_eq!(Language::pick(["de-CH", "ru_RU.UTF-8"]), Language::German);
     assert_eq!(Language::pick(["de-DE", "ja"]), Language::German);
@@ -129,9 +136,21 @@ fn the_system_language_is_the_first_one_the_launcher_has() {
 
 #[test]
 fn a_missing_string_shows_in_english() {
+    assert_eq!(tr_in(Language::Polish, "Settings"), "Ustawienia");
     assert_eq!(tr_in(Language::French, "Settings"), "Paramètres");
     assert_eq!(tr_in(Language::Russian, "Settings"), "Настройки");
     assert_eq!(tr_in(Language::German, "Settings"), "Einstellungen");
     assert_eq!(tr_in(Language::English, "Settings"), "Settings");
     assert_eq!(tr_in(Language::French, "No such string"), "No such string");
+}
+
+#[test]
+fn polish_entries_are_valid_and_keep_placeholders() {
+    let (_, all) = strings();
+    let table: HashMap<String, String> = serde_json::from_str(Language::Polish.source()).unwrap();
+    for (en, said) in &table {
+        assert!(all.contains(en), "unused Polish string: {en:?}");
+        assert!(!said.trim().is_empty(), "empty Polish string: {en:?}");
+        assert_eq!(holes(en), holes(said), "Polish: {en:?}");
+    }
 }
