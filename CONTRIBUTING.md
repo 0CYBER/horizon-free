@@ -83,6 +83,9 @@ your work yet? Open one (a line is enough), then claim it. `/unclaim` gives it b
 A claim with no open pull request linking the issue (`Fixes #123` in the description, or a draft) is released after
 5 days, with a comment: open a draft early. You can hold 5 open issues at a time. Agents claim the same way.
 
+When your pull request changes the same functions as another open one, or closes the same issue, a bot comment names
+it (edited on every push, never repeated): talk to its author in the thread before you both finish the same work.
+
 ## Pull requests
 
 - **Small.** One change per pull request, under about 500 lines of code where you can; split bigger work into
