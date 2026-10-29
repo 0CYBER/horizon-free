@@ -190,7 +190,7 @@ impl Launcher {
                 );
         } else {
             let ip = server.ip.clone();
-            let busy = !self.can_start_selected();
+            let busy = !self.can_join_selected();
             let join = button(
                 SharedString::from(format!("server-join-{i}")),
                 "Join",
