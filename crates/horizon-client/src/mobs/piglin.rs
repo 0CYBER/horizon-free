@@ -658,6 +658,14 @@ impl WalkAway {
             interrupt,
         }
     }
+    fn adult_piglin(speed: f64, desired: f64, interrupt: bool) -> Self {
+        Self {
+            from: AwayFrom::AdultPiglin,
+            speed,
+            desired,
+            interrupt,
+        }
+    }
     /// Where the avoided entity stands, while the activity this behaviour
     /// belongs to is the active one.
     fn source(&self, m: &Mob, w: &MobWorld) -> Option<Vec3> {
@@ -925,6 +933,9 @@ pub fn register_hoglin(m: &mut Mob) {
     g.add(2, MeleeAttack::new(1.0, true).intervals(40, 15));
     g.add(3, NotRetreating(super::goals::Breed::new(1.0)));
     g.add(3, HoglinAvoidRepellent);
+    // `HoglinAi.initIdleActivity`: an adult keeps away from the nearest adult
+    // piglin it sees, `SetWalkTargetAwayFrom.entity(NEAREST_VISIBLE_ADULT_PIGLIN, 0.4, 8, false)`.
+    g.add(3, WalkAway::adult_piglin(0.4, 8.0, false));
     g.add(4, NotRetreating(super::goals::FollowParent::new(1.1)));
     g.add(5, Stroll::avoiding_water(0.4));
     g.add(6, LookAtPlayer::new(8.0));
