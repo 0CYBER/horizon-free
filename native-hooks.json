@@ -21,6 +21,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
     },
     {
+      "name": "block_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_changed"
+    },
+    {
       "name": "neighbor_changed",
       "version": 1,
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"

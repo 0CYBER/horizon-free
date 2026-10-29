@@ -304,6 +304,8 @@ pub enum LevelEvent {
 
 /// The world as seen by block behaviour. Implemented by the game and tests.
 pub trait LevelAccess {
+    /// Observe a committed `Level.setBlock` state change, before its side effects.
+    fn observe_block_changed(&self, _pos: BlockPos, _old: BlockStateId, _new: BlockStateId) {}
     /// Observe `BlockState.handleNeighborChanged` before the block handles it.
     /// The default does nothing; implementations must not alter the update queue.
     fn observe_neighbor_changed(
