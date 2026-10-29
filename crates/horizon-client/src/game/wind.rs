@@ -413,6 +413,7 @@ impl Game<'_> {
         // fall; any other burst ends the grace of the last impulse.
         let at = p.position;
         p.impulse.set_ignore_fall_damage(wind_charge, Some(at));
+        self.adv.marks.blast = Some(([at.x, at.y, at.z], wind_charge));
         Some(push)
     }
     /// The burst: knockback, the blocks that react, the gust and the sound.

@@ -82,6 +82,8 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     levitation: Option<([f64; 3], u64)>,
+    /// The fall, lava ride, Nether trip and blast the guest's advancements track.
+    marks: super::advancements::TravelMarks,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
     /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
@@ -166,6 +168,7 @@ pub(super) struct GuestSwap {
     adv_loaded: bool,
     last_inventory: u64,
     levitation: Option<([f64; 3], u64)>,
+    marks: super::advancements::TravelMarks,
     death_cause: Option<String>,
     /// The guest's own damage record, in place while they act.
     combat: super::combat::CombatTracker,
@@ -396,6 +399,7 @@ impl Game<'_> {
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
         let levitation = std::mem::replace(&mut self.adv.levitation, play.levitation);
+        let marks = std::mem::replace(&mut self.adv.marks, std::mem::take(&mut play.marks));
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
         let acting = (
             self.lan_acting.replace(conn),
@@ -468,6 +472,7 @@ impl Game<'_> {
             adv_loaded,
             last_inventory,
             levitation,
+            marks,
             death_cause,
             acting,
             packets,
@@ -528,6 +533,7 @@ impl Game<'_> {
             adv_loaded,
             last_inventory,
             levitation,
+            marks,
             death_cause,
             combat,
             acting,
@@ -652,6 +658,7 @@ impl Game<'_> {
         self.adv.loaded = adv_loaded;
         play.last_inventory = std::mem::replace(&mut self.adv.last_inventory, last_inventory);
         play.levitation = std::mem::replace(&mut self.adv.levitation, levitation);
+        play.marks = std::mem::replace(&mut self.adv.marks, marks);
         let stat_events = std::mem::take(&mut play.stats.events);
         let name = g.name.clone();
         self.potions.swap_player(&mut g.effects, &mut play.potions);
@@ -2862,7 +2869,7 @@ impl Game<'_> {
                 && let Some(stack) = game.armor[1].clone()
             {
                 // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
-                let loss = game.durability_loss(&stack, 1);
+                let loss = game.wear(&stack, 1);
                 if let Some(elytra) = game.armor[1].as_mut() {
                     elytra.damage += loss;
                 }
