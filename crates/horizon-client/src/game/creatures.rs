@@ -3029,6 +3029,7 @@ impl Game<'_> {
                 let mut arrow = p.clone();
                 let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
                 let player_fire = self.player.as_ref().map(|pl| pl.fire_ticks);
+                let mut dodged = false;
                 // AbstractArrow.onHitEntity: a burning arrow sets its target alight.
                 if p.arrow.as_ref().is_some_and(|a| a.on_fire()) {
                     self.handle_mob_events(vec![MobEvent::Ignite {
@@ -3054,6 +3055,11 @@ impl Game<'_> {
                             .iter_mut()
                             .find(|m| m.id == id)
                             .is_some_and(|m| m.damage(amount, source));
+                        dodged = !hurt
+                            && self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
+                                m.species() == Species::Enderman
+                                    && horizon_client::mobs::enderman::dodges(m, &source)
+                            });
                         if p.owner == Some(Who::Player) {
                             self.last_hurt_by_player.insert(id, self.lan_acting);
                             if hurt && let Some(m) = self.mobs.iter().find(|m| m.id == id) {
@@ -3171,7 +3177,11 @@ impl Game<'_> {
                         }
                         self.finish_arrow_hit(arrow, EntityHit::Refused);
                     }
-                    // Mobs' refusals don't follow hurtServer yet: the arrow is gone.
+                    // EnderMan.hurtServer teleported away: the arrow flies on.
+                    (false, Who::Mob(_)) if dodged => {
+                        self.finish_arrow_hit(arrow, EntityHit::Dodged);
+                    }
+                    // Mobs' other refusals don't follow hurtServer yet: the arrow is gone.
                     (false, Who::Mob(_)) => {}
                 }
             }
