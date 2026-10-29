@@ -69,7 +69,8 @@ pub(super) struct LanHost {
     pub play: HashMap<u32, super::lan_actions::GuestPlay>,
     /// Blocks broken this tick (their sound is a level event for the guests).
     pub broken: Vec<[f64; 3]>,
-    /// Hurt time, death and swing time (while swinging) of the mobs guests see.
+    /// Hurt time, death and swing time (while swinging) of the mobs guests
+    /// see; the players' hurt time by entity id.
     mob_state: HashMap<super::Dim, HashMap<u32, (i32, bool, Option<i32>)>>,
     /// The guest each mob sees as its player, when not the host (game/lan_mobs.rs).
     pub mob_players: HashMap<u32, u32>,
@@ -325,10 +326,12 @@ fn mob_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, swimming 0x10 (a drowned
-    // under water, `Drowned.setSwimming`), invisible 0x20 (the effect's flag)
-    // and glowing 0x40 (LivingEntity.updateGlowingStatus).
+    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, sprinting 0x08 (a dashing
+    // cat or ocelot), swimming 0x10 (a drowned under water,
+    // `Drowned.setSwimming`), invisible 0x20 (the effect's flag) and glowing
+    // 0x40 (LivingEntity.updateGlowingStatus).
     let shared = i8::from(m.is_on_fire())
+        | i8::from(m.extra.sprinting) << 3
         | i8::from(m.species() == Species::Drowned && m.extra.flag) << 4
         | i8::from(m.invisible || horizon_client::mobs::trader::is_invisible(m)) << 5
         | i8::from(m.is_currently_glowing()) << 6;
@@ -518,6 +521,11 @@ fn mob_meta(
             defaults.push((collar, serializer::INT, Value::Int(red)));
             // Wolf.DATA_ANGER_END_TIME: the game time the anger ends, -1 when calm.
             if kind == "minecraft:wolf" {
+                // Wolf.DATA_INTERESTED_ID: BegGoal's flag, the head tilt.
+                if e.flag {
+                    meta.push((20, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                defaults.push((20, serializer::BOOLEAN, Value::Bool(false)));
                 if e.anger > 0 {
                     let end = game_time + i64::from(e.anger);
                     meta.push((22, serializer::LONG, Value::Long(end)));
@@ -800,6 +808,14 @@ fn mob_meta(
                 meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
             }
             defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Skeleton.DATA_STRAY_CONVERSION_ID (the first entry after Mob's):
+        // the shaking of the freezing conversion.
+        "minecraft:skeleton" => {
+            if e.counter2 > 0 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
         }
         // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
         "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
@@ -1519,6 +1535,7 @@ impl Game<'_> {
                 self.lan_riding(host_entity, &guests, &mut host.hub.riding);
                 self.lan_entities(host_entity, &host.mob_players, &mut host.hub, &mut states);
                 self.lan_hook_states(host_entity, &host.play, &host.hub, &mut states);
+                self.lan_entity_uuids(&mut states);
             } else {
                 states.clear();
             }
@@ -1596,9 +1613,7 @@ impl Game<'_> {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
                     }
-                    HostEvent::PlayerChat { sender, text } => {
-                        self.mod_player_chat(super::server_mods::Who::Uuid(sender), &text);
-                    }
+                    HostEvent::PlayerChat { .. } => {}
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
                         if self.options.dedicated.is_some()
@@ -1785,6 +1800,7 @@ impl Game<'_> {
             // A dedicated server has no host player.
             self.lan_entities(None, &host.mob_players, &mut host.hub, &mut theirs);
             self.lan_hook_states(None, &host.play, &host.hub, &mut theirs);
+            self.lan_entity_uuids(&mut theirs);
             theirs.as_slice()
         } else {
             entities
@@ -2008,6 +2024,34 @@ impl Game<'_> {
             }
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
+        // LivingEntity.hurtServer for a player: a hit that restarted the hurt
+        // time and was not blocked by a shield broadcasts the damage event,
+        // so the clients around (and the player's own) flash it red.
+        let host_player = self.player.as_ref().map(|p| {
+            (
+                host.host_entity,
+                [p.position.x, p.position.y, p.position.z],
+                p,
+            )
+        });
+        let guests = host.hub.guests.iter().filter(|g| host.hub.here(g));
+        let players: Vec<_> = host_player
+            .into_iter()
+            .chain(guests.filter_map(|g| g.motion.as_deref().map(|m| (g.entity_id, g.position, m))))
+            .map(|(id, at, p)| (id, at, p.health.hurt_animation_time, p.hurt_log.last()))
+            .collect();
+        for (id, at, hurt, record) in players {
+            let old = host
+                .mob_state
+                .get(&self.dim)
+                .and_then(|s| s.get(&(id as u32)));
+            if hurt > old.map_or(0, |o| o.0) {
+                // Starving keeps no record: any type flashes the same.
+                let kind = record.map_or("minecraft:generic", |r| r.source.as_str());
+                host.hub.damage_event(id, kind, None, None, at);
+            }
+            seen.insert(id as u32, (hurt, false, None));
+        }
         host.mob_state.insert(self.dim, seen);
         // Level.broadcastEntityEvent(player, 2) of a spear's stab.
         for attacker in kinetic_hits {
@@ -2116,11 +2160,13 @@ impl Game<'_> {
             m.limb_speed += ((dist * 4.0).min(1.0) - m.limb_speed) * 0.4;
             m.limb_position += m.limb_speed;
             m.age = m.age.wrapping_add(1);
-            m.extra.main_hand = g
-                .inventory
-                .get(g.selected)
-                .and_then(|s| s.as_ref())
-                .map(|s| s.item.clone());
+            // The hurt red flash (LivingEntity.hurtTime).
+            m.hurt_time = g
+                .motion
+                .as_ref()
+                .map_or(0, |p| p.health.hurt_animation_time);
+            m.extra
+                .set_main_hand_stack(g.inventory.get(g.selected).cloned().flatten());
             m.extra.off_hand = g.offhand.as_ref().map(|s| s.item.clone());
             [m.extra.head, m.extra.chest, m.extra.legs, m.extra.feet] = g
                 .armor
@@ -2249,6 +2295,14 @@ impl Game<'_> {
             );
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.held_item_geometry(m, camera, alpha, packed, true, out);
+            self.player_pumpkin_geometry(
+                m,
+                host.hub.guest(*conn).and_then(|g| g.armor[0].as_ref()),
+                camera,
+                alpha,
+                packed,
+                out,
+            );
             // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
             let guest = host.hub.guest(*conn);
             if m.glowing || guest.is_some_and(|g| g.effects.get("glowing").is_some()) {

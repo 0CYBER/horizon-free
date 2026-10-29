@@ -232,14 +232,34 @@ fn installs_jars_with_dependencies_then_updates_and_removes() {
     fake.release("map", Kind::Mod, "2", &["1.21.1"], &["fabric"], &["lib"]);
     let entry = Installed::load(&home).lookup("map").cloned().unwrap();
     assert_eq!(update_for(&fake, &t, &entry).unwrap().unwrap().number, "2");
+    // Turned off, the mod is kept as `.jar.disabled`, which the loaders skip.
+    set_on(&home, &entry, false).unwrap();
+    assert!(!is_on(&home, &entry));
+    assert!(
+        home.join("mods/map-1.jar.disabled").is_file() && !home.join("mods/map-1.jar").exists()
+    );
+    set_on(&home, &entry, false).unwrap();
+    // It stays off through an update, and the old file goes.
     install(&fake, &t, &map, &home, NONE).unwrap();
-    assert!(!home.join("mods/map-1.jar").exists());
-    assert!(home.join("mods/map-2.jar").is_file());
+    assert!(
+        !home.join("mods/map-1.jar").exists() && !home.join("mods/map-1.jar.disabled").exists()
+    );
+    assert!(
+        home.join("mods/map-2.jar.disabled").is_file() && !home.join("mods/map-2.jar").exists()
+    );
     let entry = Installed::load(&home).lookup("map").cloned().unwrap();
+    assert!(!is_on(&home, &entry));
     assert!(update_for(&fake, &t, &entry).unwrap().is_none());
+    install(&fake, &t, &map, &home, NONE).unwrap();
+    assert!(!is_on(&home, &entry));
+    set_on(&home, &entry, true).unwrap();
+    assert!(is_on(&home, &entry) && home.join("mods/map-2.jar").is_file());
+    set_on(&home, &entry, false).unwrap();
 
     remove(&home, "map-slug").unwrap();
-    assert!(!home.join("mods/map-2.jar").exists());
+    assert!(
+        !home.join("mods/map-2.jar").exists() && !home.join("mods/map-2.jar.disabled").exists()
+    );
     assert!(Installed::load(&home).lookup("map").is_none());
     assert!(home.join("mods/lib-1.jar").is_file());
     let _ = fs::remove_dir_all(&home);

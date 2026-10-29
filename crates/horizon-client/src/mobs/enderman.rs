@@ -182,10 +182,14 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     // Being angry (target set) makes the head "creepy" (render).
     m.extra.flag = m.ai.target.is_some();
 }
-/// Enderman.hurtServer: projectiles miss (teleport away) unless it rides
-/// something (`!isPassenger()`), others may teleport.
+/// Whether a hit teleports the enderman away instead of hurting it: any
+/// projectile, unless it rides something (`!isPassenger()`).
+pub fn dodges(m: &Mob, source: &Damage) -> bool {
+    source.is_projectile() && !m.extra.passenger
+}
+/// Enderman.hurtServer: projectiles miss (teleport away), others may teleport.
 pub fn on_damage(m: &mut Mob, source: &Damage) -> bool {
-    if source.is_projectile() && !m.extra.passenger {
+    if dodges(m, source) {
         // repeatedlyTryToTeleport is applied by the next AI step.
         m.extra.counter2 = 64;
         return false;
@@ -456,11 +460,14 @@ mod tests {
             let mut free = enderman();
             assert!(!on_damage(&mut free, &Damage::of(kind)), "{kind:?}");
             assert_eq!(free.extra.counter2, 64);
+            // The arrow handler keeps the arrow flying when the enderman dodges.
+            assert!(dodges(&free, &Damage::of(kind)), "{kind:?}");
 
             let mut seated = enderman();
             seated.extra.passenger = true;
             assert!(on_damage(&mut seated, &Damage::of(kind)), "{kind:?}");
             assert_eq!(seated.extra.counter2, 0, "no teleport while seated");
+            assert!(!dodges(&seated, &Damage::of(kind)), "{kind:?}");
         }
     }
 }

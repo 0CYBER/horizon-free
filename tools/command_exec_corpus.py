@@ -1134,6 +1134,58 @@ def server_clock():
     ]
 
 
+def wither_breaks():
+    """WitherBoss.customServerAiStep 20 ticks after it is hurt: Level.destroyBlock around it, which leaves
+    each cell's fluid (FluidState.createLegacyBlock), so water stays and a waterlogged block turns to water."""
+    return [
+        *setup('/fill 4 206 4 12 217 12 minecraft:glass hollow', '/fill 5 207 5 11 216 11 minecraft:water',
+               '/setblock 7 210 7 minecraft:stone', '/setblock 9 211 9 minecraft:oak_stairs[waterlogged=true]',
+               '/setblock 7 212 9 minecraft:oak_slab[waterlogged=false]'),
+        {'op': 'tick', 'n': 10},
+        *setup('/summon minecraft:wither 8.5 210 8.5 {NoGravity:1b,Tags:["wb"]}'),
+        cmd('/damage @e[tag=wb,limit=1] 1'),
+        # WaterAvoidingRandomFlyingGoal may set off on a stroll (the wither's random is unseeded in vanilla),
+        # which moves the box destroyBlocksTick breaks. Hold it in place each tick until then: customServerAiStep
+        # runs before travel, so the break sees the teleported position.
+        *[op for _ in range(25) for op in (*setup('/tp @e[tag=wb] 8.5 210 8.5'), {'op': 'tick', 'n': 1})],
+        {'op': 'tick', 'n': 15},
+        cmd('/execute if block 8 212 8 minecraft:water'),
+        cmd('/execute if block 9 211 9 minecraft:water'),
+        cmd('/execute if block 9 211 9 minecraft:oak_stairs'),
+        cmd('/execute if block 7 210 7 minecraft:stone'),
+        cmd('/execute if block 7 212 9 minecraft:oak_slab'),
+        # The broken cells' neighbours were updated (setBlock flag 3): the pool flows back in.
+        cmd('/execute if block 7 210 7 minecraft:water'),
+        cmd('/execute if block 7 212 9 minecraft:water'),
+        cmd('/execute if block 6 210 6 minecraft:water'),
+        *setup('/kill @e[tag=wb]', '/fill 4 206 4 12 217 12 minecraft:air'),
+        {'op': 'tick', 'n': 25},
+    ]
+
+
+def ender_dragon():
+    """`/kill` on the fight's dragon ends the fight (#3319): `EnderDragon.kill` removes it and calls
+    `EnderDragonFight.setDragonKilled`, so no new dragon takes its place, the exit portal opens and the
+    first dragon leaves its egg. The player stays over the exit portal, in the fight (`validPlayer`)."""
+    end = '/execute in minecraft:the_end run'
+    return [
+        *setup('/gamemode creative', f'{end} tp @s 0.5 100 0.5 0 0'),
+        {'op': 'settle'},
+        # updatePlayers, the arena scan and createNewDragon once the 17 by 17 arena chunks are block ticking
+        # (EnderDragonFight.isArenaLoaded). The oracle generates them on worker threads: a tick op with a
+        # `record` key gives it a moment of wall time before its ticks.
+        *[{'op': 'tick', 'n': 20, 'record': False}] * 10,
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd('/kill @e[type=minecraft:ender_dragon]'),
+        {'op': 'tick', 'n': 40},
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd(f'{end} fill -3 0 -3 3 120 3 minecraft:air replace minecraft:end_portal'),
+        cmd(f'{end} fill -3 0 -3 3 120 3 minecraft:air replace minecraft:dragon_egg'),
+        *setup('/execute in minecraft:overworld run tp @s 8.5 230 8.5 0 0'),
+        {'op': 'settle'},
+    ]
+
+
 def groups():
     return [
         ('setup', group_setup()),
@@ -1157,4 +1209,6 @@ def groups():
         ('compute', compute()),
         ('social and scoreboard', social()),
         ('test', test_command()),
+        ('wither breaks', wither_breaks()),
+        ('ender dragon', ender_dragon()),
     ]
