@@ -2733,14 +2733,10 @@ impl Game<'_> {
                 [position.x, position.y, position.z],
                 [velocity.x, velocity.y, velocity.z],
             ),
-            ArrowEvent::EffectParticle { color, position } => {
-                // Arrow.makeParticle: an entity-effect particle in the potion's colour.
-                let c = |shift: u32| (color >> shift & 255) as f32 / 255.0;
-                self.particles.add(
-                    &ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0]),
-                    [position.x, position.y, position.z],
-                    [0.0; 3],
-                );
+            // Arrow.tick: `broadcastEntityEvent(this, 0)`. The window and the
+            // guests burst the particles themselves (`remote_arrow_puff`).
+            ArrowEvent::PotionPuff { id, .. } => {
+                self.lan_entity_event(id as i32, 0, [at.x, at.y, at.z]);
             }
             ArrowEvent::Sound {
                 sound,

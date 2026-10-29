@@ -416,6 +416,7 @@ impl Game<'_> {
                         a.is_some_and(|a| a.no_physics),
                         a.map_or(0, |a| a.pierce),
                         a.is_some_and(|a| a.in_ground) || p.stuck,
+                        a.and_then(|a| a.effect_color()),
                     ));
                 }
                 // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
@@ -427,6 +428,7 @@ impl Game<'_> {
                         a.is_some_and(|a| a.no_physics),
                         0,
                         a.is_some_and(|a| a.in_ground) || p.stuck,
+                        None,
                     ));
                     if a.is_some_and(|a| a.pickup_item.has_any_enchantments()) {
                         e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
@@ -470,7 +472,7 @@ impl Game<'_> {
                 Some(g) => g.entity_id,
                 None => owner(Some(horizon_client::mobs::Who::Player)),
             };
-            e.meta = arrow_meta(false, t.no_physics, 0, t.in_ground);
+            e.meta = arrow_meta(false, t.no_physics, 0, t.in_ground, None);
             // ThrownTrident.ID_LOYALTY and ID_FOIL.
             if t.loyalty != 0 {
                 e.meta
@@ -573,12 +575,15 @@ impl Game<'_> {
 }
 
 /// `AbstractArrow`'s ID_FLAGS (critical 1, no physics 2), PIERCE_LEVEL and
-/// IN_GROUND, when they differ from the defaults.
+/// IN_GROUND, and `Arrow.ID_EFFECT_COLOR` of a tipped arrow, when they differ
+/// from the defaults. The colour is not sent back to -1 once the arrow turns
+/// plain: the clients end it on entity event 0.
 fn arrow_meta(
     critical: bool,
     no_physics: bool,
     pierce: u8,
     in_ground: bool,
+    color: Option<u32>,
 ) -> Vec<(u8, i32, Value)> {
     let mut meta = Vec::new();
     let flags = i8::from(critical) | i8::from(no_physics) << 1;
@@ -590,6 +595,14 @@ fn arrow_meta(
     }
     if in_ground {
         meta.push((10, serializer::BOOLEAN, Value::Bool(true)));
+    }
+    if let Some(color) = color {
+        // PotionContents.getColor is opaque ARGB.
+        meta.push((
+            11,
+            serializer::INT,
+            Value::Int((0xFF00_0000 | color) as i32),
+        ));
     }
     meta
 }

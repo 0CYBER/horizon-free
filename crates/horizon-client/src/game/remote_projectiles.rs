@@ -113,6 +113,11 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
 fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     p.previous = p.position;
     p.age += 1;
+    // The shake timer runs down, and `inGroundTime` counts the ticks in a block.
+    if let Some(a) = p.arrow.as_mut() {
+        a.shake = (a.shake - 1).max(0);
+        a.in_ground_time = if p.stuck { a.in_ground_time + 1 } else { 0 };
+    }
     if p.stuck {
         return;
     }
@@ -125,6 +130,12 @@ fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
         p.position = at;
         p.velocity = Vec3::ZERO;
         p.stuck = true;
+        // AbstractArrow.onSyncedDataUpdated: IN_GROUND turning true starts the shake.
+        if let Some(a) = p.arrow.as_mut()
+            && a.shake <= 0
+        {
+            a.shake = 7;
+        }
         return;
     }
     p.position = to;
@@ -161,6 +172,40 @@ impl Game<'_> {
         for p in at {
             self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
         }
+    }
+
+    /// `Arrow.makeParticle`: `amount` entity-effect particles in the potion's
+    /// colour inside the arrow's 0.5 box (`getRandomX(0.5)`, `getRandomY()`,
+    /// `getRandomZ(0.5)`), placed by the client's random.
+    pub(super) fn arrow_effect_particles(&mut self, at: Vec3, color: u32, amount: u32) {
+        let c = |shift: u32| (color >> shift & 255) as f32 / 255.0;
+        let options =
+            ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0]);
+        for _ in 0..amount {
+            let r = self.particles.random();
+            let x = (2.0 * r.next_double() - 1.0) * 0.5;
+            let y = r.next_double();
+            let z = (2.0 * r.next_double() - 1.0) * 0.5;
+            self.particles.add(
+                &options,
+                [at.x + 0.5 * x, at.y + 0.5 * y, at.z + 0.5 * z],
+                [0.0; 3],
+            );
+        }
+    }
+
+    /// `Arrow.handleEntityEvent(0)`: a tipped arrow stuck for 600 ticks bursts
+    /// into twenty particles in its colour. The server turns it into a plain
+    /// arrow (and does not send the colour again), so it stops here.
+    pub(super) fn remote_arrow_puff(&mut self, id: u32) {
+        let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) else {
+            return;
+        };
+        let Some(color) = p.arrow.as_mut().and_then(|a| a.synced_color.take()) else {
+            return;
+        };
+        let at = p.position;
+        self.arrow_effect_particles(at, color, 20);
     }
 
     /// `handleAddEntity` for these types; false when `kind` isn't one.
@@ -368,7 +413,23 @@ impl Game<'_> {
                         *critical = flags & 1 != 0;
                     }
                     (ProjectileKind::Arrow { .. }, 10, Value::Bool(in_ground)) => {
+                        // AbstractArrow.onSyncedDataUpdated: IN_GROUND turning true after
+                        // the first tick starts the shake.
+                        if *in_ground
+                            && !p.stuck
+                            && p.age > 0
+                            && let Some(a) = p.arrow.as_mut()
+                            && a.shake <= 0
+                        {
+                            a.shake = 7;
+                        }
                         p.stuck = *in_ground;
+                    }
+                    // Arrow.ID_EFFECT_COLOR: -1 for a plain arrow.
+                    (ProjectileKind::Arrow { .. }, 11, Value::Int(color)) => {
+                        if let Some(a) = p.arrow.as_mut() {
+                            a.synced_color = (*color != -1).then_some(*color as u32);
+                        }
                     }
                     // WitherSkull.DATA_DANGEROUS.
                     (ProjectileKind::WitherSkull { dangerous }, 8, Value::Bool(d)) => {
@@ -471,6 +532,26 @@ impl Game<'_> {
         }
         self.creatures.projectiles = projectiles;
         self.tridents = tridents;
+        // Arrow.tick on a client: a tipped arrow's particles, two per tick in
+        // flight and one every fifth tick in a block.
+        let puffs: Vec<(Vec3, u32, u32)> = self
+            .creatures
+            .projectiles
+            .iter()
+            .filter_map(|p| {
+                let a = p.arrow.as_deref()?;
+                let color = a.effect_color()?;
+                let amount = if p.stuck {
+                    u32::from(a.in_ground_time % 5 == 0)
+                } else {
+                    2
+                };
+                (amount > 0).then_some((p.position, color, amount))
+            })
+            .collect();
+        for (at, color, amount) in puffs {
+            self.arrow_effect_particles(at, color, amount);
+        }
         let trails: Vec<Vec3> = self
             .creatures
             .projectiles
