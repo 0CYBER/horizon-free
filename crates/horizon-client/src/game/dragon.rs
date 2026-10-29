@@ -801,10 +801,7 @@ impl Game<'_> {
             }
             if !self.fight.killed {
                 if self.dragon.is_none() {
-                    // createNewDragon: over the podium, holding pattern, a random yaw.
-                    let yaw = self.world.random.next_float() * 360.0;
-                    let seed = self.world.random.next_long();
-                    self.dragon = Some(Dragon::new(Vec3::new(0.0, 128.0, 0.0), yaw, seed));
+                    self.create_new_dragon();
                 }
                 self.fight.crystal_scan += 1;
                 if self.fight.crystal_scan >= 100 {
@@ -3317,6 +3314,12 @@ impl Game<'_> {
             }
         }
     }
+    /// `EnderDragonFight.createNewDragon`: over the podium, holding pattern, a random yaw.
+    fn create_new_dragon(&mut self) {
+        let yaw = self.world.random.next_float() * 360.0;
+        let seed = self.world.random.next_long();
+        self.dragon = Some(Dragon::new(Vec3::new(0.0, 128.0, 0.0), yaw, seed));
+    }
     /// The END stage: the portal crystals blow up (no block damage) and a
     /// new dragon takes over.
     fn finish_respawn(&mut self) {
@@ -3343,6 +3346,31 @@ impl Game<'_> {
             }
         }
         self.fight.killed = false;
+        // setRespawnStage(END): the new dragon is summoned for every player
+        // of the fight (the boss bar's players: alive within 192 blocks).
+        self.create_new_dragon();
+        let view = self
+            .dragon
+            .as_ref()
+            .map(|d| horizon_client::advancements::EntityView {
+                kind: "minecraft:ender_dragon".to_owned(),
+                position: [d.position.x, d.position.y, d.position.z],
+                ..Default::default()
+            });
+        if let Some(view) = view {
+            self.for_each_player(|g| {
+                let near = g.player.as_ref().is_some_and(|p| {
+                    !p.health.dead_or_dying()
+                        && p.position.x.powi(2)
+                            + (p.position.y - 128.0).powi(2)
+                            + p.position.z.powi(2)
+                            <= 192.0 * 192.0
+                });
+                if near {
+                    g.trigger_entity("minecraft:summoned_entity", "entity", &view);
+                }
+            });
+        }
         self.fight.dirty = true;
         self.count_crystals();
     }

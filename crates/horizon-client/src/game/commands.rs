@@ -2072,6 +2072,49 @@ impl Game<'_> {
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         true
     }
+    /// `RandomizableContainer.unpackLootTable` for a player who opens a
+    /// container: a roll the container still holds fires
+    /// `player_generates_container_loot` for its table, and from then on the
+    /// container saves its items, not the table.
+    pub(super) fn unpack_opened_loot(&mut self, key: (i32, i32, i32), name: &str) {
+        let Some(rolled) = self
+            .world
+            .chunks
+            .get(&(key.0 >> 4, key.2 >> 4))
+            .and_then(|c| c.saved.as_ref())
+            .and_then(|s| s.rolled_loot.iter().find(|r| r.pos == key))
+            .cloned()
+        else {
+            return;
+        };
+        // The roll is still there only while the container holds exactly its items.
+        let still_rolled = self
+            .world
+            .block_entities
+            .get_mut(&key)
+            .is_some_and(|entity| {
+                let mut tag = horizon_client::save::encode_block_entity(key, entity, name);
+                match &mut tag {
+                    horizon_world::nbt::Tag::Compound(map) => rolled.restore(map),
+                    _ => false,
+                }
+            });
+        if still_rolled {
+            self.trigger_loot_table(&rolled.table);
+        }
+        let Some(chunk) = self.world.chunks.get_mut(&(key.0 >> 4, key.2 >> 4)) else {
+            return;
+        };
+        let chunk = std::sync::Arc::make_mut(chunk);
+        let mut extras = chunk
+            .saved
+            .take()
+            .map(std::sync::Arc::unwrap_or_clone)
+            .unwrap_or_default();
+        extras.rolled_loot.retain(|r| r.pos != key);
+        chunk.saved = Some(std::sync::Arc::new(extras));
+        self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+    }
     /// RandomizableContainer.tryLoadLootTable for a tag a command gives a
     /// container (`setblock`, `data`): an empty container with a `LootTable`
     /// is rolled now, as a loaded chunk's are (`save::roll_loaded_loot`), and
