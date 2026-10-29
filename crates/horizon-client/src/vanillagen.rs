@@ -19,6 +19,7 @@ use horizon_world::{
         generator::{
             GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
         },
+        overrides::WorldgenOverrides,
         terrain::PreLightChunkStage,
     },
 };
@@ -154,13 +155,40 @@ impl VanillaTerrain {
         dimension: &str,
         structures: bool,
     ) -> crate::Result<Self> {
-        let data: Arc<GeneratorData> = shared_data(dir, registry)?;
+        let none = WorldgenOverrides::default();
+        Self::for_world_with(
+            dir, &none, registry, biomes, seed, preset, dimension, structures,
+        )
+    }
+    /// `for_world` with the world's data packs over the bundle at `dir`
+    /// (`datapack::worldgen_overrides`).
+    pub fn for_world_with(
+        dir: &Path,
+        overrides: &WorldgenOverrides,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+        preset: &str,
+        dimension: &str,
+        structures: bool,
+    ) -> crate::Result<Self> {
+        let data: Arc<GeneratorData> = shared_data_with(dir, overrides, registry)?;
         let biome_map = data
             .biome_names()
             .iter()
             .map(|name| biomes.id(name))
             .collect();
         let generator = OverworldGenerator::for_world(data, seed, preset, dimension, structures)?;
+        if let Some((asked, kept)) = generator.noise_clamped() {
+            log::warn!(
+                "Horizon: {dimension}'s noise settings reach y {}..{}, past its build height; \
+                 only y {}..{} generates",
+                asked.min_y,
+                asked.min_y + asked.height,
+                kept.min_y,
+                kept.min_y + kept.height
+            );
+        }
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(
@@ -407,8 +435,12 @@ impl VanillaTerrain {
         u64::try_from(self.created.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
-static SHARED_DATA: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> =
-    std::sync::Mutex::new(Vec::new());
+/// A bundle directory, the data packs over it, and what loading them gave.
+type SharedEntry = (std::path::PathBuf, WorldgenOverrides, Arc<GeneratorData>);
+static SHARED_DATA: std::sync::Mutex<Vec<SharedEntry>> = std::sync::Mutex::new(Vec::new());
+/// Bundles with data packs kept besides the plain ones: a world's dimensions
+/// share one, and returning to a world finds it.
+const SHARED_WITH_PACKS: usize = 2;
 /// Let go of the bundles `shared_data` loaded: for a preload no world used
 /// (game/world_loading.rs). A generator that holds one keeps it.
 pub fn forget_shared_data() {
@@ -423,14 +455,35 @@ pub fn shared_data(
     dir: &Path,
     registry: &'static BlockRegistry,
 ) -> crate::Result<Arc<GeneratorData>> {
+    shared_data_with(dir, &WorldgenOverrides::default(), registry)
+}
+/// `shared_data` with a world's data packs over the bundle: loaded once for
+/// each set of packs' entries, the most recent few kept.
+pub fn shared_data_with(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+    registry: &'static BlockRegistry,
+) -> crate::Result<Arc<GeneratorData>> {
     let mut cache = SHARED_DATA.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
+    if let Some((_, _, data)) = cache
+        .iter()
+        .find(|(path, o, _)| path == dir && o == overrides)
+    {
         return Ok(data.clone());
     }
     let started = std::time::Instant::now();
-    let data = GeneratorData::load(dir, registry)?;
+    let data = GeneratorData::load_with(dir, registry, overrides)?;
     log::info!("Horizon: worldgen data loaded in {:?}", started.elapsed());
-    cache.push((dir.to_owned(), data.clone()));
+    for warning in data.warnings() {
+        log::warn!("Horizon: data pack worldgen: {warning}");
+    }
+    if !overrides.is_empty()
+        && cache.iter().filter(|e| !e.1.is_empty()).count() >= SHARED_WITH_PACKS
+    {
+        let oldest = cache.iter().position(|e| !e.1.is_empty());
+        cache.remove(oldest.expect("counted"));
+    }
+    cache.push((dir.to_owned(), overrides.clone(), data.clone()));
     Ok(data)
 }
 impl ChunkGenerator for VanillaTerrain {

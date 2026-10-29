@@ -570,6 +570,15 @@ impl OptionsFile {
             self.values[i] = V::Int(p as i32);
         }
     }
+    /// `Options.modelCustomisation`: the PlayerModelPart bits the player shows
+    /// (cape first, as `modelPart_*` is in `MODEL_PARTS`).
+    pub fn model_customisation(&self) -> u8 {
+        MODEL_PARTS
+            .iter()
+            .enumerate()
+            .filter(|(_, part)| self.bool(&format!("modelPart_{part}")))
+            .fold(0, |bits, (bit, _)| bits | 1 << bit)
+    }
     /// Key mapping value by mapping name.
     pub fn key_binding(&self, name: &str) -> String {
         self.string(&format!("key_{name}"))
