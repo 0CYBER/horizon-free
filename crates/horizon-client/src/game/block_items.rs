@@ -73,6 +73,21 @@ impl Game<'_> {
                 Tag::compound([("honey_level", Tag::String(level.as_str().into()))]),
             );
         }
+        // CopperGolemStatueBlock.getCloneItemStack: the statue's pose as the item's
+        // block_state (`CopperGolemStatueBlockEntity.getItem`), data or not.
+        if let Some(pose) = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .filter(|s| s.name.ends_with("copper_golem_statue"))
+            .and_then(|s| s.properties.get("copper_golem_pose"))
+        {
+            patch.insert(
+                "minecraft:block_state".into(),
+                Tag::compound([("copper_golem_pose", Tag::String(pose.as_str().into()))]),
+            );
+        }
         // AbstractBannerBlock.getCloneItemStack: the banner's own item
         // (BannerBlockEntity.getItem), data or not.
         let banner = matches!(
