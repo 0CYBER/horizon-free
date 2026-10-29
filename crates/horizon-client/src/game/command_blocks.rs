@@ -646,6 +646,8 @@ impl Game<'_> {
     ) {
         let ctrl = self.keys.contains(&KeyCode::ControlLeft);
         let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        // Windows' AltGr is Ctrl+Alt, and its characters still type.
+        let types_text = self.types_text();
         let Some(mut s) = self.command_block_screen.take() else {
             return;
         };
@@ -665,7 +667,7 @@ impl Game<'_> {
                     s.command.shortcut(&m, &c, shortcut, &mut self.clipboard);
                     false
                 } else {
-                    !s.command.field_key(&m, &c, key, shift, ctrl) && !ctrl
+                    !s.command.field_key(&m, &c, key, shift, ctrl) && types_text
                 }
             }
         };

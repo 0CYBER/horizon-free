@@ -181,9 +181,15 @@ pub fn compatible(meta: &serde_json::Value) -> bool {
 /// `PackCompatibility.forVersion`: too old, too new, compatible, or unknown
 /// when the metadata names no format.
 pub fn compatibility(meta: &serde_json::Value) -> crate::pack_screen::Compat {
+    compatibility_for(meta, RESOURCE_FORMAT)
+}
+/// `compatibility` against `current`, the resource or the data pack format.
+pub fn compatibility_for(
+    meta: &serde_json::Value,
+    current: (i64, i64),
+) -> crate::pack_screen::Compat {
     use crate::pack_screen::Compat;
     let pack = &meta["pack"];
-    let current = RESOURCE_FORMAT;
     let range = if let (Some(min), Some(max)) = (
         format_of(&pack["min_format"]),
         format_of(&pack["max_format"]),
@@ -275,6 +281,10 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
     serde_json::from_slice(&bytes).ok()
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
+    pack_for(id, title, source, RESOURCE_FORMAT)
+}
+/// A pack whose compatibility is against `format`.
+fn pack_for(id: String, title: Text, source: Source, format: (i64, i64)) -> Option<Pack> {
     let meta = read_meta(&source)?;
     let (raw_description, description_style) = component_root(&meta["pack"]["description"]);
     Some(Pack {
@@ -284,7 +294,7 @@ fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
         raw_description,
         description_style,
         compatible: compatible(&meta),
-        compatibility: compatibility(&meta),
+        compatibility: compatibility_for(&meta, format),
         overlays: overlays_of(&meta),
         filter: filter_of(&meta),
         source,
@@ -305,7 +315,13 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
             out.push(p);
         }
     }
-    let mut user: Vec<Pack> = fs::read_dir(packs_dir)
+    out.extend(folder(packs_dir, RESOURCE_FORMAT));
+    out
+}
+/// The packs (folders and zips) in `dir`, by name, as `FolderRepositorySource`
+/// finds them; their compatibility is against `format`.
+pub fn folder(dir: &Path, format: (i64, i64)) -> Vec<Pack> {
+    let mut user: Vec<Pack> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -319,12 +335,11 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
             } else {
                 return None;
             };
-            pack(format!("file/{name}"), Text::literal(name), source)
+            pack_for(format!("file/{name}"), Text::literal(name), source, format)
         })
         .collect();
     user.sort_by(|a, b| a.id.cmp(&b.id));
-    out.extend(user);
-    out
+    user
 }
 /// A file a pack provides: its path (folder packs) and its name inside the pack.
 type Provided = (Option<PathBuf>, String);
@@ -380,11 +395,45 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
     if target.is_dir() {
         Ok(())
     } else {
-        fs::copy(target, at).map(|_| ())
+        // The mirror only reads these files, and unix links them: a hardlink gives
+        // the same view without writing the 639 MB prepared root again, which was
+        // 33 s of a cold Windows launch with a pack on. Another volume (or a
+        // filesystem without hardlinks) still copies.
+        fs::hard_link(target, at).or_else(|_| fs::copy(target, at).map(|_| ()))
     }
 }
+/// A directory junction, which Windows creates without privileges (a directory symlink needs
+/// developer mode). The mirror falls back to copying the tree when it fails.
+#[cfg(windows)]
+fn junction(target: &Path, at: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    // cmd parses its own line: Rust quotes only paths with spaces, so `&` or `^` in an
+    // unquoted path would split or change the command. A Windows path cannot hold `"`.
+    let quoted = |path: &Path| -> io::Result<std::ffi::OsString> {
+        let mut quoted = std::ffi::OsString::from("\"");
+        quoted.push(std::path::absolute(path)?);
+        quoted.push("\"");
+        Ok(quoted)
+    };
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .raw_arg(quoted(at)?)
+        .raw_arg(quoted(target)?)
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| io::Error::other("mklink /J failed"))
+}
+#[cfg(not(windows))]
+fn junction(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
-/// load order, last wins). Untouched directories are symlinks into vanilla.
+/// load order, last wins). Untouched directories are links into vanilla.
 pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()> {
     cache::build(vanilla, packs, out)
 }
@@ -416,6 +465,22 @@ fn build_overlay_uncached(
             }
             files.insert(name, (i, provided));
         }
+    }
+    // FallbackResourceManager: a file's `.mcmeta` counts only from the pack that
+    // supplies the file or one above it; vanilla's own sits below every pack.
+    let hidden: BTreeSet<String> = files
+        .iter()
+        .filter(|(name, _)| !name.ends_with(".mcmeta"))
+        .filter_map(|(name, (owner, _))| {
+            let meta = format!("{name}.mcmeta");
+            match files.get(&meta) {
+                Some((meta_owner, _)) if meta_owner >= owner => None,
+                _ => Some(meta),
+            }
+        })
+        .collect();
+    for name in &hidden {
+        files.remove(name);
     }
     // Vanilla sits below every pack, so filters hide its files too.
     let filters: Vec<&Filter> = packs.iter().flat_map(|p| &p.filter).collect();
@@ -468,6 +533,7 @@ fn build_overlay_uncached(
         vanilla: &Path,
         out: &Path,
         touched: &BTreeSet<String>,
+        hidden: &BTreeSet<String>,
         files: &BTreeMap<String, (usize, Provided)>,
         merged: &BTreeMap<String, Vec<u8>>,
         filters: &[&Filter],
@@ -504,6 +570,9 @@ fn build_overlay_uncached(
         }
         for name in names {
             let child = format!("{prefix}{name}");
+            if hidden.contains(&child) {
+                continue;
+            }
             if let Some(bytes) = merged.get(&child) {
                 fs::write(out.join(&child), bytes)?;
             } else if let Some((owner, (path, inner))) = files.get(&child) {
@@ -516,11 +585,17 @@ fn build_overlay_uncached(
                         }
                     }
                 }
+            } else if filters.is_empty()
+                && !touched.contains(&child)
+                && vanilla.join(&child).is_dir()
+                && junction(&vanilla.join(&child), &out.join(&child)).is_ok()
+            {
+                // Linked whole, like the unix symlink: no file in it is visited or copied.
             } else if touched.contains(&child)
-                // Windows cannot link a directory the way unix does (`link` above), so an
-                // untouched one has to be mirrored: skipping it hid textures/font and the
-                // title panorama from the overlay, and a font json that names those sheets
-                // then failed to load (#1688).
+                // Without a junction Windows cannot link a directory the way unix does (`link`
+                // above), so an untouched one has to be mirrored: skipping it hid textures/font
+                // and the title panorama from the overlay, and a font json that names those
+                // sheets then failed to load (#1688).
                 || (vanilla.join(&child).is_dir() && (cfg!(not(unix)) || !filters.is_empty()))
             {
                 mirror(
@@ -528,6 +603,7 @@ fn build_overlay_uncached(
                     vanilla,
                     out,
                     touched,
+                    hidden,
                     files,
                     merged,
                     filters,
@@ -551,6 +627,7 @@ fn build_overlay_uncached(
         vanilla,
         out,
         &touched_dirs,
+        &hidden,
         &files,
         &merged,
         &filters,
@@ -741,7 +818,9 @@ impl SelectionModel {
     /// `available` in any order; `selected` as options.txt lists them,
     /// bottom first.
     pub fn new(mut available: Vec<Selectable>, selected: &[String]) -> Self {
-        // PackRepository.available is a TreeMap by id (String.compareTo).
+        // PackRepository.discoverAvailable: every source's packs go into one
+        // TreeMap by id (String.compareTo), so `file/` packs sort among the
+        // built-in ones.
         available.sort_by(|a, b| a.id.encode_utf16().cmp(b.id.encode_utf16()));
         available.dedup_by(|a, b| a.id == b.id);
         let mut m = Self {
@@ -939,7 +1018,8 @@ mod tests {
     }
     #[test]
     fn overlay_layers_packs_over_vanilla() {
-        let base = std::env::temp_dir().join(format!("horizon-packs-{}", std::process::id()));
+        // `&` would split an unquoted `cmd /C mklink` line.
+        let base = std::env::temp_dir().join(format!("horizon-packs-&{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let vanilla = base.join("vanilla");
         fs::create_dir_all(vanilla.join("assets/minecraft/textures/block")).unwrap();
@@ -960,6 +1040,13 @@ mod tests {
         )
         .unwrap();
         fs::write(vanilla.join("facts.json"), b"[]").unwrap();
+        // A directory no pack touches (#1688: a font json names sheets in it).
+        fs::create_dir_all(vanilla.join("assets/minecraft/textures/font")).unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/font/ascii.png"),
+            b"font",
+        )
+        .unwrap();
         let pack_dir = base.join("packs/Mine");
         fs::create_dir_all(pack_dir.join("assets/minecraft/textures/block")).unwrap();
         fs::write(
@@ -997,6 +1084,17 @@ mod tests {
             br#"{"a":"vanilla","b":"pack"}"#
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/font/ascii.png")).unwrap(),
+            b"font"
+        );
+        // Linked, not mirrored: a junction on Windows, a symlink on unix.
+        assert!(
+            fs::symlink_metadata(out.join("assets/minecraft/textures/font"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         let _ = fs::remove_dir_all(base);
     }
     #[test]

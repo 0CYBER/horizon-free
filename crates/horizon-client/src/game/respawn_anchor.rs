@@ -132,6 +132,15 @@ impl Game<'_> {
             .play("minecraft:block.respawn_anchor.charge", Some(at), 1.0, 1.0);
         Ok(())
     }
+    /// `RespawnAnchorBlock.useItemOn`'s test: `held` is glowstone
+    /// (`isRespawnFuel`) and the block at `pos` is an anchor that takes another
+    /// charge (`canBeCharged`).
+    pub(super) fn anchor_takes(&self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        held.is_some_and(|s| &*s.item == "minecraft:glowstone")
+            && self.is_anchor(state)
+            && self.anchor_charges(state) < 4
+    }
     /// `RespawnAnchorBlock.useItemOn` with `held` in the hand that acts.
     pub(super) fn use_respawn_anchor(
         &mut self,

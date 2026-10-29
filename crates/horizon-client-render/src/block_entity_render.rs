@@ -654,10 +654,20 @@ fn sign_text_calls(
         .collect()
 }
 
+/// How far the text of an outlined call sits in front of its outline, in
+/// text units (`Font.DisplayMode.POLYGON_OFFSET`, see `draw_text`).
+const TEXT_OVER_OUTLINE: f32 = 0.05;
+
 /// Draws a text call with the font atlas: 8x8 glyph cells, the outline as
 /// eight one-pixel offsets under the text.
+///
+/// `TextFeatureRenderer.renderText` draws the outline glyphs NORMAL and the
+/// text over them POLYGON_OFFSET, so the coplanar text always wins the depth
+/// test. Here both share one mesh, so the text is lifted a hair towards the
+/// reader instead (a twentieth of a font pixel, invisible) rather than
+/// z-fighting with the outline under it.
 fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
-    let mut emit = |dx: f32, dy: f32, argb: u32| {
+    let mut emit = |dx: f32, dy: f32, z: f32, argb: u32| {
         let mut x = call.x + dx;
         let y0 = call.y + dy;
         for ch in call.text.chars() {
@@ -672,7 +682,7 @@ fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
                         normal: [0; 4],
                         pos: call
                             .matrix
-                            .transform_point3(Vec3::new(cx, cy, 0.0))
+                            .transform_point3(Vec3::new(cx, cy, z))
                             .to_array(),
                         uv,
                         layer: 0,
@@ -697,10 +707,15 @@ fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
             (0.0, 1.0),
             (1.0, 1.0),
         ] {
-            emit(dx, dy, call.outline);
+            emit(dx, dy, 0.0, call.outline);
         }
     }
-    emit(0.0, 0.0, call.color);
+    let z = if call.outline != 0 {
+        TEXT_OVER_OUTLINE
+    } else {
+        0.0
+    };
+    emit(0.0, 0.0, z, call.color);
 }
 
 /// Block-entity fields the level ticks, at one position (vanilla's own field
@@ -2256,6 +2271,69 @@ mod tests {
         assert_eq!(out.len(), 4);
         assert_eq!(out[1].pos, [2.0, 0.0, 0.0]);
         assert_eq!(out[2].uv, [0.5, 0.5]);
+    }
+
+    /// TextFeatureRenderer.renderText: an outlined call's text is drawn over
+    /// its outline (Font.DisplayMode.POLYGON_OFFSET), never level with it,
+    /// and plain text stays on the sign's plane.
+    #[test]
+    fn outlined_sign_text_sits_in_front_of_its_outline() {
+        let world = World::new(BlockStateId(0), 1);
+        let sprites = HashMap::new();
+        let glyph = |_: char| {
+            let rect = Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 0.0625,
+                v1: 0.0625,
+                w: 8,
+                h: 8,
+            };
+            (Some(rect), 6.0)
+        };
+        let scene = Scene {
+            camera: DVec3::ZERO,
+            orientation: Quat::IDENTITY,
+            anim: &|_| BlockAnim::default(),
+            texts: None,
+            partial: 0.0,
+            game_time: 0,
+            max_y: 320,
+            world: &world,
+            sprites: &sprites,
+            nether: false,
+            lid: &|_| 0.0,
+            sign: &|_| None,
+            banner: &|_| Vec::new(),
+            skull: &|_| None,
+            glyph: &glyph,
+            glyphs: 0,
+        };
+        let mut call = TextCall {
+            matrix: Mat4::IDENTITY,
+            x: 0.0,
+            y: 0.0,
+            text: "Hi".into(),
+            color: 0xFFFF_FF00,
+            outline: 0xFF33_3300,
+            light: 240 | 240 << 8,
+        };
+        let mut out = Vec::new();
+        draw_text(&scene, &call, &mut out);
+        // Eight outline copies, then the text, four corners a glyph.
+        assert_eq!(out.len(), 9 * 2 * 4);
+        let (outline, text) = out.split_at(8 * 2 * 4);
+        let front = outline.iter().map(|v| v.pos[2]).fold(f32::MIN, f32::max);
+        assert!(
+            text.iter().all(|v| v.pos[2] > front),
+            "text z {:?} not in front of the outline at {front}",
+            text.iter().map(|v| v.pos[2]).collect::<Vec<_>>()
+        );
+        call.outline = 0;
+        out.clear();
+        draw_text(&scene, &call, &mut out);
+        assert_eq!(out.len(), 2 * 4);
+        assert!(out.iter().all(|v| v.pos[2] == 0.0));
     }
 
     #[test]
