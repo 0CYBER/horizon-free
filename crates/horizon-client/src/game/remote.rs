@@ -4792,6 +4792,16 @@ impl Game<'_> {
                     }
                 });
                 return true;
+            } else if held
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:bone_meal")
+                && self.remote_bone_meal_succeeds(&hit)
+            {
+                // BoneMealItem.useOn succeeded on this client's level (SUCCESS;
+                // the server grows the plant): this hand swings and the click
+                // ends, so the other hand (a torch) is never tried.
+                self.with_hand(hand, Game::swing_arm);
+                return true;
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
             {
@@ -4865,6 +4875,16 @@ impl Game<'_> {
         }
     }
 
+    /// `BoneMealItem.useOn` on this client's level (a copy: nothing grows
+    /// here): whether it succeeds.
+    fn remote_bone_meal_succeeds(&mut self, hit: &super::Hit) -> bool {
+        let pos = horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
+        let face = horizon_core::geometry::Direction::ALL[face_direction(hit.face) as usize];
+        self.with_level(|b, level, _| {
+            b.bone_meal_succeeds_on_client(&mut DryLevel::new(level), pos, face)
+        })
+    }
+
     /// MultiPlayerGameMode.useItemOn inside startPrediction: the blocks the
     /// use changed on this client's level at once, each kept as predicted
     /// under the use's sequence until the server acknowledges it (a use the
@@ -4925,6 +4945,12 @@ impl Game<'_> {
                 .hive_state(hit.pos)
                 .is_some_and(|(honey, _)| honey == Some(5))
         {
+            return (true, DryUse::default());
+        }
+        // ComposterBlock.useItemOn: a compostable item on a composter below
+        // level 8 is SUCCESS on the client too (only the server adds the
+        // layer), so the other hand (a torch) is never tried.
+        if self.composter_takes(hit.pos, held) {
             return (true, DryUse::default());
         }
         use horizon_core::geometry::Direction;
