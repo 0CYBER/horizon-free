@@ -1144,7 +1144,11 @@ def wither_breaks():
         {'op': 'tick', 'n': 10},
         *setup('/summon minecraft:wither 8.5 210 8.5 {NoGravity:1b,Tags:["wb"]}'),
         cmd('/damage @e[tag=wb,limit=1] 1'),
-        {'op': 'tick', 'n': 40},
+        # WaterAvoidingRandomFlyingGoal may set off on a stroll (the wither's random is unseeded in vanilla),
+        # which moves the box destroyBlocksTick breaks. Hold it in place each tick until then: customServerAiStep
+        # runs before travel, so the break sees the teleported position.
+        *[op for _ in range(25) for op in (*setup('/tp @e[tag=wb] 8.5 210 8.5'), {'op': 'tick', 'n': 1})],
+        {'op': 'tick', 'n': 15},
         cmd('/execute if block 8 212 8 minecraft:water'),
         cmd('/execute if block 9 211 9 minecraft:water'),
         cmd('/execute if block 9 211 9 minecraft:oak_stairs'),
