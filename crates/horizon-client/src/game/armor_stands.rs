@@ -511,6 +511,25 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        // The stand's box and id, before the hit may remove it.
+        let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
+        let hurt = self.punch_armor_stand(i);
+        if hurt {
+            self.attack_effects(
+                area,
+                Some(id as i32),
+                super::mace::Spared::Stand(id),
+                magic.then_some(id as i32),
+            );
+            self.swing_arm();
+        }
+        hurt
+    }
+    /// `ArmorStand.hurtServer` for a player's attack (also a sweep's): a
+    /// creative player breaks it, otherwise the first hit wobbles it and a
+    /// second within five ticks breaks it.
+    pub(super) fn punch_armor_stand(&mut self, i: usize) -> bool {
         let time = self.world.game_time;
         let at = self.armor_stands[i].position;
         let at = [at.x, at.y, at.z];

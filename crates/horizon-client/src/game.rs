@@ -8581,7 +8581,11 @@ impl Game<'_> {
     /// strength and whether it is a critical hit): the weapon and effects
     /// scaled by the attack strength, a mace's smash, the critical hit, then
     /// enchantments.
-    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool, bool) {
+    pub(super) fn melee_damage(
+        &mut self,
+        target_kind: &str,
+        living: bool,
+    ) -> (f32, f32, bool, bool) {
         let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
         // Riptide's spin replaces the attack damage attribute.
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
@@ -8591,27 +8595,19 @@ impl Game<'_> {
             hand_damage + self.effect_attack_bonus()
         };
         let scale = self.attack_strength_scale();
+        // getEnchantedDamage(target, damage, source) - damage, taken before the
+        // attack strength scales the base damage.
+        let enchant_bonus = self.enchanted_damage(target_kind, damage) - damage;
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
         amount += self.smash_damage_bonus(target_kind);
-        let player = self.player.as_ref();
-        // Player.canCriticalAttack: falling, off the ground, not in water,
-        // not blind (isMobilityRestricted), not riding, not sprinting.
-        let falling = player.is_some_and(|p| {
-            !p.ground.on_ground
-                && p.fall_distance > 0.0
-                && !p.fluids.was_touching_water
-                && !p.sprinting
-        });
-        let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
-        let crit = scale > 0.9 && falling && !restricted;
+        let crit = living && self.critical_attack(scale);
         if crit {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        let magic_boost = self.enchant_damage_bonus(target_kind) * scale;
-        amount += magic_boost;
-        (amount, scale, crit, magic_boost > 0.0)
+        amount += enchant_bonus * scale;
+        (amount, scale, crit, enchant_bonus * scale > 0.0)
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
@@ -8619,7 +8615,14 @@ impl Game<'_> {
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
     }
     /// `Player.isSweepAttack`: a charged, grounded sword hit below the movement limit.
-    pub(super) fn sweep_attack_position(&self, scale: f32, crit: bool) -> Option<[f64; 3]> {
+    pub(super) fn sweep_attack_position(&mut self, scale: f32, crit: bool) -> Option<[f64; 3]> {
+        // Player.getSpeed: the movement speed attribute as it is now (the
+        // field is only refreshed by the local movement step, never for a
+        // server's player).
+        let p = self.player.as_mut()?;
+        if let Ok(speed) = p.attribute("minecraft:movement_speed") {
+            p.speed = speed as f32;
+        }
         let p = self.player.as_ref()?;
         let sword = self.held().is_some_and(|s| {
             self.res
@@ -8631,120 +8634,116 @@ impl Game<'_> {
         if !p.is_sweep_attack(scale, crit, sword) {
             return None;
         }
-        let yaw = f64::from(self.yaw.to_radians());
+        // Mth.sin / Mth.cos of yRot * (PI / 180), from its sine table.
+        use horizon_core::geometry::trig;
+        let yaw = f64::from(self.yaw * trig::DEG_TO_RAD);
         Some([
-            p.position.x - yaw.sin(),
+            p.position.x - f64::from(trig::sin(yaw)),
             p.position.y + f64::from(p.dimensions.height) * 0.5,
-            p.position.z + yaw.cos(),
+            p.position.z + f64::from(trig::cos(yaw)),
         ])
     }
-    /// The visual and sound part of `Player.doSweepAttack` after a successful hit.
-    pub(super) fn sweep_attack(&mut self, at: [f64; 3], from: Option<[f64; 3]>) {
-        let sweep = horizon_client::particles::ParticleOptions::simple(
+    /// `Player.doSweepAttack` after a successful hit, in vanilla's order: the
+    /// sweep sound, the victims around `target` (its box, and the mob that
+    /// was hit, when there is one) and then the arc.
+    pub(super) fn sweep_attack(
+        &mut self,
+        at: [f64; 3],
+        from: Option<[f64; 3]>,
+        target: Option<(Aabb, mace::Spared)>,
+        scale: f32,
+    ) {
+        self.audio
+            .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
+        if let Some((area, mob)) = target {
+            self.sweep_damage(area, mob, scale);
+        }
+        let arc = horizon_client::particles::ParticleOptions::simple(
             horizon_client::particles::ParticleType::SweepAttack,
         );
-        self.particles.add(&sweep, at, [0.0; 3]);
+        self.particles.add(&arc, at, [0.0; 3]);
         // Player.sweepAttack's `sendParticles(SWEEP_ATTACK, ..., 0, dx, 0, dz, 0)`:
         // the offset is the one from the player to the particle.
         let origin = from.unwrap_or(at);
         let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
-        self.lan_send_particles(&sweep, at, spread, 0.0, 0);
-        self.audio
-            .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
-    }
-    /// What `Player.doSweepAttack` deals before the target's enchantment
-    /// bonus and the attack strength: `1 + sweeping_damage_ratio * baseDamage`.
-    pub(super) fn sweep_base_damage(&self, scale: f32) -> f32 {
-        // `baseDamage` of `Player.attack` before a critical hit (a sweep has
-        // none) and the enchantments: the attack damage attribute with the
-        // strength and weakness effects, scaled by the attack strength.
-        let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
-        let base_damage = (hand_damage + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
-        // The enchantment's attribute modifier on the attribute's 0 to 1 range.
-        let ratio = self
-            .res
-            .stations()
-            .enchantments
-            .attribute_add(
-                self.inventory[self.selected].as_ref(),
-                "minecraft:sweeping_damage_ratio",
-            )
-            .clamp(0.0, 1.0) as f32;
-        1.0 + ratio * base_damage
-    }
-    /// The damage and knockback part of `Player.doSweepAttack` after a sweep
-    /// hit on the mob at `target`: every other living mob in its box grown by
-    /// (1, 0.25, 1) and closer than 3 blocks (`distanceToSqr < 9`, in creative
-    /// too), but the player's allies
-    /// (`isAlliedTo`), takes `1 + sweeping_damage_ratio * baseDamage` with the
-    /// weapon's enchantments, scaled by the attack strength, and is pushed 0.4
-    /// along the player's yaw.
-    pub(super) fn sweep_damage(&mut self, target: usize, scale: f32) {
-        let Some(p) = self.player.as_ref() else {
-            return;
-        };
-        let from = [p.position.x, p.position.y, p.position.z];
-        let sweep_damage = self.sweep_base_damage(scale);
-        let hit_box = self.mobs[target]
-            .bounds()
-            .inflate(horizon_core::geometry::Vec3::new(1.0, 0.25, 1.0));
-        let (uuid, allies) = (
-            self.level.player_uuid.or(Some([0, 0, 0, 1])),
-            self.player_allies(),
-        );
-        let nearby: Vec<usize> = self
-            .mobs
-            .iter()
-            .enumerate()
-            .filter(|(i, m)| {
-                *i != target
-                    && m.alive()
-                    && !m.removed
-                    && !allies.contains(&m.id)
-                    && !mace::ally_of_player(m, uuid)
-                    && m.bounds().intersects(hit_box)
-                    && m.position.distance_squared(p.position) < 9.0
-            })
-            .map(|(i, _)| i)
-            .collect();
-        let (xd, zd) = self.extra_knockback_direction();
-        for i in nearby {
-            let kind = self.mobs[i].kind.id.clone();
-            let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
-            let damage = (sweep_damage + self.enchant_damage_bonus(&kind)) * scale;
-            let source = self.attack_source(from);
-            if self.hurt_by_player(i, damage, source) {
-                self.mobs[i].knockback(0.4, xd, zd);
-                self.last_hurt_by_player
-                    .insert(self.mobs[i].id, self.lan_acting);
-            }
-        }
-        // `getEntitiesOfClass(LivingEntity.class)` takes the other players too.
-        let mut sweep = self.player_sweep(sweep_damage, scale);
-        sweep.hit_box = hit_box;
-        self.sweep_other_players(sweep);
+        self.lan_send_particles(&arc, at, spread, 0.0, 0);
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
-    /// strength, then strong or weak. Before `swing_arm` resets the charge.
-    pub(super) fn vehicle_attack_sounds(&mut self) {
-        let full = self.attack_strength_scale() > 0.9;
+    /// strength, then strong or weak, or the sweep around the vehicle's
+    /// box `area`. Before `swing_arm` resets the charge.
+    pub(super) fn vehicle_attack_sounds(&mut self, area: Aabb, magic: Option<i32>) {
+        self.attack_effects(area, None, mace::Spared::Nothing, magic);
+    }
+    /// `Player.attack` after a target that is not a mob took the hit:
+    /// the sprint knockback sound, a living target's critical hit (`living`:
+    /// its entity id, which makes the hit critical when the player falls),
+    /// the sweep around the target's box `area` and the strong or weak sound.
+    pub(super) fn attack_effects(
+        &mut self,
+        area: Aabb,
+        living: Option<i32>,
+        spared: mace::Spared,
+        magic: Option<i32>,
+    ) {
+        let scale = self.attack_strength_scale();
+        let full = scale > 0.9;
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
         if full && player.is_some_and(|p| p.sprinting) {
             self.audio
                 .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
         }
-        let sound = if full {
-            "minecraft:entity.player.attack.strong"
-        } else {
-            "minecraft:entity.player.attack.weak"
-        };
-        if let Some(at) = self.sweep_attack_position(self.attack_strength_scale(), false) {
-            self.sweep_attack(at, from);
-        } else {
+        let crit = living.is_some() && self.critical_attack(scale);
+        let sweep = self.sweep_attack_position(scale, crit);
+        if let Some(at) = sweep {
+            self.sweep_attack(at, from, Some((area, spared)), scale);
+        }
+        if crit {
+            self.audio
+                .play("minecraft:entity.player.attack.crit", from, 1.0, 1.0);
+            if let Some(id) = living {
+                self.area_critical_hit(id, area, false);
+            }
+        } else if sweep.is_none() {
+            let sound = if full {
+                "minecraft:entity.player.attack.strong"
+            } else {
+                "minecraft:entity.player.attack.weak"
+            };
             self.audio.play(sound, from, 1.0, 1.0);
         }
+        // Player.magicCrit: the enchantments added damage.
+        if let Some(id) = magic {
+            self.area_critical_hit(id, area, true);
+        }
+    }
+    /// `critical_hit` around the box `area` of entity `id` (`magic`: the
+    /// enchanted hit instead of the crit).
+    fn area_critical_hit(&mut self, id: i32, area: Aabb, magic: bool) {
+        let (feet, size) = (area.bottom_center(), area.size());
+        self.critical_hit(
+            self.lan_acting,
+            id,
+            [feet.x, feet.y, feet.z],
+            size.x,
+            size.y,
+            magic,
+        );
+    }
+    /// `Player.canCriticalAttack` for a living target at attack strength
+    /// `scale`: falling, off the ground, not in water, not blind (mobility
+    /// restricted), not riding, not sprinting.
+    pub(super) fn critical_attack(&self, scale: f32) -> bool {
+        let player = self.player.as_ref();
+        let falling = player.is_some_and(|p| {
+            !p.ground.on_ground
+                && p.fall_distance > 0.0
+                && !p.fluids.was_touching_water
+                && !p.sprinting
+        });
+        let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
+        scale > 0.9 && falling && !restricted
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
@@ -8770,16 +8769,11 @@ impl Game<'_> {
         if self.attack_redirectable() {
             return true;
         }
-        let hand_damage = 1.0
-            + self
-                .held()
-                .and_then(|h| self.res.items().get(&h.item))
-                .map_or(0.0, |i| i.attack_damage);
         if self.attack_frame()
             || self.attack_armor_stand()
             || self.attack_cushion()
-            || self.attack_boat(hand_damage)
-            || self.attack_cart(hand_damage)
+            || self.attack_boat()
+            || self.attack_cart()
             || self.attack_dragon()
             || self.attack_guest()
         {
@@ -8808,7 +8802,7 @@ impl Game<'_> {
     pub(super) fn attack_mob(&mut self, index: usize) {
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        let (amount, scale, crit, magic) = self.melee_damage(&target_kind);
+        let (amount, scale, crit, magic) = self.melee_damage(&target_kind, true);
         let sweep = self.sweep_attack_position(scale, crit);
         let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
@@ -8920,8 +8914,11 @@ impl Game<'_> {
             };
             // Player.playServerSideSound: at the player.
             if let Some(at) = sweep {
-                self.sweep_attack(at, from);
-                self.sweep_damage(index, scale);
+                let target = (
+                    self.mobs[index].bounds(),
+                    mace::Spared::Mob(self.mobs[index].id),
+                );
+                self.sweep_attack(at, from, Some(target), scale);
             } else {
                 self.audio.play(sound, from, 1.0, 1.0);
             }
