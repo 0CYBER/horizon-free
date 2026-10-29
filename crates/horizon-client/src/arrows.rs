@@ -130,6 +130,8 @@ pub enum ArrowSound {
     Splash,
     /// The arrow's `soundEvent` (`entity.arrow.hit`), for blocks and entities.
     HitGround,
+    /// An arrow shot from a crossbow: `item.crossbow.hit`.
+    CrossbowHit,
     /// `entity.generic.extinguish_fire`.
     Extinguish,
     /// A thrown trident's `getDefaultHitGroundSoundEvent` (`item.trident.hit_ground`).
@@ -159,6 +161,8 @@ pub struct ArrowState {
     pub pickup: Pickup,
     /// `pickupItemStack`: what picking the arrow up gives.
     pub pickup_item: crate::items::ItemStack,
+    /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
+    pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
     /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
@@ -208,6 +212,7 @@ impl ArrowState {
             last_state: None,
             pickup: Pickup::Disallowed,
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
+            fired_from_weapon: None,
             no_physics: false,
             pierce: 0,
             pierced: Vec::new(),
@@ -779,8 +784,16 @@ impl Ticker<'_, '_, '_, '_> {
     /// `playSound(soundEvent, 1, 1.2 / (random * 0.2 + 0.9))`.
     fn hit_sound(&mut self) {
         let pitch = 1.2 / (self.st.random.next_float() * 0.2 + 0.9);
+        // CrossbowItem.createProjectile: its arrows hit with the crossbow's sound.
+        let crossbow = self
+            .st
+            .fired_from_weapon
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:crossbow");
         let sound = if self.trident() {
             ArrowSound::TridentHitGround
+        } else if crossbow {
+            ArrowSound::CrossbowHit
         } else {
             ArrowSound::HitGround
         };
