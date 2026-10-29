@@ -19,11 +19,17 @@ pub(super) const CONTROL_HELP: &[&str] = &[
 impl Game<'_> {
     pub(super) fn save_title_options(&mut self) {
         if let Some(title) = &self.title
-            && title.last_server != self.settings.file.string("lastServer")
+            && (title.last_server != self.settings.file.string("lastServer")
+                || title.skip_multiplayer_warning
+                    != self.settings.file.bool("skipMultiplayerWarning"))
         {
             self.settings.file.set(
                 "lastServer",
                 horizon_client::options_file::V::Str(title.last_server.clone()),
+            );
+            self.settings.file.set(
+                "skipMultiplayerWarning",
+                horizon_client::options_file::V::Bool(title.skip_multiplayer_warning),
             );
             self.settings.save(&Self::options_path());
         }
@@ -292,6 +298,8 @@ impl Game<'_> {
                 s.horizon.hdr,
                 s.horizon.hdr_paper_white as f32,
                 s.horizon.hdr_peak as f32,
+                s.horizon.hdr_black_level as f32 / 100.0,
+                s.horizon.hdr_ui_brightness as f32 / 100.0,
                 &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
         }

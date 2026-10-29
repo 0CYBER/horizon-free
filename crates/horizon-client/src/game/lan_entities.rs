@@ -154,8 +154,15 @@ impl Game<'_> {
             );
             e.head_yaw = a.yaw;
             e.velocity = [a.velocity.x, a.velocity.y, a.velocity.z];
+            let mut flags = 0i8;
             if a.fire_ticks > 0 {
-                e.meta.push((0, serializer::BYTE, Value::Byte(1)));
+                flags |= 1;
+            }
+            if a.invisible {
+                flags |= 0x20;
+            }
+            if flags != 0 {
+                e.meta.push((0, serializer::BYTE, Value::Byte(flags)));
             }
             // LivingEntity.DATA_HEALTH_ID: 1 until the stand's max health is set.
             e.meta.push((9, serializer::FLOAT, Value::Float(a.health)));
@@ -222,6 +229,9 @@ impl Game<'_> {
                 _ => 0.0,
             };
             e.data = i32::from(f.facing);
+            if f.invisible {
+                e.meta.push((0, serializer::BYTE, Value::Byte(0x20)));
+            }
             // HangingEntity.DATA_DIRECTION, south by default.
             if f.facing != 3 {
                 e.meta

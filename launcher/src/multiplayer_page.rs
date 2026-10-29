@@ -71,8 +71,8 @@ impl Launcher {
         let address = self.servers.value(Field::ServerAddress).to_string();
         self.edit_servers(|list| list.add(&name, &address));
         if self.multiplayer.error.is_none() {
-            self.servers.text(Field::ServerName).clear();
-            self.servers.text(Field::ServerAddress).clear();
+            self.servers.text(Field::ServerName).set(String::new());
+            self.servers.text(Field::ServerAddress).set(String::new());
             self.multiplayer.adding = false;
         }
     }

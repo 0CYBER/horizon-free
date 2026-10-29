@@ -272,8 +272,8 @@ impl Launcher {
             .as_ref()
             .map(|i| (i.name.clone(), i.group.clone().unwrap_or_default()))
             .unwrap_or_default();
-        *self.servers.text(Field::InstanceName) = name;
-        *self.servers.text(Field::InstanceGroup) = group;
+        self.servers.text(Field::InstanceName).set(name);
+        self.servers.text(Field::InstanceGroup).set(group);
         self.servers.focus_soon = Some(Field::InstanceName);
         self.instances.dialog = Some(InstanceDialog {
             icon: editing.as_ref().and_then(|i| i.icon.clone()),
@@ -576,7 +576,9 @@ impl Launcher {
                 button("instance-copy", "Copy…", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         this.open_instance_dialog(None);
-                        *this.servers.text(Field::InstanceName) = format!("{name} copy");
+                        this.servers
+                            .text(Field::InstanceName)
+                            .set(format!("{name} copy"));
                         if let Some(d) = &mut this.instances.dialog {
                             d.copy = true;
                         }
