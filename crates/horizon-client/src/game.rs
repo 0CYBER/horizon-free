@@ -1199,9 +1199,10 @@ struct WorldRest {
     nether_environment: Environment,
     end_environment: Environment,
     behaviours: Behaviours,
-    player_arm: Option<horizon_client::mobs::Part>,
-    /// The slim model's right arm (3 pixels wide).
-    player_arm_slim: Option<horizon_client::mobs::Part>,
+    /// The player model's right and left arms.
+    player_arm: [Option<horizon_client::mobs::Part>; 2],
+    /// The slim model's right and left arms (3 pixels wide).
+    player_arm_slim: [Option<horizon_client::mobs::Part>; 2],
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
     /// `SpinAttackEffectModel` (Riptide's spinning boxes).
     spin_attack: Option<horizon_client::mobs::Part>,
@@ -1274,12 +1275,13 @@ impl Resources {
     fn threads(&self) -> usize {
         self.core.threads
     }
-    fn player_arm(&self, slim: bool) -> &Option<horizon_client::mobs::Part> {
-        if slim {
+    fn player_arm(&self, slim: bool, left: bool) -> &Option<horizon_client::mobs::Part> {
+        let arms = if slim {
             &self.rest().player_arm_slim
         } else {
             &self.rest().player_arm
-        }
+        };
+        &arms[usize::from(left)]
     }
     fn player_type(&self) -> &Option<Arc<horizon_client::mobs::MobType>> {
         &self.rest().player_type
@@ -10611,6 +10613,36 @@ impl Game<'_> {
         }
         self.damage_held(1);
     }
+    /// `renderPlayerHand` (`AvatarRenderer.renderHand`): the player's own
+    /// `left` or right arm with its skin at pose `m`, in its rest pose
+    /// turned 0.1 radians outwards.
+    fn first_person_arm(&self, left: bool, m: glam::Mat4, light: u32, out: &mut Vec<Vertex>) {
+        let slim = self.player_model.as_ref().is_some_and(|m| m.slim);
+        let Some(arm) = self.res.player_arm(slim, left).as_ref() else {
+            return;
+        };
+        // The player's own skin, as the inventory's model shows it.
+        let sprites = &self.gui.atlas.sprites;
+        let Some(r) = self
+            .player_model
+            .as_ref()
+            .and_then(|m| m.skin.as_deref())
+            .and_then(|skin| sprites.get(skin))
+            .or_else(|| sprites.get("entity/player/wide/steve"))
+            .copied()
+        else {
+            return;
+        };
+        let z_rot = if left { -0.1 } else { 0.1 };
+        let pose = |p: &horizon_client::mobs::Part| {
+            let mut pose = p.pose;
+            pose[3] = 0.0;
+            pose[4] = 0.0;
+            pose[5] = if p.name == arm.name { z_rot } else { 0.0 };
+            pose
+        };
+        horizon_client::mobs::render_model(arm, m, &pose, [r.u0, r.v0, r.u1, r.v1], light, 0, out);
+    }
     /// FirstPersonHandsAndItemsRenderer: the right arm or the held items of
     /// both hands in view space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
@@ -10654,7 +10686,6 @@ impl Game<'_> {
             eye[2].floor() as i32,
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-        let deg = |d: f32| d.to_radians();
         let shown = self.hands_to_render();
         let used_hand = self.used_hand();
         let spinning = self
@@ -10668,7 +10699,6 @@ impl Game<'_> {
                 continue;
             }
             let (attack, inverse_height) = (attacks[i], inverse_heights[i]);
-            let sqrt_attack = attack.sqrt();
             // The main hand on its arm, the off hand on the other one.
             let left = self.settings.main_hand_left != (hand == Hand::Off);
             let Some(stack) = item else {
@@ -10676,63 +10706,24 @@ impl Game<'_> {
                 if hand == Hand::Off {
                     continue;
                 }
-                let slim = self.player_model.as_ref().is_some_and(|m| m.slim);
-                let Some(arm) = self.res.player_arm(slim).clone() else {
-                    continue;
-                };
-                // The player's own skin, as the inventory's model shows it.
-                let sprites = &self.gui.atlas.sprites;
-                let Some(r) = self
-                    .player_model
-                    .as_ref()
-                    .and_then(|m| m.skin.as_deref())
-                    .and_then(|skin| sprites.get(skin))
-                    .or_else(|| sprites.get("entity/player/wide/steve"))
-                    .copied()
-                else {
-                    continue;
-                };
                 // renderPlayerArm (right arm)
-                let x_swing = -0.3 * (sqrt_attack * std::f32::consts::PI).sin();
-                let y_swing = 0.4 * (sqrt_attack * std::f32::consts::TAU).sin();
-                let z_swing = -0.4 * (attack * std::f32::consts::PI).sin();
-                let z_rot = (attack * attack * std::f32::consts::PI).sin();
-                let y_rot = (sqrt_attack * std::f32::consts::PI).sin();
                 let m = to_world
-                    * glam::Mat4::from_translation(glam::Vec3::new(
-                        x_swing + 0.64,
-                        y_swing - 0.6 + inverse_height * -0.6,
-                        z_swing - 0.72,
-                    ))
-                    * glam::Mat4::from_rotation_y(deg(45.0))
-                    * glam::Mat4::from_rotation_y(deg(y_rot * 70.0))
-                    * glam::Mat4::from_rotation_z(deg(z_rot * -20.0))
-                    * glam::Mat4::from_translation(glam::Vec3::new(-1.0, 3.6, 3.5))
-                    * glam::Mat4::from_rotation_z(deg(120.0))
-                    * glam::Mat4::from_rotation_x(deg(200.0))
-                    * glam::Mat4::from_rotation_y(deg(-135.0))
-                    * glam::Mat4::from_translation(glam::Vec3::new(5.6, 0.0, 0.0));
-                let pose = |p: &horizon_client::mobs::Part| {
-                    let mut pose = p.pose;
-                    pose[3] = 0.0;
-                    pose[4] = 0.0;
-                    pose[5] = 0.0;
-                    pose
-                };
-                horizon_client::mobs::render_model(
-                    &arm,
-                    m,
-                    &pose,
-                    [r.u0, r.v0, r.u1, r.v1],
-                    packed,
-                    0,
-                    &mut out,
-                );
+                    * horizon_client::first_person::player_arm_pose(false, inverse_height, attack);
+                self.first_person_arm(false, m, packed, &mut out);
                 continue;
             };
             if let Some(id) = maps::map_id(&stack) {
-                use horizon_client::first_person::{MapHold, one_handed_map_pose};
-                match MapHold::of(hand, off_hand_empty) {
+                use horizon_client::first_person::{MapHold, map_arm_poses, one_handed_map_pose};
+                let hold = MapHold::of(hand, off_hand_empty);
+                // renderOneHandedMap and renderTwoHandedMap: the arms under
+                // the map, unless the player is invisible.
+                if self.potions.effects.get("invisibility").is_none() {
+                    for (arm, pose) in map_arm_poses(hold, left, self.pitch, inverse_height, attack)
+                    {
+                        self.first_person_arm(arm, to_world * pose, packed, &mut out);
+                    }
+                }
+                match hold {
                     MapHold::TwoHanded => self.two_handed_map_geometry(
                         to_world,
                         attack,
@@ -14839,10 +14830,8 @@ fn load_world_rest(
             .collect(),
         mob_data,
         player_type: perspective::player_type(root),
-        player_arm: horizon_client::mobs::load_model(root, "minecraft:player#main")
-            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
-        player_arm_slim: horizon_client::mobs::load_model(root, "minecraft:player_slim#main")
-            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
+        player_arm: player_arms(root, "minecraft:player#main"),
+        player_arm_slim: player_arms(root, "minecraft:player_slim#main"),
         spin_attack: horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"),
     })
 }
@@ -15686,6 +15675,17 @@ pub fn run() -> Result<()> {
         run_event_loop(game)?;
     }
     Ok(())
+}
+
+/// The right and left arms of a player model layer (`PlayerModel.rightArm`
+/// and `leftArm`, with their sleeves).
+fn player_arms(root: &std::path::Path, key: &str) -> [Option<horizon_client::mobs::Part>; 2] {
+    let model = horizon_client::mobs::load_model(root, key);
+    ["right_arm", "left_arm"].map(|name| {
+        model
+            .as_ref()
+            .and_then(|m| m.children.iter().find(|c| c.name == name).cloned())
+    })
 }
 
 // Player.tick: cap the sleeping fade at 100, then fade out over 10 waking ticks.
