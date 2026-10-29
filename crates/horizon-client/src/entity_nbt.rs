@@ -715,12 +715,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         .into_iter()
         .enumerate()
         {
-            // Enchanted gear is saved with its `minecraft:enchantments`.
+            // Enchanted or trimmed gear is saved with its components.
             if let (Some(id), Some(g)) = (item, crate::mobs::gear::gear(m))
-                && !g.slots[index].is_empty()
+                && (!g.slots[index].is_empty() || g.trims[index].is_some())
             {
                 let mut stack = crate::items::ItemStack::new(id, 1);
                 stack.data_mut().enchantments = g.slots[index].clone();
+                stack.data_mut().trim = g.trims[index].clone();
                 equipment.insert(slot.into(), crate::save::item_to_nbt(&stack));
                 continue;
             }
@@ -950,10 +951,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.legs = slot("legs");
             m.extra.feet = slot("feet");
         }
-        // Their enchantments.
+        // Their enchantments and trims.
         for (index, key) in crate::mobs::gear::KEYS.iter().enumerate() {
             if let Some(stack) = eq.get(key).and_then(crate::save::item_from_nbt) {
                 crate::mobs::gear::set(&mut m, index, stack.enchantments().to_vec());
+                let trim = stack.data().and_then(|d| d.trim.clone());
+                crate::mobs::gear::set_trim(&mut m, index, trim);
             }
         }
     } else {
@@ -1509,6 +1512,10 @@ pub fn arrow_to_nbt(
         // Projectile: LeftOwner only when set; Owner as the UUID.
         map.remove(&"LeftOwner".into());
         map.remove(&"inBlockState".into());
+        map.remove(&"weapon".into());
+    }
+    if let Some(weapon) = &a.fired_from_weapon {
+        put(&mut tag, "weapon", item_to_nbt(weapon));
     }
     if p.left_owner {
         put(&mut tag, "LeftOwner", Tag::Byte(1));
@@ -1555,6 +1562,7 @@ pub fn arrow_from_nbt(
     a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i16 as i32;
     a.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
     a.pickup_item = item;
+    a.fired_from_weapon = tag.get("weapon").and_then(item_from_nbt);
     p.stuck = a.in_ground;
     Some((p, tag.get("inBlockState").cloned()))
 }

@@ -1336,9 +1336,9 @@ fn species_ai_step(
         Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
-        Species::Villager => super::villager::ai_step(m, w),
+        Species::Villager => super::villager::ai_step(m, w, events),
         Species::WanderingTrader => {
-            super::villager::ai_step(m, w);
+            super::villager::ai_step(m, w, events);
             super::trader::ai_step(m, w);
         }
         Species::Shulker => {
@@ -1962,6 +1962,7 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         Family::Guardian => super::guardian::travel(m, w, input, events),
         // Shulkers never move on their own.
         Family::Shulker => true,
+        Family::Allay => super::allay::travel(m, w, input, events),
         Family::Vex => super::vex::travel(m),
         Family::Nautilus => super::nautilus::travel(m, w, input, events),
         _ => false,

@@ -1264,6 +1264,29 @@ fn download_for_owner(
     download_for(pins, dir, pass, !accounts.accounts.is_empty(), fetch, log)
 }
 
+/// Downloads Minecraft `id` (any version on Mojang's list, its version file's sha1 from it) into
+/// Horizon's own game folder, in the official launcher's layout, for an account that owns the
+/// game (asked again now). Returns that folder.
+pub fn download_version_for_owner(
+    id: &str,
+    manifest_sha1: &str,
+    log: &dyn Fn(String),
+) -> Result<PathBuf, String> {
+    let dir = data_dir().join("minecraft");
+    let fetch = |url: &str| -> Result<Vec<u8>, String> {
+        let mut body = Vec::new();
+        get(url)?
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| e.to_string())?;
+        Ok(body)
+    };
+    let pins = sources::Pins::for_version(id, manifest_sha1);
+    download_for_owner(&pins, &dir, &fetch, log)
+        .map_err(|e| e.trim_start_matches("\n  • ").to_string())?;
+    Ok(dir)
+}
+
 /// What [`download_for_owner`] does with the owner gate's answer: Mojang's files only for its
 /// `owner`, an account the services said owns the game just now.
 fn download_for(
@@ -1369,7 +1392,7 @@ fn java(
 }
 
 /// The dynamic loader glibc programs on x86-64 Linux start through.
-const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
+pub(crate) const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
 
 /// Runs `cmd` with Java at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
 /// versions' own preparers look for Java.

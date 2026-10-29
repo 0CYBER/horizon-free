@@ -519,6 +519,7 @@ pub enum DamageKind {
     Explosion,
     Fall,
     FallingBlock,
+    FallingStalactite,
     OnFire,
     InFire,
     Lava,
@@ -737,6 +738,9 @@ pub struct Extra {
     pub chest: Option<Arc<str>>,
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
+    /// The worn armour stacks (head to feet): the dyed colour and the
+    /// trim of a piece are on the stack, not on its id.
+    pub armor: [Option<crate::items::ItemStack>; 4],
     pub using_item: i32,
     pub using_off_hand: bool,
     pub blocking: bool,
@@ -1185,6 +1189,12 @@ pub enum MobEvent {
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
+    },
+    /// `LivingEntity.startSleeping` / `stopSleeping`: the bed head at `pos`
+    /// gets `occupied` (`setBlockAndUpdate`; the foot follows it).
+    BedOccupied {
+        pos: [i32; 3],
+        occupied: bool,
     },
     /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
     /// closes, both halves, with its sound and game event.
@@ -2075,8 +2085,10 @@ impl Mob {
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
-        if source.kind == DamageKind::FallingBlock
-            && !species::body_slot(self.species())
+        if matches!(
+            source.kind,
+            DamageKind::FallingBlock | DamageKind::FallingStalactite
+        ) && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
             amount *= 0.75;
