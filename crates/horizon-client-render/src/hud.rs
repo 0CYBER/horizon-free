@@ -1162,6 +1162,33 @@ impl HudBatch {
         }
         cursor - x
     }
+    /// SubmitNodeCollection.submitNameTag's text in its own space (x right,
+    /// y down, in GUI pixels): centred at `-Font.width / 2`, drawn as
+    /// Font.prepareText draws any text (styles, fonts and glyph boxes; no
+    /// shadow), over `background` (RGBA) unless its alpha is 0. Returns how
+    /// many vertices at the start of the batch are the background.
+    pub fn name_tag(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        y: f32,
+        color: u32,
+        background: u32,
+    ) -> usize {
+        let x = -atlas.font.width_text(text) / 2.0;
+        let start = self.vertices.len();
+        let advance = self.text_styled(atlas, text, x, y, color, false);
+        if background >> 24 == 0 {
+            return 0;
+        }
+        // PreparedTextBuilder.markBackground: one pixel round the advances,
+        // from a pixel above the line to 9 below its top.
+        let glyphs = self.vertices.split_off(start);
+        self.fill(atlas, x - 1.0, y - 1.0, advance + 1.0, 10.0, background);
+        let behind = self.vertices.len() - start;
+        self.vertices.extend(glyphs);
+        behind
+    }
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1875,6 +1902,65 @@ mod tests {
         // No glyph that wide: FontSet's missing glyph.
         let missing = fonts.font.random_glyph(&Default::default(), 30.0);
         assert!(missing.rect.is_none() && missing.right == 5.0);
+    }
+
+    #[test]
+    fn name_tags_draw_bold_text_and_tall_glyphs_like_any_text() {
+        // `ascii.png`'s 8x8 'a' (4 pixels wide) and `accented.png`'s 9x12
+        // 'й' (height 12, ascent 10: the breve above the line), 7 wide.
+        let root = std::env::temp_dir().join(format!("horizon-name-tag-{}", std::process::id()));
+        let textures = root.join("assets/minecraft/textures/font");
+        fs::create_dir_all(root.join("assets/minecraft/font")).unwrap();
+        fs::create_dir_all(&textures).unwrap();
+        fs::write(
+            root.join("assets/minecraft/font/default.json"),
+            r#"{"providers":[
+                {"type":"bitmap","file":"minecraft:font/a.png","ascent":7,"chars":["a"]},
+                {"type":"bitmap","file":"minecraft:font/tall.png","height":12,"ascent":10,"chars":["й"]}]}"#,
+        )
+        .unwrap();
+        for (name, (w, h), used) in [("a", (8, 8), 4), ("tall", (9, 12), 7)] {
+            let pixels: Vec<u8> = (0..w * h)
+                .flat_map(|i| [255, 255, 255, if i % w < used { 255 } else { 0 }])
+                .collect();
+            let file = fs::File::create(textures.join(format!("{name}.png"))).unwrap();
+            let mut encoder = png::Encoder::new(file, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+        }
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        let text = crate::text::Text::literal("aй").bold();
+        let mut batch = HudBatch::new([1, 1]);
+        let behind = batch.name_tag(&atlas, &text, 0.0, u32::MAX, 0x3F00_0000);
+        // Each quad's box: x0, y0, x1, y1.
+        let boxes: Vec<[f32; 4]> = batch
+            .vertices
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .map(|q| [q[0].pos[0], q[0].pos[1], q[2].pos[0], q[2].pos[1]])
+            .collect();
+        // Advances 5 and 8, plus 1 each for bold: Font.width 15, centred.
+        let x = -7.5;
+        // Each glyph twice (bold), the copy a pixel right; 'й' in its 9x12
+        // box from 3 pixels above the line, each bold quad 0.1 larger.
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
+        let expected = [
+            [x - 0.1, -0.1, x + 8.1, 8.1],
+            [x + 0.9, -0.1, x + 9.1, 8.1],
+            [x + 5.9, -3.1, x + 15.1, 9.1],
+            [x + 6.9, -3.1, x + 16.1, 9.1],
+        ];
+        for (got, want) in boxes[1..].iter().zip(expected) {
+            assert!(near(*got, want), "{got:?} != {want:?}");
+        }
+        assert_eq!(boxes.len(), 1 + expected.len());
+        // The background first: a pixel round the advances, 10 pixels tall.
+        assert_eq!(behind, 6);
+        assert_eq!(boxes[0], [x - 1.0, -1.0, x + 15.0, 9.0]);
     }
 
     #[test]
