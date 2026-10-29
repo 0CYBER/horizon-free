@@ -1875,9 +1875,9 @@ impl Game<'_> {
                 "minecraft:tipped_arrow" => 0.125,
                 _ => 1.0,
             };
-            for (text, cat) in brewing::tooltip(stack.potion(), scale, &|k| {
-                e.translate(k).map(str::to_owned)
-            }) {
+            // PotionContents.getPotionDescription: the effect names are
+            // translatable, read in the selected language like every other line.
+            for (text, cat) in brewing::tooltip(stack.potion(), scale, &translate) {
                 let c = match cat {
                     brewing::Category::Beneficial => rgba(85, 85, 255, 255),
                     brewing::Category::Harmful => rgba(255, 85, 85, 255),
@@ -1902,18 +1902,15 @@ impl Game<'_> {
         {
             push(
                 &mut lines,
-                e.translate("item.minecraft.smithing_template.upgrade")
-                    .unwrap_or("Upgrade:")
-                    .to_owned(),
+                translate("item.minecraft.smithing_template.upgrade")
+                    .unwrap_or_else(|| "Upgrade:".to_owned()),
                 rgba(170, 170, 170, 255),
             );
             let short = |s: &str| s.trim_start_matches("minecraft:").to_owned();
-            let p = e
-                .translate(&format!("trim_pattern.minecraft.{}", short(&pattern)))
-                .map_or_else(|| short(&pattern), str::to_owned);
-            let m = e
-                .translate(&format!("trim_material.minecraft.{}", short(&material)))
-                .map_or_else(|| short(&material), str::to_owned);
+            let p = translate(&format!("trim_pattern.minecraft.{}", short(&pattern)))
+                .unwrap_or_else(|| short(&pattern));
+            let m = translate(&format!("trim_material.minecraft.{}", short(&material)))
+                .unwrap_or_else(|| short(&material));
             push(&mut lines, format!(" {p}"), rgba(170, 170, 170, 255));
             push(&mut lines, format!(" {m}"), rgba(170, 170, 170, 255));
         }
