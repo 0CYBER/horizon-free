@@ -32,11 +32,14 @@ mod owner_page;
 mod packs_page;
 mod partner;
 mod perf;
+mod plate;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
 mod shortcut_page;
 mod skin_page;
+mod sky;
+mod specimen;
 mod switch_page;
 mod theme;
 mod themes_page;
@@ -211,7 +214,8 @@ struct Launcher {
     accounts: Accounts,
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
-    keychain: bool,
+    /// What to say when the keychain doesn't keep sign-ins ([`account::no_keychain`]).
+    keychain: Option<String>,
     /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
     /// none until the keychain has been read.
     owner: Option<bool>,
@@ -228,7 +232,7 @@ struct Launcher {
     play_when_prepared: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
-    friend_code: String,
+    friend_code: line_edit::LineEdit,
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
@@ -236,12 +240,14 @@ struct Launcher {
     quick_play: Option<(&'static str, String)>,
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
+    /// The running game's instance variables, for its post-exit command.
+    client_vars: horizon_launcher::launch::Vars,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
     args_input: line_edit::LineEdit,
     args_focused: bool,
     args_focus: FocusHandle,
     /// Settings' Proxy field, the same way (`proxy`).
-    proxy_input: String,
+    proxy_input: line_edit::LineEdit,
     proxy_focused: bool,
     proxy_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
@@ -253,6 +259,8 @@ struct Launcher {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     _appearance: Subscription,
+    /// Redraws when the window gains or loses focus: the sky moves only in front.
+    _activation: Subscription,
     /// The session's measurements (`perf.rs`), and when the steps they time began.
     perf: perf::Perf,
     install_started: Option<Instant>,
@@ -296,7 +304,9 @@ struct Launcher {
     /// The player's servers, for the sidebar until the Servers page has read them.
     side_servers: Vec<horizon_launcher::servers::Entry>,
     /// The pixel art made for this window (`art.rs`), and pictures downloaded by URL.
-    art: art::Art,
+    sky: sky::Sky,
+    /// When the sky next asks for a frame, and the timer that will draw it.
+    sky_wake: Option<(Instant, gpui::Task<()>)>,
     /// The window's scale, as of its last frame, for art drawn outside `render`'s reach.
     scale: f32,
 }
@@ -410,7 +420,11 @@ impl Launcher {
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
-            proxy_input: settings.proxy.clone().unwrap_or_default(),
+            proxy_input: line_edit::LineEdit::new(
+                settings.proxy.clone().unwrap_or_default(),
+                256,
+                44,
+            ),
             proxy_focused: false,
             proxy_focus: cx.focus_handle(),
             settings,
@@ -429,25 +443,27 @@ impl Launcher {
             accounts: Accounts::load(),
             sign_in: None,
             sign_in_state: None,
-            keychain: true,
+            keychain: None,
             owner: None,
             owner_screen_open: false,
             dev_clicks: 0,
             dev_options: false,
             starting_client: None,
             play_when_prepared: None,
-            friend_code: String::new(),
+            friend_code: line_edit::LineEdit::new(String::new(), 256, 32),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
             joining: None,
             quick_play: None,
             client_run: None,
+            client_vars: Vec::new(),
             collection: collection::Collection::load(),
             agents: agents_page::AgentsUi::default(),
             playing: None,
             tx,
             rx,
             _appearance: appearance,
+            _activation: cx.observe_window_activation(window, |_, _, cx| cx.notify()),
             perf: perf::Perf::new("session"),
             install_started: None,
             prepare_started: None,
@@ -477,7 +493,8 @@ impl Launcher {
             shortcuts: Default::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
-            art: art::Art::default(),
+            sky: sky::Sky::default(),
+            sky_wake: None,
             scale: window.scale_factor(),
         };
         this.reload_instances();
@@ -490,7 +507,7 @@ impl Launcher {
         let accounts = this.accounts.clone();
         std::thread::spawn(move || {
             let store = account::store();
-            let _ = keychain_tx.send(Msg::Keychain(store.persistent()));
+            let _ = keychain_tx.send(Msg::Keychain(account::no_keychain()));
             let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
         });
         std::thread::spawn(move || {
@@ -675,16 +692,21 @@ impl Launcher {
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
-                Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Keychain(said) => self.keychain = said,
                 Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::JavaGame(id, home, cmd) => {
                     self.starting_client = None;
-                    match cmd.and_then(|cmd| backend::spawn(Job::Client, cmd, self.tx.clone())) {
+                    let spawned = cmd.and_then(|(cmd, vars)| {
+                        self.client_vars = vars;
+                        backend::spawn(Job::Client, cmd, self.tx.clone())
+                    });
+                    match spawned {
                         Ok(r) => {
                             self.client = Some(r);
                             self.client_home = Some(home);
                             self.client_run = Some((id, Instant::now()));
+                            self.client_error = account::take_unsaved();
                             self.step_aside(cx);
                         }
                         Err(e) => {
@@ -721,6 +743,8 @@ impl Launcher {
                         // Still play, offline, and say why.
                         if let Some(e) = offline {
                             self.client_error = Some(format!("Playing offline: {e}"));
+                        } else if let Some(e) = account::take_unsaved() {
+                            self.client_error = Some(e);
                         }
                         self.accounts = Accounts::load();
                         // An offline name the player picked (the quick switch).
@@ -759,11 +783,15 @@ impl Launcher {
                         backend::append_game_args(&mut cmd);
                         // Last, around every argument: the instance's pre-launch command,
                         // wrapper and variables.
-                        let launch = run
+                        let instance = run
                             .as_ref()
-                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id))
-                            .map(|i| i.launch)
+                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id));
+                        self.client_vars = instance
+                            .as_ref()
+                            .map(|i| i.vars(cmd.get_program()))
                             .unwrap_or_default();
+                        cmd.envs(self.client_vars.iter().map(|(k, v)| (k, v)));
+                        let launch = instance.map(|i| i.launch).unwrap_or_default();
                         let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
@@ -923,9 +951,16 @@ impl Launcher {
                             self.multiplayer.stale();
                             self.screenshots.stale();
                             self.game_packs.stale();
+                            let vars = std::mem::take(&mut self.client_vars);
                             if let Some((id, started)) = self.client_run.take() {
                                 if let Err(e) = instances::record_play(&id, started.elapsed()) {
                                     eprintln!("Play time not saved: {e}");
+                                }
+                                if let Some(i) = instances::list().into_iter().find(|i| i.id == id)
+                                {
+                                    horizon_launcher::launch::run_after_exit(
+                                        &i.launch, &i.home, &vars,
+                                    );
                                 }
                                 self.reload_instances();
                             }
@@ -1134,14 +1169,18 @@ impl Launcher {
             .cloned();
         if let Some(instance) = java {
             // Mojang's game: no Horizon version or preparation, only no game already running.
-            // Joining and quick play are Horizon's.
+            // It joins a server; a friend's code and opening a world are Horizon's.
             self.joining = None;
-            self.quick_play = None;
+            let server = self
+                .quick_play
+                .take()
+                .filter(|(flag, _)| *flag == "--server")
+                .map(|(_, ip)| ip);
             if self.client.is_some() || self.starting_client.is_some() {
                 return;
             }
             self.starting_pack = None;
-            self.start_java(instance);
+            self.start_java(instance, server);
             return;
         }
         let Some(tag) = self.selected().cloned() else {
@@ -1154,9 +1193,10 @@ impl Launcher {
         self.start_client(tag);
     }
 
-    /// Starts a Java instance's Minecraft: its files and Java first (downloaded the first time,
-    /// their lines in the log), then `drain` starts the game when the command arrives.
-    fn start_java(&mut self, instance: instances::Instance) {
+    /// Starts a Java instance's Minecraft, joining `server` if given: its files and Java first
+    /// (downloaded the first time, their lines in the log), then `drain` starts the game when
+    /// the command arrives.
+    fn start_java(&mut self, instance: instances::Instance, server: Option<String>) {
         self.client_error = None;
         self.crash = None;
         self.prepare_log.clear();
@@ -1168,8 +1208,11 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, &log)
-                .map(|cmd| horizon_launcher::launch::wrap(cmd, &instance.launch));
+            let cmd = backend::java_game(&instance, server.as_deref(), &log).map(|mut cmd| {
+                let vars = instance.vars(cmd.get_program());
+                cmd.envs(vars.iter().map(|(k, v)| (k, v)));
+                (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
+            });
             let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
         });
     }
@@ -1186,6 +1229,15 @@ impl Launcher {
     pub(crate) fn can_start_selected(&self) -> bool {
         self.selected_instance().is_none_or(|i| i.java.is_none())
             && self.selected().is_some_and(|tag| self.can_start(tag))
+    }
+
+    /// Whether a server's Join starts the selected instance now: a Java instance too, as Play
+    /// would (no game running or starting).
+    pub(crate) fn can_join_selected(&self) -> bool {
+        match self.selected_instance() {
+            Some(i) if i.java.is_some() => self.client.is_none() && self.starting_client.is_none(),
+            _ => self.can_start_selected(),
+        }
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -1340,7 +1392,10 @@ fn version_tag(tag: &str) -> Div {
         .text_size(px(22.))
         .line_height(px(28.))
         .font_weight(FontWeight::MEDIUM)
-        .child(tag.trim_start_matches('v').to_string())
+        .child(
+            horizon_launcher::nightly::label(tag)
+                .unwrap_or_else(|| tag.trim_start_matches('v').to_string()),
+        )
 }
 
 /// Horizon's mark: two stems, their reflection below, and the horizon across in the accent.
@@ -1462,17 +1517,61 @@ fn button(
 /// Copies to the clipboard, or into `HORIZON_LAUNCHER_CLIPBOARD` when a test run sets it
 /// (`horizon_launcher::desktop_seams`).
 fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
-    let Some(file) = horizon_launcher::desktop_seams::clipboard_file() else {
-        cx.write_to_clipboard(item);
+    if let Some(file) = horizon_launcher::desktop_seams::clipboard_file() {
+        let bytes = match item.entries().first() {
+            Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
+            _ => item.text().unwrap_or_default().into_bytes(),
+        };
+        if let Err(e) = std::fs::write(&file, bytes) {
+            eprintln!("{}: {e}", file.display());
+        }
         return;
-    };
-    let bytes = match item.entries().first() {
-        Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
-        _ => item.text().unwrap_or_default().into_bytes(),
-    };
-    if let Err(e) = std::fs::write(&file, bytes) {
-        eprintln!("{}: {e}", file.display());
     }
+    cx.write_to_clipboard(item.clone());
+    #[cfg(target_os = "linux")]
+    if let Some(text) = item.text() {
+        sync_system_clipboard(text);
+    }
+}
+
+/// GPUI's Wayland clipboard sends the last key press's serial, which a compositor ignores
+/// after a mouse click: hand the text to the desktop's own tool too, the first one present
+/// for this session (`wl-copy` on Wayland, `xclip` or `xsel` on X11).
+#[cfg(target_os = "linux")]
+fn sync_system_clipboard(text: String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const TOOLS: [(&str, &str, &[&str]); 3] = [
+        ("WAYLAND_DISPLAY", "wl-copy", &[]),
+        ("DISPLAY", "xclip", &["-selection", "clipboard"]),
+        ("DISPLAY", "xsel", &["--clipboard", "--input"]),
+    ];
+    if text.is_empty() {
+        return;
+    }
+    // Off the UI thread: a tool can take its time.
+    std::thread::spawn(move || {
+        for (session, tool, args) in TOOLS {
+            if std::env::var_os(session).is_none() {
+                continue;
+            }
+            let Ok(mut child) = Command::new(tool)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                continue;
+            };
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if child.wait().is_ok_and(|status| status.success()) {
+                return;
+            }
+        }
+    });
 }
 
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
@@ -2324,7 +2423,7 @@ impl Launcher {
         wrap
     }
 
-    fn play_page(&mut self, banner_width: f32, cx: &mut Context<Self>) -> Div {
+    fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         // A Java instance plays Mojang's game: no Horizon version, nothing of Horizon's to prepare.
         let java = self.selected_instance().and_then(|i| i.java.clone());
@@ -2359,8 +2458,15 @@ impl Launcher {
         let version = java
             .as_ref()
             .map_or_else(|| backend::game_version(&tag), |j| j.minecraft.clone());
-        let hero = match java {
-            Some(_) => self.hero("", &version, true, cx),
+        let hero = match &java {
+            // Its own game: the Minecraft version and the loader, never Horizon's.
+            Some(j) => {
+                let game = match &j.loader {
+                    Some(l) => format!("{version} · {} {}", l.kind.name(), l.version),
+                    None => version.clone(),
+                };
+                self.hero("", &game, true, cx)
+            }
             None => self.hero(&tag, &version, prepared, cx),
         };
         let running = self.client.is_some() || self.starting_client.is_some();
@@ -2419,7 +2525,8 @@ impl Launcher {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(self.picker(cx))
+                    // Horizon's versions don't apply to a Java instance.
+                    .children(java.is_none().then(|| self.picker(cx)))
                     .child(play),
             );
 
@@ -2617,9 +2724,9 @@ impl Launcher {
             }
         }
 
-        // The banner: Horizon's landscape (`art.rs`) under a veil of the page colour, the hero and
-        // the Play row over it. It reaches the content's edges and the top bar.
-        let (scene, scene_width) = self.art.scene(t.dark, self.scale, banner_width);
+        // The banner: the hero and the Play row over the sky (`sky.rs`), or over the player's
+        // own picture under a veil of the page colour. It reaches the content's edges and the top
+        // bar.
         let veil = |angle: f32, from: f32, to: f32, at: f32| {
             div()
                 .absolute()
@@ -2632,21 +2739,19 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
-        let picture = self.home_background();
-        let scene = match picture {
-            Some(path) => gpui::img(path)
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .object_fit(gpui::ObjectFit::Cover),
-            None => gpui::img(scene)
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .w(px(scene_width))
-                .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
-        };
+        let picture = self.home_background().map(|path| {
+            [
+                gpui::img(path)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .into_any_element(),
+                veil(90., 0.82, 0., 0.62).into_any_element(),
+                veil(180., 0., 0.75, 1.).into_any_element(),
+            ]
+        });
         let banner = div()
             .relative()
             .flex()
@@ -2658,12 +2763,7 @@ impl Launcher {
             .pb(px(28.))
             .gap(px(24.))
             .overflow_hidden()
-            .bg(gpui::rgb(art::sky_top(t.dark)))
-            .border_b_2()
-            .border_color(t.outline)
-            .child(scene)
-            .child(veil(90., 0.82, 0., 0.62))
-            .child(veil(180., 0., 0.75, 1.))
+            .children(picture.into_iter().flatten())
             .child(div().relative().child(hero))
             .child(div().relative().child(actions));
         let mut page = div().flex().flex_col().gap(px(28.)).child(banner);
@@ -2924,7 +3024,8 @@ impl Launcher {
                     .text_color(t.ink_soft)
                     .child(line)
             }));
-        if let Some(release) = &self.updates.horizon {
+        // A Java instance (no Horizon tag) isn't offered Horizon's updates.
+        if let Some(release) = self.updates.horizon.as_ref().filter(|_| !tag.is_empty()) {
             let installing = self.installing.as_ref().filter(|(t, _)| *t == release.tag);
             let line = div()
                 .flex()
@@ -3445,52 +3546,34 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.proxy_input.is_empty() && !focused {
-                div()
-                    .text_color(t.muted)
-                    .child("For example http://127.0.0.1:7890")
-            } else {
-                // The end of a long line stays in view while typing.
-                let chars: Vec<char> = self.proxy_input.chars().collect();
-                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.proxy_input,
+                &t,
+                focused,
+                false,
+                false,
+                "For example http://127.0.0.1:7890",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.proxy_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "backspace" => {
-                        this.proxy_input.pop();
-                    }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            // A copied line, not a copied page: the field takes one address.
-                            let line = text.lines().next().unwrap_or(&text);
-                            this.proxy_input.push_str(line.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.proxy_input.push_str(ch);
-                        }
-                    }
-                    _ => return,
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.proxy_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited => this.save_proxy(),
+                    _ => {}
                 }
-                // `truncate` counts bytes, and a cut inside a character panics: count characters.
-                if this.proxy_input.chars().count() > 256 {
-                    this.proxy_input = this.proxy_input.chars().take(256).collect();
-                }
-                this.save_proxy();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.proxy_input);
         // A half-typed address is no reason to complain; one left behind is.
-        let detail = match (focused, horizon_launcher::proxy::refuse(&self.proxy_input)) {
+        let detail = match (
+            focused,
+            horizon_launcher::proxy::refuse(self.proxy_input.text()),
+        ) {
             (false, Some(why)) => div().text_color(t.danger).child(why).into_any_element(),
             _ => div()
                 .child(
@@ -3506,7 +3589,7 @@ impl Launcher {
     /// Keeps the Proxy field in `settings.json`, and tells the parts that build their own agents
     /// (`horizon-port-pack`) which proxy to use.
     fn save_proxy(&mut self) {
-        let value = self.proxy_input.trim().to_owned();
+        let value = self.proxy_input.text().trim().to_owned();
         self.settings.proxy = (!value.is_empty()).then_some(value);
         self.settings.save();
         horizon_launcher::proxy::announce(self.settings.proxy.clone());
@@ -3609,15 +3692,14 @@ impl Launcher {
             )),
             None => div().child(tr("Add another account.")),
         };
-        let detail = if self.keychain || self.accounts.accounts.is_empty() {
-            detail
-        } else {
-            div()
+        let detail = match self.keychain.clone() {
+            Some(said) if !self.accounts.accounts.is_empty() => div()
                 .flex()
                 .flex_col()
                 .gap(px(4.))
                 .child(detail)
-                .child(div().child(account::NO_KEYCHAIN))
+                .child(div().child(said)),
+            _ => detail,
         };
         let action = if !configured {
             None
@@ -3702,46 +3784,30 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.friend_code.is_empty() && !focused {
-                div().text_color(t.muted).child(tr("Paste an invite code"))
-            } else {
-                // The end of a long code stays in view while typing.
-                let shown: String = {
-                    let chars: Vec<char> = self.friend_code.chars().collect();
-                    chars[chars.len().saturating_sub(30)..].iter().collect()
-                };
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.friend_code,
+                &t,
+                focused,
+                false,
+                false,
+                "Paste an invite code",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.friend_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "enter" => this.join_friend(),
-                    "backspace" => {
-                        this.friend_code.pop();
-                    }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.friend_code.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.friend_code.push_str(ch);
-                        }
-                    }
-                    _ => return,
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.friend_code, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Enter => this.join_friend(),
+                    line_edit::Key::Escape => window.blur(),
+                    _ => {}
                 }
-                this.friend_code.truncate(256);
                 cx.stop_propagation();
                 cx.notify();
             }));
-        let valid = horizon_friends::invite::parse(&self.friend_code).is_some();
+        let field = line_edit::mouse(field, cx, |this| &mut this.friend_code);
+        let valid = horizon_friends::invite::parse(self.friend_code.text()).is_some();
         let mut join = button("join-friend", "Join", Kind::Secondary, &t);
         if can_play && valid {
             join = join.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -3783,10 +3849,10 @@ impl Launcher {
     }
 
     fn join_friend(&mut self) {
-        if horizon_friends::invite::parse(&self.friend_code).is_none() {
+        if horizon_friends::invite::parse(self.friend_code.text()).is_none() {
             return;
         }
-        self.joining = Some(self.friend_code.clone());
+        self.joining = Some(self.friend_code.text().to_string());
         self.play();
         if self.starting_client.is_none() {
             self.joining = None;
@@ -4197,6 +4263,15 @@ fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
+        if specimen::wanted() {
+            return div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .bg(t.side)
+                .children(titlebar::render(&t, window))
+                .child(specimen::render(&t));
+        }
         self.scale = window.scale_factor();
         self.perf.frame();
         if self.bench.as_ref().is_some_and(perf::Bench::scrolling) {
@@ -4208,16 +4283,15 @@ impl Render for Launcher {
         self.args_focused = self.args_focus.is_focused(window);
         self.proxy_focused = self.proxy_focus.is_focused(window);
         let size = window.viewport_size();
-        let banner_width = f32::from(size.width) - theme::SIDEBAR - scrollbar::GUTTER;
         let content = match self.page {
-            Page::Play => self.play_page(banner_width, cx),
+            Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };
-        self.art.free_replaced(window);
+        self.sky.free_replaced(window);
         // The new page fades in and rises a few pixels.
         let content = div()
             .relative()
@@ -4235,7 +4309,16 @@ impl Render for Launcher {
         if self.opening.is_none() && window.focused(cx).is_none() {
             window.focus(&self.root_focus);
         }
-        let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
+        let (sky, next) = self.sky.render(
+            &t.night,
+            (size.width.into(), size.height.into()),
+            window.scale_factor(),
+            window.is_window_active(),
+            Instant::now(),
+        );
+        if let Some(next) = next {
+            self.wake_sky(next, cx);
+        }
         let topbar = self.topbar(window, cx);
         let sidebar = self.sidebar(window, cx);
         let mut root = div()
@@ -4267,11 +4350,9 @@ impl Render for Launcher {
             .flex()
             .flex_col()
             .size_full()
-            .bg(t.page)
             .font_family(theme::FONT)
             .text_color(t.ink)
             .overflow_hidden()
-            .child(blocks::stone(stone, size.width.into(), size.height.into()))
             .child(
                 div()
                     .relative()
@@ -4390,8 +4471,10 @@ impl Render for Launcher {
         div()
             .flex()
             .flex_col()
+            .relative()
             .size_full()
             .bg(t.side)
+            .child(sky)
             .children(titlebar::render(&t, window))
             .child(root.flex_1().min_h_0())
             .children(titlebar::resize_handles(window))
@@ -4432,6 +4515,22 @@ impl Launcher {
         }
         handle.set_offset(offset);
         window.request_animation_frame();
+    }
+
+    /// Draws the window again in `after`, when the sky next changes, unless a frame comes sooner.
+    fn wake_sky(&mut self, after: Duration, cx: &mut Context<Self>) {
+        let at = Instant::now() + after;
+        if self.sky_wake.as_ref().is_some_and(|(when, _)| *when <= at) {
+            return;
+        }
+        let timer = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(after).await;
+            let _ = this.update(cx, |this, cx| {
+                this.sky_wake = None;
+                cx.notify();
+            });
+        });
+        self.sky_wake = Some((at, timer));
     }
 
     fn skip_opening(&mut self) {
@@ -4497,13 +4596,12 @@ fn main() {
         .run(|cx: &mut App| {
             cx.text_system()
                 .add_fonts(vec![
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_REGULAR),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_MEDIUM),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_SEMIBOLD),
                     Cow::Borrowed(horizon_theme::fonts::GEIST_MONO),
-                    Cow::Borrowed(horizon_theme::fonts::PIXEL_MEDIUM),
-                    Cow::Borrowed(horizon_theme::fonts::PIXEL_SEMIBOLD),
-                    Cow::Borrowed(horizon_theme::fonts::PIXEL_BOLD),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_REGULAR),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_MEDIUM),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_SEMIBOLD),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_BOLD),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_DISPLAY_BOLD),
                 ])
                 .expect("bundled fonts");
             cx.bind_keys(key_bindings());

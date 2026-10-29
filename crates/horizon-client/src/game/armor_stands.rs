@@ -65,8 +65,13 @@ impl ArmorStandAssets {
                 }
             }
         }
-        if let Some(part) = load("minecraft:elytra#main") {
-            player.insert("elytra", part);
+        for (key, name) in [
+            ("minecraft:elytra#main", "elytra"),
+            ("minecraft:elytra_baby#main", "elytra_baby"),
+        ] {
+            if let Some(part) = load(key) {
+                player.insert(name, part);
+            }
         }
         let mut equipment = HashMap::new();
         let mut trim_overrides = HashMap::new();
@@ -584,7 +589,18 @@ impl Game<'_> {
             if !ticking(a.position.x.floor() as i32, a.position.z.floor() as i32) {
                 continue;
             }
-            a.tick(&mut scene);
+            let in_water = a.in_water(&self.world, &self.res.motion().fluids);
+            let (world, registry, facts, collision) = (
+                &self.world,
+                self.pack.assets.registry,
+                self.res.facts(),
+                self.collision,
+            );
+            a.tick(&mut scene, in_water, &mut |bounds, velocity| {
+                horizon_client::motion::bubble_column_push(
+                    world, registry, facts, collision, bounds, velocity,
+                );
+            });
             if !a.environment_tick(&self.world, self.res.facts(), self.pack.assets.registry) {
                 dead.push(i);
             }
@@ -616,9 +632,6 @@ impl Game<'_> {
         };
         for a in &self.armor_stands {
             let entity_start = out.len();
-            if a.invisible {
-                continue;
-            }
             // ArmorStand.shouldRenderAtSqrDistance: 256 times the box's mean
             // edge (4 for a marker's empty box), whatever the entity distance.
             // LivingEntityRenderer grows the culling box by 0.5 for a dragon head.
@@ -690,16 +703,20 @@ impl Game<'_> {
                 a.position.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            horizon_client::mobs::render::draw(
-                model,
-                base,
-                &poses,
-                wood,
-                0xFFFF_FFFF,
-                packed,
-                0,
-                out,
-            );
+            // LivingEntityRenderer.submit: an invisible stand has no body render type, but its
+            // layers (held items, custom head, armour) are submitted all the same.
+            if !a.invisible {
+                horizon_client::mobs::render::draw(
+                    model,
+                    base,
+                    &poses,
+                    wood,
+                    0xFFFF_FFFF,
+                    packed,
+                    0,
+                    out,
+                );
+            }
             self.armor_stand_items(a, model, base, &posed, packed, out);
             // HumanoidArmorLayer: head, chest, legs, feet.
             for (slot, layer) in [
@@ -778,6 +795,18 @@ impl Game<'_> {
                     );
                 }
             }
+            // WingsLayer: ArmorStandRenderer adds it after the armour layers. A stand
+            // never crouches or glides, so its wings rest folded.
+            self.wings_geometry(
+                a.equipment[4].as_ref().map(|s| &*s.item),
+                None,
+                a.small,
+                base,
+                horizon_client::mobs::ElytraAnimation::RESTING,
+                false,
+                packed,
+                out,
+            );
             self.cull_entity_vertices(out, entity_start);
         }
     }

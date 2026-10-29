@@ -22,7 +22,7 @@ const HELP: &[&str] = &[
     "tp X Y Z                       teleport the player",
     "hotbar 1-9                     select a hotbar slot",
     "give ITEM [COUNT]              add items to the inventory",
-    "render-distance N              chunks, 2..64",
+    "render-distance N              chunks, 2..128",
     "lod-distance N                 far surface chunks, 0 disables, up to1024",
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
@@ -34,7 +34,7 @@ const HELP: &[&str] = &[
     "chat TEXT                      send a chat line or /command as if typed",
     "type TEXT                      type into the open chat box (key enter tap sends)",
     "chat-log [N]                   the newest N chat messages (default 10)",
-    "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced)",
+    "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced graphics-hdr)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]  fly the camera along a line at constant speed, then reply with the frame summary (raw: every frame time too)",
@@ -339,17 +339,17 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
-                // Mods' keys (capability `input`) see the key as the keyboard
-                // hook does.
+                // Native mods see the key as the keyboard hook does.
                 let action = arg(2)?;
-                self.mod_key(physical, action != "up", action == "repeat");
                 self.native_key_event(physical, action != "up", action == "repeat");
                 if action == "tap" {
-                    self.mod_key(physical, false, false);
                     self.native_key_event(physical, false, false);
                 }
                 // Text screens consume raw presses; releases follow key binds.
-                let typing = matches!(self.screen, Screen::Chat | Screen::Options);
+                let typing = matches!(
+                    self.screen,
+                    Screen::Chat | Screen::Options | Screen::CommandBlock
+                );
                 let key = if typing && arg(2)? != "up" {
                     key
                 } else {
@@ -361,7 +361,8 @@ impl Game<'_> {
                                 if action != "up" {
                                     self.play_mouse(button, true)?;
                                 }
-                                if action != "down" {
+                                // A repeat keeps the key held, as the window's.
+                                if action == "up" || action == "tap" {
                                     self.play_mouse(button, false)?;
                                 }
                             }
@@ -421,19 +422,15 @@ impl Game<'_> {
                 match arg(2)? {
                     "down" => {
                         self.extras_mouse(button, true);
-                        self.mod_mouse_key(button, true);
                         self.play_mouse(button, true)?
                     }
                     "up" => {
                         self.extras_mouse(button, false);
-                        self.mod_mouse_key(button, false);
                         self.play_mouse(button, false)?
                     }
                     "click" => {
                         self.extras_mouse(button, true);
-                        self.mod_mouse_key(button, true);
                         self.extras_mouse(button, false);
-                        self.mod_mouse_key(button, false);
                         self.play_mouse(button, true)?;
                         self.play_mouse(button, false)?;
                     }
@@ -516,8 +513,9 @@ impl Game<'_> {
             }
             "render-distance" => {
                 let n: i32 = arg(1)?.parse()?;
-                if !(2..=64).contains(&n) {
-                    return Err("render distance must be 2..64".into());
+                let max = horizon_client::options_file::MAX_RENDER_DISTANCE;
+                if !(2..=max).contains(&n) {
+                    return Err(format!("render distance must be 2..{max}").into());
                 }
                 self.settings.render_distance = n;
                 self.apply_settings();
@@ -587,7 +585,10 @@ impl Game<'_> {
                 arg(1)?;
                 // The rest of the line: a path may hold spaces.
                 let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
-                renderer.screenshot = Some(path.trim().into());
+                renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
+                    path: path.trim().into(),
+                    size: None,
+                });
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
             }
@@ -677,6 +678,7 @@ impl Game<'_> {
                     "shader-packs" => Page::ShaderPacks,
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
+                    "graphics-hdr" => Page::GraphicsHdr,
                     "extras" => Page::Extras,
                     "credits" => Page::Credits,
                     "horizon" => Page::Horizon,
@@ -847,12 +849,20 @@ impl Game<'_> {
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
         self.physical_keys.insert(key);
+        // The window's shortcuts come before any screen, here too.
+        if self.screenshot_shortcut(key, false) {
+            return Ok(());
+        }
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());
         }
         if self.screen == Screen::Options {
             return self.options_key(key, None);
+        }
+        if self.screen == Screen::CommandBlock {
+            self.command_block_key_code(key, None, None);
+            return Ok(());
         }
         if self.keys.insert(key) {
             self.key_pressed(key)?;
@@ -885,7 +895,6 @@ impl Game<'_> {
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
-            Screen::Mod => "mod",
         }
     }
 

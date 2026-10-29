@@ -379,6 +379,22 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     }
     fog
 }
+/// Horizon's Fog option turned off (`horizon-graphics.txt` `fog:false`):
+/// no distance fog, in any dimension: the dimension's and biome's own fog
+/// (`visual/fog_start_distance`, `fog_end_distance`: the Nether's ends at 96
+/// blocks) and the render-distance fog. The fog of the fluid or powder snow
+/// the camera is in, blindness, darkness and a boss's world fog keep their
+/// limits. Vanilla has no such option.
+pub fn clear_distance_fog(fog: &mut FogData, input: &FogInputs) {
+    if input.fog_type == FogType::Atmospheric
+        && input.darkness.is_none()
+        && !input.boss_world_fog
+        && input.blindness.is_none()
+    {
+        (fog.render_distance_start, fog.render_distance_end) = (1e9, 2e9);
+        (fog.environmental_start, fog.environmental_end) = (1e9, 2e9);
+    }
+}
 /// `AtmosphericFogEnvironment.updateRainFogState`.
 pub fn update_rain_fog(
     state: &mut FogState,
@@ -450,6 +466,56 @@ mod tests {
         input.fog_type = FogType::Water;
         let water = setup_fog(&tables, &FogState::default(), &input);
         assert_eq!(water.environmental_start, -8.0);
+    }
+    #[test]
+    fn fog_off_clears_the_nether_fog_too() {
+        // The Nether's visual/fog_start_distance and fog_end_distance (10, 96)
+        // end before the render distance; the Fog option still clears them.
+        let nether = Sky {
+            fog_start: 10.0,
+            fog_end: 96.0,
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let mut input = inputs(&nether);
+        input.skybox = false;
+        let mut fog = setup_fog(&tables, &FogState::default(), &input);
+        assert_eq!(fog.environmental_end, 96.0);
+        clear_distance_fog(&mut fog, &input);
+        assert!(fog.environmental_start >= 1e9 && fog.render_distance_start >= 1e9);
+    }
+    #[test]
+    fn fog_off_keeps_fluid_and_effect_fog() {
+        let sky = Sky {
+            fog_start: 10.0,
+            fog_end: 96.0,
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let kept = |input: &FogInputs| {
+            let mut fog = setup_fog(&tables, &FogState::default(), input);
+            let before = fog;
+            clear_distance_fog(&mut fog, input);
+            fog == before
+        };
+        for fog_type in [FogType::Lava, FogType::PowderSnow, FogType::Water] {
+            let mut input = inputs(&sky);
+            input.fog_type = fog_type;
+            assert!(kept(&input), "{fog_type:?}");
+        }
+        let mut input = inputs(&sky);
+        input.blindness = Some((100, false));
+        assert!(kept(&input));
+        let mut input = inputs(&sky);
+        input.darkness = Some(0.5);
+        assert!(kept(&input));
+        let mut input = inputs(&sky);
+        input.boss_world_fog = true;
+        assert!(kept(&input));
     }
     #[test]
     fn boss_darkening_dims_fog_color() {

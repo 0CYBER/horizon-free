@@ -50,20 +50,30 @@ pub fn tooltip(
             Category::Neutral,
         )];
     }
-    def.effects
-        .iter()
+    effect_lines(def.effects.iter().copied(), scale, translate)
+}
+/// `PotionContents.addPotionTooltip`'s line per effect: its name, potency and
+/// scaled duration, for (effect id, duration, amplifier) entries.
+pub fn effect_lines<'a>(
+    effects: impl IntoIterator<Item = (&'a str, i32, i32)>,
+    scale: f32,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, Category)> {
+    effects
+        .into_iter()
         .map(|(e, duration, amp)| {
+            let e = e.trim_start_matches("minecraft:");
             let mut line =
-                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| (*e).to_owned());
-            if *amp > 0 {
+                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| e.to_owned());
+            if amp > 0 {
                 line.push(' ');
                 line.push_str(
                     &translate(&format!("potion.potency.{amp}"))
-                        .unwrap_or_else(|| crate::enchant::level_name(*amp as u32 + 1)),
+                        .unwrap_or_else(|| crate::enchant::level_name(amp as u32 + 1)),
                 );
             }
             let instant = effect(e).is_some_and(|d| d.instant);
-            let scaled = (*duration as f32 * scale) as i32;
+            let scaled = (duration as f32 * scale) as i32;
             if !instant && scaled > 20 {
                 line = format!("{line} ({})", format_duration(scaled));
             }
@@ -385,5 +395,24 @@ mod tests {
         // No fuel left: nothing more brews.
         stand.tick(&brewing, &items, &providers);
         assert_eq!(stand.brew_time, 0);
+    }
+
+    /// #3312: `PotionContents.getPotionDescription` names the effects with
+    /// translatable components, so a Russian game reads them from ru_ru.json
+    /// (the prepared one; skipped without it), as the tooltip's other lines.
+    #[test]
+    fn effect_lines_read_the_selected_language() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("assets/minecraft/lang/ru_ru.json").exists() {
+            return;
+        }
+        let ru = crate::lang::Language::load(&[&root], "ru_ru");
+        let translate = |key: &str| ru.get(key).map(str::to_owned);
+        let lines = tooltip(Some("minecraft:turtle_master"), 0.125, &translate);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].0.starts_with("Замедление IV ("), "{lines:?}");
+        assert!(lines[1].0.starts_with("Сопротивление III ("), "{lines:?}");
     }
 }
