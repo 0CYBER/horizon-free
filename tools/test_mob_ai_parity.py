@@ -294,6 +294,11 @@ def scenarios():
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # A baby villager grows up: Villager.ageBoundaryReached rebuilds its brain, so the adult schedule
+    # (work, meet) replaces the baby's (play) at once.
+    for seed in (201, 202):
+        add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
+                                               f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
     # Axolotls (#64): idle swimming, hunting a cod, and playing dead after hits, in a pool sunk into
     # the ground so no water flows out of it (the probe doesn't tick fluids).
     POOL = 'fill -5 -63 -5 5 -61 5 minecraft:water'

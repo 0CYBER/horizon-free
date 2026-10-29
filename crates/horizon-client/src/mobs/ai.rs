@@ -1011,6 +1011,9 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             // setAge at the age boundary: refreshDimensions.
             if m.extra.age >= 0 {
                 m.fudge_position_after_size_change(w, bw, bh);
+                if m.species() == Species::Villager {
+                    super::villager_brain::age_boundary_reached(m, w, level_random, events);
+                }
                 // Turtle.ageBoundaryReached: a grown turtle drops a scute.
                 if m.species() == Species::Turtle {
                     events.push(MobEvent::GiftLoot {
