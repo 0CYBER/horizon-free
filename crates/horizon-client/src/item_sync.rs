@@ -90,6 +90,11 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                     ("pattern", Tag::String(pattern.into())),
                 ])
             }
+            // Instruments are a synced registry: a goat horn names its own.
+            Component::Instrument(id) => match synced.name("minecraft:instrument", *id) {
+                Some(name) => Tag::String(name.into()),
+                None => continue,
+            },
             // BannerPatternLayers: each layer's pattern is a synced registry entry.
             Component::BannerPatterns(layers) => {
                 let layers: Option<Vec<Tag>> = layers
