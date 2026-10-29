@@ -1119,6 +1119,30 @@ mod tests {
     }
 
     #[test]
+    fn loot_name_preserves_plain_and_styled_components() {
+        let mut stack = ItemStack::new("minecraft:stone", 1);
+        stack
+            .data_mut()
+            .set_loot_name("minecraft:custom_name", &serde_json::json!("Rock"));
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&Tag::String("Rock".into()))
+        );
+        let styled = serde_json::json!({"text": "Rock", "color": "red"});
+        stack
+            .data_mut()
+            .set_loot_name("minecraft:custom_name", &styled);
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&horizon_client_core::scoreboard::json_to_tag(&styled))
+        );
+    }
+
+    #[test]
     fn loot_component_keeps_a_styled_custom_name() {
         let name = serde_json::json!({"text":"Prize","color":"#ff8800"});
         let mut stack = ItemStack::new("minecraft:stick", 1);

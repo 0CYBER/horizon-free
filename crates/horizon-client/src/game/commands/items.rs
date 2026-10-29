@@ -430,9 +430,10 @@ impl Game<'_> {
                                 c.insert("minecraft:item_name".into(), name);
                             });
                         } else {
-                            let t = horizon_client::packs::component(&m["name"]);
-                            stack.extra.get_or_insert_with(Default::default).custom_name =
-                                Some(horizon_client::scoreboard::json_to_tag(&t.component()));
+                            // SetNameFunction.run preserves the component when no entity resolver is requested.
+                            stack
+                                .data_mut()
+                                .set_loot_name("minecraft:custom_name", &m["name"]);
                         }
                     }
                     "minecraft:set_enchantments" => {
