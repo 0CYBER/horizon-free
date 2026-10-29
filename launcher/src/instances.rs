@@ -121,6 +121,19 @@ pub struct JavaGame {
     /// Extra JVM arguments, split on whitespace.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub jvm_args: String,
+    /// The mod loader it plays with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader: Option<crate::loaders::Loader>,
+}
+
+impl JavaGame {
+    /// What the mod browser installs for: its Minecraft version and its loader.
+    pub fn target(&self) -> crate::browser::java_instance::Target {
+        crate::browser::java_instance::Target {
+            minecraft: self.minecraft.clone(),
+            loader: self.loader.as_ref().map(|l| l.kind.id().to_string()),
+        }
+    }
 }
 
 /// 4 GiB: enough for vanilla and most modpacks, as other launchers start with.
@@ -174,14 +187,14 @@ pub struct Instance {
 }
 
 impl Instance {
-    /// Ok when it plays Horizon; a Java instance's refusal, until the launcher starts the real
-    /// game.
+    /// Ok when it plays Horizon; for a Java instance, which starts its own game
+    /// (`backend::java_game`), that Horizon's options don't apply to it.
     fn horizon(&self) -> Result<(), String> {
         match &self.java {
             None => Ok(()),
             Some(java) => Err(format!(
-                "{} plays Minecraft {} (Java Edition), which this launcher can't start yet: playing \
-                 Java instances comes in a coming update.",
+                "{} plays Minecraft {} (Java Edition), not Horizon: Play starts it, without a \
+                 Horizon version.",
                 self.name, java.minecraft
             )),
         }
