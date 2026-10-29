@@ -42,10 +42,22 @@ impl Game<'_> {
         let key = (pos[0], pos[1], pos[2]);
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts().get(state);
-        if &*facts.item == "minecraft:air" {
+        // PistonHeadBlock.getCloneItemStack: the piston the head belongs to.
+        let head = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .filter(|s| s.name.as_str() == "minecraft:piston_head")
+            .map(|s| match s.properties.get("type") {
+                Some(t) if t == "sticky" => "minecraft:sticky_piston",
+                _ => "minecraft:piston",
+            });
+        let item = head.unwrap_or(&*facts.item);
+        if item == "minecraft:air" {
             return None;
         }
-        let mut stack = ItemStack::new(&facts.item, 1);
+        let mut stack = ItemStack::new(item, 1);
         let mut patch = Compound::new();
         // BeehiveBlock.getCloneItemStack: the honey level as the item's block state.
         if include_data
