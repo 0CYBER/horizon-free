@@ -14,6 +14,12 @@ pub enum Output {
 }
 
 impl Output {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pq => "HDR10 (PQ)",
+            Self::ScRgb => "scRGB",
+        }
+    }
     pub fn format(self) -> wgpu::TextureFormat {
         match self {
             Self::Pq => wgpu::TextureFormat::Rgb10a2Unorm,
@@ -67,6 +73,8 @@ pub struct Hdr {
     /// Paper white and peak brightness, in nits.
     pub paper_white: f32,
     pub peak: f32,
+    /// The display's black level, in nits: shadows are lifted onto it (`hdr.wgsl`).
+    pub black: f32,
 }
 
 impl Hdr {
@@ -148,6 +156,7 @@ impl Hdr {
             debug: std::env::var_os("HORIZON_HDR_DEBUG").is_some_and(|v| v == "1"),
             paper_white: 200.0,
             peak: 1000.0,
+            black: 0.0,
         }
     }
 
@@ -234,7 +243,7 @@ impl Hdr {
             f32::from(u8::from(world)),
             f32::from(u8::from(self.debug)),
             f32::from(u8::from(self.output == Output::Pq)),
-            0.0,
+            self.black.clamp(0.0, paper),
             0.0,
             0.0,
         ];

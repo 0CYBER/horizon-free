@@ -232,14 +232,34 @@ fn installs_jars_with_dependencies_then_updates_and_removes() {
     fake.release("map", Kind::Mod, "2", &["1.21.1"], &["fabric"], &["lib"]);
     let entry = Installed::load(&home).lookup("map").cloned().unwrap();
     assert_eq!(update_for(&fake, &t, &entry).unwrap().unwrap().number, "2");
+    // Turned off, the mod is kept as `.jar.disabled`, which the loaders skip.
+    set_on(&home, &entry, false).unwrap();
+    assert!(!is_on(&home, &entry));
+    assert!(
+        home.join("mods/map-1.jar.disabled").is_file() && !home.join("mods/map-1.jar").exists()
+    );
+    set_on(&home, &entry, false).unwrap();
+    // It stays off through an update, and the old file goes.
     install(&fake, &t, &map, &home, NONE).unwrap();
-    assert!(!home.join("mods/map-1.jar").exists());
-    assert!(home.join("mods/map-2.jar").is_file());
+    assert!(
+        !home.join("mods/map-1.jar").exists() && !home.join("mods/map-1.jar.disabled").exists()
+    );
+    assert!(
+        home.join("mods/map-2.jar.disabled").is_file() && !home.join("mods/map-2.jar").exists()
+    );
     let entry = Installed::load(&home).lookup("map").cloned().unwrap();
+    assert!(!is_on(&home, &entry));
     assert!(update_for(&fake, &t, &entry).unwrap().is_none());
+    install(&fake, &t, &map, &home, NONE).unwrap();
+    assert!(!is_on(&home, &entry));
+    set_on(&home, &entry, true).unwrap();
+    assert!(is_on(&home, &entry) && home.join("mods/map-2.jar").is_file());
+    set_on(&home, &entry, false).unwrap();
 
     remove(&home, "map-slug").unwrap();
-    assert!(!home.join("mods/map-2.jar").exists());
+    assert!(
+        !home.join("mods/map-2.jar").exists() && !home.join("mods/map-2.jar.disabled").exists()
+    );
     assert!(Installed::load(&home).lookup("map").is_none());
     assert!(home.join("mods/lib-1.jar").is_file());
     let _ = fs::remove_dir_all(&home);
@@ -273,4 +293,30 @@ fn refuses_what_the_instance_cannot_run() {
     let err = plan(&fake, &target("1.20.1", Some("fabric")), &map).unwrap_err();
     assert_eq!(err, "map has no version for Minecraft 1.20.1 with fabric.");
     let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_page_search_keeps_the_players_filters_but_not_their_version() {
+    let t = target("1.21.1", Some("fabric"));
+    let picked = details::Filters {
+        categories: vec!["optimization".into()],
+        loader: Some("neoforge".into()),
+        game_version: Some("26.3".into()),
+        environment: Some(details::Environment::Client),
+        sort: Some(details::Sort::Downloads),
+    };
+    let q = t.search("fps", Kind::Mod, &picked);
+    assert_eq!(q.text, "fps");
+    assert_eq!(
+        q.filters,
+        details::Filters {
+            game_version: Some("1.21.1".into()),
+            loader: Some("fabric".into()),
+            ..picked
+        }
+    );
+    assert!(t.takes(Kind::Mod) && t.takes(Kind::ResourcePack));
+    assert!(!t.takes(Kind::Modpack) && !t.takes(Kind::Shader) && !t.takes(Kind::DataPack));
+    assert_eq!(t.describe(Kind::Mod), "Minecraft 1.21.1 with fabric");
+    assert_eq!(t.describe(Kind::ResourcePack), "Minecraft 1.21.1");
 }
