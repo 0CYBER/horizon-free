@@ -122,6 +122,17 @@ impl CameraType {
         }
     }
 }
+/// `LivingEntityRenderer.isBodyVisible` and `isInvisibleTo` for the player's
+/// own body, seen by itself: the Invisibility effect (`Entity.isInvisible`)
+/// hides it unless its team sees friendly invisibles, where vanilla draws it
+/// translucent.
+fn body_visible(
+    effects: &horizon_client::effects::PlayerEffects,
+    team: Option<&horizon_client::scoreboard::Team>,
+) -> bool {
+    let invisible = effects.get("invisibility").is_some();
+    !horizon_client::scoreboard::invisible_to(team, team, false, invisible)
+}
 /// The player's model type (`PlayerModel` with the default skin).
 pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
     horizon_client::mobs::load_model(root, "minecraft:player#main").map(|model| {
@@ -440,16 +451,27 @@ impl Game<'_> {
     pub(super) fn own_body_in_view(&self) -> bool {
         !self.camera_type.first_person() || self.sleeping.is_some()
     }
-    /// Whether the player's own model shows in the world view.
+    /// Whether the player's own model shows in the world view (its body or,
+    /// while invisible, only its armour and held items).
     pub(super) fn player_model_shown(&self) -> bool {
         // A shader pack's shadow pass draws the player in first person too (shadowPlayer).
         (self.own_body_in_view() || self.pack_shadow_casters.1)
             && !self.spectator()
-            && self.potions.effects.get("minecraft:invisibility").is_none()
             && self
                 .player
                 .as_ref()
                 .is_some_and(|p| !p.health.dead_or_dying())
+    }
+    /// The player's own team: a server's client is in it by its profile name.
+    fn own_team(&self) -> Option<&horizon_client::scoreboard::Team> {
+        match &self.remote {
+            Some(r) => self.score.board.players_team(&r.profile_name),
+            None => self.player_team(),
+        }
+    }
+    /// Whether the player's own body is drawn (`body_visible`).
+    pub(super) fn own_body_visible(&self) -> bool {
+        body_visible(&self.potions.effects, self.own_team())
     }
     /// The player's model for the entity pass in third person.
     pub(super) fn player_model_geometry(
@@ -473,7 +495,13 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let start = out.len();
-        horizon_client::mobs::render::render_with(
+        let body = self.own_body_visible();
+        let render = if body {
+            horizon_client::mobs::render::render_with
+        } else {
+            horizon_client::mobs::render::render_layers
+        };
+        render(
             m,
             alpha as f32,
             camera,
@@ -493,14 +521,25 @@ impl Game<'_> {
         );
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
-        // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
-        // in its team by its profile name.
+        // LivingEntity.isCurrentlyGlowing: the Glowing effect.
         if self.potions.effects.get("glowing").is_some() {
-            let team = match &self.remote {
-                Some(r) => self.score.board.players_team(&r.profile_name),
-                None => self.player_team(),
-            };
-            self.mark_outline(&out[start..], super::glowing::team_color(team));
+            let color = super::glowing::team_color(self.own_team());
+            // LivingEntityRenderer.getRenderType: an invisible glowing body
+            // still draws its outline.
+            if !body {
+                let mut silhouette = Vec::new();
+                horizon_client::mobs::render::render(
+                    m,
+                    alpha as f32,
+                    camera,
+                    &lookup,
+                    packed,
+                    self.res.mob_data(),
+                    &mut silhouette,
+                );
+                self.mark_outline(&silhouette, color);
+            }
+            self.mark_outline(&out[start..], color);
         }
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
@@ -545,7 +584,13 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
-        horizon_client::mobs::render::render_with(
+        // The same render state as in the world: an invisible body is not drawn.
+        let render = if self.own_body_visible() {
+            horizon_client::mobs::render::render_with
+        } else {
+            horizon_client::mobs::render::render_layers
+        };
+        render(
             &m,
             1.0,
             camera,
@@ -801,6 +846,73 @@ mod preview_tests {
                 assert!((transform.transform_vector3(axis).length() - expected).abs() < 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn an_invisible_player_hides_its_own_body() {
+        use horizon_client::{effects::EffectInstance, scoreboard::Scoreboard};
+        // The effect as a server's UpdateMobEffect or a drunk potion adds it.
+        let id = horizon_client::brewing::effect("minecraft:invisibility")
+            .unwrap()
+            .id;
+        let mut effects = horizon_client::effects::PlayerEffects::default();
+        assert!(body_visible(&effects, None));
+        effects.add(EffectInstance::new(id, 3600, 0));
+        assert!(!body_visible(&effects, None), "no team: the body is hidden");
+        // Entity.isInvisibleTo: a team that sees friendly invisibles sees it.
+        let mut board = Scoreboard::default();
+        let team = board.add_team("blue");
+        assert!(body_visible(&effects, Some(team)));
+        team.see_friendly_invisibles = false;
+        assert!(!body_visible(&effects, Some(team)));
+    }
+
+    /// LivingEntityRenderer.submit: an invisible body is not drawn, its
+    /// HumanoidArmorLayer is.
+    #[test]
+    fn an_invisible_body_keeps_its_armour() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        let Some(kind) = player_type(&root) else {
+            return;
+        };
+        let m = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
+        let armour = [(&*kind.model, [0.5, 0.5, 0.75, 0.75], u32::MAX)];
+        let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
+        let data = horizon_client::mobs::MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        let draw = |body: bool| {
+            let mut out = Vec::new();
+            let render = if body {
+                horizon_client::mobs::render::render_with
+            } else {
+                horizon_client::mobs::render::render_layers
+            };
+            render(
+                &m,
+                1.0,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xF0F0,
+                &data,
+                &armour,
+                &mut out,
+            );
+            out
+        };
+        let (shown, hidden) = (draw(true), draw(false));
+        assert!(shown.iter().any(|v| v.uv[0] <= 0.25), "the body draws");
+        assert!(!hidden.is_empty(), "the armour still draws");
+        assert!(hidden.iter().all(|v| v.uv[0] >= 0.5), "only the armour");
+        assert_eq!(hidden.len() * 2, shown.len());
     }
 
     #[test]
