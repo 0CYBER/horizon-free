@@ -99,6 +99,16 @@ pub fn rear_offset(m: &Mob) -> [f64; 3] {
 pub fn immobile(m: &Mob) -> bool {
     can_rear(m.species()) && (m.extra.flag || m.extra.counter > 0) && !controlled(m)
 }
+/// `AbstractHorse.onElasticLeashPull`: a lead pulled taut ends the horse's
+/// grazing, and `Camel.onElasticLeashPull` stands a sitting camel up.
+pub fn on_elastic_leash_pull(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if grazes(m.species()) {
+        m.extra.flag = false;
+    }
+    if super::camel::is_camel(m.species()) {
+        super::camel::on_elastic_leash_pull(m, w, events);
+    }
+}
 /// `AbstractHorse.standIfPossible`: a horse that can rear does, for twenty
 /// ticks (`setStanding(20)`, which also ends its grazing).
 pub fn stand_if_possible(m: &mut Mob) {

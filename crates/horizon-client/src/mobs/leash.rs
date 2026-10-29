@@ -274,6 +274,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.velocity.z + force[2] * 0.8 + rel.z * 0.11,
             );
             check_fall_distance(m);
+            super::equine::on_elastic_leash_pull(m, w, events);
             true
         });
     if !pulled {

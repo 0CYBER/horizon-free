@@ -1,7 +1,7 @@
 //! Camels (`Camel`): ridden by two, sitting down and standing up now and
 //! then, dashing instead of jumping, eating cactus, always "tame".
 use super::{
-    Mob, MobEvent,
+    Mob, MobEvent, MobWorld,
     anim::{Poses, State},
     goals::{
         Breed, Cx, Float, FollowParent, Goal, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll,
@@ -9,6 +9,7 @@ use super::{
     },
 };
 use horizon_core::geometry::trig::Mth;
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_core::random::RandomSource;
 use std::collections::HashMap;
 
@@ -87,6 +88,38 @@ pub fn finish_load(m: &mut Mob, game_time: i64) {
     }
     let since = (game_time - tick.abs()).clamp(0, i64::from(i32::MAX / 2));
     m.extra.egg_time = (i64::from(m.age) - since) as i32;
+}
+/// `Camel.getDefaultDimensions`: the standing box, the type's or a baby's
+/// `BABY_STANDING_DIMENSIONS` (width and height).
+fn standing_dims(m: &Mob) -> (f32, f32) {
+    if m.is_baby() {
+        (0.95, 1.4)
+    } else {
+        (m.kind.width as f32, m.kind.height as f32)
+    }
+}
+/// `Camel.canCamelChangePose`: the box of the other pose fits where the camel
+/// is (`wouldNotSuffocateAtTargetPose`: no block in the way).
+pub fn can_change_pose(m: &Mob, w: &MobWorld) -> bool {
+    let (width, height) = if sitting(m) {
+        standing_dims(m)
+    } else {
+        let (width, height, _) = sitting_dims(m.is_baby());
+        (width, height)
+    };
+    let half = f64::from(width) / 2.0;
+    let at = m.position;
+    w.no_collision(Aabb::new(
+        Vec3::new(at.x - half, at.y, at.z - half),
+        Vec3::new(at.x + half, at.y + f64::from(height), at.z + half),
+    ))
+}
+/// `Camel.onElasticLeashPull`: a taut lead stands a sitting camel up, once it
+/// is not changing pose and has room to stand.
+pub fn on_elastic_leash_pull(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if sitting(m) && !in_transition(m) && can_change_pose(m, w) {
+        stand_up(m, events);
+    }
 }
 /// `Camel.getBodyAnchorAnimationYOffset` at the partial tick 0: how high the
 /// seat of the front (`front`) or back rider is on a camel of `height` at
