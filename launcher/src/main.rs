@@ -1642,8 +1642,6 @@ fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool {
     play_press(prepared, None, preparing || running) == PlayPress::Play
 }
 
-/// The selected version once one has been removed: the saved choice if it is still installed,
-/// else the newest left.
 /// Whether `tag` can start being deleted now: it is installed, no install is writing it, and it
 /// is not already going. Another version deleting at the same time does not stop it.
 fn removable(
@@ -1657,6 +1655,8 @@ fn removable(
         && !removing.iter().any(|t| t == tag)
 }
 
+/// The selected version once one has been removed: the saved choice if it is still installed,
+/// else the newest left.
 fn selection_after_removal(installed: &[String], saved: Option<String>) -> Option<String> {
     saved
         .filter(|s| installed.contains(s))
