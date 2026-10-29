@@ -8,6 +8,7 @@ use horizon_client::{
     items::ItemStack, save,
 };
 use horizon_world::{
+    level::classes::Class,
     nbt::{Compound, Tag},
     registry::BlockStateId,
 };
@@ -45,7 +46,17 @@ impl Game<'_> {
         if &*facts.item == "minecraft:air" {
             return None;
         }
-        let mut stack = ItemStack::new(&facts.item, 1);
+        // FlowerPotBlock.getCloneItemStack: a potted plant picks as that plant
+        // (`new ItemStack(potted)`), an empty pot as the pot itself.
+        let behaviours = self.res.behaviours();
+        let plant = behaviours.data(state);
+        let plant_item = plant
+            .is(Class::FlowerPot)
+            .then_some(plant.link)
+            .flatten()
+            .map(|block| behaviours.block_data(block).item.clone())
+            .filter(|item| &**item != "minecraft:air");
+        let mut stack = ItemStack::new(plant_item.as_ref().unwrap_or(&facts.item), 1);
         let mut patch = Compound::new();
         // BeehiveBlock.getCloneItemStack: the honey level as the item's block state.
         if include_data
