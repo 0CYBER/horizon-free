@@ -3010,6 +3010,7 @@ def check_eat(host, guest, out):
     guest.wait(5)
     guest.raw('select', 'minecraft:bread')
     hungry = guest('state')['player']['food']
+    start = guest('status')
     # use-item --hold returns once released: watch the guest's screen meanwhile.
     hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.2))
     hold.start()
@@ -3022,12 +3023,23 @@ def check_eat(host, guest, out):
     guest.wait(10)
     fed = guest('state')['player']['food']
     left = guest('inventory')['counts'].get('minecraft:bread', 0)
-    detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using')}
+    end = guest('status')
+    # Every bite the guest's client draws (5 crumbs, 16 for the last) plays its own sound; the
+    # server plays them for the others only (Player.playSound) and adds FoodProperties.onConsume's
+    # sound for each loaf, so the eater hears each bite once (#3129).
+    eat = 'minecraft:entity.generic.eat'
+    heard = end['heard'].get(eat, 0) - start['heard'].get(eat, 0)
+    crumbs = end['particles'].get('item', 0) - start['particles'].get('item', 0)
+    eaten = 3 - left
+    bites = (crumbs - 16 * eaten) / 5
+    detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using'),
+              'heard': heard, 'crumbs': crumbs}
     assert hungry < 20, f'the guest is not hungry: {detail}'
     ticks = [u['ticks'] for u in using if u]
     assert len(ticks) >= 3 and ticks == sorted(ticks) and ticks[-1] > ticks[0], f'no eating on the guest\'s screen: {detail}'
     assert left == 2 and fed > hungry, f'the server did not eat one loaf: {detail}'
     assert detail['after'] is None, f'still eating after the release: {detail}'
+    assert heard == bites + 2 * eaten, f'the guest heard {heard} bites for {bites:g} crumb bursts: {detail}'
     return detail
 
 

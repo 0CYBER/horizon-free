@@ -571,6 +571,15 @@ impl Game<'_> {
                 }),
             );
         }
+        // Player.playSound: everyone near but the guest, in the players' source.
+        let players = horizon_client::settings::SOUND_SOURCES
+            .iter()
+            .position(|s| *s == "player")
+            .unwrap_or(0) as i32;
+        for (name, at, volume, pitch) in std::mem::take(&mut self.guest_player_sounds) {
+            host.hub
+                .sound(&name, at, volume, pitch, players, Some(conn));
+        }
         // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
         for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
             host.hub.send_to(
