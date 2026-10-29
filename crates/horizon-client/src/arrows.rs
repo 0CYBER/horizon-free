@@ -164,6 +164,8 @@ pub struct ArrowState {
     /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
     pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
+    /// `Arrow.ID_EFFECT_COLOR` as a client has it from its server (-1: none).
+    pub effect_color: i32,
     /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
     /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
@@ -214,6 +216,7 @@ impl ArrowState {
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
             fired_from_weapon: None,
             no_physics: false,
+            effect_color: -1,
             pierce: 0,
             pierced: Vec::new(),
             fire_ticks: 0,

@@ -6,7 +6,11 @@
 //! instance's random.
 use horizon_core::random::RandomSource;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 /// `SoundManager.EMPTY_SOUND_LOCATION`.
 pub const EMPTY: &str = "minecraft:empty";
@@ -224,6 +228,34 @@ fn parse_sound(v: &Value) -> Option<Sound> {
         sentinel: Sentinel::None,
     })
 }
+/// The files under a namespace's `sounds/`, as `sounds/<path>` with `/`.
+fn sound_files(namespace: &Path) -> HashSet<String> {
+    let mut files = HashSet::new();
+    let mut stack = vec![namespace.join("sounds")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            // The listing's own type; a link is followed, as `is_file` does.
+            let Ok(kind) = e.file_type() else {
+                continue;
+            };
+            let (dir, file) = if kind.is_symlink() {
+                (path.is_dir(), path.is_file())
+            } else {
+                (kind.is_dir(), kind.is_file())
+            };
+            if dir {
+                stack.push(path);
+            } else if file && let Ok(rel) = path.strip_prefix(namespace) {
+                files.insert(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    files
+}
 impl SoundRegistry {
     /// Every `assets/<namespace>/sounds.json` under a resource root, files
     /// validated against `assets/<namespace>/sounds/`.
@@ -236,13 +268,19 @@ impl SoundRegistry {
             .filter_map(|e| e.file_name().to_str().map(str::to_owned))
             .collect();
         namespaces.sort();
+        // Each namespace's sound files are listed once, as the resource manager
+        // lists a pack, instead of one file lookup per sound (thousands).
+        let files: HashMap<&str, HashSet<String>> = namespaces
+            .iter()
+            .map(|ns| (ns.as_str(), sound_files(&assets.join(ns))))
+            .collect();
+        let exists = |ns: &str, path: &str| files.get(ns).is_some_and(|f| f.contains(path));
         let mut registry = Self::default();
-        for namespace in namespaces {
-            let Ok(text) = fs::read(assets.join(&namespace).join("sounds.json")) else {
+        for namespace in &namespaces {
+            let Ok(text) = fs::read(assets.join(namespace).join("sounds.json")) else {
                 continue;
             };
-            let exists = |ns: &str, path: &str| assets.join(ns).join(path).is_file();
-            registry.add_file(&namespace, &text, &exists);
+            registry.add_file(namespace, &text, &exists);
         }
         registry
     }
@@ -368,6 +406,24 @@ impl SoundRegistry {
 mod tests {
     use super::*;
     use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn load_keeps_the_sound_files_a_root_holds() {
+        let root = std::env::temp_dir().join(format!("horizon-sounds-{}", std::process::id()));
+        let ns = root.join("assets/minecraft");
+        fs::create_dir_all(ns.join("sounds/block/note")).unwrap();
+        fs::write(ns.join("sounds/block/note/harp.ogg"), b"").unwrap();
+        fs::write(
+            ns.join("sounds.json"),
+            br#"{"note": {"sounds": ["block/note/harp", "block/note/gone"]}}"#,
+        )
+        .unwrap();
+        let r = SoundRegistry::load(&root);
+        let _ = fs::remove_dir_all(&root);
+        let sounds = &r.get("minecraft:note").unwrap().sounds;
+        let kept: Vec<&str> = sounds.iter().map(|s| s.location.as_str()).collect();
+        assert_eq!(kept, ["minecraft:block/note/harp"]);
+    }
 
     #[test]
     fn references_weigh_as_much_as_their_event() {

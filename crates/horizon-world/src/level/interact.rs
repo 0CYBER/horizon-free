@@ -397,9 +397,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::BrewingStand
                 | Class::CartographyTable
                 | Class::Chest
+                | Class::CopperChest
                 | Class::Crafter
                 | Class::CraftingTable
                 | Class::Dispenser
+                | Class::Dropper
                 | Class::EnchantingTable
                 | Class::EnderChest
                 | Class::Grindstone
@@ -409,10 +411,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 | Class::Sign
                 | Class::SmithingTable
                 | Class::Stonecutter
+                | Class::TrappedChest
                 | Class::Lectern => {
                     self.player_effect(pos, state, PlayerEffect::OpenMenu);
                     Success
                 }
+                // DecoratedPotBlock.useWithoutItem: the wobble always succeeds.
+                Class::DecoratedPot => Success,
+                // JukeboxBlock.useWithoutItem: ejecting a disc is SUCCESS (the
+                // insert is useItemOn). An empty jukebox passes.
+                Class::Jukebox if table.bool(state, p.has_record) => Success,
                 Class::Command | Class::Structure | Class::Jigsaw => {
                     if player.game_master {
                         self.player_effect(pos, state, PlayerEffect::OpenMenu);
@@ -696,6 +704,26 @@ impl Behaviours {
         }
         if self.data(state).chain.contains(&Class::CopperGolemStatue) {
             return self.turn_statue(level, ticks, pos, state, item);
+        }
+        // RespawnAnchorBlock.useItemOn: glowstone (`isRespawnFuel`) charges an
+        // anchor below 4 charges (`canBeCharged`) and the click ends there.
+        if item == Some("minecraft:glowstone")
+            && self.data(state).chain.contains(&Class::RespawnAnchor)
+            && self.table.int(state, self.props.charges) < 4
+        {
+            // RespawnAnchorBlock.charge.
+            let charges = self.table.int(state, self.props.charges);
+            let next = self.table.set_int(state, self.props.charges, charges + 1);
+            let mut sim = self.sim(level, ticks);
+            sim.set_block_and_update(pos, next);
+            sim.game_event_state(pos, "minecraft:block_change", next);
+            sim.sound(
+                pos,
+                &"minecraft:block.respawn_anchor.charge".into(),
+                1.0,
+                1.0,
+            );
+            return InteractionResult::Success;
         }
         // NoteBlock.useItemOn: a mob head on the top face is placed, not tuned
         // (`#minecraft:noteblock_top_instruments`).
