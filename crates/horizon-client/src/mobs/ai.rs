@@ -472,6 +472,11 @@ pub fn tick(
     if m.removed {
         return false;
     }
+    if m.species() == Species::ZombieVillager {
+        // ZombieVillager.tick counts the cure down before super.tick, with
+        // or without AI (NoAI only skips serverAiStep).
+        super::zombie_villager::step(m, &mut Cx { w, events });
+    }
     super::warden::pre_tick(m, w, events);
     if m.species() == Species::Strider {
         super::strider::pre_tick(m, w, events);
