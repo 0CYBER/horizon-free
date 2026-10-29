@@ -14,8 +14,8 @@ pub use horizon_client_render::{
     mesher, minimap, mipmap, mod_list, model_library, models, options_file, options_fixes,
     options_ui, overlay, pack_screen, packs, par, particles, poi_sections, providers, screen_draw,
     screen_effects, sculk, settings, shader_pack_list, signs, skins, sound_engine, sound_events,
-    spans, sprites, streaming, tab_list, telemetry, testgen, title_edition, trims, ui, vault,
-    weather, widgets, world, worldborder, zip,
+    spans, split_layout, sprites, streaming, tab_list, telemetry, testgen, title_edition, trims,
+    ui, vault, weather, widgets, world, worldborder, zip,
 };
 pub mod attack_strength;
 pub mod attribute_updates;
