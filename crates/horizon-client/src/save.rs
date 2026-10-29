@@ -185,6 +185,19 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
         .map_err(|e| format!("upgrading {}: {e}", world.display()))?;
     Ok(())
 }
+/// Whether opening the world runs file fixes, which vanilla asks for a backup
+/// first (`BackupStatus.FILE_FIXING_REQUIRED`). Saves of 1.8 and before have no
+/// DataVersion, read as -1.
+pub fn needs_file_fixes(world: &Path) -> bool {
+    let Some(root) = read_dat(&world.join("level.dat")) else {
+        return false;
+    };
+    let Some(data) = root.get("Data") else {
+        return false;
+    };
+    let version = number(data.get("DataVersion")).unwrap_or(-1);
+    i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
