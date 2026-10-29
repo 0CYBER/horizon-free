@@ -269,6 +269,38 @@ impl Projectile {
     pub fn is_arrow(&self) -> bool {
         matches!(self.kind, ProjectileKind::Arrow { .. })
     }
+    /// Whether it is a `SpectralArrow` (its own entity type): a spectral
+    /// arrow's pickup item, or the glowing effect a dispenser shoots with.
+    pub fn is_spectral_arrow(&self) -> bool {
+        let ProjectileKind::Arrow { effect, .. } = &self.kind else {
+            return false;
+        };
+        effect.is_some_and(|(id, _)| id == "minecraft:glowing")
+            || self
+                .arrow
+                .as_ref()
+                .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+    }
+    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): the opaque colour of the
+    /// potion the arrow carries, from its tipped pickup item or the effect a
+    /// stray, bogged or parched adds; -1 for none.
+    pub fn arrow_effect_color(&self) -> i32 {
+        let ProjectileKind::Arrow { effect, .. } = &self.kind else {
+            return -1;
+        };
+        if self.is_spectral_arrow() {
+            return -1;
+        }
+        let rgb = match (effect, &self.arrow) {
+            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.color),
+            (None, Some(a)) if &*a.pickup_item.item == "minecraft:tipped_arrow" => a
+                .pickup_item
+                .potion()
+                .map(|p| crate::brewing::potion_color(Some(p))),
+            _ => None,
+        };
+        rgb.map_or(-1, |rgb| (rgb | 0xFF00_0000) as i32)
+    }
     pub fn is_fireball(&self) -> bool {
         matches!(
             self.kind,

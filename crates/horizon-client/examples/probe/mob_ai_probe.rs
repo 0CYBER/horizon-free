@@ -198,6 +198,15 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "Float" => "FloatGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
         "RandomStroll" => "RandomStrollGoal",
+        // AbstractFish's private subclass of RandomSwimmingGoal.
+        "RandomSwimming"
+            if matches!(
+                m.species(),
+                Species::Cod | Species::Salmon | Species::TropicalFish | Species::Pufferfish
+            ) =>
+        {
+            "FishSwimGoal"
+        }
         "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",
         "RandomLookAround" => "RandomLookAroundGoal",
@@ -234,6 +243,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "FreezeWhenLookedAt" => "EndermanFreezeWhenLookedAt",
         "LookForPlayer" => "EndermanLookForPlayerGoal",
         "HealRaiders" => "NearestHealableRaiderTargetGoal",
+        "MountPanic" => "MountPanicGoal",
+        "LlamaHurtBy" => "LlamaHurtByTargetGoal",
         other => return other.to_owned(),
     };
     vanilla.to_owned()
@@ -732,6 +743,15 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool, now: i6
             .opened_chest
             .map_or("-".into(), |p| format!("{},{},{}", p[0], p[1], p[2]));
         let _ = write!(out, "\tcg {} {held} {opened}", m.extra.variant3);
+    }
+    if m.species() == Species::Wolf {
+        // NeutralMob anger left (the angry texture), -1 when calm.
+        let anger = if m.extra.anger > 0 {
+            i64::from(m.extra.anger)
+        } else {
+            -1
+        };
+        let _ = write!(out, "\twolf {anger}");
     }
     if let Some(b) = horizon_client::mobs::bee::get(m) {
         let anger = if b.anger_end > 0 {

@@ -584,6 +584,14 @@ impl Creative {
         let y = if tab.top { -28.0 } else { Self::HEIGHT - 4.0 };
         (x, y)
     }
+    /// `CreativeModeInventoryScreen.extractTabButton`'s cursor: an unselected
+    /// tab asks for the pointing hand when the whole-pixel mouse, relative to
+    /// the screen origin, is strictly inside its 26x32 button.
+    pub fn tab_wants_hand(tab: &Tab, selected: bool, mouse: (f32, f32)) -> bool {
+        let (x, y) = Self::tab_position(tab);
+        let (mx, my) = (mouse.0.floor(), mouse.1.floor());
+        !selected && mx > x && my > y && mx < x + 26.0 && my < y + 32.0
+    }
 }
 /// Whether a suffix array of `strings` has a suffix starting with `text`:
 /// some string contains it (none for no strings, even when `text` is empty).
@@ -1170,5 +1178,39 @@ mod tests {
         c.search.key(KeyCode::ArrowRight, false, false);
         c.search.key(KeyCode::Backspace, false, false);
         assert_eq!(c.search.value, "world");
+    }
+
+    #[test]
+    fn unselected_tabs_want_the_hand_strictly_inside() {
+        let tab = |top, column| Tab {
+            id: String::new(),
+            title: String::new(),
+            icon: String::new(),
+            items: Vec::new(),
+            top,
+            column,
+            search: false,
+            inventory: false,
+        };
+        // Top row, second column: the button spans x 27..53, y -28..4.
+        let t = tab(true, 1);
+        assert!(Creative::tab_wants_hand(&t, false, (40.0, -10.0)));
+        assert!(!Creative::tab_wants_hand(&t, true, (40.0, -10.0)));
+        // Its edges ask for nothing; the mouse counts in whole pixels.
+        assert!(!Creative::tab_wants_hand(&t, false, (27.0, -10.0)));
+        assert!(!Creative::tab_wants_hand(&t, false, (27.9, -10.0)));
+        assert!(Creative::tab_wants_hand(&t, false, (28.0, -10.0)));
+        assert!(Creative::tab_wants_hand(&t, false, (52.9, -10.0)));
+        assert!(!Creative::tab_wants_hand(&t, false, (53.0, -10.0)));
+        assert!(!Creative::tab_wants_hand(&t, false, (40.0, -28.0)));
+        assert!(Creative::tab_wants_hand(&t, false, (40.0, -27.0)));
+        assert!(Creative::tab_wants_hand(&t, false, (40.0, 3.9)));
+        assert!(!Creative::tab_wants_hand(&t, false, (40.0, 4.0)));
+        // Bottom row, right-aligned inventory column: x 169..195, y 132..164.
+        let b = tab(false, 6);
+        assert!(Creative::tab_wants_hand(&b, false, (180.0, 140.0)));
+        assert!(!Creative::tab_wants_hand(&b, false, (169.0, 140.0)));
+        assert!(Creative::tab_wants_hand(&b, false, (170.0, 140.0)));
+        assert!(!Creative::tab_wants_hand(&b, false, (180.0, 132.0)));
     }
 }

@@ -1,6 +1,20 @@
+<!-- Opened by an AI agent? First line: "> 🤖 Opened by <your GitHub login>'s AI agent (<tool, model>), not by <your GitHub login> personally." Use your own login, not someone else's. -->
+
 ## What and why
 
 <!-- What this changes, and why. Link the issue it fixes ("Fixes #123"). -->
+
+## Kind
+
+<!-- Tick one: it sets the pull request's label (CONTRIBUTING.md "Pull requests"). -->
+
+- [ ] parity: Horizon now does what vanilla 26.3 does
+- [ ] bug: a crash or a breakage
+- [ ] perf: faster, or less memory
+- [ ] feature: something new for players (listed under New in the release notes)
+- [ ] extra: Horizon-only, off by default
+- [ ] tooling: tools, CI, tests, harnesses
+- [ ] docs
 
 ## Vanilla reference
 
