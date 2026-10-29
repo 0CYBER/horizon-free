@@ -11636,6 +11636,12 @@ impl Game<'_> {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        // countRenderedSections() > 10: a client that joined its server
+        // thread has nothing pending before the first chunks arrive, and the
+        // icon would be only sky.
+        if renderer.drawn_sections <= 10 {
+            return;
+        }
         if renderer.screenshot.is_some() {
             // F2's or an agent's screenshot owns the frame this time; ours
             // comes around again with the next attempt.
