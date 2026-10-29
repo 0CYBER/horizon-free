@@ -4573,6 +4573,9 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
+        let debug_stick = self
+            .held()
+            .is_some_and(|stack| &*stack.item == "minecraft:debug_stick");
         if !self
             .res
             .items()
@@ -4600,7 +4603,11 @@ impl Game<'_> {
         }
         if self.creative {
             let seq = self.next_sequence();
-            self.predict_break(hit.pos, state, seq);
+            // DebugStickItem.canDestroyBlock never lets the client break the
+            // block; the server only selects the property on this START.
+            if !debug_stick {
+                self.predict_break(hit.pos, state, seq);
+            }
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 0,
                 pos: hit.pos,
@@ -4647,7 +4654,9 @@ impl Game<'_> {
             }));
             if progress >= 1.0 {
                 // startDestroyBlock: instant survival breaks have no destroy delay.
-                self.predict_break(hit.pos, state, seq);
+                if !debug_stick {
+                    self.predict_break(hit.pos, state, seq);
+                }
                 return;
             }
             if let Some(r) = self.remote.as_mut() {
@@ -4671,7 +4680,11 @@ impl Game<'_> {
         let ticks = self.mining.as_ref().map_or(0, |m| m.ticks) + 1;
         if done >= 1.0 {
             let seq = self.next_sequence();
-            self.predict_break(pos, state, seq);
+            // DebugStickItem.canDestroyBlock: the server selects the property
+            // and sends the block update instead; never predict a break.
+            if !debug_stick {
+                self.predict_break(pos, state, seq);
+            }
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 3,
                 pos,
@@ -4825,9 +4838,14 @@ impl Game<'_> {
             .as_ref()
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
+        let debug_stick = held
+            .as_ref()
+            .is_some_and(|stack| &*stack.item == "minecraft:debug_stick");
         if let Some(hit) = self.pick() {
             let spectator = self.spectator();
-            let (reacts, changes) = if hand == Hand::Main && !spectator {
+            let (reacts, changes) = if debug_stick && !spectator {
+                (true, DryUse::default())
+            } else if hand == Hand::Main && !spectator {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
                 // useItemOn runs for the off hand too (useWithoutItem doesn't):
@@ -4858,6 +4876,11 @@ impl Game<'_> {
             // the block's menu.
             if spectator {
                 return true;
+            }
+            // DebugStickItem.useOn is SUCCESS on the client too: the hand
+            // swings even though only the server changes the block.
+            if debug_stick {
+                self.with_hand(hand, |game| game.swing_arm());
             }
             // Only a predicted placement (predict_place) marks a cell whose
             // resend plays a place sound: an empty hand or a non-block item
@@ -4999,6 +5022,11 @@ impl Game<'_> {
         hit: &super::Hit,
         held: Option<&ItemStack>,
     ) -> (bool, DryUse) {
+        // DebugStickItem.useOn: SUCCESS without touching the client's level;
+        // the server cycles the property and sends the block update.
+        if held.is_some_and(|stack| &*stack.item == "minecraft:debug_stick") {
+            return (true, DryUse::default());
+        }
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {

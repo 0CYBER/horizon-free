@@ -160,6 +160,29 @@ impl StackData {
             self.other.sort_by(|a, b| a.0.cmp(&b.0));
         }
     }
+    /// `DebugStickState.properties().get(block)`: the property selected for
+    /// `block` in `minecraft:debug_stick_state`.
+    pub fn debug_stick_property(&self, block: &str) -> Option<String> {
+        let Tag::Compound(map) = self.other("minecraft:debug_stick_state")? else {
+            return None;
+        };
+        match map.get(&JavaString::from(block))? {
+            Tag::String(property) => Some(property.to_string_lossy()),
+            _ => None,
+        }
+    }
+    /// `DebugStickState.withProperty(block, property)`.
+    pub fn set_debug_stick_property(&mut self, block: &str, property: &str) {
+        let mut map = match self.other("minecraft:debug_stick_state") {
+            Some(Tag::Compound(map)) => map.clone(),
+            _ => Default::default(),
+        };
+        map.insert(
+            JavaString::from(block),
+            Tag::String(JavaString::from(property)),
+        );
+        self.set_other("minecraft:debug_stick_state", Some(Tag::Compound(map)));
+    }
 }
 /// `Raid.getBannerComponentPatch`: the ominous banner's pattern layers.
 pub const OMINOUS_LAYERS: [(&str, &str); 8] = [
@@ -1138,5 +1161,32 @@ mod tests {
         );
         assert_eq!(explosions[0].colors, vec![0xFF0000]);
         assert!(explosions[0].twinkle && !explosions[0].trail);
+    }
+
+    #[test]
+    fn debug_stick_state_round_trips() {
+        let mut stack = ItemStack::new("minecraft:debug_stick", 1);
+        stack
+            .data_mut()
+            .set_debug_stick_property("minecraft:oak_stairs", "facing");
+        stack
+            .data_mut()
+            .set_debug_stick_property("minecraft:oak_stairs", "half");
+        stack
+            .data_mut()
+            .set_debug_stick_property("minecraft:stone", "axis");
+
+        let tag = encode_components(&stack).expect("debug stick components");
+        let (_, extra) = decode_components(Some(&tag));
+        let data = extra.expect("debug stick state");
+        assert_eq!(
+            data.debug_stick_property("minecraft:oak_stairs").as_deref(),
+            Some("half")
+        );
+        assert_eq!(
+            data.debug_stick_property("minecraft:stone").as_deref(),
+            Some("axis")
+        );
+        assert_eq!(data.debug_stick_property("minecraft:dirt"), None);
     }
 }

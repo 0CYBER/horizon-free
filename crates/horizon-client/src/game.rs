@@ -44,6 +44,7 @@ mod creatures;
 mod crossbow;
 pub(crate) mod cushions;
 mod debug_keys;
+mod debug_stick;
 mod decorated_pot;
 mod dedicated;
 mod deflect;
@@ -4057,6 +4058,11 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        // DebugStickItem.canDestroyBlock: a left click selects a property and
+        // never destroys the block.
+        if !self.debug_stick_can_destroy(pos)? {
+            return Ok(());
+        }
         if !self
             .res
             .items()
@@ -4453,6 +4459,24 @@ impl Game<'_> {
             ))
         {
             return Ok(false);
+        }
+        // ItemStack.useOn: after the block's own useItemOn/useWithoutItem
+        // passed. DebugStickItem.useOn cycles the selected property.
+        if let Some(hit) = block_hit
+            && let Some(success) = self.debug_stick_use_on(hit.pos)?
+        {
+            // `Minecraft.startUseItem`: the stick's client-side `useOn` is
+            // SUCCESS, so the actor's hand swings; a remote guest swings in
+            // its own client, not on the server.
+            if self.lan_acting.is_none() {
+                self.swing_arm();
+            }
+            if success {
+                // `ServerPlayerGameMode.useItemOn`: a consuming `useOn`
+                // triggers ITEM_USED_ON_BLOCK with the stack before the use.
+                self.trigger_block("minecraft:item_used_on_block", hit.pos, &stack);
+            }
+            return Ok(true);
         }
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
             return Ok(true);
