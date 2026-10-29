@@ -1,13 +1,39 @@
 //! `AbstractThrownPotion`: what a splash or lingering potion does around where
-//! it lands besides its effects, as `#minecraft:douses_fire`,
-//! `#minecraft:hurts_water_sensitive_entities`, `#minecraft:extinguishes_entities`
-//! and `#minecraft:rehydrates_axolotls` (plain water in vanilla) decide.
+//! it lands besides its effects. A potion in `#minecraft:douses_fire` puts out
+//! the fire, candles and campfires next to the block it hit; one in
+//! `#minecraft:hurts_water_sensitive_entities` hurts the water-sensitive mobs
+//! near it and one in `#minecraft:extinguishes_entities` puts out burning
+//! entities. Only plain water is in those tags in vanilla.
 use super::Game;
 use horizon_client::{
     items::ItemStack,
     mobs::{Damage, Species, Who},
 };
-use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::{
+    geometry::{Aabb, Direction, Vec3},
+    position::BlockPos,
+};
+use horizon_world::{chunk::BlockState, registry::BlockStateId};
+
+/// The block a thrown potion hit and the face it hit it on, as the
+/// `BlockHitResult` of `ProjectileUtil.getHitResultOnMoveVector`: `end` is a
+/// point of the path inside the block, `start` where the step began. The face
+/// is the one the path enters the block cube through, or, when the step began
+/// inside the block, the one facing back along the motion.
+pub(super) fn thrown_block_hit(start: Vec3, end: Vec3, velocity: Vec3) -> ([i32; 3], Direction) {
+    let cell = [end.x, end.y, end.z].map(|v| v.floor() as i32);
+    let face = Aabb::clip_boxes(
+        [Aabb::unit_cube(Vec3::ZERO)],
+        start,
+        end,
+        BlockPos::new(cell[0], cell[1], cell[2]),
+    )
+    .map_or_else(
+        || Direction::approximate_nearest(velocity.reverse()),
+        |hit| hit.direction,
+    );
+    (cell, face)
+}
 
 impl Game<'_> {
     /// `PotionContents.is`: the potion of `stack` is in the potion tag `tag`
@@ -22,6 +48,78 @@ impl Game<'_> {
                 .get(tag)
                 .is_some_and(|members| members.iter().any(|m| m.as_str() == potion))
         })
+    }
+
+    /// `AbstractThrownPotion.onHitBlock` on the server: a potion (the stack's
+    /// `potion_contents`) in `#douses_fire` douses the cell in front of the
+    /// face it hit, the cell behind that (the block it hit) and the four
+    /// horizontal neighbours of the cell in front. `hit` is the block and
+    /// `face` the face it was hit on.
+    pub(super) fn potion_hit_block(&mut self, stack: &ItemStack, hit: [i32; 3], face: Direction) {
+        // `PotionContents.is(PotionTags.DOUSES_FIRE)` on the stack's `potion_contents`.
+        if !self.potion_in_tag(stack, "minecraft:douses_fire") {
+            return;
+        }
+        let relative = |pos: [i32; 3], direction: Direction| {
+            let n = direction.normal();
+            [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]
+        };
+        let effect = relative(hit, face);
+        self.douse_fire(effect);
+        self.douse_fire(relative(effect, face.opposite()));
+        // Direction.Plane.HORIZONTAL.
+        for direction in [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ] {
+            self.douse_fire(relative(effect, direction));
+        }
+    }
+
+    /// `AbstractThrownPotion.douseFire`: a fire block is destroyed without
+    /// drops, a lit candle or candle cake goes out, and a lit campfire goes
+    /// out after level event 1009 and its block-change game event.
+    fn douse_fire(&mut self, pos: [i32; 3]) {
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let name = self.res.facts().get(state).name.clone();
+        let fire = self.block_in_tag("minecraft:fire", &name);
+        if fire {
+            // Level.destroyBlock(pos, false, this).
+            self.with_level(|b, level, ticks| b.destroy_block(level, ticks, at, false));
+        }
+        let candle =
+            !fire && self.with_level(|b, level, ticks| b.extinguish_candle(level, ticks, at));
+        if !fire
+            && !candle
+            && let Some(mut lit) = self.lit_campfire(state, &name)
+        {
+            self.level_event_at(1009, pos, 0);
+            // CampfireBlock.douse: the block-change game event, whose source
+            // is the potion's owner (not tracked here).
+            self.post_block_game_event("minecraft:block_change", pos, None, None);
+            lit.properties.insert("lit".into(), "false".into());
+            if let Ok(unlit) = self.pack.assets.registry.resolve(&lit) {
+                let _ = self.level_set(pos, unlit);
+            }
+        }
+        let _ = self.process_level_events();
+    }
+
+    /// `CampfireBlock.isLitCampfire`: the state of a lit block in
+    /// `#minecraft:campfires`.
+    fn lit_campfire(&self, state: BlockStateId, name: &str) -> Option<BlockState> {
+        if !self.block_in_tag("minecraft:campfires", name) {
+            return None;
+        }
+        self.pack
+            .assets
+            .registry
+            .state(state)
+            .filter(|s| s.properties.get("lit").map(String::as_str) == Some("true"))
+            .cloned()
     }
 
     /// `AbstractThrownPotion.affectEntitiesAround`: the living entities whose
@@ -97,7 +195,7 @@ impl Game<'_> {
             }
         }
         if self.potion_in_tag(stack, "minecraft:rehydrates_axolotls") {
-            // Axolotl.rehydrate: its air back to the maximum of 1800 more.
+            // Axolotl.rehydrate: 1800 more air, up to the maximum.
             let (lo, hi) = (
                 [at.x - 0.125 - 4.0, at.y - 2.0, at.z - 0.125 - 4.0],
                 [at.x + 0.125 + 4.0, at.y + 0.25 + 2.0, at.z + 0.125 + 4.0],
