@@ -94,6 +94,16 @@ fn agent(url: &str) -> ureq::Agent {
     .build()
 }
 
+/// A file's body, from the network as the launcher reaches it.
+pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    get(url)?
+        .into_reader()
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
 pub(crate) fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
@@ -1323,19 +1333,35 @@ pub fn java_game(
     let player = account::java_player()?;
     let minecraft = data_dir().join("minecraft");
     let id = mojang::relative(&game.minecraft)?;
-    let versions = minecraft.join("versions").join(&id);
-    let downloaded = versions.join(".downloaded");
-    if !downloaded.is_file() {
+    let natives = minecraft.join("natives").join(&id);
+    // Each version and loader profile is fetched once; it then starts offline too.
+    let downloaded = |id: &str| -> Result<PathBuf, String> {
+        Ok(minecraft
+            .join("versions")
+            .join(mojang::relative(id)?)
+            .join(".downloaded"))
+    };
+    let marker = downloaded(&game.minecraft)?;
+    if !marker.is_file() {
         let listed = crate::minecraft_versions::load()?;
         let version = listed.find(&game.minecraft)?;
         download_version_for_owner(&version.id, &version.sha1, log)?;
-        fs::write(&downloaded, "").map_err(|e| format!("{}: {e}", downloaded.display()))?;
+        fs::write(&marker, "").map_err(|e| format!("{}: {e}", marker.display()))?;
     }
-    let file = versions.join(format!("{}.json", game.minecraft));
-    let version: serde_json::Value = fs::read_to_string(&file)
-        .map_err(|e| e.to_string())
-        .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut start = game.minecraft.clone();
+    if let Some(loader) = &game.loader {
+        start = loader.kind.profile_id(&loader.version, &game.minecraft);
+        let marker = downloaded(&start)?;
+        if !marker.is_file() {
+            start = crate::loaders::install(loader, &game.minecraft, &minecraft, &get_bytes, log)?;
+            fs::write(downloaded(&start)?, "").map_err(|e| e.to_string())?;
+        }
+    }
+    let file = minecraft
+        .join("versions")
+        .join(mojang::relative(&start)?)
+        .join(format!("{start}.json"));
+    let version = crate::java_launch::resolve(crate::java_launch::read(&file)?, &minecraft)?;
     let need = crate::java::Need::of(&version);
     let found = crate::java::pick(
         &need,
@@ -1357,7 +1383,7 @@ pub fn java_game(
         &crate::java_launch::Launch {
             minecraft: &minecraft,
             game_dir: &instance.home,
-            natives: &minecraft.join("natives").join(&id),
+            natives: &natives,
             java: &runtime.java(),
             memory_mb: game
                 .memory_mb

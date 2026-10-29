@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use horizon_launcher::instances;
+use horizon_launcher::loaders;
 use horizon_launcher::native_mods;
 use horizon_launcher::other_launchers;
 use horizon_launcher::server_list;
@@ -217,6 +218,12 @@ enum InstanceCmd {
         /// latest-snapshot) instead of a Horizon one
         #[arg(long, conflicts_with = "copy")]
         minecraft: Option<String>,
+        /// With this mod loader: fabric or quilt
+        #[arg(long, requires = "minecraft")]
+        loader: Option<String>,
+        /// The loader's version (default: its newest stable one)
+        #[arg(long, requires = "loader")]
+        loader_version: Option<String>,
     },
     /// The versions of Minecraft: Java Edition a Java instance can play, the newest first
     Versions {
@@ -242,6 +249,17 @@ enum InstanceCmd {
         /// Extra JVM arguments (one string; "" clears them)
         #[arg(long, allow_hyphen_values = true)]
         args: Option<String>,
+    },
+    /// A Java instance's mod loader: fabric or quilt, or none. --list shows its versions
+    Loader {
+        instance: String,
+        loader: String,
+        /// The loader's version (default: its newest stable one)
+        #[arg(long)]
+        version: Option<String>,
+        /// List the loader's versions for the instance's Minecraft instead
+        #[arg(long, conflicts_with = "version")]
+        list: bool,
     },
     /// Rename an instance (its folder stays)
     Rename { instance: String, name: String },
@@ -2335,7 +2353,15 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .map(|g| format!("  [{g}]"))
             .unwrap_or_default();
         let pinned = match (&i.java, &i.version) {
-            (Some(java), _) => format!("  Minecraft {} (Java Edition)", java.minecraft),
+            (Some(java), _) => match &java.loader {
+                Some(l) => format!(
+                    "  Minecraft {} (Java Edition) with {} {}",
+                    java.minecraft,
+                    l.kind.name(),
+                    l.version
+                ),
+                None => format!("  Minecraft {} (Java Edition)", java.minecraft),
+            },
             (None, Some(v)) => format!("  {v}"),
             (None, None) => String::new(),
         };
@@ -2371,14 +2397,59 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             name,
             copy,
             minecraft: None,
+            ..
         } => changed(instances::create(&name, copy.as_deref())?),
         InstanceCmd::Create {
             name,
             minecraft: Some(version),
+            loader,
+            loader_version,
             ..
         } => {
             let versions = horizon_launcher::minecraft_versions::load()?;
-            changed(instances::create_java(&name, &versions.find(&version)?.id)?)
+            let id = &versions.find(&version)?.id;
+            // The loader first: a version it doesn't have makes no instance.
+            let loader = loader
+                .map(|kind| loaders::choose(&kind, id, loader_version.as_deref()))
+                .transpose()?;
+            let made = instances::create_java(&name, id)?;
+            match loader {
+                Some(loader) => changed(instances::edit(&made.id, |m| {
+                    m.java.get_or_insert_with(Default::default).loader = Some(loader)
+                })?),
+                None => changed(made),
+            }
+        }
+        InstanceCmd::Loader {
+            instance,
+            loader,
+            version,
+            list,
+        } => {
+            let Some(java) = instances::find(&instance)?.java else {
+                return Err(format!(
+                    "{instance} is a Horizon instance: mod loaders are for Java instances."
+                ));
+            };
+            if list {
+                let kind = loaders::Kind::parse(&loader)?;
+                let listed = loaders::versions(kind, &java.minecraft, &backend::get_bytes)?;
+                if as_json {
+                    json(serde_json::json!(listed));
+                } else {
+                    for l in listed {
+                        println!("{}{}", l.version, if l.stable { "" } else { "  (beta)" });
+                    }
+                }
+                return Ok(());
+            }
+            let loader = match loader.trim() {
+                "none" => None,
+                kind => Some(loaders::choose(kind, &java.minecraft, version.as_deref())?),
+            };
+            changed(instances::edit(&instance, |m| {
+                m.java.get_or_insert_with(Default::default).loader = loader
+            })?)
         }
         InstanceCmd::Versions { snapshots, old } => {
             let versions = horizon_launcher::minecraft_versions::load()?;

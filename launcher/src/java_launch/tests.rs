@@ -293,3 +293,27 @@ fn a_loader_profile_plays_on_its_game_version() {
     );
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_version_that_inherits_from_itself_is_refused() {
+    let dir = scratch("loops");
+    let mc = dir.join("mc");
+    let write = |id: &str, parent: &str| {
+        let file = mc.join(format!("versions/{id}/{id}.json"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, json!({"id": id, "inheritsFrom": parent}).to_string()).unwrap();
+    };
+    write("self", "self");
+    write("a", "b");
+    write("b", "a");
+    let read = |id: &str| read(&mc.join(format!("versions/{id}/{id}.json"))).unwrap();
+    assert_eq!(
+        resolve(read("self"), &mc).unwrap_err(),
+        "self: inheritsFrom loops"
+    );
+    assert_eq!(
+        resolve(read("a"), &mc).unwrap_err(),
+        "b: inheritsFrom loops"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

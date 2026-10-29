@@ -121,6 +121,9 @@ pub struct JavaGame {
     /// Extra JVM arguments, split on whitespace.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub jvm_args: String,
+    /// The mod loader it plays with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader: Option<crate::loaders::Loader>,
 }
 
 impl JavaGame {
