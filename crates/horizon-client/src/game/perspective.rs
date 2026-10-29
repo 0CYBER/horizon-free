@@ -492,6 +492,7 @@ impl Game<'_> {
         );
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
+        self.player_pumpkin_geometry(m, self.armor[0].as_ref(), camera, alpha, packed, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
         // in its team by its profile name.
         if self.potions.effects.get("glowing").is_some() {
