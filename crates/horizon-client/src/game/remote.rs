@@ -5092,6 +5092,9 @@ impl Game<'_> {
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
+            // EnderEyeItem.use: startUsingItem unless an End portal frame is
+            // aimed at, with or without a stronghold to throw the eye at.
+            "minecraft:ender_eye" => !self.aims_at_end_portal_frame(),
             // Item.use: a kinetic weapon starts being used.
             id if horizon_client::spear::Kinetic::of(id).is_some() => true,
             // ShieldItem.use: anything that blocks attacks, off cooldown.
@@ -5105,11 +5108,17 @@ impl Game<'_> {
         }
     }
     /// Whether `stack` stays in use until the button lets go (bows,
-    /// crossbows, tridents, spyglasses, shields): its use only counts ticks here.
+    /// crossbows, tridents, spyglasses, shields, eyes of ender, whose
+    /// `getUseDuration` 0 never counts down to the end): its use only counts
+    /// ticks here.
     fn held_until_released(&self, stack: &ItemStack) -> bool {
         matches!(
             &*stack.item,
-            "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:spyglass"
+            "minecraft:bow"
+                | "minecraft:crossbow"
+                | "minecraft:trident"
+                | "minecraft:spyglass"
+                | "minecraft:ender_eye"
         ) || horizon_client::spear::Kinetic::of(&stack.item).is_some()
             || self.blocks_attacks(stack).is_some()
     }
