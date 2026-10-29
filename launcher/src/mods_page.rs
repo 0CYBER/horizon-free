@@ -1388,7 +1388,7 @@ impl Launcher {
         }
         let idle = self.native_step.is_none() && self.native_confirm.is_none();
         let can_build =
-            idle && matches!(state, State::NotBuilt | State::Outdated) || idle && error.is_some();
+            idle && (error.is_some() || matches!(state, State::NotBuilt | State::Outdated));
         let mut right = div()
             .flex()
             .items_center()
