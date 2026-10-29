@@ -278,7 +278,11 @@ impl Opt {
             | Opt::GlintStrength
             | Opt::PanoramaSpeed => Kind::Slider(s.file.double(self.file_key().unwrap()) as f32),
             Opt::Fov => unit(s.fov, 30.0, 110.0),
-            Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 64.0),
+            Opt::RenderDistance => unit(
+                s.render_distance as f32,
+                2.0,
+                crate::options_file::MAX_RENDER_DISTANCE as f32,
+            ),
             Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
             Opt::Sensitivity => Kind::Slider(s.sensitivity),
             Opt::WheelSensitivity => unit(s.mouse_wheel_sensitivity, 0.01, 10.0),
@@ -647,7 +651,10 @@ impl Opt {
                 crate::options_file::V::Double(f64::from(v)),
             ),
             Opt::Fov => s.fov = step(30.0, 110.0),
-            Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
+            Opt::RenderDistance => {
+                s.render_distance =
+                    step(2.0, crate::options_file::MAX_RENDER_DISTANCE as f32) as i32
+            }
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
             Opt::Sensitivity => s.sensitivity = v,
             Opt::WheelSensitivity => s.mouse_wheel_sensitivity = 0.01 + v * 9.99,
@@ -3226,7 +3233,7 @@ mod tests {
     #[test]
     fn render_distance_slider_round_trips_through_extended_options_range() {
         let mut s = Settings::default();
-        for (position, distance) in [(0.0, 2), (0.5, 33), (1.0, 64)] {
+        for (position, distance) in [(0.0, 2), (0.5, 65), (1.0, 128)] {
             set_slider(Opt::RenderDistance, &mut s, position);
             assert_eq!(s.render_distance, distance);
             let reloaded = Settings::parse(&s.serialize());
@@ -3237,10 +3244,10 @@ mod tests {
             );
         }
         let mut file = crate::options_file::OptionsFile::default();
-        file.set_text("renderDistance", "64").unwrap();
-        assert!(file.set_text("renderDistance", "65").is_err());
+        file.set_text("renderDistance", "128").unwrap();
+        assert!(file.set_text("renderDistance", "129").is_err());
         assert!(file.set_text("renderDistance", "1").is_err());
-        assert_eq!(file.int("renderDistance"), 64);
+        assert_eq!(file.int("renderDistance"), 128);
     }
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
