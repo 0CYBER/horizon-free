@@ -1639,6 +1639,15 @@ pub fn feed_animal(
 pub fn can_age_up(m: &Mob) -> bool {
     m.is_baby() && !m.extra.age_locked
 }
+/// `AgeableMob.setAgeLockedData`: a golden dandelion flips the lock, puts the
+/// age back to a baby's starting age (`getBabyStartAge`) and starts the
+/// particle timer (40 ticks).
+pub fn set_age_locked_data(m: &mut Mob) {
+    m.extra.age_locked = !m.extra.age_locked;
+    let start = super::finalize::baby_start_age(m.species());
+    super::finalize::set_age(m, start);
+    m.extra.age_lock_particle_timer = 40;
+}
 /// `AgeableMob.makeAgeLockedParticle`: while the golden dandelion's timer
 /// runs, every other tick one pause (locked) or reset (unlocked) growth
 /// particle rises above the mob (`sendParticles`, so the players are sent it).
