@@ -172,10 +172,12 @@ impl<B: TerrainBlockStates> HeightmapChunk for TerrainBlocks<'_, B> {
     }
 }
 impl<B: TerrainBlockStates> TerrainBlocks<'_, B> {
+    #[inline]
     fn section_index(&self, y: i32) -> Option<usize> {
         let dy = i64::from(y) - i64::from(self.min_y);
         (dy >= 0 && dy < i64::from(self.height)).then_some((dy >> 4) as usize)
     }
+    #[inline]
     fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         let Some(section) = self.section_index(y) else {
             return self.void_air;
@@ -183,11 +185,10 @@ impl<B: TerrainBlockStates> TerrainBlocks<'_, B> {
         if self.non_air[section] == 0 {
             return self.air;
         }
-        self.sections[section]
-            .get(local_index(x, y, z))
-            .expect("valid section coordinates")
+        self.sections[section].state(local_index(x, y, z))
     }
 }
+#[inline]
 fn local_index(x: i32, y: i32, z: i32) -> usize {
     (((y & 15) << 8) | ((z & 15) << 4) | (x & 15)) as usize
 }
@@ -334,8 +335,50 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
         self.blocks.highest_section_y()
     }
     /// ProtoChunk reads collapse an all-air section to its default AIR state.
+    #[inline]
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.blocks.block(x, y, z)
+    }
+    /// `FeatureWorld::scan_column` in this chunk: an all-air section is
+    /// tested once, a mixed one read without looking the section up per block.
+    pub fn scan_column(
+        &self,
+        [x, mut y, z]: [i32; 3],
+        step: i32,
+        mut limit: i32,
+        mut keep: impl FnMut(BlockStateId) -> bool,
+    ) -> i32 {
+        debug_assert!(step == 1 || step == -1);
+        let blocks = &self.blocks;
+        while limit > 0 {
+            let Some(section) = blocks.section_index(y) else {
+                if !keep(blocks.void_air) {
+                    return y;
+                }
+                y = y.wrapping_add(step);
+                limit -= 1;
+                continue;
+            };
+            // Blocks from y to this section's end in the walk's direction.
+            let within = (y - blocks.min_y) & 15;
+            let run = if step > 0 { 16 - within } else { within + 1 }.min(limit);
+            limit -= run;
+            if blocks.non_air[section] == 0 {
+                if !keep(blocks.air) {
+                    return y;
+                }
+                y = y.wrapping_add(step * run);
+                continue;
+            }
+            let storage = &blocks.sections[section];
+            for _ in 0..run {
+                if !keep(storage.state(local_index(x, y, z))) {
+                    return y;
+                }
+                y = y.wrapping_add(step);
+            }
+        }
+        y
     }
     pub fn section(&self, index: usize) -> Option<&BlockSection<'r>> {
         self.blocks.sections.get(index)

@@ -536,7 +536,9 @@ impl Game<'_> {
             title
                 .recent_worlds()
                 .iter()
-                .map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.creative }))
+                .map(
+                    |w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 }),
+                )
                 .collect::<Vec<_>>()
         };
         match &title.mode {
@@ -546,7 +548,7 @@ impl Game<'_> {
                 selected,
             } => json!({
                 "mode": "select-world",
-                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.creative })).collect::<Vec<_>>(),
+                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 })).collect::<Vec<_>>(),
                 "selected": selected,
             }),
             Mode::Create {
