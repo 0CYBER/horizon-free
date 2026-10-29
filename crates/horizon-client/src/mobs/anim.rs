@@ -840,6 +840,10 @@ pub fn setup(
                 bob(p, "right_arm", s.age, 1.0);
                 bob(p, "left_arm", s.age, -1.0);
             }
+            // BoggedModel.setupAnim: the mushrooms on the head come off once sheared.
+            if m.species() == super::Species::Bogged {
+                p.visible("mushrooms", !m.extra.sheared);
+            }
         }
         Anim::Witch => super::witch::anim(m, s, p),
         Anim::Villager => super::villager::anim(m, s, p),

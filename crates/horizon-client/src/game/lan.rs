@@ -812,6 +812,14 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // Bogged.DATA_SHEARED (the first entry after Mob's): the mushrooms
+        // on its head are gone.
+        "minecraft:bogged" => {
+            if e.sheared {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
         "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
         // Hoglin.DATA_IMMUNE_TO_ZOMBIFICATION (after AgeableMob's two) and
