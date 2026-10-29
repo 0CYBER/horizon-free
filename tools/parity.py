@@ -564,7 +564,7 @@ def dependencies(trace, scope=None):
         path = Path(path) if os.path.isabs(path) else ROOT / path
         if inside(path, ROOT) and not inside(path, LOCAL) and not inside(path, ROOT / "target") and path.is_file() \
                 and "__pycache__" not in path.parts:  # bytecode caches vary; their sources are dependencies already
-            kept.add(str(path.resolve().relative_to(ROOT)))
+            kept.add(path.resolve().relative_to(ROOT).as_posix())
     unique = []
     for artifact in artifacts:
         if artifact not in unique:
@@ -1376,6 +1376,12 @@ def changed_files(ref):
         set(filter(None, git("ls-files", "--others", "--exclude-standard") or []))
 
 
+def canonical_dependency_path(path: str) -> str:
+    """Normalize legacy Windows paths without changing their narrowed-root annotation."""
+    prefix, separator, suffix = path.partition(KEEP)
+    return prefix.replace("\\", "/") + separator + suffix
+
+
 def changed_harnesses(found, records, ref):
     """Harnesses new or changed since the merge base of HEAD and ref: their script, or a dependency of theirs that is
     an oracle (Java under mods/horizon/src/test) or a probe (a crate's example or binary), changed or was added."""
@@ -1385,7 +1391,8 @@ def changed_harnesses(found, records, ref):
         return set()
     found_changed = set()
     for name, script in found.items():
-        specific = [path for path in records.get(name, {}).get("dependencies", [])
+        dependencies = map(canonical_dependency_path, records.get(name, {}).get("dependencies", []))
+        specific = [path.split(KEEP)[0] for path in dependencies
                     if path.startswith("mods/horizon/src/test/") or "/examples/" in path or "/src/bin/" in path]
         if Path(script).relative_to(ROOT).as_posix() in changed or any(path in changed for path in specific):
             found_changed.add(name)
@@ -1425,6 +1432,7 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
         if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed:
             affected.add(name)
             continue
+        dependencies = [canonical_dependency_path(path) for path in dependencies]
         plain = {path.split(KEEP)[0] for path in dependencies}
         hit = (plain & changed) | parity_reach.unrecorded(ROOT, plain, changed)
         if not hit:
@@ -1439,7 +1447,8 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
         if over:
             affected.add(name)
             continue
-        narrowed = parity_reach.narrow(dependencies, recorded_artifacts(record), graph, changed, stop)
+        narrowed = parity_reach.narrow(dependencies, recorded_artifacts(dict(record, dependencies=dependencies)),
+                                      graph, changed, stop)
         if any(path.split(KEEP)[0] in changed and (children is None or parity_reach.declarations_changed(
                 ROOT, path.split(KEEP)[0], children, base, whole)) for path, (whole, children) in narrowed.items()):
             affected.add(name)
