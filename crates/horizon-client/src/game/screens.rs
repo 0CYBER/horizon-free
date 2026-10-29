@@ -366,6 +366,9 @@ impl Game<'_> {
             }
             // Autosaves keep a login position; death must resolve the respawn point instead.
             self.level.position = None;
+            // The dead player's Entity.setRemoved stopped its riding: the
+            // new one is not put back into the vehicle.
+            self.riding = None;
         }
         if self.remote.is_some() {
             self.ui.death_text = None;

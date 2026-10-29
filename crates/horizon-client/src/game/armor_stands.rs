@@ -2,7 +2,7 @@
 //! falling, `interactAt` equipment swaps by clicked height, the two-hit break
 //! of `hurtServer` (creative breaks at once), and `ArmorStandRenderer` with
 //! the default pose, the hit wobble and humanoid armor layers.
-use super::{Game, view_vector};
+use super::Game;
 use horizon_client::{
     entities::ArmorStand,
     items::ItemStack,
@@ -374,8 +374,7 @@ impl Game<'_> {
     }
     /// The armor stand under the crosshair, its distance and the hit point.
     pub(super) fn armor_stand_hit(&self) -> Option<(usize, f64, [f64; 3])> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64, [f64; 3])> = None;
         for (i, a) in self.armor_stands.iter().enumerate() {
@@ -511,6 +510,25 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        // The stand's box and id, before the hit may remove it.
+        let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
+        let hurt = self.punch_armor_stand(i);
+        if hurt {
+            self.attack_effects(
+                area,
+                Some(id as i32),
+                super::mace::Spared::Stand(id),
+                magic.then_some(id as i32),
+            );
+            self.swing_arm();
+        }
+        hurt
+    }
+    /// `ArmorStand.hurtServer` for a player's attack (also a sweep's): a
+    /// creative player breaks it, otherwise the first hit wobbles it and a
+    /// second within five ticks breaks it.
+    pub(super) fn punch_armor_stand(&mut self, i: usize) -> bool {
         let time = self.world.game_time;
         let at = self.armor_stands[i].position;
         let at = [at.x, at.y, at.z];

@@ -1376,7 +1376,8 @@ impl Game<'_> {
             self.player = Some(player);
             return Err(err("command.failed", &[]));
         }
-        self.trigger_dimension(from, dimension);
+        let at = player.position;
+        self.trigger_dimension(from, dimension, [at.x, at.y, at.z]);
         let target = Vec3::new(pos[0], pos[1], pos[2]);
         player.position = target;
         player.velocity = Vec3::ZERO;
@@ -1928,7 +1929,10 @@ impl Game<'_> {
     fn spawned_mark(&self) -> (u32, usize) {
         (
             self.next_entity,
-            self.tnts.len() + self.falling.len() + self.creatures.projectiles.len(),
+            self.tnts.len()
+                + self.falling.len()
+                + self.creatures.projectiles.len()
+                + self.rockets.len(),
         )
     }
     /// BlockStateArgument -> registry state.
