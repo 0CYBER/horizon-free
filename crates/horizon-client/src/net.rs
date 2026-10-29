@@ -639,6 +639,7 @@ fn configure(
                 }))?
             }
             cfg::Clientbound::RegistryData(r) => registries.add(r),
+            cfg::Clientbound::UpdateTags(t) => registries.add_tags(&t),
             cfg::Clientbound::CodeOfConduct(c) => {
                 let _ = send.send(Event::CodeOfConduct(c.text));
             }

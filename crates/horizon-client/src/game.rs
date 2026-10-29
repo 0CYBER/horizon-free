@@ -13079,6 +13079,9 @@ impl ApplicationHandler for Game<'_> {
                     if let Some(r) = &self.renderer {
                         let b = HudBatch::new([r.config.width, r.config.height]);
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
+                        if self.dialog_open() {
+                            self.dialog_drag();
+                        }
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
                         }
@@ -13216,8 +13219,12 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } if self.dialog_open() => {
-                    if state == ElementState::Pressed && button == MouseButton::Left {
-                        self.dialog_click()?;
+                    if button == MouseButton::Left {
+                        if state == ElementState::Pressed {
+                            self.dialog_click()?;
+                        } else {
+                            self.dialog_release();
+                        }
                     }
                 }
                 // ConnectScreen's Cancel, under the prompts and dialogs above.
