@@ -691,10 +691,12 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             true,
         ),
-        // The copper golem's eyes glow (LivingEntityEmissiveLayer, eyes render type).
+        // The copper golem's eyes glow: CopperGolemRenderer's
+        // LivingEntityEmissiveLayer (eyes render type) draws on a model baked
+        // from ModelLayers.COPPER_GOLEM, the body's, not COPPER_GOLEM_EYES.
         S::CopperGolem => {
             let eyes = super::copper_golem::eye_texture(m);
-            push(&mut v, "copper_golem#eyes", &eyes, white, true);
+            push(&mut v, &m.kind.model_key(), &eyes, white, true);
         }
         S::Spider | S::CaveSpider => push(
             &mut v,
@@ -1740,6 +1742,58 @@ mod tests {
                 "a swallowed block still hides the default core"
             );
             assert!(vertices.iter().all(|v| v.uv[0] >= 0.5));
+        }
+    }
+    /// CopperGolemRenderer: the emissive eye layer draws the eye texture on
+    /// the body's model, every polygon of it, at each oxidation level. The
+    /// prepared `copper_golem#eyes` model has no polygons, so the eyes
+    /// showed the body texture's black sockets.
+    #[test]
+    fn copper_golem_eyes_are_drawn_on_the_body_model() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:copper_golem"].clone());
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        let atlas = |name: &str| {
+            Some(if name.contains("copper_golem_eyes") {
+                [0.5, 0.5, 0.75, 0.75]
+            } else {
+                [0.0, 0.0, 0.25, 0.25]
+            })
+        };
+        for variant in 0..4 {
+            let mut mob = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+            mob.extra.variant = variant;
+            let mut vertices = Vec::new();
+            render(
+                &mob,
+                0.5,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xf0f0,
+                &data,
+                &mut vertices,
+            );
+            let body = vertices.iter().filter(|v| v.uv[0] <= 0.25).count();
+            let eyes = vertices.iter().filter(|v| v.uv[0] >= 0.5).count();
+            assert!(body > 0, "variant {variant}: no body drawn");
+            assert_eq!(
+                eyes, body,
+                "variant {variant}: the eye layer covers the body"
+            );
         }
     }
     /// `VexModel.translateToHand`: the held item is drawn at 0.55 scale and
