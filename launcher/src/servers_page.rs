@@ -44,13 +44,14 @@ pub(super) enum Field {
     PreLaunch,
     Wrapper,
     LaunchEnv,
+    PostExit,
     /// Settings' new offline name (`switch_page.rs`).
     OfflineName,
     DeleteServer,
 }
 
 impl Field {
-    const ALL: [Field; 19] = [
+    const ALL: [Field; 20] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -68,6 +69,7 @@ impl Field {
         Field::PreLaunch,
         Field::Wrapper,
         Field::LaunchEnv,
+        Field::PostExit,
         Field::OfflineName,
         Field::DeleteServer,
     ];
@@ -1081,7 +1083,9 @@ impl Launcher {
             | Field::InstanceGroup
             | Field::ConsoleSearch
             | Field::DeleteServer => {}
-            Field::PreLaunch | Field::Wrapper | Field::LaunchEnv => self.save_launch(),
+            Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {
+                self.save_launch()
+            }
             Field::OfflineName => self.offline_name_enter(),
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
