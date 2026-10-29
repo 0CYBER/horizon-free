@@ -114,6 +114,13 @@ impl SignData {
     pub fn line_height(&self) -> f32 {
         if self.hanging { 9.0 } else { 10.0 }
     }
+    /// `SignBlockEntity.canExecuteClickCommands`: a waxed sign whose side
+    /// has a `run_command` click event. (Horizon keeps no filtered text, so
+    /// `Player.isTextFilteringEnabled` never selects it.)
+    pub fn can_execute_click_commands(&self, front: bool) -> bool {
+        let side = if front { &self.front } else { &self.back };
+        self.waxed && side.has_any_click_commands()
+    }
     /// NBT entries after the common block-entity header.
     pub fn encode(&self) -> Vec<(&'static str, Tag)> {
         let side = |t: &SignText| {

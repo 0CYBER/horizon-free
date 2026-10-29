@@ -90,6 +90,15 @@ impl Game<'_> {
         let diff = if diff >= 180.0 { 360.0 - diff } else { diff };
         diff <= 90.0
     }
+    /// `SignBlockEntity.canExecuteClickCommands` for the side the acting
+    /// player faces: a waxed sign with a `run_command` click event on it.
+    pub(super) fn sign_can_execute_click_commands(&self, pos: (i32, i32, i32)) -> bool {
+        // Only a waxed sign can; skip the facing maths for everything else.
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&pos) else {
+            return false;
+        };
+        sign.waxed && sign.can_execute_click_commands(self.facing_sign_front(pos))
+    }
     /// `SignBlock.useWithoutItem` (the block's `OpenMenu` effect): a waxed
     /// sign plays the failed-interaction sound; otherwise a player who may
     /// build edits the side they face.
