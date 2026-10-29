@@ -674,6 +674,33 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
+        self.wings_geometry(
+            chest,
+            m.cape.as_deref(),
+            false,
+            horizon_client::mobs::render::base_transform(m, partial, camera),
+            m.extra.elytra.angles(partial),
+            m.extra.crouching,
+            light,
+            out,
+        );
+    }
+    /// `WingsLayer.submit` for any wearer: the wings of `chest`'s equipment
+    /// asset on `base` (the wearer's model transform), `baby` for the baby
+    /// elytra model. `cape` is a player's own cape texture, which has its
+    /// elytra (`WingsLayer.getPlayerElytraTexture`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn wings_geometry(
+        &self,
+        chest: Option<&str>,
+        cape: Option<&str>,
+        baby: bool,
+        base: glam::Mat4,
+        angles: [f32; 3],
+        crouching: bool,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
         let Some(asset) = chest
             .and_then(|item| self.res.items().get(item))
             .and_then(|i| i.equip_asset.as_ref())
@@ -684,18 +711,17 @@ impl Game<'_> {
         let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
             return;
         };
-        // WingsLayer.getPlayerElytraTexture: a player's cape texture has its elytra.
         let sprites = &self.gui.atlas.sprites;
-        let rect = m.cape.as_deref().and_then(|c| sprites.get(c));
+        let rect = cape.and_then(|c| sprites.get(c));
         let (Some(model), Some(rect)) = (
-            assets.player.get("elytra"),
+            assets
+                .player
+                .get(if baby { "elytra_baby" } else { "elytra" }),
             rect.or_else(|| sprites.get(texture)),
         ) else {
             return;
         };
-        let base = horizon_client::mobs::render::base_transform(m, partial, camera)
-            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
-        let angles = m.extra.elytra.angles(partial);
+        let base = base * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
         horizon_client::mobs::render_model(
             model,
             base,
@@ -703,7 +729,7 @@ impl Game<'_> {
                 let mut p = part.pose;
                 if part.name == "left_wing" || part.name == "right_wing" {
                     let invert = if part.name == "left_wing" { 1.0 } else { -1.0 };
-                    p[1] = if m.extra.crouching { 3.0 } else { 0.0 };
+                    p[1] = if crouching { 3.0 } else { 0.0 };
                     p[3] = angles[0];
                     p[4] = invert * angles[1];
                     p[5] = invert * angles[2];

@@ -65,8 +65,13 @@ impl ArmorStandAssets {
                 }
             }
         }
-        if let Some(part) = load("minecraft:elytra#main") {
-            player.insert("elytra", part);
+        for (key, name) in [
+            ("minecraft:elytra#main", "elytra"),
+            ("minecraft:elytra_baby#main", "elytra_baby"),
+        ] {
+            if let Some(part) = load(key) {
+                player.insert(name, part);
+            }
         }
         let mut equipment = HashMap::new();
         let mut trim_overrides = HashMap::new();
@@ -779,6 +784,18 @@ impl Game<'_> {
                     );
                 }
             }
+            // WingsLayer: ArmorStandRenderer adds it after the armour layers. A stand
+            // never crouches or glides, so its wings rest folded.
+            self.wings_geometry(
+                a.equipment[4].as_ref().map(|s| &*s.item),
+                None,
+                a.small,
+                base,
+                horizon_client::mobs::ElytraAnimation::RESTING,
+                false,
+                packed,
+                out,
+            );
             self.cull_entity_vertices(out, entity_start);
         }
     }
