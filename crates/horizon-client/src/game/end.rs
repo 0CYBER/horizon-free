@@ -376,14 +376,8 @@ impl Game<'_> {
         }
         self.consume_held();
         self.swing_arm();
-        let center = hit.pos.map(|v| f64::from(v) + 0.5);
-        // LevelEvent 1503: END_PORTAL_FRAME_FILL.
-        self.audio.play(
-            "minecraft:block.end_portal_frame.fill",
-            Some(center),
-            1.0,
-            1.0,
-        );
+        // EnderEyeItem.useOn emits this event for all nearby players.
+        self.level_event_at(1503, hit.pos, 0);
         if let Some(c) = self.portal_ring_center(hit.pos) {
             for dz in -1..=1 {
                 for dx in -1..=1 {
