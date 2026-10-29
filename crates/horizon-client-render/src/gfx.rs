@@ -3331,7 +3331,8 @@ impl Renderer {
             // Only HDR output asks the system about the display, so with HDR off the
             // game never waits on the compositor for it.
             self.display = if output.is_some() {
-                let (watch, now) = DisplayWatch::new(&self.window);
+                let (watch, now) =
+                    DisplayWatch::new(&self.window, self.surface.as_ref(), &self.adapter);
                 crate::graphics::report(now);
                 self.display_fresh = true;
                 watch
@@ -3370,7 +3371,7 @@ impl Renderer {
         if std::mem::take(&mut self.display_fresh) {
             return true;
         }
-        let Some(now) = self.display.changed() else {
+        let Some(now) = self.display.changed(self.surface.as_ref(), &self.adapter) else {
             return false;
         };
         crate::graphics::report(now);
@@ -5732,6 +5733,38 @@ mod tests {
         assert!(!drawable_size(984, 65496, 32768));
         assert!(!drawable_size(984, u32::MAX, 32768));
     }
+
+    #[test]
+    fn os_luminances_become_auto_values() {
+        use super::os_reported;
+        use crate::graphics::Reported;
+        let info = |max, white| wgpu::DisplayHdrInfo {
+            luminance: Some(wgpu::DisplayLuminance {
+                max_nits: max,
+                sdr_white_nits: white,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Windows' SDR content brightness slider runs 80..480 nits.
+        assert_eq!(
+            os_reported(&info(Some(998.4), Some(240.0))),
+            Some(Reported {
+                paper_white: 240,
+                peak: 998
+            })
+        );
+        assert_eq!(
+            os_reported(&info(Some(120.0), Some(1000.0))),
+            Some(Reported {
+                paper_white: 480,
+                peak: 200
+            })
+        );
+        assert_eq!(os_reported(&info(Some(1000.0), None)), None);
+        assert_eq!(os_reported(&info(Some(f32::NAN), Some(80.0))), None);
+        assert_eq!(os_reported(&wgpu::DisplayHdrInfo::default()), None);
+    }
     #[test]
     fn surface_is_8_bit_and_not_srgb() {
         use super::surface_format;
@@ -6156,32 +6189,64 @@ mod sprite_upload_tests {
 }
 
 /// What the system says about the window's display, kept up to date: on Wayland, the
-/// compositor's preferred image description of the surface.
+/// compositor's preferred image description of the surface; elsewhere what wgpu reads
+/// from the OS (on Windows, DXGI's luminances and the SDR white level).
 #[derive(Default)]
 struct DisplayWatch {
     #[cfg(target_os = "linux")]
     wayland: Option<horizon_hdr::wayland::Watch>,
+    /// Without Wayland's event, what wgpu last read and when to read it again: the OS
+    /// sends no event for a moved window or a changed SDR brightness slider.
+    polled: Option<(Option<crate::graphics::Reported>, std::time::Instant)>,
 }
+/// How often [`DisplayWatch`] reads the OS's values again where no event says they changed.
+const DISPLAY_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 impl DisplayWatch {
     /// Starts watching, with what the system reports now.
-    fn new(window: &Window) -> (Self, Option<crate::graphics::Reported>) {
+    fn new(
+        window: &Window,
+        surface: Option<&wgpu::Surface>,
+        adapter: &wgpu::Adapter,
+    ) -> (Self, Option<crate::graphics::Reported>) {
         #[cfg(target_os = "linux")]
         if let Some((wayland, now)) = horizon_hdr::wayland::Watch::new(window) {
             let watch = Self {
                 wayland: Some(wayland),
+                polled: None,
             };
             return (watch, now.map(reported));
         }
         let _ = window;
-        (Self::default(), None)
+        let now = surface.and_then(|surface| os_reported(&surface.display_hdr_info(adapter)));
+        log_os_reported(now);
+        let watch = Self {
+            polled: Some((now, std::time::Instant::now() + DISPLAY_POLL)),
+            ..Self::default()
+        };
+        (watch, now)
     }
     /// What the system reports, if that changed since the last call.
-    fn changed(&mut self) -> Option<Option<crate::graphics::Reported>> {
+    fn changed(
+        &mut self,
+        surface: Option<&wgpu::Surface>,
+        adapter: &wgpu::Adapter,
+    ) -> Option<Option<crate::graphics::Reported>> {
         #[cfg(target_os = "linux")]
         if let Some(wayland) = &mut self.wayland {
             return wayland.changed().map(|now| now.map(reported));
         }
-        None
+        let (last, next) = self.polled.as_mut()?;
+        let time = std::time::Instant::now();
+        if time < *next {
+            return None;
+        }
+        *next = time + DISPLAY_POLL;
+        let now = surface.and_then(|surface| os_reported(&surface.display_hdr_info(adapter)));
+        (now != *last).then(|| {
+            log_os_reported(now);
+            *last = now;
+            now
+        })
     }
 }
 
@@ -6231,6 +6296,30 @@ fn flush_display_log() {
         log::info!("{line}");
         (log.last, log.at) = (line, Some(now));
     }
+}
+fn log_os_reported(reported: Option<crate::graphics::Reported>) {
+    log_display(match reported {
+        Some(r) => format!(
+            "Horizon renderer: the system reports SDR white at {} nits and a peak of {} nits",
+            r.paper_white, r.peak
+        ),
+        None => "Horizon renderer: the system doesn't report the display's luminance".into(),
+    });
+}
+/// What the OS reports in absolute nits (Windows: DXGI's `MaxLuminance` and the SDR
+/// white level the brightness slider sets), which is HDR output's scale there: SDR
+/// white is Paper White, the display's peak is Peak Brightness. Both are kept within
+/// the settings' ranges. The OS's figures often come from the display's EDID and may
+/// run optimistic; the player's own value always wins.
+fn os_reported(info: &wgpu::DisplayHdrInfo) -> Option<crate::graphics::Reported> {
+    let luminance = info.luminance?;
+    let usable = |n: f32| n.is_finite() && n > 0.0;
+    let peak = luminance.max_nits.filter(|&n| usable(n))?;
+    let white = luminance.sdr_white_nits.filter(|&n| usable(n))?;
+    Some(crate::graphics::Reported {
+        paper_white: (white.round() as u32).clamp(80, 480),
+        peak: (peak.round() as u32).clamp(200, 10_000),
+    })
 }
 
 /// What a compositor's luminances mean in HDR output's scale.
