@@ -1002,6 +1002,35 @@ impl HudBatch {
         color: u32,
         shadow: bool,
     ) -> f32 {
+        self.styled_text(atlas, text, x, y, color, shadow, false)
+    }
+    /// `text_styled` for text drawn in the world (`TextRenderable.render`
+    /// with `flat` false): each quad's `depth` is its z in text units, the
+    /// glyphs `Font.SHADOW_DEPTH` in front of their shadow, a bold copy 0.001
+    /// in front of its glyph and the lines 0.01 (`BakedSheetGlyph`), so they
+    /// do not fight over the same pixels.
+    pub fn text_styled_world(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+    ) -> f32 {
+        self.styled_text(atlas, text, x, y, color, shadow, true)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn styled_text(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+        world: bool,
+    ) -> f32 {
         // StringDecomposer.iterateFormatted inside Font.drawInternal:
         // `§` codes inside a span restyle what follows and are not drawn.
         let text = text.resolved();
@@ -1011,7 +1040,13 @@ impl HudBatch {
         let alpha = (color >> 24) as u8;
         let mut glyphs = Vec::new();
         let mut cursor = x;
+        let mut previous = None;
         for (i, (ch, style)) in text.chars().enumerate() {
+            // Font.PreparedTextBuilder.accept: lines start 1 left of a
+            // sequence's first character. Language.getVisualOrder makes a
+            // sequence of each run of one style, which world text has.
+            let first = i == 0 || world && previous != Some(style);
+            previous = Some(style);
             // The style's font (`Style.getFont`), the default one unless set.
             let mut g = font.glyph_styled(ch, style);
             // Font.StringRenderOutput.accept: obfuscated characters draw a
@@ -1033,7 +1068,7 @@ impl HudBatch {
                 style.is_italic(),
                 style.underlined == Some(true),
                 style.strikethrough == Some(true),
-                i == 0,
+                first,
                 advance,
             ));
             cursor += advance;
@@ -1045,27 +1080,36 @@ impl HudBatch {
                 .iter()
                 .any(|glyph| glyph.3.is_some_and(|color| color != 0));
         let passes: &[bool] = if has_shadow { &[true, false] } else { &[false] };
+        // ARGB.scaleRGB(color, 0.25): the default shadow colour.
+        let shade = |c: u32| {
+            let b = c.to_le_bytes();
+            rgba(
+                (f32::from(b[0]) * 0.25) as u8,
+                (f32::from(b[1]) * 0.25) as u8,
+                (f32::from(b[2]) * 0.25) as u8,
+                b[3],
+            )
+        };
         for &is_shadow in passes {
             for &(gx, g, c, custom_shadow, bold, italic, underline, strike, first, advance) in
                 &glyphs
             {
-                if is_shadow && (custom_shadow == Some(0) || (!shadow && custom_shadow.is_none())) {
+                let shadow_color = if let Some(argb) = custom_shadow {
+                    let text_alpha = (c >> 24) as u8 as u16;
+                    let shadow_alpha = (argb >> 24) as u8 as u16;
+                    let alpha = (shadow_alpha * text_alpha / 255) as u8;
+                    rgba((argb >> 16) as u8, (argb >> 8) as u8, argb as u8, alpha)
+                } else {
+                    shade(c)
+                };
+                let has_shadow = (custom_shadow.is_some_and(|argb| argb != 0)
+                    || custom_shadow.is_none() && shadow)
+                    && !(world && shadow_color == 0);
+                if is_shadow && !has_shadow {
                     continue;
                 }
                 let (dx, col) = if is_shadow {
-                    let b = c.to_le_bytes();
-                    let color = if let Some(argb) = custom_shadow {
-                        let alpha = ((argb >> 24) as u8 as u16 * b[3] as u16 / 255) as u8;
-                        rgba((argb >> 16) as u8, (argb >> 8) as u8, argb as u8, alpha)
-                    } else {
-                        rgba(
-                            (f32::from(b[0]) * 0.25) as u8,
-                            (f32::from(b[1]) * 0.25) as u8,
-                            (f32::from(b[2]) * 0.25) as u8,
-                            b[3],
-                        )
-                    };
-                    (g.offset, color)
+                    (g.offset, shadow_color)
                 } else {
                     (0.0, c)
                 };
@@ -1105,17 +1149,31 @@ impl HudBatch {
                     }
                     None => {}
                 };
+                let base = if has_shadow && !is_shadow { 0.03 } else { 0.0 };
+                let lift = |batch: &mut Self, start: usize, z: f32| {
+                    if world {
+                        for v in &mut batch.vertices[start..] {
+                            v.depth = z;
+                        }
+                    }
+                };
+                let start = self.vertices.len();
                 draw(self, 0.0);
+                lift(self, start, base);
                 if bold {
+                    let start = self.vertices.len();
                     draw(self, g.offset);
+                    lift(self, start, base + 0.001);
                 }
                 let x0 = if first { px - 1.0 } else { px };
+                let start = self.vertices.len();
                 if strike {
                     self.rect_uv(x0, py + 3.5, px + advance - x0, 1.0, white, col);
                 }
                 if underline {
                     self.rect_uv(x0, py + 8.0, px + advance - x0, 1.0, white, col);
                 }
+                lift(self, start, base + 0.01);
             }
         }
         cursor - x
@@ -1850,6 +1908,11 @@ mod tests {
         batch.text_styled(&atlas, &text, 10.0, 10.0, u32::MAX, false);
         assert_eq!(batch.vertices.len(), 12);
         assert_eq!(batch.vertices[0].color, rgba(0x40, 0x20, 0x10, 0x80));
+        batch.vertices.clear();
+        batch.text_styled_world(&atlas, &text, 10.0, 10.0, u32::MAX, false);
+        assert_eq!(batch.vertices.len(), 12);
+        assert_eq!(batch.vertices[0].depth, 0.0);
+        assert_eq!(batch.vertices[6].depth, 0.03);
         batch.vertices.clear();
         let no_shadow = crate::text::Text::styled(
             "a",

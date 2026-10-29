@@ -1692,6 +1692,33 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
     Some(p)
 }
 
+/// `FireworkRocketEntity.readAdditionalSaveData`: Life, LifeTime (0 when
+/// absent: a bare `/summon` explodes at once), FireworksItem and
+/// ShotAtAngle, with `Projectile`'s Owner and LeftOwner.
+pub struct RocketNbt {
+    pub position: Vec3,
+    pub motion: Vec3,
+    pub life: i32,
+    pub lifetime: i32,
+    pub item: Option<crate::items::ItemStack>,
+    pub angled: bool,
+    pub owner: Option<Who>,
+    pub left_owner: bool,
+}
+pub fn firework_rocket_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<RocketNbt> {
+    let owner = uuid_from_tag(tag.get("Owner"));
+    Some(RocketNbt {
+        position: position(tag)?,
+        motion: motion(tag),
+        life: number(tag.get("Life")).unwrap_or(0) as i32,
+        lifetime: number(tag.get("LifeTime")).unwrap_or(0) as i32,
+        item: tag.get("FireworksItem").and_then(item_from_nbt),
+        angled: flag(tag, "ShotAtAngle"),
+        owner: (player.is_some() && owner == player).then_some(Who::Player),
+        left_owner: flag(tag, "LeftOwner"),
+    })
+}
+
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.
 #[allow(clippy::too_many_arguments)]
 pub fn falling_block_to_nbt(
