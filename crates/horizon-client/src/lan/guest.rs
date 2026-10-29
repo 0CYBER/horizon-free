@@ -737,6 +737,21 @@ fn network_stack(
                 },
             ));
         }
+        // SuspiciousStewEffects: each effect by its `minecraft:mob_effect` id.
+        if !d.stew_effects.is_empty() {
+            let effects = d
+                .stew_effects
+                .iter()
+                .filter_map(|(effect, duration)| {
+                    let name = horizon_world::datafix::dynamic::namespaced(effect);
+                    Some((synced_id("minecraft:mob_effect", &name)?, *duration))
+                })
+                .collect();
+            stack.added.push((
+                horizon_protocol::item::component::SUSPICIOUS_STEW_EFFECTS,
+                horizon_protocol::item::Component::StewEffects(effects),
+            ));
+        }
         // A loaded crossbow's ammunition.
         if !d.charged.is_empty() {
             let charged = d
