@@ -31,7 +31,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 
 **HDR** (Display, off by default) presents to an HDR10 swapchain (`Rgb10a2Unorm`, BT.2020 with the PQ curve) or, where only that is offered, an scRGB one (`Rgba16Float`, extended linear sRGB), on displays and compositors that offer either; `HORIZON_HDR_OUTPUT=pq` or `scrgb` allows only one. The frame is drawn exactly as in SDR, in vanilla's gamma space, and a last pass (`hdr.wgsl`) decodes it to linear light at the **Paper White** and lifts light sources (blocks that emit light, lava, the sun and the moon) towards the **Peak Brightness**; everything else stays as in SDR. The mesher puts the light a block's face emits in its vertex colour's alpha (`EMISSION_BITS`), the frame's alpha carries the mark, and only pixels that still show the world before the hand and HUD are lifted. On Vulkan, `horizon-hdr` sends HDR metadata (MaxCLL, mastering luminance), which wgpu doesn't: without it a compositor may clip everything above SDR white. KWin maps the content's reference white onto the desktop's SDR brightness, so on Linux the default Paper White matches SDR mode. `HORIZON_HDR_DEBUG=1` paints lifted pixels magenta. Not lifted yet: glowing particles, distant LOD terrain.
 
-Which settings each screen shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); `graphics_style.rs` draws them.
+Which settings each screen shows, their descriptions and costs are in `crates/horizon-client-render/src/graphics_ui.rs` (`rows`); `graphics_style.rs` draws them.
 
 ## Distant terrain
 

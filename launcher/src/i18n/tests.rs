@@ -159,12 +159,20 @@ fn every_language_has_every_string_the_code_asks_for() {
 #[test]
 fn the_system_language_is_the_first_one_the_launcher_has() {
     assert_eq!(Language::pick(["fr-CH", "en-US"]), Language::French);
-    assert_eq!(Language::pick(["de-CH", "ru_RU.UTF-8"]), Language::Russian);
-    assert_eq!(Language::pick(["de-DE", "zh-Hans-CN"]), Language::Chinese);
-    assert_eq!(Language::pick(["de-DE", "ja"]), Language::English);
+    assert_eq!(Language::pick(["it-IT", "ru_RU.UTF-8"]), Language::Russian);
+    assert_eq!(Language::pick(["it-IT", "zh-Hans-CN"]), Language::Chinese);
+    assert_eq!(Language::pick(["it-IT", "ja"]), Language::English);
+    assert_eq!(Language::pick(["de-CH", "ru_RU.UTF-8"]), Language::German);
+    assert_eq!(Language::pick(["de-DE", "ja"]), Language::German);
+    assert_eq!(Language::pick(["de-DE", "zh-Hans-CN"]), Language::German);
     assert_eq!(Language::pick([]), Language::English);
     assert_eq!(Language::parse("FR"), Some(Language::French));
     assert_eq!(Language::parse("french"), None);
+    assert_eq!(Language::parse("DE"), Some(Language::German));
+    assert_eq!(Language::parse("german"), None);
+    assert_eq!(Language::parse("ZH"), Some(Language::Chinese));
+    assert_eq!(serde_json::to_string(&Language::German).unwrap(), "\"de\"");
+    assert_eq!(serde_json::to_string(&Language::Chinese).unwrap(), "\"zh\"");
     assert_eq!(serde_json::to_string(&Language::Russian).unwrap(), "\"ru\"");
 }
 
@@ -172,6 +180,7 @@ fn the_system_language_is_the_first_one_the_launcher_has() {
 fn a_missing_string_shows_in_english() {
     assert_eq!(tr_in(Language::French, "Settings"), "Paramètres");
     assert_eq!(tr_in(Language::Russian, "Settings"), "Настройки");
+    assert_eq!(tr_in(Language::German, "Settings"), "Einstellungen");
     assert_eq!(tr_in(Language::Chinese, "Settings"), "设置");
     assert_eq!(tr_in(Language::English, "Settings"), "Settings");
     assert_eq!(tr_in(Language::French, "No such string"), "No such string");

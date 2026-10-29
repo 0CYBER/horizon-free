@@ -86,6 +86,9 @@ configuration and toolchain changes select the whole workspace; CI also keeps it
   release notes), `skip-release` when players see no change (tooling, docs, tests), nothing for a fix.
   `release-now` is for crash fixes that shouldn't wait. pr_ready suggests one.
 
+Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; risky ones (saves, network, world
+generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).
+
 Every merge to main is released automatically ([release flow](docs/release-flow.md)), so main always stays playable.
 How agents, checks, releases and signed updates keep this safe: [security](docs/security.md).
 

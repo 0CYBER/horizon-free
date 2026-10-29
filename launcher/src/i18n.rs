@@ -1,6 +1,6 @@
-//! The launcher's languages: English (the strings in the code), French, Russian and Simplified
-//! Chinese. A table per language (`launcher/lang/<code>.json`)
-//! maps each English string to its translation; a string the table lacks shows in English.
+//! The launcher's languages: English (the strings in the code), French, Russian, German and
+//! Simplified Chinese. A table per language (`launcher/lang/<code>.json`) maps each English
+//! string to its translation; a string the table lacks shows in English.
 //!
 //! The language follows the system's unless the player picks one in Settings
 //! (`Settings::language`). Translations are Horizon's own, written for this launcher.
@@ -18,12 +18,20 @@ pub enum Language {
     French,
     #[serde(rename = "ru")]
     Russian,
+    #[serde(rename = "de")]
+    German,
     #[serde(rename = "zh")]
     Chinese,
 }
 
 impl Language {
-    pub const ALL: [Language; 4] = [Self::English, Self::French, Self::Russian, Self::Chinese];
+    pub const ALL: [Language; 5] = [
+        Self::English,
+        Self::French,
+        Self::Russian,
+        Self::German,
+        Self::Chinese,
+    ];
 
     /// Its code in `settings.json` and on the command line.
     pub fn code(self) -> &'static str {
@@ -31,6 +39,7 @@ impl Language {
             Self::English => "en",
             Self::French => "fr",
             Self::Russian => "ru",
+            Self::German => "de",
             Self::Chinese => "zh",
         }
     }
@@ -41,6 +50,7 @@ impl Language {
             Self::English => "English",
             Self::French => "Français",
             Self::Russian => "Русский",
+            Self::German => "Deutsch",
             Self::Chinese => "简体中文",
         }
     }
@@ -72,6 +82,7 @@ impl Language {
             Self::English => "{}",
             Self::French => include_str!("../lang/fr.json"),
             Self::Russian => include_str!("../lang/ru.json"),
+            Self::German => include_str!("../lang/de.json"),
             Self::Chinese => include_str!("../lang/zh.json"),
         }
     }
