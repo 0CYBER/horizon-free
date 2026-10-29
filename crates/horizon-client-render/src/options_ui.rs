@@ -1004,13 +1004,19 @@ pub enum Event {
     ButtonClick,
     /// Close the options screens (back to the pause menu or title).
     Close,
-    /// Settings changed: apply them.
+    /// Settings changed: apply and save them.
     Changed,
+    /// A slider is being dragged: apply settings live but defer saving.
+    SliderDrag,
     /// The language changed (reload translations).
     Language(String),
     /// The pack selection changed (reload resources).
     Packs(Vec<String>),
+    /// Create World's Data Packs screen closed with a new selection.
+    DataPacks(Vec<String>),
     OpenPackFolder,
+    /// Data Packs' Open Pack Folder: create the folder if needed and open it.
+    OpenDataPackFolder(std::path::PathBuf),
     OpenModFolder,
     /// The Shader Packs page opened: list `shaderpacks/` into `shader_packs`.
     ListShaderPacks,
@@ -1020,6 +1026,9 @@ pub enum Event {
     /// Open the mod's own settings page (capability `ui`): the installed
     /// mod's index in `mods.installed`.
     ModSettings(usize),
+    /// Native mod `.0`'s page opened: the game asks the mod for its labels
+    /// again (they were made with the list, maybe in another language).
+    NativeSettings(usize),
     /// Button `.1` of native mod `.0`'s page was pressed: the game tells the
     /// mod and refreshes the page.
     NativeButton(usize, usize),
@@ -1073,6 +1082,13 @@ pub struct OptionsUi {
     pub pack_selection: Vec<String>,
     /// The open pack screen, made at its first frame.
     pub pack_screen: Option<crate::pack_screen::PackScreen>,
+    /// The Packs page is Create World's Data Packs screen on this folder.
+    data_pack_dir: Option<std::path::PathBuf>,
+    /// The game's resources, for the built-in data pack's icon.
+    data_pack_resources: std::path::PathBuf,
+    /// The folder's entries when its packs were listed, and when they were
+    /// last compared with it.
+    data_pack_stamp: (Vec<(String, Option<std::time::SystemTime>)>, Instant),
     /// A reload failure, dismissed before returning to the current page.
     pub resource_error: Option<String>,
     /// When the pack screen's search box took the focus (its cursor blink).
@@ -1107,6 +1123,9 @@ impl Default for OptionsUi {
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
+            data_pack_dir: None,
+            data_pack_resources: Default::default(),
+            data_pack_stamp: (Vec::new(), Instant::now()),
             resource_error: None,
             pack_focus: Instant::now(),
             in_world: false,
@@ -1214,9 +1233,48 @@ impl OptionsUi {
     pub fn open(&mut self, in_world: bool) {
         self.open_at(in_world, Page::Main);
     }
+    /// Create World's Data Packs (`openDataPackSelectionScreen`): the Packs
+    /// page on the new world's pack folder `dir`, `selected` chosen;
+    /// `resources` holds the built-in pack's icon.
+    pub fn open_data_packs(
+        &mut self,
+        dir: std::path::PathBuf,
+        selected: Vec<String>,
+        resources: std::path::PathBuf,
+    ) {
+        self.open_at(false, Page::Packs);
+        self.pack_infos = crate::datapack::screen_packs(&dir, &resources);
+        self.data_pack_resources = resources;
+        self.pack_selection = selected;
+        self.data_pack_stamp = (crate::datapack::folder_stamp(&dir), Instant::now());
+        self.data_pack_dir = Some(dir);
+    }
+    /// `PackSelectionScreen.tick`'s watcher: once a second, the Data Packs
+    /// folder's packs are listed again if it changed, the selection kept
+    /// (the search text and scroll start over).
+    fn watch_data_packs(&mut self, atlas: &HudAtlas, size: (f32, f32)) {
+        let Some(dir) = &self.data_pack_dir else {
+            return;
+        };
+        if self.data_pack_stamp.1.elapsed().as_secs() < 1 {
+            return;
+        }
+        let stamp = crate::datapack::folder_stamp(dir);
+        let changed = stamp != self.data_pack_stamp.0;
+        self.data_pack_stamp = (stamp, Instant::now());
+        if !changed {
+            return;
+        }
+        self.pack_infos = crate::datapack::screen_packs(dir, &self.data_pack_resources);
+        if let Some(p) = self.pack_screen.take() {
+            self.pack_selection = p.commit();
+            self.packs(atlas, size).changed = p.changed;
+        }
+    }
     /// Open a page whose Done/Escape returns directly to the calling screen.
     pub fn open_at(&mut self, in_world: bool, page: Page) {
         self.stack.clear();
+        self.data_pack_dir = None;
         self.push(page);
         self.in_world = in_world;
         self.selected_key = None;
@@ -2268,6 +2326,7 @@ impl OptionsUi {
             return;
         }
         if self.page() == Page::Packs {
+            self.watch_data_packs(atlas, (w, h));
             ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
             let blink = self.pack_focus.elapsed().as_millis() as u64;
             let m = crate::screen_draw::Measure(&atlas.font);
@@ -2526,6 +2585,7 @@ impl OptionsUi {
                 match action {
                     Action::ButtonClick => events.push(Event::ButtonClick),
                     Action::Changed => events.push(Event::Changed),
+                    Action::SliderDrag => events.push(Event::SliderDrag),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
@@ -2562,7 +2622,10 @@ impl OptionsUi {
                 self.pack_focus = Instant::now();
             }
             match action {
-                crate::pack_screen::Action::OpenFolder => events.push(Event::OpenPackFolder),
+                crate::pack_screen::Action::OpenFolder => events.push(match &self.data_pack_dir {
+                    Some(dir) => Event::OpenDataPackFolder(dir.clone()),
+                    None => Event::OpenPackFolder,
+                }),
                 crate::pack_screen::Action::Done => events.extend(self.back(s)),
                 crate::pack_screen::Action::None => {}
             }
@@ -2606,7 +2669,7 @@ impl OptionsUi {
                 let v = ui::slider_value(wd.x, wd.w, x);
                 self.slider_value = Some((opt, v, Instant::now()));
                 set_slider(opt, s, v);
-                events.push(Event::Changed);
+                events.push(Event::SliderDrag);
             }
             return events;
         }
@@ -2711,6 +2774,7 @@ impl OptionsUi {
                             events.push(Event::ButtonClick);
                             if s.mods.installed.get(i).is_some_and(|m| m.native.is_some()) {
                                 self.push(Page::NativeMod(i));
+                                events.push(Event::NativeSettings(i));
                             } else {
                                 events.push(Event::ModSettings(i));
                             }
@@ -2742,7 +2806,7 @@ impl OptionsUi {
                     let v = ui::slider_value(wd.x, wd.w, x);
                     self.slider_value = Some((opt, v, Instant::now()));
                     set_slider(opt, s, v);
-                    events.push(Event::Changed);
+                    events.push(Event::SliderDrag);
                 }
                 WKind::LanguageRow { code, .. } => {
                     if self.language_choice.as_deref() == Some(code.as_str()) {
@@ -2775,7 +2839,7 @@ impl OptionsUi {
         let slider = self.dragging.take().is_some();
         let graphics_slider = self.graphics.release();
         if slider || graphics_slider {
-            vec![Event::ButtonClick]
+            vec![Event::ButtonClick, Event::Changed]
         } else {
             Vec::new()
         }
@@ -2791,7 +2855,7 @@ impl OptionsUi {
             return;
         }
         if let Some(level) = Self::graphics_level(self.page()) {
-            self.graphics.scroll(level, size.1, amount);
+            self.graphics.scroll(level, s, size.1, amount);
             return;
         }
         match &mut self.pack_screen {
@@ -2813,8 +2877,14 @@ impl OptionsUi {
             }
             None => {
                 self.pack_focus = Instant::now();
+                let title = if self.data_pack_dir.is_some() {
+                    "dataPack.title"
+                } else {
+                    "resourcePack.title"
+                };
                 self.pack_screen = Some(crate::pack_screen::PackScreen::new(
                     &m,
+                    crate::text::Text::translate(title, &[]),
                     w,
                     h,
                     self.in_world,
@@ -2846,13 +2916,18 @@ impl OptionsUi {
             }
             Page::Packs => {
                 // PackSelectionScreen.onClose: PackSelectionModel.commit.
+                let data = self.data_pack_dir.take();
                 if let Some(p) = self.pack_screen.take()
                     && p.changed
                 {
                     let ids = p.commit();
-                    s.resource_packs = ids.clone();
-                    self.pack_selection = ids.clone();
-                    events.push(Event::Packs(ids));
+                    if data.is_some() {
+                        events.push(Event::DataPacks(ids));
+                    } else {
+                        s.resource_packs = ids.clone();
+                        self.pack_selection = ids.clone();
+                        events.push(Event::Packs(ids));
+                    }
                 }
             }
             _ => {}
@@ -3330,6 +3405,50 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_native_mods_page_asks_the_game_for_its_labels_again() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "native".into(),
+            title: "Native 1.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            has_settings: false,
+            native: Some(crate::mod_list::NativePage::default()),
+        });
+        ui.show(Page::Mods);
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let settings = widgets
+            .iter()
+            .find(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ModSettings(0),
+                        ..
+                    }
+                )
+            })
+            .expect("a native mod's row has a Settings button");
+        let events = ui.click(
+            &mut s,
+            &atlas,
+            settings.x + 1.0,
+            settings.y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        // Its labels were made with the list, maybe in another language.
+        assert_eq!(events.last(), Some(&Event::NativeSettings(0)));
+        assert_eq!(ui.page(), Page::NativeMod(0));
+    }
+
+    #[test]
     fn option_tooltip_keys_follow_value_dependent_descriptions() {
         let mut s = Settings::default();
         assert_eq!(
@@ -3765,22 +3884,22 @@ mod tests {
         let (x, y) = (slider.x + slider.w - 1.0, slider.y + 1.0);
         assert_eq!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
-            vec![Event::Changed]
+            vec![Event::SliderDrag]
         );
         assert_eq!(s.master_volume, 1.0);
-        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(ui.release().is_empty());
         assert_eq!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
-            vec![Event::Changed]
+            vec![Event::SliderDrag]
         );
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
                 ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
-                vec![Event::Changed]
+                vec![Event::SliderDrag]
             );
         }
-        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
                 .is_empty()

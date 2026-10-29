@@ -8,7 +8,7 @@
 //! offsets), styled drawing and StringSplitter-style line wrapping.
 use crate::{
     hud::Rect,
-    text::{Style, Text},
+    text::{Span, Style, Text, legacy_format},
     zip::Zip,
 };
 use ab_glyph::{Font as _, ScaleFont as _};
@@ -966,6 +966,83 @@ impl Font {
         }
         out
     }
+    /// `Font.split`: `StringSplitter.splitLines(text, width, Style.EMPTY)` over
+    /// the text's parts with their `§` codes in. A code styles what follows
+    /// (`§r` back to no style while measuring), and the part a line breaks in
+    /// goes on in the style at the break. Lines keep their codes for drawing.
+    pub fn split_formatted(&self, t: &Text, max_width: f32) -> Vec<Text> {
+        let max_width = max_width.max(1.0);
+        let mut parts: Vec<(Vec<char>, Style)> = t
+            .spans
+            .iter()
+            .filter(|s| !s.text.is_empty())
+            .map(|s| (s.text.chars().collect(), s.style.clone()))
+            .collect();
+        let mut flat: Vec<char> = parts.iter().flat_map(|p| p.0.iter().copied()).collect();
+        let mut out = Vec::new();
+        let mut force_new_line = false;
+        // One LineBreakFinder per line, over the parts left.
+        while let Some((at, split_style)) = self.line_break(&parts, max_width) {
+            let tail = flat[at];
+            let new_line = tail == '\n';
+            let skip = usize::from(new_line || tail == ' ');
+            force_new_line = new_line;
+            out.push(split_at(&mut parts, at, skip, &split_style));
+            flat.drain(..at + skip);
+        }
+        if !parts.is_empty() {
+            let mut rest = Text::default();
+            rest.spans = parts
+                .into_iter()
+                .map(|(text, style)| Span {
+                    text: text.into_iter().collect(),
+                    style,
+                })
+                .collect();
+            out.push(rest);
+        } else if force_new_line {
+            out.push(Text::empty());
+        }
+        out
+    }
+    /// `StringSplitter.LineBreakFinder` fed by `StringDecomposer.iterateFormatted`:
+    /// where the parts break (a character index) and the style there.
+    fn line_break(&self, parts: &[(Vec<char>, Style)], max_width: f32) -> Option<(usize, Style)> {
+        let (mut width, mut had_visible, mut last_space) = (0.0f32, false, None);
+        let mut offset = 0;
+        for (contents, part_style) in parts {
+            let mut style = part_style.clone();
+            let mut i = 0;
+            while i < contents.len() {
+                let c = contents[i];
+                if c == '§' {
+                    // A `§` that ends its part ends only that part.
+                    let Some(&code) = contents.get(i + 1) else {
+                        break;
+                    };
+                    style = legacy_format(&style, code, &Style::default());
+                    i += 2;
+                    continue;
+                }
+                let at = offset + i;
+                if c == '\n' {
+                    return Some((at, style));
+                }
+                if c == ' ' {
+                    last_space = Some((at, style.clone()));
+                }
+                let advance = self.advance(c, &style);
+                width += advance;
+                if had_visible && width > max_width {
+                    return Some(last_space.unwrap_or((at, style)));
+                }
+                had_visible |= advance != 0.0;
+                i += 1;
+            }
+            offset += contents.len();
+        }
+        None
+    }
     /// `ComponentRenderUtils.wrapComponents`: the split lines, wrapped ones
     /// indented by an unstyled space; one empty line for empty text.
     pub fn wrap_components(&self, t: &Text, max_width: i32) -> Vec<Text> {
@@ -1057,6 +1134,47 @@ impl Font {
     pub fn white(&self) -> Rect {
         self.white
     }
+}
+
+/// `StringSplitter.FlatComponents.splitAt`: the parts before `at` as a line,
+/// `skip` characters dropped, and the part it ends in restyled as `style`.
+fn split_at(parts: &mut Vec<(Vec<char>, Style)>, at: usize, skip: usize, style: &Style) -> Text {
+    let mut line = Text::default();
+    let mut push = |text: &[char], style: &Style| {
+        line.spans.push(Span {
+            text: text.iter().collect(),
+            style: style.clone(),
+        })
+    };
+    // Each part done is removed, so the one at hand is always the first.
+    let (mut position, mut in_skip) = (at, false);
+    while let Some((text, part_style)) = parts.first() {
+        let size = text.len();
+        if !in_skip {
+            if position > size {
+                push(text, part_style);
+                parts.remove(0);
+                position -= size;
+                continue;
+            }
+            if position > 0 {
+                push(&text[..position], part_style);
+            }
+            position += skip;
+            in_skip = true;
+        }
+        if position <= size {
+            if position == size {
+                parts.remove(0);
+            } else {
+                parts[0] = (text[position..].to_vec(), style.clone());
+            }
+            break;
+        }
+        parts.remove(0);
+        position -= size;
+    }
+    line
 }
 
 #[cfg(test)]
@@ -1219,6 +1337,37 @@ mod tests {
         assert_eq!(font.width_text(&text), 10.0);
         assert_eq!(font.random_glyph(&alt, 7.0).advance, 7.0);
         assert!(!font.take_patches().is_empty());
+    }
+
+    /// StringDecomposer.iterateFormatted: a `§` that ends a part stops that
+    /// part only; the next part is still measured and can break.
+    #[test]
+    fn a_section_sign_ending_a_part_still_breaks_the_next() {
+        let sheet = png(16, 8, |x, _| x < 2);
+        let default = br#"{"providers":[{"type":"space","advances":{" ":4}},{"type":"bitmap","file":"minecraft:font/a.png","ascent":7,"chars":["ab"]}]}"#;
+        let root = root(
+            "section-sign",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/minecraft/textures/font/a.png", &sheet),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let mut text = Text::default();
+        text.spans = ["a§", "a a"]
+            .map(|part| Span {
+                text: part.into(),
+                style: Style::default(),
+            })
+            .into();
+        // 3 + 3 + 4 + 3 is past 12: the line breaks at the space.
+        let lines: Vec<String> = font
+            .split_formatted(&text, 12.0)
+            .iter()
+            .map(Text::plain)
+            .collect();
+        assert_eq!(lines, ["a§a", "a"]);
     }
 
     /// A renderer rebuilt over the same font (the loading screen's handoff)

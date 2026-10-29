@@ -100,11 +100,16 @@ fn modifier_line(
     } else {
         return None;
     };
+    // TranslatableContents: `%s` and numbered `%1$s` arguments, `%%` a percent sign.
     Some(
-        text(&format!("attribute.modifier.{kind}.{operation}"))
-            .replacen("%s", &format_amount(shown), 1)
-            .replacen("%s", &text(&format!("attribute.name.{attribute}")), 1)
-            .replace("%%", "%"),
+        crate::text::format_translation(
+            &text(&format!("attribute.modifier.{kind}.{operation}")),
+            &[
+                crate::text::Text::literal(format_amount(shown)),
+                crate::text::Text::literal(text(&format!("attribute.name.{attribute}"))),
+            ],
+        )
+        .plain(),
     )
 }
 
@@ -430,6 +435,44 @@ pub fn unbreakable_line(
     .then(|| translate("item.unbreakable").unwrap_or_else(|| "item.unbreakable".into()))
 }
 
+/// `OminousBottleAmplifier.addToTooltip`: the effect the bottle gives,
+/// `MobEffectInstance(BAD_OMEN, 120000, amplifier)`, listed as
+/// `PotionContents.addPotionTooltip` lists it, in the colour of Bad Omen's
+/// category (NEUTRAL, blue). An ominous bottle without the component has the
+/// item's default amplifier, 0.
+pub fn ominous_bottle_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, u32)> {
+    const BAD_OMEN_TICKS: i32 = 120_000;
+    let amplifier = stack
+        .data()
+        .and_then(|d| d.ominous_amplifier)
+        .or_else(|| (&*stack.item == "minecraft:ominous_bottle").then_some(0))?;
+    if !display.shows("minecraft:ominous_bottle_amplifier") {
+        return None;
+    }
+    use crate::text::{Text, format_translation};
+    let text = |key: &str, fallback: &str| translate(key).unwrap_or_else(|| fallback.to_owned());
+    // PotionContents.getPotionDescription.
+    let mut line = Text::literal(text(
+        "effect.minecraft.bad_omen",
+        "effect.minecraft.bad_omen",
+    ));
+    if amplifier > 0 {
+        let potency = translate(&format!("potion.potency.{amplifier}"))
+            .unwrap_or_else(|| crate::enchant::level_name(u32::from(amplifier) + 1));
+        line = format_translation(
+            &text("potion.withAmplifier", "%s %s"),
+            &[line, Text::literal(potency)],
+        );
+    }
+    let duration = Text::literal(crate::brewing::format_duration(BAD_OMEN_TICKS));
+    let line = format_translation(&text("potion.withDuration", "%s (%s)"), &[line, duration]);
+    Some((line.plain(), rgba(85, 85, 255, 255)))
+}
+
 /// `PotionContents.addPotionTooltip`'s attribute block: an empty line, "When
 /// Applied:" and the modifiers of the potion's effects (blue for a gain, red
 /// for a loss); nothing for a potion whose effects add none.
@@ -592,6 +635,7 @@ pub fn detail_lines(
                 .map(|(line, _)| line),
         );
     }
+    lines.extend(ominous_bottle_line(stack, &display, translate).map(|l| l.0));
     lines
 }
 
@@ -824,6 +868,62 @@ mod tests {
         assert!(!display.name_visible(false));
         assert!(display.name_visible(true));
         assert!(!display.shows("minecraft:attribute_modifiers"));
+    }
+
+    #[test]
+    fn ominous_bottle_lists_bad_omen_at_its_amplifier_for_100_minutes() {
+        let lang = |key: &str| {
+            Some(
+                match key {
+                    "effect.minecraft.bad_omen" => "Bad Omen",
+                    "potion.withAmplifier" => "%s %s",
+                    "potion.withDuration" => "%s (%s)",
+                    "potion.potency.3" => "IV",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let duration = crate::brewing::format_duration(120_000);
+        let blue = rgba(85, 85, 255, 255);
+        // The item's default amplifier, 0: no potency.
+        let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
+        let line = |s: &ItemStack| ominous_bottle_line(s, &TooltipDisplay::for_stack(s), &lang);
+        assert_eq!(
+            line(&bottle),
+            Some((format!("Bad Omen ({duration})"), blue))
+        );
+        bottle.data_mut().ominous_amplifier = Some(3);
+        assert_eq!(
+            line(&bottle),
+            Some((format!("Bad Omen IV ({duration})"), blue))
+        );
+        assert!(
+            lines(&bottle, None, &lang).contains(&format!("Bad Omen IV ({duration})")),
+            "{:?}",
+            lines(&bottle, None, &lang)
+        );
+        // A numbered template, as some languages write it.
+        let numbered = |key: &str| match key {
+            "potion.withDuration" => Some("%2$s: %1$s".to_owned()),
+            other => lang(other),
+        };
+        assert_eq!(
+            ominous_bottle_line(&bottle, &TooltipDisplay::for_stack(&bottle), &numbered)
+                .map(|l| l.0),
+            Some(format!("{duration}: Bad Omen IV"))
+        );
+        bottle.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([(
+                "hidden_components",
+                Tag::List(vec![Tag::String(
+                    "minecraft:ominous_bottle_amplifier".into(),
+                )]),
+            )])),
+        );
+        assert_eq!(line(&bottle), None);
+        assert_eq!(line(&ItemStack::new("minecraft:glass_bottle", 1)), None);
     }
 
     #[test]
@@ -1120,5 +1220,28 @@ mod tests {
             Some("-60% Speed")
         );
         assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2, false), None);
+    }
+
+    #[test]
+    fn modifier_lines_support_positional_format() {
+        let lang = |k: &str| {
+            Some(
+                match k {
+                    "attribute.modifier.equals.0" => "%2$s: %1$s",
+                    "attribute.modifier.plus.2" => "+%1$s%% %2$s",
+                    "attribute.name.attack_damage" => "Damage",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 5.0, 0, true).as_deref(),
+            Some("Damage: 5")
+        );
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 0.2, 2, false).as_deref(),
+            Some("+20% Damage")
+        );
     }
 }

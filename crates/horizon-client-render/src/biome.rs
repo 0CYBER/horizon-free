@@ -256,6 +256,10 @@ impl Biomes {
             .copied()
             .unwrap_or(0)
     }
+    /// Whether the game has the biome `name`.
+    pub fn contains(&self, name: &str) -> bool {
+        self.index.contains_key(name)
+    }
     pub fn get(&self, id: u16) -> &BiomeInfo {
         &self.list[usize::from(id).min(self.list.len() - 1)]
     }
