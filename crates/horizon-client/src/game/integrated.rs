@@ -478,6 +478,8 @@ impl Game<'_> {
             self.lan = Some(host);
         }
         std::thread::sleep(Duration::from_millis(100));
+        // ServerPlayer.disconnect: nobody is left in a bed.
+        self.free_player_beds()?;
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;
