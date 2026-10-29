@@ -375,8 +375,9 @@ pub(super) fn make_streaming(
         // WorldOptions.generateStructures, from the world's settings.
         let structures =
             horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
+        let preset = horizon_client::save::WorldGen::preset(world_root);
         let overrides = world_worldgen_overrides(world_root, res.biomes());
-        let inner = Arc::new(VanillaTerrain::for_world_with(&options.resources.join("worldgen"), &overrides, pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
+        let inner = Arc::new(VanillaTerrain::for_world_with(&options.resources.join("worldgen"), &overrides, pack.assets.registry, res.biomes(), seed, preset, dim.id(), structures).map_err(|e| {
                 if overrides.is_empty() {
                     format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
                 } else {

@@ -141,11 +141,9 @@ pub(super) struct Remote {
     /// the first teleport, which takes them then.
     abilities: Option<play::PlayerAbilities>,
     loaded_sent: bool,
-    /// The view distance last sent in ClientInformation.
-    sent_view: i8,
-    /// The Chat option's visibility last sent in ClientInformation
-    /// (`Options.broadcastOptions` sends it again when it changes).
-    sent_chat_visibility: i32,
+    /// The ClientInformation last sent (`Options.broadcastOptions` sends it
+    /// again when a view distance, Chat, skin or Main Hand option changes).
+    sent_info: horizon_protocol::packets::configuration::ClientInformation,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -192,6 +190,9 @@ pub(super) struct Remote {
     online_mode: bool,
     /// Player entities in the level: entity id to profile UUID.
     level_players: HashMap<i32, u128>,
+    /// The profile name each player entity was created with (`RemotePlayer.getGameProfile`): it outlives the
+    /// player-list entry, which servers remove to hide their NPCs from the list.
+    level_player_names: HashMap<i32, String>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
@@ -476,8 +477,7 @@ impl Game<'_> {
             carried: None,
             abilities: None,
             loaded_sent: false,
-            sent_view: view,
-            sent_chat_visibility: self.settings.chat_visibility as i32,
+            sent_info: self.settings.client_information(view),
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -502,6 +502,7 @@ impl Game<'_> {
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
+            level_player_names: HashMap::new(),
             glowing: Default::default(),
             profile: 0,
             profile_name: String::new(),
@@ -552,6 +553,7 @@ impl Game<'_> {
             r.session.disconnect();
         }
         self.server_packs_disconnect();
+        self.code_of_conduct = None;
         self.close_dialogs();
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
@@ -572,6 +574,9 @@ impl Game<'_> {
         self.streaming.paused = true;
         self.world = World::new(self.res.facts().air, 0);
         self.player = None;
+        // Out of the server's bed: InBedChatScreen goes with the level.
+        self.sleeping = None;
+        self.sleep_timer = 0;
         self.mobs.clear();
         self.clear_remote_objects();
         self.clear_remote_projectiles();
@@ -919,6 +924,7 @@ impl Game<'_> {
                 }
                 Event::ShowDialog(dialog) => self.show_dialog(&dialog),
                 Event::ClearDialog => self.clear_dialog(),
+                Event::CodeOfConduct(text) => self.handle_code_of_conduct(text),
                 Event::DecodeError(e) => {
                     if let Some(r) = self.remote.as_mut() {
                         r.decode_errors += 1;
@@ -1095,6 +1101,7 @@ impl Game<'_> {
                 // The entity ids are the old world's; the new dimension's
                 // player entities re-map to their profiles on AddEntity.
                 r.level_players.clear();
+                r.level_player_names.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -1786,13 +1793,12 @@ impl Game<'_> {
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
                 self.enter_remote_dimension(&p.spawn, false);
-                let view = client_view_distance(self.settings.render_distance);
+                let info = self
+                    .settings
+                    .client_information(client_view_distance(self.settings.render_distance));
                 if let Some(r) = self.remote.as_mut() {
-                    r.sent_view = view;
+                    r.sent_info = info.clone();
                 }
-                let mut info =
-                    horizon_protocol::packets::configuration::ClientInformation::new(view);
-                info.chat_visibility = self.settings.chat_visibility as i32;
                 self.send(S::ClientInformation(info));
             }
             C::Respawn(p) => {
@@ -1937,11 +1943,18 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
+                        // createEntityFromPacket: the player takes the profile of its list entry.
+                        match r.players.get(&p.uuid) {
+                            Some(name) => r.level_player_names.insert(p.id, name.clone()),
+                            None => r.level_player_names.remove(&p.id),
+                        };
                     } else {
                         r.level_players.remove(&p.id);
+                        r.level_player_names.remove(&p.id);
                     }
                 }
-                // Entity.getTeam: a mob is on a team by its UUID.
+                // Entity.getTeam: a mob is on a team by its UUID, a player by
+                // its profile name (`Game::scoreboard_name`).
                 self.persist.uuids.insert(
                     p.id as u32,
                     horizon_client::lan::playerdata::uuid_ints(p.uuid),
@@ -1965,6 +1978,7 @@ impl Game<'_> {
                 for id in p.ids {
                     if let Some(r) = self.remote.as_mut() {
                         r.level_players.remove(&id);
+                        r.level_player_names.remove(&id);
                     }
                     self.remove_entity(id);
                 }
@@ -2156,6 +2170,13 @@ impl Game<'_> {
                         {
                             m.extra.main_hand_left = *arm == 0;
                         }
+                        // Avatar.DATA_PLAYER_MODE_CUSTOMISATION: the skin layers
+                        // the player shows (PlayerModelPart bits).
+                        if let (16, Value::Byte(bits)) = (index, value)
+                            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                        {
+                            m.extra.hidden_model_parts = !(*bits as u8) & 0x7F;
+                        }
                     }
                 }
                 // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): this
@@ -2270,10 +2291,22 @@ impl Game<'_> {
                         match slot {
                             0 => e.main_hand = item,
                             1 => e.off_hand = item,
-                            2 => e.feet = item,
-                            3 => e.legs = item,
-                            4 => e.chest = item,
-                            5 if !body => e.head = item,
+                            2 => {
+                                e.feet = item;
+                                e.armor[3] = stack;
+                            }
+                            3 => {
+                                e.legs = item;
+                                e.armor[2] = stack;
+                            }
+                            4 => {
+                                e.chest = item;
+                                e.armor[1] = stack;
+                            }
+                            5 if !body => {
+                                e.head = item;
+                                e.armor[0] = stack;
+                            }
                             6 if body => {
                                 // A wolf's armor shows its cracks.
                                 e.body_damage = stack.as_ref().map_or(0, |s| s.damage as i32);
@@ -3637,16 +3670,14 @@ impl Game<'_> {
         self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
-        let view = client_view_distance(self.settings.render_distance);
-        let visibility = self.settings.chat_visibility as i32;
+        let info = self
+            .settings
+            .client_information(client_view_distance(self.settings.render_distance));
         if let Some(r) = self.remote.as_mut()
             && r.joined
-            && (r.sent_view != view || r.sent_chat_visibility != visibility)
+            && r.sent_info != info
         {
-            r.sent_view = view;
-            r.sent_chat_visibility = visibility;
-            let mut info = horizon_protocol::packets::configuration::ClientInformation::new(view);
-            info.chat_visibility = visibility;
+            r.sent_info = info.clone();
             self.send(S::ClientInformation(info));
         }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
@@ -6077,9 +6108,18 @@ impl Game<'_> {
         let r = self.remote.as_ref()?;
         Some(r.glowing.contains(&(id as i32)))
     }
+    /// The profile name of another player the server sent, by entity id.
+    pub(super) fn remote_player_name(&self, id: u32) -> Option<&str> {
+        let r = self.remote.as_ref()?;
+        let uuid = r.level_players.get(&(id as i32))?;
+        if *uuid == r.profile {
+            return None;
+        }
+        r.level_player_name(id as i32, uuid)
+    }
     /// Status for `horizon-ctl status`.
-    /// The other players' entities in the level and their names (from the
-    /// player list).
+    /// The other players' entities in the level and their names (their
+    /// profiles', which outlive the player list's entries).
     pub(super) fn remote_player_names(&self) -> Vec<(u32, String)> {
         let Some(r) = self.remote.as_ref() else {
             return Vec::new();
@@ -6087,7 +6127,7 @@ impl Game<'_> {
         r.level_players
             .iter()
             .filter(|(_, uuid)| **uuid != r.profile)
-            .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
+            .filter_map(|(id, uuid)| Some((*id as u32, r.level_player_name(*id, uuid)?.to_owned())))
             .collect()
     }
     /// `ClientClockManager.tick`: the clock moves on by the game time that
@@ -6164,6 +6204,8 @@ impl Game<'_> {
                 .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).
             "player_model": self.player_model.is_some(),
+            // The world view draws it now (third person, or lying in a bed).
+            "own_body": self.player_model_shown(),
             "text_display_vertices": self.text_display_vertices,
             "text_displays": self.text_displays.len(),
             "health": r.health.0,
@@ -6480,6 +6522,14 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 }
 
 impl Remote {
+    /// A player entity's profile name: the one it was created with, else its
+    /// player-list entry's (an entity the list named after it spawned).
+    fn level_player_name(&self, id: i32, uuid: &u128) -> Option<&str> {
+        self.level_player_names
+            .get(&id)
+            .or_else(|| self.players.get(uuid))
+            .map(String::as_str)
+    }
     /// Players in the server's player list, this one included.
     pub(super) fn player_count(&self) -> usize {
         self.players.len()
