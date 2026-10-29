@@ -5474,6 +5474,9 @@ impl Game<'_> {
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
+        if self.serving.is_some() || self.options.dedicated.is_some() {
+            self.native_lifecycle_server_tick_start(running);
+        }
         // GameRenderer.tick: a wither's bar darkens the world, then fades;
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
