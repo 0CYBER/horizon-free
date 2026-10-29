@@ -16,7 +16,7 @@ use std::{
     collections::{BinaryHeap, HashSet, VecDeque},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
 };
@@ -227,6 +227,9 @@ struct Shared {
     /// packs reload; each mesh job takes the current one.
     context: RwLock<Arc<WorkerContext>>,
     done: Mailbox,
+    /// Workers that have freed their buffers ([`IDLE_RELEASE`]) and taken no
+    /// job since: the last of them gives the freed memory back to the OS.
+    released: AtomicUsize,
 }
 /// Finished jobs, from the workers to the game thread, in the order they
 /// finished. Not an `mpsc` channel: its receiver waits for a sender it finds
@@ -520,7 +523,9 @@ impl Streaming {
             stop: AtomicBool::new(false),
             context: RwLock::new(context.clone()),
             done: Mailbox::default(),
+            released: AtomicUsize::new(0),
         });
+        let workers = threads.max(1);
         let light_tables = context.light.clone();
         let saves: Arc<dyn Saves> = generator.clone();
         let threads = (0..threads.max(1))
@@ -547,6 +552,9 @@ impl Streaming {
                                         return;
                                     }
                                     if let Some(job) = queue.pop() {
+                                        if released {
+                                            shared.released.fetch_sub(1, Ordering::Relaxed);
+                                        }
                                         break job.job;
                                     }
                                     if released {
@@ -564,6 +572,14 @@ impl Streaming {
                                         generator.idle(&mut worker);
                                         faces = None;
                                         released = true;
+                                        // The allocator keeps freed pages until memory
+                                        // runs short: once every worker has freed its own,
+                                        // hand them back.
+                                        if shared.released.fetch_add(1, Ordering::Relaxed) + 1
+                                            == workers
+                                        {
+                                            horizon_threads::release_free_memory();
+                                        }
                                         queue = shared.queue.lock().unwrap();
                                     }
                                 }
