@@ -292,6 +292,8 @@ impl Game<'_> {
                 s.horizon.hdr,
                 s.horizon.paper_white_nits() as f32,
                 s.horizon.peak_nits() as f32,
+                s.horizon.hdr_black_level as f32 / 100.0,
+                s.horizon.hdr_ui_brightness as f32 / 100.0,
                 &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
         }

@@ -921,6 +921,7 @@ pub enum Page {
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
+    GraphicsHdr,
     /// Horizon's controller settings and button binds.
     Controller,
     PadBinds,
@@ -1295,7 +1296,10 @@ impl OptionsUi {
         if page == Page::Packs {
             self.pack_screen = None;
         }
-        if matches!(page, Page::Graphics | Page::GraphicsAdvanced) {
+        if matches!(
+            page,
+            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr
+        ) {
             self.graphics.reset();
         }
     }
@@ -1304,6 +1308,7 @@ impl OptionsUi {
         match page {
             Page::Graphics => Some(crate::graphics_ui::Level::Simple),
             Page::GraphicsAdvanced => Some(crate::graphics_ui::Level::Advanced),
+            Page::GraphicsHdr => Some(crate::graphics_ui::Level::Hdr),
             _ => None,
         }
     }
@@ -1325,7 +1330,7 @@ impl OptionsUi {
             Page::Mods => "Mods",
             Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "Shader Packs",
-            Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
+            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
             Page::Extras => "Horizon Extras",
@@ -2587,6 +2592,7 @@ impl OptionsUi {
                     Action::Changed => events.push(Event::Changed),
                     Action::SliderDrag => events.push(Event::SliderDrag),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
+                    Action::OpenHdr => self.push(Page::GraphicsHdr),
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
                             && self.stack[self.stack.len() - 2] == Page::Graphics
