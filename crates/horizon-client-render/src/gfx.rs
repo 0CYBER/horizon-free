@@ -43,6 +43,7 @@ pub use entity_batch::{
     TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
     WATER_MASK_OVERLAY,
 };
+pub use view::{View, ViewSet};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -98,6 +99,7 @@ mod sunrise_fan;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
+mod view;
 mod wgsl_prefix;
 mod world_post;
 
@@ -3518,14 +3520,14 @@ impl Renderer {
             &self.lightmap_sampler,
         );
     }
-    pub fn view_projection(&self, frame: &Frame) -> Mat4 {
-        self.projection(
+    /// The views `render` draws `frame` from.
+    pub fn views(&self, frame: &Frame) -> ViewSet {
+        ViewSet::single(self.screen_view(
             frame.fov_degrees,
             frame.yaw,
             frame.pitch,
-            frame.bob * frame.spin,
             frame.depth_far,
-        )
+        ))
     }
     /// The view frustum `render` will cull with, for culling geometry built
     /// before the frame (entities, block entities) the same way.
@@ -3537,13 +3539,14 @@ impl Renderer {
         bob: Mat4,
         depth_far: f32,
     ) -> Frustum {
+        let views = ViewSet::single(self.screen_view(fov_degrees, yaw, pitch, depth_far));
         Frustum {
-            planes: frustum(self.projection(fov_degrees, yaw, pitch, bob, depth_far)),
+            planes: frustum(views.cull().view_proj(bob)),
         }
     }
-    fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, far: f32) -> Mat4 {
+    fn screen_view(&self, fov_degrees: f32, yaw: f32, pitch: f32, far: f32) -> View {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        world_projection(fov_degrees, aspect, far) * bob * crate::camera::view_matrix(yaw, pitch)
+        View::screen(yaw, pitch, fov_degrees, aspect, far)
     }
     fn update_lightmap(
         &mut self,
@@ -3703,7 +3706,9 @@ impl Renderer {
             frame.block_flicker,
             frame.boss_darken,
         );
-        let view_proj = self.view_projection(frame);
+        let views = self.views(frame);
+        let pose = frame.bob * frame.spin;
+        let view_proj = views.primary().view_proj(pose);
         // TAA runs where the world post pass does, not under a shader pack's own.
         let taa = !frame.title
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
@@ -3723,8 +3728,7 @@ impl Renderer {
                 frame.pitch,
             );
         }
-        let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
+        let view = views.primary().view;
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
@@ -3777,8 +3781,8 @@ impl Renderer {
             misc: [
                 1.0 - frame.sky.sky_light_factor,
                 frame.game_time,
-                aspect,
-                (frame.fov_degrees.to_radians() / 2.0).tan(),
+                views.primary().aspect,
+                views.primary().tan_half_fov,
             ],
             inverse_view: view.inverse().to_cols_array_2d(),
             sunrise: frame.sky.sunrise_color,
@@ -3841,14 +3845,15 @@ impl Renderer {
             bytemuck::bytes_of(&crosshair_globals),
         );
         // Frustum culling and camera-relative origins.
+        let cull_proj = views.cull().view_proj(pose);
         let view = Frustum {
-            planes: frustum(view_proj),
+            planes: frustum(cull_proj),
         };
         let camera = frame.camera;
         let camera_section = camera_section(camera);
         // Solid quads facing away from the eye are left out: the bob moves
         // the eye off `camera`, so it is found from the projection.
-        let eye = projection_center(view_proj).filter(|_| self.sides_on);
+        let eye = projection_center(cull_proj).filter(|_| self.sides_on);
         let culling = !frame.title && frame.cave_culling;
         if culling {
             crate::spans::time("occlusion", || {
