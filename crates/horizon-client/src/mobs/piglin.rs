@@ -999,6 +999,42 @@ impl<G: Goal + Clone + 'static> Goal for NotRetreating<G> {
     }
 }
 
+/// A goal of the idle and avoid activities' movement: the ride activity has
+/// none of it (`PiglinAi.initRideHoglinActivity`), so it waits while the
+/// brain is in the ride activity.
+#[derive(Clone, Debug)]
+struct NotRiding<G>(G);
+impl<G: Goal + Clone + 'static> Goal for NotRiding<G> {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.piglin.activity != Activity::Ride && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.piglin.activity != Activity::Ride && self.0.can_continue(m, cx)
+    }
+    fn interruptable(&self) -> bool {
+        self.0.interruptable()
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx)
+    }
+}
+
 fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     // `StartAttacking` is in the idle and celebrate activities, not in the retreat.
     if m.is_baby() || m.extra.piglin.activity == Activity::Avoid {
@@ -1020,10 +1056,10 @@ pub fn register_piglin(m: &mut Mob) {
         g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     }
     g.add(3, MeleeAttack::new(1.0, true));
-    g.add(4, PiglinAvoidRepellent);
+    g.add(4, NotRiding(PiglinAvoidRepellent));
     g.add(4, GoToWantedItem);
     g.add(4, Celebrate);
-    g.add(5, Stroll::avoiding_water(0.6));
+    g.add(5, NotRiding(Stroll::avoiding_water(0.6)));
     g.add(5, LookAtLoved);
     g.add(6, LookAtPlayer::new(8.0));
     g.add(7, RandomLookAround::default());
@@ -1284,21 +1320,20 @@ impl Goal for PiglinAvoidRepellent {
     }
 }
 /// `PiglinAi.isPlayerHoldingLovedItem`: the idle and celebrate activities'
-/// `SetEntityLookTarget.create(.., 14.0)` turns to look at the player in
-/// sight within 14 blocks who holds gold.
+/// `SetEntityLookTarget.create(.., 14.0)` and the ride activity's, with 8.0,
+/// turn to look at the player in sight within that many blocks who holds gold.
 #[derive(Clone, Debug)]
 struct LookAtLoved;
 impl LookAtLoved {
     /// The eye of the player to watch, if there is one.
     fn watched(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
-        if !matches!(
-            m.extra.piglin.activity,
-            Activity::Idle | Activity::Celebrate
-        ) {
-            return None;
-        }
+        let range_sqr = match m.extra.piglin.activity {
+            Activity::Idle | Activity::Celebrate => 196.0,
+            Activity::Ride => 64.0,
+            _ => return None,
+        };
         let p = cx.w.player.as_ref()?;
-        if !holds_loved(cx.w, p) || m.distance_sqr(p.position) > 196.0 {
+        if !holds_loved(cx.w, p) || m.distance_sqr(p.position) > range_sqr {
             return None;
         }
         let eye = p.eye;
