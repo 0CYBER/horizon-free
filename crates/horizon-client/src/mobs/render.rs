@@ -99,6 +99,23 @@ pub fn sheep_wool_rgb(color: u8) -> u32 {
     let f = |c: u32| ((c as f32 * 0.75).floor() as u32).min(255);
     f(src >> 16 & 255) << 16 | f(src >> 8 & 255) << 8 | f(src & 255)
 }
+/// `ColorLerper.getLerpedColor(ColorLerper.Type.SHEEP, tick)`: a `jeb_` sheep's
+/// wool holds each dye for 25 ticks, blending into the next one.
+pub fn jeb_wool_rgb(tick: f32) -> u32 {
+    let whole = tick.floor() as i32;
+    let value = (whole / 25) as usize;
+    let sub_step = ((whole % 25) as f32 + (tick - tick.floor())) / 25.0;
+    let (from, to) = (
+        sheep_wool_rgb((value % 16) as u8),
+        sheep_wool_rgb(((value + 1) % 16) as u8),
+    );
+    // ARGB.srgbLerp: Mth.lerpInt per channel, p0 + floor(alpha * (p1 - p0)).
+    let channel = |shift: u32| {
+        let (a, b) = ((from >> shift & 255) as i32, (to >> shift & 255) as i32);
+        (a + (sub_step * (b - a) as f32).floor() as i32) as u32
+    };
+    channel(16) << 16 | channel(8) << 8 | channel(0)
+}
 pub const VILLAGER_TYPES: [&str; 7] = [
     "plains", "desert", "jungle", "savanna", "snow", "swamp", "taiga",
 ];
@@ -459,7 +476,7 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
     }
 }
 /// Extra render layers drawn over the body with the same pose.
-pub fn layers(m: &Mob) -> Vec<Layer> {
+pub fn layers(m: &Mob, alpha: f32) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
     if avatar(m) {
@@ -656,7 +673,15 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {
-            let color = abgr(sheep_wool_rgb(m.extra.color));
+            // SheepRenderer.extractRenderState: `MobRenderer.checkMagicName(entity, "jeb_")`.
+            let jeb = m.custom_name.as_deref() == Some("jeb_");
+            // SheepRenderState.getWoolColor: a jeb_ sheep cycles through the dyes.
+            let wool = if jeb {
+                jeb_wool_rgb(m.age as f32 + alpha)
+            } else {
+                sheep_wool_rgb(m.extra.color)
+            };
+            let color = abgr(wool);
             if !m.is_baby() && m.extra.color != 0 {
                 push(
                     &mut v,
@@ -1368,7 +1393,7 @@ fn render_visible(
     for (part, uv, color) in extra {
         draw(part, base, &poses, *uv, *color, light, overlay, out);
     }
-    let mut all_layers = layers(m);
+    let mut all_layers = layers(m, alpha);
     // WardenRenderer: the translucent emissive layers fade with the animations.
     if m.species() == Species::Warden {
         for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
@@ -1735,7 +1760,7 @@ mod tests {
                         m.extra.age = if baby { -24000 } else { 0 };
                         (m.extra.variant, m.extra.variant2, m.extra.variant3) =
                             (t as u8, p as u8, 5);
-                        let layers = layers(&m);
+                        let layers = layers(&m, 0.0);
                         let group = if baby { "/baby/" } else { "/type/" };
                         assert!(
                             layers.iter().any(|l| l.texture.contains(group)),
