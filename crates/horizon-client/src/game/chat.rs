@@ -427,7 +427,8 @@ impl Game<'_> {
             .map(|(k, _)| k.clone())
             .collect();
     }
-    /// The block the player is looking at, for coordinate suggestions.
+    /// The block the player is looking at, for coordinate suggestions, and
+    /// the entity, for entity arguments (ClientSuggestionProvider).
     /// `ClientSuggestionProvider.getRelevantCoordinates` and
     /// `getAbsoluteCoordinates` read `Minecraft.hitResult` only when it is a
     /// block: an entity in front of the block leaves the `~` defaults.
@@ -440,6 +441,7 @@ impl Game<'_> {
         self.ui.registries.target_block = hit.as_ref().map(|h| h.pos);
         self.ui.registries.target_point =
             hit.map(|h| h.point.map(horizon_client::java_text::format_fixed2));
+        self.ui.registries.selected_entities = self.crosshair_entity_uuid().into_iter().collect();
         // ClientPacketListener.getOnlinePlayerNames on a server.
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;

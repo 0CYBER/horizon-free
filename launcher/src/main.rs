@@ -211,7 +211,8 @@ struct Launcher {
     accounts: Accounts,
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
-    keychain: bool,
+    /// What to say when the keychain doesn't keep sign-ins ([`account::no_keychain`]).
+    keychain: Option<String>,
     /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
     /// none until the keychain has been read.
     owner: Option<bool>,
@@ -431,7 +432,7 @@ impl Launcher {
             accounts: Accounts::load(),
             sign_in: None,
             sign_in_state: None,
-            keychain: true,
+            keychain: None,
             owner: None,
             owner_screen_open: false,
             dev_clicks: 0,
@@ -493,7 +494,7 @@ impl Launcher {
         let accounts = this.accounts.clone();
         std::thread::spawn(move || {
             let store = account::store();
-            let _ = keychain_tx.send(Msg::Keychain(store.persistent()));
+            let _ = keychain_tx.send(Msg::Keychain(account::no_keychain()));
             let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
         });
         std::thread::spawn(move || {
@@ -678,7 +679,7 @@ impl Launcher {
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
-                Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Keychain(said) => self.keychain = said,
                 Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::JavaGame(id, home, cmd) => {
@@ -692,6 +693,7 @@ impl Launcher {
                             self.client = Some(r);
                             self.client_home = Some(home);
                             self.client_run = Some((id, Instant::now()));
+                            self.client_error = account::take_unsaved();
                             self.step_aside(cx);
                         }
                         Err(e) => {
@@ -728,6 +730,8 @@ impl Launcher {
                         // Still play, offline, and say why.
                         if let Some(e) = offline {
                             self.client_error = Some(format!("Playing offline: {e}"));
+                        } else if let Some(e) = account::take_unsaved() {
+                            self.client_error = Some(e);
                         }
                         self.accounts = Accounts::load();
                         // An offline name the player picked (the quick switch).
@@ -1152,14 +1156,18 @@ impl Launcher {
             .cloned();
         if let Some(instance) = java {
             // Mojang's game: no Horizon version or preparation, only no game already running.
-            // Joining and quick play are Horizon's.
+            // It joins a server; a friend's code and opening a world are Horizon's.
             self.joining = None;
-            self.quick_play = None;
+            let server = self
+                .quick_play
+                .take()
+                .filter(|(flag, _)| *flag == "--server")
+                .map(|(_, ip)| ip);
             if self.client.is_some() || self.starting_client.is_some() {
                 return;
             }
             self.starting_pack = None;
-            self.start_java(instance);
+            self.start_java(instance, server);
             return;
         }
         let Some(tag) = self.selected().cloned() else {
@@ -1172,9 +1180,10 @@ impl Launcher {
         self.start_client(tag);
     }
 
-    /// Starts a Java instance's Minecraft: its files and Java first (downloaded the first time,
-    /// their lines in the log), then `drain` starts the game when the command arrives.
-    fn start_java(&mut self, instance: instances::Instance) {
+    /// Starts a Java instance's Minecraft, joining `server` if given: its files and Java first
+    /// (downloaded the first time, their lines in the log), then `drain` starts the game when
+    /// the command arrives.
+    fn start_java(&mut self, instance: instances::Instance, server: Option<String>) {
         self.client_error = None;
         self.crash = None;
         self.prepare_log.clear();
@@ -1186,7 +1195,7 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, None, &log).map(|mut cmd| {
+            let cmd = backend::java_game(&instance, server.as_deref(), &log).map(|mut cmd| {
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
@@ -1207,6 +1216,15 @@ impl Launcher {
     pub(crate) fn can_start_selected(&self) -> bool {
         self.selected_instance().is_none_or(|i| i.java.is_none())
             && self.selected().is_some_and(|tag| self.can_start(tag))
+    }
+
+    /// Whether a server's Join starts the selected instance now: a Java instance too, as Play
+    /// would (no game running or starting).
+    pub(crate) fn can_join_selected(&self) -> bool {
+        match self.selected_instance() {
+            Some(i) if i.java.is_some() => self.client.is_none() && self.starting_client.is_none(),
+            _ => self.can_start_selected(),
+        }
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -3674,15 +3692,14 @@ impl Launcher {
             )),
             None => div().child(tr("Add another account.")),
         };
-        let detail = if self.keychain || self.accounts.accounts.is_empty() {
-            detail
-        } else {
-            div()
+        let detail = match self.keychain.clone() {
+            Some(said) if !self.accounts.accounts.is_empty() => div()
                 .flex()
                 .flex_col()
                 .gap(px(4.))
                 .child(detail)
-                .child(div().child(account::NO_KEYCHAIN))
+                .child(div().child(said)),
+            _ => detail,
         };
         let action = if !configured {
             None

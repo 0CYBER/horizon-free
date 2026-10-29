@@ -1641,7 +1641,20 @@ pub fn held_item_transform(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let mut t = hand_base(m, &model, base, &poses, left)?;
-    // ItemInHandLayer: a spear in use (ArmPose.SPEAR's animateUseItem).
+    // ItemInHandLayer: a STAB swing of this arm thrusts its item out
+    // (SpearAnimations.thirdPersonAttackItem, the main hand's forward
+    // movement), and a spear in use moves with it (ArmPose.SPEAR's
+    // animateUseItem).
+    let swing_left = m.extra.swing_right_arm.map_or(m.main_arm_left(), |r| !r);
+    if m.extra.swing_stab && swing_left == left {
+        let forward = m
+            .extra
+            .main_hand
+            .as_deref()
+            .and_then(crate::spear::Kinetic::of)
+            .map_or(0.0, |k| k.forward_movement);
+        t *= crate::spear::third_person_attack_item(s.swing, forward);
+    }
     let off_hand = left != m.main_arm_left();
     if m.extra.using_item > 0
         && m.extra.using_off_hand == off_hand

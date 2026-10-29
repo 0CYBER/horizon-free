@@ -1028,6 +1028,17 @@ impl Game<'_> {
         }
         best
     }
+    /// `ContainerEntity.unpackChestVehicleLootTable` for a player who opens a
+    /// chest minecart: a roll it still holds fires `player_generates_container_loot`
+    /// for its table, and the cart keeps its items from then on.
+    fn unpack_cart_loot(&mut self, i: usize) {
+        let Some(loot) = self.carts[i].loot.take() else {
+            return;
+        };
+        if loot.items == horizon_client::save::encode_items(&self.carts[i].items) {
+            self.trigger_loot_table(&loot.table);
+        }
+    }
     /// `interact`: ride, open, fuel or ignite the cart under the crosshair.
     pub(super) fn interact_cart(&mut self) -> bool {
         let Some((i, d)) = self.cart_hit() else {
@@ -1047,6 +1058,7 @@ impl Game<'_> {
             }
             // AbstractMinecartContainer.interact: no sneak check.
             CartKind::Chest | CartKind::Hopper => {
+                self.unpack_cart_loot(i);
                 let c = self.carts[i].clone();
                 let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
                 self.world

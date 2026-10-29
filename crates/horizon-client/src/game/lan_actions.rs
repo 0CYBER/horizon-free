@@ -2035,8 +2035,11 @@ impl Game<'_> {
         let d = vanilla::game_dispatcher();
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let parse = d.parse(command, &self.ui.registries);
-        let ((start, end), suggestions) = d.suggestions(&parse, command.len(), &self.ui.registries);
+        let ((start, end), mut suggestions) =
+            d.suggestions(&parse, command.len(), &self.ui.registries);
         self.ui.registries.permission = level;
+        // ServerCommandSuggestionsProvider.limitSuggestionCount.
+        suggestions.truncate(1000);
         let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;
         let mut w = horizon_protocol::buf::Writer::new();
         w.varint(id);
