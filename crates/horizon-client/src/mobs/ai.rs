@@ -952,9 +952,10 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     m.ai.xxa *= 0.98;
     m.ai.zza *= 0.98;
     // LivingEntity.isImmobile: no goals or input (a biting, stunned or
-    // roaring ravager). A mannequin is an Avatar, not a Mob: LivingEntity's
+    // roaring ravager, an eating or rearing horse). A mannequin is an Avatar, not a Mob: LivingEntity's
     // serverAiStep has no goals, so it only falls and is pushed.
     let immobile = (m.species() == Species::Ravager && super::ravager::immobile(m))
+        || super::equine::immobile(m)
         || m.species() == Species::Mannequin;
     if m.species() == Species::Piglin && m.alive() {
         super::piglin::celebrate(m, w);
@@ -1146,7 +1147,8 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
-    if !w.daylight || w.nether {
+    // Mob.isSunBurnTick: the monsters_burn attribute, not the sky darkness.
+    if !w.monsters_burn {
         return false;
     }
     let (x, y, z) = (
@@ -1336,9 +1338,9 @@ fn species_ai_step(
         Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
-        Species::Villager => super::villager::ai_step(m, w),
+        Species::Villager => super::villager::ai_step(m, w, events),
         Species::WanderingTrader => {
-            super::villager::ai_step(m, w);
+            super::villager::ai_step(m, w, events);
             super::trader::ai_step(m, w);
         }
         Species::Shulker => {

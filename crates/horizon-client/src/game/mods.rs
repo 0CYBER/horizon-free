@@ -92,12 +92,6 @@ pub(super) struct ModsState {
     /// Capability `recipes`'s tables, made once a mod reads them.
     #[cfg(feature = "mods")]
     pub(super) recipes: Option<std::sync::Arc<horizon_mods::Recipes>>,
-    /// The recipe book's known displays, and the book's version they are of.
-    #[cfg(feature = "mods")]
-    pub(super) known_recipes: (Option<u64>, std::sync::Arc<[i32]>),
-    /// Capability `ui`'s item panel beside container screens.
-    #[cfg(feature = "mods")]
-    pub(super) browser: super::mod_browser::Browser,
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
@@ -500,8 +494,7 @@ impl Game<'_> {
         if !self.mods.mods.wants_raycast() {
             return None;
         }
-        let eye = self.eye_position()?;
-        let dir = super::view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach = f64::from(horizon_mods::RAYCAST_MAX);
         let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
             Some(hit) => (

@@ -1997,6 +1997,12 @@ impl Game<'_> {
         {
             push(&mut lines, text, rgba(85, 85, 255, 255));
         }
+        // OminousBottleAmplifier.addToTooltip.
+        if let Some((text, c)) =
+            horizon_client::item_tooltip::ominous_bottle_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, c);
+        }
         // SuspiciousStewEffects.addToTooltip: the creative flag, which vanilla
         // sets for the creative screen's own slots, as `name_visible` above.
         for (text, c) in horizon_client::item_tooltip::stew_lines(

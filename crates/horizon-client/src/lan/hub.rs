@@ -1566,10 +1566,15 @@ impl Hub {
             }
             // Block entities with data the client shows.
             for &(x, y, z) in &positions {
-                let Some(entity) = world.block_entities.get(&(x, y, z)) else {
-                    continue;
+                // A decorated pot is no block entity: its tag is the chunk's saved one.
+                let tag = match world.block_entities.get(&(x, y, z)) {
+                    Some(entity) => super::chunks::entity_tag(entity),
+                    None => world
+                        .chunks
+                        .get(&(x >> 4, z >> 4))
+                        .and_then(|c| super::chunks::pot_tag(c, (x, y, z))),
                 };
-                let Some(tag) = super::chunks::entity_tag(entity) else {
+                let Some(tag) = tag else {
                     continue;
                 };
                 let state = world.block(x, y, z).0;
@@ -2547,6 +2552,10 @@ impl Hub {
         let g = &mut self.guests[i];
         // PlayerList.respawn: into the level in place (the respawn level).
         g.dimension = self.config.dimension.clone();
+        // ServerLevel.removePlayerImmediately: the dead player's
+        // Entity.setRemoved (KILLED) stops its riding; the new player rides
+        // nothing.
+        g.stop_riding();
         // ServerLevel.removePlayerImmediately: every entity paired with the dead player is
         // removed (ServerEntity.removePairing, one packet each). Its chunks are dropped
         // without ForgetLevelChunk (PlayerChunkSender.dropChunk skips dead players): the
