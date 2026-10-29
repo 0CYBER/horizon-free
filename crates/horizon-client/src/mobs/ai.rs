@@ -943,6 +943,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Hoglin if m.ai.target.is_some() => "entity.hoglin.angry",
         // Zoglin.getAmbientSound: with an attack target, the angry sound.
         Species::Zoglin if m.ai.target.is_some() => "entity.zoglin.angry",
+        // HoglinAi.getSoundForActivity: the retreat grunt near a repellent.
+        Species::Hoglin if m.extra.repellent.is_some() => "entity.hoglin.retreat",
         _ => voice_sounds(m)[0],
     };
     let _ = w;
