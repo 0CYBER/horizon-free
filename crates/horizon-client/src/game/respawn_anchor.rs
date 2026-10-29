@@ -303,11 +303,7 @@ impl Game<'_> {
         center: [f64; 3],
         water_at: Option<[i32; 3]>,
     ) -> Result<()> {
-        let interaction = if self.ui.rules.bool("block_explosion_drop_decay") {
-            super::explosion::BlockInteraction::DestroyWithDecay
-        } else {
-            super::explosion::BlockInteraction::Destroy
-        };
+        let interaction = self.destroy_type("block_explosion_drop_decay");
         self.server_explode_as(
             center,
             5.0,

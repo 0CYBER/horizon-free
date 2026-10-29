@@ -19,6 +19,25 @@ builds after its Nightly is replaced. All the mods of one build must pin the sam
 launcher says which mod pins which, and the player installs versions made for the same Nightly. A bundle with no
 pin builds on the commit of the installed version the build starts from.
 
+### Mods on the hook points
+
+A mod that hooks only Horizon's native hook points (`crates/horizon-client/src/game/native_hooks.rs`: empty
+functions the game calls at fixed places, plus helpers, kept stable across releases) can name the version it
+needs instead of pinning: `"hooks": 1` in its `.hnmod`'s `horizon-native.json`, the `NATIVE_HOOKS_API` of that
+file when it was made. Hook points are only ever added: each addition raises `NATIVE_HOOKS_API`, and a mod builds
+on any Horizon whose version is the one it needs or a later one. Its `horizon` is then only the commit it was tested on. The launcher builds it on the commit the other mods
+pin, else on the installed version's commit (the game the player plays), after checking that commit's
+`NATIVE_HOOKS_API` (read from GitHub) is at least the mod's; when it isn't and nothing pins, it builds on the commit the
+mod was tested on. In its own copy of the mod it sets `horizon_revision` to the commit it builds on. Horizon's
+official mods (Zoom, FPS counter, Keystrokes, Minimap, Recipes) are made this way, so any of them build together
+with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
+
+API 2 adds the item panel beside container screens and its recipe pages (`native_panel_items`,
+`native_panel_recipes`, and the hook `native_panel_event` for the player's clicks, searches and keys over items), and
+the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_place_recipe`, `native_give`): what a
+recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
+mod shows one.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page, turn on Settings → Game → **Native mods (experimental)**,
@@ -53,7 +72,10 @@ trusting native code is the player's decision, never an agent's.
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
    saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
-   folder built from the command line, or mods of the default home, go to the **Native mods** instance).
+   folder built from the command line, or mods of the default home, go to the **Native mods** instance). That
+   instance gets each mod's settings from the default home the first time it plays it (its
+   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where the mod's
+   WebAssembly version kept them); nothing it already has is overwritten.
 
 ## Cache and disk
 
@@ -93,6 +115,9 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
   has read the source: the `.hnmod` *is* the source (only `.rs` and `.toml`, checked without running anything),
   pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
+  are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
+  player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
 - **Isolation of data.** Native mods run only in the instance built for them, with its own worlds, options and logs.
 - What this does not do: sandbox the compiled game. horizon-mixins' checks stop mistakes, not a malicious helper
   ([security notes](https://github.com/horizon-rust/horizon-mixins/blob/main/docs/security.md)).
