@@ -457,13 +457,14 @@ MCP: `instance_export`.
 
 ## `horizon-launcher instance launch`
 
-Show or set what runs around an instance's game: a shell command before it (the game starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode, MangoHud and the dedicated graphics card, when the computer has them.
+Show or set what runs around an instance's game: a shell command before it (the game starts only if it succeeds), a wrapper it runs through (`nice -n 5`), environment variables ("NAME=value NAME2=value") and a shell command after it exits. An empty value clears one. The game and the commands also get INST_NAME, INST_ID, INST_DIR, INST_MC_DIR and, for a Java instance, INST_JAVA. On Linux, also GameMode, MangoHud and the dedicated graphics card, when the computer has them.
 
     horizon-launcher instance launch <INSTANCE>
 
 - `INSTANCE`
 - `--pre-launch`
 - `--wrapper`
+- `--post-exit`
 - `--env`
 - `--gamemode`: Linux: run it through GameMode (gamemoderun), on or off
 - `--mangohud`: Linux: MangoHud's overlay, on or off
@@ -848,7 +849,7 @@ MCP: `mods_remove`, needs `confirm: true`.
 
 ## `horizon-launcher mods enable`
 
-Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does).
+Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does; in a Java instance, its file loses `.disabled`).
 
     horizon-launcher mods enable <PROJECT>
 
@@ -859,7 +860,7 @@ MCP: `mods_enable`.
 
 ## `horizon-launcher mods disable`
 
-Turn off a mod the browser installed; it stays installed.
+Turn off a mod the browser installed; it stays installed (in a Java instance, as `<file>.disabled`).
 
     horizon-launcher mods disable <PROJECT>
 

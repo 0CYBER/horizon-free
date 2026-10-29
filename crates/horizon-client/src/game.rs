@@ -1451,6 +1451,9 @@ struct Game<'a> {
     lod: Option<horizon_client::lod::Lod>,
     lod_source_attempted: bool,
     lod_observe: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
+    /// Beacon beam sections kept after their chunk unloads, so far terrain
+    /// LOD still draws their beams (`beacon_geometry` refreshes them).
+    far_beacons: HashMap<(i32, i32, i32), Vec<(u32, i32)>>,
     /// The detail revision, centre and radius `Lod::update` last had covered for.
     lod_covered_at: Option<(u64, (i32, i32), i32)>,
     options: Options,
@@ -3794,6 +3797,7 @@ impl Game<'_> {
             // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.get_or_insert_with(key, || entity);
+            self.unpack_opened_loot(key, &name);
             let centre = [
                 f64::from(key.0) + 0.5,
                 f64::from(key.1) + 0.5,
@@ -6568,9 +6572,13 @@ impl Game<'_> {
     /// The recipe id and result of the crafting grid.
     /// `RecipeCraftingHolder.awardUsedRecipes`: a crafted recipe becomes known
     /// (special ones never do).
-    fn award_crafted(&mut self, recipes: &[String]) {
+    fn award_crafted(&mut self, crafts: &[(String, Vec<Option<ItemStack>>)]) {
+        for (recipe, ingredients) in crafts {
+            self.trigger_recipe_crafted(recipe, ingredients);
+        }
+        let recipes: Vec<String> = crafts.iter().map(|(r, _)| r.clone()).collect();
         let index = &self.res.stations().recipe_index;
-        let (_, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
+        let (_, unlocked) = self.level.recipe_book.add_recipes(index, &recipes);
         self.recipe_unlocked(&unlocked);
     }
     fn craft_recipe(&self) -> Option<(String, ItemStack)> {
@@ -7958,6 +7966,7 @@ impl Game<'_> {
             while let Some((recipe, result)) = self.craft_recipe() {
                 let made = (result.item.clone(), result.count);
                 let cells = self.craft_size * self.craft_size;
+                let ingredients = self.craft_grid[..cells].to_vec();
                 let remainders = self.res.recipes().remainders(
                     &recipe,
                     &self.craft_grid[..cells],
@@ -7997,7 +8006,7 @@ impl Game<'_> {
                 }
                 crafted += 1;
                 self.stats.add("crafted", &made.0, made.1 as i32);
-                self.award_crafted(&[format!("minecraft:{recipe}")]);
+                self.award_crafted(&[(format!("minecraft:{recipe}"), ingredients)]);
                 if !shift || crafted >= 64 {
                     break;
                 }
@@ -10851,6 +10860,14 @@ impl Game<'_> {
                     }
                 }
                 _ if spinning => ItemPose::SpinAttack,
+                // ItemInHandRenderer: a STAB swing of this hand jabs.
+                _ if self
+                    .swing
+                    .current
+                    .is_some_and(|c| c.hand == hand && c.animation.kind == 2) =>
+                {
+                    ItemPose::Stab
+                }
                 _ => ItemPose::Swing,
             };
             let m = to_world
@@ -12616,6 +12633,7 @@ impl Game<'_> {
         self.lod = None;
         self.lod_source_attempted = false;
         self.lod_observe.clear();
+        self.far_beacons.clear();
         self.lod_covered_at = None;
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_lods();
@@ -13613,8 +13631,15 @@ impl ApplicationHandler for Game<'_> {
                                 )?;
                             }
                             Err(button) => {
-                                if self.screen == Screen::Playing && !event.repeat {
-                                    self.play_mouse(button, event.state == ElementState::Pressed)?;
+                                let action = match (event.state, event.repeat) {
+                                    (ElementState::Released, _) => KeyAction::Release,
+                                    (_, false) => KeyAction::Press,
+                                    (_, true) => KeyAction::Repeat,
+                                };
+                                if let Some(pressed) =
+                                    keyboard_button(self.screen == Screen::Playing, action)
+                                {
+                                    self.play_mouse(button, pressed)?;
                                 }
                             }
                         }
@@ -13985,6 +14010,7 @@ impl<'a> Game<'a> {
             streaming,
             lod: None,
             lod_source_attempted: false,
+            far_beacons: HashMap::new(),
             lod_observe: Default::default(),
             lod_covered_at: None,
             options,
@@ -15783,6 +15809,15 @@ fn tick_sleep_timer(timer: u32, sleeping: bool) -> u32 {
     }
 }
 
+/// `KeyboardHandler.keyPress` for a key bound to a mouse mapping (key.attack,
+/// key.use, key.pickItem): in game, a press and every repeat of the held key
+/// reach `KeyMapping.set(key, true)` and `KeyMapping.click` alike, so a held
+/// key keeps attacking; a release lets go. `None` behind a screen, which takes
+/// the key.
+fn keyboard_button(playing: bool, action: KeyAction) -> Option<bool> {
+    playing.then_some(action != KeyAction::Release)
+}
+
 fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Stats) {
     *adv = Default::default();
     *stats = Default::default();
@@ -15864,6 +15899,17 @@ mod tests {
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
 
+    /// A key bound to key.attack keeps attacking while it is held: each
+    /// repeat clicks like the press (#3243).
+    #[test]
+    fn a_held_key_bound_to_a_button_repeats_its_clicks() {
+        assert_eq!(keyboard_button(true, KeyAction::Press), Some(true));
+        assert_eq!(keyboard_button(true, KeyAction::Repeat), Some(true));
+        assert_eq!(keyboard_button(true, KeyAction::Release), Some(false));
+        for action in [KeyAction::Press, KeyAction::Repeat, KeyAction::Release] {
+            assert_eq!(keyboard_button(false, action), None);
+        }
+    }
     #[test]
     fn sleep_fade_lasts_ten_ticks_after_waking() {
         let alpha = |timer| match hud_overlays::sleep_overlay(320, 240, timer).first() {

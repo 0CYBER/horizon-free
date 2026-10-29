@@ -2580,7 +2580,7 @@ impl Game<'_> {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
                     self.swing_hand(hand, animation);
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    m.swing_hand_modified(hand == Hand::Off, animation.duration);
+                    m.swing_hand_modified(hand == Hand::Off, animation);
                 }
             }
             // The player's own instances: its maximum health (the hearts the
@@ -3791,6 +3791,7 @@ impl Game<'_> {
         // and the moving pistons a block event's client-side moveBlocks made
         // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.client_tick_beacons();
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
         });
