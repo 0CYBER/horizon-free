@@ -1654,6 +1654,23 @@ impl Mob {
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
     }
+    /// `Entity.extinguishFire`: a burning mob first plays the extinguish sound
+    /// (`playEntityOnFireExtinguishedSound`: volume 0.7, pitch from two draws
+    /// of its random, at its feet), then `clearFire` keeps only the
+    /// fire-immune countdown.
+    pub fn extinguish_fire(&mut self) {
+        if self.is_on_fire() {
+            let pitch = 1.6 + (self.random.next_float() - self.random.next_float()) * 0.4;
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox.push(MobEvent::Sound(
+                "entity.generic.extinguish_fire",
+                at,
+                0.7,
+                pitch,
+            ));
+        }
+        self.fire_ticks = self.fire_ticks.min(0);
+    }
     /// `Entity.isFullyFrozen`.
     pub fn is_fully_frozen(&self) -> bool {
         self.ticks_frozen >= crate::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE
