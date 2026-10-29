@@ -112,6 +112,11 @@ pub(super) struct Levels {
 }
 
 impl Levels {
+    /// A parked level, without opening or loading it.
+    pub(super) fn parked_world(&self, dim: Dim) -> Option<&World> {
+        self.parked.get(&dim).map(|level| &level.world)
+    }
+
     /// The level not in place, in `dim`.
     pub(super) fn parked_mut(&mut self, dim: Dim) -> Option<&mut Parked> {
         self.parked.get_mut(&dim)

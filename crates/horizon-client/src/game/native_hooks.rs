@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 5 adds read-only server block queries (`native_server_block`).
+//!
 //! API 4 adds authoritative server tick hooks (`native_server_tick`).
 //!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
@@ -40,7 +42,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 4;
+pub(crate) const NATIVE_HOOKS_API: u32 = 5;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
