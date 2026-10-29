@@ -181,9 +181,16 @@
   "These mods will run with full access to your computer": "Estos mods se ejecutarán con acceso completo a tu ordenador",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Pueden leer, modificar o eliminar tus archivos y usar tus cuentas y red, como cualquier programa que ejecutes. Compílalos únicamente si confías en sus autores: la página Mods los enumera.",
   "Mods: {mods}": "Mods: {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilación construye el juego: toma unos diez minutos y unos pocos GB de disco la primera vez, y unos minutos las siguientes veces.",
   "Delete old versions automatically": "Eliminar automáticamente las versiones antiguas",
   "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Conserva las {count} más recientes, la que está en uso y las que usan tus instancias. Las versiones eliminadas se vuelven a instalar desde la página Versiones.",
   "Installed versions use {size}.": "Las versiones instaladas ocupan {size}.",
-  "{size} on disk": "{size} en disco"
+  "{size} on disk": "{size} en disco",
+  "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "La compilación construye el juego: de 20 a 30 minutos y unos pocos GB de disco la primera vez (descarga Rust), y unos minutos después.",
+  "Delete…": "Eliminar…",
+  "Keep": "Conservar",
+  "Move to Trash": "Mover a la papelera",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "¿Mover {name} a la papelera, con sus mundos y ajustes? Podrás recuperarlo desde allí.",
+  "Install and turn on native mods": "Instalar y activar los mods nativos",
+  "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version} (Java Edition). La primera vez, Jugar lo descarga de Mojang para tu cuenta, junto con el Java que necesita.",
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Los mods nativos se compilan en un juego propio. Al instalar uno se activan los mods nativos: después compilas el juego con él en Ajustes > Mods nativos. La primera compilación descarga Rust y puede tardar de 20 a 30 minutos; las siguientes son más rápidas."
 }
