@@ -667,6 +667,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.insert("Peek".into(), Tag::Byte(m.extra.counter as i8));
             map.insert("Color".into(), Tag::Byte(m.extra.color as i8));
         }
+        // GlowSquid.addAdditionalSaveData.
+        "minecraft:glow_squid" => {
+            map.insert(
+                "DarkTicksRemaining".into(),
+                Tag::Int(crate::mobs::aquatic::dark_ticks(m)),
+            );
+        }
         "minecraft:slime" | "minecraft:magma_cube" => {
             map.insert("Size".into(), Tag::Int(m.extra.size.max(1) - 1));
             map.insert("wasOnGround".into(), Tag::Byte(i8::from(m.extra.flag2)));
@@ -1346,6 +1353,13 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Sheep {
         m.extra.color = number(tag.get("Color")).map_or(0, |c| (c as u8) & 15);
         m.extra.sheared = flag(tag, "Sheared");
+    }
+    // GlowSquid.readAdditionalSaveData: not dimmed when absent.
+    if m.species() == crate::mobs::Species::GlowSquid {
+        crate::mobs::aquatic::set_dark_ticks(
+            &mut m,
+            number(tag.get("DarkTicksRemaining")).unwrap_or(0) as i32,
+        );
     }
     // IronGolem.readAdditionalSaveData: not player created when absent.
     if m.species() == crate::mobs::Species::IronGolem {

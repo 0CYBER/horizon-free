@@ -178,6 +178,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // Vex.DATA_FLAGS_ID: charging in bit 0.
             (Species::Vex, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // GlowSquid.DATA_DARK_TICKS_REMAINING (after AgeableMob's two).
+            (Species::GlowSquid, 18, Value::Int(ticks)) => {
+                horizon_client::mobs::aquatic::set_dark_ticks(m, *ticks);
+            }
             // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
             (Species::Creaking, 16, Value::Bool(can_move)) => m.extra.flag2 = !*can_move,
             (Species::Creaking, 17, Value::Bool(active)) => m.extra.flag = *active,

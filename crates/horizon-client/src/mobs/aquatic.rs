@@ -301,6 +301,17 @@ pub fn squid_client_step(m: &mut Mob) {
     }
 }
 
+/// `GlowSquid.getDarkTicksRemaining`: `DATA_DARK_TICKS_REMAINING`, the ticks
+/// left of the dimming a hit gave (kept in `extra.counter`).
+pub fn dark_ticks(m: &Mob) -> i32 {
+    m.extra.counter
+}
+
+/// `GlowSquid.setDarkTicks`: a server sends it to its clients as synched data.
+pub fn set_dark_ticks(m: &mut Mob, ticks: i32) {
+    m.extra.counter = ticks;
+}
+
 /// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
 pub fn squid_cycle_event(m: &mut Mob) {
     if matches!(m.species(), Species::Squid | Species::GlowSquid) {
