@@ -87,6 +87,30 @@ fn java_float(v: f64) -> String {
 fn format_double(v: f64) -> String {
     format!("{v:.6}")
 }
+/// `EntitySelectorParser.createRotationPredicate`: the wrapped angle lies in
+/// the wrapped range, which runs through 180 when its minimum is above its
+/// maximum (defaults 0 and 359).
+fn rotation_in((lo, hi): (Option<f64>, Option<f64>), angle: f32) -> bool {
+    let min = wrap_degrees(lo.unwrap_or(0.0) as f32);
+    let max = wrap_degrees(hi.unwrap_or(359.0) as f32);
+    let angle = wrap_degrees(angle);
+    if min > max {
+        angle >= min || angle <= max
+    } else {
+        angle >= min && angle <= max
+    }
+}
+/// `Mth.wrapDegrees`.
+fn wrap_degrees(angle: f32) -> f32 {
+    let wrapped = angle % 360.0;
+    if wrapped >= 180.0 {
+        wrapped - 360.0
+    } else if wrapped < -180.0 {
+        wrapped + 360.0
+    } else {
+        wrapped
+    }
+}
 
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
@@ -652,6 +676,18 @@ impl Game<'_> {
                     + (p[2] - origin[2]).powi(2);
                 if let Some((lo, hi)) = s.distance
                     && (lo.is_some_and(|l| d2 < l * l) || hi.is_some_and(|h| d2 > h * h))
+                {
+                    return None;
+                }
+                // x_rotation is the pitch, y_rotation the yaw (getXRot, getYRot).
+                let [yaw, pitch] = self.target_rotation(t);
+                if let Some(range) = s.x_rotation
+                    && !rotation_in(range, pitch)
+                {
+                    return None;
+                }
+                if let Some(range) = s.y_rotation
+                    && !rotation_in(range, yaw)
                 {
                     return None;
                 }
