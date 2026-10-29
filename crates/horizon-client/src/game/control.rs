@@ -22,7 +22,7 @@ const HELP: &[&str] = &[
     "tp X Y Z                       teleport the player",
     "hotbar 1-9                     select a hotbar slot",
     "give ITEM [COUNT]              add items to the inventory",
-    "render-distance N              chunks, 2..64",
+    "render-distance N              chunks, 2..128",
     "lod-distance N                 far surface chunks, 0 disables, up to1024",
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
@@ -517,8 +517,9 @@ impl Game<'_> {
             }
             "render-distance" => {
                 let n: i32 = arg(1)?.parse()?;
-                if !(2..=64).contains(&n) {
-                    return Err("render distance must be 2..64".into());
+                let max = horizon_client::options_file::MAX_RENDER_DISTANCE;
+                if !(2..=max).contains(&n) {
+                    return Err(format!("render distance must be 2..{max}").into());
                 }
                 self.settings.render_distance = n;
                 self.apply_settings();

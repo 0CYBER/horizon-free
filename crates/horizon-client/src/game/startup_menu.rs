@@ -76,6 +76,7 @@ impl StartupMenu {
                 &self.root,
             );
             title.last_server = settings.file.string("lastServer");
+            title.skip_multiplayer_warning = settings.file.bool("skipMultiplayerWarning");
             self.title = Some(title);
         }
     }
@@ -320,12 +321,11 @@ impl Loading {
     }
 
     fn save_menu_address(&mut self) {
-        if self
-            .menu
-            .title
-            .as_ref()
-            .is_some_and(|title| title.last_server != self.settings.file.string("lastServer"))
-        {
+        if self.menu.title.as_ref().is_some_and(|title| {
+            title.last_server != self.settings.file.string("lastServer")
+                || title.skip_multiplayer_warning
+                    != self.settings.file.bool("skipMultiplayerWarning")
+        }) {
             self.save_menu_settings();
         }
     }
@@ -335,6 +335,10 @@ impl Loading {
             self.settings.file.set(
                 "lastServer",
                 horizon_client::options_file::V::Str(title.last_server.clone()),
+            );
+            self.settings.file.set(
+                "skipMultiplayerWarning",
+                horizon_client::options_file::V::Bool(title.skip_multiplayer_warning),
             );
         }
         self.settings.save(&Game::options_path());
