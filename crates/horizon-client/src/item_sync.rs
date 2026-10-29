@@ -491,6 +491,7 @@ mod tests {
         };
         let dynamic = Dynamic {
             registries: Default::default(),
+            ..Default::default()
         };
         for amplifier in [None, Some(0), Some(3)] {
             let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
