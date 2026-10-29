@@ -850,12 +850,29 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
             bonus_chest: true
         }
     );
-    // The More tab's Experiments and Data Packs screens don't exist yet.
+    // The More tab: Experiments has no screen yet; Data
+    // Packs opens on a new pack folder, and its selection reaches the action.
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
+    let more = labels(&f);
     assert_eq!(
-        labels(&f)[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
-        [true, false, false]
+        more[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
+        [true, false, true]
     );
+    let (action, sound) = f.title.click(more[2].1 + 10.0, more[2].2 + 10.0, size);
+    let Action::DataPacks { dir, selected } = action else {
+        panic!("{action:?}")
+    };
+    assert!(sound && dir.is_dir() && selected == ["vanilla"]);
+    f.title
+        .set_data_packs(vec!["vanilla".into(), "file/ttm.zip".into()]);
+    let Action::Create { options, .. } = f.title.create_action() else {
+        panic!()
+    };
+    assert_eq!(options.data_packs, ["vanilla", "file/ttm.zip"]);
+    assert_eq!(options.pack_dir.as_ref(), Some(&dir));
+    // Cancel removes the folder (removeTempDataPackDir).
+    f.title.escape();
+    assert!(!dir.exists());
 }
 
 #[test]

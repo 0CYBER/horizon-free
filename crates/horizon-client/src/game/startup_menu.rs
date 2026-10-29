@@ -365,6 +365,15 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
+                Event::DataPacks(ids) => {
+                    if let Some(title) = &mut self.menu.title {
+                        title.set_data_packs(ids);
+                    }
+                }
+                Event::OpenDataPackFolder(dir) => {
+                    let _ = std::fs::create_dir_all(&dir);
+                    packs::open_folder(&dir);
+                }
                 Event::OpenModFolder => {
                     let dir = Game::options_path().with_file_name(horizon_client::mod_list::DIR);
                     let _ = std::fs::create_dir_all(&dir);
@@ -426,6 +435,11 @@ impl Loading {
             Action::Options => self.open_menu_options(Page::Main),
             Action::Accessibility => self.open_menu_options(Page::Accessibility),
             Action::Language => self.open_menu_options(Page::Language),
+            Action::DataPacks { dir, selected } => {
+                let resources = self.vanilla_root.clone();
+                self.menu.options.open_data_packs(dir, selected, resources);
+                self.menu.options_open = true;
+            }
             action => {
                 let name = self
                     .options

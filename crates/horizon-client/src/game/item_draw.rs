@@ -345,10 +345,23 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
+        let lights = diffuse_lights(self.dim == Dim::Nether);
+        self.submit_item_lit(state, pose, light, lights, out);
+    }
+    /// [`Self::submit_item_world`] shaded by other diffuse lights (a
+    /// `Lighting.Entry` other than the level's), in the pose's output space.
+    pub(super) fn submit_item_lit(
+        &self,
+        state: &ItemRenderState,
+        pose: glam::Mat4,
+        light: u32,
+        lights: (glam::Vec3, glam::Vec3),
+        out: &mut Vec<Vertex>,
+    ) {
         let mut sink = WorldSink {
             out,
             light,
-            lights: Some(diffuse_lights(self.dim == Dim::Nether)),
+            lights: Some(lights),
             glint: self.glint(),
         };
         state.submit(
