@@ -395,7 +395,7 @@ pub fn anger_level(m: &Mob) -> AngerLevel {
 
 /// `Warden.isInvulnerableTo`: while digging or emerging.
 pub fn accepts_damage(m: &Mob, source: &Damage) -> bool {
-    !(digging_or_emerging(m) && source.kind != DamageKind::Generic)
+    !(digging_or_emerging(m) && !source.kind.bypasses_invulnerability())
 }
 /// `Warden.hurtServer`'s reaction, handled at the warden's next tick.
 pub fn hurt(m: &mut Mob, source: &Damage) {
