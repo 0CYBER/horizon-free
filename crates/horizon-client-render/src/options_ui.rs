@@ -2940,6 +2940,33 @@ impl OptionsUi {
             _ => self.scroll(s, size, amount),
         }
     }
+    /// `VideoSettingsScreen.mouseScrolled`: with Ctrl held the wheel steps the GUI scale
+    /// (auto counts as one past the maximum) and the list goes back to the top.
+    pub fn video_wheel_gui_scale(
+        &mut self,
+        s: &mut Settings,
+        framebuffer: [i32; 2],
+        amount: f32,
+    ) -> Vec<Event> {
+        let max = i64::from(crate::window::calculate_scale(
+            framebuffer,
+            0,
+            s.force_unicode,
+        ));
+        let old = if s.gui_scale == 0 {
+            max + 1
+        } else {
+            i64::from(s.gui_scale)
+        };
+        let step = i64::from(amount > 0.0) - i64::from(amount < 0.0);
+        let new = old + step;
+        if new == 0 || new > max {
+            return Vec::new();
+        }
+        s.gui_scale = new as u32;
+        self.scroll = 0.0;
+        vec![Event::Changed]
+    }
     /// The pack screen at this GUI size, made on first use.
     fn packs(&mut self, atlas: &HudAtlas, size: (f32, f32)) -> &mut crate::pack_screen::PackScreen {
         let m = crate::screen_draw::Measure(&atlas.font);

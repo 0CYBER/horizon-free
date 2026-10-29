@@ -13383,7 +13383,7 @@ impl ApplicationHandler for Game<'_> {
                         self.command_block_scroll(d);
                     }
                     if self.screen == Screen::Options && d != 0.0 {
-                        self.options_scroll(d);
+                        self.options_scroll(d)?;
                     }
                     // AbstractContainerScreen.mouseScrolled: a bundle under the
                     // cursor takes the wheel before the screen's own scrolling.
