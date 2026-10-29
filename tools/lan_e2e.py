@@ -311,7 +311,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
-          'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
+          'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
@@ -3578,6 +3578,79 @@ def check_sidebar(host, guest, out):
     return result
 
 
+def fluid_pig_position(host, tag):
+    """Read the tagged pig even after the current carries it past its spawn."""
+    reply = server_reply(host, f'data get entity @e[type=pig,tag={tag},limit=1] Pos', 'entity data')
+    values = re.findall(r'-?\d+(?:\.\d+)?', reply.rsplit(':', 1)[-1])
+    assert len(values) == 3, f'no position for {tag}: {reply}'
+    return tuple(map(float, values))
+
+
+def clear_fluid_arena(host, x, y, z, tags, floor='minecraft:stone'):
+    """Kill the tagged pigs and empty the arena, up in the air at y 100 so its
+    walls never close around a player; the last clear takes the floor away too."""
+    for tag in tags:
+        host('command', command=f'kill @e[type=pig,tag={tag}]')
+    host('command', command=f'fill {x-2} {y} {z-2} {x+9} {y+6} {z+7} minecraft:air')
+    host('command', command=f'fill {x-2} {y-1} {z-2} {x+9} {y-1} {z+7} {floor}')
+    host.wait(10)
+
+
+def check_flow_push(host, guest, out):
+    """A current pushes a tagged pig farther than a pool of source blocks."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    tags = ('horizon_flow_test', 'horizon_still_test')
+    host('command', command='gamemode survival')
+    try:
+        clear_fluid_arena(host, x, y, z, tags)
+        # Enclosed trough: its walls keep water inside the area cleaned below.
+        host('command', command=f'fill {x-1} {y} {z-1} {x+8} {y+1} {z+1} minecraft:stone')
+        host('command', command=f'fill {x} {y} {z} {x+7} {y+2} {z} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:water')
+        # Enclosed source pool, whose centre has no horizontal current.
+        host('command', command=f'fill {x+2} {y} {z+2} {x+6} {y+1} {z+6} minecraft:stone')
+        host('command', command=f'fill {x+3} {y} {z+3} {x+5} {y} {z+5} minecraft:water')
+        host('command', command=f'fill {x+3} {y+1} {z+3} {x+5} {y+3} {z+5} minecraft:air')
+        host.wait(40)
+        for tag, px, pz in [(tags[0], x+1.5, z+0.5), (tags[1], x+4.5, z+4.5)]:
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {pz} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
+        host.wait(40)
+        flowing = fluid_pig_position(host, tags[0])[0] - (x + 1.5)
+        still = fluid_pig_position(host, tags[1])[0] - (x + 4.5)
+        assert flowing - still > 0.2, f'the current did not carry the mob: {flowing} vs {still}'
+        return {'flowing': round(flowing, 3), 'still': round(still, 3)}
+    finally:
+        clear_fluid_arena(host, x, y, z, tags, floor='minecraft:air')
+
+
+def check_bubble_column(host, guest, out):
+    """A bubble column lifts a tagged pig farther than an ordinary water source."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    tags = ('horizon_bubble_test', 'horizon_plain_test')
+    host('command', command='gamemode survival')
+    try:
+        clear_fluid_arena(host, x, y, z, tags)
+        for px in (x, x+3):
+            host('command', command=f'fill {px-1} {y} {z-1} {px+1} {y} {z+1} minecraft:stone')
+            host('command', command=f'setblock {px} {y} {z} minecraft:water')
+        host('command', command=f'setblock {x} {y-1} {z} minecraft:soul_sand')
+        host.wait(20)
+        for tag, px in [(tags[0], x+0.5), (tags[1], x+3.5)]:
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {z+0.5} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
+        samples = {tag: [] for tag in tags}
+        for _ in range(8):
+            host.wait(5)
+            for tag in tags:
+                samples[tag].append(fluid_pig_position(host, tag)[1])
+        column, plain = (max(samples[tag]) for tag in tags)
+        assert column - plain > 0.2, f'the bubble column did not carry the pig up: {column} vs {plain}'
+        return {'column': round(column-y, 3), 'plain': round(plain-y, 3)}
+    finally:
+        clear_fluid_arena(host, x, y, z, tags, floor='minecraft:air')
+
+
 def check_border(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -5196,6 +5269,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
+             'flow-push': check_flow_push,
+             'bubble-column': check_bubble_column,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'names': check_names, 'feedback': check_feedback, 'titles': check_titles,
              'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,
