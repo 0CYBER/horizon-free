@@ -810,6 +810,7 @@ pub fn register_piglin(m: &mut Mob) {
     g.add(4, GoToWantedItem);
     g.add(4, Celebrate);
     g.add(5, Stroll::avoiding_water(0.6));
+    g.add(5, LookAtLoved);
     g.add(6, LookAtPlayer::new(8.0));
     g.add(7, RandomLookAround::default());
     let mut hurt = HurtByTarget::new().alert();
@@ -1066,6 +1067,46 @@ impl Goal for PiglinAvoidRepellent {
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         let path = m.ai.pending_path.take();
         m.nav_move_to_path(path, 1.0);
+    }
+}
+/// `PiglinAi.isPlayerHoldingLovedItem`, as `SetEntityLookTarget.create(.., 14.0)`
+/// of the idle and celebrate activities uses it: turn to look at the player
+/// in sight within 14 blocks who holds gold.
+#[derive(Clone, Debug)]
+struct LookAtLoved;
+impl LookAtLoved {
+    /// The eye of the player to watch, if there is one.
+    fn watched(m: &mut Mob, cx: &mut Cx) -> Option<[f64; 3]> {
+        if !matches!(
+            m.extra.piglin.activity,
+            Activity::Idle | Activity::Celebrate
+        ) {
+            return None;
+        }
+        let p = cx.w.player.as_ref()?;
+        if !holds_loved(cx.w, p) || m.distance_sqr(p.position) > 196.0 {
+            return None;
+        }
+        let eye = p.eye;
+        let range = m.attrs.follow_range;
+        m.can_see_player(cx.w, range).then_some(eye)
+    }
+}
+impl Goal for LookAtLoved {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        Self::watched(m, cx).is_some()
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(eye) = Self::watched(m, cx) {
+            m.look_at(eye);
+        }
     }
 }
 /// Admiring a gold item held in the off hand: stand and look at it.
