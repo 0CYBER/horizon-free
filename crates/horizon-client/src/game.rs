@@ -10916,7 +10916,7 @@ impl Game<'_> {
                 // renderArmWithItem: only the main hand's empty arm shows,
                 // on the main arm (the left one with the main hand set to
                 // left), and not while the player is invisible.
-                if hand == Hand::Off || self.potions.effects.get("invisibility").is_some() {
+                if hand == Hand::Off || self.own_invisible() {
                     continue;
                 }
                 // renderPlayerArm
@@ -10930,7 +10930,7 @@ impl Game<'_> {
                 let hold = MapHold::of(hand, off_hand_empty);
                 // renderOneHandedMap and renderTwoHandedMap: the arms under
                 // the map, unless the player is invisible.
-                if self.potions.effects.get("invisibility").is_none() {
+                if !self.own_invisible() {
                     for (arm, pose) in map_arm_poses(hold, left, self.pitch, inverse_height, attack)
                     {
                         self.first_person_arm(arm, to_world * pose, packed, &mut out);
