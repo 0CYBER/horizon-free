@@ -8599,13 +8599,12 @@ impl Game<'_> {
         {
             return darken;
         }
-        let mut sky = self
-            .res
-            .environment()
-            .sample(self.world.day_time, None, None);
-        horizon_client::environment::apply_weather(&mut sky, rain, thunder);
-        // Level.updateSkyBrightness: darkening from the sky light level.
-        let darken = (15.0 - 15.0 * sky.sky_light_level).round() as i32;
+        let darken = horizon_client::environment::sky_darken(
+            self.res.environment(),
+            self.world.day_time,
+            rain,
+            thunder,
+        );
         self.sky_darken_memo.set(Some((key, darken)));
         darken
     }
@@ -11071,8 +11070,6 @@ impl Game<'_> {
         let Some((position, yaw)) = self.player.as_ref().map(|p| (p.position, p.yaw)) else {
             return;
         };
-        let time = self.world.day_time.rem_euclid(24000);
-        let night = (12542..23460).contains(&time) || self.world.weather.thundering;
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let props = self
             .pack
@@ -11165,7 +11162,7 @@ impl Game<'_> {
                     .or(self.spawn)
             };
         }
-        if !night {
+        if !(self.dim == Dim::Overworld && self.sky_darken() >= 4) {
             self.tell_sleeper(
                 "block.minecraft.bed.no_sleep",
                 "You can sleep only at night or during thunderstorms",
