@@ -179,8 +179,13 @@ impl Game<'_> {
         let m = &mut self.mobs[i];
         m.extra.ints[1] -= 1;
         m.extra.ints[3] = 60;
-        // ItemEntity.setDefaultPickUpDelay.
+        // ItemEntity.setDefaultPickUpDelay; BehaviorUtils.throwItem sets the allay as the thrower.
         self.spawn_item(ItemStack::new(&item, 1), from, v, 10);
+        let id = self.mobs[i].id;
+        let thrower = self.mob_uuid(id);
+        if let Some(e) = self.dropped.last_mut() {
+            e.thrower = Some(thrower);
+        }
         if self.world.game_time % 7 == 0 && self.world.random.next_double() < 0.9 {
             const PITCHES: [f32; 16] = [
                 0.5625, 0.625, 0.75, 0.9375, 1.0, 1.0, 1.125, 1.25, 1.5, 1.875, 2.0, 2.25, 2.5,

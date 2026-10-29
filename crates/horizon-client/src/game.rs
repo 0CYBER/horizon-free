@@ -2881,13 +2881,16 @@ impl Game<'_> {
             if touching && item.pickup_delay == 0 && item.target.is_none_or(|t| t == own) {
                 let before = item.stack.count;
                 let kind = item.stack.item.clone();
+                let thrower = item.thrower;
                 match self.give(item.stack.clone()) {
                     None => {
                         self.stats.add("picked_up", &kind, before as i32);
+                        let picked = item.stack.clone();
                         self.add_pickup(
                             pickups::Taken::Item(Box::new(item)),
                             pickups::Collector::Player,
                         );
+                        self.trigger_thrown_pickup(thrower, &picked);
                         let pitch = ((self.world.random.next_float()
                             - self.world.random.next_float())
                             * 0.7
@@ -2905,6 +2908,9 @@ impl Game<'_> {
                                 pickups::Taken::Item(Box::new(item.clone())),
                                 pickups::Collector::Player,
                             );
+                            // ItemEntity.playerTouch: the entity keeps what did not fit,
+                            // and `onItemPickup` hands that stack to the trigger.
+                            self.trigger_thrown_pickup(thrower, &rest);
                             // handleTakeItemEntity: the random pitch of a full pickup.
                             let pitch = ((self.world.random.next_float()
                                 - self.world.random.next_float())

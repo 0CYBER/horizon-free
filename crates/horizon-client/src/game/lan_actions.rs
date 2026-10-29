@@ -3092,16 +3092,21 @@ impl Game<'_> {
         let mut taken = Vec::new();
         for i in near.into_iter().rev() {
             let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
+            let thrower = self.dropped[i].thrower;
             let before = stack.count;
+            let whole = stack.clone();
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
                     let item = self.dropped.remove(i);
                     self.guest_pickup(host, id, item);
+                    // ServerPlayer.onItemPickup: the stack the entity held.
+                    self.as_guest(host, conn, |g| g.trigger_thrown_pickup(thrower, &whole));
                     taken.push((item_id, before));
                 }
                 Some(rest) if rest.count < before => {
                     self.guest_pickup(host, id, self.dropped[i].clone());
+                    self.as_guest(host, conn, |g| g.trigger_thrown_pickup(thrower, &rest));
                     self.dropped[i].stack = rest;
                     taken.push((item_id, before - self.dropped[i].stack.count));
                 }

@@ -1089,6 +1089,31 @@ impl Game<'_> {
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
+    /// `ServerPlayer.onItemPickup`: the acting player takes an item that an
+    /// entity threw (`ItemEntity.getOwner`), which fires
+    /// `thrown_item_picked_up_by_player` with that entity and the stack the
+    /// item entity holds. A thrower that is neither this player nor a mob in
+    /// the level (another player) fires nothing.
+    pub(super) fn trigger_thrown_pickup(&mut self, thrower: Option<[i32; 4]>, stack: &ItemStack) {
+        let Some(uuid) = thrower else {
+            return;
+        };
+        let name = "minecraft:thrown_item_picked_up_by_player";
+        if uuid == self.acting_player_uuid() {
+            let me = self.player_entity();
+            self.trigger_item_entity(name, stack, &me);
+            return;
+        }
+        let Some(m) = self
+            .mobs
+            .iter()
+            .find(|m| self.persist.uuids.get(&m.id) == Some(&uuid))
+        else {
+            return;
+        };
+        let target = self.mob_entity(m);
+        self.trigger_item_entity(name, stack, &target);
+    }
     /// `ConstructBeaconTrigger`: the pyramid levels of the new beacon.
     pub(super) fn trigger_construct_beacon(&mut self, levels: i32) {
         let me = self.player_entity();
