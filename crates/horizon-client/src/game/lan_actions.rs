@@ -82,6 +82,8 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     levitation: Option<([f64; 3], u64)>,
+    /// The fall, lava ride, Nether trip and blast the guest's advancements track.
+    marks: super::advancements::TravelMarks,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
     /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
@@ -166,6 +168,7 @@ pub(super) struct GuestSwap {
     adv_loaded: bool,
     last_inventory: u64,
     levitation: Option<([f64; 3], u64)>,
+    marks: super::advancements::TravelMarks,
     death_cause: Option<String>,
     /// The guest's own damage record, in place while they act.
     combat: super::combat::CombatTracker,
@@ -396,6 +399,7 @@ impl Game<'_> {
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
         let levitation = std::mem::replace(&mut self.adv.levitation, play.levitation);
+        let marks = std::mem::replace(&mut self.adv.marks, std::mem::take(&mut play.marks));
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
         let acting = (
             self.lan_acting.replace(conn),
@@ -468,6 +472,7 @@ impl Game<'_> {
             adv_loaded,
             last_inventory,
             levitation,
+            marks,
             death_cause,
             acting,
             packets,
@@ -528,6 +533,7 @@ impl Game<'_> {
             adv_loaded,
             last_inventory,
             levitation,
+            marks,
             death_cause,
             combat,
             acting,
@@ -652,6 +658,7 @@ impl Game<'_> {
         self.adv.loaded = adv_loaded;
         play.last_inventory = std::mem::replace(&mut self.adv.last_inventory, last_inventory);
         play.levitation = std::mem::replace(&mut self.adv.levitation, levitation);
+        play.marks = std::mem::replace(&mut self.adv.marks, marks);
         let stat_events = std::mem::take(&mut play.stats.events);
         let name = g.name.clone();
         self.potions.swap_player(&mut g.effects, &mut play.potions);
@@ -826,35 +833,23 @@ impl Game<'_> {
             .facts()
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name;
-        let (menu, title, slots) = if &**name == "minecraft:ender_chest" {
+        let (menu, slots) = if &**name == "minecraft:ender_chest" {
             // EnderChestBlock.useWithoutItem: the player's own inventory.
-            (
-                "minecraft:generic_9x3",
-                "container.enderchest",
-                Slots::Ender,
-            )
+            ("minecraft:generic_9x3", Slots::Ender)
         } else if let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get(&pos) {
             // AbstractFurnaceBlock.openContainer: FurnaceMenu, BlastFurnaceMenu, SmokerMenu.
-            let (menu, title) = match f.kind.recipe_type() {
-                "minecraft:blasting" => ("minecraft:blast_furnace", "container.blast_furnace"),
-                "minecraft:smoking" => ("minecraft:smoker", "container.smoker"),
-                _ => ("minecraft:furnace", "container.furnace"),
+            let menu = match f.kind.recipe_type() {
+                "minecraft:blasting" => "minecraft:blast_furnace",
+                "minecraft:smoking" => "minecraft:smoker",
+                _ => "minecraft:furnace",
             };
-            (menu, title, Slots::Block(pos))
+            (menu, Slots::Block(pos))
         } else if let Some(BlockEntity::Crafter(_)) = self.world.block_entities.get(&pos) {
             // CrafterBlock.useWithoutItem: CrafterMenu over the block entity.
-            (
-                "minecraft:crafter_3x3",
-                "container.crafter",
-                Slots::Block(pos),
-            )
+            ("minecraft:crafter_3x3", Slots::Block(pos))
         } else if let Some(BlockEntity::Brewing(_)) = self.world.block_entities.get(&pos) {
             // BrewingStandBlock.useWithoutItem: BrewingStandMenu.
-            (
-                "minecraft:brewing_stand",
-                "container.brewing",
-                Slots::Block(pos),
-            )
+            ("minecraft:brewing_stand", Slots::Block(pos))
         } else if let Some((other, right)) = self.chest_partner(pos) {
             // ChestBlock.combine: the right half's slots come first.
             let halves = if right {
@@ -862,24 +857,33 @@ impl Game<'_> {
             } else {
                 Slots::Double(other, pos)
             };
-            ("minecraft:generic_9x6", "container.chestDouble", halves)
+            ("minecraft:generic_9x6", halves)
         } else {
             let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
                 return false;
             };
-            let (menu, title) = match items.len() {
-                27 => ("minecraft:generic_9x3", "container.chest"),
-                9 => ("minecraft:generic_3x3", "container.dispenser"),
-                5 => ("minecraft:hopper", "container.hopper"),
+            let menu = match items.len() {
+                27 => "minecraft:generic_9x3",
+                9 => "minecraft:generic_3x3",
+                5 => "minecraft:hopper",
                 _ => return false,
             };
-            let title = match &**name {
-                "minecraft:barrel" => "container.barrel",
-                "minecraft:dropper" => "container.dropper",
-                n if n.ends_with("shulker_box") => "container.shulkerBox",
-                _ => title,
-            };
-            (menu, title, Slots::Block(pos))
+            (menu, Slots::Block(pos))
+        };
+        // The menu provider's getDisplayName: a container's custom name
+        // (BaseContainerBlockEntity.getName) or its default name.
+        let custom = |k: (i32, i32, i32)| self.world.block_names.get(&k).map(String::as_str);
+        let title = match slots {
+            Slots::Ender => horizon_protocol::text::translatable("container.enderchest", &[]),
+            Slots::Double(first, second) => {
+                horizon_client::containers::double_chest_name(custom(first), custom(second))
+            }
+            Slots::Block(k) => {
+                let Some(key) = horizon_client::containers::default_name_key(name) else {
+                    return false;
+                };
+                horizon_client::containers::display_name(custom(k), key)
+            }
         };
         let Some(items) = host
             .hub
@@ -891,14 +895,8 @@ impl Game<'_> {
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
-        host.hub.open_container(
-            conn,
-            menu,
-            horizon_protocol::text::translatable(title, &[]),
-            pos,
-            slots,
-            items,
-        );
+        host.hub
+            .open_container(conn, menu, title, pos, slots, items);
         true
     }
 
@@ -1179,9 +1177,6 @@ impl Game<'_> {
             }
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
-                if spectator {
-                    return;
-                }
                 // handleUseItemOn: within reach, and the hit point within the block.
                 let inside = p
                     .cursor
@@ -1246,7 +1241,14 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let g = &mut host.hub.guests[gi];
                 (g.yaw, g.pitch) = (p.yaw, p.pitch);
+                // ServerPlayer.getKnownMovement: the move their client just sent,
+                // which a throw adds to the projectile.
+                let movement = g
+                    .moves
+                    .last()
+                    .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
                 let swung = self.as_guest(host, conn, |g| {
+                    g.known_movement = movement;
                     g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
@@ -1317,6 +1319,9 @@ impl Game<'_> {
                 let g = &mut host.hub.guests[gi];
                 let old = g.menu_slot(slot);
                 g.set_menu_slot(slot, item.clone());
+                // InventoryMenu.setRemoteSlot: the client already has it, so broadcastChanges
+                // sends nothing back that could undo a click made since.
+                g.menu_sent[slot] = item.clone();
                 // InventoryMenu's ArmorSlot and off-hand slot: setByPlayer.
                 let equipment = match slot {
                     5..=8 => Some(["head", "chest", "legs", "feet"][slot - 5]),
@@ -1653,9 +1658,7 @@ impl Game<'_> {
         host.hub.teleport(gi, Some(at));
     }
     fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
-        let g = &mut host.hub.guests[gi];
-        g.death_time += 1;
-        if g.death_time >= 20 {
+        if host.hub.guests[gi].tick_death() {
             self.guest_drop_carried(host, gi);
         }
     }
@@ -2720,6 +2723,12 @@ impl Game<'_> {
         self.as_guest(host, conn, |game| {
             game.sculk_step_on_player();
             game.tick_player_sculk_events();
+            // Entity.restituteMovementAfterCollisions: GameEvent.BOUNCE.
+            for event in &events {
+                if matches!(event, MotionEvent::Bounce { .. }) {
+                    game.post_entity_event("minecraft:bounce", horizon_client::mobs::Who::Player);
+                }
+            }
         });
         for event in events {
             match event {
@@ -2855,7 +2864,7 @@ impl Game<'_> {
                 && let Some(stack) = game.armor[1].clone()
             {
                 // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
-                let loss = game.durability_loss(&stack, 1);
+                let loss = game.wear(&stack, 1);
                 if let Some(elytra) = game.armor[1].as_mut() {
                     elytra.damage += loss;
                 }
