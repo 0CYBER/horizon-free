@@ -100,18 +100,17 @@ fn modifier_line(
     } else {
         return None;
     };
-    let raw = text(&format!("attribute.modifier.{kind}.{operation}"));
-    let line = if raw.contains("%1$s") || raw.contains("%2$s") {
-        raw.replace("%1$s", &format_amount(shown))
-            .replace("%2$s", &text(&format!("attribute.name.{attribute}")))
-    } else {
-        raw.replacen("%s", &format_amount(shown), 1).replacen(
-            "%s",
-            &text(&format!("attribute.name.{attribute}")),
-            1,
+    // TranslatableContents: `%s` and numbered `%1$s` arguments, `%%` a percent sign.
+    Some(
+        crate::text::format_translation(
+            &text(&format!("attribute.modifier.{kind}.{operation}")),
+            &[
+                crate::text::Text::literal(format_amount(shown)),
+                crate::text::Text::literal(text(&format!("attribute.name.{attribute}"))),
+            ],
         )
-    };
-    Some(line.replace("%%", "%"))
+        .plain(),
+    )
 }
 
 /// `Attribute.getStyle`: the colour of a line for an attribute whose value
