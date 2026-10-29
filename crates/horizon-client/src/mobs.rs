@@ -735,8 +735,9 @@ pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
-    /// The local player's `minecraft:scale`, which scales the whole model
-    /// (`LivingEntityRenderState.scale`); 0 is the default, 1.
+    /// A player's or mannequin's `minecraft:scale`, which scales the whole model
+    /// (`LivingEntityRenderState.scale`): the local player's own, and on a
+    /// server the others' from their attribute updates; 0 is the default, 1.
     pub model_scale: f32,
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
