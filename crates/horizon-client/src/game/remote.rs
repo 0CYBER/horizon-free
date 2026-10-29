@@ -2510,6 +2510,13 @@ impl Game<'_> {
                 {
                     horizon_client::mobs::aquatic::squid_cycle_event(m);
                 }
+                // LivingEntity.handleEntityEvent 55: another player swapped
+                // its main and off hand (`swapHandItems`).
+                if p.event == 55
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                {
+                    std::mem::swap(&mut m.extra.main_hand, &mut m.extra.off_hand);
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
