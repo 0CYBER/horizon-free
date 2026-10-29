@@ -1308,7 +1308,7 @@ impl Game<'_> {
         }
     }
     /// `renderTwoHandedMap`: map `id` held in both hands, in view space (the
-    /// arms under it are not drawn).
+    /// arms under it: `first_person::map_arm_poses`).
     pub(super) fn two_handed_map_geometry(
         &mut self,
         to_world: glam::Mat4,
@@ -1318,22 +1318,11 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
+        use horizon_core::geometry::trig::Mth;
         let deg = |d: f32| d.to_radians();
-        let sqrt_attack = attack.sqrt();
-        let y_swing = -0.2 * (attack * std::f32::consts::PI).sin();
-        let z_swing = -0.4 * (sqrt_attack * std::f32::consts::PI).sin();
-        // calculateMapTilt
-        let tilt = (1.0 - self.pitch / 45.0 + 0.1).clamp(0.0, 1.0);
-        let tilt = -(tilt * std::f32::consts::PI).cos() * 0.5 + 0.5;
         let base = to_world
-            * glam::Mat4::from_translation(glam::Vec3::new(0.0, -y_swing / 2.0, z_swing))
-            * glam::Mat4::from_translation(glam::Vec3::new(
-                0.0,
-                0.04 + inverse_height * -1.2 + tilt * -0.5,
-                -0.72,
-            ))
-            * glam::Mat4::from_rotation_x(deg(tilt * -85.0));
-        let swing = (sqrt_attack * std::f32::consts::PI).sin();
+            * horizon_client::first_person::two_handed_map_base(self.pitch, inverse_height, attack);
+        let swing = (attack.sqrt() * std::f32::consts::PI).msin();
         let m = base
             * glam::Mat4::from_rotation_x(deg(swing * 20.0))
             * glam::Mat4::from_scale(glam::Vec3::splat(2.0));

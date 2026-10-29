@@ -233,7 +233,7 @@ fn gather(
         _ => {}
     }
 }
-fn hash(seed: u64, x: i32, z: i32) -> u64 {
+pub(super) fn hash(seed: u64, x: i32, z: i32) -> u64 {
     let mut n = seed
         ^ (x as u64).wrapping_mul(0x9e3779b97f4a7c15)
         ^ (z as u64).wrapping_mul(0xd1b54a32d192ed03);
