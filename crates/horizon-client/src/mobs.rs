@@ -2790,6 +2790,12 @@ pub struct ElytraAnimation {
     pub angles: [f32; 3],
 }
 impl ElytraAnimation {
+    /// The angles `ElytraAnimationState` eases to when not gliding or crouching.
+    pub const RESTING: [f32; 3] = [
+        std::f32::consts::PI / 12.0,
+        0.0,
+        -std::f32::consts::PI / 12.0,
+    ];
     pub fn tick(&mut self, flying: bool, crouching: bool, velocity: horizon_core::geometry::Vec3) {
         use std::f32::consts::PI;
         self.old = self.angles;
@@ -2810,7 +2816,7 @@ impl ElytraAnimation {
         } else if crouching {
             [PI * 2.0 / 9.0, 0.08726646, -PI / 4.0]
         } else {
-            [PI / 12.0, 0.0, -PI / 12.0]
+            Self::RESTING
         };
         for (angle, target) in self.angles.iter_mut().zip(target) {
             *angle += (target - *angle) * 0.3;
@@ -2900,6 +2906,18 @@ mod elytra_tests {
             wings.tick(false, true, Vec3::ZERO);
         }
         assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
+    }
+    /// An armour stand never glides or crouches: its wings stay at the angles
+    /// a standing wearer eases to.
+    #[test]
+    fn resting_wings_are_the_standing_target() {
+        let mut wings = ElytraAnimation::default();
+        for _ in 0..80 {
+            wings.tick(false, false, Vec3::ZERO);
+        }
+        for (angle, resting) in wings.angles.iter().zip(ElytraAnimation::RESTING) {
+            assert!((angle - resting).abs() < 0.00001);
+        }
     }
 }
 #[cfg(test)]
