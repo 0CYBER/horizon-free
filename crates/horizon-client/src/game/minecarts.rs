@@ -4,7 +4,7 @@
 //! `MinecartItem` placement, `VehicleEntity` breaking, the chest, hopper,
 //! furnace and TNT variants, saving, and `AbstractMinecartRenderer`'s old
 //! rail-following render with the display block.
-use super::{Game, Hit, Keys, explosion::BlockInteraction, view_vector};
+use super::{Game, Hit, Keys};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
@@ -662,9 +662,9 @@ impl Game<'_> {
         // The cart is the explosion's source: it is gone before the blast
         // looks for entities, so it can't hit itself.
         self.carts.retain(|x| x.id != c.id);
-        let _ = self.with_hive_emptying_blast(|g| {
-            g.server_explode(at, power, BlockInteraction::Destroy, false)
-        });
+        // ExplosionInteraction.TNT: the tnt_explosion_drop_decay rule.
+        let interaction = self.destroy_type("tnt_explosion_drop_decay");
+        let _ = self.with_hive_emptying_blast(|g| g.server_explode(at, power, interaction, false));
     }
     /// `AbstractMinecart.push` from each player walking into a cart
     /// (`LivingEntity.pushEntities`): the window's player and every server
@@ -998,8 +998,7 @@ impl Game<'_> {
         true
     }
     pub(super) fn cart_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, c) in self.carts.iter().enumerate() {
@@ -1147,7 +1146,7 @@ impl Game<'_> {
             })
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_cart(&mut self, damage: f32) -> bool {
+    pub(super) fn attack_cart(&mut self) -> bool {
         let Some((i, d)) = self.cart_hit() else {
             return false;
         };
@@ -1157,8 +1156,12 @@ impl Game<'_> {
         let burning = self
             .held()
             .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
-        self.vehicle_attack_sounds();
+        let area = self.carts[i].bounds();
+        // Player.attack's full damage against the cart's entity type.
+        let id = self.carts[i].id as i32;
+        let (damage, _, _, magic) = self.melee_damage(self.carts[i].kind.id(), false);
         self.hurt_cart(i, damage, self.creative, burning);
+        self.vehicle_attack_sounds(area, magic.then_some(id));
         self.swing_arm();
         true
     }
@@ -1459,6 +1462,7 @@ impl Game<'_> {
             banner: &|_| Vec::new(),
             skull: &|_| None,
             glyph: &|c| self.gui.atlas.glyph_cell(c),
+            glyphs: self.gui.atlas.font.epoch(),
         };
         self.res
             .block_entity_render()
