@@ -83,6 +83,7 @@ impl Mob {
     pub fn swing(&mut self) {
         if self.start_swing(6) {
             self.extra.swing_right_arm = None;
+            self.extra.swing_stab = false;
         }
     }
     /// `LivingEntity.swing(hand, animation, false)` for a swing of `duration`
@@ -90,24 +91,25 @@ impl Mob {
     pub fn swing_hand(&mut self, off_hand: bool, duration: i32) {
         if self.start_swing(duration) {
             self.extra.swing_right_arm = Some(!off_hand != self.main_arm_left());
+            self.extra.swing_stab = false;
         }
     }
-    /// `swing_hand` for a swing of `base` ticks, lengthened or shortened by
+    /// `swing_hand` for a swing of `animation`, lengthened or shortened by
     /// this mob's haste, conduit power or mining fatigue
     /// (`LivingEntity.getModifiedSwingDuration`).
-    pub fn swing_hand_modified(&mut self, off_hand: bool, base: i32) {
+    pub fn swing_hand_modified(
+        &mut self,
+        off_hand: bool,
+        animation: crate::first_person::SwingAnimation,
+    ) {
         let amplifier = |id: &str| self.extra.effects.iter().find(|e| e.0 == id).map(|e| e.2);
         let dig_speed = amplifier("minecraft:haste").max(amplifier("minecraft:conduit_power"));
         let fatigue = amplifier("minecraft:mining_fatigue");
-        let duration = crate::first_person::swing_duration(
-            crate::first_person::SwingAnimation {
-                kind: 1,
-                duration: base,
-            },
-            dig_speed,
-            fatigue,
-        );
-        self.swing_hand(off_hand, duration);
+        let duration = crate::first_person::swing_duration(animation, dig_speed, fatigue);
+        if self.start_swing(duration) {
+            self.extra.swing_right_arm = Some(!off_hand != self.main_arm_left());
+            self.extra.swing_stab = animation.kind == 2;
+        }
     }
 }
 /// The module implementing a species' behaviour.
@@ -617,6 +619,7 @@ pub fn tick_swing(m: &mut Mob) {
             m.ai.swinging = false;
             m.ai.swing_duration = 0;
             m.extra.swing_right_arm = None;
+            m.extra.swing_stab = false;
         }
     } else {
         m.ai.swing_time = 0;
