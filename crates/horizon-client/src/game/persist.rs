@@ -589,7 +589,11 @@ impl Game<'_> {
     /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
     /// names, once the vehicle is in the world.
     pub(super) fn restore_root_vehicle(&mut self) {
-        if self.riding.is_some() || self.player.is_none() {
+        if self.serving.is_some()
+            || self.options.dedicated.is_some()
+            || self.riding.is_some()
+            || self.player.is_none()
+        {
             return;
         }
         let Some(uuid) = self.pending_vehicle else {

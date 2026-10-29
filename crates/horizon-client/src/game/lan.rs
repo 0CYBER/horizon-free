@@ -1256,7 +1256,14 @@ impl Game<'_> {
             .filter_map(|(i, g)| Some((i, g.saved_vehicle?)))
             .filter(|(i, _)| {
                 let g = &host.hub.guests[*i];
-                g.placed && g.vehicle.is_none() && g.dimension == self.dim.id()
+                let chunk = (
+                    (g.position[0].floor() as i32).div_euclid(16),
+                    (g.position[2].floor() as i32).div_euclid(16),
+                );
+                g.placed
+                    && g.vehicle.is_none()
+                    && g.dimension == self.dim.id()
+                    && g.sent_chunks.contains(&chunk)
             })
             .collect();
         for (i, uuid) in waiting {
@@ -1270,6 +1277,8 @@ impl Game<'_> {
             }
             g.vehicle = Some(id);
             g.saved_vehicle = None;
+            // Pair the stationary restored entities before their passenger packet.
+            g.moved = true;
         }
     }
     /// The file name of a player's advancements and statistics: an
