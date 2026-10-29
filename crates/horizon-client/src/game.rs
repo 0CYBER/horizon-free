@@ -4286,6 +4286,16 @@ impl Game<'_> {
                         xp,
                     );
                 }
+                // TurtleEggBlock.playerDestroy: after the drops, one egg of a
+                // mined stack is taken and the rest stay.
+                self.with_level(|b, level, ticks| {
+                    b.turtle_egg_destroyed_by_player(
+                        level,
+                        ticks,
+                        BlockPos::new(pos[0], pos[1], pos[2]),
+                        broken,
+                    );
+                });
             }
             // IceBlock.playerDestroy: the ice melts back into water (the
             // #prevents_ice_melting tool tag holds only silk touch).

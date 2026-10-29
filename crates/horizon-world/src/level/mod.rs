@@ -685,6 +685,18 @@ impl Behaviours {
         self.sim(level, ticks)
             .ice_destroyed_by_player(pos, destroyed, prevents_melting);
     }
+    /// `TurtleEggBlock.playerDestroy` after the drops: a mined stack of eggs
+    /// loses one egg and the rest stay. `destroyed` is the state that was broken.
+    pub fn turtle_egg_destroyed_by_player<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+    ) {
+        self.sim(level, ticks)
+            .turtle_egg_destroyed_by_player(pos, destroyed);
+    }
     /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
     /// otherwise fire shaped by its neighbours.
     pub fn fire_state_for<L: LevelAccess + ?Sized>(
