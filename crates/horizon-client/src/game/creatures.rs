@@ -1016,7 +1016,17 @@ impl Game<'_> {
                     } else {
                         from_loot(&stack)
                     };
-                    self.spawn_item(item, pos, [0.0, 0.2, 0.0], 10);
+                    // Every death drop is its own ItemEntity, and the drop
+                    // entity's constructor gives it a random horizontal push
+                    // (its motion otherwise stays [0, 0.2, 0] and the drops
+                    // land stacked at the mob's centre).
+                    let r = &mut self.world.random;
+                    let v = [
+                        r.next_double() * 0.2 - 0.1,
+                        0.2,
+                        r.next_double() * 0.2 - 0.1,
+                    ];
+                    self.spawn_item(item, pos, v, 10);
                 }
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
                 drops::Drop::Orb(_) => {}
@@ -1122,7 +1132,15 @@ impl Game<'_> {
                 .loot_table(table, false, None, &mut self.world.random),
         };
         for d in stacks {
-            self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
+            // The ItemEntity constructor's random motion (a gift otherwise
+            // lands where it started).
+            let r = &mut self.world.random;
+            let v = [
+                r.next_double() * 0.2 - 0.1,
+                0.2,
+                r.next_double() * 0.2 - 0.1,
+            ];
+            self.spawn_item(d, at, v, 10);
         }
     }
     /// Adds a projectile, giving it an id from the entity counter
@@ -1449,17 +1467,28 @@ impl Game<'_> {
                         self.apply_setup(id, &setup);
                     }
                 }
-                MobEvent::DropItem { item, count, at } => self.spawn_item(
-                    ItemStack {
-                        item,
-                        count,
-                        damage: 0,
-                        extra: None,
-                    },
-                    at,
-                    [0.0, 0.2, 0.0],
-                    10,
-                ),
+                MobEvent::DropItem { item, count, at } => {
+                    // The ItemEntity constructor's random motion, so
+                    // spawnAtLocation drops (a fox's berries, a panda's held
+                    // food, a goat's horn) land apart.
+                    let r = &mut self.world.random;
+                    let v = [
+                        r.next_double() * 0.2 - 0.1,
+                        0.2,
+                        r.next_double() * 0.2 - 0.1,
+                    ];
+                    self.spawn_item(
+                        ItemStack {
+                            item,
+                            count,
+                            damage: 0,
+                            extra: None,
+                        },
+                        at,
+                        v,
+                        10,
+                    );
+                }
                 MobEvent::DropGift { table, at } => {
                     let stacks =
                         self.res
