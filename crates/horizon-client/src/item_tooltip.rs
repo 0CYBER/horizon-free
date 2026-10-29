@@ -208,7 +208,10 @@ fn is_potion_item(item: &str) -> bool {
 /// The name line of `stack`, as the item's translation or, for potions and
 /// smithing templates, its name component gives it.
 pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) -> String {
-    let path = stack.item.trim_start_matches("minecraft:");
+    let (namespace, path) = stack
+        .item
+        .split_once(':')
+        .unwrap_or(("minecraft", &stack.item));
     if let Some(name) = stack.custom_name() {
         return name.to_owned();
     }
@@ -231,9 +234,12 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     } else {
         None
     };
+    // `Item.getDescriptionId`: `Util.makeDescriptionId("item", id)`, or the
+    // block's for a block item, in the item's own namespace.
+    let id = format!("{namespace}.{}", path.replace('/', "."));
     key.and_then(|k| translate(&k))
-        .or_else(|| translate(&format!("item.minecraft.{path}")))
-        .or_else(|| translate(&format!("block.minecraft.{path}")))
+        .or_else(|| translate(&format!("item.{id}")))
+        .or_else(|| translate(&format!("block.{id}")))
         .unwrap_or_else(|| path.replace('_', " "))
 }
 
@@ -860,6 +866,25 @@ mod tests {
         let plain = ItemStack::new("minecraft:white_banner", 1);
         assert_eq!(name_line(&plain, &translate), "White Banner");
         assert_eq!(rarity(&plain, "common"), "common");
+    }
+
+    #[test]
+    fn name_line_translates_items_of_any_namespace() {
+        let translate = |key: &str| match key {
+            "item.example.ruby" => Some("Ruby".to_owned()),
+            "block.example.ruby_block" => Some("Block of Ruby".to_owned()),
+            "item.example.tools.chisel" => Some("Chisel".to_owned()),
+            "item.minecraft.diamond" => Some("Diamond".to_owned()),
+            _ => None,
+        };
+        let name = |id: &str| name_line(&ItemStack::new(id, 1), &translate);
+        // `Util.makeDescriptionId`: the item's own namespace, `/` as `.`.
+        assert_eq!(name("example:ruby"), "Ruby");
+        assert_eq!(name("example:ruby_block"), "Block of Ruby");
+        assert_eq!(name("example:tools/chisel"), "Chisel");
+        assert_eq!(name("minecraft:diamond"), "Diamond");
+        // No translation: the path, as the creative names fall back to.
+        assert_eq!(name("example:raw_ruby"), "raw ruby");
     }
 
     #[test]
