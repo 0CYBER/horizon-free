@@ -34,9 +34,9 @@ class ReadmeTests(unittest.TestCase):
                 "## Project status\n\nThe table.\n")
         once = pg.rewrite(text, pg.block(lists(7)), 7)
         self.assertIn("player--visible%20gaps-7%20open-", once)
-        self.assertIn("## Project status\n\n" + pg.START, once)
+        self.assertIn("## Project status\n\n**Player-visible gaps: 7 open**", once)
         twice = pg.rewrite(once, pg.block(lists(3)), 3)
-        self.assertEqual(twice.count(pg.START), 1)
+        self.assertEqual(twice.count("**Player-visible gaps:"), 1)
         self.assertIn("player--visible%20gaps-3%20open-", twice)
         self.assertEqual(pg.written(twice)[0], 3)
 
@@ -49,7 +49,8 @@ class ReadmeTests(unittest.TestCase):
         self.assertIsNotNone(badge, "the README's gap badge is missing")
         self.assertEqual(int(badge.group(2)), total, "the gap badge must match the block")
         status = text.split("## Project status", 1)[1]
-        self.assertTrue(status.lstrip().startswith(pg.START), "the gaps come first under Project status")
+        self.assertTrue(status.lstrip().startswith("**Player-visible gaps:"), "the gaps come first under Project status")
+        self.assertNotIn("<!--", status.split("###", 1)[0], "the website prints HTML comments of this intro")
         self.assertTrue(re.search(r"^### Java parity: \d+%$", status, re.M), "the site still reads this heading")
 
 

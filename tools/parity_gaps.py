@@ -24,7 +24,8 @@ README = ROOT / "README.md"
 REPO = "horizon-rust/horizon"
 # The gap lists, one per area, filed from the port ledger on 2026-10-28 (#3859 step 5).
 ISSUES = list(range(3512, 3522))
-START, END = "<!-- parity-gaps: tools/parity_gaps.py writes this block -->", "<!-- /parity-gaps -->"
+# The block is one paragraph, found by its first words: no HTML comment markers, which the website would print.
+LINE = re.compile(r"^\*\*Player-visible gaps: (\d+) open\*\*.*$", re.M)
 BADGE = re.compile(r"(https://img\.shields\.io/badge/player--visible%20gaps-)(\d+)(%20open-)")
 OPEN_ROW = re.compile(r"^\s*[-*] \[ \] ", re.M)
 DONE_ROW = re.compile(r"^\s*[-*] \[[xX]\] ", re.M)
@@ -60,29 +61,24 @@ def block(lists: list[dict]) -> str:
     total = still + sum(l["closed"] for l in lists)
     parts = "; ".join(f"{l['area']} [{l['open']}](https://github.com/{REPO}/issues/{l['number']})"
                       for l in sorted(lists, key=lambda l: -l["open"]))
-    return "\n".join([
-        START,
-        f"**Player-visible gaps: {still} open** of the {total} the [port ledger](tools/port_ledger.py) found, "
-        "reading every vanilla 26.3 method against Horizon's code: vanilla behaviour a player would notice that "
-        f"Horizon doesn't have yet. By area: {parts}. This number goes down as gaps close; the harness results "
-        "below say that what is tested matches.",
-        END,
-    ])
+    return (f"**Player-visible gaps: {still} open** of the {total} the [port ledger](tools/port_ledger.py) found, "
+            "reading every vanilla 26.3 method against Horizon's code: vanilla behaviour a player would notice that "
+            f"Horizon doesn't have yet. By area: {parts}. This number goes down as gaps close "
+            "(`tools/parity_gaps.py`); the harness results below say that what is tested matches.")
 
 
 def written(text: str) -> tuple[int, list[int]] | None:
     """(the open total, each area's number) of the README's block, or None without one."""
-    m = re.search(re.escape(START) + r"\n(.*?)\n" + re.escape(END), text, re.S)
+    m = LINE.search(text)
     if not m:
         return None
-    total = re.search(r"\*\*Player-visible gaps: (\d+) open\*\*", m.group(1))
-    counts = [int(x) for x in re.findall(r" \[(\d+)\]\(https://github\.com/[^)]+/issues/\d+\)", m.group(1))]
-    return (int(total.group(1)) if total else -1), counts
+    counts = [int(x) for x in re.findall(r" \[(\d+)\]\(https://github\.com/[^)]+/issues/\d+\)", m.group(0))]
+    return int(m.group(1)), counts
 
 
 def rewrite(text: str, new_block: str, still: int) -> str:
-    if START in text:
-        text = re.sub(re.escape(START) + r".*?" + re.escape(END), lambda _: new_block, text, flags=re.S)
+    if LINE.search(text):
+        text = LINE.sub(lambda _: new_block, text, count=1)
     else:
         text = text.replace("## Project status\n\n", f"## Project status\n\n{new_block}\n\n", 1)
     if BADGE.search(text):
