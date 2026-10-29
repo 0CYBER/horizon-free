@@ -68,6 +68,36 @@ impl AttackStrength {
     }
 }
 
+/// `Player.attack`'s extra knockback from the weapon's knockback enchantment
+/// (`getKnockback`, halved) and a sprinting full-strength hit (0.5), and
+/// whether the hit is that sprinting knockback attack.
+pub fn extra_knockback(enchanted: f32, strength: f32, sprinting: bool) -> (f32, bool) {
+    let knockback_attack = strength > 0.9 && sprinting;
+    let bonus = if knockback_attack { 0.5 } else { 0.0 };
+    (enchanted / 2.0 + bonus, knockback_attack)
+}
+
+/// What the attacking client's own `Player.attack` does to itself on a hit
+/// at another player, whose `RemotePlayer.hurtClient` lets the hit through:
+/// whether `causeExtraKnockback` cuts its horizontal speed to 0.6 and stops
+/// its sprint. `attack_damage` is the ATTACK_DAMAGE value before clamping
+/// (the hand and weapon plus strength and weakness, or a riptide spin's),
+/// `enchant_damage` the weapon's enchantment damage, `strength`
+/// `getAttackStrengthScale(0.5)` and `knockback` from [`extra_knockback`].
+pub fn attacker_slows_after_hit(
+    attack_damage: f32,
+    enchant_damage: f32,
+    strength: f32,
+    knockback: f32,
+) -> bool {
+    // The attribute's range is [0, 2048]: weakness can't make it negative.
+    let base = attack_damage.clamp(0.0, 2048.0) * (0.2 + strength * strength * 0.8);
+    let enchant = enchant_damage * strength;
+    // Player.attack stops before the hurt and the knockback when neither
+    // part of the damage is left.
+    (base > 0.0 || enchant > 0.0) && knockback > 0.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +136,53 @@ mod tests {
         s.tick(held("minecraft:diamond_sword", ""));
         s.reset_attack();
         assert_eq!((s.ticker, s.swap_ticker), (0, 1));
+    }
+    /// The attacker's side of a hit on another player, as the client sees it.
+    fn slows(damage: f32, enchant: f32, strength: f32, sprinting: bool, kb_enchant: f32) -> bool {
+        let (knockback, _) = extra_knockback(kb_enchant, strength, sprinting);
+        attacker_slows_after_hit(damage, enchant, strength, knockback)
+    }
+    #[test]
+    fn a_charged_sprint_hit_slows_the_attacker() {
+        // A diamond sword (1 + 6), full strength, sprinting.
+        assert!(slows(7.0, 0.0, 1.0, true, 0.0));
+        assert_eq!(extra_knockback(0.0, 1.0, true), (0.5, true));
+    }
+    #[test]
+    fn an_uncharged_sprint_hit_does_not() {
+        assert!(!slows(7.0, 0.0, 0.5, true, 0.0));
+        assert!(
+            !slows(7.0, 0.0, 0.9, true, 0.0),
+            "the bonus needs more than 0.9"
+        );
+    }
+    #[test]
+    fn a_hit_without_sprinting_or_knockback_does_not() {
+        assert!(!slows(7.0, 0.0, 1.0, false, 0.0));
+    }
+    #[test]
+    fn a_knockback_weapon_slows_even_uncharged() {
+        // Knockback I: getKnockback 1, halved; no sprint needed.
+        assert!(slows(7.0, 0.0, 0.2, false, 1.0));
+    }
+    #[test]
+    fn a_hit_that_does_no_damage_stops_first() {
+        // An empty hand (1) under Weakness I (-4): the attribute clamps to 0,
+        // so Player.attack ends before causeExtraKnockback.
+        assert!(!slows(1.0 - 4.0, 0.0, 1.0, true, 0.0));
+        assert!(!slows(0.0, 0.0, 1.0, true, 1.0));
+        // Enchantment damage alone still lands the hit.
+        assert!(slows(0.0, 1.25, 1.0, true, 0.0));
+    }
+    #[test]
+    fn a_server_attack_speed_charges_at_once() {
+        // 1.8-style servers raise ATTACK_SPEED: with 1024 the delay is under
+        // a tick, so getAttackStrengthScale(0.5) is full right after a hit.
+        let mut s = AttackStrength::default();
+        s.reset_attack();
+        assert_eq!(s.scale(0.5, 1024.0), 1.0);
+        assert!(slows(7.0, 0.0, s.scale(0.5, 1024.0), true, 0.0));
+        // A sword's own 1.6 leaves it uncharged.
+        assert!(!slows(7.0, 0.0, s.scale(0.5, 1.6), true, 0.0));
     }
 }

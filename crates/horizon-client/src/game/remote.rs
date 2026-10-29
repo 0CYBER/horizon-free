@@ -5463,8 +5463,20 @@ impl Game<'_> {
             })
             .unwrap_or_else(|| self.main_hand_attack_speed());
         let scale = self.hand_strength.scale(0.5, speed);
+        // Player.attack's damage, in its order: the ATTACK_DAMAGE value (or a
+        // riptide spin's), the enchantment damage, then the knockback.
+        let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
+        let damage = if spin > 0.0 {
+            spin
+        } else {
+            1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage)
+                + self.effect_attack_bonus()
+        };
+        let enchant = self.enchant_damage_bonus("minecraft:player");
         let (knockback, _) = self.extra_knockback("minecraft:player", scale);
-        if knockback <= 0.0 {
+        if !horizon_client::attack_strength::attacker_slows_after_hit(
+            damage, enchant, scale, knockback,
+        ) {
             return;
         }
         if let Some(p) = self.player.as_mut() {
