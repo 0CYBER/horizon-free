@@ -192,5 +192,13 @@
   "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version} (Java Edition). Za pierwszym razem Graj pobiera go od Mojang dla Twojego konta, razem z potrzebną Javą.",
   "Move to Trash": "Przenieś do kosza",
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Przenieść {name} do kosza razem z jego światami i ustawieniami? Możesz go stamtąd przywrócić.",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Mody natywne kompilują się we własną wersję gry. Zainstalowanie jednego włącza mody natywne: potem budujesz z nim grę w Ustawienia > Mody natywne. Pierwsza kompilacja pobiera Rust i może potrwać od 20 do 30 minut; kolejne są szybsze."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Mody natywne kompilują się we własną wersję gry. Zainstalowanie jednego włącza mody natywne: potem budujesz z nim grę w Ustawienia > Mody natywne. Pierwsza kompilacja pobiera Rust i może potrwać od 20 do 30 minut; kolejne są szybsze.",
+  "Applying the mixins": "Nakładanie mixinów",
+  "Building horizon-mixins (once)": "Budowanie horizon-mixins (jednorazowo)",
+  "Checking the mods' crates against Horizon's Cargo.lock": "Sprawdzanie skrzynek (crates) modów z Cargo.lock Horizon",
+  "Compiling the game: {count} crates, now {name}": "Kompilowanie gry: {count} skrzynek, teraz {name}",
+  "Downloading Horizon's source at {revision}": "Pobieranie kodu źródłowego Horizon w wersji {revision}",
+  "Downloading Rust {version} (once): {done}%": "Pobieranie Rust {version} (jednorazowo): {done}%",
+  "Installing the build": "Instalowanie kompilacji",
+  "Running {name}'s post-build step": "Uruchamianie kroku po kompilacji moda {name}"
 }
