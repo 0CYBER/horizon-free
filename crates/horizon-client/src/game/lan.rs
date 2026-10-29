@@ -1410,7 +1410,8 @@ impl Game<'_> {
                 crouching: p.pose == horizon_client::pose::Pose::Crouching,
                 spin_attack: p.auto_spin_attack_ticks > 0,
                 on_fire: p.fire_ticks > 0,
-                invisible: self.potions.effects.get("invisibility").is_some(),
+                // ServerPlayer.updateInvisibilityStatus: a spectator is always invisible.
+                invisible: self.potions.effects.get("invisibility").is_some() || self.spectator(),
                 glowing: self.potions.effects.get("glowing").is_some(),
             },
         })
