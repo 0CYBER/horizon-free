@@ -4148,13 +4148,7 @@ impl Game<'_> {
             hardness != 0.0
         };
         if wears && per_block > 0 && max > 0 {
-            let loss = self.wear(&stack, per_block);
-            if let Some(held) = self.inventory[self.selected].as_mut() {
-                held.damage += loss;
-                if held.damage >= max {
-                    self.inventory[self.selected] = None;
-                }
-            }
+            self.damage_held(per_block);
         }
         self.stats.add("used", &stack.item, 1);
     }
@@ -10236,7 +10230,7 @@ impl Game<'_> {
             self.post_block_game_event("minecraft:block_change", at, None, Some(new));
         }
     }
-    fn damage_held(&mut self, amount: u32) {
+    pub(super) fn damage_held(&mut self, amount: u32) {
         if self.creative {
             return;
         }
