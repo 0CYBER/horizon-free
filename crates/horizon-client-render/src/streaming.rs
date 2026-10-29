@@ -21,6 +21,10 @@ use std::{
     thread,
 };
 
+/// How long a worker waits with nothing to do before it gives back its
+/// generator's scratch buffers ([`ChunkGenerator::idle`]).
+pub const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A chunk under generation, opaque to the streamer.
 pub type Proto = Box<dyn std::any::Any + Send>;
 /// Chunk generation in vanilla's stages: a neighbour-independent proto chunk
@@ -57,6 +61,9 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// What a loaded chunk needs from the generator before the game uses it,
     /// on the worker that loaded it.
     fn prepare_loaded(&self, _worker: &mut Self::Worker, _chunk: &Chunk) {}
+    /// The worker has had nothing to do for [`IDLE_RELEASE`]: give back what
+    /// it keeps between jobs only to go faster.
+    fn idle(&self, _worker: &mut Self::Worker) {}
     fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto;
     fn decorates(&self) -> bool {
         false
@@ -534,6 +541,7 @@ impl Streaming {
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
+                                let mut released = false;
                                 loop {
                                     if shared.stop.load(Ordering::Relaxed) {
                                         return;
@@ -541,7 +549,23 @@ impl Streaming {
                                     if let Some(job) = queue.pop() {
                                         break job.job;
                                     }
-                                    queue = shared.ready.wait(queue).unwrap();
+                                    if released {
+                                        queue = shared.ready.wait(queue).unwrap();
+                                        continue;
+                                    }
+                                    let (woken, wait) =
+                                        shared.ready.wait_timeout(queue, IDLE_RELEASE).unwrap();
+                                    queue = woken;
+                                    if wait.timed_out() && queue.is_empty() {
+                                        // A server nobody is on, a client standing still:
+                                        // free the generator's buffers (and the mesher's
+                                        // face cache) until the next job needs them.
+                                        drop(queue);
+                                        generator.idle(&mut worker);
+                                        faces = None;
+                                        released = true;
+                                        queue = shared.queue.lock().unwrap();
+                                    }
                                 }
                             };
                             let done = match job {
