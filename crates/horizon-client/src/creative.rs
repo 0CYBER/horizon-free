@@ -1274,6 +1274,7 @@ mod tests {
             column,
             search: false,
             inventory: false,
+            hotbar: false,
         };
         // Top row, second column: the button spans x 27..53, y -28..4.
         let t = tab(true, 1);
