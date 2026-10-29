@@ -5977,8 +5977,9 @@ fn flush_display_log() {
 ///
 /// KWin maps content's reference white (203 nits in PQ, BT.2408) onto its own, so the
 /// desktop's white is 203 there and the peak is the target's maximum over that ratio.
-/// Checked on KWin; other compositors with `wp_color_management_v1` (Mutter, wlroots)
-/// are assumed to map it the same way. The peak is kept within the settings' lowest and
+/// Checked on KWin. Hyprland (0.57) reports the standard 203, and shows HDR windows below
+/// the SDR white of its desktop (which it doesn't report), so Auto can't match its desktop
+/// there. Other compositors are unchecked. The peak is kept within the settings' lowest and
 /// PQ's top, so the metadata never ends below the black level.
 #[cfg(target_os = "linux")]
 fn reported(l: horizon_hdr::wayland::Luminances) -> crate::graphics::Reported {
