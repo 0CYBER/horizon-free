@@ -2399,12 +2399,17 @@ impl Game<'_> {
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
-        if self.carried.is_some() {
-            return;
-        }
         let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
             return;
         };
+        // The recipe book's tooltip is drawn after the slot's own, so a ghost wins.
+        if let Some(ghost) = self.ghost_stack(slot) {
+            self.draw_stack_tooltip(batch, &ghost, self.cursor.0, self.cursor.1);
+            return;
+        }
+        if self.carried.is_some() {
+            return;
+        }
         let stack = self.slot_view(slot);
         if let Some(stack) = stack {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
