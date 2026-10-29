@@ -1045,8 +1045,8 @@ impl Mob {
         } else {
             y -= self.gravity();
         }
-        // LivingEntity.shouldDiscardFriction (a breeze's long jump).
-        if super::breeze::discards_friction(self) {
+        // LivingEntity.shouldDiscardFriction (a breeze's or a frog's long jump).
+        if super::breeze::discards_friction(self) || self.extra.frog.discard_friction {
             self.velocity = Vec3::new(movement.x, y, movement.z);
             return;
         }
@@ -1069,7 +1069,11 @@ impl Mob {
         let old_y = self.position.y;
         let gravity = self.gravity();
         if self.fluids.in_water {
-            let mut slow = self.kind.water_slowdown;
+            let mut slow = if self.extra.sprinting {
+                0.9
+            } else {
+                self.kind.water_slowdown
+            };
             let mut speed = 0.02f32;
             let mut efficiency = self.kind.water_efficiency as f32;
             if !self.on_ground {
@@ -1090,7 +1094,7 @@ impl Mob {
                 m.y * f64::from(0.8_f32),
                 m.z * f64::from(slow),
             );
-            self.velocity = fluid_falling(gravity, falling, m);
+            self.velocity = fluid_falling(gravity, falling, self.extra.sprinting, m);
         } else {
             self.move_relative(0.02, input);
             self.do_move(w, events);
@@ -1100,7 +1104,8 @@ impl Mob {
                     self.velocity.y * f64::from(0.8_f32),
                     self.velocity.z * 0.5,
                 );
-                self.velocity = fluid_falling(gravity, falling, self.velocity);
+                self.velocity =
+                    fluid_falling(gravity, falling, self.extra.sprinting, self.velocity);
             } else {
                 self.velocity = Vec3::new(
                     self.velocity.x * 0.5,
@@ -1200,6 +1205,12 @@ impl Mob {
         let power = self.jump_power();
         if power > 1.0e-5 {
             self.velocity.y = f64::from(power).max(self.velocity.y);
+            // A sprint jump (a dashing cat or ocelot) adds 0.2 along its yaw.
+            if self.extra.sprinting {
+                let angle = f64::from(self.yaw * trig::DEG_TO_RAD);
+                self.velocity.x += f64::from(-trig::sin(angle)) * 0.2;
+                self.velocity.z += f64::from(trig::cos(angle)) * 0.2;
+            }
         }
     }
     pub fn jump_power(&self) -> f32 {
@@ -1231,8 +1242,8 @@ impl Mob {
     }
 }
 /// LivingEntity.getFluidFallingAdjustedMovement.
-fn fluid_falling(gravity: f64, falling: bool, m: Vec3) -> Vec3 {
-    if gravity != 0.0 {
+fn fluid_falling(gravity: f64, falling: bool, sprinting: bool, m: Vec3) -> Vec3 {
+    if gravity != 0.0 && !sprinting {
         let y = if falling && (m.y - 0.005).abs() >= 0.003 && (m.y - gravity / 16.0).abs() < 0.003 {
             -0.003
         } else {

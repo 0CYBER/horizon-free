@@ -690,6 +690,22 @@ fn network_stack(
             ));
         }
         stack.added.extend(firework_components(d));
+        // A goat horn's instrument, by its `minecraft:instrument` id.
+        if let Some(id) = d
+            .other("minecraft:instrument")
+            .and_then(|t| crate::save::text(Some(t)))
+            .and_then(|name| {
+                synced_id(
+                    "minecraft:instrument",
+                    &horizon_world::datafix::dynamic::namespaced(&name),
+                )
+            })
+        {
+            stack.added.push((
+                horizon_protocol::item::component::INSTRUMENT,
+                horizon_protocol::item::Component::Instrument(id),
+            ));
+        }
         // The compass's lodestone target.
         if let Some(t) = d.other("minecraft:lodestone_tracker") {
             let target = t.get("target").and_then(|g| {
@@ -846,6 +862,24 @@ mod tests {
         chestplate.data_mut().trim = Some(("minecraft:x".into(), "coast".into()));
         let stack = stack_to_network(|_| 7, synced_id, &Some(chestplate)).unwrap();
         assert_eq!(stack.component(component::TRIM), None);
+    }
+
+    #[test]
+    fn goat_horns_send_their_instrument_by_registry_id() {
+        let mut horn = ItemStack::new("minecraft:goat_horn", 1);
+        horn.data_mut().other.push((
+            "minecraft:instrument".into(),
+            horizon_world::nbt::Tag::String("minecraft:sing_goat_horn".into()),
+        ));
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:instrument", "minecraft:sing_goat_horn") => Some(1),
+            _ => None,
+        };
+        let stack = stack_to_network(|_| 7, synced_id, &Some(horn)).unwrap();
+        assert_eq!(
+            stack.component(component::INSTRUMENT),
+            Some(&Component::Instrument(1))
+        );
     }
 
     fn guest_at(position: [f64; 3]) -> Guest {
