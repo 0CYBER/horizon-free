@@ -173,7 +173,9 @@ pub(super) struct GuestSwap {
     /// The guest's own damage record, in place while they act.
     combat: super::combat::CombatTracker,
     /// The guest whose turn this one nests in, if any.
-    acting: (Option<u32>, Option<String>, Option<u128>),
+    acting: (Option<u32>, Option<String>, Option<u128>, Option<u8>),
+    /// That turn's `known_movement`.
+    known_movement: Vec3,
     /// The packets queued for that guest.
     packets: Vec<play::Clientbound>,
     /// The entity events queued for that guest.
@@ -401,10 +403,13 @@ impl Game<'_> {
         let levitation = std::mem::replace(&mut self.adv.levitation, play.levitation);
         let marks = std::mem::replace(&mut self.adv.marks, std::mem::take(&mut play.marks));
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
+        let [x, y, z] = g.known_movement;
+        let known_movement = std::mem::replace(&mut self.known_movement, Vec3::new(x, y, z));
         let acting = (
             self.lan_acting.replace(conn),
             self.lan_acting_name.replace(g.name.clone()),
             self.lan_acting_uuid.replace(g.uuid),
+            self.lan_acting_permission.replace(g.permission),
         );
         let packets = std::mem::take(&mut self.guest_packets);
         let entity_events = std::mem::take(&mut self.guest_entity_events);
@@ -475,6 +480,7 @@ impl Game<'_> {
             marks,
             death_cause,
             acting,
+            known_movement,
             packets,
             entity_events,
             swings,
@@ -537,6 +543,7 @@ impl Game<'_> {
             death_cause,
             combat,
             acting,
+            known_movement,
             packets,
             entity_events,
             swings,
@@ -581,7 +588,13 @@ impl Game<'_> {
                 }),
             );
         }
-        (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
+        (
+            self.lan_acting,
+            self.lan_acting_name,
+            self.lan_acting_uuid,
+            self.lan_acting_permission,
+        ) = acting;
+        self.known_movement = known_movement;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
         // An ender chest the guest opened: the menu shows their inventory
         // itself (lan_open_container), not a stand-in block entity.
@@ -626,7 +639,9 @@ impl Game<'_> {
             }) => Some(key),
             _ => None,
         };
-        self.command_block_screen = host_command_block;
+        // A command block the guest's use opened (Player.openCommandBlock).
+        let guest_command_block =
+            std::mem::replace(&mut self.command_block_screen, host_command_block).map(|s| s.pos());
         // A mount inventory the guest's action opened (shift + use, or the
         // inventory key while riding).
         let guest_mount = std::mem::replace(&mut self.mount_menu, host_mount_menu).opened_mob();
@@ -675,9 +690,7 @@ impl Game<'_> {
         let new_mode = self.mode_id();
         self.mode = mode;
         self.creative = creative;
-        self.selected = std::mem::replace(&mut g.selected, selected);
-        // `g.selected` now holds the host's value: swap the inventories back.
-        std::mem::swap(&mut self.selected, &mut g.selected);
+        g.selected = std::mem::replace(&mut self.selected, selected);
         std::mem::swap(&mut self.inventory, &mut g.inventory);
         std::mem::swap(&mut self.armor, &mut g.armor);
         std::mem::swap(&mut self.offhand, &mut g.offhand);
@@ -738,7 +751,8 @@ impl Game<'_> {
             // LivingEntity.startSleeping: in the bed, still.
             let at = [
                 f64::from(head[0]) + 0.5,
-                f64::from(head[1]) + 0.5625,
+                // setPosToBed: the bed's top (getSleepHeight) and 0.125 above it.
+                f64::from(head[1]) + 0.5625 + 0.125,
                 f64::from(head[2]) + 0.5,
             ];
             g.position = at;
@@ -778,6 +792,9 @@ impl Game<'_> {
         }
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
+        }
+        if let Some(pos) = guest_command_block {
+            self.lan_open_command_block(host, conn, pos);
         }
         if let Some(pos) = opened_table {
             self.lan_open_crafting(host, conn, pos);
@@ -891,6 +908,12 @@ impl Game<'_> {
             .and_then(|g| slots.read(&self.world, g))
         else {
             return false;
+        };
+        // The block entity's createMenu: a shulker box opens a ShulkerBoxMenu
+        // (not a 9x3 ChestMenu), whose slots refuse shulker boxes.
+        let menu = match slots {
+            Slots::Block(_) => horizon_client::containers::block_menu_type(name).unwrap_or(menu),
+            _ => menu,
         };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
@@ -1241,14 +1264,7 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let g = &mut host.hub.guests[gi];
                 (g.yaw, g.pitch) = (p.yaw, p.pitch);
-                // ServerPlayer.getKnownMovement: the move their client just sent,
-                // which a throw adds to the projectile.
-                let movement = g
-                    .moves
-                    .last()
-                    .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
                 let swung = self.as_guest(host, conn, |g| {
-                    g.known_movement = movement;
                     g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
@@ -1775,14 +1791,8 @@ impl Game<'_> {
             return;
         };
         let at = g.position;
-        // ServerPlayer.getKnownMovement: the move their client just sent.
-        let movement = g
-            .moves
-            .last()
-            .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
         let sound = self
             .guest_hit_by(host, conn, |g| {
-                g.known_movement = movement;
                 if g.cannot_attack_with_item(g.attack_ticks as i32, 5) {
                     None
                 } else {
@@ -1890,10 +1900,6 @@ impl Game<'_> {
                     overlay: false,
                 }),
             );
-            return;
-        }
-        // A server mod's command, for every player whatever their level.
-        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
             return;
         }
         // An integrated server runs every player's commands at their own
@@ -2236,13 +2242,7 @@ impl Game<'_> {
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
             if digging.is_some() || using || delayed {
-                // ServerPlayer.getKnownMovement: the move their client just sent.
-                let movement = host.hub.guests[gi]
-                    .moves
-                    .last()
-                    .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
                 self.as_guest(host, conn, |g| {
-                    g.known_movement = movement;
                     g.attack_ticks = g.attack_ticks.saturating_add(1);
                     if let Some((pos, face)) = digging {
                         g.forced_hit = Some(Hit {

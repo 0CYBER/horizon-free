@@ -326,10 +326,12 @@ fn mob_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, swimming 0x10 (a drowned
-    // under water, `Drowned.setSwimming`), invisible 0x20 (the effect's flag)
-    // and glowing 0x40 (LivingEntity.updateGlowingStatus).
+    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, sprinting 0x08 (a dashing
+    // cat or ocelot), swimming 0x10 (a drowned under water,
+    // `Drowned.setSwimming`), invisible 0x20 (the effect's flag) and glowing
+    // 0x40 (LivingEntity.updateGlowingStatus).
     let shared = i8::from(m.is_on_fire())
+        | i8::from(m.extra.sprinting) << 3
         | i8::from(m.species() == Species::Drowned && m.extra.flag) << 4
         | i8::from(m.invisible || horizon_client::mobs::trader::is_invisible(m)) << 5
         | i8::from(m.is_currently_glowing()) << 6;
@@ -519,6 +521,11 @@ fn mob_meta(
             defaults.push((collar, serializer::INT, Value::Int(red)));
             // Wolf.DATA_ANGER_END_TIME: the game time the anger ends, -1 when calm.
             if kind == "minecraft:wolf" {
+                // Wolf.DATA_INTERESTED_ID: BegGoal's flag, the head tilt.
+                if e.flag {
+                    meta.push((20, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                defaults.push((20, serializer::BOOLEAN, Value::Bool(false)));
                 if e.anger > 0 {
                     let end = game_time + i64::from(e.anger);
                     meta.push((22, serializer::LONG, Value::Long(end)));
@@ -1606,9 +1613,7 @@ impl Game<'_> {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
                     }
-                    HostEvent::PlayerChat { sender, text } => {
-                        self.mod_player_chat(super::server_mods::Who::Uuid(sender), &text);
-                    }
+                    HostEvent::PlayerChat { .. } => {}
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
                         if self.options.dedicated.is_some()
@@ -2160,11 +2165,8 @@ impl Game<'_> {
                 .motion
                 .as_ref()
                 .map_or(0, |p| p.health.hurt_animation_time);
-            m.extra.main_hand = g
-                .inventory
-                .get(g.selected)
-                .and_then(|s| s.as_ref())
-                .map(|s| s.item.clone());
+            m.extra
+                .set_main_hand_stack(g.inventory.get(g.selected).cloned().flatten());
             m.extra.off_hand = g.offhand.as_ref().map(|s| s.item.clone());
             [m.extra.head, m.extra.chest, m.extra.legs, m.extra.feet] = g
                 .armor
@@ -2293,6 +2295,14 @@ impl Game<'_> {
             );
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.held_item_geometry(m, camera, alpha, packed, true, out);
+            self.player_pumpkin_geometry(
+                m,
+                host.hub.guest(*conn).and_then(|g| g.armor[0].as_ref()),
+                camera,
+                alpha,
+                packed,
+                out,
+            );
             // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
             let guest = host.hub.guest(*conn);
             if m.glowing || guest.is_some_and(|g| g.effects.get("glowing").is_some()) {

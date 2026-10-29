@@ -201,6 +201,15 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "GhastShoot" => "GhastShootFireballGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
         "RandomStroll" => "RandomStrollGoal",
+        // AbstractFish's private subclass of RandomSwimmingGoal.
+        "RandomSwimming"
+            if matches!(
+                m.species(),
+                Species::Cod | Species::Salmon | Species::TropicalFish | Species::Pufferfish
+            ) =>
+        {
+            "FishSwimGoal"
+        }
         "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",
         "RandomLookAround" => "RandomLookAroundGoal",
@@ -237,6 +246,8 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "FreezeWhenLookedAt" => "EndermanFreezeWhenLookedAt",
         "LookForPlayer" => "EndermanLookForPlayerGoal",
         "HealRaiders" => "NearestHealableRaiderTargetGoal",
+        "MountPanic" => "MountPanicGoal",
+        "LlamaHurtBy" => "LlamaHurtByTargetGoal",
         other => return other.to_owned(),
     };
     vanilla.to_owned()
