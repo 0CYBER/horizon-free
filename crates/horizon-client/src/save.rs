@@ -1727,7 +1727,7 @@ fn compress_records(
     let compress = |record: &Record| {
         record
             .tag()
-            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
+            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::saved()))
             .transpose()
     };
     let helpers = std::thread::available_parallelism()
@@ -1844,7 +1844,7 @@ fn read_region_record(
         .map_err(|_| "region file poisoned")?
         .read(ChunkPos::new(x, z))?;
     Ok(match record {
-        Some(r) => Some(r.nbt(Limits::default())?),
+        Some(r) => Some(r.nbt(Limits::saved())?),
         None => None,
     })
 }
@@ -2275,11 +2275,51 @@ impl Drop for SaveDir {
 
 pub fn read_dat(path: &Path) -> Option<Tag> {
     let bytes = fs::read(path).ok()?;
-    let raw = match Compression::Gzip.decode(&bytes, 64 << 20) {
+    let raw = match Compression::Gzip.decode(&bytes, Limits::saved().max_bytes) {
         Ok(raw) => raw,
         Err(_) => bytes,
     };
-    Some(nbt::read_named(&raw, Limits::default()).ok()?.0.tag)
+    Some(nbt::read_named(&raw, Limits::saved()).ok()?.0.tag)
+}
+/// `FileNameDateFormatter`: the time in the names of backed-up unreadable files.
+fn backup_stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+}
+/// `LevelStorageSource.readLevelDataTagFixed`: level.dat, else level.dat_old.
+fn read_level_dat(dir: &Path) -> Option<Tag> {
+    read_dat(&dir.join("level.dat")).or_else(|| read_dat(&dir.join("level.dat_old")))
+}
+/// `restoreLevelDataFromOld`: an unreadable level.dat is kept as
+/// `level.dat_corrupted_<time>` and level.dat_old takes its place, so the next
+/// write does not bury either file.
+fn restore_level_dat(dir: &Path) {
+    let path = dir.join("level.dat");
+    if read_dat(&path).is_some() {
+        return;
+    }
+    if path.exists() {
+        let _ = fs::rename(
+            &path,
+            dir.join(format!("level.dat_corrupted_{}", backup_stamp())),
+        );
+    }
+    let old = dir.join("level.dat_old");
+    if read_dat(&old).is_some() {
+        let _ = fs::rename(old, path);
+    }
+}
+/// `PlayerDataStorage.backup`: a player file that fails to load is copied to
+/// `<uuid>_corrupted_<time>.dat` before it is written over.
+fn back_up_unreadable_player(path: &Path) {
+    if path.is_file()
+        && read_dat(path).is_none()
+        && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+    {
+        let _ = fs::copy(
+            path,
+            path.with_file_name(format!("{stem}_corrupted_{}.dat", backup_stamp())),
+        );
+    }
 }
 /// Write a gzip NBT file the way vanilla does (`<name>_new`, keep `_old`).
 pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
@@ -2291,7 +2331,7 @@ pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
             name: "".into(),
             tag,
         },
-        Limits::default(),
+        Limits::saved(),
     )
     .map_err(|e| e.to_string())?;
     let compressed = Compression::Gzip.encode(&bytes)?;
@@ -2647,6 +2687,9 @@ pub struct Level {
     /// The game mode id (0 survival, 1 creative, 2 adventure, 3 spectator);
     /// `creative` wins when the two disagree.
     pub game_mode: i32,
+    /// `previousPlayerGameType`: the mode the player left last (the F3+F4 switcher's
+    /// return mode), when it has one.
+    pub previous_game_mode: Option<i32>,
     pub time: i64,
     pub day_time: i64,
     /// Where the player respawns when it has no bed or anchor: its forced
@@ -2755,7 +2798,7 @@ impl Level {
         }
     }
     pub fn read(dir: &Path) -> Option<Self> {
-        let root = read_dat(&dir.join("level.dat"))?;
+        let root = read_level_dat(dir)?;
         let data = root.get("Data")?;
         let n = |t: Option<&Tag>| number(t).unwrap_or(0);
         let mut level = Self {
@@ -2843,7 +2886,12 @@ impl Level {
         // file of a server world, or the legacy Data.Player.
         let uuid = uuid_from_tag(data.get("singleplayer_uuid"));
         let player_dir = dir.join("players").join("data");
-        let owner = uuid.and_then(|u| read_dat(&player_dir.join(format!("{}.dat", uuid_text(u)))));
+        // PlayerDataStorage.load: the player's file, else its .dat_old.
+        let owner = uuid.and_then(|u| {
+            let name = uuid_text(u);
+            read_dat(&player_dir.join(format!("{name}.dat")))
+                .or_else(|| read_dat(&player_dir.join(format!("{name}.dat_old"))))
+        });
         let player = owner
             .or_else(|| {
                 fs::read_dir(&player_dir)
@@ -2901,6 +2949,7 @@ impl Level {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
         }
+        self.previous_game_mode = n("previousPlayerGameType").map(|m| m as i32);
         self.flying = p
             .get("abilities")
             .and_then(|a| number(a.get("flying")))
@@ -2998,6 +3047,7 @@ impl Level {
                 "respawn",
                 "recipeBook",
                 "LastDeathLocation",
+                "previousPlayerGameType",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -3166,6 +3216,10 @@ impl Level {
                 ));
             }
         }
+        // ServerPlayer.storeGameTypes: storeNullable, so absent without one.
+        if let Some(mode) = self.previous_game_mode {
+            entries.push(("previousPlayerGameType", Tag::Int(mode)));
+        }
         for (key, value) in entries {
             put(&mut p, key, value);
         }
@@ -3191,6 +3245,7 @@ impl Level {
     /// Write every file; a world without a player UUID gets a random one.
     pub fn write(&mut self, dir: &Path) -> Result<()> {
         fs::create_dir_all(dir)?;
+        restore_level_dat(dir);
         let existing = read_dat(&dir.join("level.dat")).and_then(|r| r.get("Data").cloned());
         let legacy = existing
             .as_ref()
@@ -3381,12 +3436,12 @@ impl Level {
             }
             write_saved_data(dir, "game_rules", rules)?;
         }
-        write_dat(
-            &dir.join("players")
-                .join("data")
-                .join(format!("{}.dat", uuid_text(uuid))),
-            self.player_tag(),
-        )?;
+        let player_file = dir
+            .join("players")
+            .join("data")
+            .join(format!("{}.dat", uuid_text(uuid)));
+        back_up_unreadable_player(&player_file);
+        write_dat(&player_file, self.player_tag())?;
         write_dat(&dir.join("level.dat"), Tag::compound([("Data", data)]))?;
         Ok(())
     }
@@ -4495,11 +4550,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("horizon-lock-{}", std::process::id()));
         let first = super::SessionLock::acquire(&dir).expect("first lock");
         assert!(super::SessionLock::acquire(&dir).is_err());
+        drop(first);
+        // Windows refuses a read through another handle while the file is
+        // locked, so the bytes are read once the lock is released.
         assert_eq!(
             std::fs::read(dir.join("session.lock")).unwrap(),
             [0x26, 0x03]
         );
-        drop(first);
         assert!(super::SessionLock::acquire(&dir).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
