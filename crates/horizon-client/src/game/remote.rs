@@ -11,6 +11,7 @@ use super::{Dim, Game, Mining, Screen};
 use horizon_client::first_person::{Hand, SwingAnimation};
 use horizon_client::{
     Result,
+    blocks::Fluid,
     chunk::Chunk,
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ExperienceOrb, ItemEntity},
@@ -141,11 +142,9 @@ pub(super) struct Remote {
     /// the first teleport, which takes them then.
     abilities: Option<play::PlayerAbilities>,
     loaded_sent: bool,
-    /// The view distance last sent in ClientInformation.
-    sent_view: i8,
-    /// The Chat option's visibility last sent in ClientInformation
-    /// (`Options.broadcastOptions` sends it again when it changes).
-    sent_chat_visibility: i32,
+    /// The ClientInformation last sent (`Options.broadcastOptions` sends it
+    /// again when a view distance, Chat, skin or Main Hand option changes).
+    sent_info: horizon_protocol::packets::configuration::ClientInformation,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -192,6 +191,9 @@ pub(super) struct Remote {
     online_mode: bool,
     /// Player entities in the level: entity id to profile UUID.
     level_players: HashMap<i32, u128>,
+    /// The profile name each player entity was created with (`RemotePlayer.getGameProfile`): it outlives the
+    /// player-list entry, which servers remove to hide their NPCs from the list.
+    level_player_names: HashMap<i32, String>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
@@ -216,8 +218,8 @@ pub(super) struct Remote {
     /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
     show_death_screen: bool,
     player_type: Option<Arc<MobType>>,
-    /// Inventory (then the off hand) as last synchronised, for creative-mode
-    /// slot updates.
+    /// Inventory, off hand and armour as last synchronised, for creative-mode
+    /// slot updates (`creative_sync_stacks`).
     synced: Vec<Option<ItemStack>>,
     decode_errors: u32,
     clock: Option<i32>,
@@ -477,8 +479,7 @@ impl Game<'_> {
             carried: None,
             abilities: None,
             loaded_sent: false,
-            sent_view: view,
-            sent_chat_visibility: self.settings.chat_visibility as i32,
+            sent_info: self.settings.client_information(view),
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -503,6 +504,7 @@ impl Game<'_> {
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
+            level_player_names: HashMap::new(),
             glowing: Default::default(),
             profile: 0,
             profile_name: String::new(),
@@ -517,7 +519,7 @@ impl Game<'_> {
             death_message: None,
             show_death_screen: true,
             player_type,
-            synced: vec![None; 37],
+            synced: vec![None; CREATIVE_SYNCED],
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
@@ -556,6 +558,12 @@ impl Game<'_> {
         self.code_of_conduct = None;
         self.reset_tutorial();
         self.close_dialogs();
+        // Gui.setScreen -> KeyMapping.releaseAll: the title or disconnect
+        // screen releases every held key. Its release goes to that screen,
+        // so a key kept here would still be down in the next world (#3246).
+        self.keys.clear();
+        self.left = false;
+        self.right = false;
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
             Some(server) => {
@@ -1102,6 +1110,7 @@ impl Game<'_> {
                 // The entity ids are the old world's; the new dimension's
                 // player entities re-map to their profiles on AddEntity.
                 r.level_players.clear();
+                r.level_player_names.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -1427,7 +1436,16 @@ impl Game<'_> {
         on_ground: bool,
         far_snaps: bool,
     ) {
-        let mob = self.mobs.iter_mut().find(|m| m.id == id as u32);
+        // The dragon is drawn from its own state (game/dragon.rs), which
+        // tick_remote_dragon eases to the server's moves through `lerps`. Its
+        // copy in the mob list draws nothing: given the move, it kept the
+        // dragon where it spawned (#2083).
+        let dragon = self.dragon.as_ref().is_some_and(|d| d.id as i32 == id);
+        let mob = self
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == id as u32)
+            .filter(|_| !dragon);
         let tracked = self
             .remote
             .as_ref()
@@ -1793,13 +1811,12 @@ impl Game<'_> {
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
                 self.enter_remote_dimension(&p.spawn, false);
-                let view = client_view_distance(self.settings.render_distance);
+                let info = self
+                    .settings
+                    .client_information(client_view_distance(self.settings.render_distance));
                 if let Some(r) = self.remote.as_mut() {
-                    r.sent_view = view;
+                    r.sent_info = info.clone();
                 }
-                let mut info =
-                    horizon_protocol::packets::configuration::ClientInformation::new(view);
-                info.chat_visibility = self.settings.chat_visibility as i32;
                 self.send(S::ClientInformation(info));
             }
             C::Respawn(p) => {
@@ -1807,6 +1824,12 @@ impl Game<'_> {
                 // again) and with no item in use.
                 self.potions.effects.clear();
                 self.using = None;
+                // After a death (no KEEP_ENTITY_DATA) the new LocalPlayer
+                // rides nothing: the server pairs a vehicle again with its
+                // passengers. A dimension change keeps the vehicle it travels in.
+                if p.keep & 2 == 0 {
+                    self.riding = None;
+                }
                 let dimension_changed = self.dim != Dim::from_id(&p.spawn.dimension);
                 self.enter_remote_dimension(&p.spawn, true);
                 if dimension_changed {
@@ -1944,11 +1967,18 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
+                        // createEntityFromPacket: the player takes the profile of its list entry.
+                        match r.players.get(&p.uuid) {
+                            Some(name) => r.level_player_names.insert(p.id, name.clone()),
+                            None => r.level_player_names.remove(&p.id),
+                        };
                     } else {
                         r.level_players.remove(&p.id);
+                        r.level_player_names.remove(&p.id);
                     }
                 }
-                // Entity.getTeam: a mob is on a team by its UUID.
+                // Entity.getTeam: a mob is on a team by its UUID, a player by
+                // its profile name (`Game::scoreboard_name`).
                 self.persist.uuids.insert(
                     p.id as u32,
                     horizon_client::lan::playerdata::uuid_ints(p.uuid),
@@ -1972,6 +2002,7 @@ impl Game<'_> {
                 for id in p.ids {
                     if let Some(r) = self.remote.as_mut() {
                         r.level_players.remove(&id);
+                        r.level_player_names.remove(&id);
                     }
                     self.remove_entity(id);
                 }
@@ -2162,6 +2193,13 @@ impl Game<'_> {
                             && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                         {
                             m.extra.main_hand_left = *arm == 0;
+                        }
+                        // Avatar.DATA_PLAYER_MODE_CUSTOMISATION: the skin layers
+                        // the player shows (PlayerModelPart bits).
+                        if let (16, Value::Byte(bits)) = (index, value)
+                            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                        {
+                            m.extra.hidden_model_parts = !(*bits as u8) & 0x7F;
                         }
                     }
                 }
@@ -2728,8 +2766,9 @@ impl Game<'_> {
                         self.hotbar_pop[pop] = 5;
                     }
                 }
+                let before = self.creative_stacks();
                 self.set_menu_slot(p.container, i32::from(p.slot), stack);
-                self.remote_synced();
+                self.remote_synced_since(&before);
             }
             C::SetCursorItem(p) => {
                 let stack = self.to_stack(&p.item);
@@ -2739,6 +2778,7 @@ impl Game<'_> {
             C::SetPlayerInventory(p) => {
                 let stack = self.to_stack(&p.item);
                 self.tutorial_get_item(stack.as_ref());
+                let before = self.creative_stacks();
                 match p.slot {
                     0..=35 => self.inventory[p.slot as usize] = stack,
                     36..=39 => self.armor[3 - (p.slot - 36) as usize] = stack,
@@ -2746,7 +2786,7 @@ impl Game<'_> {
                     40 => self.offhand = stack,
                     _ => {}
                 }
-                self.remote_synced();
+                self.remote_synced_since(&before);
             }
             C::ContainerSetData(p) if self.open_menu_name(p.container) == "minecraft:lectern" => {
                 self.remote_lectern_page(i32::from(p.value));
@@ -3222,6 +3262,8 @@ impl Game<'_> {
         let mut resolved: Vec<(u128, String)> = Vec::new();
         // PlayerSkin.model of each resolved skin: the textures' `slim`.
         let mut slim = std::collections::HashSet::new();
+        // PlayerSkin.cape of each resolved skin.
+        let mut capes: HashMap<u128, String> = HashMap::new();
         for (uuid, textures) in entries {
             // PlayerInfo.createSkinLookup: only the local player's own skin
             // may be unsigned.
@@ -3235,10 +3277,24 @@ impl Game<'_> {
                 if textures.slim {
                     slim.insert(uuid);
                 }
+                if let Some(cape) = horizon_client::skins::cape(&textures) {
+                    capes.insert(uuid, cape);
+                }
                 resolved.push((uuid, skin));
             }
         }
         resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
+        // An offline name's cape from the launcher, where the profile has none.
+        if !capes.contains_key(&local)
+            && let Some(rgba) = horizon_client::skins::offline_cape()
+        {
+            const OFFLINE: &str = "capes/offline";
+            if !self.show_skin(OFFLINE) {
+                self.store_skin(OFFLINE.into(), rgba.to_vec());
+            }
+            capes.insert(local, OFFLINE.into());
+        }
+        capes.retain(|_, cape| self.again_skin(cape));
         // PlayerInfo.getSkin: the downloaded skin and its model, else the
         // profile's default skin (DefaultPlayerSkin.get), slim or wide.
         let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
@@ -3270,12 +3326,18 @@ impl Game<'_> {
             {
                 mob.skin = Some(skin);
                 mob.slim = is_slim;
+                mob.cape = capes.get(&uuid).cloned();
             }
         }
         if let Some(mob) = self.player_model.as_mut() {
             let (skin, is_slim) = skin_of(&skins, own);
             mob.skin = Some(skin);
             mob.slim = is_slim;
+            // Avatar.isModelPartShown(CAPE): the Skin Customization option.
+            mob.cape = capes
+                .get(&own)
+                .filter(|_| self.settings.file.bool("modelPart_cape"))
+                .cloned();
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3359,7 +3421,7 @@ impl Game<'_> {
             self.gui.atlas.sprites.remove(&old);
             slot
         };
-        let Some(rect) = self
+        let Some(mut rect) = self
             .gui
             .atlas
             .sprites
@@ -3376,6 +3438,10 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
+        // A cape is a 64x32 texture in the top half of the slot (skins::process_cape).
+        if location.starts_with("capes/") {
+            rect.v1 = (rect.v0 + rect.v1) / 2.0;
+        }
         self.gui.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }
@@ -3662,16 +3728,14 @@ impl Game<'_> {
         self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
-        let view = client_view_distance(self.settings.render_distance);
-        let visibility = self.settings.chat_visibility as i32;
+        let info = self
+            .settings
+            .client_information(client_view_distance(self.settings.render_distance));
         if let Some(r) = self.remote.as_mut()
             && r.joined
-            && (r.sent_view != view || r.sent_chat_visibility != visibility)
+            && r.sent_info != info
         {
-            r.sent_view = view;
-            r.sent_chat_visibility = visibility;
-            let mut info = horizon_protocol::packets::configuration::ClientInformation::new(view);
-            info.chat_visibility = visibility;
+            r.sent_info = info.clone();
             self.send(S::ClientInformation(info));
         }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
@@ -3835,6 +3899,17 @@ impl Game<'_> {
             // player too (controlled_simulation_tick does it otherwise): left
             // at 10, the hurt tilt restarted every frame and shook the camera.
             player.health.advance_clock();
+            if riding && !dead {
+                MotionWorld {
+                    entities: &entity_collisions,
+                    player: &mut *player,
+                    scene: &mut self.world,
+                    assets: &self.pack.assets,
+                    collision_binding: self.collision,
+                    resources: self.motion,
+                }
+                .passenger_pose_tick()?;
+            }
         }
         // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
         // jump, a spectator, landing) is sent to the server.
@@ -4449,41 +4524,44 @@ impl Game<'_> {
         {
             out.push(packet);
         }
-        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot);
-        // `synced[36]` is the off hand.
+        // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
         let mut creative_slots = Vec::new();
         if self.creative {
-            for i in 0..37 {
-                let stack = self.inventory.get(i).unwrap_or(&self.offhand);
-                if *stack != r.synced[i] {
+            let stacks = creative_sync_stacks(&self.inventory, &self.offhand, &self.armor);
+            for (i, stack) in stacks.into_iter().enumerate() {
+                if stack != r.synced[i] {
                     r.synced[i] = stack.clone();
-                    creative_slots.push(i);
+                    creative_slots.push((creative_sync_slot(i), stack));
                 }
             }
         }
         for packet in out {
             self.send(packet);
         }
-        for i in creative_slots {
-            // InventoryMenu's slots: the hotbar is 36..=44, the off hand 45.
-            let slot = match i {
-                0..9 => 36 + i,
-                36 => 45,
-                _ => i,
-            } as i16;
-            let item = self.to_network(self.inventory.get(i).unwrap_or(&self.offhand));
+        for (slot, stack) in creative_slots {
+            let item = self.to_network(&stack);
             self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
                 slot,
                 item,
             }));
         }
     }
+    fn creative_stacks(&self) -> Vec<Option<ItemStack>> {
+        creative_sync_stacks(&self.inventory, &self.offhand, &self.armor)
+    }
     /// Inventory as the server last described it.
     fn remote_synced(&mut self) {
-        let mut inventory = self.inventory.clone();
-        inventory.push(self.offhand.clone());
+        let stacks = self.creative_stacks();
         if let Some(r) = self.remote.as_mut() {
-            r.synced = inventory;
+            r.synced = stacks;
+        }
+    }
+    /// The slots a server packet changed since `before` are as the server has them; the
+    /// others keep what was last sent, so a creative click made since still goes out.
+    fn remote_synced_since(&mut self, before: &[Option<ItemStack>]) {
+        let now = self.creative_stacks();
+        if let Some(r) = self.remote.as_mut() {
+            mark_synced(&mut r.synced, before, now);
         }
     }
 
@@ -4763,10 +4841,17 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
-            let (reacts, changes) = if hand == Hand::Main {
+            let spectator = self.spectator();
+            let (reacts, changes) = if hand == Hand::Main && !spectator {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
-                (false, DryUse::default())
+                // useItemOn runs for the off hand too (useWithoutItem doesn't):
+                // RespawnAnchorBlock.useItemOn charges an anchor with its glowstone.
+                let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+                let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
+                let charges =
+                    !(sneaking && hands_full) && self.anchor_takes(hit.pos, held.as_ref());
+                (charges, DryUse::default())
             };
             let seq = self.next_sequence();
             let cursor = [
@@ -4783,6 +4868,12 @@ impl Game<'_> {
                 world_border: false,
                 sequence: seq,
             }));
+            // MultiPlayerGameMode.performUseItemOn: a spectator's use predicts
+            // nothing and ends the click (CONSUME, no swing); the server opens
+            // the block's menu.
+            if spectator {
+                return true;
+            }
             // Only a predicted placement (predict_place) marks a cell whose
             // resend plays a place sound: an empty hand or a non-block item
             // places nothing (BlockItem.place is where the sound comes from).
@@ -4931,6 +5022,12 @@ impl Game<'_> {
         if self.jukebox_takes(hit.pos, held) {
             return (true, DryUse::default());
         }
+        // RespawnAnchorBlock.useItemOn: PASS when the off hand's glowstone is to
+        // charge the anchor, so useWithoutItem doesn't run and the off hand's turn
+        // comes (glowstone in this hand charges it in `use_item_on`).
+        if !self.anchor_takes(hit.pos, held) && self.anchor_takes(hit.pos, self.offhand.as_ref()) {
+            return (false, DryUse::default());
+        }
         // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
         // (honey level 5) is SUCCESS, so the click ends after UseItemOn and
         // no UseItem follows (the server does the harvest, see `use_beehive`).
@@ -5035,7 +5132,7 @@ impl Game<'_> {
     }
 
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
-    /// the click ends there, as far as this client can tell (`item_has_use`).
+    /// the click ends there, as far as this client can tell (`use_ends_click`).
     fn remote_use_item(&mut self, hand: Hand) -> bool {
         let Some(held) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
@@ -5064,6 +5161,12 @@ impl Game<'_> {
         if info.food.is_some() && !eating {
             return false;
         }
+        // A bucket, a glass bottle or a boat with nothing to fill, empty or
+        // place PASSes or FAILs: startUseItem goes on to the off hand (a
+        // Riptide trident there charges).
+        if self.with_hand(hand, |g| g.use_finds_no_target(&held)) {
+            return false;
+        }
         // It runs the use here too: ItemStack.use starts the `use_cooldown`
         // of an item with no use time, and the server's
         // ClientboundCooldownPacket confirms it; one held in use starts it at
@@ -5075,9 +5178,65 @@ impl Game<'_> {
             return true;
         }
         self.with_hand(hand, |g| g.remote_start_held_use(&held));
-        item_has_use(&info)
+        let gliding = self.player.as_ref().is_some_and(|p| p.fall_flying);
+        use_ends_click(&info, gliding)
     }
 
+    /// Whether `held`'s `Item.use` needs a target this client sees none of
+    /// (not SUCCESS): BucketItem.use (a fluid source or powder snow to pick
+    /// up through `ClipContext.Fluid.SOURCE_ONLY`, a block to empty a full
+    /// one against, `mayUseItemAt`), BottleItem.use (water to fill from) and
+    /// BoatItem.use (a block or fluid surface with room for the boat).
+    fn use_finds_no_target(&self, held: &ItemStack) -> bool {
+        let id = &*held.item;
+        let facts = |pos: [i32; 3]| {
+            self.res
+                .facts()
+                .get(self.world.block(pos[0], pos[1], pos[2]))
+        };
+        let source = |want: Option<Fluid>| {
+            let fluid_hit = self.pick_fluid();
+            // pick_fluid steps through waterlogged blocks, but their water is
+            // a source the SOURCE_ONLY ray stops at (and a BucketPickup).
+            if let Some(hit) = self.pick()
+                && facts(hit.pos).waterlogged
+            {
+                let eye = self.aim().map_or(hit.point, |(eye, _)| eye);
+                let d = |p: [f64; 3]| (0..3).map(|a| (p[a] - eye[a]).powi(2)).sum::<f64>();
+                if fluid_hit
+                    .as_ref()
+                    .is_none_or(|fluid| d(fluid.point) >= d(hit.point))
+                {
+                    return want.is_none_or(|want| want == Fluid::Water);
+                }
+            }
+            fluid_hit.is_some_and(|hit| {
+                let f = facts(hit.pos);
+                let fluid = f.fluid != Fluid::None && f.fluid_level == 8 && !f.fluid_falling;
+                match want {
+                    Some(want) => fluid && f.fluid == want,
+                    None => fluid || self.is_powder_snow(hit.pos),
+                }
+            })
+        };
+        // SolidBucketItem only has useOn: its use is Item.use's PASS.
+        if id == "minecraft:powder_snow_bucket" {
+            return true;
+        }
+        if id == "minecraft:bucket" {
+            return !self.may_build() || !source(None);
+        }
+        if horizon_client::items::bucket_contents(id).is_some() {
+            return !self.may_build() || self.pick().is_none();
+        }
+        if id == "minecraft:glass_bottle" {
+            return !source(Some(Fluid::Water));
+        }
+        if super::boats::any_boat_wood(id).is_some() {
+            return self.boat_to_place(held).is_none();
+        }
+        false
+    }
     /// `Item.use` runs on the client too (MultiPlayerGameMode.useItem): an
     /// item held in use until the button lets go starts being used here, so
     /// that letting go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and
@@ -5107,6 +5266,9 @@ impl Game<'_> {
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
+            // EnderEyeItem.use: startUsingItem unless an End portal frame is
+            // aimed at, with or without a stronghold to throw the eye at.
+            "minecraft:ender_eye" => !self.aims_at_end_portal_frame(),
             // Item.use: a kinetic weapon starts being used.
             id if horizon_client::spear::Kinetic::of(id).is_some() => true,
             // ShieldItem.use: anything that blocks attacks, off cooldown.
@@ -5120,11 +5282,17 @@ impl Game<'_> {
         }
     }
     /// Whether `stack` stays in use until the button lets go (bows,
-    /// crossbows, tridents, spyglasses, shields): its use only counts ticks here.
+    /// crossbows, tridents, spyglasses, shields, eyes of ender, whose
+    /// `getUseDuration` 0 never counts down to the end): its use only counts
+    /// ticks here.
     fn held_until_released(&self, stack: &ItemStack) -> bool {
         matches!(
             &*stack.item,
-            "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:spyglass"
+            "minecraft:bow"
+                | "minecraft:crossbow"
+                | "minecraft:trident"
+                | "minecraft:spyglass"
+                | "minecraft:ender_eye"
         ) || horizon_client::spear::Kinetic::of(&stack.item).is_some()
             || self.blocks_attacks(stack).is_some()
     }
@@ -5611,6 +5779,14 @@ impl Game<'_> {
         } else {
             Input::Pickup
         };
+        if self.screen == Screen::Creative {
+            // CreativeModeInventoryScreen.slotClicked: the Survival Inventory tab clicks the
+            // player's own InventoryMenu, and its CreativeInventoryListener sends each slot that
+            // changed (SetCreativeModeSlot). No ContainerClick: a server holding the carried
+            // stack would give it back after the Destroy Item slot cleared it (#3307).
+            self.menu_click(Some(internal), i32::from(right), input);
+            return;
+        }
         self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
@@ -5767,6 +5943,12 @@ impl Game<'_> {
         } else {
             self.carried.take().expect("carried")
         };
+        self.remote_creative_throw(thrown);
+    }
+    /// `MultiPlayerGameMode.handleCreativeModeItemDrop`: a stack thrown out of the creative
+    /// screen goes to the server as a SetCreativeModeSlot to slot -1, which drops it from the
+    /// player's hand; the client only swings (`Player.drop` on a client).
+    pub(super) fn remote_creative_throw(&mut self, thrown: ItemStack) {
         if !self.creative {
             return;
         }
@@ -6112,9 +6294,18 @@ impl Game<'_> {
         let r = self.remote.as_ref()?;
         Some(r.glowing.contains(&(id as i32)))
     }
+    /// The profile name of another player the server sent, by entity id.
+    pub(super) fn remote_player_name(&self, id: u32) -> Option<&str> {
+        let r = self.remote.as_ref()?;
+        let uuid = r.level_players.get(&(id as i32))?;
+        if *uuid == r.profile {
+            return None;
+        }
+        r.level_player_name(id as i32, uuid)
+    }
     /// Status for `horizon-ctl status`.
-    /// The other players' entities in the level and their names (from the
-    /// player list).
+    /// The other players' entities in the level and their names (their
+    /// profiles', which outlive the player list's entries).
     pub(super) fn remote_player_names(&self) -> Vec<(u32, String)> {
         let Some(r) = self.remote.as_ref() else {
             return Vec::new();
@@ -6122,7 +6313,7 @@ impl Game<'_> {
         r.level_players
             .iter()
             .filter(|(_, uuid)| **uuid != r.profile)
-            .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
+            .filter_map(|(id, uuid)| Some((*id as u32, r.level_player_name(*id, uuid)?.to_owned())))
             .collect()
     }
     /// `ClientClockManager.tick`: the clock moves on by the game time that
@@ -6257,6 +6448,50 @@ type Predicted = (
     Vec<(i16, Option<ItemStack>)>,
     Option<ItemStack>,
 );
+
+/// How many stacks the creative screen keeps in step with the server (`Remote::synced`).
+const CREATIVE_SYNCED: usize = 41;
+
+/// The player's stacks in `Remote::synced` order: the 36 inventory slots, the off hand, then
+/// the armour from the head down. `CreativeInventoryListener.slotChanged` sends every
+/// InventoryMenu slot the creative screen changes, the armour slots too.
+fn creative_sync_stacks(
+    inventory: &[Option<ItemStack>],
+    offhand: &Option<ItemStack>,
+    armor: &[Option<ItemStack>; 4],
+) -> Vec<Option<ItemStack>> {
+    let mut stacks: Vec<Option<ItemStack>> = inventory.iter().take(36).cloned().collect();
+    stacks.resize(36, None);
+    stacks.push(offhand.clone());
+    stacks.extend(armor.iter().cloned());
+    stacks
+}
+
+/// Entries of `creative_sync_stacks` that went from `before` to `now` are synced as `now`.
+fn mark_synced(
+    synced: &mut [Option<ItemStack>],
+    before: &[Option<ItemStack>],
+    now: Vec<Option<ItemStack>>,
+) {
+    for (i, stack) in now.into_iter().enumerate() {
+        if before.get(i) != Some(&stack)
+            && let Some(s) = synced.get_mut(i)
+        {
+            *s = stack;
+        }
+    }
+}
+
+/// InventoryMenu's slot for entry `i` of `creative_sync_stacks`: the hotbar is 36..=44, the
+/// main inventory 9..=35, the off hand 45 and the armour 5..=8 (head first).
+fn creative_sync_slot(i: usize) -> i16 {
+    (match i {
+        0..9 => 36 + i,
+        36 => 45,
+        37.. => 5 + (i - 37),
+        _ => i,
+    }) as i16
+}
 
 fn menu_items(m: &horizon_client::menu::Menu) -> Vec<Option<ItemStack>> {
     (0..m.slot_count()).map(|i| m.slot(i).cloned()).collect()
@@ -6395,6 +6630,13 @@ fn hand_id(hand: Hand) -> i32 {
     }
 }
 
+/// Whether `Item.use` of `info` ends `Minecraft.startUseItem`'s click, so the
+/// off hand gets no turn. `FireworkRocketItem.use` answers SUCCESS while the
+/// player glides (the rocket boosts them) and PASS otherwise.
+fn use_ends_click(info: &horizon_client::items::ItemInfo, fall_flying: bool) -> bool {
+    item_has_use(info) || (fall_flying && &*info.id == "minecraft:firework_rocket")
+}
+
 /// Whether `Item.use` usually acts on this item (eats, drinks, equips, raises,
 /// throws, shoots, fills or places), which ends `Minecraft.startUseItem` at
 /// its hand. Tools and materials pass, and the off hand gets its turn. The
@@ -6517,6 +6759,14 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 }
 
 impl Remote {
+    /// A player entity's profile name: the one it was created with, else its
+    /// player-list entry's (an entity the list named after it spawned).
+    fn level_player_name(&self, id: i32, uuid: &u128) -> Option<&str> {
+        self.level_player_names
+            .get(&id)
+            .or_else(|| self.players.get(uuid))
+            .map(String::as_str)
+    }
     /// Players in the server's player list, this one included.
     pub(super) fn player_count(&self) -> usize {
         self.players.len()
@@ -6643,6 +6893,58 @@ mod tests {
     }
 
     #[test]
+    fn the_creative_sync_covers_inventory_menu_slots_5_to_45_once_each() {
+        // CreativeInventoryListener sends every InventoryMenu slot but the crafting ones: the
+        // armour (5..=8), the inventory (9..=44) and the off hand (45).
+        let stack = |item: &str| Some(horizon_client::items::ItemStack::new(item, 1));
+        let inventory: Vec<_> = (0..36)
+            .map(|i| stack(&format!("minecraft:item_{i}")))
+            .collect();
+        let offhand = stack("minecraft:shield");
+        let armor = [
+            stack("minecraft:diamond_helmet"),
+            stack("minecraft:diamond_chestplate"),
+            stack("minecraft:diamond_leggings"),
+            stack("minecraft:diamond_boots"),
+        ];
+        let stacks = super::creative_sync_stacks(&inventory, &offhand, &armor);
+        assert_eq!(stacks.len(), super::CREATIVE_SYNCED);
+        let mut slots: Vec<i16> = (0..stacks.len()).map(super::creative_sync_slot).collect();
+        // Each entry goes to the menu slot that holds that stack.
+        for (i, &slot) in slots.iter().enumerate() {
+            let game_slot = Game::menu_slot("inventory", i32::from(slot)).unwrap();
+            let expected = match game_slot {
+                0..36 => &inventory[game_slot],
+                504 => &offhand,
+                500..504 => &armor[game_slot - 500],
+                _ => panic!("entry {i} went to game slot {game_slot}"),
+            };
+            assert_eq!(&stacks[i], expected, "entry {i}, menu slot {slot}");
+        }
+        slots.sort();
+        assert_eq!(slots, (5..=45).collect::<Vec<i16>>());
+    }
+
+    #[test]
+    fn a_server_slot_update_leaves_an_unsent_creative_click_to_be_sent() {
+        let stack = |item: &str| Some(horizon_client::items::ItemStack::new(item, 1));
+        let none = || vec![None; super::CREATIVE_SYNCED];
+        // Synced: nothing. A click puts a helmet on (entry 37, not sent yet), then the server
+        // sets hotbar slot 0 (a pickup): only that entry counts as synced.
+        let mut synced = none();
+        let mut before = none();
+        before[37] = stack("minecraft:diamond_helmet");
+        let mut now = before.clone();
+        now[0] = stack("minecraft:stick");
+        super::mark_synced(&mut synced, &before, now.clone());
+        assert_eq!(synced[0], now[0]);
+        assert_eq!(
+            synced[37], None,
+            "the helmet still differs, so the next tick sends it"
+        );
+    }
+
+    #[test]
     fn every_inventory_menu_slot_is_a_game_slot_and_45_is_the_off_hand() {
         // InventoryMenu: result, 2x2 grid, armour, 27 + 9 inventory slots, then the off hand.
         assert_eq!(Game::menu_slot("inventory", 45), Some(504));
@@ -6676,5 +6978,32 @@ mod tests {
         assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 354), None);
         assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 504), None);
         assert_eq!(Game::menu_slot_index("unknown", 0), None);
+    }
+
+    /// `FireworkRocketItem.use` is SUCCESS while gliding: the main hand's
+    /// rocket ends the click and the off hand's shield is not raised (#3424).
+    /// On foot it passes, so the off hand still gets its turn.
+    #[test]
+    fn a_rocket_used_while_gliding_ends_the_click() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            eprintln!("skipping: no prepared resources in {}", root.display());
+            return;
+        }
+        let registry = horizon_world::level::data::load_registry(&root).unwrap();
+        let facts = horizon_client::blocks::BlockFacts::load(&root, &registry).unwrap();
+        let items = horizon_client::items::Items::load(&root, &registry, &facts).unwrap();
+        let rocket = items.get("minecraft:firework_rocket").unwrap();
+        assert!(super::use_ends_click(rocket, true), "gliding");
+        assert!(!super::use_ends_click(rocket, false), "on foot");
+        // Other items answer the same whether or not the player glides.
+        let shield = items.get("minecraft:shield").unwrap();
+        let stick = items.get("minecraft:stick").unwrap();
+        for gliding in [false, true] {
+            assert!(super::use_ends_click(shield, gliding));
+            assert!(!super::use_ends_click(stick, gliding));
+        }
     }
 }

@@ -51,7 +51,7 @@ Start the client (needs a signed-in Microsoft account that owns Minecraft: Java 
 
     horizon-launcher play
 
-- `--instance`: The instance to play (its name or id; default: the selected one)
+- `--instance`: The instance to play (its name or id; default: the selected one). A Java instance starts its Minecraft: Java Edition, downloaded with its Java the first time
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
@@ -336,6 +336,8 @@ Make an instance: empty but for your options and name, or a copy of another one'
 - `NAME`
 - `--copy`: The instance to copy (its name or id)
 - `--minecraft`: Make a Minecraft: Java Edition instance of this version (1.21.4, latest or latest-snapshot) instead of a Horizon one
+- `--loader`: With this mod loader: fabric or quilt
+- `--loader-version`: The loader's version (default: its newest stable one)
 
 MCP: `instance_create`.
 
@@ -363,6 +365,18 @@ A Java instance's Java: its own Java home or the automatic pick, memory and JVM 
 - `--args`: Extra JVM arguments (one string; "" clears them)
 
 MCP: `instance_java`.
+
+## `horizon-launcher instance loader`
+
+A Java instance's mod loader: fabric or quilt, or none. --list shows its versions.
+
+    horizon-launcher instance loader <INSTANCE> <LOADER>
+
+- `INSTANCE`
+- `LOADER`
+- `--list`: List the loader's versions for the instance's Minecraft instead
+
+MCP: `instance_loader`.
 
 ## `horizon-launcher instance rename`
 
@@ -477,6 +491,28 @@ Import what a file is, as dropping it on the window does: a shared instance (a .
 - `--instance`: The instance a pack goes into
 
 MCP: `instance_import`.
+
+## `horizon-launcher instance others`
+
+List the instances other launchers keep (Prism Launcher, MultiMC, the official launcher), read without changing anything there.
+
+    horizon-launcher instance others
+
+- `--folder`: Look in this folder instead: a launcher's folder, its instances/ or one instance
+
+MCP: `instance_others`.
+
+## `horizon-launcher instance copy-from`
+
+Copy another launcher's instance into a new Java instance: its Minecraft version and its game folder (worlds, mods, packs, options); the other launcher's copy stays as it is.
+
+    horizon-launcher instance copy-from <NAME>
+
+- `NAME`: Its name, as `instance others` lists it
+- `--folder`: Look in this folder instead: a launcher's folder, its instances/ or one instance
+- `--as`: The new instance's name (default: the same)
+
+MCP: `instance_copy_from`.
 
 ## `horizon-launcher worlds list`
 
@@ -747,7 +783,7 @@ MCP: `mods_list`.
 
 ## `horizon-launcher mods search`
 
-Search for packs Horizon loads.
+Search for packs Horizon loads, or for what a Java instance runs (made for its Minecraft version and loader).
 
     horizon-launcher mods search [TEXT]...
 
@@ -755,6 +791,7 @@ Search for packs Horizon loads.
 - `--kind` (mod, resource, modpack, shader, datapack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
 - `--source` (modrinth, curseforge, horizon)
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_search`.
 
@@ -772,7 +809,7 @@ MCP: `mods_check`.
 
 ## `horizon-launcher mods install`
 
-Install a pack and what it needs into an instance, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as an instance of its own; a data pack goes into the world `--world` names.
+Install a pack and what it needs into an instance, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on (a Java instance gets the jar made for its version and loader in mods/); a modpack is imported as an instance of its own; a data pack goes into the world `--world` names.
 
     horizon-launcher mods install <PROJECT>
 

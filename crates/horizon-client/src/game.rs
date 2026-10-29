@@ -4231,8 +4231,15 @@ impl Game<'_> {
     }
     /// `Minecraft.startUseItem`: the main hand, then the off hand.
     fn use_item_as_player(&mut self) -> Result<Option<Hand>> {
-        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
+        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass),
+        // but on a server a spectator's use on a block opens the block's
+        // menu (ServerPlayerGameMode.useItemOn).
         if self.spectator() {
+            if matches!(self.guest_use, Some(GuestUse::OnBlock(_)))
+                && let Some(hit) = self.pick()
+            {
+                self.spectator_open_menu(hit.pos);
+            }
             return Ok(None);
         }
         // A carrot or warped fungus on a stick boosts the ridden pig or strider.
@@ -4783,7 +4790,9 @@ impl Game<'_> {
             self.tick_crossbow(slot, ticks, &stack);
             return;
         }
-        if &*stack.item == "minecraft:trident" {
+        // TridentItem and EnderEyeItem: used until released (an eye's
+        // getUseDuration 0 never counts down to finishUsingItem).
+        if matches!(&*stack.item, "minecraft:trident" | "minecraft:ender_eye") {
             self.using = Some((slot, ticks + 1));
             return;
         }
@@ -6652,9 +6661,15 @@ impl Game<'_> {
                         }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let title = self.container_title(self.translate(key, fallback));
-                    let tw = HudBatch::text_width(atlas, &title);
-                    batch.text(
+                    // A server's furnace menu has the title it was given.
+                    let title = self.remote_menu_title().unwrap_or_else(|| {
+                        horizon_client::text::Text::literal(
+                            self.container_title(self.translate(key, fallback)),
+                        )
+                        .resolve_legacy()
+                    });
+                    let tw = atlas.font.width_text(&title);
+                    batch.text_styled(
                         atlas,
                         &title,
                         ox + (176.0 - tw) / 2.0,
@@ -7348,6 +7363,13 @@ impl Game<'_> {
                 let at = [p.position.x, p.position.y, p.position.z];
                 self.award_furnace_recipes(pos, at);
             }
+        } else if self.creative_inventory_open() {
+            // CreativeModeInventoryScreen.slotClicked's THROW on the Survival Inventory tab: the
+            // stack goes to the server (handleCreativeModeItemDrop), the slot follows with the
+            // others (SetCreativeModeSlot).
+            for stack in dropped {
+                self.remote_creative_throw(stack);
+            }
         }
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
@@ -7547,7 +7569,8 @@ impl Game<'_> {
                     return;
                 }
                 if let Some(moved) = self.last_quick_moved.clone() {
-                    if self.remote.is_some() {
+                    // The creative screen clicks its own menu, on a server too.
+                    if self.remote.is_some() && self.screen != Screen::Creative {
                         self.remote_quick_move_all(slot, &moved);
                     } else {
                         self.menu_session(|menu, env, to_menu| {
