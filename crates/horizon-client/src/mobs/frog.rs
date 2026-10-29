@@ -36,6 +36,8 @@ const SCAN_RATE: i32 = 20;
 /// `FrogAi.TIME_BETWEEN_LONG_JUMPS` and the brain memory
 /// `LONG_JUMP_COOLDOWN_TICKS` (saved with the others, as `finalize` sets it).
 const TIME_BETWEEN_LONG_JUMPS: (i32, i32) = (100, 140);
+/// `GoatAi.TIME_BETWEEN_LONG_JUMPS`.
+const GOAT_TIME_BETWEEN_LONG_JUMPS: (i32, i32) = (600, 1200);
 const LONG_JUMP_COOLDOWN: &str = "long_jump_cooldown";
 /// `FrogAi`'s `LongJumpToPreferredBlock`: `MAX_LONG_JUMP_WIDTH`,
 /// `MAX_LONG_JUMP_HEIGHT`, `MAX_JUMP_VELOCITY_MULTIPLIER` and the chance to
@@ -374,7 +376,11 @@ fn set_jump_cooldown(m: &mut Mob, ticks: Option<i64>) {
 /// `TIME_BETWEEN_LONG_JUMPS.sample` from the level's random, divided as the
 /// caller asks.
 fn sample_cooldown(m: &mut Mob, lr: &mut LegacyRandom, div: i32) {
-    let (lo, hi) = TIME_BETWEEN_LONG_JUMPS;
+    let (lo, hi) = if m.species() == Species::Goat {
+        GOAT_TIME_BETWEEN_LONG_JUMPS
+    } else {
+        TIME_BETWEEN_LONG_JUMPS
+    };
     let t = lr.next_int_between_inclusive(lo, hi).unwrap_or(lo) / div;
     set_jump_cooldown(m, Some(i64::from(t)));
 }
@@ -569,22 +575,27 @@ impl Goal for LongJump {
         true
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        // The activity: no cooldown and out of water. FrogAi.initJumpActivity
-        // also wants TEMPTING_PLAYER and BREED_TARGET absent, and the
-        // LAY_SPAWN activity (IS_PREGNANT) goes before LONG_JUMP.
+        // The activity: no cooldown, and for a frog out of water (a frog in
+        // water is in its swim activity; a goat has none, so its check below
+        // sets the cooldown instead). FrogAi.initJumpActivity also wants
+        // TEMPTING_PLAYER and BREED_TARGET absent, and the LAY_SPAWN activity
+        // (IS_PREGNANT) goes before LONG_JUMP.
         // TODO: gate on them once frogs follow frog_food, breed and lay
         // frogspawn here; none of the three exists for frogs yet.
-        if jump_cooldown(m).is_some() || m.fluids.in_water {
+        if jump_cooldown(m).is_some() || m.species() != Species::Goat && m.fluids.in_water {
             return false;
         }
-        // checkExtraStartConditions: on the ground, not in lava or on honey.
+        // checkExtraStartConditions: on the ground, not in water or lava or
+        // on honey.
         let (x, y, z) = (
             m.position.x.floor() as i32,
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         );
-        let can =
-            m.on_ground && !m.fluids.in_lava && cx.w.block_name(x, y, z) != "minecraft:honey_block";
+        let can = m.on_ground
+            && !m.fluids.in_water
+            && !m.fluids.in_lava
+            && cx.w.block_name(x, y, z) != "minecraft:honey_block";
         if !can {
             sample_cooldown(m, cx.lr, 2);
         }
