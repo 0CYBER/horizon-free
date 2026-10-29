@@ -410,7 +410,11 @@ impl Launcher {
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
-            proxy_input: line_edit::LineEdit::new(settings.proxy.clone().unwrap_or_default(), 256, 44),
+            proxy_input: line_edit::LineEdit::new(
+                settings.proxy.clone().unwrap_or_default(),
+                256,
+                44,
+            ),
             proxy_focused: false,
             proxy_focus: cx.focus_handle(),
             settings,
@@ -3513,7 +3517,10 @@ impl Launcher {
             }));
         let field = line_edit::mouse(field, cx, |this| &mut this.proxy_input);
         // A half-typed address is no reason to complain; one left behind is.
-        let detail = match (focused, horizon_launcher::proxy::refuse(self.proxy_input.text())) {
+        let detail = match (
+            focused,
+            horizon_launcher::proxy::refuse(self.proxy_input.text()),
+        ) {
             (false, Some(why)) => div().text_color(t.danger).child(why).into_any_element(),
             _ => div()
                 .child(

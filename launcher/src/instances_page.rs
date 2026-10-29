@@ -576,7 +576,9 @@ impl Launcher {
                 button("instance-copy", "Copy…", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         this.open_instance_dialog(None);
-                        this.servers.text(Field::InstanceName).set(format!("{name} copy"));
+                        this.servers
+                            .text(Field::InstanceName)
+                            .set(format!("{name} copy"));
                         if let Some(d) = &mut this.instances.dialog {
                             d.copy = true;
                         }
