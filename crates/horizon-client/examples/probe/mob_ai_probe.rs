@@ -189,6 +189,7 @@ fn goal_name(m: &Mob, name: &str) -> String {
     let vanilla = match name {
         "Float" => "FloatGoal",
         "Stroll" => "WaterAvoidingRandomStrollGoal",
+        "ParrotWander" => "ParrotWanderGoal",
         "RandomStroll" => "RandomStrollGoal",
         "RandomSwimming" => "RandomSwimmingGoal",
         "LookAtPlayer" => "LookAtPlayerGoal",

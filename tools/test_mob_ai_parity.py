@@ -272,6 +272,15 @@ def scenarios():
     add('bee_hive_rain', 300, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 162 persistent'], 'rain')
     add('bee_hive_morning', 1000, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 163 persistent'], 'time=22900 daycycle')
     add('bee_hive_honey', 2600, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 164 persistent nectar'])
+    # Parrots (#3091): FlyingMoveControl(10, false) and FlyingPathNavigation. ParrotWanderGoal flies
+    # to the top of a tree (an empty block over leaves or a log), and a parrot in the air glides
+    # down (calculateFlapping). On Peaceful: Parrot.getAmbient's 1-in-1000 imitation roll is the
+    # level's random there, which the probe doesn't share.
+    TREE = ['fill 4 -60 4 4 -56 4 minecraft:oak_log', 'fill 2 -55 2 6 -55 6 minecraft:oak_leaves[persistent=true]']
+    for i, seed in enumerate([181, 182]):
+        add(f'parrot_alone_{i}', 400, [f'mob minecraft:parrot 0.5 -60 0.5 {90 * i} {seed} persistent'], 'difficulty=0')
+    add('parrot_tree', 400, TREE + ['mob minecraft:parrot 0.5 -60 0.5 0 183 persistent'], 'difficulty=0')
+    add('parrot_falling', 100, ['mob minecraft:parrot 0.5 -50 0.5 0 184 persistent'], 'difficulty=0')
     # Mobs dropped into deep water (#542): FloatGoal users float at the surface (their navigation
     # can float, so Mob.jumpInLiquid adds 0.04 a tick), zombies sink.
     for species, seed in [('pig', 171), ('cow', 172), ('wolf', 173), ('cat', 174), ('horse', 175),

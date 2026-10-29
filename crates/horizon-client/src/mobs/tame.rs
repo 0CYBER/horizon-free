@@ -101,7 +101,8 @@ pub fn register(m: &mut Mob) {
     );
 }
 /// `Parrot.registerGoals`: a tamed parrot sits when told to and follows its
-/// owner from five blocks away (the wander and the shoulder come as they are).
+/// owner from five blocks away; it wanders to trees (`ParrotWanderGoal`) and
+/// lands on its owner's shoulder.
 pub fn register_parrot(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, TamePanic(Panic::new(1.25)));
@@ -109,7 +110,7 @@ pub fn register_parrot(m: &mut Mob) {
     g.add(1, LookAtPlayer::new(8.0));
     g.add(2, SitWhenOrdered);
     g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
-    g.add(2, Stroll::avoiding_water(1.0));
+    g.add(2, Stroll::parrot(1.0));
     g.add(3, LandOnOwnersShoulder);
 }
 /// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
@@ -226,10 +227,12 @@ fn teleport_to_owner(m: &mut Mob, w: &MobWorld) {
         }
     }
 }
-/// `TamableAnimal.canTeleportTo`: walkable, not on leaves, no collision.
+/// `TamableAnimal.canTeleportTo`: walkable, not on leaves (unless it can
+/// fly, `Parrot.canFlyToOwner`), no collision.
 fn can_teleport_to(m: &Mob, w: &MobWorld, p: [i32; 3]) -> bool {
     let below = w.facts.get(w.world.block(p[0], p[1] - 1, p[2]));
-    if !below.full_collision || below.name.ends_with("_leaves") {
+    let flies = m.species() == Species::Parrot;
+    if !below.full_collision || (!flies && below.name.ends_with("_leaves")) {
         return false;
     }
     let here = w.facts.get(w.world.block(p[0], p[1], p[2]));

@@ -19,12 +19,13 @@ use horizon_world::{
     registry::BlockStateId,
 };
 
-/// `Entity.moveDist`, `flyDist` and `nextStep`.
+/// `Entity.moveDist`, `flyDist`, `nextStep` and `Parrot.nextFlap`.
 #[derive(Clone, Copy, Debug)]
 pub struct Steps {
     pub move_dist: f32,
     pub fly_dist: f32,
     pub next_step: f32,
+    pub next_flap: f32,
     /// `AbstractHorse.gallopSoundCounter`.
     pub gallop: i32,
 }
@@ -34,6 +35,7 @@ impl Default for Steps {
             move_dist: 0.0,
             fly_dist: 0.0,
             next_step: 1.0,
+            next_flap: 1.0,
             gallop: 0,
         }
     }
@@ -759,6 +761,9 @@ impl Mob {
                     ));
                 }
             }
+        } else if w.facts.is_air(state) && self.species() == super::Species::Parrot {
+            // Entity.processFlappingMovement: a move ending in the air.
+            super::parrot::process_flapping(self, events);
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
