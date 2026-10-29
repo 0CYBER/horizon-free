@@ -424,6 +424,7 @@ impl Game<'_> {
         m.extra.fall_fly_ticks = fly_ticks;
         m.extra.auto_spin_attack = spinning;
         m.extra.main_hand_left = self.settings.main_hand_left;
+        m.extra.hidden_model_parts = !self.settings.file.model_customisation() & 0x7F;
         m.extra.using_item = using;
         m.extra.using_off_hand = using_off_hand;
         m.extra.blocking = blocking;
