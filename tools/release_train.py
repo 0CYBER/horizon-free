@@ -407,10 +407,10 @@ def notes(kind, version, prs, issues, previous=None):
         parts.append("### Known issues\n" + "\n".join(issues))
     contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != MAINTAINER})
     if contributors:
-        parts.append("Thanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
+        parts.append("### Contributors\nThanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
     if kind == "launcher":
         parts.append(LAUNCHER_FOOTER)
-    parts.append(DISCLAIMER)
+    parts.append("---\n" + DISCLAIMER)
     return title, "\n\n".join(parts) + "\n"
 
 

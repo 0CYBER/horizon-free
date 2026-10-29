@@ -940,6 +940,23 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
     match entity {
         BlockEntity::Sign(sign) => Some(Tag::compound(sign.encode())),
         BlockEntity::Spawner(s) => Some(s.update_tag()),
+        BlockEntity::Brushable(b) => {
+            let mut entries = Vec::new();
+            if let Some(face) = b.hit_direction {
+                entries.push(("hit_direction", Tag::Byte(face as i8)));
+            }
+            if let Some(item) = &b.item {
+                entries.push(("item", crate::save::item_to_nbt(item)));
+            }
+            Some(Tag::compound(entries))
+        }
+        BlockEntity::Shelf(s) => Some(Tag::compound([
+            ("Items", crate::save::encode_items(&s.items)),
+            (
+                "align_items_to_bottom",
+                Tag::Byte(i8::from(s.align_to_bottom)),
+            ),
+        ])),
         // BannerBlockEntity.getUpdateTag: saveWithoutMetadata, so the patterns,
         // the custom name and the components.
         BlockEntity::Banner(b) => {

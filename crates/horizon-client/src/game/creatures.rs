@@ -1618,7 +1618,13 @@ impl Game<'_> {
                             self.pop_resource(pos, d);
                         }
                     }
-                    self.world.set(pos[0], pos[1], pos[2], self.world.air)?;
+                    // Level.destroyBlock: setBlock(fluidState.createLegacyBlock(), 3),
+                    // so water stays water and a waterlogged block leaves its water.
+                    let b = self.res.behaviours();
+                    let left = b.legacy_block(b.fluid(old));
+                    if left != old {
+                        self.level_set(pos, left)?;
+                    }
                 }
                 MobEvent::Particles { kind, at, count } => {
                     // Mob particle bursts (hearts, smoke, splashes) around a point.
@@ -4566,6 +4572,14 @@ impl Game<'_> {
                 self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+                self.player_pumpkin_geometry(
+                    mob,
+                    mob.extra.armor[0].as_ref(),
+                    camera,
+                    alpha,
+                    packed,
+                    out,
+                );
             }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
@@ -4651,7 +4665,15 @@ impl Game<'_> {
                 let Some(model) = self.arrow_model.as_ref() else {
                     continue;
                 };
-                let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
+                // SpectralArrowRenderer, and TippableArrowRenderer's `getColor() > 0`.
+                let texture = if a.is_spectral_arrow() {
+                    "entity/projectiles/arrow_spectral"
+                } else if a.arrow.as_ref().is_some_and(|s| s.effect_color > 0) {
+                    "entity/projectiles/arrow_tipped"
+                } else {
+                    "entity/projectiles/arrow"
+                };
+                let Some(r) = atlas.sprites.get(texture).copied() else {
                     continue;
                 };
                 let m = glam::Mat4::from_translation(c)
