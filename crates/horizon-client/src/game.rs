@@ -13315,7 +13315,7 @@ impl ApplicationHandler for Game<'_> {
                             self.creative_screen.drag_scrollbar(self.cursor.1 - oy);
                         }
                         if self.screen == Screen::Inventory {
-                            self.loom_drag();
+                            self.station_drag();
                         }
                         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
                             self.inventory_drag_move();
@@ -13624,7 +13624,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::Inventory => {
                             self.inventory_mouse_release(button == MouseButton::Right);
-                            self.loom_release();
+                            self.station_release();
                         }
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
