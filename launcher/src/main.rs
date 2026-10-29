@@ -211,7 +211,8 @@ struct Launcher {
     accounts: Accounts,
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
-    keychain: bool,
+    /// What to say when the keychain doesn't keep sign-ins ([`account::no_keychain`]).
+    keychain: Option<String>,
     /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
     /// none until the keychain has been read.
     owner: Option<bool>,
@@ -431,7 +432,7 @@ impl Launcher {
             accounts: Accounts::load(),
             sign_in: None,
             sign_in_state: None,
-            keychain: true,
+            keychain: None,
             owner: None,
             owner_screen_open: false,
             dev_clicks: 0,
@@ -493,7 +494,7 @@ impl Launcher {
         let accounts = this.accounts.clone();
         std::thread::spawn(move || {
             let store = account::store();
-            let _ = keychain_tx.send(Msg::Keychain(store.persistent()));
+            let _ = keychain_tx.send(Msg::Keychain(account::no_keychain()));
             let _ = keychain_tx.send(Msg::Owner(accounts.has_owner(store)));
         });
         std::thread::spawn(move || {
@@ -678,7 +679,7 @@ impl Launcher {
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
-                Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Keychain(said) => self.keychain = said,
                 Msg::Owner(owns) => self.owner = Some(owns),
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::JavaGame(id, home, cmd) => {
@@ -692,6 +693,7 @@ impl Launcher {
                             self.client = Some(r);
                             self.client_home = Some(home);
                             self.client_run = Some((id, Instant::now()));
+                            self.client_error = account::take_unsaved();
                             self.step_aside(cx);
                         }
                         Err(e) => {
@@ -728,6 +730,8 @@ impl Launcher {
                         // Still play, offline, and say why.
                         if let Some(e) = offline {
                             self.client_error = Some(format!("Playing offline: {e}"));
+                        } else if let Some(e) = account::take_unsaved() {
+                            self.client_error = Some(e);
                         }
                         self.accounts = Accounts::load();
                         // An offline name the player picked (the quick switch).
@@ -3688,15 +3692,14 @@ impl Launcher {
             )),
             None => div().child(tr("Add another account.")),
         };
-        let detail = if self.keychain || self.accounts.accounts.is_empty() {
-            detail
-        } else {
-            div()
+        let detail = match self.keychain.clone() {
+            Some(said) if !self.accounts.accounts.is_empty() => div()
                 .flex()
                 .flex_col()
                 .gap(px(4.))
                 .child(detail)
-                .child(div().child(account::NO_KEYCHAIN))
+                .child(div().child(said)),
+            _ => detail,
         };
         let action = if !configured {
             None
