@@ -633,6 +633,8 @@ impl Game<'_> {
             && m.id.is_empty()
         {
             **m = taken;
+            // BlockEntity.setChanged: the next save writes its chunk.
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
         }
     }
     /// Options > Mods' rows for the native mods, after the others.
