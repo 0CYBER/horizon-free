@@ -1231,7 +1231,7 @@ impl<B: Backend> Sounds for Bound<'_, B> {
             .update_category_volume(source, gain, self.backend);
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_backend {
     use super::{Backend, ChannelId};
     use crate::sound_events::Sound;

@@ -28,7 +28,7 @@ const NAME: &str = "Native mods";
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "0500ff24aa5933fca95a877ef41125353c4b4fe3";
+pub const MIXINS_REV: &str = "0d6b103c70633d8fd9443d8d0acd3aadaacedb06";
 /// The profile and features of the release's own game (game-build.yml).
 const PROFILE: &str = "release";
 const FEATURES: &str = "horizon-client/mods";
@@ -492,6 +492,16 @@ fn tool(rust: &Toolchain, rev: &str) -> Result<PathBuf, String> {
     Ok(bin)
 }
 
+/// `horizon-mixins apply`: the mods in `mods` applied to `source`, into `out`. It runs
+/// `cargo metadata`, so it gets the launcher's toolchain like a build does: on a computer with no
+/// Rust of its own, a plain command found no cargo (E_METADATA).
+fn apply(rust: &Toolchain, tool: &Path, source: &Path, mods: &Path, out: &Path) -> Command {
+    let mut cmd = rust.command(tool);
+    cmd.arg("apply").arg("--workspace").arg(source);
+    cmd.arg("--mods").arg(mods).arg("--out").arg(out);
+    cmd
+}
+
 /// Horizon's source at commit `revision`: GitHub's archive of it, unpacked once, with the commit in
 /// `.horizon-revision` (bundles pin it). A Nightly's commit stays downloadable after the Nightly
 /// is gone: its `nightly-source/…` tag keeps it (docs/release-flow.md). Links are left out:
@@ -614,10 +624,11 @@ pub fn build(
         let real = plain(root().canonicalize().map_err(|e| e.to_string())?);
         let fresh = real.join("stage.new");
         let _ = fs::remove_dir_all(&fresh);
-        let mut apply = Command::new(&tool);
-        apply.arg("apply").arg("--workspace").arg(&source);
-        apply.arg("--mods").arg(&incoming).arg("--out").arg(&fresh);
-        run(apply, "horizon-mixins", |_| {})?;
+        run(
+            apply(&rust, &tool, &source, &incoming, &fresh),
+            "horizon-mixins",
+            |_| {},
+        )?;
         let stage = root().join("stage");
         sync(&fresh, &stage)?;
         let _ = fs::remove_dir_all(&fresh);
@@ -836,6 +847,41 @@ mod tests {
         assert_eq!(
             plain("/home/me/.local/share/horizon-launcher/native"),
             PathBuf::from("/home/me/.local/share/horizon-launcher/native")
+        );
+    }
+
+    #[test]
+    fn horizon_mixins_finds_the_launchers_cargo() {
+        let rust = Toolchain {
+            dir: PathBuf::from("/rust/1.99.1-x"),
+        };
+        let cmd = apply(
+            &rust,
+            Path::new("/tools/horizon-mixins"),
+            Path::new("/src"),
+            Path::new("/mods"),
+            Path::new("/out"),
+        );
+        let path = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "PATH")
+            .and_then(|(_, v)| v)
+            .unwrap();
+        assert_eq!(
+            std::env::split_paths(path).next(),
+            Some(rust.dir.join("bin"))
+        );
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            [
+                "apply",
+                "--workspace",
+                "/src",
+                "--mods",
+                "/mods",
+                "--out",
+                "/out"
+            ]
         );
     }
 

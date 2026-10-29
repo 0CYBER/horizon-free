@@ -230,7 +230,7 @@ pub struct Info {
 /// `VibrationSelector`: the closest, then highest-frequency candidate of a tick.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Selector {
-    pub(crate) current: Option<(Info, i64)>,
+    pub current: Option<(Info, i64)>,
 }
 /// `VibrationSystem.Data`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -278,7 +278,7 @@ pub struct SpawnData {
 /// Which `SpawnData` is next: one of the potentials (the same object in
 /// vanilla, so changing it changes the potential) or its own.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Next {
+pub enum Next {
     Potential(usize),
     Own(SpawnData),
 }
@@ -288,7 +288,7 @@ pub struct Spawner {
     pub spawn_delay: i32,
     /// `SpawnPotentials`: data and weight.
     pub potentials: Vec<(SpawnData, i32)>,
-    pub(crate) next: Option<Next>,
+    pub next: Option<Next>,
     pub min_spawn_delay: i32,
     pub max_spawn_delay: i32,
     pub spawn_count: i32,
@@ -300,6 +300,24 @@ pub struct Spawner {
     pub client_delay: i32,
     pub spin: f64,
     pub o_spin: f64,
+}
+impl Default for Spawner {
+    fn default() -> Self {
+        Self {
+            spawn_delay: 20,
+            potentials: Vec::new(),
+            next: None,
+            min_spawn_delay: 200,
+            max_spawn_delay: 800,
+            spawn_count: 4,
+            max_nearby_entities: 6,
+            required_player_range: 16,
+            spawn_range: 4,
+            client_delay: 20,
+            spin: 0.0,
+            o_spin: 0.0,
+        }
+    }
 }
 /// `TrialSpawnerConfig`.
 #[derive(Clone, Debug, PartialEq)]
@@ -313,6 +331,26 @@ pub struct TrialConfig {
     pub spawn_potentials: Vec<(SpawnData, i32)>,
     pub loot_tables_to_eject: Vec<(String, i32)>,
     pub items_to_drop_when_ominous: String,
+}
+impl Default for TrialConfig {
+    /// `TrialSpawnerConfig.Builder`'s defaults.
+    fn default() -> Self {
+        Self {
+            spawn_range: 4,
+            total_mobs: 6.0,
+            simultaneous_mobs: 2.0,
+            total_mobs_added_per_player: 2.0,
+            simultaneous_mobs_added_per_player: 1.0,
+            ticks_between_spawn: 40,
+            spawn_potentials: Vec::new(),
+            loot_tables_to_eject: vec![
+                ("minecraft:spawners/trial_chamber/consumables".into(), 1),
+                ("minecraft:spawners/trial_chamber/key".into(), 1),
+            ],
+            items_to_drop_when_ominous:
+                "minecraft:spawners/trial_chamber/items_to_drop_when_ominous".into(),
+        }
+    }
 }
 /// A `Holder<TrialSpawnerConfig>` as saved: a registry id
 /// (`minecraft:trial_chamber/breeze/normal`) or an inline config.
@@ -346,6 +384,28 @@ pub struct TrialSpawner {
     /// `getDispensingItems`, kept once rolled (not saved): the ominous items
     /// and their weights (the rolled counts).
     pub dispensing: Option<Vec<ItemStack>>,
+}
+impl Default for TrialSpawner {
+    fn default() -> Self {
+        Self {
+            normal: ConfigSlot::default(),
+            ominous: ConfigSlot::default(),
+            target_cooldown_length: 36000,
+            required_player_range: 14,
+            detected_players: Vec::new(),
+            current_mobs: Vec::new(),
+            cooldown_ends_at: 0,
+            next_mob_spawns_at: 0,
+            total_mobs_spawned: 0,
+            next_spawn_data: None,
+            ejecting_loot_table: None,
+            is_ominous: false,
+            has_display: false,
+            spin: 0.0,
+            o_spin: 0.0,
+            dispensing: None,
+        }
+    }
 }
 /// `VaultConfig`.
 #[derive(Clone, Debug, PartialEq)]
