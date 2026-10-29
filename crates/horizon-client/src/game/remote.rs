@@ -194,6 +194,10 @@ pub(super) struct Remote {
     /// The profile name each player entity was created with (`RemotePlayer.getGameProfile`): it outlives the
     /// player-list entry, which servers remove to hide their NPCs from the list.
     level_player_names: HashMap<i32, String>,
+    /// The `textures` each player entity found in the player list first
+    /// (`AbstractClientPlayer.getPlayerInfo` keeps that `PlayerInfo`): its skin
+    /// outlives the entry, which NPC plugins remove a moment after spawning.
+    level_player_textures: HashMap<i32, horizon_client::skins::Textures>,
     /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
     /// theirs in `Mob::glowing`.
     glowing: std::collections::HashSet<i32>,
@@ -504,6 +508,7 @@ impl Game<'_> {
             online_mode: false,
             level_players: HashMap::new(),
             level_player_names: HashMap::new(),
+            level_player_textures: HashMap::new(),
             glowing: Default::default(),
             profile: 0,
             profile_name: String::new(),
@@ -1129,6 +1134,7 @@ impl Game<'_> {
                 // player entities re-map to their profiles on AddEntity.
                 r.level_players.clear();
                 r.level_player_names.clear();
+                r.level_player_textures.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -1984,6 +1990,8 @@ impl Game<'_> {
                 let rotation =
                     [p.yaw, p.pitch, p.head_yaw].map(horizon_protocol::buf::unpack_degrees);
                 if let Some(r) = self.remote.as_mut() {
+                    // A new entity looks its PlayerInfo up afresh.
+                    r.level_player_textures.remove(&p.id);
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
                         // createEntityFromPacket: the player takes the profile of its list entry.
@@ -2022,6 +2030,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.level_players.remove(&id);
                         r.level_player_names.remove(&id);
+                        r.level_player_textures.remove(&id);
                     }
                     self.remove_entity(id);
                 }
@@ -3254,15 +3263,34 @@ impl Game<'_> {
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
     fn update_remote_skins(&mut self) {
-        let Some(r) = self.remote.as_ref() else {
+        let Some(r) = self.remote.as_mut() else {
             return;
         };
+        // AbstractClientPlayer.getPlayerInfo: a player entity takes its list entry's
+        // profile the first time it finds one and keeps it, entry removed or not.
+        for (id, uuid) in &r.level_players {
+            if !r.level_player_textures.contains_key(id)
+                && let Some(textures) = r.skin_textures.get(uuid)
+            {
+                r.level_player_textures.insert(*id, textures.clone());
+            }
+        }
+        let r = &*r;
         let local = r.profile;
         let mut entries: Vec<(u128, horizon_client::skins::Textures)> = r
             .skin_textures
             .iter()
             .map(|(uuid, textures)| (*uuid, textures.clone()))
             .collect();
+        // The players whose entry is gone show the profile their entity kept.
+        for (id, textures) in &r.level_player_textures {
+            if let Some(uuid) = r.level_players.get(id)
+                && !r.skin_textures.contains_key(uuid)
+                && !entries.iter().any(|(u, _)| u == uuid)
+            {
+                entries.push((*uuid, textures.clone()));
+            }
+        }
         // Minecraft.profileFuture: the signed-in account's own profile, fetched from the
         // services, gives the local player its skin where the server sends none (single
         // player's offline-mode server).
