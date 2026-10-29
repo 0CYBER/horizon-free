@@ -22,3 +22,11 @@ pub fn number(tag: Option<&Tag>) -> Option<i64> {
         _ => return None,
     })
 }
+/// Any numeric tag as f64, keeping a float's or double's fraction.
+pub fn float(tag: Option<&Tag>) -> Option<f64> {
+    Some(match tag? {
+        Tag::Float(b) => f64::from(f32::from_bits(*b)),
+        Tag::Double(b) => f64::from_bits(*b),
+        other => number(Some(other))? as f64,
+    })
+}

@@ -361,8 +361,9 @@ impl NativePost {
 pub fn frame_inputs(frame: &Frame, size: [u32; 2], seconds: f32, index: u32) -> FrameInputs {
     let aspect = size[0] as f32 / size[1].max(1) as f32;
     let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
-    let projection =
-        super::world_projection(frame.fov_degrees, aspect, frame.depth_far) * frame.bob;
+    let projection = super::world_projection(frame.fov_degrees, aspect, frame.depth_far)
+        * frame.bob
+        * frame.spin;
     // A celestial body's direction at `angle` degrees (SkyRenderer: Y -90°, then X by the
     // angle, of straight up): overhead at 0, rising in the east (+x).
     let body = |angle: f32| {

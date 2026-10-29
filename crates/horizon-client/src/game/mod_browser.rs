@@ -456,7 +456,7 @@ impl Game<'_> {
         Some(BrowserStack {
             item: stack.item.to_string(),
             count: stack.count,
-            components: super::mod_recipes::components(&stack),
+            components: super::native_recipes::components(&stack),
         })
     }
 }

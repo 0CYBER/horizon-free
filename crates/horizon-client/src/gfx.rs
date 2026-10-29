@@ -105,12 +105,9 @@ const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
 /// targets (phase 2 draws over phase 1, reading the test's results).
-/// LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
+/// `LevelRenderer.addSkyPass`: fluids and camera effects block the sky pass.
 fn sky_open(frame: &Frame) -> bool {
-    match frame.fog {
-        Some(f) => f.sky_end > 2.0,
-        None => !frame.underwater,
-    }
+    !frame.sky_blocked
 }
 
 /// The Overworld-style sky (disc, sunset, stars, void) draws this frame.
@@ -222,6 +219,9 @@ pub struct Frame<'a> {
     /// The `GameRenderer.bobHurt`/`bobView` pose multiplied into the
     /// projection (`crate::camera::bob_matrix`).
     pub bob: Mat4,
+    /// The spinning effect multiplied into the level's projection only
+    /// (`crate::camera::spinning_effect_matrix`), not the hand's.
+    pub spin: Mat4,
     pub sky: Sky,
     /// Render distance in blocks (fog end).
     pub distance: f32,
@@ -235,6 +235,8 @@ pub struct Frame<'a> {
     pub cave_culling: bool,
     /// Title screen: only the dedicated panorama cube map and the HUD.
     pub title: bool,
+    /// Lava, powder snow, blindness or darkness blocks the sky pass.
+    pub sky_blocked: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
     /// The End: clear to black and draw the resident sky box behind the world.
@@ -537,6 +539,9 @@ pub struct Renderer {
     hdr: Option<hdr::Hdr>,
     /// The HDR output the window's surface can present.
     hdr_output: Option<hdr::Output>,
+    /// The marker file of an HDR output that has not presented a frame yet
+    /// (`graphics::HDR_MARKER`).
+    hdr_marker: Option<std::path::PathBuf>,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
@@ -1964,7 +1969,7 @@ impl Renderer {
         // ulps covers that spread at any resolution while staying far below
         // the 0.001 a model's feet sit higher, so shadows never bleed onto
         // the feet.
-        let shadow_blob_pipeline = entity_pipeline(
+        let shadow_blob_pipeline = entity_pipeline_with(
             "Entity shadows",
             None,
             false,
@@ -1976,6 +1981,8 @@ impl Renderer {
             },
             alpha_blend,
             false,
+            "fs_entity_shadow",
+            wgpu::ColorWrites::ALL,
         );
         // RenderPipelines.ITEM_TRANSLUCENT: blended, depth tested. Drawn before
         // translucent terrain, it cannot write depth: the water behind a
@@ -2642,6 +2649,7 @@ impl Renderer {
             world_post,
             hdr: None,
             hdr_output,
+            hdr_marker: None,
             pack_post: None,
             native: None,
             pass_timing: pack_timing::PassTiming::logging(),
@@ -3200,9 +3208,17 @@ impl Renderer {
     }
     /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
-    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32) {
+    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32, marker: &std::path::Path) {
         let output = self.hdr_output.filter(|_| on && self.surface.is_some());
         if output.is_some() != self.hdr.is_some() {
+            // If the game dies before HDR output shows a frame, the marker is still there at
+            // the next start, which then comes up with HDR off.
+            if output.is_some() {
+                let _ = std::fs::write(marker, "HDR output was being switched on\n");
+                self.hdr_marker = Some(marker.to_owned());
+            } else if let Some(marker) = self.hdr_marker.take() {
+                let _ = std::fs::remove_file(marker);
+            }
             let format = self.config.format.remove_srgb_suffix();
             self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
@@ -3418,7 +3434,7 @@ impl Renderer {
             frame.fov_degrees,
             frame.yaw,
             frame.pitch,
-            frame.bob,
+            frame.bob * frame.spin,
             frame.depth_far,
         )
     }
@@ -4508,7 +4524,7 @@ impl Renderer {
             cull.bind_depth(&self.device, world_depth);
         }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
-        let clear = if frame.title || (frame.end_sky && !frame.underwater) {
+        let clear = if frame.title || (frame.end_sky && !frame.underwater && sky_open(frame)) {
             wgpu::Color::BLACK
         } else {
             wgpu::Color {
@@ -5229,6 +5245,12 @@ impl Renderer {
                 startup_step(format_args!("presenting the first frame"));
             }
             self.queue.present(surface_frame);
+            if self.hdr.is_some()
+                && let Some(marker) = self.hdr_marker.take()
+            {
+                let _ = std::fs::remove_file(marker);
+                log::info!("Horizon renderer: HDR output presented its first frame");
+            }
             if reconfigure && let Some(surface) = &self.surface {
                 Self::configure(
                     &self.device,
