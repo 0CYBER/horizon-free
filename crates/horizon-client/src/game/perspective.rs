@@ -417,6 +417,11 @@ impl Game<'_> {
         m.anim.attack_anim = attack.1;
         m.extra.main_hand = main;
         m.extra.off_hand = off;
+        m.extra.head = self.armor[0].as_ref().map(|s| s.item.clone());
+        m.extra.chest = self.armor[1].as_ref().map(|s| s.item.clone());
+        m.extra.legs = self.armor[2].as_ref().map(|s| s.item.clone());
+        m.extra.feet = self.armor[3].as_ref().map(|s| s.item.clone());
+        m.extra.armor = self.armor.clone();
         m.extra.crouching = crouching;
         m.extra.passenger = riding;
         m.velocity = velocity;
@@ -492,6 +497,7 @@ impl Game<'_> {
         );
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
+        self.head_item_geometry(m, camera, alpha, packed, true, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
         // in its team by its profile name.
         if self.potions.effects.get("glowing").is_some() {
@@ -563,6 +569,7 @@ impl Game<'_> {
             &mut verts,
         );
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+        self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).
