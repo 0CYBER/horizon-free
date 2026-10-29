@@ -1894,6 +1894,7 @@ impl Game<'_> {
                     p.pitch
                 })
                 .clamp(-90.0, 90.0);
+                self.snap_player_model_pitch();
             }
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
@@ -3716,12 +3717,8 @@ impl Game<'_> {
         } else {
             p.yaw
         };
-        let pitch = (if p.relatives & rel::X_ROT != 0 {
-            self.pitch + p.pitch
-        } else {
-            p.pitch
-        })
-        .clamp(-90.0, 90.0);
+        let relative_pitch = p.relatives & rel::X_ROT != 0;
+        let pitch = position_packet_pitch(self.pitch, p.pitch, relative_pitch);
         let delta = horizon_client::player_sync::teleport_velocity(
             velocity,
             (self.yaw, self.pitch),
@@ -3751,6 +3748,14 @@ impl Game<'_> {
         self.previous_position = position;
         self.yaw = yaw;
         self.pitch = pitch;
+        // setValuesFromPositionPacket: setOldPosAndRot gives xRotO the same
+        // change, so a relative pitch keeps the model's ease and an absolute
+        // one snaps it.
+        if let Some(m) = self.player_model.as_mut() {
+            m.previous_head_pitch =
+                position_packet_pitch(m.previous_head_pitch, p.pitch, relative_pitch);
+            m.head_pitch = pitch;
+        }
         if let Some(id) = self.remote.as_mut().and_then(|r| r.ghast_dismount.take()) {
             self.place_ghast_under(id, position);
         }
@@ -6533,6 +6538,13 @@ impl Game<'_> {
     }
 }
 
+/// `PositionMoveRotation.calculateAbsolute`'s pitch: the packet's pitch,
+/// added to `source` when it is relative, clamped to +-90.
+fn position_packet_pitch(source: f32, change: f32, relative: bool) -> f32 {
+    let offset = if relative { source } else { 0.0 };
+    (offset + change).clamp(-90.0, 90.0)
+}
+
 /// `Mth.wrapDegrees`.
 fn wrap_degrees(a: f32) -> f32 {
     let a = a % 360.0;
@@ -6942,6 +6954,30 @@ impl Remote {
 #[cfg(test)]
 mod tests {
     use super::Game;
+
+    /// `handleMovePlayer` moves the player's pitch and the model's old pitch
+    /// (`xRotO`) alike: a relative change keeps the ease a tick began, each
+    /// end clamped on its own, and an absolute one snaps both (#3844).
+    #[test]
+    fn a_position_packet_moves_both_pitch_ends() {
+        use super::position_packet_pitch as pitch;
+        // The tick is laying the head down from 30 to 0; the packet turns 10.
+        assert_eq!(
+            (pitch(30.0, 10.0, true), pitch(0.0, 10.0, true)),
+            (40.0, 10.0)
+        );
+        // Each end clamps on its own.
+        assert_eq!(
+            (pitch(80.0, 20.0, true), pitch(60.0, 20.0, true)),
+            (90.0, 80.0)
+        );
+        // An absolute pitch ignores both ends.
+        assert_eq!(
+            (pitch(30.0, -45.0, false), pitch(0.0, -45.0, false)),
+            (-45.0, -45.0)
+        );
+        assert_eq!(pitch(0.0, 120.0, false), 90.0);
+    }
 
     /// Q over a slot of the inventory on a server (#3357): the predicted THROW
     /// drops the stack, so the player's hand swings, as `LivingEntity.drop`
