@@ -239,6 +239,8 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   unfocused; the interface moves only to show cause and effect (a row arrives where it was added,
   progress fills). Reduced motion: nothing moves.
 - **Copy says what happens** ("Downloads 26.3 and Java 21, about 600 MB"), never praises.
+- The specimen (`HORIZON_LAUNCHER_PAGE=specimen horizon-launcher`) draws the type and colours in the
+  launcher itself.
 
 ## The mark
 

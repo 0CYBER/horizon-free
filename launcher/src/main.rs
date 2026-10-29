@@ -37,6 +37,7 @@ mod scrollbar;
 mod servers_page;
 mod shortcut_page;
 mod skin_page;
+mod specimen;
 mod switch_page;
 mod theme;
 mod themes_page;
@@ -4197,6 +4198,15 @@ fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
+        if specimen::wanted() {
+            return div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .bg(t.side)
+                .children(titlebar::render(&t, window))
+                .child(specimen::render(&t));
+        }
         self.scale = window.scale_factor();
         self.perf.frame();
         if self.bench.as_ref().is_some_and(perf::Bench::scrolling) {
