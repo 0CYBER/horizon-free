@@ -334,25 +334,43 @@ fn minecraft_login(ep: &Endpoints, ms_access: &str) -> Result<Minecraft, String>
         return Err("Xbox Live refused the sign-in.".into());
     };
     let xuid = claims.and_then(|c| str_field(c, "xid"));
+    let (token, expires_in) = minecraft_token(ep, &format!("XBL3.0 x={uhs};{xsts_token}"))?;
+    Ok(Minecraft {
+        token,
+        expires_at: now() + expires_in,
+        xuid,
+    })
+}
+
+/// The Minecraft access token and its lifetime from the XSTS one (`XBL3.0 x=<uhs>;<token>`).
+/// `launcher/login` first: a new account's token from `login_with_xbox` names no profile, so
+/// joining an online-mode server answers "Profile not found" (found and diagnosed by
+/// martipops). `login_with_xbox` stays the fallback, so a sign-in that worked before still does
+/// when the other refuses.
+fn minecraft_token(ep: &Endpoints, xtoken: &str) -> Result<(String, u64), String> {
+    let lifetime = |v: &Value| v.get("expires_in").and_then(Value::as_u64).unwrap_or(86400);
+    let launcher = send(
+        request_to("POST", &format!("{}/launcher/login", ep.minecraft)),
+        Some(Body::Json(
+            json!({ "xtoken": xtoken, "platform": "PC_LAUNCHER" }),
+        )),
+        "the Minecraft services",
+    );
+    if let Ok((200, v)) = &launcher {
+        if let Some(token) = str_field(v, "access_token") {
+            return Ok((token, lifetime(v)));
+        }
+    }
     let (status, mc) = send(
         request_to(
             "POST",
             &format!("{}/authentication/login_with_xbox", ep.minecraft),
         ),
-        Some(Body::Json(
-            json!({ "identityToken": format!("XBL3.0 x={uhs};{xsts_token}") }),
-        )),
+        Some(Body::Json(json!({ "identityToken": xtoken }))),
         "the Minecraft services",
     )?;
     match (status, str_field(&mc, "access_token")) {
-        (200, Some(token)) => Ok(Minecraft {
-            token,
-            expires_at: now()
-                + mc.get("expires_in")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(86400),
-            xuid,
-        }),
+        (200, Some(token)) => Ok((token, lifetime(&mc))),
         // New Azure apps are refused until Mojang approves them (Minecraft API access).
         (403, _) => Err(
             "The Minecraft services refused this launcher: its app is not approved by Mojang yet."
