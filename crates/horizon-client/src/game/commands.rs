@@ -1430,7 +1430,10 @@ impl Game<'_> {
         let targets = if id.starts_with("teleport.targets") {
             self.entities(ctx, "targets", false)?
         } else {
-            vec![self.implied_player()]
+            vec![
+                self.source_entity()
+                    .ok_or_else(|| err("permissions.requires.entity", &[]))?,
+            ]
         };
         if id.ends_with("destination") {
             let dest = self.entities(ctx, "destination", false)?[0];
