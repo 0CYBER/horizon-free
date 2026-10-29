@@ -56,7 +56,7 @@ pub struct Column {
 impl Column {
     /// Reduce an entire horizontal footprint, rather than inflating its corner
     /// column (a single leaf used to become a whole distant tree-sized slab).
-    pub(crate) fn reduced(columns: &[Column; 256], x: usize, z: usize, width: usize) -> Self {
+    pub fn reduced(columns: &[Column; 256], x: usize, z: usize, width: usize) -> Self {
         if width == 1 {
             return columns[z * 16 + x].clone();
         }
@@ -139,7 +139,7 @@ impl Column {
         }
         column
     }
-    pub(crate) fn push(&mut self, span: Span) {
+    pub fn push(&mut self, span: Span) {
         if let Some(last) = self.spans.last_mut()
             && last.max == span.min
             && last.state == span.state
