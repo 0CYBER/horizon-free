@@ -158,11 +158,7 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
 pub fn environmental(kind: DamageKind) -> bool {
     matches!(
         kind,
-        DamageKind::Cactus
-            | DamageKind::OnFire
-            | DamageKind::InFire
-            | DamageKind::Campfire
-            | DamageKind::Lava
+        DamageKind::Cactus | DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava
     )
 }
 /// The hurt sound: a ball's is muffled, and it has no ambient sound
@@ -450,11 +446,13 @@ mod tests {
     }
 
     #[test]
-    fn campfire_damage_is_fire_and_makes_it_panic() {
-        // `campfire` is in #is_fire and #panic_environmental_causes (#4037).
+    fn campfire_damage_is_fire_and_has_no_knockback_but_does_not_cause_panic() {
+        // `campfire` is in #is_fire and #no_knockback, but in neither
+        // #panic_causes nor #panic_environmental_causes (#4037).
         let source = Damage::of(DamageKind::Campfire);
         assert!(source.is_fire());
         assert!(source.no_knockback());
-        assert!(environmental(DamageKind::Campfire));
+        assert!(!source.causes_panic());
+        assert!(!environmental(DamageKind::Campfire));
     }
 }

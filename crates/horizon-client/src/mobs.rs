@@ -644,6 +644,7 @@ impl Damage {
                 | DamageKind::Spit
                 | DamageKind::Stalagmite
                 | DamageKind::Starve
+                | DamageKind::Campfire
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
