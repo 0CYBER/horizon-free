@@ -22,6 +22,12 @@ pub struct Player {
     pub xuid: String,
 }
 
+impl std::fmt::Debug for Player {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Player({}, <token hidden>)", self.name)
+    }
+}
+
 /// Everything the command needs besides the version JSON.
 pub struct Launch<'a> {
     /// Holds `versions/`, `libraries/`, `assets/`.
@@ -76,9 +82,96 @@ fn allowed(rules: &Value, os: &str) -> bool {
     allow
 }
 
-/// The libraries this system uses, then the client jar.
+/// A version file.
+pub fn read(path: &Path) -> Result<Value, String> {
+    fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A library's name without its version: `group:artifact[:classifier]`.
+fn library_key(library: &Value) -> String {
+    let mut parts = library["name"].as_str().unwrap_or_default().split(':');
+    let (group, artifact) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
+    match parts.nth(1) {
+        Some(classifier) => format!("{group}:{artifact}:{classifier}"),
+        None => format!("{group}:{artifact}"),
+    }
+}
+
+/// A version with what it `inheritsFrom` (a loader's profile on the game's version) merged in, as
+/// the official launcher reads it: the child's fields over the parent's, its libraries first (a
+/// parent's library it names again is left out), its arguments after the parent's, and the
+/// parent's client jar (`jar`).
+pub fn resolve(version: Value, minecraft: &Path) -> Result<Value, String> {
+    resolve_from(version, minecraft, &mut Vec::new())
+}
+
+/// `resolve`, with the ids already on the way down: a version met twice is a loop.
+fn resolve_from(version: Value, minecraft: &Path, seen: &mut Vec<String>) -> Result<Value, String> {
+    let Some(parent) = version["inheritsFrom"].as_str() else {
+        return Ok(version);
+    };
+    let id = version["id"].as_str().unwrap_or_default();
+    seen.push(id.to_owned());
+    if seen.iter().any(|s| s == parent) {
+        return Err(format!("{id}: inheritsFrom loops"));
+    }
+    let file = minecraft
+        .join("versions")
+        .join(mojang::relative(parent)?)
+        .join(format!("{parent}.json"));
+    let mut merged = resolve_from(read(&file)?, minecraft, seen)?;
+    let jar = merged["jar"]
+        .as_str()
+        .or(merged["id"].as_str())
+        .unwrap_or(parent)
+        .to_string();
+    let own: Vec<Value> = version["libraries"].as_array().cloned().unwrap_or_default();
+    let named: std::collections::HashSet<String> = own.iter().map(library_key).collect();
+    let mut libraries = own;
+    libraries.extend(
+        merged["libraries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|l| !named.contains(&library_key(l)))
+            .cloned(),
+    );
+    for side in ["game", "jvm"] {
+        let mut list = merged["arguments"][side]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        list.extend(
+            version["arguments"][side]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        if !list.is_empty() {
+            merged["arguments"][side] = Value::Array(list);
+        }
+    }
+    for (key, value) in version.as_object().into_iter().flatten() {
+        if !matches!(key.as_str(), "libraries" | "arguments" | "inheritsFrom") {
+            merged[key] = value.clone();
+        }
+    }
+    merged["libraries"] = Value::Array(libraries);
+    merged["jar"] = jar.into();
+    Ok(merged)
+}
+
+/// The libraries this system uses, then the client jar (a loader's: the game's, `jar`).
 pub fn classpath(version: &Value, minecraft: &Path, os: &str) -> Result<Vec<PathBuf>, String> {
     let id = version["id"].as_str().ok_or("The version file has no id")?;
+    let jar = version["jar"].as_str().unwrap_or(id);
     let mut paths: Vec<PathBuf> = Vec::new();
     for library in version["libraries"].as_array().into_iter().flatten() {
         if !allowed(&library["rules"], os) {
@@ -94,8 +187,8 @@ pub fn classpath(version: &Value, minecraft: &Path, os: &str) -> Result<Vec<Path
     paths.push(
         minecraft
             .join("versions")
-            .join(mojang::relative(id)?)
-            .join(format!("{id}.jar")),
+            .join(mojang::relative(jar)?)
+            .join(format!("{jar}.jar")),
     );
     Ok(paths)
 }
@@ -290,23 +383,23 @@ pub fn command(version: &Value, launch: &Launch) -> Result<Command, String> {
             .join(mojang::relative(file)?);
         jvm.push(arg.replace("${path}", &path(&config)));
     }
-    let (jvm_list, game) = match version["arguments"].as_object() {
-        Some(a) => (list(&a["jvm"], launch.os), list(&a["game"], launch.os)),
-        // Before 1.13: one line of game arguments, and the JVM's natives and classpath.
-        None => (
-            vec![
-                "-Djava.library.path=${natives_directory}".into(),
-                "-cp".into(),
-                "${classpath}".into(),
-            ],
-            version["minecraftArguments"]
-                .as_str()
-                .unwrap_or("")
-                .split_whitespace()
-                .map(String::from)
-                .collect(),
-        ),
-    };
+    let arguments = &version["arguments"];
+    let (mut jvm_list, mut game) = (Vec::new(), Vec::new());
+    // Before 1.13: one line of game arguments, and the JVM's natives and classpath. A loader's
+    // profile on such a version adds its own lists after them.
+    if let Some(line) = version["minecraftArguments"].as_str() {
+        jvm_list.extend(
+            [
+                "-Djava.library.path=${natives_directory}",
+                "-cp",
+                "${classpath}",
+            ]
+            .map(String::from),
+        );
+        game.extend(line.split_whitespace().map(String::from));
+    }
+    jvm_list.extend(list(&arguments["jvm"], launch.os));
+    game.extend(list(&arguments["game"], launch.os));
     jvm.extend(jvm_list.iter().map(|a| fill(a, &vars)));
     jvm.extend(launch.jvm_args.iter().cloned());
     let mut cmd = Command::new(launch.java);

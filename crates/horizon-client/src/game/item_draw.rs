@@ -458,11 +458,35 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn civil_dates_follow_the_gregorian_calendar() {
         assert_eq!(civil(0), (1970, 1, 1));
         assert_eq!(civil(19_716), (2023, 12, 25));
         assert_eq!(civil(11_016), (2000, 2, 29));
+    }
+
+    #[test]
+    fn a_shield_is_used_for_the_vanilla_s_time() {
+        // Item.getUseDuration: an item with `blocks_attacks` (a shield) is
+        // used for 72000 ticks, so its use animation (the arm held up)
+        // runs instead of ending at once (#2289).
+        let mut shield = Components::new();
+        shield.insert("minecraft:blocks_attacks".into(), json!({}));
+        assert_eq!(use_duration(&shield), 72_000);
+        // Food is used for as long as it takes to eat it.
+        let mut food = Components::new();
+        food.insert(
+            "minecraft:consumable".into(),
+            json!({"consume_seconds": 1.6}),
+        );
+        assert_eq!(use_duration(&food), 32);
+        // The bow keeps its own use time.
+        let mut bow = Components::new();
+        bow.insert("minecraft:item_model".into(), json!("minecraft:bow"));
+        assert_eq!(use_duration(&bow), 72_000);
+        // Anything else is not used at all.
+        assert_eq!(use_duration(&Components::new()), 0);
     }
 }
