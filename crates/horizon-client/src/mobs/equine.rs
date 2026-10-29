@@ -210,7 +210,9 @@ pub fn controlled(m: &Mob) -> bool {
         Species::Pig | Species::Strider => m.extra.saddled && r.steer,
         Species::HappyGhast => super::happy_ghast::controlled(m),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::controlled(m),
-        _ => m.extra.saddled || m.species() == Species::SkeletonHorse && m.extra.tame,
+        // AbstractHorse.getControllingPassenger: saddled with a player on it. A
+        // tamed skeleton horse (SkeletonTrapGoal only tames it) needs the saddle too.
+        _ => m.extra.saddled,
     }
 }
 /// `ItemBasedSteering.boost`: 140 to 980 ticks of extra speed.
