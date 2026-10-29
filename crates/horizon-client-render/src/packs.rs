@@ -380,7 +380,11 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
     if target.is_dir() {
         Ok(())
     } else {
-        fs::copy(target, at).map(|_| ())
+        // The mirror only reads these files, and unix links them: a hardlink gives
+        // the same view without writing the 639 MB prepared root again, which was
+        // 33 s of a cold Windows launch with a pack on. Another volume (or a
+        // filesystem without hardlinks) still copies.
+        fs::hard_link(target, at).or_else(|_| fs::copy(target, at).map(|_| ()))
     }
 }
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
