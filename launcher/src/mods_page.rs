@@ -962,24 +962,27 @@ impl Launcher {
         page(body.child(self.mods_results(cx)))
     }
 
-    /// Which instance installs go into, when there is more than one to pick from. A modpack
-    /// becomes an instance of its own.
+    /// Which instance installs go into, even when it is the only one: native mods build into it.
+    /// A modpack becomes an instance of its own.
     fn mods_target_line(&self, cx: &mut Context<Self>) -> Option<Div> {
         let instance = self.selected_instance()?;
         if self.mods.kind == PackKind::DataPack {
             return Some(self.mods_world_picker(&instance.name.clone(), cx));
         }
-        if self.instances.list.len() < 2 || self.mods.kind == PackKind::Modpack {
+        if self.mods.kind == PackKind::Modpack {
             return None;
         }
-        Some(
-            text(theme::CAPTION)
-                .text_color(self.theme.muted)
-                .child(format!(
-                    "Installs into {}: pick another instance on the left.",
-                    instance.name
-                )),
-        )
+        let name = [("instance", instance.name.as_str())];
+        Some(text(theme::CAPTION).text_color(self.theme.muted).child(
+            if self.instances.list.len() < 2 {
+                trf("Installs into {instance}.", &name)
+            } else {
+                trf(
+                    "Installs into {instance}: pick another instance on the left.",
+                    &name,
+                )
+            },
+        ))
     }
 
     /// The world data packs go into: one of the instance's, picked here.
@@ -1122,9 +1125,11 @@ impl Launcher {
             && entries
                 .iter()
                 .any(|e| native_status::is_native_file(&e.file));
+        let instance = self.selected_instance().map(|i| i.name.clone());
         let row = |i: usize| {
             let e = entries[i];
             let key = (e.source, e.project.clone());
+            let is_native = self.mods.java.is_none() && native_status::is_native_file(&e.file);
             let mut right = div().flex().items_center().gap(px(8.));
             if let Some(number) = self.mods.updates.get(&key) {
                 let mut update = button(
@@ -1207,6 +1212,21 @@ impl Launcher {
                         })),
                 );
             }
+            if is_native {
+                let folder = self.mods.home().join(native_mods::INSTALLED);
+                right = right.child(
+                    button(
+                        SharedString::from(format!("mods-folder-{}", e.project)),
+                        "Open folder",
+                        Kind::Ghost,
+                        &t,
+                    )
+                    .on_click(move |_, _, cx| {
+                        let _ = std::fs::create_dir_all(&folder);
+                        cx.open_with_system(&folder);
+                    }),
+                );
+            }
             right = right.child(remove);
             let detail = div()
                 .flex()
@@ -1226,6 +1246,11 @@ impl Launcher {
                     },
                     e.file
                 ))
+                .children(instance.as_ref().filter(|_| is_native).map(|name| {
+                    div()
+                        .text_color(t.ink)
+                        .child(trf("Installed in {instance}", &[("instance", name)]))
+                }))
                 .children(e.skipped.iter().map(|s| {
                     div()
                         .text_color(t.ink_soft)
@@ -1286,10 +1311,13 @@ impl Launcher {
         )
     }
 
-    /// The selected instance's native build (docs/native-mods.md): building, failed, up to
-    /// date, or Build when the version it plays lacks the native mods turned on. Build opens the
-    /// trust warning first (`native_warning`).
+    /// The selected instance's native build (docs/native-mods.md): which build it plays, the
+    /// Horizon it was built on, and whether it holds the native mods turned on (Up to date,
+    /// Needs rebuild, Not built), with Build, and Update when a newer Horizon is installed. Both
+    /// open the trust warning first (`native_warning`). A build under way, or its error, shows
+    /// only on the instance it is for.
     fn native_build(&self, cx: &mut Context<Self>) -> Option<Div> {
+        use native_status::State;
         let t = self.theme;
         let instance = self.selected_instance()?;
         let version = self.version_of(instance).cloned();
@@ -1305,42 +1333,102 @@ impl Launcher {
                 state
             }
         };
+        let build = version.as_deref().and_then(|v| self.native_build_of(v));
+        let update = build
+            .as_ref()
+            .filter(|_| state != State::NoMods)
+            .and_then(|b| native_mods::newer_than(&b.base, &self.installed));
+        let mine = self.native_for.as_deref() == Some(instance.id.as_str());
+        let step = self.native_step.as_ref().filter(|_| mine);
+        let error = self.native_error.as_ref().filter(|_| mine);
+        let name = [("instance", instance.name.as_str())];
         let line = |s: String| div().child(s);
-        let (status, can_build) = match (&self.native_step, &self.native_error, state) {
-            (Some(step), _, _) => (line(step.clone()).text_color(t.accent), false),
-            (None, Some(e), _) => (line(e.clone()).text_color(t.danger), true),
-            (None, None, native_status::State::NoMods) => {
-                (line(tr("No native mod is turned on.").into()), false)
-            }
-            (None, None, native_status::State::NeedsBuild) => (
-                line(tr("Build the game to play with the native mods turned on.").into()),
-                true,
+        let (status, badge) = match (step, error, state) {
+            (Some(step), _, _) => (
+                line(step.clone()).text_color(t.accent),
+                Some((tr("Building"), t.accent)),
             ),
-            (None, None, native_status::State::UpToDate) => (
+            (None, Some(e), _) => (line(e.clone()).text_color(t.danger), None),
+            (None, None, State::NoMods) => (line(tr("No native mod is turned on.").into()), None),
+            (None, None, State::NotBuilt) => (
                 line(trf(
-                    "Up to date: {instance} plays these mods.",
-                    &[("instance", &instance.name)],
+                    "{instance} doesn't play its native mods yet: build the game with them.",
+                    &name,
                 )),
-                false,
+                Some((tr("Not built"), t.warn)),
+            ),
+            (None, None, State::Outdated) => (
+                line(trf(
+                    "The native mods turned on changed since {instance} was built: build again to play them.",
+                    &name,
+                )),
+                Some((tr("Needs rebuild"), t.warn)),
+            ),
+            (None, None, State::UpToDate) => (
+                line(trf("Up to date: {instance} plays these mods.", &name)),
+                Some((tr("Up to date"), t.success)),
             ),
         };
-        let build = (can_build && self.native_confirm.is_none()).then(|| {
-            button("native-build", "Build", Kind::Primary, &t)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+        let mut detail = div().flex().flex_col().gap(px(4.)).child(status);
+        if let (Some(tag), Some(build)) = (&version, &build) {
+            detail = detail.child(div().text_color(t.muted).child(trf(
+                "Plays {build}, built on Horizon {version}.",
+                &[("build", tag), ("version", &build.horizon())],
+            )));
+        }
+        if self.native_step.is_some() && !mine {
+            let other = self
+                .native_for
+                .as_deref()
+                .and_then(|id| self.instances.list.iter().find(|i| i.id == id));
+            detail = detail.child(div().text_color(t.muted).child(trf(
+                "{instance} is building: one build at a time.",
+                &[("instance", other.map_or("", |i| i.name.as_str()))],
+            )));
+        }
+        let idle = self.native_step.is_none() && self.native_confirm.is_none();
+        let can_build =
+            idle && matches!(state, State::NotBuilt | State::Outdated) || idle && error.is_some();
+        let mut right = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .children(badge.map(|(label, color)| blocks::badge(label.to_string(), color, &t)));
+        if let Some(newer) = update.filter(|_| idle) {
+            right = right.child(
+                button(
+                    "native-update",
+                    trf(
+                        "Update to Horizon {version}",
+                        &[("version", &native_status::horizon_label(&newer))],
+                    ),
+                    Kind::Secondary,
+                    &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.native_update = Some(newer.clone());
                     this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
                     cx.notify();
-                }))
-                .into_any_element()
-        });
-        let mut detail = div().flex().flex_col().gap(px(4.)).child(status);
+                })),
+            );
+        }
+        if can_build {
+            right = right.child(button("native-build", "Build", Kind::Primary, &t).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.native_update = None;
+                    this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
+                    cx.notify();
+                }),
+            ));
+        }
         if let Some(mods) = &self.native_confirm {
             detail = detail.child(self.native_warning(mods, cx));
         }
         Some(index_row(
             0,
-            tr("Native build"),
+            trf("Native build of {instance}", &name),
             Some(detail.into_any_element()),
-            build,
+            Some(right.into_any_element()),
             &t,
         ))
     }

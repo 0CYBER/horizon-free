@@ -189,8 +189,20 @@
   "Keep": "Залишити",
   "Move to Trash": "Перемістити до кошика",
   "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "Нативні моди не ізольовані: вони мають повний доступ до вашого комп'ютера, як будь-яка програма. Встановлюйте лише моди авторів, яким довіряєте. Щоб грати з модом, зберіть гру на сторінці «Моди»; перша збірка завантажує Rust і триває 20–30 хвилин.",
-  "Native build": "Нативна збірка",
   "No native mod is turned on.": "Жоден нативний мод не ввімкнено.",
-  "Build the game to play with the native mods turned on.": "Зберіть гру, щоб грати з увімкненими нативними модами.",
-  "Up to date: {instance} plays these mods.": "Актуально: {instance} грає з цими модами."
+  "Up to date: {instance} plays these mods.": "Актуально: {instance} грає з цими модами.",
+  "Update moves this instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a rebuild: up to 30 minutes.": "Оновлення переведе цей екземпляр на Horizon {version}. Гра компілюється з нуля, тому це довше за звичайне перезбирання: до 30 хвилин.",
+  "Installs into {instance}.": "Встановлюється в {instance}.",
+  "Installs into {instance}: pick another instance on the left.": "Встановлюється в {instance}: виберіть інший екземпляр ліворуч.",
+  "Installed in {instance}": "Встановлено в {instance}",
+  "Building": "Збирання",
+  "{instance} doesn't play its native mods yet: build the game with them.": "{instance} ще не грає зі своїми нативними модами: зберіть гру з ними.",
+  "Not built": "Не зібрано",
+  "The native mods turned on changed since {instance} was built: build again to play them.": "Увімкнені нативні моди змінилися після збирання {instance}: зберіть знову, щоб грати з ними.",
+  "Needs rebuild": "Потрібне перезбирання",
+  "{instance} is building: one build at a time.": "{instance} збирається: лише одне збирання за раз.",
+  "Update to Horizon {version}": "Оновити до Horizon {version}",
+  "Native build of {instance}": "Нативна збірка {instance}",
+  "Native build · {version}": "Нативна збірка · {version}",
+  "Plays {build}, built on Horizon {version}.": "Грає {build}, зібрано на Horizon {version}."
 }

@@ -394,7 +394,7 @@ pub fn update_for(version: &str, installed: &[String]) -> Option<String> {
     newer_than(&about(version)?.base, installed)
 }
 
-fn newer_than(base: &str, installed: &[String]) -> Option<String> {
+pub fn newer_than(base: &str, installed: &[String]) -> Option<String> {
     newest(installed)
         .filter(|n| *n != base && backend::compare_versions(n, base).is_gt())
         .cloned()

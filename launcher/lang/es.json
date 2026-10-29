@@ -189,8 +189,20 @@
   "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "¿Mover {name} a la papelera, con sus mundos y ajustes? Podrás recuperarlo desde allí.",
   "Minecraft {version} (Java Edition). Play downloads it from Mojang for your account the first time, with the Java it needs.": "Minecraft {version} (Java Edition). La primera vez, Jugar lo descarga de Mojang para tu cuenta, junto con el Java que necesita.",
   "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "Los mods nativos no están aislados: se ejecutan con acceso total a tu ordenador, como cualquier programa. Instala solo mods de autores en los que confíes. Para jugar con uno, compila el juego en la página Mods; la primera compilación descarga Rust y tarda de 20 a 30 minutos.",
-  "Native build": "Compilación nativa",
   "No native mod is turned on.": "No hay ningún mod nativo activado.",
-  "Build the game to play with the native mods turned on.": "Compila el juego para jugar con los mods nativos activados.",
-  "Up to date: {instance} plays these mods.": "Al día: {instance} juega con estos mods."
+  "Up to date: {instance} plays these mods.": "Al día: {instance} juega con estos mods.",
+  "Update moves this instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a rebuild: up to 30 minutes.": "Actualizar pasa esta instancia a Horizon {version}. Compila el juego desde cero, así que tarda más que una recompilación: hasta 30 minutos.",
+  "Installs into {instance}.": "Se instala en {instance}.",
+  "Installs into {instance}: pick another instance on the left.": "Se instala en {instance}: elige otra instancia a la izquierda.",
+  "Installed in {instance}": "Instalado en {instance}",
+  "Building": "Compilando",
+  "{instance} doesn't play its native mods yet: build the game with them.": "{instance} aún no juega con sus mods nativos: compila el juego con ellos.",
+  "Not built": "Sin compilar",
+  "The native mods turned on changed since {instance} was built: build again to play them.": "Los mods nativos activados cambiaron desde que se compiló {instance}: vuelve a compilar para jugar con ellos.",
+  "Needs rebuild": "Requiere recompilar",
+  "{instance} is building: one build at a time.": "{instance} se está compilando: una compilación a la vez.",
+  "Update to Horizon {version}": "Actualizar a Horizon {version}",
+  "Native build of {instance}": "Compilación nativa de {instance}",
+  "Native build · {version}": "Compilación nativa · {version}",
+  "Plays {build}, built on Horizon {version}.": "Juega {build}, compilado sobre Horizon {version}."
 }

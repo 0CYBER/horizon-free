@@ -189,8 +189,20 @@
   "Keep": "Behalten",
   "Move to Trash": "In den Papierkorb",
   "Native mods aren't sandboxed: they run with full access to your computer, like any program. Install only mods whose authors you trust. To play with one, build the game on the Mods page; the first build downloads Rust and takes 20 to 30 minutes.": "Native Mods laufen nicht in einer Sandbox: Sie haben vollen Zugriff auf deinen Computer, wie jedes Programm. Installiere nur Mods, deren Autoren du vertraust. Um mit einer zu spielen, baue das Spiel auf der Mods-Seite; der erste Build lädt Rust herunter und dauert 20 bis 30 Minuten.",
-  "Native build": "Nativer Build",
   "No native mod is turned on.": "Keine native Mod ist eingeschaltet.",
-  "Build the game to play with the native mods turned on.": "Baue das Spiel, um mit den eingeschalteten nativen Mods zu spielen.",
-  "Up to date: {instance} plays these mods.": "Auf dem neuesten Stand: {instance} spielt mit diesen Mods."
+  "Up to date: {instance} plays these mods.": "Auf dem neuesten Stand: {instance} spielt mit diesen Mods.",
+  "Update moves this instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a rebuild: up to 30 minutes.": "Das Update stellt diese Instanz auf Horizon {version} um. Es kompiliert das Spiel von Grund auf und dauert daher länger als ein erneuter Build: bis zu 30 Minuten.",
+  "Installs into {instance}.": "Wird in {instance} installiert.",
+  "Installs into {instance}: pick another instance on the left.": "Wird in {instance} installiert: wähle links eine andere Instanz.",
+  "Installed in {instance}": "Installiert in {instance}",
+  "Building": "Wird gebaut",
+  "{instance} doesn't play its native mods yet: build the game with them.": "{instance} spielt seine nativen Mods noch nicht: baue das Spiel mit ihnen.",
+  "Not built": "Nicht gebaut",
+  "The native mods turned on changed since {instance} was built: build again to play them.": "Die eingeschalteten nativen Mods haben sich seit dem Build von {instance} geändert: baue erneut, um mit ihnen zu spielen.",
+  "Needs rebuild": "Neuer Build nötig",
+  "{instance} is building: one build at a time.": "{instance} wird gerade gebaut: immer nur ein Build gleichzeitig.",
+  "Update to Horizon {version}": "Auf Horizon {version} aktualisieren",
+  "Native build of {instance}": "Nativer Build von {instance}",
+  "Native build · {version}": "Nativer Build · {version}",
+  "Plays {build}, built on Horizon {version}.": "Spielt {build}, gebaut auf Horizon {version}."
 }

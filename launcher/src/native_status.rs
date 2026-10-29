@@ -22,8 +22,10 @@ pub fn is_native_file(file: &str) -> bool {
 pub enum State {
     /// No native mod is turned on: nothing to build.
     NoMods,
-    /// The version it plays doesn't hold the mods turned on (or isn't a native build).
-    NeedsBuild,
+    /// The version it plays isn't a native build.
+    NotBuilt,
+    /// The version it plays is a native build, made with other mods than those turned on.
+    Outdated,
     /// The version it plays was built with exactly these mods.
     UpToDate,
 }
@@ -41,8 +43,47 @@ pub fn state(enabled: &[Mod], built: Option<&[Mod]>) -> State {
         v
     };
     match built {
+        None => State::NotBuilt,
         Some(built) if sorted(built) == sorted(enabled) => State::UpToDate,
-        _ => State::NeedsBuild,
+        Some(_) => State::Outdated,
+    }
+}
+
+/// What a native build was made from, as the Mods page and the instance list show it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Build {
+    /// The release or Nightly it was built on (`native_mods::About::base`).
+    pub base: String,
+}
+
+impl Build {
+    /// Installed native build `version`'s, from its `native-mods.json`; None for another version.
+    pub fn read(version: &str) -> Option<Build> {
+        Some(Build {
+            base: native_mods::about(version)?.base,
+        })
+    }
+
+    /// The Horizon it was built on, as a player reads it (`horizon_label`).
+    pub fn horizon(&self) -> String {
+        horizon_label(&self.base)
+    }
+
+    /// The same, short enough for the instance list: `Nightly 10-28`.
+    pub fn horizon_short(&self) -> String {
+        match crate::nightly::date_of(&self.base) {
+            Some(date) => format!("Nightly {}", &date[5..]),
+            None => self.base.clone(),
+        }
+    }
+}
+
+/// A release or Nightly as a player reads it beside "Horizon": `v0.2.93` as it is,
+/// `nightly-2026-10-29-4baa571` as `Nightly 2026-10-29`.
+pub fn horizon_label(version: &str) -> String {
+    match crate::nightly::date_of(version) {
+        Some(date) => format!("Nightly {date}"),
+        None => version.to_owned(),
     }
 }
 
@@ -125,22 +166,22 @@ mod tests {
             State::NoMods,
             "nothing on: nothing to build"
         );
-        assert_eq!(state(&on, None), State::NeedsBuild, "not a native build");
+        assert_eq!(state(&on, None), State::NotBuilt, "not a native build");
         let reordered = [m("zoom", "2.1"), m("veinminer", "1.0")];
         assert_eq!(state(&on, Some(&reordered)), State::UpToDate);
         assert_eq!(
             state(&on, Some(&[m("veinminer", "1.0")])),
-            State::NeedsBuild,
+            State::Outdated,
             "a mod turned on since"
         );
         assert_eq!(
             state(&on[..1], Some(&on)),
-            State::NeedsBuild,
+            State::Outdated,
             "a mod turned off since"
         );
         assert_eq!(
             state(&on, Some(&[m("veinminer", "1.1"), m("zoom", "2.1")])),
-            State::NeedsBuild,
+            State::Outdated,
             "a mod updated since"
         );
     }
@@ -154,6 +195,26 @@ mod tests {
         assert_eq!(parse_built(&about), [m("zoom", "2.1")]);
         assert!(parse_built(&serde_json::json!({})).is_empty());
         assert_eq!(built("v0.1.0"), None, "not a native build");
+    }
+
+    #[test]
+    fn builds_name_the_horizon_they_were_built_on() {
+        assert_eq!(horizon_label("v0.2.93"), "v0.2.93");
+        assert_eq!(
+            horizon_label("nightly-2026-10-29-4baa571"),
+            "Nightly 2026-10-29"
+        );
+        assert_eq!(horizon_label("nightly-2026-10-29"), "Nightly 2026-10-29");
+        let build = Build {
+            base: "nightly-2026-10-28-0c02067".into(),
+        };
+        assert_eq!(build.horizon(), "Nightly 2026-10-28");
+        assert_eq!(build.horizon_short(), "Nightly 10-28");
+        let release = Build {
+            base: "v0.2.93".into(),
+        };
+        assert_eq!(release.horizon_short(), "v0.2.93");
+        assert_eq!(Build::read("v0.1.0"), None, "not a native build");
     }
 
     #[test]

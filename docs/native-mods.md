@@ -41,13 +41,23 @@ mod shows one.
 
 ## What the launcher does
 
-In the window: install a native mod from the Mods page, into the instance picked on the left. The first one shows a
-trust notice once (native mods aren't sandboxed; the first build downloads Rust and can take 20 to 30 minutes; later
-builds are faster); `mods install` prints it too. The Mods page's installed list then has a **Native build** row for
-that instance: **Build** while the version it plays doesn't hold the native mods turned on (it isn't a `native-*`
-build, or the `mods` in its `native-mods.json` differ from those turned on, by id and version), else "Up to date". The
-launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the row shows each step and
-the error if one fails. From the command line:
+In the window: install a native mod from the Mods page, into the instance picked on the left ("Installs into
+{instance}", shown even with one instance). The first one shows a trust notice once (native mods aren't sandboxed; the
+first build downloads Rust and can take 20 to 30 minutes; later builds are faster); `mods install` prints it too. Each
+installed native mod's row says "Installed in {instance}" and has **Open folder** (`<instance>/horizon-native-mods/`).
+The installed list has a **Native build of {instance}** row for the instance picked on the left, never another's:
+
+- a badge: **Not built** (the version it plays isn't a `native-*` build), **Needs rebuild** (the `mods` in its
+  `native-mods.json` differ from those turned on, by id and version) or **Up to date**, with **Build** for the first
+  two;
+- for a native build, "Plays native-…, built on Horizon {version}" (the `base` of its `native-mods.json`);
+- **Update to Horizon {version}** when a newer release or Nightly is installed (`native_mods::update_for`). Build
+  stays on the Horizon the instance plays; only Update moves it, and its warning says the build starts from scratch
+  and takes longer.
+
+The instance list on the left shows such an instance as "Native build · Nightly 10-28" (its base). The launcher names
+the mods, warns in red, and builds only from "I trust these mods: build"; the row shows each step and the error if
+one fails, on the instance being built only; one build runs at a time. From the command line:
 `horizon-launcher native-build [FOLDER] [--instance NAME] [--update] --trust-native-code`. FOLDER is a bundle, an
 unpacked `.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
 trusting native code is the player's decision, never an agent's.
@@ -184,6 +194,5 @@ each was built or last used): switching a mod off and on again plays the kept bu
 
 ## Left to do
 
-- Offer **Update** in the window when `update_for` finds a newer Horizon (asking first, as it compiles for minutes).
-  The Mods page already offers Build when the mods turned on change.
+- A list of every native build, to delete the ones no instance needs.
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
