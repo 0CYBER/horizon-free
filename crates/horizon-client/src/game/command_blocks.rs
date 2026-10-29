@@ -27,8 +27,8 @@ type Pos = (i32, i32, i32);
 
 /// The open `CommandBlockEditScreen`.
 pub(super) struct CommandBlockScreen {
-    pos: Pos,
-    command: EditBox,
+    pub(super) pos: Pos,
+    pub(super) command: EditBox,
     previous: EditBox,
     track_output: bool,
     mode: Mode,
@@ -103,7 +103,6 @@ impl CommandBlockScreen {
         self.previous.set_value(&shown);
     }
 }
-
 fn state_of(registry: &BlockRegistry, state: BlockStateId) -> Option<&BlockState> {
     registry.state(state)
 }
@@ -231,6 +230,35 @@ impl Game<'_> {
     fn update_output_signal(&mut self, pos: Pos) {
         let at = BlockPos::new(pos.0, pos.1, pos.2);
         self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
+    }
+    /// `CommandBlockEditScreen.updateGui`: the server's block-entity data
+    /// arrived while the screen is open; refresh the fields from the entity.
+    /// The mode and conditional live in the block state here (vanilla's
+    /// `CommandBlockEntity.Mode`).
+    pub(super) fn update_command_block_screen(&mut self) {
+        let Some(screen_pos) = self.command_block_screen.as_ref().map(|s| s.pos) else {
+            return;
+        };
+        let state = self.block_state_at(screen_pos).map(|s| {
+            (
+                Mode::of_block(&s.name).unwrap_or(Mode::Redstone),
+                conditional(s),
+            )
+        });
+        let block = self.command_block(screen_pos).cloned();
+        let Some(screen) = self.command_block_screen.as_mut() else {
+            return;
+        };
+        if let Some((mode, conditional)) = state {
+            screen.mode = mode;
+            screen.conditional = conditional;
+        }
+        if let Some(block) = block {
+            screen.command.set_value(&block.command);
+            screen.track_output = block.track_output;
+            screen.auto = block.auto;
+            screen.show_previous(&block);
+        }
     }
 
     /// `CommandBlock.setPlacedBy`: unless the item carried block entity data

@@ -1248,6 +1248,15 @@ impl Game<'_> {
             let state = self.world.block(pos[0], pos[1], pos[2]);
             let _ = self.world.set(pos[0], pos[1], pos[2], state);
         }
+        // `handleBlockEntityData`: a command block's data arriving while its
+        // edit screen is open refreshes the screen.
+        if self
+            .command_block_screen
+            .as_ref()
+            .is_some_and(|s| s.pos == key)
+        {
+            self.update_command_block_screen();
+        }
     }
     /// `handleAnimate`: a player wakes up, or an entity gets the critical
     /// hit (`CRIT`) or magic critical hit (`ENCHANTED_HIT`) emitter.
