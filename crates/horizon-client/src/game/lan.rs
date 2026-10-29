@@ -177,7 +177,7 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
         | "minecraft:axolotl"
         | "minecraft:dolphin"
         | "minecraft:squid"
-        | "minecraft:glow_squid" => Some(16),
+        | "minecraft:glow_squid"
         | "minecraft:sulfur_cube" => Some(16),
         _ => None,
     }
