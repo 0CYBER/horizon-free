@@ -151,37 +151,49 @@ pub fn jump(m: &mut Mob) {
     };
     m.velocity.y = f64::from(m.jump_power() + boost);
 }
+/// `AbstractCubeMob.tick`'s landing splash: crumbs of goo (or flames) around
+/// the cube's feet, drawn by the side that ticks the mob.
+fn landing_splash(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    let size = m.width() * 2.0;
+    let radius = size / 2.0;
+    let kind = match m.species() {
+        Species::MagmaCube => "flame",
+        Species::SulfurCube => "sulfur_cube_goo",
+        _ => "item_slime",
+    };
+    let mut i = 0;
+    while (i as f32) < size * 16.0 {
+        let dir = m.random.next_float() * std::f64::consts::TAU as f32;
+        let d = m.random.next_float() * 0.5 + 0.5;
+        let xd = trig::sin(f64::from(dir)) * radius * d;
+        let zd = trig::cos(f64::from(dir)) * radius * d;
+        events.push(MobEvent::Particles {
+            kind,
+            at: [
+                m.position.x + f64::from(xd),
+                m.position.y,
+                m.position.z + f64::from(zd),
+            ],
+            count: 0,
+        });
+        i += 1;
+    }
+}
+/// `AbstractCubeMob.tick` on a client of a server: the landing splash follows
+/// the on-ground flag the server sends.
+pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.on_ground && !m.extra.flag2 {
+        landing_splash(m, events);
+    }
+    m.extra.flag2 = m.on_ground;
+}
 /// AbstractCubeMob.tick squish and landing sounds, plus contact damage.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let v = &mut m.anim.v;
     v[SQUISH] += (v[TARGET_SQUISH] - v[SQUISH]) * 0.5;
     let was = m.extra.flag2;
     if m.on_ground && !was {
-        // The landing splash: drawn on the server too, where it spawns nothing.
-        let size = m.width() * 2.0;
-        let radius = size / 2.0;
-        let kind = match m.species() {
-            Species::MagmaCube => "flame",
-            Species::SulfurCube => "sulfur_cube_goo",
-            _ => "item_slime",
-        };
-        let mut i = 0;
-        while (i as f32) < size * 16.0 {
-            let dir = m.random.next_float() * std::f64::consts::TAU as f32;
-            let d = m.random.next_float() * 0.5 + 0.5;
-            let xd = trig::sin(f64::from(dir)) * radius * d;
-            let zd = trig::cos(f64::from(dir)) * radius * d;
-            events.push(MobEvent::Particles {
-                kind,
-                at: [
-                    m.position.x + f64::from(xd),
-                    m.position.y,
-                    m.position.z + f64::from(zd),
-                ],
-                count: 0,
-            });
-            i += 1;
-        }
+        landing_splash(m, events);
         let squish = match (m.species(), tiny(m)) {
             (Species::SulfurCube, _) => super::sulfur_cube::squish_sound(m),
             (Species::MagmaCube, true) => "entity.magma_cube.squish_small",

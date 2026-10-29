@@ -4,12 +4,12 @@
 //! `MinecartItem` placement, `VehicleEntity` breaking, the chest, hopper,
 //! furnace and TNT variants, saving, and `AbstractMinecartRenderer`'s old
 //! rail-following render with the display block.
-use super::{Game, Hit, Keys, explosion::BlockInteraction, view_vector};
+use super::{Game, Hit, Keys};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
     containers::BlockEntity,
-    items::ItemStack,
+    items::{ItemStack, Items},
     mesher::Vertex,
     mobs::{Part, anim::Poses},
     particles::{ParticleOptions, ParticleType},
@@ -73,7 +73,7 @@ pub(super) struct Minecart {
     pub yaw: f32,
     pub previous_yaw: f32,
     pub flipped: bool,
-    on_ground: bool,
+    pub(super) on_ground: bool,
     horizontal_collision: bool,
     fall_distance: f64,
     pub hurt_time: i32,
@@ -200,6 +200,17 @@ impl Minecart {
     }
     fn horizontal(&self) -> f64 {
         self.velocity.x.hypot(self.velocity.z)
+    }
+    /// `AbstractContainerMenu.getRedstoneSignalFromContainer` of `slots`.
+    pub(super) fn container_signal(slots: &[Option<ItemStack>], items: &Items) -> i32 {
+        let mut total = 0.0f32;
+        for s in slots.iter().flatten() {
+            let max = items.get(&s.item).map_or(64, |i| i.max_stack).min(64);
+            total += s.count as f32 / max as f32;
+        }
+        total /= slots.len().max(1) as f32;
+        // Mth.lerpDiscrete(total, 0, 15)
+        (total * 14.0).floor() as i32 + i32::from(total > 0.0)
     }
 }
 pub(super) struct CartModels {
@@ -547,7 +558,6 @@ impl Game<'_> {
         // applyGravity
         c.velocity.y -= if self.cart_in_water(c) { 0.005 } else { 0.04 };
         let pos = self.rail_block(c.position);
-        let fall_speed = c.velocity;
         if let Some(rail) = self.rail(pos[0], pos[1], pos[2]) {
             self.move_along_track(c, pos, &rail, intent);
             if &*rail.name == "minecraft:activator_rail" {
@@ -589,21 +599,25 @@ impl Game<'_> {
                 }
             }
             CartKind::Tnt => {
-                let speed = fall_speed.x * fall_speed.x + fall_speed.z * fall_speed.z;
+                // MinecartTNT.tick: the fuse and the collision check are separate.
                 if c.fuse > 0 {
                     c.fuse -= 1;
                     let at = [c.position.x, c.position.y + 0.5, c.position.z];
                     self.particles
                         .add(&ParticleOptions::simple(ParticleType::Smoke), at, [0.0; 3]);
-                } else if c.fuse == 0 || (c.horizontal_collision && speed >= 0.01) {
+                } else if c.fuse == 0 {
+                    // explode(horizontalDistanceSqr()): a rising cart's
+                    // vertical speed adds nothing.
                     let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-                    let speed = if c.fuse == 0 && c.velocity.y > 0.0 {
-                        c.velocity.y * c.velocity.y
-                    } else {
-                        speed
-                    };
                     self.explode_cart(c, speed);
                     return false;
+                }
+                if c.horizontal_collision {
+                    let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
+                    if speed >= f64::from(0.01_f32) {
+                        self.explode_cart(c, speed);
+                        return false;
+                    }
                 }
             }
             _ => {}
@@ -648,51 +662,9 @@ impl Game<'_> {
         // The cart is the explosion's source: it is gone before the blast
         // looks for entities, so it can't hit itself.
         self.carts.retain(|x| x.id != c.id);
-        let _ = self.server_explode(at, power, BlockInteraction::Destroy, false);
-    }
-    /// `MinecartHopper.suckInItems`: items above, into the five slots.
-    fn hopper_cart_pickup(&mut self, c: &mut Minecart) {
-        if !c.enabled {
-            return;
-        }
-        let p = c.position;
-        let zone = Aabb::new(
-            Vec3::new(p.x - 0.5, p.y - 0.5 + 0.0, p.z - 0.5),
-            Vec3::new(p.x + 0.5, p.y + 1.5, p.z + 0.5),
-        );
-        let mut i = 0;
-        while i < self.dropped.len() {
-            let e = &self.dropped[i];
-            if e.pickup_delay > 0 || !zone.contains(e.position) {
-                i += 1;
-                continue;
-            }
-            let mut stack = e.stack.clone();
-            for slot in c.items.iter_mut() {
-                match slot {
-                    None => {
-                        *slot = Some(stack.clone());
-                        stack.count = 0;
-                    }
-                    Some(s) if s.same_item_same_components(&stack) => {
-                        let max = self.res.items().get(&s.item).map_or(64, |i| i.max_stack);
-                        let moved = stack.count.min(max.saturating_sub(s.count));
-                        s.count += moved;
-                        stack.count -= moved;
-                    }
-                    _ => {}
-                }
-                if stack.count == 0 {
-                    break;
-                }
-            }
-            if stack.count == 0 {
-                self.dropped.remove(i);
-            } else {
-                self.dropped[i].stack = stack;
-                i += 1;
-            }
-        }
+        // ExplosionInteraction.TNT: the tnt_explosion_drop_decay rule.
+        let interaction = self.destroy_type("tnt_explosion_drop_decay");
+        let _ = self.with_hive_emptying_blast(|g| g.server_explode(at, power, interaction, false));
     }
     /// `AbstractMinecart.push` from each player walking into a cart
     /// (`LivingEntity.pushEntities`): the window's player and every server
@@ -826,8 +798,8 @@ impl Game<'_> {
             }
             let mut c = self.carts[i].clone();
             let alive = self.tick_cart(&mut c, [0.0; 2]);
-            if c.kind == CartKind::Hopper {
-                self.hopper_cart_pickup(&mut c);
+            if c.kind == CartKind::Hopper && c.enabled {
+                self.hopper_cart_suck(&mut c);
             }
             let Some(i) = self.carts.iter().position(|c| c.id == id) else {
                 continue;
@@ -945,7 +917,7 @@ impl Game<'_> {
         }
         true
     }
-    /// `getDismountLocationForPassenger`: beside the cart (across its motion), else on top.
+    /// `getDismountLocationForPassenger`: beside the cart (across its facing), else on top.
     pub(super) fn dismount_cart(&mut self, i: usize) {
         self.riding = None;
         let c = &self.carts[i];
@@ -955,17 +927,25 @@ impl Game<'_> {
             c.position.z.floor() as i32,
         );
         let mut target = None;
+        // DismountHelper.offsetsForDirection of the cart's facing
+        // (Direction.fromYRot of its yaw): right, left, back right, back left,
+        // forward right, forward left, back, forward.
+        let step = |q: i32| [(0, 1), (-1, 0), (0, -1), (1, 0)][(q & 3) as usize];
+        let facing = (f64::from(c.yaw) / 90.0 + 0.5).floor() as i32;
+        let (fx, fz) = step(facing);
+        let (rx, rz) = (-fz, fx);
+        let offsets = [
+            (rx, rz),
+            (-rx, -rz),
+            (rx - fx, rz - fz),
+            (-rx - fx, -rz - fz),
+            (fx + rx, fz + rz),
+            (fx - rx, fz - rz),
+            (-fx, -fz),
+            (fx, fz),
+        ];
         'search: for dy in [0, 1, -1] {
-            for (dx, dz) in [
-                (1, 0),
-                (-1, 0),
-                (0, 1),
-                (0, -1),
-                (1, 1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ] {
+            for (dx, dz) in offsets {
                 let (x, y, z) = (bx + dx, by + dy, bz + dz);
                 let below = self.res.facts().get(self.world.block(x, y - 1, z));
                 let here = self.res.facts().get(self.world.block(x, y, z));
@@ -1018,8 +998,7 @@ impl Game<'_> {
         true
     }
     pub(super) fn cart_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, c) in self.carts.iter().enumerate() {
@@ -1066,10 +1045,8 @@ impl Game<'_> {
                 }
                 self.riding = Some(self.carts[i].id);
             }
+            // AbstractMinecartContainer.interact: no sneak check.
             CartKind::Chest | CartKind::Hopper => {
-                if sneaking {
-                    return false;
-                }
                 let c = self.carts[i].clone();
                 let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
                 self.world
@@ -1169,7 +1146,7 @@ impl Game<'_> {
             })
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_cart(&mut self, damage: f32) -> bool {
+    pub(super) fn attack_cart(&mut self) -> bool {
         let Some((i, d)) = self.cart_hit() else {
             return false;
         };
@@ -1179,8 +1156,12 @@ impl Game<'_> {
         let burning = self
             .held()
             .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
-        self.vehicle_attack_sounds();
+        let area = self.carts[i].bounds();
+        // Player.attack's full damage against the cart's entity type.
+        let id = self.carts[i].id as i32;
+        let (damage, _, _, magic) = self.melee_damage(self.carts[i].kind.id(), false);
         self.hurt_cart(i, damage, self.creative, burning);
+        self.vehicle_attack_sounds(area, magic.then_some(id));
         self.swing_arm();
         true
     }
@@ -1296,6 +1277,7 @@ impl Game<'_> {
                         layer: 0,
                         color,
                         light,
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -1480,6 +1462,7 @@ impl Game<'_> {
             banner: &|_| Vec::new(),
             skull: &|_| None,
             glyph: &|c| self.gui.atlas.glyph_cell(c),
+            glyphs: self.gui.atlas.font.epoch(),
         };
         self.res
             .block_entity_render()

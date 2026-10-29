@@ -36,17 +36,18 @@ MCP: `remove`, needs `confirm: true`.
 
 ## `horizon-launcher prepare`
 
-Prepare a version's resources from your own Minecraft install.
+Prepare a version's resources from your own Minecraft install, or from Mojang.
 
     horizon-launcher prepare
 
 - `--minecraft`: The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
+- `--download`: Download Minecraft from Mojang for the signed-in account that owns it, instead of using an install
 
 MCP: `prepare`.
 
 ## `horizon-launcher play`
 
-Start the client.
+Start the client (needs a signed-in Microsoft account that owns Minecraft: Java Edition).
 
     horizon-launcher play
 
@@ -69,6 +70,18 @@ Run a dedicated server here; type commands into its console.
 - `--accept-eula`: Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)
 
 MCP: `server`, `server_command`, `server_log`, `server_stop`.
+
+## `horizon-launcher native-build`
+
+Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon revision they pin, with the launcher's own Rust, as the version the "Native mods" instance plays. Not sandboxed: the mods' code runs with your rights.
+
+    horizon-launcher native-build [FOLDER]
+
+- `FOLDER`: A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them (default: the native mods installed and turned on in the instance)
+- `--instance`: The instance whose installed native mods to build, and which then plays the build (default: the selected one; the game's own home builds into the Native mods instance)
+- `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+
+MCP: none: the player's switch.
 
 ## `horizon-launcher notes`
 
@@ -98,7 +111,7 @@ MCP: `account_list`.
 
 ## `horizon-launcher account sign-in`
 
-Sign in with a Microsoft account in your browser (device code).
+Sign in with a Microsoft account in your browser (device code). Play needs one that owns Minecraft: Java Edition.
 
     horizon-launcher account sign-in
 
@@ -126,7 +139,7 @@ MCP: `account_select`.
 
 ## `horizon-launcher account offline`
 
-Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
+Play offline (LAN, offline-mode servers) beside a signed-in account that owns the game: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
 
     horizon-launcher account offline [NAME]
 
@@ -136,7 +149,7 @@ MCP: `account_offline`.
 
 ## `horizon-launcher account forget-offline`
 
-Forget one of your offline names.
+Forget one of your offline names; its skin and cape go with it.
 
     horizon-launcher account forget-offline <NAME>
 
@@ -161,11 +174,11 @@ MCP: `account_skin`.
 
 ## `horizon-launcher settings`
 
-Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, opening-animation on|off, proxy http://host:port ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language system|en|fr|ru (the window's language; system follows the computer's), accent violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default" shows Horizon's landscape).
+Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, prune-old-versions on|off (delete old versions after an install, keeping the selected one, the ones instances use and the newest few), keep-versions N (how many of the newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language system|en|fr|ru (the window's language; system follows the computer's), accent violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default" shows Horizon's landscape).
 
     horizon-launcher settings [KEY] [VALUE]
 
-- `KEY` (selected-version, minecraft-dir, server-dir, install-new-versions, opening-animation, proxy, while-playing, language, accent, background)
+- `KEY` (selected-version, minecraft-dir, server-dir, install-new-versions, prune-old-versions, keep-versions, opening-animation, proxy, while-playing, language, accent, background)
 - `VALUE`: The new value (with KEY)
 
 MCP: `settings`.
@@ -322,8 +335,34 @@ Make an instance: empty but for your options and name, or a copy of another one'
 
 - `NAME`
 - `--copy`: The instance to copy (its name or id)
+- `--minecraft`: Make a Minecraft: Java Edition instance of this version (1.21.4, latest or latest-snapshot) instead of a Horizon one
 
 MCP: `instance_create`.
+
+## `horizon-launcher instance versions`
+
+The versions of Minecraft: Java Edition a Java instance can play, the newest first.
+
+    horizon-launcher instance versions
+
+- `--snapshots`: Snapshots too
+- `--old`: Old betas and alphas too
+
+MCP: `instance_versions`.
+
+## `horizon-launcher instance java`
+
+A Java instance's Java: its own Java home or the automatic pick, memory and JVM arguments.
+
+    horizon-launcher instance java <INSTANCE>
+
+- `INSTANCE`
+- `--home`: A Java home to run it on
+- `--auto`: Go back to the Java the version needs, picked or downloaded by the launcher
+- `--memory`: The most memory the game may use, in MiB
+- `--args`: Extra JVM arguments (one string; "" clears them)
+
+MCP: `instance_java`.
 
 ## `horizon-launcher instance rename`
 
@@ -335,6 +374,16 @@ Rename an instance (its folder stays).
 - `NAME`
 
 MCP: `instance_rename`.
+
+## `horizon-launcher instance delete`
+
+Delete an instance: its folder (worlds, options, packs) goes to the Trash, where you can get it back. Horizon's own instance stays.
+
+    horizon-launcher instance delete <INSTANCE>
+
+- `INSTANCE`
+
+MCP: `instance_delete`.
 
 ## `horizon-launcher instance icon`
 
@@ -565,6 +614,24 @@ Turn a pack off and move it to the system's trash.
 
 MCP: `packs_remove`, needs `confirm: true`.
 
+## `horizon-launcher java list`
+
+The Java runtimes Horizon downloaded from Mojang and the ones installed on this computer.
+
+    horizon-launcher java list
+
+MCP: `java_list`.
+
+## `horizon-launcher java install`
+
+Download Mojang's Java runtime: a major (8, 16, 17, 21, 25) or a component name from a version's JSON (java-runtime-delta).
+
+    horizon-launcher java install <JAVA>
+
+- `JAVA`
+
+MCP: `java_install`.
+
 ## `horizon-launcher screenshots list`
 
 The screenshots, the newest first, with their files (the default).
@@ -761,6 +828,30 @@ Turn off a mod the browser installed; it stays installed.
 - `--instance`: The instance (default: the selected one)
 
 MCP: `mods_disable`.
+
+## `horizon-launcher rust status`
+
+Whether it is installed, its version and whether this computer can link with it.
+
+    horizon-launcher rust status
+
+MCP: `rust_status`.
+
+## `horizon-launcher rust install`
+
+Download the pinned toolchain from static.rust-lang.org (once), checked by SHA-256.
+
+    horizon-launcher rust install
+
+MCP: `rust_install`.
+
+## `horizon-launcher rust remove`
+
+Delete the toolchain and the native builds' Cargo home.
+
+    horizon-launcher rust remove
+
+MCP: `rust_remove`.
 
 ## `horizon-launcher servers list`
 

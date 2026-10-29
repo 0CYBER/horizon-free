@@ -70,6 +70,16 @@ pub fn sound(m: &Mob, what: &str) -> &'static str {
 }
 /// `CopperGolem.setupAnimationStates` (client) and the sound of the head spin.
 pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if animate(m) {
+        let at = [m.position.x, m.position.y, m.position.z];
+        events.push(MobEvent::LocalSound(sound(m, "spin"), at, 1.0, 1.0));
+    }
+}
+/// `CopperGolem.setupAnimationStates`, for the server and a client alike;
+/// returns whether the head spin sound plays now (a client's sound is the
+/// server's `LocalSound`).
+pub fn animate(m: &mut Mob) -> bool {
+    let mut spin = false;
     let age = m.age as f32;
     let state = m.extra.variant3;
     let st = &mut m.anim.states;
@@ -93,8 +103,7 @@ pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.extra.ints[0] = tick + 200 + r.next_int_bound(40).unwrap_or(0);
             }
             if tick == m.extra.ints[0] + 10 {
-                let at = [m.position.x, m.position.y, m.position.z];
-                events.push(MobEvent::LocalSound(sound(m, "spin"), at, 1.0, 1.0));
+                spin = true;
                 m.extra.ints[0] = 0;
             }
         }
@@ -106,6 +115,7 @@ pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         _ => {}
     }
+    spin
 }
 /// `CopperGolem.updateWeathering` on the level random: the first tick sets
 /// the next weathering tick, which advances the weather state; once
