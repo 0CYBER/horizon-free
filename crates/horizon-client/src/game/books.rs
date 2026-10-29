@@ -76,9 +76,11 @@ fn view_pages(data: Option<&StackData>) -> Vec<Text> {
         .iter()
         .enumerate()
         .map(|(i, page)| match tagged.then(|| &w.page_tags[i]) {
-            Some(tag @ horizon_world::nbt::Tag::Compound(_)) => {
-                horizon_client::entity_nbt::name_text(tag)
-            }
+            // A component object, or a component list (`ComponentSerialization`
+            // takes both; servers behind ViaVersion send the list form).
+            Some(
+                tag @ (horizon_world::nbt::Tag::Compound(_) | horizon_world::nbt::Tag::List(_)),
+            ) => horizon_client::entity_nbt::name_text(tag),
             _ => Text::literal(page),
         })
         .collect()
@@ -153,9 +155,12 @@ impl Game<'_> {
                 use horizon_client::clipboard::Clipboard;
                 self.clipboard.set(&value);
             }
+            // defaultHandleGameClickEvent: the dialog opens over the book.
+            ClickEvent::ShowDialog(dialog) => self.show_dialog_ref(&dialog),
             // SuggestCommand's insertText does nothing on a book; a server's
             // text never opens a file.
             ClickEvent::SuggestCommand(_) | ClickEvent::OpenFile(_) => {}
+            _ => {}
         }
     }
     /// `WritableBookItem.use` / `WrittenBookItem.use` (`Player.openItemGui`).

@@ -338,6 +338,12 @@ impl Decoration {
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
+        // The blocks' facts: `BlockState.isSolidRender` and the rest, the
+        // structure pieces ask them of the blocks around them.
+        let tree_blocks = self
+            .bindings
+            .tree_blocks()
+            .map_err(|e| resource(e.to_string()))?;
         // ChunkGenerator.getWritableArea: the chunk's minimum Y + 1 to its maximum Y.
         let chunk_box = BoundingBox::new(
             [center.x * 16, min_y + 1, center.z * 16],
@@ -375,6 +381,7 @@ impl Decoration {
                             start,
                             world,
                             &structures.resources,
+                            &tree_blocks,
                             random,
                             chunk_box,
                             &mut place_feature,
