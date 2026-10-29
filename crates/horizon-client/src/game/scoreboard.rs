@@ -85,27 +85,31 @@ impl Game<'_> {
         }
         self.score.storage.save(&self.world_root);
         self.score.stopwatches.save(&self.world_root);
-        if self.border != horizon_client::worldborder::WorldBorder::default() {
-            let _ = save::write_dat(
+        if self.border != horizon_client::worldborder::WorldBorder::default()
+            && let Err(e) = save::write_dat(
                 &self.border_path(),
                 Tag::compound([
                     ("data", self.border.pack()),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                 ]),
-            );
+            )
+        {
+            log::warn!("the world border was not written: {e}");
         }
         let path = self.scoreboard_path();
         let board = &self.score.board;
         if board == &Scoreboard::default() && !path.exists() {
             return;
         }
-        let _ = save::write_dat(
+        if let Err(e) = save::write_dat(
             &path,
             Tag::compound([
                 ("data", board.pack()),
                 ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
             ]),
-        );
+        ) {
+            log::warn!("the scoreboard was not written: {e}");
+        }
     }
     /// The names commands complete: objectives, teams and tracked holders.
     pub(super) fn sync_score_registries(&mut self) {

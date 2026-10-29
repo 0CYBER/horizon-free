@@ -100,11 +100,16 @@ fn modifier_line(
     } else {
         return None;
     };
+    // TranslatableContents: `%s` and numbered `%1$s` arguments, `%%` a percent sign.
     Some(
-        text(&format!("attribute.modifier.{kind}.{operation}"))
-            .replacen("%s", &format_amount(shown), 1)
-            .replacen("%s", &text(&format!("attribute.name.{attribute}")), 1)
-            .replace("%%", "%"),
+        crate::text::format_translation(
+            &text(&format!("attribute.modifier.{kind}.{operation}")),
+            &[
+                crate::text::Text::literal(format_amount(shown)),
+                crate::text::Text::literal(text(&format!("attribute.name.{attribute}"))),
+            ],
+        )
+        .plain(),
     )
 }
 
@@ -1215,5 +1220,28 @@ mod tests {
             Some("-60% Speed")
         );
         assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2, false), None);
+    }
+
+    #[test]
+    fn modifier_lines_support_positional_format() {
+        let lang = |k: &str| {
+            Some(
+                match k {
+                    "attribute.modifier.equals.0" => "%2$s: %1$s",
+                    "attribute.modifier.plus.2" => "+%1$s%% %2$s",
+                    "attribute.name.attack_damage" => "Damage",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 5.0, 0, true).as_deref(),
+            Some("Damage: 5")
+        );
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 0.2, 2, false).as_deref(),
+            Some("+20% Damage")
+        );
     }
 }

@@ -616,9 +616,6 @@ impl Game<'_> {
         };
         for a in &self.armor_stands {
             let entity_start = out.len();
-            if a.invisible {
-                continue;
-            }
             // ArmorStand.shouldRenderAtSqrDistance: 256 times the box's mean
             // edge (4 for a marker's empty box), whatever the entity distance.
             // LivingEntityRenderer grows the culling box by 0.5 for a dragon head.
@@ -690,16 +687,20 @@ impl Game<'_> {
                 a.position.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            horizon_client::mobs::render::draw(
-                model,
-                base,
-                &poses,
-                wood,
-                0xFFFF_FFFF,
-                packed,
-                0,
-                out,
-            );
+            // LivingEntityRenderer.submit: an invisible stand has no body render type, but its
+            // layers (held items, custom head, armour) are submitted all the same.
+            if !a.invisible {
+                horizon_client::mobs::render::draw(
+                    model,
+                    base,
+                    &poses,
+                    wood,
+                    0xFFFF_FFFF,
+                    packed,
+                    0,
+                    out,
+                );
+            }
             self.armor_stand_items(a, model, base, &posed, packed, out);
             // HumanoidArmorLayer: head, chest, legs, feet.
             for (slot, layer) in [
