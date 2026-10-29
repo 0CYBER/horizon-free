@@ -133,9 +133,8 @@
   --index: 40px;
   --plate-bleed: 16px;
   --rise: 8px;
-  --night-radius-plate: 12px;
-  --night-radius-control: 8px;
   --night-pixel-corner: 4px;
+  --night-radius-control: 8px;
   --night-play: 56px;
   --measure: 56ch;
   --quick: 150ms;

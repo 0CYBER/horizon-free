@@ -159,9 +159,10 @@ of the main action. The game's menus keep `LIGHT` and `DARK`.
 
 - **Pixel type for what names and what you act on.** Headings, navigation, buttons and the
   wordmark use Pixelify Sans (OFL; Medium, SemiBold, Bold); paragraphs and numbers stay in Geist
-  and Geist Mono so long text reads easily. The bundled copies add the two uppercase Cyrillic
-  letters upstream leaves out, О and П: the Latin O's glyph and the lowercase п lifted to that
-  weight's cap height, so a Russian heading stays in the pixel face.
+  and Geist Mono so long text reads easily. The bundled copies add the three uppercase Cyrillic
+  letters upstream leaves out, О, П and І: the Latin O's glyph, the lowercase п lifted to that
+  weight's cap height, and the Latin I's glyph, so a Russian or Ukrainian heading stays in the
+  pixel face.
 - **Blocks, not rounded cards.** Every surface is square: a 2 px dark outline, a 2 px light bevel
   along the top and a darker lip along the bottom. The main action is the violet face with its own
   bevel and a 4 px lip; it sinks a pixel when pressed. Code and fields are sunk wells.
@@ -201,15 +202,18 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   icons, their skin's head, mods and counts. No ornaments, no empty cards.
 - **Plates only where text needs them.** A plate is `card` at its opacity with a 1 px `stroke`;
   `card_hi` for a selected or raised one. Text sits on the bare sky only over its upper stops
-  (`UNCARDED_STOPS`): the sunset is too bright for light text. Corners are 12 for plates and 8 for
-  controls; a plate can instead cut its corners in two 4 px steps, like the art.
+  (`UNCARDED_STOPS`): the sunset is too bright for light text. A plate cuts each corner in two 4 px
+  steps (`PIXEL_CORNER`), like the art, and its stroke follows the steps. The main action cuts one
+  step; other controls round at 8 (at 1x a step vanishes on a pale fill and looks notched on a thin
+  ring: compared in the specimen).
 - **One accent.** `accent` fills the one main action (Play, Create, Install) and progress;
   `accent_hi` is the accent as text and the 2 px focus ring. Everything else is ink on plates.
 - **Bricolage Grotesque** (SIL OFL 1.1, `fonts/OFL-BricolageGrotesque.txt`), cut from upstream's
   variable font by `tools/bake_bricolage.py`: the UI family at optical size 14 (Regular, Medium,
   SemiBold, Bold) and `Bricolage Grotesque Display` (Bold at optical size 72) for instance and page
-  names. Geist Mono stays for paths, codes and counts. Upstream has no Cyrillic: Russian falls back
-  to the system's face.
+  names. Geist Mono stays for paths, codes and counts. Upstream has no Cyrillic, so the bake merges
+  Geist's (OFL, `fonts/OFL-Geist.txt`) into every cut: the letters drawn like Latin ones reuse
+  Bricolage's, the others are Geist's scaled to Bricolage's cap and x-heights at a matching weight.
 - **Two or three sizes per screen**, from `night::TYPE`:
 
 | Token           | App px | Line | Tracking (web) | Weight | Use |

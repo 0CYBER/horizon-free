@@ -263,6 +263,8 @@ enum Tint {
     /// `BlockTintSources.grassBlock`: grass in the world, none on its particles.
     GrassBlock,
     TallGrassUpper,
+    SugarCane,
+    LilyPad,
     Foliage,
     DryFoliage,
     Water,
@@ -329,6 +331,10 @@ pub struct MeshTables {
     lava_still: u16,
     lava_flow: u16,
 }
+fn stem_color(age: u8) -> u32 {
+    let a = u32::from(age);
+    (a * 32) << 16 | (255 - a * 8) << 8 | (a * 4)
+}
 fn redstone_color(power: u8) -> u32 {
     // RedstoneWireBlock.COLORS
     let f = f32::from(power) / 15.0;
@@ -377,10 +383,9 @@ impl MeshTables {
                         ([Tint::Grass; 2], 1)
                     }
                 }
-                "fern" | "short_grass" | "potted_fern" | "bush" | "sugar_cane" => {
-                    ([Tint::Grass; 2], 1)
-                }
+                "fern" | "short_grass" | "potted_fern" | "bush" => ([Tint::Grass; 2], 1),
                 "grass_block" => ([Tint::GrassBlock; 2], 1),
+                "sugar_cane" => ([Tint::SugarCane; 2], 1),
                 "pink_petals" | "wildflowers" => ([Tint::None, Tint::Grass], 2),
                 "spruce_leaves" => ([Tint::Constant(0x61_9961); 2], 1),
                 "birch_leaves" => ([Tint::Constant(0x80_A755); 2], 1),
@@ -395,7 +400,7 @@ impl MeshTables {
                     ([Tint::Constant(0xE0_C71C); 2], 1)
                 }
                 "melon_stem" | "pumpkin_stem" => ([Tint::Stem(prop("age")); 2], 1),
-                "lily_pad" => ([Tint::Constant(0x20_8030); 2], 1),
+                "lily_pad" => ([Tint::LilyPad; 2], 1),
                 _ => ([Tint::None; 2], 0),
             };
             // getShadeBrightness overrides; the default is 0.2 for full collision shapes.
@@ -491,6 +496,25 @@ impl MeshTables {
             tint_sources: i.tint_count,
         })
     }
+    /// `BlockTintSource.color(state)`: block-model colour without a level.
+    /// `grass` is `GrassColor.getDefaultColor()` from the active pack's colormap.
+    /// Untinted faces, blank sources and invalid tint indices return `None`.
+    pub fn default_tint(&self, state: BlockStateId, index: i32, grass: u32) -> Option<u32> {
+        let info = self.info.get(state.0 as usize)?;
+        if index < 0 || index >= i32::from(info.tint_count) {
+            return None;
+        }
+        Some(match info.tints[index as usize] {
+            Tint::None | Tint::SugarCane | Tint::Water => return None,
+            Tint::Grass | Tint::GrassBlock | Tint::TallGrassUpper => grass & 0xFF_FFFF,
+            Tint::Foliage => 0x48_B518,
+            Tint::DryFoliage => 0x5C_3C32,
+            Tint::LilyPad => 0x71_C35C,
+            Tint::Constant(c) => c,
+            Tint::Redstone(p) => redstone_color(p),
+            Tint::Stem(age) => stem_color(age),
+        })
+    }
     /// `TerrainParticle`'s colour: tint source 0's `colorAsTerrainParticle`,
     /// which is the in-world (biome-blended) colour except on grass blocks,
     /// whose dirt crumbs stay untinted. `None` when the state has no source.
@@ -512,6 +536,56 @@ impl MeshTables {
         let origin = [x >> 4, z >> 4, y & !15];
         let mut tints = Tints::new(region, biomes, zoom, blend_radius, origin);
         Mesher::tint(info, 0, &mut tints, [x & 15, y & 15, z & 15])
+    }
+    /// `BlockColors` for each of the state's tint indices at `pos`, as the
+    /// chunk mesher tints them (grass blocks included): `None` for an
+    /// untinted (-1) layer. For block models drawn outside the chunk mesh.
+    pub fn block_tints(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        region: &[[Option<&Chunk>; 3]; 3],
+        biomes: &Biomes,
+        zoom: BiomeZoom,
+        blend_radius: i32,
+    ) -> impl Fn(i32) -> Option<u32> + use<> {
+        let sources = self.info.get(state.0 as usize).map(|info| {
+            let [x, y, z] = pos;
+            let origin = [x >> 4, z >> 4, y & !15];
+            let mut tints = Tints::new(region, biomes, zoom, blend_radius, origin);
+            let local = [x & 15, y & 15, z & 15];
+            let colors = [0, 1].map(|i| Mesher::tint(info, i, &mut tints, local));
+            (colors, i32::from(info.tint_count))
+        });
+        move |index| {
+            let (colors, count) = sources?;
+            if index < 0 || index >= count {
+                return None;
+            }
+            colors[(index as usize).min(1)]
+        }
+    }
+    /// `ModelBlockRenderer.tesselateFlat`'s light coords (`LightCoordsUtil`
+    /// packing, the quad's own emission included) for `quad` of `state`
+    /// drawn as the only block at `pos`, as `MovingBlockRenderState` gives
+    /// it: `light` is the world's stored light (sky << 4 | block) at a
+    /// position. For block models drawn outside the chunk mesh.
+    pub fn flat_light(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        quad: &horizon_assets::bake::ModelQuad,
+        light: impl Fn([i32; 3]) -> u8,
+    ) -> u32 {
+        let own = self.info.get(state.0 as usize);
+        let full = own.is_some_and(|i| i.full);
+        let at = lighting::flat_position(pos, &quad.positions, quad.facing, quad.cull, full);
+        let packed = light(at);
+        let coords = match own {
+            Some(own) => lighting::packed_coords(own, packed),
+            None => u32::from(packed & 15) << 4 | u32::from(packed >> 4) << 20,
+        };
+        lighting::with_emission(coords, quad.light_emission)
     }
     /// `BlockState.getOffset` for blocks with a random model offset.
     pub fn offset(&self, state: BlockStateId, x: i32, z: i32) -> Option<[f64; 3]> {
@@ -838,17 +912,15 @@ impl Mesher<'_> {
         }
         Some(match state.tints[(index as usize).min(1)] {
             Tint::None => return None,
-            Tint::Grass | Tint::GrassBlock => tints.get(Resolver::Grass, x, y, z),
+            Tint::Grass | Tint::GrassBlock | Tint::SugarCane => tints.get(Resolver::Grass, x, y, z),
             Tint::TallGrassUpper => tints.get(Resolver::Grass, x, y, z),
             Tint::Foliage => tints.get(Resolver::Foliage, x, y, z),
             Tint::DryFoliage => tints.get(Resolver::Dry, x, y, z),
             Tint::Water => tints.get(Resolver::Water, x, y, z),
             Tint::Constant(c) => c,
+            Tint::LilyPad => 0x20_8030,
             Tint::Redstone(p) => redstone_color(p),
-            Tint::Stem(age) => {
-                let a = u32::from(age);
-                (a * 32) << 16 | (255 - a * 8) << 8 | (a * 4)
-            }
+            Tint::Stem(age) => stem_color(age),
         })
     }
     #[allow(clippy::too_many_arguments)]
