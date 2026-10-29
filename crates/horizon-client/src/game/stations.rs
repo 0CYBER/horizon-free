@@ -2245,10 +2245,24 @@ impl Game<'_> {
         x: f32,
         y: f32,
     ) {
-        let lines = Self::resolved(&self.stack_tooltip(stack));
+        self.draw_stack_tooltip_with(batch, stack, x, y, Vec::new());
+    }
+    /// [`Self::draw_stack_tooltip`] with `after_name` inserted from line 1,
+    /// as the creative screen adds its tab names.
+    pub(super) fn draw_stack_tooltip_with(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+        after_name: Vec<(horizon_client::text::Text, u32)>,
+    ) {
+        let mut lines = self.stack_tooltip(stack);
         if lines.is_empty() {
             return;
         }
+        lines.splice(1..1, after_name);
+        let lines = Self::resolved(&lines);
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
         let probe = horizon_client::bundle::tooltip_layout(self.res.items(), stack, 0.0, 0.0, 96.0);

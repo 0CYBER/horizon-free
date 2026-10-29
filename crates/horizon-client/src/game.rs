@@ -11263,6 +11263,38 @@ impl Game<'_> {
         batch.fill(atlas, x - 3.0, y + 10.0, w + 6.0, 1.0, rgba(40, 0, 127, 80));
         batch.text(atlas, text, x, y, u32::MAX, true);
     }
+    /// `CreativeModeInventoryScreen.getTooltipFromContainerItem`: the lines
+    /// that follow the item's name, none for a category tab's own grid slots
+    /// (`grid`): the names of the tabs containing the stack, in blue, then on
+    /// the search tab's grid the tags a `#` search shows, in dark purple.
+    fn creative_tooltip_tabs(
+        &self,
+        stack: &ItemStack,
+        grid: bool,
+    ) -> Vec<(horizon_client::text::Text, u32)> {
+        let screen = &self.creative_screen;
+        let tab = screen.tab();
+        let category = !tab.search && !tab.inventory;
+        if !horizon_client::creative::tooltip_lists_tabs(category, grid) {
+            return Vec::new();
+        }
+        let blue = rgba(85, 85, 255, 255);
+        let dark_purple = rgba(170, 0, 170, 255);
+        let mut lines: Vec<(horizon_client::text::Text, u32)> = screen
+            .tabs_containing(stack)
+            .into_iter()
+            .map(|i| {
+                let title = self.creative_tab_title(&screen.tabs[i]);
+                (horizon_client::text::Text::literal(title), blue)
+            })
+            .collect();
+        if tab.search && grid {
+            for tag in screen.search_tag_lines(stack) {
+                lines.push((horizon_client::text::Text::literal(tag), dark_purple));
+            }
+        }
+        lines
+    }
     fn draw_creative(&mut self, batch: &mut HudBatch) {
         let (ox, oy) = Self::creative_origin(batch);
         let selected = self.creative_screen.selected;
@@ -11345,7 +11377,8 @@ impl Game<'_> {
             search.max_length = clipboard::CREATIVE_SEARCH_CHARS;
             search.draw(batch, atlas, None);
         }
-        let mut hovered: Option<ItemStack> = None;
+        // The hovered stack, and whether it is a grid slot (`CustomCreativeSlot`).
+        let mut hovered: Option<(ItemStack, bool)> = None;
         if tab.inventory {
             self.draw_player_preview(
                 batch,
@@ -11395,7 +11428,7 @@ impl Game<'_> {
                         && self.cursor.1 < y + 16.0
                     {
                         batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                        hovered = Some(stack.clone());
+                        hovered = Some((stack.clone(), true));
                     }
                 }
             }
@@ -11409,7 +11442,7 @@ impl Game<'_> {
                     && self.cursor.1 < y + 16.0
                 {
                     batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                    hovered = self.inventory[c].clone();
+                    hovered = self.inventory[c].clone().map(|s| (s, false));
                 }
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
@@ -11444,13 +11477,18 @@ impl Game<'_> {
         if tab.inventory {
             if Self::creative_trash_hovered(batch, self.cursor) {
                 self.tooltip(batch, "Destroy Item", self.cursor.0, self.cursor.1);
-            } else {
-                self.draw_slot_tooltip(batch);
+            } else if self.carried.is_none()
+                && let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
+                && let Some(stack) = self.slot_view(slot)
+            {
+                let tabs = self.creative_tooltip_tabs(&stack, false);
+                self.draw_stack_tooltip_with(batch, &stack, self.cursor.0, self.cursor.1, tabs);
             }
         } else if self.carried.is_none()
-            && let Some(item) = hovered
+            && let Some((item, grid)) = hovered
         {
-            self.draw_stack_tooltip(batch, &item, self.cursor.0, self.cursor.1);
+            let tabs = self.creative_tooltip_tabs(&item, grid);
+            self.draw_stack_tooltip_with(batch, &item, self.cursor.0, self.cursor.1, tabs);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }
