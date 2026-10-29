@@ -39,8 +39,9 @@ mod entity_outline;
 mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::{
-    ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
-    TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
+    ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
+    TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
+    WATER_MASK_OVERLAY,
 };
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
@@ -425,6 +426,7 @@ pub struct Renderer {
     lightning_pipeline: wgpu::RenderPipeline,
     lightning: lightning::Renderer,
     see_through_pipeline: wgpu::RenderPipeline,
+    text_polygon_offset_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
     end_sky: end_sky::EndSky,
@@ -2037,6 +2039,21 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        // RenderPipelines.TEXT_POLYGON_OFFSET: a text display's text and
+        // background win against the surface they lie on (bias 1, 10).
+        let text_polygon_offset_pipeline = entity_pipeline(
+            "Polygon offset text",
+            None,
+            true,
+            wgpu::CompareFunction::GreaterEqual,
+            wgpu::DepthBiasState {
+                constant: 10,
+                slope_scale: 1.0,
+                clamp: 0.0,
+            },
+            alpha_blend,
+            false,
+        );
         let entity_pipeline = entity_pipeline(
             "Entities",
             None,
@@ -2594,6 +2611,7 @@ impl Renderer {
             lightning_pipeline,
             lightning: lightning::Renderer::new(),
             see_through_pipeline,
+            text_polygon_offset_pipeline,
             celestial_pipeline,
             celestial_buffer,
             end_sky: end_sky::EndSky::default(),
@@ -4242,6 +4260,7 @@ impl Renderer {
         }
         let [
             entity_quads,
+            text_quads,
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
@@ -4254,6 +4273,7 @@ impl Renderer {
             .update(entities, frame.additive, frame.hand, frame.see_through);
         let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads = entity_quads
+            + text_quads
             + crumbling_quads
             + translucent_crumbling_quads
             + water_mask_quads
@@ -4792,6 +4812,13 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if text_quads > 0 {
+                pass.set_pipeline(&self.text_polygon_offset_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(0..text_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if translucent_item_quads > 0 {
                 pass.set_pipeline(&self.translucent_item_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -4811,7 +4838,11 @@ impl Renderer {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-                pass.draw_indexed(0..crumbling_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.draw_indexed(
+                    0..crumbling_quads * 6,
+                    ((entity_quads + text_quads) * 4) as i32,
+                    0..1,
+                );
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if shadow_quads > 0 {
@@ -4837,7 +4868,8 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..water_mask_quads * 6,
-                    ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
+                    ((entity_quads + text_quads + crumbling_quads + translucent_crumbling_quads)
+                        * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -4855,6 +4887,7 @@ impl Renderer {
                 pass.draw_indexed(
                     0..swirl_quads * 6,
                     ((entity_quads
+                        + text_quads
                         + crumbling_quads
                         + translucent_crumbling_quads
                         + water_mask_quads)
@@ -4948,7 +4981,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..translucent_crumbling_quads * 6,
-                    ((entity_quads + crumbling_quads) * 4) as i32,
+                    ((entity_quads + text_quads + crumbling_quads) * 4) as i32,
                     0..1,
                 );
             }
@@ -5552,6 +5585,7 @@ mod tests {
             (11, 2),
             (15, 10),
             (7, 3),
+            (35, 11),
             (4, 4),
             (12, 7),
         ]
@@ -5561,7 +5595,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 0, 1, 1, 0]);
+        assert_eq!(counts, [4, 1, 1, 1, 0, 0, 1, 1, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -5569,7 +5603,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 1, 3, 4, 2, 7, 9, 10, 5, 6, 8]
+            [0, 1, 3, 4, 11, 2, 7, 9, 10, 5, 6, 8]
         );
     }
     #[test]

@@ -1002,6 +1002,35 @@ impl HudBatch {
         color: u32,
         shadow: bool,
     ) -> f32 {
+        self.styled_text(atlas, text, x, y, color, shadow, false)
+    }
+    /// `text_styled` for text drawn in the world (`TextRenderable.render`
+    /// with `flat` false): each quad's `depth` is its z in text units, the
+    /// glyphs `Font.SHADOW_DEPTH` in front of their shadow, a bold copy 0.001
+    /// in front of its glyph and the lines 0.01 (`BakedSheetGlyph`), so they
+    /// do not fight over the same pixels.
+    pub fn text_styled_world(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+    ) -> f32 {
+        self.styled_text(atlas, text, x, y, color, shadow, true)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn styled_text(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+        world: bool,
+    ) -> f32 {
         // StringDecomposer.iterateFormatted inside Font.drawInternal:
         // `§` codes inside a span restyle what follows and are not drawn.
         let text = text.resolved();
@@ -1011,7 +1040,13 @@ impl HudBatch {
         let alpha = (color >> 24) as u8;
         let mut glyphs = Vec::new();
         let mut cursor = x;
+        let mut previous = None;
         for (i, (ch, style)) in text.chars().enumerate() {
+            // Font.PreparedTextBuilder.accept: lines start 1 left of a
+            // sequence's first character. Language.getVisualOrder makes a
+            // sequence of each run of one style, which world text has.
+            let first = i == 0 || world && previous != Some(style);
+            previous = Some(style);
             // The style's font (`Style.getFont`), the default one unless set.
             let mut g = font.glyph_styled(ch, style);
             // Font.StringRenderOutput.accept: obfuscated characters draw a
@@ -1032,7 +1067,7 @@ impl HudBatch {
                 style.is_italic(),
                 style.underlined == Some(true),
                 style.strikethrough == Some(true),
-                i == 0,
+                first,
                 advance,
             ));
             cursor += advance;
@@ -1040,19 +1075,25 @@ impl HudBatch {
         self.patches.extend(font.take_patches());
         let white = font.white();
         let passes: &[bool] = if shadow { &[true, false] } else { &[false] };
+        // ARGB.scaleRGB(color, 0.25): the shadow's colour.
+        let shade = |c: u32| {
+            let b = c.to_le_bytes();
+            rgba(
+                (f32::from(b[0]) * 0.25) as u8,
+                (f32::from(b[1]) * 0.25) as u8,
+                (f32::from(b[2]) * 0.25) as u8,
+                b[3],
+            )
+        };
         for &is_shadow in passes {
             for &(gx, g, c, bold, italic, underline, strike, first, advance) in &glyphs {
+                // In the world a glyph whose shadow is 0 has none (hasShadow).
+                let has_shadow = shadow && !(world && shade(c) == 0);
+                if is_shadow && !has_shadow {
+                    continue;
+                }
                 let (dx, col) = if is_shadow {
-                    let b = c.to_le_bytes();
-                    (
-                        g.offset,
-                        rgba(
-                            (f32::from(b[0]) * 0.25) as u8,
-                            (f32::from(b[1]) * 0.25) as u8,
-                            (f32::from(b[2]) * 0.25) as u8,
-                            b[3],
-                        ),
-                    )
+                    (g.offset, shade(c))
                 } else {
                     (0.0, c)
                 };
@@ -1092,17 +1133,31 @@ impl HudBatch {
                     }
                     None => {}
                 };
+                let base = if has_shadow && !is_shadow { 0.03 } else { 0.0 };
+                let lift = |batch: &mut Self, start: usize, z: f32| {
+                    if world {
+                        for v in &mut batch.vertices[start..] {
+                            v.depth = z;
+                        }
+                    }
+                };
+                let start = self.vertices.len();
                 draw(self, 0.0);
+                lift(self, start, base);
                 if bold {
+                    let start = self.vertices.len();
                     draw(self, g.offset);
+                    lift(self, start, base + 0.001);
                 }
                 let x0 = if first { px - 1.0 } else { px };
+                let start = self.vertices.len();
                 if strike {
                     self.rect_uv(x0, py + 3.5, px + advance - x0, 1.0, white, col);
                 }
                 if underline {
                     self.rect_uv(x0, py + 8.0, px + advance - x0, 1.0, white, col);
                 }
+                lift(self, start, base + 0.01);
             }
         }
         cursor - x

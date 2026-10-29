@@ -92,6 +92,7 @@ mod subtitle_fixture;
 mod tab_list_fixture;
 mod team_rules_fixture;
 mod text_display_fixture;
+mod text_display_render_fixture;
 mod toggle_keys_probe;
 mod tooltip_display_fixture;
 mod trading_fixture;
@@ -184,6 +185,7 @@ probes! {
     toggle_keys_probe,
     tooltip_display_fixture,
     text_display_fixture,
+    text_display_render_fixture,
     trading_fixture,
     translucency_fixture,
     weather_fixture,
