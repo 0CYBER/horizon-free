@@ -563,13 +563,21 @@ impl Game<'_> {
         };
         let time = (self.world.game_time.rem_euclid(40)) as f32 + alpha as f32;
         let scoping = self.scoping();
+        let view = f64::from(self.settings.render_distance * 16);
         for (k, e) in &self.world.block_entities {
             let BlockEntity::Beacon(b) = e else { continue };
+            // `getBeamSections` is empty while Levels is 0.
             if b.levels == 0 || b.sections.is_empty() {
                 continue;
             }
             let base = glam::DVec3::new(f64::from(k.0) + 0.5, f64::from(k.1), f64::from(k.2) + 0.5);
-            let distance = (base - camera).truncate().length() as f32;
+            // `BeaconRenderer.shouldRender`: horizontal distance under render distance × 16.
+            let offset = base - camera;
+            let horizontal = glam::DVec2::new(offset.x, offset.z).length();
+            if horizontal >= view {
+                continue;
+            }
+            let distance = horizontal as f32;
             let scale = if scoping {
                 1.0
             } else {
