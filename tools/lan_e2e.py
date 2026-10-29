@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """LAN multiplayer end to end: a host opens its world to LAN and a guest joins, both real games.
 
-The host uses its integrated server thread by default; --in-frame compares the fallback, and
---server-thread remains accepted. Two Horizon clients run under horizon-ctl in scratch folders. The host
+The host uses its integrated server thread. --in-frame is DEPRECATED (never use it, it will be removed
+soon); --server-thread remains accepted. Two Horizon clients run under horizon-ctl in scratch folders. The host
 creates a survival world and opens it to LAN with commands allowed; the guest connects to it by
 address. The script then checks, from both sides, what a guest's game used to get wrong (#366):
 
@@ -308,7 +308,7 @@ from integration_env import game_environment, require_server_reports  # noqa: E4
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-# Match normal single player; --in-frame is the comparison path.
+# Match normal single player; --in-frame is deprecated.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
@@ -5406,10 +5406,12 @@ def main():
     mode.add_argument('--server-thread', dest='server_thread', action='store_true', default=True,
                       help='host on its server thread (default; retained for existing callers)')
     mode.add_argument('--in-frame', dest='server_thread', action='store_false',
-                      help='host the world in the window, for comparison')
+                      help='DEPRECATED, never use: hosts the world in the window; unsupported, will be removed soon')
     args = parser.parse_args()
     global SERVER_THREAD
     SERVER_THREAD = args.server_thread
+    if not SERVER_THREAD:
+        print('DEPRECATED: --in-frame is unsupported and will be removed soon. Do not use it.', file=sys.stderr)
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
