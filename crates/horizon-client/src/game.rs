@@ -12650,7 +12650,6 @@ impl Game<'_> {
             // key.toggleGui is a KeyMapping: it clicks only with no screen open.
             KeyCode::F1 if self.screen == Screen::Playing => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
-            KeyCode::F2 => self.take_screenshot(),
             KeyCode::F5 if self.screen == Screen::Playing => self.cycle_camera(),
             KeyCode::KeyE
                 if self.screen == Screen::Creative && self.creative_screen.tab().search => {}
@@ -13145,6 +13144,18 @@ impl ApplicationHandler for Game<'_> {
                 self.toggle_fullscreen();
             }
             return;
+        }
+        // A screenshot is a window shortcut too: vanilla takes it before a
+        // screen or a text box consumes the key (`handleGlobalKeyPress`), so
+        // it works with chat, a sign or a book open.
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.state == ElementState::Pressed
+            && let PhysicalKey::Code(key) = event.physical_key
+        {
+            self.last_input = Instant::now();
+            if self.screenshot_shortcut(key, event.repeat) {
+                return;
+            }
         }
         // KeyboardHandler.keyPress: the debug keys come before the game's.
         if let WindowEvent::KeyboardInput {
