@@ -603,6 +603,13 @@ impl Ticker<'_, '_, '_, '_> {
             if self.st.in_ground_time % 5 == 0 {
                 self.make_particle(1);
             }
+            // Arrow.tick on the server: a tipped arrow stuck for 600 ticks sends
+            // entity event 0 (the client's burst of 20 particles in its colour,
+            // handleEntityEvent) and turns into a plain arrow.
+            if self.st.in_ground_time >= 600 && self.effect_color().is_some() {
+                self.make_particle(20);
+                self.st.pickup_item = crate::items::ItemStack::new("minecraft:arrow", 1);
+            }
             return Hit::None;
         }
         self.st.in_ground_time = 0;
