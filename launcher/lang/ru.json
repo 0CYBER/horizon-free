@@ -187,5 +187,9 @@
   "Mods: {mods}": "Моды: {mods}",
   "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "Сборка компилирует игру: 20–30 минут и несколько ГБ на диске в первый раз (она скачивает Rust), затем несколько минут.",
   "Install and turn on native mods": "Установить и включить нативные моды",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативные моды компилируются в отдельную игру. Установка такого мода включает нативные моды: затем вы собираете с ним игру в «Настройки > Нативные моды». Первая сборка скачивает Rust и может занять 20–30 минут; следующие быстрее."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативные моды компилируются в отдельную игру. Установка такого мода включает нативные моды: затем вы собираете с ним игру в «Настройки > Нативные моды». Первая сборка скачивает Rust и может занять 20–30 минут; следующие быстрее.",
+  "Delete…": "Удалить…",
+  "Keep": "Оставить",
+  "Move to Trash": "В корзину",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть."
 }

@@ -187,5 +187,9 @@
   "Mods: {mods}": "Mods : {mods}",
   "The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.": "La compilation construit le jeu : 20 à 30 minutes et quelques Go de disque la première fois (elle télécharge Rust), quelques minutes ensuite.",
   "Install and turn on native mods": "Installer et activer les mods natifs",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Les mods natifs sont compilés dans un jeu à part. En installer un active les mods natifs : vous compilez ensuite le jeu avec lui dans Paramètres > Mods natifs. La première compilation télécharge Rust et peut prendre 20 à 30 minutes ; les suivantes sont plus rapides."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Les mods natifs sont compilés dans un jeu à part. En installer un active les mods natifs : vous compilez ensuite le jeu avec lui dans Paramètres > Mods natifs. La première compilation télécharge Rust et peut prendre 20 à 30 minutes ; les suivantes sont plus rapides.",
+  "Delete…": "Supprimer…",
+  "Keep": "Garder",
+  "Move to Trash": "Mettre à la corbeille",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer."
 }
