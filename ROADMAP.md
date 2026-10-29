@@ -16,7 +16,7 @@ Horizon is Minecraft: Java Edition 26.3 rewritten from scratch in Rust, so it ru
 - **Single player as a server: the last differences**: Single player now runs a small server in the background, as vanilla does. We are fixing what still behaves differently there; every fix also works for LAN and server players.
 - **Horizon's mod registry**: One place for mods, modpacks and resource packs made for Horizon: browse them on the website and install them from the launcher in one click.
 
-**Next**: Microsoft sign-in (coming soon); CurseForge in the mod browser (coming soon); Fresh benchmarks against vanilla; Pistons push players and mobs; Horizon on Intel Macs; Faster world creation and entry on small CPUs; Servers that hold 20 TPS with 50 to 100 players; Low-end computers: Steam Deck, old Macs, 8 GB; Native upscaling; A batch of targeted optimisations; A Convert to Rust button for what isn't rewritten yet; Mods with code: machines, magic, mobs; Data packs in the mod browser; Prepare a version without Java; Server console, bans and a full admin API; Hosting polish: Windows service, safe updates; Guided hosting with Tailscale and an invite button; An official Docker image for servers; One single-player path: remove the in-frame world; Villages and combat, exactly as in vanilla; Choose the audio output device; Well-known shader looks, rewritten for Horizon; A visible beta label; Wayland and Hyprland polish; A versioned agent-control protocol; Port mods with your own AI agent; Horizon on X (coming soon); Pipeline protection and a GitHub App for agents; Signed updates everywhere, installers included; A server you install with one command.
+**Next**: A new launcher design; CurseForge in the mod browser (coming soon); Fresh benchmarks against vanilla; Pistons push players and mobs; Horizon on Intel Macs; Faster world creation and entry on small CPUs; Servers that hold 20 TPS with 50 to 100 players; Low-end computers: Steam Deck, old Macs, 8 GB; Native upscaling; A batch of targeted optimisations; A Convert to Rust button for what isn't rewritten yet; Mods with code: machines, magic, mobs; Data packs in the mod browser; Prepare a version without Java; Server console, bans and a full admin API; Hosting polish: Windows service, safe updates; Guided hosting with Tailscale and an invite button; An official Docker image for servers; One single-player path: remove the in-frame world; Villages and combat, exactly as in vanilla; Choose the audio output device; Mods that read and change the world; Machines and blocks with inventories (API 0.4); Well-known shader looks, rewritten for Horizon; A visible beta label; Wayland and Hyprland polish; A versioned agent-control protocol; Port mods with your own AI agent; Horizon on X (coming soon); Pipeline protection and a GitHub App for agents; Signed updates everywhere, installers included; A server you install with one command; Ready-made setups for hosting panels.
 
 **How to help**: Play it and tell us what differs from vanilla (Discord or GitHub), run the benchmark on your computer, vote for what you want next, or pick one of the Help wanted items.
 
@@ -104,13 +104,49 @@ More: [docs/mods.md](docs/mods.md)
 
 </details>
 
-#### Tools for people who make mods
+#### Native mods, built by the launcher
 
-Better tools for mod makers: a template and checks for content mods, a template for native mods, and clear promises about what keeps working from one version to the next.
+Horizon's own mods become native code that the launcher builds into your game, with no Rust to install: Zoom, FPS Counter, Keystrokes and Minimap already are, and Recipes is next.
 
 <details><summary>Technical</summary>
 
-`cargo horizon-mod` makes content mods (`new`, `build`, `run`, `check`; [#1859](https://github.com/horizon-rust/horizon/issues/1859), [#1810](https://github.com/horizon-rust/horizon/issues/1810), [docs/mods.md](docs/mods.md)); native mods start from horizon-native-mod-template (docs/native-mods.md). The WebAssembly SDK and its test runner were removed. Left: a CI check that fails when a stable reference entry is removed without a new major version ([docs/api/stability.md](docs/api/stability.md)).
+Stable hook points in the game (game/native_hooks.rs, [#3345](https://github.com/horizon-rust/horizon/issues/3345), [#3346](https://github.com/horizon-rust/horizon/issues/3346); v2 with the item panel and recipe pages, [#3434](https://github.com/horizon-rust/horizon/issues/3434), [#3435](https://github.com/horizon-rust/horizon/issues/3435)), horizon-mixins applied by the launcher with its own portable Rust ([#3388](https://github.com/horizon-rust/horizon/issues/3388)), on/off in Options > Mods. The official mods live in horizon-mods/native/ and are in the registry as native mods. Next: Recipes, native mods on automatically when a player installs one (with a notice about the first build), then the WebAssembly runtime is removed ([#3350](https://github.com/horizon-rust/horizon/issues/3350), [#3351](https://github.com/horizon-rust/horizon/issues/3351), [#3353](https://github.com/horizon-rust/horizon/issues/3353), [#3371](https://github.com/horizon-rust/horizon/issues/3371)).
+
+More: [docs/native-mods.md](docs/native-mods.md)
+
+</details>
+
+#### Mods that run on the server
+
+Mods that run on the server side of a world, so a dedicated server or a LAN world can have mods that react to players joining, chat and blocks being broken or placed, and that add commands.
+
+<details><summary>Technical</summary>
+
+The same hook points on the server thread and the dedicated server: world events (block broken or placed, entity spawned or killed, player joined or left), game rules and server commands with typed arguments. The earlier WebAssembly API 0.3 ([#1833](https://github.com/horizon-rust/horizon/issues/1833)) is the reference for what to cover.
+
+More: [docs/native-mods.md](docs/native-mods.md)
+
+</details>
+
+#### Screens, input and drawing for mods
+
+Mods will be able to open their own screens and settings pages, react to keys and item use, and draw, so bigger mods, such as the Orbital Laser, run on the normal game.
+
+<details><summary>Technical</summary>
+
+On native hook points ([docs/native-mods.md](docs/native-mods.md)): settings pages under Options > Mods and the item panel are there ([#3346](https://github.com/horizon-rust/horizon/issues/3346), [#3435](https://github.com/horizon-rust/horizon/issues/3435)). Next: mod-owned screens built from vanilla's widgets, an item's use, key binds and the crosshair target, and a budgeted draw list on the native shader API. Orbital Laser is the acceptance test.
+
+</details>
+
+#### Tools for people who make mods
+
+Better tools for mod makers: templates for each kind of mod, a test run with no game window, and clear promises about which hook points keep working from one version to the next.
+
+<details><summary>Technical</summary>
+
+`cargo horizon-mod` makes content mods (`new`, `build`, `run`, `check`; [#1859](https://github.com/horizon-rust/horizon/issues/1859), [#1810](https://github.com/horizon-rust/horizon/issues/1810), [docs/mods.md](docs/mods.md)). Native mods start from horizon-native-mod-template, and `native.py check` in horizon-mods applies them on a chosen Horizon and builds them together, with a weekly check of every official mod on the newest Nightly ([docs/native-mods.md](docs/native-mods.md)). The WebAssembly SDK and its test runner were removed. Left: a versioned list of stable hook points (NATIVE_HOOKS_API), a test runner without a window, and a CI check that fails when a stable reference entry is removed without a new major version ([docs/api/stability.md](docs/api/stability.md)).
+
+More: [#3388](https://github.com/horizon-rust/horizon/issues/3388)
 
 </details>
 
@@ -220,6 +256,20 @@ Horizon's own way to make shader packs, with tools to write and test them. Every
 
 </details>
 
+### Launcher
+
+#### Minecraft Java instances in the launcher
+
+Play the real Java game from the Horizon launcher too: vanilla and modded instances, any version, mods from Modrinth filtered to what fits, and your instances imported from other launchers.
+
+<details><summary>Technical</summary>
+
+For an account that owns the game: any version downloaded with the Java it needs ([#3406](https://github.com/horizon-rust/horizon/issues/3406)), Java instances, the version list and the CLI ([#3395](https://github.com/horizon-rust/horizon/issues/3395)), the start command read from the version JSON ([#3419](https://github.com/horizon-rust/horizon/issues/3419)). Next: Play for a Java instance, Fabric and Quilt, then NeoForge and Forge; Modrinth with compatibility filtering and dependencies; imports from Prism, MultiMC, the CurseForge app, the Modrinth App, ATLauncher and the official launcher, each from its documented on-disk format.
+
+More: [#3506](https://github.com/horizon-rust/horizon/issues/3506)
+
+</details>
+
 ### Horizon extras
 
 #### Discord Rich Presence
@@ -241,6 +291,16 @@ Cleaning up Horizon's code: removing what nothing uses and making it quicker to 
 <details><summary>Technical</summary>
 
 A review of the whole tree: dead code and stubs removed ([#1432](https://github.com/horizon-rust/horizon/issues/1432), [#1658](https://github.com/horizon-rust/horizon/issues/1658)), one probe binary per crate ([#1453](https://github.com/horizon-rust/horizon/issues/1453), [#1454](https://github.com/horizon-rust/horizon/issues/1454)), shared harness helpers ([#1448](https://github.com/horizon-rust/horizon/issues/1448)), clippy clean on the whole tree ([#1707](https://github.com/horizon-rust/horizon/issues/1707)). [docs/architecture.md](docs/architecture.md) maps each feature to its files and harnesses.
+
+</details>
+
+#### Every vanilla method, tracked
+
+A public list of every method of the Java game and where Horizon does it, so anyone can see what is ported, what is missing and pick something to fix.
+
+<details><summary>Technical</summary>
+
+[tools/port_ledger.py](tools/port_ledger.py) and tools/port_map/ ([#3139](https://github.com/horizon-rust/horizon/issues/3139)): every 26.3 method outside the skipped packages has a verdict (port, inline, missing, skip, trivial), linked to the harnesses that cover it ([#3526](https://github.com/horizon-rust/horizon/issues/3526)), with one tracking issue per area. Bug fixes start from it (.claude/skills/vanilla-parity).
 
 </details>
 
@@ -420,6 +480,40 @@ A player's idea (#horizon-ideas). `horizon-server` already runs headless; left: 
 
 </details>
 
+#### Ready-made setups for hosting panels
+
+Install a Horizon server from the panels hosts use, such as Pterodactyl and AMP, the usual way for each panel.
+
+<details><summary>Technical</summary>
+
+Asked in the suggestion queue for Pterodactyl eggs and AMP templates. Builds on the one-command install ('A server you install with one command') and horizon-server's server.toml ([docs/hosting.md](docs/hosting.md)).
+
+</details>
+
+### Mods and API
+
+#### Mods that read and change the world
+
+Mods that can see and change blocks, read inventories and items, and find and affect entities, all through the server so every player sees the same thing.
+
+<details><summary>Technical</summary>
+
+Hook points for reading blocks, states and biomes and changing them through the server's block log, so clients and the parity harnesses see vanilla's updates; the player's inventory and item stacks with components; entity queries near a position. Batched per tick, never per-block calls in hot paths.
+
+More: [docs/native-mods.md](docs/native-mods.md) · [docs/modpacks.md](docs/modpacks.md)
+
+</details>
+
+#### Machines and blocks with inventories (API 0.4)
+
+Mods that add machines: blocks that tick, hold items and have their own menus. This unlocks the technology mods of big modpacks.
+
+<details><summary>Technical</summary>
+
+Block entities and menus: ticking machines with slots, server menu logic and the menu protocol to clients, energy, item and fluid transfer, data attachments, accessory slots and custom recipe types, with a typed client and server channel and typed config beside them. A draft ([#1189](https://github.com/horizon-rust/horizon/issues/1189)) proves a furnace ported tick for tick and holds the ATM10 code-mods plan; the design is redone through the API policy before it merges ([docs/modpacks.md](docs/modpacks.md), docs/api/stability.md).
+
+</details>
+
 ### Gameplay parity
 
 #### Pistons push players and mobs
@@ -478,15 +572,13 @@ More: [docs/shaders.md](docs/shaders.md)
 
 ### Launcher
 
-#### Microsoft sign-in (coming soon)
+#### A new launcher design
 
-Coming soon: sign in with your Microsoft account to play on online-mode servers. The code is ready; it waits for Microsoft's approval.
+A redesigned launcher: every button where you expect it, the fewest clicks to play, add an instance or add mods, smooth animations, and instant startup.
 
 <details><summary>Technical</summary>
 
-Device-code sign-in in the launcher and online-mode login in the client ([docs/microsoft-account.md](docs/microsoft-account.md)). It is turned on by setting the app's client id once Minecraft API access is approved; until then the launcher shows "Coming soon".
-
-More: [#1270](https://github.com/horizon-rust/horizon/issues/1270)
+Based on the site concept by the Team (Bricolage Grotesque, a night sky and an animated pixel sunset). Screens and flows are designed first, then small PRs; tokens in [crates/horizon-theme](crates/horizon-theme) and rules in [docs/design-system.md](docs/design-system.md), the game's vanilla look unchanged. Measured before and after: startup, frame time and idle CPU/GPU, reduced motion honoured. Mods screens separate Horizon native mods from Java mods; a running instance can be stopped from the launcher.
 
 </details>
 
@@ -650,6 +742,18 @@ Issue [#1270](https://github.com/horizon-rust/horizon/issues/1270) asks for Ely.
 
 </details>
 
+#### Join servers on older versions
+
+Join servers that run older Minecraft versions, such as 1.21 or 1.8 PvP servers, from Horizon.
+
+<details><summary>Technical</summary>
+
+Asked often in the suggestion queue. Horizon speaks 26.3's protocol; the path is a native protocol adapter in Rust that translates older versions' packets, not a downloaded Java proxy. Java instances in the launcher already play any version with the real game.
+
+More: [#3023](https://github.com/horizon-rust/horizon/issues/3023)
+
+</details>
+
 #### Online-mode checks for Play with Friends
 
 Friends who join through an invite code could prove who they are with their Microsoft account, as on online-mode servers.
@@ -661,6 +765,18 @@ Play with Friends joins over an encrypted tunnel with an invite code ([docs/play
 </details>
 
 ### Mods and API
+
+#### Scripts for mods
+
+Small mods written as scripts, in the style of KubeJS, with no compiler.
+
+<details><summary>Technical</summary>
+
+Waits for native mods to settle: the earlier plan ran Lua inside the WebAssembly sandbox, which is being removed. A script layer over the native hook points is to be designed.
+
+More: [docs/native-mods.md](docs/native-mods.md)
+
+</details>
 
 #### Orbital Laser on the normal game
 
@@ -674,11 +790,13 @@ A native port (a horizon-mixins bundle, docs/native-mods.md) of [https://github.
 
 #### Native versions of popular client mods
 
-Built-in versions of the client mods players ask for: block info on hover, a recipe viewer like JEI, a world map and schematic overlays.
+Built-in versions of the client mods players ask for: block info on hover, a world map, inventory tweaks and schematic overlays.
 
 <details><summary>Technical</summary>
 
-Done: the minimap, zoom, FPS counter and keystrokes are native mods ([docs/extras.md](docs/extras.md), [docs/mods.md](docs/mods.md)). Left: block info tooltips, a recipe viewer (a contributor offered to port JEI if it becomes a native feature), a world map and a schematic overlay. Each is a native mod, or goes into the game directly.
+Done: a mod list and menu, minimap, zoom, keystrokes, an FPS counter and a recipe viewer, as native mods (horizon-mods/native/). Asked for: an angled world map that shows hills, overhangs and caves, inventory tweaks (drag and scroll to move items), block info tooltips and schematic overlays.
+
+More: [docs/extras.md](docs/extras.md) · [docs/native-mods.md](docs/native-mods.md)
 
 </details>
 
@@ -721,6 +839,16 @@ Make controller support solid: tested with real PlayStation and Xbox pads and a 
 <details><summary>Technical</summary>
 
 The game side is merged ([docs/controllers.md](docs/controllers.md)): pads read with gilrs, menus, rumble, glyphs, remapping and DualSense adaptive triggers, lightbar and haptics, but not yet confirmed on real pads or a Steam Deck (DualSense haptics stay behind a switch until then). Left: a test pass on real hardware, and the same focus navigation in the GPUI launcher.
+
+</details>
+
+#### Splitscreen
+
+Play with a friend on the same screen, each with a controller.
+
+<details><summary>Technical</summary>
+
+Issue [#2054](https://github.com/horizon-rust/horizon/issues/2054); a contributor is working on it. Two local players on the same world, each with their own camera and HUD, built on the server thread's multiplayer.
 
 </details>
 
@@ -774,7 +902,7 @@ More graphics options: multisample anti-aliasing, anisotropic filtering and an e
 
 <details><summary>Technical</summary>
 
-Not implemented ([docs/graphics.md](docs/graphics.md)). Anisotropic filtering needs linear magnification in wgpu, which blurs close blocks, so close-up sharpness has to be kept first; MSAA would sit beside FXAA; exclusive fullscreen where the backend supports it.
+Not implemented ([docs/graphics.md](docs/graphics.md)). Anisotropic filtering needs linear magnification in wgpu, which blurs close blocks, so close-up sharpness has to be kept first; MSAA would sit beside FXAA, and SMAA or TAA are asked for too; exclusive fullscreen where the backend supports it.
 
 </details>
 
@@ -799,6 +927,18 @@ Game and launcher builds for 64-bit ARM Linux computers.
 <details><summary>Technical</summary>
 
 Issue [#1709](https://github.com/horizon-rust/horizon/issues/1709): aarch64 builds of the game and the launcher in the release workflow, tested on a real ARM machine with its Vulkan driver. The server build already drops audio and controllers (`--no-default-features`).
+
+</details>
+
+#### Horizon on Windows ARM64
+
+A native Horizon for Windows on ARM computers, such as Snapdragon laptops.
+
+<details><summary>Technical</summary>
+
+Releases are x64 for Windows and Linux and arm64 for macOS. Needs an aarch64-pc-windows-msvc build in the release workflow and a machine to test on.
+
+More: [docs/release-flow.md](docs/release-flow.md)
 
 </details>
 
@@ -908,6 +1048,7 @@ Armour and tools in End city chests should come enchanted, as in vanilla.
 
 ## Recently shipped
 
+- **Microsoft sign-in** (launcher@0.2.17): Sign in with your Microsoft account in the launcher to play on online-mode servers. [docs/microsoft-account.md](docs/microsoft-account.md) · [#2879](https://github.com/horizon-rust/horizon/issues/2879)
 - **OpenGL for old computers** (v0.2.63): Horizon now starts on old PCs whose graphics card has no Vulkan or DirectX 12 driver: it switches to OpenGL by itself, and Options > Graphics can pick OpenGL by hand. [#1917](https://github.com/horizon-rust/horizon/issues/1917) · [#1920](https://github.com/horizon-rust/horizon/issues/1920) · [#1936](https://github.com/horizon-rust/horizon/issues/1936)
 - **Server resource packs** (v0.2.48): Servers can send you their resource pack: Horizon asks, downloads it and applies it, like vanilla. [#1562](https://github.com/horizon-rust/horizon/issues/1562) · [#1569](https://github.com/horizon-rust/horizon/issues/1569) · [#1570](https://github.com/horizon-rust/horizon/issues/1570)
 - **Single player on its own server thread** (v0.2.39): Single player runs on a server thread, as vanilla does, so the world keeps ticking smoothly while the window draws. [#1514](https://github.com/horizon-rust/horizon/issues/1514) · [docs/server-levels.md](docs/server-levels.md)

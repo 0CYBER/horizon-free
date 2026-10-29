@@ -302,6 +302,12 @@ impl Game<'_> {
     /// (an end portal opening, the dragon's death roar): here, and sent to
     /// every guest whatever their dimension.
     pub(super) fn global_level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        // ServerLevel.globalLevelEvent: without global_sound_events it is a
+        // plain level event, which the client has no sound for (1023, 1028
+        // and 1038 are only in `LevelEventHandler.globalLevelEvent`).
+        if !self.ui.rules.bool("global_sound_events") {
+            return;
+        }
         self.global_level_event_sound(id, pos);
         if self.audio.capture.is_some() {
             self.lan_global_events.push((id, pos, data));

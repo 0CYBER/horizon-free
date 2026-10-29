@@ -186,13 +186,14 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
     }
 }
 /// Save the list after a move or delete, keeping the icons pings stored in
-/// servers.dat since it was loaded.
+/// servers.dat since it was loaded, and the Code of Conduct accepted on a server.
 fn save_servers(file: &Path, servers: &mut [ServerEntry]) {
     let _guard = SAVING.lock();
     let saved = servers::load(file);
     for entry in servers.iter_mut() {
         if let Some(s) = saved.iter().find(|s| s.ip == entry.ip) {
             entry.icon = s.icon.clone();
+            entry.accepted_code_of_conduct = s.accepted_code_of_conduct;
         }
     }
     let _ = servers::save(file, servers);

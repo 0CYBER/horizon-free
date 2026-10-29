@@ -208,7 +208,10 @@ fn is_potion_item(item: &str) -> bool {
 /// The name line of `stack`, as the item's translation or, for potions and
 /// smithing templates, its name component gives it.
 pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) -> String {
-    let path = stack.item.trim_start_matches("minecraft:");
+    let (namespace, path) = stack
+        .item
+        .split_once(':')
+        .unwrap_or(("minecraft", &stack.item));
     if let Some(name) = stack.custom_name() {
         return name.to_owned();
     }
@@ -231,9 +234,12 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     } else {
         None
     };
+    // `Item.getDescriptionId`: `Util.makeDescriptionId("item", id)`, or the
+    // block's for a block item, in the item's own namespace.
+    let id = format!("{namespace}.{}", path.replace('/', "."));
     key.and_then(|k| translate(&k))
-        .or_else(|| translate(&format!("item.minecraft.{path}")))
-        .or_else(|| translate(&format!("block.minecraft.{path}")))
+        .or_else(|| translate(&format!("item.{id}")))
+        .or_else(|| translate(&format!("block.{id}")))
         .unwrap_or_else(|| path.replace('_', " "))
 }
 
@@ -424,6 +430,44 @@ pub fn unbreakable_line(
     .then(|| translate("item.unbreakable").unwrap_or_else(|| "item.unbreakable".into()))
 }
 
+/// `OminousBottleAmplifier.addToTooltip`: the effect the bottle gives,
+/// `MobEffectInstance(BAD_OMEN, 120000, amplifier)`, listed as
+/// `PotionContents.addPotionTooltip` lists it, in the colour of Bad Omen's
+/// category (NEUTRAL, blue). An ominous bottle without the component has the
+/// item's default amplifier, 0.
+pub fn ominous_bottle_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, u32)> {
+    const BAD_OMEN_TICKS: i32 = 120_000;
+    let amplifier = stack
+        .data()
+        .and_then(|d| d.ominous_amplifier)
+        .or_else(|| (&*stack.item == "minecraft:ominous_bottle").then_some(0))?;
+    if !display.shows("minecraft:ominous_bottle_amplifier") {
+        return None;
+    }
+    use crate::text::{Text, format_translation};
+    let text = |key: &str, fallback: &str| translate(key).unwrap_or_else(|| fallback.to_owned());
+    // PotionContents.getPotionDescription.
+    let mut line = Text::literal(text(
+        "effect.minecraft.bad_omen",
+        "effect.minecraft.bad_omen",
+    ));
+    if amplifier > 0 {
+        let potency = translate(&format!("potion.potency.{amplifier}"))
+            .unwrap_or_else(|| crate::enchant::level_name(u32::from(amplifier) + 1));
+        line = format_translation(
+            &text("potion.withAmplifier", "%s %s"),
+            &[line, Text::literal(potency)],
+        );
+    }
+    let duration = Text::literal(crate::brewing::format_duration(BAD_OMEN_TICKS));
+    let line = format_translation(&text("potion.withDuration", "%s (%s)"), &[line, duration]);
+    Some((line.plain(), rgba(85, 85, 255, 255)))
+}
+
 /// `PotionContents.addPotionTooltip`'s attribute block: an empty line, "When
 /// Applied:" and the modifiers of the potion's effects (blue for a gain, red
 /// for a loss); nothing for a potion whose effects add none.
@@ -586,6 +630,7 @@ pub fn detail_lines(
                 .map(|(line, _)| line),
         );
     }
+    lines.extend(ominous_bottle_line(stack, &display, translate).map(|l| l.0));
     lines
 }
 
@@ -821,6 +866,62 @@ mod tests {
     }
 
     #[test]
+    fn ominous_bottle_lists_bad_omen_at_its_amplifier_for_100_minutes() {
+        let lang = |key: &str| {
+            Some(
+                match key {
+                    "effect.minecraft.bad_omen" => "Bad Omen",
+                    "potion.withAmplifier" => "%s %s",
+                    "potion.withDuration" => "%s (%s)",
+                    "potion.potency.3" => "IV",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let duration = crate::brewing::format_duration(120_000);
+        let blue = rgba(85, 85, 255, 255);
+        // The item's default amplifier, 0: no potency.
+        let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
+        let line = |s: &ItemStack| ominous_bottle_line(s, &TooltipDisplay::for_stack(s), &lang);
+        assert_eq!(
+            line(&bottle),
+            Some((format!("Bad Omen ({duration})"), blue))
+        );
+        bottle.data_mut().ominous_amplifier = Some(3);
+        assert_eq!(
+            line(&bottle),
+            Some((format!("Bad Omen IV ({duration})"), blue))
+        );
+        assert!(
+            lines(&bottle, None, &lang).contains(&format!("Bad Omen IV ({duration})")),
+            "{:?}",
+            lines(&bottle, None, &lang)
+        );
+        // A numbered template, as some languages write it.
+        let numbered = |key: &str| match key {
+            "potion.withDuration" => Some("%2$s: %1$s".to_owned()),
+            other => lang(other),
+        };
+        assert_eq!(
+            ominous_bottle_line(&bottle, &TooltipDisplay::for_stack(&bottle), &numbered)
+                .map(|l| l.0),
+            Some(format!("{duration}: Bad Omen IV"))
+        );
+        bottle.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::compound([(
+                "hidden_components",
+                Tag::List(vec![Tag::String(
+                    "minecraft:ominous_bottle_amplifier".into(),
+                )]),
+            )])),
+        );
+        assert_eq!(line(&bottle), None);
+        assert_eq!(line(&ItemStack::new("minecraft:glass_bottle", 1)), None);
+    }
+
+    #[test]
     fn ominous_banner_keeps_its_default_hidden_pattern_tooltip() {
         let mut banner = crate::mobs::raider::ominous_banner();
         let display = TooltipDisplay::for_stack(&banner);
@@ -860,6 +961,25 @@ mod tests {
         let plain = ItemStack::new("minecraft:white_banner", 1);
         assert_eq!(name_line(&plain, &translate), "White Banner");
         assert_eq!(rarity(&plain, "common"), "common");
+    }
+
+    #[test]
+    fn name_line_translates_items_of_any_namespace() {
+        let translate = |key: &str| match key {
+            "item.example.ruby" => Some("Ruby".to_owned()),
+            "block.example.ruby_block" => Some("Block of Ruby".to_owned()),
+            "item.example.tools.chisel" => Some("Chisel".to_owned()),
+            "item.minecraft.diamond" => Some("Diamond".to_owned()),
+            _ => None,
+        };
+        let name = |id: &str| name_line(&ItemStack::new(id, 1), &translate);
+        // `Util.makeDescriptionId`: the item's own namespace, `/` as `.`.
+        assert_eq!(name("example:ruby"), "Ruby");
+        assert_eq!(name("example:ruby_block"), "Block of Ruby");
+        assert_eq!(name("example:tools/chisel"), "Chisel");
+        assert_eq!(name("minecraft:diamond"), "Diamond");
+        // No translation: the path, as the creative names fall back to.
+        assert_eq!(name("example:raw_ruby"), "raw ruby");
     }
 
     #[test]
