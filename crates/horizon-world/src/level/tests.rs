@@ -1440,24 +1440,23 @@ fn creative_breaking_piston_head_does_not_drop_piston() {
         w.put(head_pos, head);
         w.level.events.clear();
 
-        // Breaking the head in creative mode:
-        assert!(
-            w.f.behaviours
-                .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, true, true),
-            "head should be destroyed"
-        );
+        // Breaking the head in creative mode. Destroying the base first makes the
+        // head's shape update remove it, so its own removeBlock finds air.
+        w.f.behaviours
+            .player_destroy_block(&mut w.level, &mut w.ticks, head_pos, true, true);
 
         // Both head and base must be removed:
         assert_eq!(w.get(head_pos), w.b().air(), "head should become air");
         assert_eq!(w.get(base_pos), w.b().air(), "base should become air");
 
-        // Must NOT drop any resources:
+        // Must NOT drop the base: the head's own removal (its shape update) drops
+        // its empty loot, as vanilla's updateOrDestroy does.
         assert!(
             !w.level
                 .events
                 .iter()
-                .any(|e| matches!(e, LevelEvent::DropResources { .. })),
-            "creative mode breaking {head_type} piston head must not drop resources"
+                .any(|e| matches!(e, LevelEvent::DropResources { pos, .. } if *pos == base_pos)),
+            "creative mode breaking {head_type} piston head must not drop the base piston"
         );
     }
 }
