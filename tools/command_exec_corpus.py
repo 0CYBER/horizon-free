@@ -1134,6 +1134,29 @@ def server_clock():
     ]
 
 
+def ender_dragon():
+    """`/kill` on the fight's dragon ends the fight (#3319): `EnderDragon.kill` removes it and calls
+    `EnderDragonFight.setDragonKilled`, so no new dragon takes its place, the exit portal opens and the
+    first dragon leaves its egg. The player stays over the exit portal, in the fight (`validPlayer`)."""
+    end = '/execute in minecraft:the_end run'
+    return [
+        *setup('/gamemode creative', f'{end} tp @s 0.5 100 0.5 0 0'),
+        {'op': 'settle'},
+        # updatePlayers, the arena scan and createNewDragon once the 17 by 17 arena chunks are block ticking
+        # (EnderDragonFight.isArenaLoaded). The oracle generates them on worker threads: a tick op with a
+        # `record` key gives it a moment of wall time before its ticks.
+        *[{'op': 'tick', 'n': 20, 'record': False}] * 10,
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd('/kill @e[type=minecraft:ender_dragon]'),
+        {'op': 'tick', 'n': 40},
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd(f'{end} fill -3 0 -3 3 120 3 minecraft:air replace minecraft:end_portal'),
+        cmd(f'{end} fill -3 0 -3 3 120 3 minecraft:air replace minecraft:dragon_egg'),
+        *setup('/execute in minecraft:overworld run tp @s 8.5 230 8.5 0 0'),
+        {'op': 'settle'},
+    ]
+
+
 def groups():
     return [
         ('setup', group_setup()),
@@ -1157,4 +1180,5 @@ def groups():
         ('compute', compute()),
         ('social and scoreboard', social()),
         ('test', test_command()),
+        ('ender dragon', ender_dragon()),
     ]

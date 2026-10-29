@@ -38,7 +38,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
 - hurt:      a pig the guest hits, and one the host hits, flashes red on the other side too (the
-             server's damage event) (#848);
+             server's damage event) (#848), and so does a hurt host or guest (#2827);
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - names:     a renamed shulker box, copper chest and chest the guest places open on the guest's screen
@@ -264,6 +264,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              sends each target its packet).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
+- cure-discount: the host and the guest each cure a zombie villager with a golden apple and pay 14
+              wheat instead of 20 for its emerald (the ZOMBIE_VILLAGER_CURED gossip, #3306).
 - falling:   an item, a falling block and primed TNT the host summons high up fall smoothly on the
              guest, a little further every tick between the server's updates (every 20 ticks, 10 for
              TNT), as their own client tick moves them (they used to hang, then jump down once a
@@ -309,7 +311,7 @@ GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
-          'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
+          'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
@@ -1356,9 +1358,29 @@ def check_hurt(host, guest, out):
         watcher.shot(out, 'hurt-' + name.replace(' ', '-') + '-seen')
         attacker.wait(20)
     host('command', command='kill @e[type=minecraft:pig]')
+    # A hurt player flashes red for the other one too (#2827).
+    # An in-frame host draws its guests as models of its own, not entities: only the screenshot.
+    watched = ((('host hurt', host, guest),) if not SERVER_THREAD else
+               (('host hurt', host, guest), ('guest hurt', guest, host)))
+    for name, hurt, watcher in watched:
+        hurt.wait(30)
+        # Instant damage hurts on the next effect tick.
+        hurt('command', command='effect give @s minecraft:instant_damage 1 0')
+        for _ in range(10):
+            other = watcher.raw('entities', 6, 'player')['entities'][0]
+            if other['hurt_time'] > 0:
+                break
+            watcher.wait(1)
+        seen[name] = {'watcher': other['hurt_time']}
+        watcher.shot(out, 'hurt-' + name.replace(' ', '-') + '-seen')
+    if not SERVER_THREAD:
+        guest.wait(30)
+        guest('command', command='effect give @s minecraft:instant_damage 1 0')
+        guest.wait(2)
+        host.shot(out, 'hurt-guest-hurt-seen')
     # LivingEntity.hurtTime: 10 when hurt, one less each tick; the reads come a few ticks later.
     for name, sides in seen.items():
-        assert all(t > 0 for t in sides.values()), f'{name}: the pig\'s hurt flash {seen}'
+        assert all(t > 0 for t in sides.values()), f'{name}: the hurt flash {seen}'
     return seen
 
 
@@ -3576,6 +3598,79 @@ def check_sidebar(host, guest, out):
     return result
 
 
+def fluid_pig_position(host, tag):
+    """Read the tagged pig even after the current carries it past its spawn."""
+    reply = server_reply(host, f'data get entity @e[type=pig,tag={tag},limit=1] Pos', 'entity data')
+    values = re.findall(r'-?\d+(?:\.\d+)?', reply.rsplit(':', 1)[-1])
+    assert len(values) == 3, f'no position for {tag}: {reply}'
+    return tuple(map(float, values))
+
+
+def clear_fluid_arena(host, x, y, z, tags, floor='minecraft:stone'):
+    """Kill the tagged pigs and empty the arena, up in the air at y 100 so its
+    walls never close around a player; the last clear takes the floor away too."""
+    for tag in tags:
+        host('command', command=f'kill @e[type=pig,tag={tag}]')
+    host('command', command=f'fill {x-2} {y} {z-2} {x+9} {y+6} {z+7} minecraft:air')
+    host('command', command=f'fill {x-2} {y-1} {z-2} {x+9} {y-1} {z+7} {floor}')
+    host.wait(10)
+
+
+def check_flow_push(host, guest, out):
+    """A current pushes a tagged pig farther than a pool of source blocks."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    tags = ('horizon_flow_test', 'horizon_still_test')
+    host('command', command='gamemode survival')
+    try:
+        clear_fluid_arena(host, x, y, z, tags)
+        # Enclosed trough: its walls keep water inside the area cleaned below.
+        host('command', command=f'fill {x-1} {y} {z-1} {x+8} {y+1} {z+1} minecraft:stone')
+        host('command', command=f'fill {x} {y} {z} {x+7} {y+2} {z} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:water')
+        # Enclosed source pool, whose centre has no horizontal current.
+        host('command', command=f'fill {x+2} {y} {z+2} {x+6} {y+1} {z+6} minecraft:stone')
+        host('command', command=f'fill {x+3} {y} {z+3} {x+5} {y} {z+5} minecraft:water')
+        host('command', command=f'fill {x+3} {y+1} {z+3} {x+5} {y+3} {z+5} minecraft:air')
+        host.wait(40)
+        for tag, px, pz in [(tags[0], x+1.5, z+0.5), (tags[1], x+4.5, z+4.5)]:
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {pz} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
+        host.wait(40)
+        flowing = fluid_pig_position(host, tags[0])[0] - (x + 1.5)
+        still = fluid_pig_position(host, tags[1])[0] - (x + 4.5)
+        assert flowing - still > 0.2, f'the current did not carry the mob: {flowing} vs {still}'
+        return {'flowing': round(flowing, 3), 'still': round(still, 3)}
+    finally:
+        clear_fluid_arena(host, x, y, z, tags, floor='minecraft:air')
+
+
+def check_bubble_column(host, guest, out):
+    """A bubble column lifts a tagged pig farther than an ordinary water source."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    tags = ('horizon_bubble_test', 'horizon_plain_test')
+    host('command', command='gamemode survival')
+    try:
+        clear_fluid_arena(host, x, y, z, tags)
+        for px in (x, x+3):
+            host('command', command=f'fill {px-1} {y} {z-1} {px+1} {y} {z+1} minecraft:stone')
+            host('command', command=f'setblock {px} {y} {z} minecraft:water')
+        host('command', command=f'setblock {x} {y-1} {z} minecraft:soul_sand')
+        host.wait(20)
+        for tag, px in [(tags[0], x+0.5), (tags[1], x+3.5)]:
+            host('command', command=f'summon minecraft:pig {px} {y+0.1} {z+0.5} {{attributes:[{{id:"minecraft:movement_speed",base:0.0d}}],Tags:["{tag}"]}}')
+        samples = {tag: [] for tag in tags}
+        for _ in range(8):
+            host.wait(5)
+            for tag in tags:
+                samples[tag].append(fluid_pig_position(host, tag)[1])
+        column, plain = (max(samples[tag]) for tag in tags)
+        assert column - plain > 0.2, f'the bubble column did not carry the pig up: {column} vs {plain}'
+        return {'column': round(column-y, 3), 'plain': round(plain-y, 3)}
+    finally:
+        clear_fluid_arena(host, x, y, z, tags, floor='minecraft:air')
+
+
 def check_border(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -5194,6 +5289,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
+             'flow-push': check_flow_push,
+             'bubble-column': check_bubble_column,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'names': check_names, 'feedback': check_feedback, 'titles': check_titles,
              'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,
@@ -6558,6 +6655,87 @@ def check_hero_trading(host, guest, out):
 
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})
+
+
+def check_cure_discount(host, guest, out):
+    """#3306: ZombieVillager.finishConversion credits the player who fed the golden apple
+    (conversionStarter, level.getPlayerByUUID): the ZOMBIE_VILLAGER_CURED gossip (+20 major and +25
+    minor positive, reputation 125) lowers that player's price by floor(125 * 0.05) = 6, for the
+    host on its server thread and for a guest alike."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'cure_trade'
+    at = (x + 2.5, y, z + 0.5)
+    seen = {}
+    try:
+        host('command', command=f'fill {x - 4} {y - 1} {z - 2} {x + 4} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'fill {x - 4} {y} {z - 2} {x + 4} {y + 3} {z + 2} minecraft:air')
+        host('command', command='time set midnight')
+        for game, other in ((host, guest), (guest, host)):
+            back_to_game(game)
+            back_to_game(other)
+            other('command', command=f'tp @s {x - 3.5} {y} {z + 0.5}')
+            game('command', command='gamemode survival')
+            game('command', command='effect clear @s')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} -90 0')
+            game('command', command='clear @s')
+            game('command', command='give @s minecraft:golden_apple')
+            game.wait(10)
+            game.raw('select', 'minecraft:golden_apple')
+            host('command', command=f'summon minecraft:zombie_villager {at[0]} {at[1]} {at[2]} '
+                 f'{{Tags:["{tag}"],NoAI:1b,PersistenceRequired:1b,Xp:1,VillagerData:{{type:"minecraft:plains",'
+                 'profession:"minecraft:farmer",level:1},Offers:{Recipes:[{buy:{id:"minecraft:wheat",count:20},'
+                 'sell:{id:"minecraft:emerald",count:1},maxUses:16,uses:0,xp:0,priceMultiplier:0.05f,demand:0}]}}')
+            host('command', command=f'effect give @e[tag={tag}] minecraft:weakness 60 0')
+            game.wait(20)
+            zombie = next(e['id'] for e in game.raw('entities', 8, 'minecraft:zombie_villager')['entities']
+                          if math.dist(e['pos'], at) < 0.5)
+            # ZombieVillager.mobInteract: the apple starts the cure; then it is cut short.
+            game.raw('interact-entity', zombie)
+            game.wait(10)
+            # Horizon counts the cure down in the AI step, so NoAI goes for the last tick.
+            host('command', command=f'data merge entity @e[tag={tag},limit=1] {{ConversionTime:1,NoAI:0b}}')
+            villager = None
+            for _ in range(30):
+                game.wait(5)
+                villager = next((e['id'] for e in game.raw('entities', 8, 'minecraft:villager')['entities']
+                                 if math.dist(e['pos'], at) < 2), None)
+                if villager is not None:
+                    break
+            assert villager is not None, f'{game.name}: the zombie villager was not cured'
+            near = f'x={at[0]},y={at[1]},z={at[2]},distance=..3,sort=nearest,limit=1'
+            host('command', command=f'data merge entity @e[type=minecraft:villager,{near}] '
+                 f'{{NoAI:1b,Tags:["{tag}"]}}')
+            game('command', command='clear @s')
+            game('command', command='give @s minecraft:wheat 20')
+            game.wait(10)
+            game.raw('interact-entity', villager)
+            game.raw('wait-for', 'screen', 'station', '--timeout', 10)
+            assert game('screen')['station'] == 'Merchant', f'{game.name}: no merchant screen'
+            game.raw('click-gui', -1, 28)
+            game.wait(10)
+            assert station_slots(game).get(650) == ('minecraft:emerald', 1), f'{game.name}: no result'
+            game.shot(out, f'cure-discount-{game.name}')
+            game.raw('click-slot', 650, 'shift')
+            game.wait(10)
+            game.raw('key', 'esc', 'tap')
+            game.wait(10)
+            case = {item: server_count(game, item) for item in ('wheat', 'emerald')}
+            seen[game.name] = case
+            want = {'wheat': 20 - 14, 'emerald': 1}
+            assert case == want, f'{game.name}: expected {want}, got {case}'
+            host('command', command=f'kill @e[tag={tag}]')
+            game.wait(5)
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='clear @s')
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command='time set day')
+    return seen
+
+
+CHECKS += ['cure-discount']
+CHECK_FNS.update({'cure-discount': check_cure_discount})
 
 
 def check_spectator_travel(host, guest, out):

@@ -99,6 +99,9 @@ pub trait LodSampler: Send {
     fn drain_details(&mut self) -> Vec<LodDetail> {
         Vec::new()
     }
+    /// Reduced far detail (`graphics::FarDetail::Reduced`): `grid` may then
+    /// approximate wide cells.
+    fn set_approximate(&mut self, _approximate: bool) {}
     fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface>;
     fn column(&mut self, x: i32, z: i32) -> crate::lod::Column {
         crate::lod::Column::from_surface(self.sample(x, z))
@@ -168,6 +171,9 @@ enum Job {
     /// Proto chunks checked out to be saved (`ChunkGenerator::save_protos`),
     /// off the main thread like vanilla's IOWorker.
     Save(Vec<((i32, i32), Proto)>),
+    /// Meshes the renderer is done with (`Streaming::free`): their memory
+    /// is given back here, not in the frame.
+    Free(Vec<((i32, i32, i32), SectionMesh)>),
 }
 pub enum Done {
     Generated(Chunk),
@@ -510,6 +516,10 @@ impl Streaming {
                                     generator.save_protos(&refs);
                                     Done::Saved(protos)
                                 }
+                                Job::Free(meshes) => {
+                                    drop(meshes);
+                                    continue;
+                                }
                                 Job::Light(x, z, region, seq, sky) => {
                                     Done::Lit(x, z, light_chunk(&borrow(&region), &light, sky), seq)
                                 }
@@ -660,6 +670,17 @@ impl Streaming {
             }
         }
     }
+    /// Give back meshes the renderer has copied: a worker frees them, ahead of
+    /// other jobs, as vanilla's compile task closes its mesh data on its own
+    /// thread once copied (`SectionRenderDispatcher.RenderSection.CompileTask.doTask`).
+    /// Freed in the frame, the hundreds of meshes a chunk border brings waited
+    /// on the allocator behind every busy worker: up to 20 ms of a frame each
+    /// time while flying at render distance 32.
+    pub fn free(&mut self, meshes: Vec<((i32, i32, i32), SectionMesh)>) {
+        if !meshes.is_empty() {
+            self.submit(None, 0, Job::Free(meshes));
+        }
+    }
     /// A column the server unloaded (ClientboundForgetLevelChunkPacket).
     pub fn forget(&mut self, world: &mut World, x: i32, z: i32) -> Option<Arc<Chunk>> {
         self.lit.remove(&(x, z));
@@ -676,7 +697,7 @@ impl Streaming {
     }
     /// Queue a job for the column `at`, nearest first: its distance (`distance`)
     /// times four plus `bias`, which orders a column's jobs. A job without a
-    /// column (a save) goes ahead of every other.
+    /// column (a save, meshes to free) goes ahead of every other.
     fn submit(&mut self, at: Option<(i32, i32)>, bias: i64, job: Job) {
         self.order += 1;
         let priority = at.map_or(i64::MIN, |(x, z)| self.distance(x, z) * 4 + bias);
@@ -910,6 +931,8 @@ impl Streaming {
         self.relight_edits(world);
         let deferred = std::mem::take(&mut self.deferred);
         let received = std::iter::from_fn(|| self.results.try_recv().ok());
+        // Meshes made stale meanwhile, freed with the uploaded ones (`free`).
+        let mut stale = Vec::new();
         for done in deferred.into_iter().chain(received.collect::<Vec<_>>()) {
             match done {
                 Done::Proto(x, z, proto, decorated) => {
@@ -966,12 +989,14 @@ impl Streaming {
                 }
                 Done::Meshed(x, sy, z, mesh, seq) => {
                     if self.meshing.get(&(x, sy, z)) != Some(&seq) {
+                        stale.push(((x, sy, z), mesh));
                         continue;
                     }
                     // Its column unloaded while it was meshed: nothing would
                     // ever remove the uploaded section.
                     if !world.chunks.contains_key(&(x, z)) {
                         self.meshing.remove(&(x, sy, z));
+                        stale.push(((x, sy, z), mesh));
                         continue;
                     }
                     self.meshing.remove(&(x, sy, z));
@@ -980,6 +1005,7 @@ impl Streaming {
                 }
             }
         }
+        self.free(stale);
         let mut removed = Vec::new();
         if sweep {
             // Unload far columns.
