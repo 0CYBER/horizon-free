@@ -3094,10 +3094,7 @@ impl Game<'_> {
         // The host is online unless this is a dedicated server, which has none.
         let host = (self.options.dedicated.is_none() && !owner_listed).then(|| match &self.lan {
             Some(h) => (h.host_uuid, h.host_name.clone()),
-            None => (
-                horizon_protocol::crypto::offline_uuid(PLAYER_NAME),
-                PLAYER_NAME.to_owned(),
-            ),
+            None => (self.player_uuid(), PLAYER_NAME.to_owned()),
         });
         let guests = self
             .lan
