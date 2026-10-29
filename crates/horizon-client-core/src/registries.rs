@@ -54,6 +54,9 @@ pub struct Registries {
     pub function_tags: Vec<String>,
     /// The block the source is looking at (relevant coordinates).
     pub target_block: Option<[i32; 3]>,
+    /// `ClientSuggestionProvider.getSelectedEntities`: the UUID of the
+    /// entity under the crosshair (`Entity.getStringUUID`), if any.
+    pub selected_entities: Vec<String>,
     /// `ClientSuggestionProvider.getAbsoluteCoordinates`: the exact point of
     /// that block hit, each coordinate as `%.2f` (`Locale.ROOT`).
     pub target_point: Option<[String; 3]>,

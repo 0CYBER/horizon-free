@@ -4,7 +4,7 @@
 //! signed and what it may do), install it with its checksum checked, turn Horizon mods on and
 //! off, and update or remove what was installed (`horizon_launcher::browser`). Imported modpacks
 //! are listed on its Modpacks tab.
-use super::servers_page::{type_key, Key};
+use super::line_edit::{self, Key, LineEdit};
 use super::*;
 use horizon_launcher::browser::{
     self, horizon, installed, java, java_instance, Kind as PackKind, Project, Query, SourceId,
@@ -59,7 +59,7 @@ pub(super) enum Checking {
 pub(super) struct Mods {
     pub(super) kind: PackKind,
     pub(super) source: SourceId,
-    text: String,
+    text: LineEdit,
     focus: FocusHandle,
     pub(super) focused: bool,
     everything: bool,
@@ -151,7 +151,7 @@ impl Mods {
                 Ok("horizon") => SourceId::Horizon,
                 _ => SourceId::Modrinth,
             },
-            text: String::new(),
+            text: LineEdit::new(String::new(), 100, 40),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focused: false,
             everything: false,
@@ -405,14 +405,14 @@ impl Launcher {
             Some(target) => Query {
                 offset,
                 limit: PAGE,
-                ..target.search(&m.text, m.kind, &m.browse.filters)
+                ..target.search(m.text.text(), m.kind, &m.browse.filters)
             },
             None => Query {
                 everything: m.everything,
                 offset,
                 limit: PAGE,
                 filters: m.browse.filters.clone(),
-                ..Query::new(&m.text, m.kind)
+                ..Query::new(m.text.text(), m.kind)
             },
         };
         // A Java instance's files are Modrinth's; Horizon's registry is for Horizon.
@@ -786,11 +786,7 @@ impl Launcher {
         let t = self.theme;
         let m = &self.mods;
         let focused = m.focused;
-        let shown: String = {
-            let chars: Vec<char> = m.text.chars().collect();
-            chars[chars.len().saturating_sub(40)..].iter().collect()
-        };
-        div()
+        let field = div()
             .id("mods-search")
             .track_focus(&m.focus)
             .flex()
@@ -806,45 +802,29 @@ impl Launcher {
             .text_size(px(theme::UI.px))
             .cursor_text()
             .child(blocks::icon("search", 18., t.muted))
-            .child(if m.text.is_empty() && !focused {
-                div().text_color(t.muted).child("Search, then Enter")
-            } else {
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| {
-                d.child(div().flex_none().w(px(1.)).h(px(16.)).bg(t.ink))
-            })
+            .child(line_edit::content(
+                &m.text,
+                &t,
+                focused,
+                false,
+                false,
+                "Search, then Enter",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.mods.focus);
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                let k = &ev.keystroke;
-                let command = k.modifiers.control || k.modifiers.platform;
-                match type_key(
-                    &mut this.mods.text,
-                    false,
-                    &k.key,
-                    k.key_char.as_deref(),
-                    command,
-                ) {
+                match line_edit::handle(&mut this.mods.text, ev, cx) {
                     Key::Enter => this.mods_search(0),
                     Key::Escape => window.blur(),
-                    Key::Paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            let line = text.lines().next().unwrap_or_default().trim().to_string();
-                            this.mods.text.push_str(&line);
-                        }
-                    }
-                    Key::Edited => {}
                     Key::Pass => return,
-                }
-                if let Some((at, _)) = this.mods.text.char_indices().nth(100) {
-                    this.mods.text.truncate(at);
+                    _ => {}
                 }
                 cx.stop_propagation();
                 cx.notify();
-            }))
+            }));
+        line_edit::mouse(field, cx, |this| &mut this.mods.text)
     }
 
     pub(super) fn mods_page(&mut self, cx: &mut Context<Self>) -> Div {
