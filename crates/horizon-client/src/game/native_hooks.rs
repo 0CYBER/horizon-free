@@ -305,7 +305,8 @@ impl Game<'_> {
         let _ = mods;
     }
     /// The buttons of mod `mod_id`'s settings page, under its keys: push
-    /// their labels when it is yours. Asked again after each click.
+    /// their labels when it is yours. Asked again each time the page opens
+    /// and after each click.
     pub(super) fn native_settings(&mut self, mod_id: &str, buttons: &mut Vec<String>) {
         let _ = (mod_id, buttons);
     }
@@ -341,9 +342,12 @@ impl Game<'_> {
     pub(super) fn native_window(&self) -> bool {
         self.options.execution_role == ExecutionRole::Client
     }
-    /// Whether a box in `corner` shows: F3's debug screen takes the top left.
+    /// Whether a box in `corner` shows: F3's debug screen takes both top
+    /// corners (its left and right columns), and a bottom corner while one
+    /// of its charts is drawn there.
     pub(super) fn native_corner_shown(&self, corner: Corner) -> bool {
-        !self.debug || corner != Corner::TopLeft
+        let charts = self.debug_charts.corners(!self.has_singleplayer_server());
+        !debug_takes(corner, self.debug, charts)
     }
     /// The width of `text` in GUI pixels.
     pub(super) fn native_text_width(&self, text: &str) -> f32 {
@@ -533,6 +537,14 @@ impl Game<'_> {
             return;
         };
         self.native_settings_click(&id, button);
+        self.native_settings_refresh(i);
+    }
+    /// Native mod `i`'s page opened: its labels asked again, so that they
+    /// follow the language (and the mod's state) since the list was made.
+    pub(super) fn native_settings_refresh(&mut self, i: usize) {
+        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+            return;
+        };
         let mut buttons = Vec::new();
         self.native_settings(&id, &mut buttons);
         let row = self.settings.mods.installed.get_mut(i);
@@ -602,6 +614,19 @@ impl Game<'_> {
     }
 }
 
+/// Whether F3's debug screen, open when `debug`, covers `corner`
+/// (`DebugScreenOverlay.extractRenderState`): its left and right columns
+/// the top corners, and its charts the bottom corners `charts` (bottom left,
+/// bottom right) says they are drawn in.
+fn debug_takes(corner: Corner, debug: bool, charts: [bool; 2]) -> bool {
+    debug
+        && match corner {
+            Corner::TopLeft | Corner::TopRight => true,
+            Corner::BottomLeft => charts[0],
+            Corner::BottomRight => charts[1],
+        }
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -624,5 +649,22 @@ mod tests {
                 assert!(!line.contains(mac), "a macro in the hook points: {line}");
             }
         }
+    }
+
+    /// Vanilla's F3 draws a column in each top corner (`extractLines`, left
+    /// and right aligned), and its charts along the bottom.
+    #[test]
+    fn the_debug_screen_takes_both_top_corners_and_its_charts_corners() {
+        use super::{Corner, debug_takes};
+        for corner in Corner::ALL {
+            assert!(!debug_takes(corner, false, [true, true]), "{corner:?}");
+        }
+        assert!(debug_takes(Corner::TopLeft, true, [false, false]));
+        assert!(debug_takes(Corner::TopRight, true, [false, false]));
+        assert!(!debug_takes(Corner::BottomLeft, true, [false, false]));
+        assert!(!debug_takes(Corner::BottomRight, true, [false, false]));
+        assert!(debug_takes(Corner::BottomLeft, true, [true, false]));
+        assert!(!debug_takes(Corner::BottomRight, true, [true, false]));
+        assert!(debug_takes(Corner::BottomRight, true, [false, true]));
     }
 }

@@ -679,6 +679,24 @@ fn content_root_carries_a_structure_mod() {
         assert!(!ours.contains_key("othermod:houses"));
     }
 
+    // The commands suggest the mod's structure, set and pool.
+    let registries: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("command-registries.json")).unwrap()).unwrap();
+    for (registry, id) in [
+        ("minecraft:worldgen/structure", "huts:hut"),
+        ("minecraft:worldgen/structure_set", "huts:huts"),
+        ("minecraft:worldgen/template_pool", "huts:hut/start"),
+    ] {
+        let ids = registries["by_registry"][registry]["ids"]
+            .as_array()
+            .unwrap();
+        assert!(ids.iter().any(|v| v == id), "{registry} lacks {id}");
+        assert!(
+            ids.iter()
+                .any(|v| v.as_str().unwrap().starts_with("minecraft:"))
+        );
+    }
+
     let assets = Assets::load(&root).unwrap();
     let biomes = crate::biome::Biomes::load(&root).unwrap();
     let terrain = crate::vanillagen::VanillaTerrain::new(
