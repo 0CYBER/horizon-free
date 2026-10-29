@@ -210,3 +210,86 @@ fn placeholders_fill_in_place() {
     assert_eq!(fill("x${a}y${b}z", &vars), "x1ytwoz");
     assert_eq!(fill("${c} ${a", &vars), "${c} ${a");
 }
+
+/// A loader's profile on its game version: its main class, its libraries first (one replacing
+/// the game's), its JVM argument after the game's, and the game's jar.
+#[test]
+fn a_loader_profile_plays_on_its_game_version() {
+    let dir = scratch("loader");
+    let mc = dir.join("mc");
+    let write = |id: &str, version: &Value| {
+        let file = mc.join(format!("versions/{id}/{id}.json"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, version.to_string()).unwrap();
+    };
+    write("1.21.4", &modern());
+    let profile = json!({
+        "id": "fabric-loader-0.16.9-1.21.4", "inheritsFrom": "1.21.4",
+        "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        "arguments": {"game": [], "jvm": ["-DFabricMcEmu= net.minecraft.client.main.Main "]},
+        "libraries": [
+            {"name": "net.fabricmc:fabric-loader:0.16.9",
+             "downloads": {"artifact": {"path": "net/fabricmc/fabric-loader-0.16.9.jar"}}},
+            {"name": "a:common:2", "downloads": {"artifact": {"path": "a/common/2/common-2.jar"}}}
+        ]
+    });
+    let version = resolve(profile, &mc).unwrap();
+    assert_eq!(version["id"], "fabric-loader-0.16.9-1.21.4");
+    assert_eq!(version["assetIndex"]["id"], "19", "the game's fields stay");
+    let cp = classpath(&version, &mc, "linux").unwrap();
+    let lib = |p: &str| mc.join("libraries").join(p);
+    assert_eq!(
+        cp,
+        [
+            lib("net/fabricmc/fabric-loader-0.16.9.jar"),
+            lib("a/common/2/common-2.jar"),
+            lib("a/not-mac/1/not-mac-1.jar"),
+            under(&mc, "versions/1.21.4/1.21.4.jar"),
+        ]
+    );
+    let (game, natives, java, p) = (
+        dir.join("game"),
+        dir.join("natives"),
+        dir.join("java"),
+        player(),
+    );
+    let launch = Launch {
+        minecraft: &mc,
+        game_dir: &game,
+        natives: &natives,
+        java: &java,
+        memory_mb: 4096,
+        jvm_args: &[],
+        player: &p,
+        os: "linux",
+    };
+    let a = args(&command(&version, &launch).unwrap());
+    let at = |s: &str| a.iter().position(|x| x == s).unwrap();
+    assert!(at("-cp") < at("-DFabricMcEmu= net.minecraft.client.main.Main "));
+    assert!(
+        at("-DFabricMcEmu= net.minecraft.client.main.Main ")
+            < at("net.fabricmc.loader.impl.launch.knot.KnotClient")
+    );
+    assert_eq!(a[at("--version") + 1], "fabric-loader-0.16.9-1.21.4");
+
+    // On a version from before 1.13 the profile's JVM argument joins the old ones.
+    write(
+        "1.8.9",
+        &json!({"id": "1.8.9", "mainClass": "net.minecraft.client.main.Main",
+                "minecraftArguments": "--username ${auth_player_name}", "libraries": []}),
+    );
+    let old = resolve(
+        json!({"id": "fabric-loader-0.16.9-1.8.9", "inheritsFrom": "1.8.9",
+               "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+               "arguments": {"jvm": ["-Dfabric=1"]}, "libraries": []}),
+        &mc,
+    )
+    .unwrap();
+    let a = args(&command(&old, &launch).unwrap());
+    assert!(a.contains(&"-cp".into()) && a.contains(&"-Dfabric=1".into()));
+    assert_eq!(
+        a[a.iter().position(|x| x == "--username").unwrap() + 1],
+        "Notch"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
