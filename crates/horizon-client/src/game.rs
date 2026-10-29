@@ -11593,7 +11593,10 @@ impl Game<'_> {
         self.draw_carried(batch);
         if tab.inventory {
             if Self::creative_trash_hovered(batch, self.cursor) {
-                self.tooltip(batch, "Destroy Item", self.cursor.0, self.cursor.1);
+                // `CreativeModeInventoryScreen`: the destroy slot's tooltip is
+                // `inventory.binSlot`, not an English literal.
+                let destroy = self.translate("inventory.binSlot", "Destroy Item");
+                self.tooltip(batch, &destroy, self.cursor.0, self.cursor.1);
             } else if self.carried.is_none()
                 && let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1)
                 && let Some(stack) = self.slot_view(slot)
