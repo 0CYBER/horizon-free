@@ -262,6 +262,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
              client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
              sends each target its packet).
+- merchant-close: the host and the guest each open a trade screen with the payment in its slot; the screen
+             closes and the payment returns when they walk out of reach (7 blocks in survival, 9 in
+             creative) or the villager dies, and stays open in range.
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
 - falling:   an item, a falling block and primed TNT the host summons high up fall smoothly on the
@@ -6554,6 +6557,73 @@ def check_hero_trading(host, guest, out):
             game('command', command='clear @s')
         host('command', command=f'kill @e[tag={tag}]')
     return seen
+
+
+def check_merchant_close(host, guest, out):
+    """AbstractVillager.stillValid: a trade screen closes when its villager is out of reach or dead, and
+    the payment slots go back to the player as on a normal close; in range it stays open."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'close_trade'
+    seen = {}
+    # (label, mode, tp x offset from the player's start, dies?, screen still open?)
+    cases = [('survival-near', 'survival', 0, False, True), ('survival-8', 'survival', -6.0, False, False),
+             ('creative-8', 'creative', -6.0, False, True), ('creative-far', 'creative', -15.0, False, False),
+             ('killed', 'survival', 0, True, False)]
+    try:
+        host('command', command=f'fill {x - 20} {y - 1} {z - 2} {x + 8} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'fill {x - 20} {y} {z - 2} {x + 8} {y + 3} {z + 2} minecraft:air')
+        for game, other in ((host, guest), (guest, host)):
+            back_to_game(game)
+            back_to_game(other)
+            other('command', command=f'tp @s {x + 6.5} {y} {z + 1.5}')
+            for label, mode, dx, dies, stays in cases:
+                game('command', command=f'gamemode {mode}')
+                game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+                game('command', command='clear @s')
+                game('command', command='give @s minecraft:wheat 20')
+                host('command', command=f'summon minecraft:villager {x + 2.5} {y} {z + 0.5} {{Tags:["{tag}"],'
+                     'NoAI:1b,PersistenceRequired:1b,Xp:1,VillagerData:{type:"minecraft:plains",'
+                     'profession:"minecraft:farmer",level:1},Offers:{Recipes:[{buy:{id:"minecraft:wheat",count:20},'
+                     'sell:{id:"minecraft:emerald",count:1},maxUses:16,uses:0,xp:0,priceMultiplier:0f,demand:0}]}}')
+                game.wait(20)
+                villager = next(e['id'] for e in game.raw('entities', 8, 'minecraft:villager')['entities']
+                                if math.dist(e['pos'], [x + 2.5, y, z + 0.5]) < 0.5)
+                game.raw('interact-entity', villager)
+                game.raw('wait-for', 'screen', 'station', '--timeout', 10)
+                assert game('screen')['station'] == 'Merchant', f'{game.name}-{label}: no merchant screen'
+                # Selecting the offer moves the wheat into the payment slot.
+                game.raw('click-gui', -1, 28)
+                game.wait(10)
+                paid = station_slots(game).get(600)
+                assert paid == ('minecraft:wheat', 20), f'{game.name}-{label}: payment slot {paid}'
+                if dies:
+                    host('command', command=f'kill @e[tag={tag}]')
+                else:
+                    game('command', command=f'tp @s {x + 0.5 + dx} {y} {z + 0.5}')
+                game.wait(20)
+                screen = game('state').get('screen')
+                open_now = screen not in (None, 'playing')
+                case = {'open': open_now}
+                if not stays:
+                    game.wait(10)
+                    case['wheat'] = server_count(game, 'wheat')
+                seen[f'{game.name}-{label}'] = case
+                want = {'open': stays} if stays else {'open': False, 'wheat': 20}
+                assert case == want, f'{game.name}-{label}: expected {want}, got {case} (screen {screen})'
+                back_to_game(game)
+                host('command', command=f'kill @e[tag={tag}]')
+                game.wait(5)
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+        host('command', command=f'kill @e[tag={tag}]')
+    return seen
+
+
+CHECKS += ['merchant-close']
+CHECK_FNS.update({'merchant-close': check_merchant_close})
 
 
 CHECKS += ['hero-trading']
