@@ -13,7 +13,7 @@ use std::{
 
 /// Horizon's registry; `HORIZON_MOD_INDEX` points elsewhere (a local file
 /// for trials, whose files may then be `file://`), as for the launcher.
-pub const INDEX_URL: &str = "https://ludovic111.github.io/horizon-mods/index.json";
+pub const INDEX_URL: &str = "https://horizon-rust.github.io/horizon-mods/index.json";
 const MAX_INDEX: u64 = 16 << 20;
 
 /// An extra that is an official mod now.

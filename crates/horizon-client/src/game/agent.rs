@@ -568,6 +568,22 @@ impl Game<'_> {
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
             }),
+            Mode::CreateFlat {
+                name,
+                seed,
+                options,
+                flat,
+                ..
+            } => json!({
+                "mode": "customize-flat",
+                "fields": { "name": name, "seed": seed },
+                "superflat": options.flat,
+                "biome": flat.settings().biome,
+                "layers": flat.settings().layers.iter().map(|layer| json!({
+                    "block": layer.block,
+                    "height": layer.height,
+                })).collect::<Vec<_>>(),
+            }),
             Mode::Edit {
                 world,
                 name,
@@ -580,6 +596,9 @@ impl Game<'_> {
             }
             Mode::Delete { world } => {
                 json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
+            }
+            Mode::BackupBeforeUpgrade { world } => {
+                json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
             }
             Mode::Error { message, .. } => {
                 json!({ "mode": "world-operation-error", "message": message })

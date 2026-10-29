@@ -1,11 +1,9 @@
 //! `BlockBehaviour.useWithoutItem` (right-click with an empty hand or an item
 //! that does not handle the block itself).
-use super::{
-    Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, query::axis_of, update::below,
-};
+use super::{Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, update::below};
 use crate::registry::BlockStateId;
 use horizon_core::{
-    geometry::{Axis, Direction, Vec3},
+    geometry::{Direction, Vec3},
     position::BlockPos,
     random::RandomSource,
 };
@@ -22,6 +20,44 @@ impl InteractionResult {
     pub fn consumes_action(self) -> bool {
         !matches!(self, Self::Pass)
     }
+}
+
+/// `SelectableSlotContainer.getHitSlot`: the slot of a block with `rows` by
+/// `columns` slots on its front face (the way it `facing`) that the click at
+/// `hit` on `face` of the block at `pos` lands in, if it is the front face.
+pub fn hit_slot(
+    facing: Direction,
+    face: Direction,
+    pos: BlockPos,
+    hit: Vec3,
+    rows: i32,
+    columns: i32,
+) -> Option<usize> {
+    if facing != face {
+        return None;
+    }
+    // The location relative to the block in front of the face, which only
+    // moves the axis the face points along: the others are the block's own.
+    let (dx, dy, dz) = (
+        hit.x - f64::from(pos.x),
+        hit.y - f64::from(pos.y),
+        hit.z - f64::from(pos.z),
+    );
+    let (x, y) = match face {
+        Direction::North => ((1.0 - dx) as f32, dy as f32),
+        Direction::South => (dx as f32, dy as f32),
+        Direction::West => (dz as f32, dy as f32),
+        Direction::East => ((1.0 - dz) as f32, dy as f32),
+        Direction::Down | Direction::Up => return None,
+    };
+    // getSection
+    let section = |relative: f32, sections: i32| {
+        let size = 16.0f32 / sections as f32;
+        ((relative * 16.0f32 / size).floor() as i32).clamp(0, sections - 1)
+    };
+    let row = section(1.0 - y, rows);
+    let column = section(x, columns);
+    Some((column + row * columns) as usize)
 }
 
 /// The interacting player, as far as block behaviour needs it.
@@ -326,19 +362,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         Consume
                     }
                 }
-                Class::Bell => {
-                    let click_y = hit.y - f64::from(pos.y);
-                    let proper = axis_of(face) != Axis::Y && click_y <= 0.8124 && {
-                        let facing_axis = axis_of(b.facing(state));
-                        match table.text(state, p.attachment) {
-                            "floor" => facing_axis == axis_of(face),
-                            "single_wall" | "double_wall" => facing_axis != axis_of(face),
-                            "ceiling" => true,
-                            _ => false,
-                        }
+                Class::ChiseledBookShelf => {
+                    // useItemOn and useWithoutItem agree on what a click takes: no
+                    // slot under it passes, an empty slot consumes it, a book in
+                    // it comes out (the block entity is the game's).
+                    let Some(slot) = hit_slot(b.facing(state), face, pos, hit, 2, 3) else {
+                        return Pass;
                     };
-                    if proper {
-                        self.bell_ring(pos, state, face);
+                    let occupied = [
+                        p.slot_0_occupied,
+                        p.slot_1_occupied,
+                        p.slot_2_occupied,
+                        p.slot_3_occupied,
+                        p.slot_4_occupied,
+                        p.slot_5_occupied,
+                    ];
+                    if table.bool(state, occupied[slot]) {
+                        Success
+                    } else {
+                        Consume
+                    }
+                }
+                Class::Bell => {
+                    if self.bell_hit(pos, state, face, hit.y - f64::from(pos.y)) {
                         Success
                     } else {
                         Pass
@@ -559,20 +605,30 @@ impl Behaviours {
         sim.game_event_state(pos, "minecraft:block_change", next);
     }
 
-    /// The state change of `RedStoneOreBlock.attack` when mining begins.
+    /// `BlockBehaviour.attack` when mining begins: `RedStoneOreBlock.attack`
+    /// lights the ore, `DragonEggBlock.attack` teleports the egg,
+    /// `NoteBlock.attack` plays the note. True for a note block, whose player
+    /// also earns the `play_noteblock` statistic.
     pub fn attack_block<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         pos: BlockPos,
-    ) {
+    ) -> bool {
         let mut sim = self.sim(level, ticks);
         let state = sim.state(pos);
-        if self.data(state).chain.contains(&Class::RedStoneOre)
-            && !self.table.bool(state, self.props.lit)
-        {
+        let chain = &self.data(state).chain;
+        if chain.contains(&Class::DragonEgg) {
+            sim.dragon_egg_teleport(pos, state);
+        }
+        if chain.contains(&Class::Note) {
+            sim.note_play(pos, state);
+            return true;
+        }
+        if chain.contains(&Class::RedStoneOre) && !self.table.bool(state, self.props.lit) {
             sim.set_block_and_update(pos, self.table.set_bool(state, self.props.lit, true));
         }
+        false
     }
 
     /// `BlockState.useWithoutItem` for a right-click on `pos` (hit face and
@@ -640,6 +696,25 @@ impl Behaviours {
         }
         if self.data(state).chain.contains(&Class::CopperGolemStatue) {
             return self.turn_statue(level, ticks, pos, state, item);
+        }
+        // NoteBlock.useItemOn: a mob head on the top face is placed, not tuned
+        // (`#minecraft:noteblock_top_instruments`).
+        if face == Direction::Up
+            && self.data(state).chain.contains(&Class::Note)
+            && item.is_some_and(|i| {
+                matches!(
+                    i,
+                    "minecraft:zombie_head"
+                        | "minecraft:skeleton_skull"
+                        | "minecraft:creeper_head"
+                        | "minecraft:dragon_head"
+                        | "minecraft:wither_skeleton_skull"
+                        | "minecraft:piglin_head"
+                        | "minecraft:player_head"
+                )
+            })
+        {
+            return InteractionResult::Pass;
         }
         self.use_without_item(level, ticks, pos, face, hit, player)
     }

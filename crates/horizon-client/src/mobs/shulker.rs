@@ -49,7 +49,7 @@ pub fn register(m: &mut Mob) {
     // attach axis.
     m.ai.targets.add(
         2,
-        NearestTarget::player(true).when(|m, w| {
+        NearestTarget::player(true).gate(peaceful_off).when(|m, w| {
             let Some(p) = &w.player else { return false };
             let d = p.position.subtract(m.position);
             let axis = match m.extra.variant3 {
@@ -325,6 +325,13 @@ pub fn look_yaw(m: &Mob, at: [f64; 3]) -> Option<f32> {
         f64::from(delta_forward),
     ))
 }
+/// `Shulker.tick` on a client that is not the server: the lid eases to the
+/// peek it was sent, and its body stays square (`ShulkerBodyRotationControl`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    ease_peek(m);
+    m.body_yaw = 0.0;
+}
 /// `Shulker.hurtServer` before the damage: arrows bounce off a closed shell.
 pub fn accepts(m: &Mob, source: &Damage) -> bool {
     !(m.extra.counter == 0 && source.kind == DamageKind::Arrow)
@@ -419,6 +426,11 @@ impl ProjectileWorld for Probe<'_, '_> {
             .full_collision
     }
 }
+/// `level().getDifficulty() != Difficulty.PEACEFUL`, which the shulker's
+/// attack goal and target goal check.
+fn peaceful_off(_m: &Mob, w: &MobWorld) -> bool {
+    w.difficulty.effective != 0.0
+}
 /// `ShulkerAttackGoal`: open up and fire a bullet every one to five and a
 /// half seconds at a target within 20 blocks.
 #[derive(Clone, Debug)]
@@ -434,7 +446,7 @@ impl Goal for ShulkerAttack {
         true
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        m.target_info(cx.w).is_some_and(|t| t.alive)
+        m.target_info(cx.w).is_some_and(|t| t.alive) && peaceful_off(m, cx.w)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.attack_time = 20;
@@ -444,6 +456,9 @@ impl Goal for ShulkerAttack {
         set_peek(m, 0, cx.events);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if !peaceful_off(m, cx.w) {
+            return;
+        }
         self.attack_time -= 1;
         let (Some(who), Some(t)) = (m.ai.target, m.target_info(cx.w)) else {
             return;
@@ -577,4 +592,66 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     };
     p.xrot("head", s.x_rot.to_radians());
     p.yrot("head", (s.y_rot - 180.0).to_radians());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use std::sync::Arc;
+
+    /// A shulker fixed to a block face.
+    fn shulker() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:shulker".into();
+        k.species = Species::Shulker;
+        k.max_head_y_rot = 180.0;
+        let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
+        m.extra.variant3 = 2;
+        m
+    }
+
+    #[test]
+    fn the_body_stays_square_while_the_head_turns() {
+        // Shulker.recreateFromPacket sets the body rotation to 0 and
+        // Shulker.ShulkerBodyRotationControl.clientTick is empty, so the
+        // shulker's body never turns: it stays square to the block it is
+        // fixed to and only its head turns (#1661).
+        let mut m = shulker();
+        m.yaw = 90.0;
+        m.head_yaw = 90.0;
+        // It moved, so a body that follows the mob would turn with it.
+        m.previous = Vec3::new(1.0, 0.0, 0.0);
+        m.body_rotation_tick();
+        assert_eq!(
+            m.body_yaw, 0.0,
+            "the shulker's body stays square to the block"
+        );
+        assert_eq!(m.previous_body_yaw, 0.0);
+        // A mob that moves turns its body to where it goes.
+        let mut other = Mob::new(2, kind(), Vec3::ZERO, 0.0);
+        other.yaw = 90.0;
+        other.previous = Vec3::new(1.0, 0.0, 0.0);
+        other.body_rotation_tick();
+        assert_eq!(other.body_yaw, 90.0);
+    }
+
+    #[test]
+    fn the_head_turns_to_its_target() {
+        // ShulkerLookControl.clampHeadRotationToBody does nothing, so the
+        // head is not clamped to the square body: it turns to the target.
+        let mut m = shulker();
+        m.ai.look.kind = LookKind::Shulker;
+        for _ in 0..20 {
+            // A goal keeps the look up to date every tick.
+            m.ai.look.set_look_at([5.0, 0.0, 0.0], 10.0, 10.0);
+            m.look_control_tick();
+        }
+        assert!(
+            m.head_yaw.abs() > 45.0,
+            "the head turns to the target, not back to the square body"
+        );
+        assert_eq!(m.body_yaw, 0.0);
+    }
 }

@@ -256,9 +256,8 @@ impl Game<'_> {
             .fluid
             == horizon_client::blocks::Fluid::Water;
         let on_ground = p.ground.on_ground;
-        let (sprinting, flying, gliding, swimming) = (
+        let (sprinting, gliding, swimming) = (
             p.sprinting,
-            p.flying,
             p.fall_flying,
             p.pose == horizon_client::pose::Pose::Swimming,
         );
@@ -272,15 +271,27 @@ impl Game<'_> {
         });
         let s = &mut self.stats;
         match riding {
-            Some(Ok(horizon_client::mobs::Species::Pig)) => s.custom("pig_one_cm", total),
-            Some(Ok(horizon_client::mobs::Species::Strider)) => s.custom("strider_one_cm", total),
-            Some(Ok(sp)) if horizon_client::mobs::equine::is_equine(sp) => {
-                s.custom("horse_one_cm", horizontal)
+            Some(Ok(sp)) => {
+                use horizon_client::mobs::Species;
+                // `checkRidingStatistics`: only these mounts count, the horse
+                // family by the full 3D distance; any other mount nothing.
+                match sp {
+                    Species::Pig => s.custom("pig_one_cm", total),
+                    Species::Strider => s.custom("strider_one_cm", total),
+                    Species::HappyGhast => s.custom("happy_ghast_one_cm", total),
+                    Species::Nautilus | Species::ZombieNautilus => {
+                        s.custom("nautilus_one_cm", total)
+                    }
+                    sp if horizon_client::mobs::equine::is_equine(sp) => {
+                        s.custom("horse_one_cm", total)
+                    }
+                    _ => {}
+                }
             }
-            Some(_) => {
+            Some(Err(())) => {
                 if self.boats.iter().any(|b| Some(b.id) == self.riding) {
                     s.custom("boat_one_cm", total)
-                } else {
+                } else if self.carts.iter().any(|c| Some(c.id) == self.riding) {
                     s.custom("minecart_one_cm", total)
                 }
             }
@@ -300,8 +311,9 @@ impl Game<'_> {
                 }
             }
             None if gliding => s.custom("aviate_one_cm", total),
-            None if flying => s.custom("fly_one_cm", horizontal),
-            None if d.y < 0.0 => s.custom("fall_one_cm", (-d.y * 100.0).round() as i32),
+            // Airborne and not gliding: more than 25 cm sideways per move
+            // (creative flight, or a long jump), not only flying.
+            None if horizontal > 25 => s.custom("fly_one_cm", horizontal),
             None => {}
         }
     }
@@ -366,9 +378,10 @@ impl Game<'_> {
         if pos[1] < 63 || !self.can_see_sky(pos) {
             return;
         }
-        // DifficultyInstance.isHarderThan(random * 3) at normal difficulty.
+        // `getCurrentDifficultyAt(playerPos).isHarderThan(random * 3)`.
+        let difficulty = self.local_difficulty([position.x, position.y, position.z]);
         let r = &mut self.world.random;
-        if r.next_float() * 3.0 >= 2.0 {
+        if difficulty.effective <= r.next_float() * 3.0 {
             return;
         }
         if r.next_int_bound(since_rest.max(1)).unwrap_or(0) < 72000 {

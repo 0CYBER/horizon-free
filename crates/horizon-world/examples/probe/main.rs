@@ -137,6 +137,7 @@ mod movement_support_fixture;
 mod object_open_map_fixture;
 mod object_open_set_fixture;
 mod piston_movement_fixture;
+mod piston_push_fixture;
 mod piston_shape_fixture;
 mod placement_fixture;
 mod player_equipment_fixture;
@@ -309,6 +310,7 @@ probes! {
     object_open_map_fixture,
     object_open_set_fixture,
     piston_movement_fixture,
+    piston_push_fixture,
     piston_shape_fixture,
     placement_fixture,
     player_equipment_fixture,

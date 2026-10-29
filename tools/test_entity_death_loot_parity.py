@@ -31,7 +31,7 @@ SKIPPED = {'player', 'mannequin', 'armor_stand', 'ender_dragon', 'giant'}
 # Types Horizon keeps body armour for in the head slot: their corpus wears
 # body items instead of helmets.
 BODY = {'horse', 'donkey', 'mule', 'skeleton_horse', 'zombie_horse', 'camel', 'camel_husk', 'llama', 'trader_llama',
-        'happy_ghast', 'nautilus', 'zombie_nautilus', 'sulfur_cube'}
+        'happy_ghast', 'nautilus', 'zombie_nautilus', 'sulfur_cube', 'wolf'}
 WEAPONS = ['minecraft:iron_sword', 'minecraft:diamond_sword;looting:1', 'minecraft:diamond_sword;looting:2',
            'minecraft:netherite_sword;looting:3', 'minecraft:golden_sword;fire_aspect:2', 'minecraft:diamond_axe;looting:3;fire_aspect:1']
 ARMOUR = {'head': 'minecraft:iron_helmet', 'chest': 'minecraft:chainmail_chestplate', 'legs': 'minecraft:golden_leggings',

@@ -2,7 +2,7 @@
 //! falling, `interactAt` equipment swaps by clicked height, the two-hit break
 //! of `hurtServer` (creative breaks at once), and `ArmorStandRenderer` with
 //! the default pose, the hit wobble and humanoid armor layers.
-use super::{Game, view_vector};
+use super::Game;
 use horizon_client::{
     entities::ArmorStand,
     items::ItemStack,
@@ -15,6 +15,21 @@ use horizon_core::{
     random::RandomSource,
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
+/// `EquipmentLayerRenderer.getColorForLayer`: a dyeable layer (one with a
+/// colour when undyed) takes the stack's `minecraft:dyed_color`, else that
+/// colour; any other layer stays white, dyed or not. The result is in the
+/// renderer's byte order (R and B swapped).
+fn layer_color(undyed: Option<u32>, stack: Option<&ItemStack>) -> u32 {
+    let dyed = stack
+        .and_then(|s| s.data())
+        .and_then(|d| d.dyed_color)
+        .map(|c| c as u32 & 0xFF_FFFF);
+    undyed.map_or(0xFFFF_FFFF, |undyed| {
+        let c = dyed.unwrap_or(undyed);
+        0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
+    })
+}
 
 /// Armor stand models and the humanoid layers of every equipment asset.
 pub(super) struct ArmorStandAssets {
@@ -138,7 +153,13 @@ impl Game<'_> {
     pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
         let e = &m.extra;
         self.armor_layers(
-            [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref().map(|i| (i, None))),
+            [
+                (e.head.as_deref(), e.armor[0].as_ref()),
+                (e.chest.as_deref(), e.armor[1].as_ref()),
+                (e.legs.as_deref(), e.armor[2].as_ref()),
+                (e.feet.as_deref(), e.armor[3].as_ref()),
+            ]
+            .map(|(item, stack)| item.map(|i| (i, stack))),
         )
     }
     /// The layers of the armour items `worn` (with their stacks when known,
@@ -179,9 +200,7 @@ impl Game<'_> {
             ) else {
                 continue;
             };
-            let color = undyed.map_or(0xFFFF_FFFF, |c| {
-                0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
-            });
+            let color = layer_color(*undyed, stack);
             out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
             // EquipmentLayerRenderer: the trim layer over the armour.
             if let Some(r) = stack
@@ -207,6 +226,7 @@ impl Game<'_> {
             .armor
             .iter()
             .chain(guests.flat_map(|g| g.armor.iter()))
+            .chain(self.mobs.iter().flat_map(|m| m.extra.armor.iter()))
             .zip(
                 ["helmet", "chestplate", "leggings", "boots"]
                     .into_iter()
@@ -354,8 +374,7 @@ impl Game<'_> {
     }
     /// The armor stand under the crosshair, its distance and the hit point.
     pub(super) fn armor_stand_hit(&self) -> Option<(usize, f64, [f64; 3])> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64, [f64; 3])> = None;
         for (i, a) in self.armor_stands.iter().enumerate() {
@@ -491,6 +510,25 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        // The stand's box and id, before the hit may remove it.
+        let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
+        let hurt = self.punch_armor_stand(i);
+        if hurt {
+            self.attack_effects(
+                area,
+                Some(id as i32),
+                super::mace::Spared::Stand(id),
+                magic.then_some(id as i32),
+            );
+            self.swing_arm();
+        }
+        hurt
+    }
+    /// `ArmorStand.hurtServer` for a player's attack (also a sweep's): a
+    /// creative player breaks it, otherwise the first hit wobbles it and a
+    /// second within five ticks breaks it.
+    pub(super) fn punch_armor_stand(&mut self, i: usize) -> bool {
         let time = self.world.game_time;
         let at = self.armor_stands[i].position;
         let at = [at.x, at.y, at.z];
@@ -627,21 +665,8 @@ impl Game<'_> {
                 * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0))
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0));
             let mut poses = Poses::new(model);
-            // ArmorStand.DEFAULT_*_POSE and ArmorStandModel part visibility.
-            let deg = |v: f32| v.to_radians();
-            for (name, rot) in [
-                ("left_arm", [-10.0, 0.0, -10.0]),
-                ("right_arm", [-15.0, 0.0, 10.0]),
-                ("left_leg", [-1.0, 0.0, -1.0]),
-                ("right_leg", [1.0, 0.0, 1.0]),
-            ] {
-                if poses.has(name) {
-                    let pose = poses.get(name);
-                    pose[3] = deg(rot[0]);
-                    pose[4] = deg(rot[1]);
-                    pose[5] = deg(rot[2]);
-                }
-            }
+            // ArmorStandModel.setupAnim: the stand's pose and part visibility.
+            apply_pose(&mut poses, &a.pose);
             // Item layers pose from the hidden arms too (`visible` only skips drawing).
             let posed = poses.clone();
             let mut hide = |name: &str| {
@@ -708,10 +733,24 @@ impl Game<'_> {
                 else {
                     continue;
                 };
-                let color = undyed.map_or(0xFFFF_FFFF, |c| {
-                    0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
-                });
-                let layer_poses = Poses::new(part);
+                let color = layer_color(*undyed, Some(stack));
+                // ArmorStandRenderer's HumanoidArmorLayer: the armour glint
+                // when `stack.hasFoil()`, as on a living entity.
+                let item_glint = self
+                    .res
+                    .items()
+                    .enchantments
+                    .props
+                    .get(&stack.item)
+                    .is_some_and(|p| p.glint);
+                let overlay = if stack.has_foil(item_glint) {
+                    horizon_client::mobs::render::ARMOR_GLINT
+                } else {
+                    0
+                };
+                // ArmorStandArmorModel.setupAnim: the same pose as the stand.
+                let mut layer_poses = Poses::new(part);
+                apply_pose(&mut layer_poses, &a.pose);
                 horizon_client::mobs::render::draw(
                     part,
                     base,
@@ -719,7 +758,7 @@ impl Game<'_> {
                     uv,
                     color,
                     packed,
-                    0,
+                    overlay,
                     out,
                 );
                 // EquipmentLayerRenderer: the trim layer over the armour.
@@ -734,12 +773,39 @@ impl Game<'_> {
                         trim,
                         0xFFFF_FFFF,
                         packed,
-                        0,
+                        overlay,
                         out,
                     );
                 }
             }
             self.cull_entity_vertices(out, entity_start);
+        }
+    }
+}
+/// The `Pose` rotations on the parts of an armor stand model or its armor
+/// (`ArmorStandArmorModel.setupAnim`); the body also turns the sticks.
+fn apply_pose(poses: &mut Poses, pose: &[[f32; 3]; 6]) {
+    let parts: [&[&str]; 6] = [
+        &["head"],
+        &[
+            "body",
+            "right_body_stick",
+            "left_body_stick",
+            "shoulder_stick",
+        ],
+        &["left_arm"],
+        &["right_arm"],
+        &["left_leg"],
+        &["right_leg"],
+    ];
+    for (names, rotation) in parts.into_iter().zip(pose) {
+        for name in names {
+            if poses.has(name) {
+                let part = poses.get(name);
+                part[3] = rotation[0].to_radians();
+                part[4] = rotation[1].to_radians();
+                part[5] = rotation[2].to_radians();
+            }
         }
     }
 }
@@ -877,6 +943,7 @@ impl Game<'_> {
                 lights: Some(horizon_client::block_entity_render::diffuse_lights(
                     self.dim == super::Dim::Nether,
                 )),
+                glint: self.glint(),
             };
             let profile = stack
                 .extra
@@ -960,5 +1027,23 @@ mod burn_drop_tests {
         let (pos, drops) = burnt_armor_stand_equipment(stand);
         assert_eq!(pos, [-1, 5, 0]);
         assert_eq!(drops, vec![kept]);
+    }
+}
+#[cfg(test)]
+mod layer_color_tests {
+    use super::*;
+    #[test]
+    fn a_dyed_stack_overrides_the_undyed_leather_colour() {
+        let mut dyed = ItemStack::new("minecraft:leather_helmet", 1);
+        dyed.data_mut().dyed_color = Some(0x1E_90FF);
+        // Dyed blue, R and B swapped into the renderer's order, opaque.
+        assert_eq!(layer_color(Some(0xA06540), Some(&dyed)), 0xFFFF_901E);
+        // An undyed stack keeps the asset's brown.
+        let plain = ItemStack::new("minecraft:leather_helmet", 1);
+        assert_eq!(layer_color(Some(0xA06540), Some(&plain)), 0xFF40_65A0);
+        // No dye and no undyed colour: white.
+        assert_eq!(layer_color(None, Some(&plain)), 0xFFFF_FFFF);
+        // A layer that isn't dyeable stays white even on a dyed stack.
+        assert_eq!(layer_color(None, Some(&dyed)), 0xFFFF_FFFF);
     }
 }
