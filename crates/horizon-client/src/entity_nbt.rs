@@ -605,11 +605,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
         }
         "minecraft:camel" | "minecraft:camel_husk" => {
-            // LastPoseTick: negative while sitting.
-            let sitting = crate::mobs::camel::sitting(m);
+            // LastPoseTick: the pose change time, negative while sitting. The
+            // game time is not known here; the world's save overwrites it
+            // with the real one (`camel::synced_pose_tick`).
             map.insert(
                 "LastPoseTick".into(),
-                Tag::Long(if sitting { -1 } else { 0 }),
+                Tag::Long(crate::mobs::camel::synced_pose_tick(m, 0)),
             );
             if let Some(saddle) = m.saddle_item() {
                 map.insert(
@@ -1256,11 +1257,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .and_then(|v| crate::save::uuid_from_tag(Some(v)));
     }
     if crate::mobs::camel::is_camel(m.species()) {
-        let sitting = matches!(tag.get("LastPoseTick"), Some(Tag::Long(v)) if *v < 0);
+        // The tick is a game time: `camel::finish_load` puts it on the mob's
+        // clock once the world's time is known.
+        let tick = match tag.get("LastPoseTick") {
+            Some(Tag::Long(v)) => *v,
+            _ => 0,
+        };
         crate::mobs::camel::stand_up_instantly(&mut m);
-        if sitting {
-            m.extra.egg_time = -1 - 400;
-        }
+        m.extra.pose_change_tick = tick;
+        m.extra.camel_sitting = tick < 0;
         // Camels are always tame (`Camel.register` in Horizon).
         m.extra.tame = true;
     }

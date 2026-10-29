@@ -923,6 +923,8 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// Whether a camel sits (`egg_time` is then the age it sat down at).
+    pub camel_sitting: bool,
     /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
     pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
