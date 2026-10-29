@@ -324,12 +324,12 @@ impl Game<'_> {
         let Some(hit) = self.pick() else {
             return false;
         };
-        let name = &*self
+        let id = &*self
             .res
             .facts()
             .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
             .name;
-        let name = name.trim_start_matches("minecraft:");
+        let name = id.trim_start_matches("minecraft:");
         match name {
             // BlockBehaviour.getMenuProvider and `instanceof Portal`.
             "crafting_table" | "enchanting_table" | "anvil" | "chipped_anvil" | "damaged_anvil"
@@ -338,8 +338,9 @@ impl Game<'_> {
             | "dispenser" | "dropper" | "crafter" | "lectern" | "beacon" | "nether_portal"
             | "end_portal" | "end_gateway" => true,
             // ChestBlock.getMenuProvider: none while a redstone conductor
-            // sits on top of either half (a sitting cat aside).
-            "chest" | "trapped_chest" => {
+            // sits on top of either half (a sitting cat aside). Copper
+            // chests are `ChestBlock`s too.
+            _ if horizon_client::containers::is_chest_block(id) => {
                 let key = (hit.pos[0], hit.pos[1], hit.pos[2]);
                 let blocked = |p: (i32, i32, i32)| {
                     let above = self.world.block(p.0, p.1 + 1, p.2);

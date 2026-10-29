@@ -1089,8 +1089,7 @@ impl Game<'_> {
     /// Player melee on the dragon's parts or a crystal under the crosshair.
     /// The dragon part under the crosshair within reach: its id and distance.
     pub(super) fn dragon_hit(&self) -> Option<(u32, f64)> {
-        let eye = self.eye_position()?;
-        let dir = super::view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(u32, f64)> = None;
         for (id, b) in self.special_targets() {
@@ -1123,22 +1122,21 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        let hand_damage = self.attack_item_info().map_or(0.0, |i| i.attack_damage);
-        let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
-        let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
-        let mut amount =
-            (1.0 + hand_damage + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
-        let falling = self
-            .player
-            .as_ref()
-            .is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
-        if scale > 0.9 && falling {
-            amount *= 1.5;
-        }
-        amount += self.enchant_damage_bonus("minecraft:ender_dragon") * scale;
-        self.attack_ticks = 0;
+        // A dragon part is no LivingEntity: `canCriticalAttack` is false.
+        let (amount, _, _, _) = self.melee_damage("minecraft:ender_dragon", false);
         self.swing_arm();
-        self.hit_special(id, amount, true, false);
+        // The part's box.
+        let area = self
+            .special_targets()
+            .into_iter()
+            .find(|(part, _)| *part == id)
+            .map(|(_, b)| b);
+        let hurt = self.hit_special(id, amount, true, false);
+        // The sweep and the sounds read the charge, which the hit then spends.
+        if let (Some(area), Hurt::Landed { .. }) = (area, hurt) {
+            self.attack_effects(area, None, super::mace::Spared::Nothing, None);
+        }
+        self.attack_ticks = 0;
         true
     }
     /// The 24 nodes (`findClosestNode` builds them on first use).

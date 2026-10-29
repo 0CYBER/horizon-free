@@ -12,7 +12,11 @@ use horizon_client::{
     screen_draw::Measure,
     text::{ClickEvent, Style, Text},
 };
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 /// The tree the chat parses and completes with: a server's, once it has
 /// sent one (ClientPacketListener.commands), else the game's own.
@@ -123,6 +127,64 @@ impl UiState {
     }
 }
 
+/// The ids `build_registries` lists from the prepared resources' folders.
+/// The folders don't change while the game runs, so each root is read once
+/// instead of at every world opening (thousands of files).
+struct ResourceIds {
+    recipes: Vec<String>,
+    damage_types: Vec<String>,
+    loot_tables: Vec<String>,
+    templates: Vec<String>,
+}
+static RESOURCE_IDS: Mutex<Vec<(PathBuf, Arc<ResourceIds>)>> = Mutex::new(Vec::new());
+
+fn resource_ids(root: &Path) -> Arc<ResourceIds> {
+    let mut cache = RESOURCE_IDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, ids)) = cache.iter().find(|(cached, _)| cached == root) {
+        return ids.clone();
+    }
+    let data = root.join("data/minecraft");
+    let ids = Arc::new(ResourceIds {
+        recipes: ids_under(&data.join("recipe"), "json"),
+        damage_types: ids_under(&data.join("damage_type"), "json"),
+        loot_tables: ids_under(&data.join("loot_table"), "json"),
+        templates: ids_under(&root.join("worldgen/structure/minecraft"), "nbt"),
+    });
+    cache.push((root.to_owned(), ids.clone()));
+    ids
+}
+
+/// The `minecraft:` ids of the `extension` files under `root`, sorted.
+fn ids_under(root: &Path, extension: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_owned()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            // The listing's own type, without another look at each file; a
+            // link is followed, as `Path::is_dir` does.
+            let is_dir = e
+                .file_type()
+                .is_ok_and(|t| t.is_dir() || (t.is_symlink() && path.is_dir()));
+            if is_dir {
+                stack.push(path);
+            } else if path.extension().and_then(|x| x.to_str()) == Some(extension)
+                && let Ok(rel) = path.strip_prefix(root)
+            {
+                out.push(format!(
+                    "minecraft:{}",
+                    rel.with_extension("").to_string_lossy().replace('\\', "/")
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 impl Game<'_> {
     /// `PlayerList.isOp` for the single-player owner: the world's Allow Commands.
     pub(super) fn allow_commands(&self) -> bool {
@@ -146,61 +208,11 @@ impl Game<'_> {
         let permission = owner_permission(self.allow_commands());
         let reg = &mut self.ui.registries;
         reg.permission = permission;
-        {
-            let dir = |sub: &str| -> Vec<String> {
-                let root = self.options.resources.join("data/minecraft").join(sub);
-                let mut out = Vec::new();
-                let mut stack = vec![root.clone()];
-                while let Some(d) = stack.pop() {
-                    let Ok(entries) = std::fs::read_dir(&d) else {
-                        continue;
-                    };
-                    for e in entries.flatten() {
-                        let p = e.path();
-                        if p.is_dir() {
-                            stack.push(p);
-                        } else if p.extension().and_then(|x| x.to_str()) == Some("json")
-                            && let Ok(rel) = p.strip_prefix(&root)
-                        {
-                            out.push(format!(
-                                "minecraft:{}",
-                                rel.with_extension("").to_string_lossy().replace('\\', "/")
-                            ));
-                        }
-                    }
-                }
-                out.sort();
-                out
-            };
-            self.ui.registries.recipes = dir("recipe");
-            self.ui.registries.damage_types = dir("damage_type");
-            self.ui.registries.loot_tables = dir("loot_table");
-            self.ui.registries.templates = {
-                let root = self.options.resources.join("worldgen/structure/minecraft");
-                let mut out = Vec::new();
-                let mut stack = vec![root.clone()];
-                while let Some(d) = stack.pop() {
-                    let Ok(entries) = std::fs::read_dir(&d) else {
-                        continue;
-                    };
-                    for e in entries.flatten() {
-                        let p = e.path();
-                        if p.is_dir() {
-                            stack.push(p);
-                        } else if p.extension().and_then(|x| x.to_str()) == Some("nbt")
-                            && let Ok(rel) = p.strip_prefix(&root)
-                        {
-                            out.push(format!(
-                                "minecraft:{}",
-                                rel.with_extension("").to_string_lossy().replace('\\', "/")
-                            ));
-                        }
-                    }
-                }
-                out.sort();
-                out
-            };
-        }
+        let ids = resource_ids(&self.options.resources);
+        self.ui.registries.recipes = ids.recipes.clone();
+        self.ui.registries.damage_types = ids.damage_types.clone();
+        self.ui.registries.loot_tables = ids.loot_tables.clone();
+        self.ui.registries.templates = ids.templates.clone();
         self.ui.registries.sounds = self.audio.event_names();
         self.ui.registries.attributes = [
             "armor",
@@ -1224,3 +1236,24 @@ fn owner_permission(allow_commands: bool) -> u8 {
 /// `ConfirmLinkScreen`'s buttons, left to right: yes, copy, no.
 const LINK_YES: usize = 0;
 const LINK_COPY: usize = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_ids_are_listed_once_per_root() {
+        let root = std::env::temp_dir().join(format!("horizon-ids-{}", std::process::id()));
+        let recipe = root.join("data/minecraft/recipe");
+        std::fs::create_dir_all(recipe.join("sub")).unwrap();
+        std::fs::write(recipe.join("b.json"), "{}").unwrap();
+        std::fs::write(recipe.join("sub/a.json"), "{}").unwrap();
+        std::fs::write(recipe.join("notes.txt"), "").unwrap();
+        let first = resource_ids(&root);
+        assert_eq!(first.recipes, ["minecraft:b", "minecraft:sub/a"]);
+        assert!(first.loot_tables.is_empty());
+        std::fs::write(recipe.join("c.json"), "{}").unwrap();
+        assert!(Arc::ptr_eq(&first, &resource_ids(&root)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

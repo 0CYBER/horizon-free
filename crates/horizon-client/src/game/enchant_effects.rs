@@ -82,8 +82,13 @@ impl Game<'_> {
     }
     /// `getEnchantedDamage - base`: damage bonus of the held weapon against a mob type.
     pub(super) fn enchant_damage_bonus(&mut self, target: &str) -> f32 {
+        self.enchanted_damage(target, 0.0)
+    }
+    /// `Player.getEnchantedDamage`: `base` run through the held weapon's
+    /// damage effects against a mob type.
+    pub(super) fn enchanted_damage(&mut self, target: &str, base: f32) -> f32 {
         let Some(held) = self.held().cloned() else {
-            return 0.0;
+            return base;
         };
         let ctx = EffectContext {
             this: Some(target),
@@ -99,7 +104,7 @@ impl Game<'_> {
             "minecraft:damage",
             &ctx,
             &mut self.world.random,
-            0.0,
+            base,
         )
     }
     /// Strength / weakness on the attack damage attribute.
