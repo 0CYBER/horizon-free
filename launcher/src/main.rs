@@ -591,7 +591,7 @@ impl Launcher {
     }
 
     /// Builds the selected instance's native mods, once the player accepted the warning. The
-    /// build reuses the game files of the version the instance plays, else the newest installed.
+    /// build stays on the Horizon the instance plays (`native_mods::base_for`).
     fn build_native(&mut self) {
         if self.native_step.is_some() {
             return;
@@ -599,16 +599,8 @@ impl Launcher {
         self.native_confirm = None;
         self.native_error = None;
         let instance = instances::selected();
-        let base = instance
-            .version
-            .clone()
-            .filter(|v| !native_mods::is_native(v))
-            .or_else(|| {
-                self.installed
-                    .iter()
-                    .find(|t| backend::is_game_tag(t) || t.starts_with("nightly-"))
-                    .cloned()
-            });
+        let plays = self.version_of(&instance).cloned();
+        let base = native_mods::base_for(plays.as_deref(), &self.installed, false);
         let Some(base) = base else {
             self.native_error = Some(tr("Install Horizon first.").into());
             return;
@@ -623,7 +615,7 @@ impl Launcher {
         self.native_step = Some(tr("Starting the build").into());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = native_mods::build(&base, &folder, Some(&instance), |step| {
+            let result = native_mods::build(&base, &folder, &instance, |step| {
                 let _ = tx.send(Msg::NativeProgress(step.label()));
             });
             let _ = tx.send(Msg::Native(result));

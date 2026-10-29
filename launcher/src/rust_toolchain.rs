@@ -142,7 +142,7 @@ impl Toolchain {
 
     /// `program` (this toolchain's cargo, or a tool built with it) set up to use only this
     /// toolchain: its rustc, its MinGW-w64 where it has one, the launcher's Cargo home, and none of
-    /// the player's rustup or compiler-wrapper settings.
+    /// the player's rustup, compiler-wrapper or compiler-flag settings ([`scrubbed`]).
     pub fn command(&self, program: &Path) -> Command {
         let mut cmd = Command::new(program);
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -150,17 +150,19 @@ impl Toolchain {
         let paths = std::iter::once(self.dir.join("bin"))
             .chain(mingw)
             .chain(std::env::split_paths(&path));
+        if let Some(root) = outside_configs() {
+            cmd.current_dir(root);
+        }
         cmd.env("PATH", std::env::join_paths(paths).unwrap_or(path))
             .env("RUSTC", self.dir.join("bin").join(exe("rustc")))
             .env("CARGO_HOME", cargo_home());
-        for name in [
-            "RUSTUP_TOOLCHAIN",
-            "RUSTC_WRAPPER",
-            "RUSTC_WORKSPACE_WRAPPER",
-            "CARGO_BUILD_RUSTC_WRAPPER",
-            "CARGO_TARGET_DIR",
-        ] {
+        for name in SCRUBBED {
             cmd.env_remove(name);
+        }
+        for (name, _) in std::env::vars_os() {
+            if name.to_str().is_some_and(scrubbed) {
+                cmd.env_remove(name);
+            }
         }
         cmd
     }
@@ -180,6 +182,43 @@ impl Toolchain {
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
     }
+}
+
+/// Whether the player's environment variable `name` stays out of a build: it would pick another
+/// Rust or wrap it (rustup, `RUSTC_WRAPPER`), or change the compiler's flags (`RUSTFLAGS`, a
+/// profile, incremental, the build's target, linker or jobs: `CARGO_BUILD_*`, `CARGO_TARGET_*`),
+/// so the build would differ from the release's and recompile everything after any change.
+pub fn scrubbed(name: &str) -> bool {
+    const PREFIXES: [&str; 3] = ["CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_"];
+    // Windows' variable names ignore case.
+    let name = name.to_ascii_uppercase();
+    SCRUBBED.contains(&name.as_str()) || PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+const SCRUBBED: [&str; 8] = [
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
+    "CARGO_INCREMENTAL",
+];
+
+/// Where commands run so that no player's Cargo configuration reaches them: the root of the disk
+/// the launcher's data is on. Cargo reads `.cargo/config.toml` in the folder it starts in and in
+/// every folder above it, so from a folder under the player's home it would read
+/// `~/.cargo/config.toml` even with another `CARGO_HOME`: its `[profile]`, `[build]` and
+/// `[target]` settings (rustflags, linker, incremental) beat both the workspace's profile and
+/// the environment, and no command-line switch turns that search off. A build names its workspace
+/// with `--manifest-path` instead.
+pub fn outside_configs() -> Option<PathBuf> {
+    let data = backend::data_dir();
+    data.ancestors()
+        .last()
+        .filter(|root| root.has_root())
+        .map(Path::to_path_buf)
 }
 
 /// Where toolchains live: `<launcher data>/rust/`.
@@ -408,6 +447,40 @@ mod tests {
         );
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             assert_eq!(host().unwrap().target, "aarch64-apple-darwin");
+        }
+    }
+
+    #[test]
+    fn the_players_compiler_settings_stay_out_of_builds() {
+        for name in [
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTDOCFLAGS",
+            "CARGO_INCREMENTAL",
+            "CARGO_PROFILE_RELEASE_LTO",
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS",
+            "CARGO_BUILD_TARGET",
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_TARGET_DIR",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+            "RUSTC_WRAPPER",
+            "RUSTUP_TOOLCHAIN",
+            "cargo_profile_release_debug",
+        ] {
+            assert!(scrubbed(name), "{name}");
+        }
+        for name in [
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "CARGO_NET_OFFLINE",
+            "CARGO_HTTP_PROXY",
+            "HTTPS_PROXY",
+            "SSL_CERT_FILE",
+        ] {
+            assert!(!scrubbed(name), "{name}");
         }
     }
 

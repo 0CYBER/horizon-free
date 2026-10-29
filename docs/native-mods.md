@@ -45,8 +45,8 @@ In the window: install a native mod from the Mods page. The first one shows a no
 Rust and can take 20 to 30 minutes; later builds are faster) and turns on Settings → Game → **Native mods
 (experimental)**, which stays off for players who never install one; `mods install` does the same. Then **Build**. The launcher names the mods, warns in red, and builds only from "I trust these mods: build"; the
 row shows each step, the error if one fails, and the build the instance plays. From the command line:
-`horizon-launcher native-build [FOLDER] [--instance NAME] --trust-native-code`. FOLDER is a bundle, an unpacked
-`.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
+`horizon-launcher native-build [FOLDER] [--instance NAME] [--update] --trust-native-code`. FOLDER is a bundle, an
+unpacked `.hnmod`, or a folder of them; without it, the native mods turned on in the instance. It is not an MCP tool:
 trusting native code is the player's decision, never an agent's.
 
 1. **Rust.** The launcher's own toolchain ([`rust_toolchain`](../launcher/src/rust_toolchain.rs)): Rust 1.99.1's
@@ -73,11 +73,28 @@ trusting native code is the player's decision, never an agent's.
    horizon-mixins diagnostic in one line).
 6. **Install**: a new version, `native-<commit>-<key>`, a copy of the starting version's folder (resources
    included, cloned on APFS, Btrfs and ReFS) with the built game in place of its own, and a `native-mods.json`
-   saying which commit, mods, horizon-mixins and Rust made it. The instance the mods are installed in plays it (a
-   folder built from the command line, or mods of the default home, go to the **Native mods** instance). That
-   instance gets each mod's settings from the default home the first time it plays it (its
-   `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where the mod's
-   WebAssembly version kept them); nothing it already has is overwritten.
+   saying which release or Nightly it started from (`base`) and which commit, mods, horizon-mixins and Rust made
+   it. The instance the mods are installed in plays it, the default **Horizon** instance included: the build
+   pins its version, as picking a version does. Updates of the launcher's version leave a pinned instance where
+   it is, and their clean-up never removes a native build. An instance built before this (the **Native mods**
+   instance the default home's mods used to go to) keeps its worlds and its build.
+
+## Rebuilds stay on the instance's Horizon
+
+A build starts from the version the instance plays (`native_mods::base_for`). When that is a native build, the
+next one compiles the same commit (its `native-mods.json`'s `horizon`) from the same game files, unless a mod pins
+another, so a rebuild after a mod changes or is switched off compiles only what changed. A newer Horizon is taken
+only when the player asks: `native-build --update` starts from the newest installed release or Nightly (a full
+rebuild); `native_mods::update_for` says which one, if any, the window can offer.
+
+The compiler runs as the release's build does, whatever the player's own Rust setup: the launcher's toolchain
+drops the variables that change compiler flags or the target (`RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`,
+`RUSTDOCFLAGS`, `CARGO_INCREMENTAL`, `CARGO_PROFILE_*`, `CARGO_BUILD_*`, `CARGO_TARGET_*`, rustup's and the
+wrappers'), and starts Cargo from the disk's root with `--manifest-path`. Cargo reads `.cargo/config.toml` from
+the folder it starts in and every one above it, whatever `CARGO_HOME` says, so from the launcher's data folder it
+would read the player's `~/.cargo/config.toml`, whose `[profile]`, `[build]` and `[target]` settings beat the
+workspace and the environment; no switch turns that search off. The source's own `.cargo/config.toml`, if it
+has one, is passed with `--config`.
 
 ## Cache and disk
 
@@ -111,7 +128,9 @@ Measured 2026-10-28 on Linux (an x86_64 server with no Rust of its own), Zoom on
 ran: `rust install` in 11 s (592 MB), the first build in 12 min 9 s. The built game ran Zoom's proof (under `xvfb-run`:
 the game needs a display even with `--offscreen`).
 
-Only the native builds an instance plays are kept (`native_mods::prune`); `native/target/` stays for the next one.
+The native builds an instance plays are kept, and the three newest no instance plays (`native_mods::prune`, by when
+each was built or last used): switching a mod off and on again plays the kept build again without compiling.
+`native/target/` stays for the next one.
 
 ## Trust
 
@@ -126,7 +145,8 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
   A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
-- **Isolation of data.** Native mods run only in the instance built for them, with its own worlds, options and logs.
+- **Isolation of data.** Native mods run only in the instance they are installed in, with its worlds, options and
+  logs (the default Horizon instance's, when they are installed there); other instances play their own versions.
 - What this does not do: sandbox the compiled game. horizon-mixins' checks stop mistakes, not a malicious helper
   ([security notes](https://github.com/horizon-rust/horizon-mixins/blob/main/docs/security.md)).
 
@@ -139,5 +159,6 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
 
 ## Left to do
 
-- Rebuild after the mods or the Nightly change (asking first, as it compiles for minutes).
+- Rebuild after the mods change, and offer **Update** when `update_for` finds a newer Horizon (asking first, as it
+  compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
