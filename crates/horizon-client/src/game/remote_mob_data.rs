@@ -79,6 +79,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.ai.aggressive = flags & 4 != 0;
             }
             (i, Value::Bool(b)) if Some(i) == baby => m.extra.age = if *b { -1 } else { 0 },
+            // AgeableMob.AGE_LOCKED, the entry after DATA_BABY_ID (not
+            // Zombie's or Piglin's).
+            (17, Value::Bool(locked)) if baby == Some(16) && finalize::ageable(species) => {
+                m.extra.age_locked = *locked
+            }
             _ => {}
         }
         match (species, *index, value) {
@@ -119,8 +124,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
             (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
-            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
-            (Species::Mooshroom, 17, Value::Int(variant)) => {
+            // Tadpole.AGE_LOCKED (after AbstractFish's FROM_BUCKET).
+            (Species::Tadpole, 17, Value::Bool(locked)) => m.extra.age_locked = *locked,
+            // MushroomCow.DATA_TYPE (after AgeableMob's two): 0 red, 1 brown.
+            (Species::Mooshroom, 18, Value::Int(variant)) => {
                 m.extra.variant = (*variant == 1) as u8
             }
             // Piglin.DATA_IS_DANCING: the dance pose.

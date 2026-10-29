@@ -82,6 +82,10 @@ impl Game<'_> {
         let at = [m.position.x, m.position.y, m.position.z];
         let mut dropped = None;
         if m.is_baby() {
+            // Panda.mobInteract: a baby an age lock holds back passes.
+            if !horizon_client::mobs::ai::can_age_up(m) {
+                return false;
+            }
             // ageUp((int) (-getAge() / 20 * 0.1F), true).
             let seconds = ((-m.extra.age / 20) as f32 * 0.1) as i32;
             horizon_client::mobs::ai::age_up(m, seconds, true);

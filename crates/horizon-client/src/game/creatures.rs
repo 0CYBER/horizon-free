@@ -4040,7 +4040,7 @@ impl Game<'_> {
             // adult remember it (`gotFish`), to swim to a treasure.
             Species::Dolphin if fish => {
                 eat = Some(("entity.dolphin.eat", 1.0, 1.0));
-                if m.extra.age < 0 {
+                if horizon_client::mobs::ai::can_age_up(m) {
                     let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
                     horizon_client::mobs::ai::age_up(m, secs, true);
                 } else {

@@ -282,6 +282,13 @@ fn mob_variant_meta(
                 meta.push((17, serializer::INT, Value::Int(packed)));
             }
         }
+        // Tadpole.AGE_LOCKED (after AbstractFish's FROM_BUCKET).
+        "minecraft:tadpole" => {
+            if e.age_locked {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // CopperGolem.DATA_WEATHER_STATE: unaffected 0 to oxidized 3, and it
         // goes back down when the golem is scraped.
         "minecraft:copper_golem" => {
@@ -397,6 +404,13 @@ fn mob_meta(
             meta.push((index, serializer::BOOLEAN, Value::Bool(true)));
         }
         defaults.push((index, serializer::BOOLEAN, Value::Bool(false)));
+        // AgeableMob.AGE_LOCKED, the entry after it (not Zombie's or Piglin's).
+        if index == 16 && horizon_client::mobs::finalize::ageable(m.species()) {
+            if m.extra.age_locked {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+        }
     }
     let e = &m.extra;
     let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
@@ -435,12 +449,12 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BYTE, Value::Byte(16)));
         }
-        // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+        // MushroomCow.DATA_TYPE (after AgeableMob's two): 0 red, 1 brown.
         "minecraft:mooshroom" => {
             if e.variant == 1 {
-                meta.push((17, serializer::INT, Value::Int(1)));
+                meta.push((18, serializer::INT, Value::Int(1)));
             }
-            defaults.push((17, serializer::INT, Value::Int(0)));
+            defaults.push((18, serializer::INT, Value::Int(0)));
         }
         // AbstractPiglin.DATA_IMMUNE_TO_ZOMBIFICATION (16: with the dimension it
         // makes it shake) and Piglin.DATA_IS_DANCING (after the baby flag and

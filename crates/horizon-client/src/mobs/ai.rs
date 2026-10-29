@@ -1031,8 +1031,11 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         }
         m.extra.forced_age_timer -= 1;
     }
-    if m.alive() {
-        if m.extra.age < 0 {
+    // AgeableMob.aiStep: an age counts only for its subclasses (a tadpole
+    // counts its own age up, a zombie's baby age never moves). `canAgeUp`:
+    // a baby grows unless an age lock holds it; a breeding pause counts down.
+    if m.alive() && super::finalize::ageable(m.species()) {
+        if can_age_up(m) {
             let (bw, bh, _) = m.dims();
             m.extra.age += 1;
             // setAge at the age boundary: refreshDimensions.
@@ -1050,6 +1053,8 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         } else if m.extra.age > 0 {
             m.extra.age -= 1;
         }
+    }
+    if m.alive() {
         // Animal.aiStep
         if m.extra.age != 0 {
             m.extra.in_love = 0;
@@ -1613,7 +1618,7 @@ pub fn feed_animal(
     if m.extra.age == 0 && m.extra.in_love <= 0 {
         m.extra.in_love = 600;
         m.extra.love_player = true;
-    } else if m.extra.age < 0 {
+    } else if can_age_up(m) {
         // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age), true): a tenth.
         let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
         age_up(m, secs, true);
@@ -1626,6 +1631,10 @@ pub fn feed_animal(
         sound = Some(("entity.strider.eat", 1.0, pitch));
     }
     Some(sound)
+}
+/// `AgeableMob.canAgeUp`: a baby that no age lock holds back.
+pub fn can_age_up(m: &Mob) -> bool {
+    m.is_baby() && !m.extra.age_locked
 }
 /// `AgeableMob.ageUp(seconds, forced)`.
 pub fn age_up(m: &mut Mob, seconds: i32, forced: bool) {
@@ -1993,7 +2002,8 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
 pub fn ate(m: &mut Mob) {
     if m.species() == Species::Sheep {
         m.extra.sheared = false;
-        if m.is_baby() {
+        // Sheep.ate: only a baby `canAgeUp` (no age lock holds it) grows.
+        if can_age_up(m) {
             // AgeableMob.ageUp(60)
             m.extra.age = (m.extra.age + 60 * 20).min(0);
         }
