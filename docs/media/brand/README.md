@@ -39,14 +39,15 @@ NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(asy
 
 ## The README banner
 
-`docs/media/banner.webp` (1600x654) is the website's hero, a screenshot of playhorizon.dev in its
-dark theme. The navbar, the hero's buttons and its version line are hidden first: no launcher
-version goes stale, and the banner is the message and the landscape. The crop starts 56 px above
-the kicker, so no empty sky sits over the text. With Playwright, from the repository's root:
+`docs/media/banner.webp` (1600x600) is the website's hero, a screenshot of playhorizon.dev in its
+dark theme. The navbar, the hero's buttons, its version line and its lede are hidden first, so the
+banner carries no launcher version and no harness count (the README's prose owns the count), and
+nothing in it goes stale. The crop starts 56 px above the kicker and ends at the hero's bottom
+edge. With Playwright, from the repository's root:
 
 ```sh
 d=$(mktemp -d) && npm install --prefix "$d" playwright && npx --prefix "$d" playwright install chromium
-NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:1600,height:1000}});await p.goto("https://playhorizon.dev/",{waitUntil:"networkidle"});await p.click(".theme-toggle");await p.waitForTimeout(1200);await p.evaluate(()=>{for(const s of ["header",".hero-actions",".download-meta"]){const e=document.querySelector(s);if(e)e.style.display="none"}});await p.waitForTimeout(400);await p.screenshot({path:"docs/media/banner.webp",clip:{x:0,y:136,width:1600,height:654}});await b.close()})()'
+NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:1600,height:1000}});await p.goto("https://playhorizon.dev/",{waitUntil:"networkidle"});await p.click(".theme-toggle");await p.waitForTimeout(1200);await p.evaluate(()=>{for(const s of ["header",".hero-actions",".download-meta",".lede"]){const e=document.querySelector(s);if(e)e.style.display="none"}});await p.waitForTimeout(400);await p.screenshot({path:"docs/media/banner.webp",clip:{x:0,y:136,width:1600,height:600}});await b.close()})()'
 ```
 
 ## Drawn in code
