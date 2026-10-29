@@ -1036,7 +1036,7 @@ impl Launcher {
     }
 
     /// A player's face, from the default skin their UUID picks (the server knows no other).
-    fn head(&mut self, uuid: &str, size: f32) -> Div {
+    pub(super) fn head(&mut self, uuid: &str, size: f32) -> Div {
         let resources = servers::game_files(&servers::runtime_root(), "26.3");
         let face = self
             .servers

@@ -247,6 +247,11 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
 - **Copy says what happens** ("Downloads 26.3 and Java 21, about 600 MB"), never praises.
 - The specimen (`HORIZON_LAUNCHER_PAGE=specimen horizon-launcher`) draws the type and colours in the
   launcher itself.
+- **The frame** (`launcher/src/shell.rs`): the sidebar is one plate from the window's top to its
+  bottom (the wordmark, instances by group, servers, the launcher's version); the top bar over the
+  pages has no plate, only a rule. A selected row or tab sits on `card_hi` cut in steps (two for
+  rows, one for tabs and icon buttons); a hovered one gets the same shape at half its opacity,
+  eased in. A row's second line is its state, after a small square in the state's colour.
 
 ## The mark
 
