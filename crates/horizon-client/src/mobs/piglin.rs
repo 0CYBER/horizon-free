@@ -238,7 +238,64 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     if m.extra.piglin.activity == Activity::Avoid && wants_to_stop_fleeing(m, cx.w) {
         m.extra.piglin.avoid = None;
     }
-    m.extra.piglin.activity = activity(m);
+    update_activity(m, cx.w, cx.events);
+}
+/// `HoglinAi.updateActivity` and `PiglinAi.updateActivity`: take the first
+/// valid activity and, when it is not the one it was in, make the sound that
+/// goes with the new one.
+fn update_activity(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    let now = activity(m);
+    let before = std::mem::replace(&mut m.extra.piglin.activity, now);
+    if before != now {
+        let sound = if m.species() == Species::Hoglin {
+            hoglin_sound(m, w, now)
+        } else {
+            piglin_sound(m, w, now)
+        };
+        m.voice(sound, events);
+    }
+}
+/// `Hoglin.isConverting` and `AbstractPiglin.isConverting`: in a dimension
+/// that is not piglin safe, a mob that is not immune and has AI.
+fn converting(m: &Mob, w: &MobWorld) -> bool {
+    !w.nether && !m.extra.flag2 && !m.no_ai
+}
+/// `HoglinAi.getSoundForActivity`: a retreat grunt while retreating,
+/// converting or near a repellent, an angry one while fighting.
+fn hoglin_sound(m: &Mob, w: &MobWorld, activity: Activity) -> &'static str {
+    if activity == Activity::Avoid || converting(m, w) {
+        "entity.hoglin.retreat"
+    } else if activity == Activity::Fight {
+        "entity.hoglin.angry"
+    } else if m.extra.repellent.is_some() {
+        "entity.hoglin.retreat"
+    } else {
+        "entity.hoglin.ambient"
+    }
+}
+/// `PiglinAi.getSoundForActivity`: angry while fighting, a retreat grunt
+/// while converting, retreating from something within 12 blocks or near a
+/// repellent, then admiring, celebrating, jealous of a player holding gold,
+/// or the plain grunt.
+fn piglin_sound(m: &Mob, w: &MobWorld, activity: Activity) -> &'static str {
+    let b = &m.extra.piglin;
+    if activity == Activity::Fight {
+        "entity.piglin.angry"
+    } else if converting(m, w) {
+        "entity.piglin.retreat"
+    } else if activity == Activity::Avoid && b.avoid.is_some_and(|a| m.distance_sqr(a.at) < 144.0) {
+        "entity.piglin.retreat"
+    } else if activity == Activity::Admire {
+        "entity.piglin.admiring_item"
+    } else if activity == Activity::Celebrate {
+        "entity.piglin.celebrate"
+    } else if b.sees_loved {
+        "entity.piglin.jealous"
+    } else if m.extra.repellent.is_some() {
+        "entity.piglin.retreat"
+    } else {
+        "entity.piglin.ambient"
+    }
 }
 /// `PiglinAi.getAvoidTarget`: the avoid target while the memory is there.
 pub fn avoid_target(m: &Mob) -> Option<Who> {
