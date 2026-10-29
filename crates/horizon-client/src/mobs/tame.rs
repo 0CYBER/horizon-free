@@ -638,16 +638,21 @@ fn update_persistent_anger(m: &mut Mob, w: &MobWorld) {
         stop_being_angry(m);
     }
 }
+/// The part of `Wolf.tick` both sides run: `interestedAngle` eases toward 1
+/// while the wolf begs (`isInterested`, `DATA_INTERESTED_ID`), toward 0
+/// otherwise, for `getHeadRollAngle`.
+pub fn interest_tick(m: &mut Mob) {
+    let goal = if m.extra.flag { 1.0 } else { 0.0 };
+    m.anim.vo[INTEREST] = m.anim.v[INTEREST];
+    m.anim.v[INTEREST] += (goal - m.anim.v[INTEREST]) * 0.4;
+}
 /// `Wolf.tick` / `aiStep`: anger, begging tilt and shaking off water.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     update_persistent_anger(m, w);
     if !m.alive() {
         return;
     }
-    // interestedAngle eases toward 1 while begging.
-    let goal = if m.extra.flag { 1.0 } else { 0.0 };
-    let v = &mut m.anim.v;
-    v[INTEREST] += (goal - v[INTEREST]) * 0.4;
+    interest_tick(m);
     // isWet (extra.flag2), isShaking (counter2 > 0).
     let rain = super::ai::in_rain(m, w);
     let shaking = m.extra.counter2 > 0;
