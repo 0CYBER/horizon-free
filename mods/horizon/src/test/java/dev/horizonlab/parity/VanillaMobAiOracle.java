@@ -1072,6 +1072,11 @@ public final class VanillaMobAiOracle {
                 sb.append("\tcg ").append(golem.getState().ordinal()).append(' ').append(stack(golem.getMainHandItem())).append(' ')
                     .append(opened == null ? "-" : pos((BlockPos) opened));
             }
+            if (m instanceof net.minecraft.world.entity.animal.wolf.Wolf wolf) {
+                // NeutralMob anger left (the angry texture), -1 when calm.
+                long end = wolf.getPersistentAngerEndTime();
+                sb.append("	wolf ").append(end > 0 ? end - wolf.level().getGameTime() : -1);
+            }
             if (m instanceof net.minecraft.world.entity.animal.bee.Bee bee) {
                 // Flags (roll 2, stung 4, nectar 8), anger left, ticks without nectar, flower cooldown, flower.
                 Object acc = field(net.minecraft.world.entity.animal.bee.Bee.class, "DATA_FLAGS_ID").get(null);
