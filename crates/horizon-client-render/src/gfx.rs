@@ -3248,7 +3248,7 @@ impl Renderer {
     ) {
         surface.configure(device, config);
         if let Some(hdr) = hdr {
-            horizon_hdr::set_metadata(device, surface, hdr.paper_white, hdr.peak);
+            horizon_hdr::set_metadata(device, surface, hdr.paper_white, hdr.peak, hdr.black);
         }
     }
     fn configure_surface(&self) {
@@ -3263,7 +3263,7 @@ impl Renderer {
     }
     fn send_hdr_metadata(&self) {
         if let (Some(surface), Some(hdr)) = (&self.surface, &self.hdr) {
-            horizon_hdr::set_metadata(&self.device, surface, hdr.paper_white, hdr.peak);
+            horizon_hdr::set_metadata(&self.device, surface, hdr.paper_white, hdr.peak, hdr.black);
         }
     }
     /// The swapchain's configuration: `config` (what every pipeline draws in), or
@@ -3293,7 +3293,14 @@ impl Renderer {
     }
     /// HDR output (Horizon setting): HDR10 or scRGB at `paper_white` nits, the world's
     /// highlights expanded up to `peak` nits. Off where the surface can't present it.
-    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32, marker: &std::path::Path) {
+    pub fn set_hdr(
+        &mut self,
+        on: bool,
+        paper_white: f32,
+        peak: f32,
+        black: f32,
+        marker: &std::path::Path,
+    ) {
         let output = self.hdr_output.filter(|_| on && self.surface.is_some());
         if output.is_some() != self.hdr.is_some() {
             // If the game dies before HDR output shows a frame, the marker is still there at
@@ -3317,10 +3324,11 @@ impl Renderer {
             }
         }
         if let Some(hdr) = &mut self.hdr
-            && (hdr.paper_white, hdr.peak) != (paper_white, peak)
+            && (hdr.paper_white, hdr.peak, hdr.black) != (paper_white, peak, black)
         {
             hdr.paper_white = paper_white;
             hdr.peak = peak;
+            hdr.black = black;
             self.send_hdr_metadata();
         }
     }
