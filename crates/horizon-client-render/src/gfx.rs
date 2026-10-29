@@ -94,6 +94,7 @@ mod page_runs;
 pub mod panorama;
 mod resident;
 mod stars;
+mod sunrise_fan;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
@@ -189,6 +190,8 @@ struct Globals {
     outline_params: [f32; 4],
     /// Horizon Extras' dynamic lights: camera-relative position and level (`dynamic_light`).
     dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
+    /// The sunrise fan's triangles as the sky shader tests them (`sunrise_fan::normals`).
+    sunrise_fan: [[f32; 4]; 2 * sunrise_fan::TRIANGLES],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -3786,6 +3789,7 @@ impl Renderer {
                 }
                 lights
             },
+            sunrise_fan: sunrise_fan::normals(frame.sky.sunrise_color[3], sun),
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
