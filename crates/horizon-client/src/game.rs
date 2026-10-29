@@ -8385,20 +8385,23 @@ impl Game<'_> {
                     p.z + (q.z - p.z) * a,
                 )
             };
-            let mut casters: Vec<(glam::DVec3, &str)> =
+            let mut casters: Vec<(glam::DVec3, &str, f32)> =
                 horizon_client::shadows::mob_casters(&self.mobs, a).collect();
+            let fixed = |id: &'static str| (id, horizon_client::shadows::shadow_params(id).0);
+            let (item, item_radius) = fixed("minecraft:item");
             casters.extend(
                 self.dropped
                     .iter()
-                    .map(|i| (lerp(i.previous, i.position), "minecraft:item")),
+                    .map(|i| (lerp(i.previous, i.position), item, item_radius)),
             );
+            let (orb, orb_radius) = fixed("minecraft:experience_orb");
             casters.extend(
                 self.orbs
                     .iter()
-                    .map(|o| (lerp(o.previous, o.position), "minecraft:experience_orb")),
+                    .map(|o| (lerp(o.previous, o.position), orb, orb_radius)),
             );
-            for (pos, id) in casters {
-                let (radius, strength) = horizon_client::shadows::shadow_params(id);
+            for (pos, id, radius) in casters {
+                let strength = horizon_client::shadows::shadow_params(id).1;
                 horizon_client::shadows::shadow(
                     &self.world,
                     self.res.facts(),
