@@ -181,6 +181,10 @@ impl EndState {
             survive: false,
         });
     }
+    /// Where each eye in flight was last tick and is now (the hitbox view).
+    pub(super) fn eye_motions(&self) -> impl Iterator<Item = (glam::DVec3, glam::DVec3)> + '_ {
+        self.eyes.iter().map(|e| (e.previous, e.position))
+    }
     /// `EyeOfEnder.tick` on a server's client: it moves by its last known
     /// motion; only the server steers it.
     pub(super) fn step_remote_eyes(&mut self) {
