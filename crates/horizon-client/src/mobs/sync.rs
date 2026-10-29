@@ -126,6 +126,7 @@ pub fn entity_event(m: &mut Mob, event: u8) {
         Species::Hoglin | Species::Zoglin => piglin::client_event(m, event),
         Species::IronGolem => golem::client_event(m, event),
         Species::Creaking => creaking::entity_event(m, event),
+        Species::Wolf => tame::entity_event(m, event),
         _ => {}
     }
 }
