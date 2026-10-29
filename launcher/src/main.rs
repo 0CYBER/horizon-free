@@ -32,6 +32,7 @@ mod owner_page;
 mod packs_page;
 mod partner;
 mod perf;
+mod plate;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
