@@ -878,6 +878,19 @@ impl Mob {
         if self.species() == super::Species::Creeper {
             self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
         }
+        // AbstractHorse.causeFallDamage (llamas override it): a landing of more
+        // than a block thuds, and the horse's fall makes no generic fall sound.
+        let thud =
+            super::equine::is_equine(self.species()) && !super::llama::is_llama(self.species());
+        if thud && self.fall_distance > 1.0 && !self.silent {
+            let at = [self.position.x, self.position.y, self.position.z];
+            let sound = if self.is_baby() {
+                "entity.baby_horse.land"
+            } else {
+                "entity.horse.land"
+            };
+            events.push(MobEvent::Sound(sound, at, 0.4, 1.0));
+        }
         if self.kind.flags.fall_immune {
             return;
         }
@@ -897,7 +910,9 @@ impl Mob {
                 (false, true) => "entity.generic.big_fall",
                 (false, false) => "entity.generic.small_fall",
             };
-            events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            if !thud {
+                events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            }
             self.damage(damage as f32, super::Damage::fall());
         }
     }
