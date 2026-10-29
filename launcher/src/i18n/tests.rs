@@ -63,6 +63,8 @@ fn strings() -> (BTreeSet<String>, BTreeSet<String>) {
                 continue;
             }
             let s = literal(&file[at + 1..]);
+            // rustfmt puts a long string on the line after the call.
+            let before = before.trim_end();
             let call = |name: &str| {
                 before.ends_with(&format!("{name}(")) && {
                     let head = &before[..before.len() - name.len() - 1];

@@ -769,8 +769,13 @@ pub struct Extra {
     /// `LivingEntity.isAutoSpinAttack` (Riptide).
     pub auto_spin_attack: bool,
     pub main_hand_left: bool,
+    /// The skin layers a player hides (`PlayerModelPart` bits, set to
+    /// `Avatar.DATA_PLAYER_MODE_CUSTOMISATION` inverted); 0 shows all.
+    pub hidden_model_parts: u8,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,
+    /// `ClientAvatarState` of a player: the cloak, bob and walked distance its cape swings with.
+    pub avatar: crate::camera::AvatarBob,
     /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
     /// for the right arm.
     pub swing_right_arm: Option<bool>,
@@ -965,6 +970,9 @@ pub struct Mob {
     pub skin: Option<String>,
     /// `PlayerSkin.model` is `SLIM`: the player model with 3-pixel arms.
     pub slim: bool,
+    /// `PlayerSkin.cape`: a player's cape texture, once every download of
+    /// its skin is ready.
+    pub cape: Option<String>,
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
@@ -1561,6 +1569,11 @@ impl Mob {
             .sum();
         (base - 0.15 * f64::from(protection)).max(0.0)
     }
+    /// Entity.isOnFire: fire-immune mobs never count as burning, even on the
+    /// tick a sun or fire check set their timer before `base_tick` clears it.
+    pub fn is_on_fire(&self) -> bool {
+        !self.kind.flags.fire_immune && self.fire_ticks > 0
+    }
     pub fn ignite_for_ticks(&mut self, ticks: i32) {
         self.fire_ticks = self
             .fire_ticks
@@ -1963,6 +1976,7 @@ impl Mob {
             outbox: Vec::new(),
             skin: None,
             slim: false,
+            cape: None,
             profile: None,
             attrs: Attrs {
                 speed: kind.speed,
@@ -2355,6 +2369,11 @@ impl Mob {
     pub fn is_currently_glowing(&self) -> bool {
         self.glowing || self.has_effect("minecraft:glowing")
     }
+    /// `Entity.isInvisible`: the shared flag 0x20 a server sends (`invisible`),
+    /// or the Invisibility effect on a mob this game ticks itself.
+    pub fn is_invisible(&self) -> bool {
+        self.invisible || self.has_effect("minecraft:invisibility")
+    }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
             // MobEffectInstance.update: a stronger effect replaces with its
@@ -2734,6 +2753,8 @@ impl Mob {
     /// player from its synched pose and flags: the glide count, the wings
     /// (`elytraAnimationState`) and the swim amount (`updateSwimAmount`).
     pub fn tick_avatar_pose(&mut self, in_water: bool) {
+        let (p, v) = (self.previous, self.velocity);
+        let on_ground_alive = self.on_ground && self.alive();
         let e = &mut self.extra;
         e.fall_fly_ticks = if e.fall_flying {
             e.fall_fly_ticks + 1
@@ -2745,6 +2766,17 @@ impl Mob {
         let visually = e.synced_pose == 3 || (!e.fall_flying && e.synced_pose == 1);
         e.elytra.tick(e.fall_flying, e.crouching, self.velocity);
         e.swim.tick(visually, in_water);
+        // AbstractClientPlayer.tick's ClientAvatarState.tick (from where the
+        // player was before this tick's move), RemotePlayer.aiStep's
+        // updateBob and rideTick's resetBob.
+        e.avatar.tick([p.x, p.y, p.z]);
+        if e.passenger {
+            e.avatar.reset_bob();
+        } else {
+            let swimming = e.synced_pose == 3;
+            e.avatar
+                .update_bob(on_ground_alive && !swimming, [v.x, v.y, v.z]);
+        }
     }
 }
 
@@ -2844,12 +2876,12 @@ mod teams_tests {
     }
 }
 #[cfg(test)]
-mod sensor_scan_tests {
+pub(crate) mod sensor_scan_tests {
     use super::*;
     use horizon_core::geometry::Vec3;
     use serde_json::json;
 
-    pub(super) fn kind() -> Arc<MobType> {
+    pub(crate) fn kind() -> Arc<MobType> {
         Arc::new(MobType {
             id: "minecraft:cow".into(),
             species: Species::Cow,

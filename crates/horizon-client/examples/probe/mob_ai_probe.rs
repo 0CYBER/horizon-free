@@ -67,8 +67,9 @@ struct Scenario {
     /// The player hits a mob for 1 at the start of a tick: (tick, mob index).
     hurts: Vec<(i32, usize)>,
     /// The player feeds an animal at the start of a tick (Animal.mobInteract):
-    /// (tick, mob index); the scenario only feeds each animal its food.
-    feeds: Vec<(i32, usize)>,
+    /// (tick, mob index, None); the scenario only feeds each animal its food.
+    /// `interact` uses another item on a horse: (tick, mob index, Some(item)).
+    feeds: Vec<(i32, usize, Option<String>)>,
     hand: Option<String>,
     mobs: Vec<MobSpec>,
 }
@@ -108,7 +109,14 @@ fn parse(text: &str) -> Vec<Scenario> {
             }
             "heart" => s.hearts.push(f.iter().map(|x| (*x).to_owned()).collect()),
             "hurt" => s.hurts.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
-            "feed" => s.feeds.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
+            "feed" => s
+                .feeds
+                .push((f[1].parse().unwrap(), f[2].parse().unwrap(), None)),
+            "interact" => s.feeds.push((
+                f[1].parse().unwrap(),
+                f[2].parse().unwrap(),
+                Some(f[3].to_owned()),
+            )),
             "player" => {
                 s.player = Some([
                     f[1].parse().unwrap(),
@@ -1209,8 +1217,20 @@ pub fn main() -> horizon_client::Result<()> {
                 }
                 events.append(&mut mobs[i].outbox);
             }
-            for &(tick, i) in &s.feeds {
+            for (tick, i, item) in &s.feeds {
+                let (tick, i) = (*tick, *i);
                 if tick != t || i >= mobs.len() || mobs[i].removed {
+                    continue;
+                }
+                // Horse.mobInteract's held-item branch (makeMad).
+                if let Some(item) = item {
+                    horizon_client::mobs::equine::held_item(
+                        &mut mobs[i],
+                        item,
+                        false,
+                        item == "minecraft:golden_dandelion",
+                        &mut events,
+                    );
                     continue;
                 }
                 if let Some(Some((name, volume, pitch))) =

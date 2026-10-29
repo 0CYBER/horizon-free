@@ -29,6 +29,8 @@ pub enum Ping {
         motd: Text,
         /// Online and max players; None when the status has no `players`.
         players: Option<(i64, i64)>,
+        /// `ServerData.playerList`: shown over the player count.
+        player_list: Vec<Text>,
         ms: u128,
         version: String,
     },
@@ -50,6 +52,26 @@ impl Ping {
         }
         .with_color(DARK_GRAY)
     }
+}
+/// ServerStatusPinger: each sample name as a literal line (its `§` codes
+/// styled as the font does), then `multiplayer.status.and_more` for the
+/// players the sample leaves out.
+fn player_list(players: &serde_json::Value, online: i64) -> Vec<Text> {
+    let Some(sample) = players["sample"].as_array().filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<Text> = sample
+        .iter()
+        .map(|p| Text::literal(p["name"].as_str().unwrap_or_default()).resolve_legacy())
+        .collect();
+    let shown = sample.len() as i64;
+    if shown < online {
+        lines.push(Text::translate(
+            "multiplayer.status.and_more",
+            &[Text::literal((online - shown).to_string())],
+        ));
+    }
+    lines
 }
 type Pings = Arc<Mutex<HashMap<String, Ping>>>;
 /// Server icons by address as 64x64 RGBA (FaviconTexture), from servers.dat
@@ -157,6 +179,9 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
                                 p.get("max").and_then(|n| n.as_i64()).unwrap_or(0),
                             )
                         });
+                        let player_list = players
+                            .map(|(online, _)| player_list(&json["players"], online))
+                            .unwrap_or_default();
                         let version = json["version"]["name"].as_str().unwrap_or("?").to_owned();
                         // A new favicon replaces the saved one (an invalid one
                         // clears it) and servers.dat is saved again.
@@ -175,6 +200,7 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
                         Ping::Ok {
                             motd,
                             players,
+                            player_list,
                             ms,
                             version,
                         }
@@ -367,6 +393,37 @@ fn ping_tooltip(
         )),
     })
 }
+/// OnlineServerEntry's player list, over the player count drawn left of
+/// the status icon; `width` measures that count.
+fn player_list_tooltip(
+    servers: &[ServerEntry],
+    pings: &HashMap<String, Ping>,
+    size: (f32, f32),
+    scroll: f32,
+    cursor: (f32, f32),
+    width: impl Fn(&Text) -> f32,
+) -> Option<Vec<Text>> {
+    let Row::Server(i) = row_at(servers.len(), 0, cursor, size, scroll)? else {
+        return None;
+    };
+    let Some(Ping::Ok {
+        players,
+        player_list,
+        ..
+    }) = pings.get(&servers[i].ip)
+    else {
+        return None;
+    };
+    let (top, _, left) = list_area(size.0, size.1);
+    let icon_x = left + 2.0 + ROW_WIDTH - 4.0 - 15.0;
+    let y = top + 4.0 - scroll.trunc() + i as f32 * ROW_HEIGHT;
+    let w = width(&Ping::player_count(*players)).ceil();
+    let x = icon_x - w - 5.0;
+    if cursor.0 < x || cursor.0 >= x + w || cursor.1 < y || cursor.1 >= y + 8.0 {
+        return None;
+    }
+    (!player_list.is_empty()).then(|| player_list.clone())
+}
 
 impl Screen {
     /// Draw after the list and footer so the tooltip is neither clipped nor covered.
@@ -389,11 +446,15 @@ impl Screen {
             bottom,
             content_height(servers.len(), lan.games().len()),
         );
-        if let Some(text) =
-            ping_tooltip(servers, &pings.lock().unwrap(), size, scroll.amount, cursor)
-        {
-            crate::ui::tooltip(batch, atlas, &[text], cursor);
-        }
+        let pings = pings.lock().unwrap();
+        let lines = match ping_tooltip(servers, &pings, size, scroll.amount, cursor) {
+            Some(text) => vec![text],
+            None => player_list_tooltip(servers, &pings, size, scroll.amount, cursor, |t| {
+                atlas.font.width_text(t)
+            })
+            .unwrap_or_default(),
+        };
+        crate::ui::tooltip(batch, atlas, &lines, cursor);
     }
 
     pub fn list(saves: &Path) -> Self {
@@ -1441,6 +1502,7 @@ mod tests {
             Ping::Ok {
                 motd: Text::empty(),
                 players: None,
+                player_list: Vec::new(),
                 ms: 42,
                 version: String::new(),
             },
@@ -1475,6 +1537,60 @@ mod tests {
             hover(&pings, 0.0, (349.0, 37.0)).as_deref(),
             Some("(no connection)")
         );
+    }
+
+    #[test]
+    fn player_list_styles_sample_names_and_counts_the_rest() {
+        let players = serde_json::json!({
+            "online": 5,
+            "sample": [
+                {"name": "\u{a7}b\u{a7}lBIT\u{a7}rMADE"},
+                {"name": ""},
+                {"name": "\u{a7}8\u{2022}\u{a7}r \u{a7}bLobby"},
+            ]
+        });
+        let lines = player_list(&players, 5);
+        assert_eq!(lines.len(), 4);
+        let plain: Vec<String> = lines.iter().take(3).map(Text::plain).collect();
+        assert_eq!(plain, ["BITMADE", "", "\u{2022} Lobby"]);
+        assert_eq!(player_list(&players, 3).len(), 3);
+        assert!(player_list(&serde_json::json!({"online": 2}), 2).is_empty());
+        assert!(player_list(&serde_json::json!({"online": 2, "sample": []}), 2).is_empty());
+    }
+
+    #[test]
+    fn player_list_tooltip_covers_only_the_player_count() {
+        let servers = vec![ServerEntry::new("Test", "server0")];
+        let size = (427.0, 240.0);
+        let mut pings = HashMap::new();
+        let hover = |pings: &HashMap<String, Ping>, cursor| {
+            player_list_tooltip(&servers, pings, size, 0.0, cursor, |_| 20.0)
+                .map(|l| l.iter().map(Text::plain).collect::<Vec<_>>())
+        };
+        assert!(hover(&pings, (324.0, 37.0)).is_none());
+        let ok = |player_list| Ping::Ok {
+            motd: Text::empty(),
+            players: Some((0, 500)),
+            player_list,
+            ms: 1,
+            version: String::new(),
+        };
+        pings.insert("server0".into(), ok(vec![Text::literal("Lobby")]));
+        // The 20-wide count ends 5 pixels left of the bars at (349, 37).
+        for cursor in [(324.0, 37.0), (343.9, 44.9)] {
+            assert_eq!(hover(&pings, cursor), Some(vec!["Lobby".to_owned()]));
+        }
+        for cursor in [
+            (323.9, 37.0),
+            (344.0, 37.0),
+            (324.0, 36.9),
+            (324.0, 45.0),
+            (349.0, 37.0),
+        ] {
+            assert!(hover(&pings, cursor).is_none(), "{cursor:?}");
+        }
+        pings.insert("server0".into(), ok(Vec::new()));
+        assert!(hover(&pings, (324.0, 37.0)).is_none());
     }
 
     #[test]
