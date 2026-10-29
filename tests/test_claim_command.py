@@ -72,6 +72,14 @@ class ClaimTests(unittest.TestCase):
         with self.assertRaisesRegex(cc.Refused, "@other already claimed"):
             do("/claim", Fake({5: thread(holders=("other",))}))
 
+    def test_claimed_on_discord(self):
+        t = thread()
+        t["labels"] = [{"name": "In progress"}]
+        api = Fake({5: t})
+        with self.assertRaisesRegex(cc.Refused, "on Discord"):
+            do("/claim", api)
+        self.assertEqual(api.calls, [])
+
     def test_already_yours(self):
         with self.assertRaisesRegex(cc.Refused, "already hold"):
             do("/claim", Fake({5: thread(holders=("NewComer",))}))

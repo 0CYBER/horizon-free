@@ -262,6 +262,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
              client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
              sends each target its packet).
+- riptide_rain: the host and the guest each launch with a Riptide trident in rain, with an elytra worn or not (#3458).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
 - cure-discount: the host and the guest each cure a zombie villager with a golden apple and pay 14
@@ -6654,6 +6655,41 @@ def check_hero_trading(host, guest, out):
         host('command', command=f'kill @e[tag={tag}]')
     return seen
 
+
+def check_riptide_rain(host, guest, out):
+    """TridentItem.use/releaseUsing: a Riptide trident launches its user in rain, for the host and for a guest
+    (a server's client answers `isInRain` from its own chunks and weather), with an elytra worn or not (#3458)."""
+    result = {}
+    spots = apart(host, guest)
+    x, y, z = spots['host']
+    host('command', command=f'fill {x} {y + 4} {z} {x} {y + 120} {z} minecraft:air')
+    host('command', command='weather rain')
+    for label, player in (('host', host), ('guest', guest)):
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        player('command', command='give @s minecraft:trident[minecraft:enchantments={"minecraft:riptide":3}]')
+        try:
+            for case, elytra in (('plain', False), ('elytra', True)):
+                player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+                player('command', command='item replace entity @s armor.chest with '
+                       + ('minecraft:elytra' if elytra else 'minecraft:air'))
+                player.raw('key', '1', 'tap')
+                player.wait(25)
+                start = pos_of(player)
+                replies = player.script(['mouse right down', 'wait 25', 'mouse right up', 'wait 12', 'state'], every=True)
+                moved = round(math.dist(start, replies[-1]['player']['position']), 2)
+                result[f'{label}-{case}'] = moved
+                assert moved > 4, f'{label}-{case}: the Riptide trident in rain moved the player {moved} blocks: {result}'
+        finally:
+            player('command', command='clear @s')
+            player('command', command='item replace entity @s armor.chest with minecraft:air')
+            player.raw('key', 'w', 'up')
+    host('command', command='weather clear')
+    return result
+
+
+CHECKS += ['riptide_rain']
+CHECK_FNS['riptide_rain'] = check_riptide_rain
 
 CHECKS += ['hero-trading']
 CHECK_FNS.update({'hero-trading': check_hero_trading})
