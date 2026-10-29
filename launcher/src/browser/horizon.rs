@@ -60,6 +60,14 @@ pub fn known_index() -> Option<Arc<Index>> {
         .map(|(_, index)| index.clone())
 }
 
+/// Whether the registry's project `id` is a native mod, by the index already read (never the
+/// network); false when none was read.
+pub fn is_native_mod(id: &str) -> bool {
+    known_index()
+        .and_then(|index| Some(index.project(id)?.kind == index::Kind::NativeMod))
+        .unwrap_or(false)
+}
+
 /// The index: the one fetched in the last ten minutes, else fetched again (and kept in the game
 /// folder), else the copy kept last time.
 pub fn index() -> Result<Arc<Index>, String> {
