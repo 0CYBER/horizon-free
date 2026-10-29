@@ -134,12 +134,8 @@ impl Game<'_> {
         };
         let invisible = stack.extra.as_ref().is_some_and(|extra| {
             extra.other.iter().any(|(k, v)| {
-                (k == "minecraft:entity_data" || k == "entity_data" || k == "EntityTag")
-                    && horizon_client::save::number(
-                        v.get("Invisible").or_else(|| v.get("invisible")),
-                    )
-                    .unwrap_or(0)
-                        != 0
+                (k == "minecraft:entity_data" || k == "entity_data")
+                    && horizon_client::save::number(v.get("Invisible")).unwrap_or(0) != 0
             })
         });
         let pos = std::array::from_fn(|i| hit.pos[i] + hit.face[i]);

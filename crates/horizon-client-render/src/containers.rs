@@ -117,14 +117,7 @@ impl SkullSkin {
         let fallback = crate::skins::profile_uuid_nbt(profile)
             .or_else(|| {
                 crate::skins::nbt_text(profile.get("name"))
-                    .or_else(|| crate::skins::nbt_text(profile.get("Name")))
                     .map(|name| horizon_protocol::crypto::offline_uuid(&name))
-            })
-            .or_else(|| match profile {
-                horizon_world::nbt::Tag::String(s) => {
-                    Some(horizon_protocol::crypto::offline_uuid(&s.to_string_lossy()))
-                }
-                _ => None,
             })
             .map_or("entity/player/slim/steve", crate::tab_list::default_skin);
         Self {

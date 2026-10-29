@@ -1874,14 +1874,7 @@ pub fn item_frame_to_nbt(f: &ItemFrame, uuid: [i32; 4], raw: Option<&Tag>) -> Ta
 pub fn item_frame_from_nbt(tag: &Tag, id: u32) -> Option<ItemFrame> {
     let pos = match tag.get("block_pos") {
         Some(Tag::IntArray(v)) if v.len() == 3 => [v[0], v[1], v[2]],
-        _ => match (
-            number(tag.get("TileX")),
-            number(tag.get("TileY")),
-            number(tag.get("TileZ")),
-        ) {
-            (Some(x), Some(y), Some(z)) => [x as i32, y as i32, z as i32],
-            _ => return None,
-        },
+        _ => return None,
     };
     Some(ItemFrame {
         id,
@@ -1891,8 +1884,8 @@ pub fn item_frame_from_nbt(tag: &Tag, id: u32) -> Option<ItemFrame> {
         item: tag.get("Item").and_then(item_from_nbt),
         rotation: (number(tag.get("ItemRotation")).unwrap_or(0) & 7) as u8,
         drop_chance: float(tag.get("ItemDropChance")).map_or(1.0, |v| v as f32),
-        fixed: flag(tag, "Fixed") || flag(tag, "fixed"),
-        invisible: flag(tag, "Invisible") || flag(tag, "invisible"),
+        fixed: flag(tag, "Fixed"),
+        invisible: flag(tag, "Invisible"),
         check_interval: 0,
     })
 }
@@ -3041,25 +3034,6 @@ mod fireball_nbt_tests {
             (p.kind, p.acceleration),
             (ProjectileKind::LargeFireball { power: 1 }, 0.1)
         );
-    }
-
-    #[test]
-    fn item_frame_reads_legacy_tile_pos_and_invisibility() {
-        let tag = Tag::compound([
-            ("id", Tag::String("minecraft:item_frame".into())),
-            ("TileX", Tag::Int(5)),
-            ("TileY", Tag::Int(64)),
-            ("TileZ", Tag::Int(-12)),
-            ("Facing", Tag::Byte(3)),
-            ("Invisible", Tag::Byte(1)),
-            ("Fixed", Tag::Byte(1)),
-        ]);
-        let frame = item_frame_from_nbt(&tag, 100).expect("frame");
-        assert_eq!(frame.id, 100);
-        assert_eq!(frame.pos, [5, 64, -12]);
-        assert_eq!(frame.facing, 3);
-        assert!(frame.invisible);
-        assert!(frame.fixed);
     }
 }
 
