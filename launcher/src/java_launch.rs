@@ -97,7 +97,12 @@ pub fn classpath(version: &Value, minecraft: &Path, os: &str) -> Result<Vec<Path
             }
         }
     }
-    paths.push(minecraft.join(format!("versions/{id}/{id}.jar")));
+    paths.push(
+        minecraft
+            .join("versions")
+            .join(mojang::relative(id)?)
+            .join(format!("{id}.jar")),
+    );
     Ok(paths)
 }
 
@@ -286,7 +291,8 @@ pub fn command(version: &Value, launch: &Launch) -> Result<Command, String> {
     {
         let config = launch
             .minecraft
-            .join("assets/log_configs")
+            .join("assets")
+            .join("log_configs")
             .join(mojang::relative(file)?);
         jvm.push(arg.replace("${path}", &path(&config)));
     }

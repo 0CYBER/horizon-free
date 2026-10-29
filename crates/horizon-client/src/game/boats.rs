@@ -664,10 +664,9 @@ impl Game<'_> {
         if !self.boat_models.has(wood, chest) {
             return false;
         }
-        let Some(eye) = self.eye_position() else {
+        let Some((eye, dir)) = self.aim() else {
             return false;
         };
-        let dir = view_vector(self.yaw, self.pitch);
         let reach = self.reach();
         // ClipContext.Fluid.ANY: the first fluid surface (water or lava) or
         // block along the ray.
@@ -744,8 +743,7 @@ impl Game<'_> {
         true
     }
     pub(super) fn boat_hit(&self) -> Option<(usize, f64)> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64)> = None;
         for (i, b) in self.boats.iter().enumerate() {
@@ -811,15 +809,19 @@ impl Game<'_> {
         true
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_boat(&mut self, damage: f32) -> bool {
+    pub(super) fn attack_boat(&mut self) -> bool {
         let Some((i, d)) = self.boat_hit() else {
             return false;
         };
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        self.vehicle_attack_sounds();
+        let area = self.boats[i].bounds();
+        // Player.attack's full damage against the boat's entity type.
+        let (kind, id) = (self.boats[i].entity_type(), self.boats[i].id as i32);
+        let (damage, _, _, magic) = self.melee_damage(&kind, false);
         self.hurt_boat(i, damage, self.creative);
+        self.vehicle_attack_sounds(area, magic.then_some(id));
         self.swing_arm();
         true
     }

@@ -11,6 +11,12 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// `rel` (`a/b/c`) under `base`, one part at a time as the code joins them (Windows paths).
+fn under(base: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .fold(base.to_path_buf(), |path, part| path.join(part))
+}
+
 fn player() -> Player {
     Player {
         name: "Notch".into(),
@@ -83,7 +89,7 @@ fn a_modern_version_gets_its_rules_placeholders_and_classpath() {
     };
     assert_eq!(a[0], "-Xmx6144M");
     assert!(a.contains(&"-Dlog4j2.formatMsgNoLookups=true".into()));
-    let config = mc.join("assets/log_configs/client-1.21.2.xml");
+    let config = under(&mc, "assets/log_configs/client-1.21.2.xml");
     assert!(a.contains(&format!("-Dlog4j.configurationFile={}", config.display())));
     assert!(at("-XstartOnFirstThread") < at("net.minecraft.client.main.Main"));
     assert!(at("-XX:+UseZGC") < at("net.minecraft.client.main.Main"));
@@ -97,13 +103,14 @@ fn a_modern_version_gets_its_rules_placeholders_and_classpath() {
     assert!(!a.iter().any(|x| x == "--demo" || x == "--width"));
     let sep = if cfg!(windows) { ";" } else { ":" };
     let cp: Vec<String> = a[at("-cp") + 1].split(sep).map(String::from).collect();
+    // Library paths are Mojang's, `/` and all (`mojang::relative`): Windows takes them.
     let lib = |p: &str| mc.join("libraries").join(p).to_string_lossy().into_owned();
     assert_eq!(
         cp,
         [
             lib("a/common/1/common-1.jar"),
             lib("a/mac/1/mac-1.jar"),
-            mc.join("versions/1.21.4/1.21.4.jar")
+            under(&mc, "versions/1.21.4/1.21.4.jar")
                 .to_string_lossy()
                 .into_owned()
         ]
@@ -176,7 +183,7 @@ fn an_old_version_gets_its_natives_and_assets_by_name() {
     let a = args(&command(&version, &launch).unwrap());
     assert_eq!(fs::read(natives.join("liblwjgl.dylib")).unwrap(), b"lib");
     assert!(!natives.join("META-INF").exists());
-    let virtual_dir = mc.join("assets/virtual/1.8");
+    let virtual_dir = under(&mc, "assets/virtual/1.8");
     assert_eq!(
         fs::read(virtual_dir.join("sounds/step/grass1.ogg")).unwrap(),
         b"ogg"
