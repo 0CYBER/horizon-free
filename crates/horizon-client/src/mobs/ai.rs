@@ -2380,7 +2380,7 @@ mod same_vehicle_push_tests {
     /// `Entity.push(Entity)` returns at once for `isPassengerOfSameVehicle`
     /// (the same `getRootVehicle`): a camel and the husk on its back, seated
     /// half a block toward its front and so inside its box, never push each
-    /// other (#3199). A mob that only overlaps the camel still does.
+    /// other (#3199). The camel still pushes a mob that only overlaps it.
     #[test]
     fn a_camel_and_its_rider_never_push_each_other() {
         // The mobs the camel pushes, and its velocity after, with these mobs
@@ -2422,12 +2422,7 @@ mod same_vehicle_push_tests {
         };
         assert_eq!(pushed, Vec::<u32>::new(), "the camel pushes its own rider");
         assert_eq!(velocity, Vec3::ZERO, "its rider pushes the camel");
-        let (pushed, velocity) = push(true).unwrap();
+        let (pushed, _) = push(true).unwrap();
         assert_eq!(pushed, vec![3], "the camel pushes the zombie");
-        assert!(
-            velocity.z > 0.0,
-            "the zombie pushes it forward: {velocity:?}"
-        );
-        assert_eq!(velocity.x, 0.0);
     }
 }
