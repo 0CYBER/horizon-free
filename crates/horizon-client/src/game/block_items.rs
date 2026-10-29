@@ -9,7 +9,7 @@ use horizon_client::{
 };
 use horizon_world::{
     level::classes::Class,
-    nbt::{Compound, Tag},
+    nbt::{Compound, JavaString, Tag},
     registry::BlockStateId,
 };
 
@@ -79,10 +79,17 @@ impl Game<'_> {
             self.world.block_entities.get(&key),
             Some(BlockEntity::Banner(_))
         );
-        if (include_data || banner)
+        // DecoratedPotBlock.getCloneItemStack: createDecoratedPotInstance, the
+        // sherds only; the pot's item comes with include_data.
+        let pot = &*facts.name == "minecraft:decorated_pot";
+        if (include_data || banner || pot)
             && let Some(saved) = self.saved_block_entity(key)
         {
-            patch.extend(block_entity_item::pick(&saved));
+            let mut picked = block_entity_item::pick(&saved);
+            if pot && !include_data {
+                picked.retain(|k, _| *k == JavaString::from("minecraft:pot_decorations"));
+            }
+            patch.extend(picked);
         }
         if !patch.is_empty() {
             let mut all = components(&stack);
