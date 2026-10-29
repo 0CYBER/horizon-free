@@ -229,6 +229,11 @@ pub struct Streaming {
     generation_scan: GenerationScan,
     /// Proto chunks: `None` while checked out to a decoration or save job.
     protos: FxHashMap<(i32, i32), Option<Proto>>,
+    /// The light jobs' views of proto chunks past the area (`light_region`),
+    /// built once per proto: each is a neighbour of up to three columns and
+    /// waits in failed regions until the last one loads. Dropped whenever
+    /// the proto is checked out, replaced or removed.
+    light_views: FxHashMap<(i32, i32), Arc<Chunk>>,
     decorated: FxHashSet<(i32, i32)>,
     decorating: usize,
     /// Save jobs in flight.
@@ -564,6 +569,7 @@ impl Streaming {
             generating: Default::default(),
             generation_scan: GenerationScan::default(),
             protos: Default::default(),
+            light_views: Default::default(),
             decorated: Default::default(),
             decorating: 0,
             saving: 0,
@@ -713,6 +719,7 @@ impl Streaming {
         self.decorated.insert((x, z));
         for (i, proto) in region.into_iter().enumerate() {
             let key = (x + (i % 3) as i32 - 1, z + (i / 3) as i32 - 1);
+            self.light_views.remove(&key);
             self.protos.insert(key, Some(proto));
             self.written.insert(key);
         }
@@ -723,6 +730,7 @@ impl Streaming {
         self.generation_scan.exhausted = false;
         self.saving -= 1;
         for (key, proto) in protos {
+            self.light_views.remove(&key);
             self.protos.insert(key, Some(proto));
         }
     }
@@ -730,7 +738,11 @@ impl Streaming {
     fn save_checked_out(&mut self, keys: impl IntoIterator<Item = (i32, i32)>) {
         let protos: Vec<((i32, i32), Proto)> = keys
             .into_iter()
-            .filter_map(|k| Some((k, self.protos.get_mut(&k)?.take()?)))
+            .filter_map(|k| {
+                let proto = self.protos.get_mut(&k)?.take()?;
+                self.light_views.remove(&k);
+                Some((k, proto))
+            })
             .collect();
         if !protos.is_empty() {
             self.saving += 1;
@@ -799,7 +811,7 @@ impl Streaming {
     /// The 3x3 a light job reads: the finished columns, and for a neighbour
     /// that will not finish (past the area), its decorated proto chunk, as
     /// vanilla lights its last FULL ring against neighbours at FEATURES.
-    fn light_region(&self, world: &World, x: i32, z: i32) -> Option<Box<Region>> {
+    fn light_region(&mut self, world: &World, x: i32, z: i32) -> Option<Box<Region>> {
         let mut region: Region = Default::default();
         for dz in 0..3 {
             for dx in 0..3 {
@@ -807,8 +819,14 @@ impl Streaming {
                 region[dz][dx] = Some(match world.chunks.get(&n) {
                     Some(chunk) => chunk.clone(),
                     None if !self.in_range(n.0, n.1, 1) && self.decorated.contains(&n) => {
-                        let proto = self.protos.get(&n)?.as_ref()?;
-                        Arc::new((self.light_view)(proto)?)
+                        if let Some(view) = self.light_views.get(&n) {
+                            view.clone()
+                        } else {
+                            let proto = self.protos.get(&n)?.as_ref()?;
+                            let view = Arc::new((self.light_view)(proto)?);
+                            self.light_views.insert(n, view.clone());
+                            view
+                        }
                     }
                     None => return None,
                 });
@@ -916,6 +934,7 @@ impl Streaming {
                     self.generation_scan.exhausted = false;
                     self.generating.remove(&(x, z));
                     if self.in_range(x, z, 4) || self.near_finished(x, z, 2) {
+                        self.light_views.remove(&(x, z));
                         self.protos.insert((x, z), Some(proto));
                         if decorated || !self.decorates {
                             self.decorated.insert((x, z));
@@ -1039,6 +1058,7 @@ impl Streaming {
                     written.push(key);
                 } else {
                     self.protos.remove(&key);
+                    self.light_views.remove(&key);
                 }
             }
             self.save_checked_out(written);
@@ -1068,6 +1088,7 @@ impl Streaming {
                     .remove(&(x, z))
                     .flatten()
                     .expect("present proto");
+                self.light_views.remove(&(x, z));
                 self.finishing.insert((x, z));
                 self.written.remove(&(x, z));
                 self.submit(Some((x, z)), 0, Job::Finish(proto));
@@ -1166,6 +1187,7 @@ impl Streaming {
                 let region: Vec<Proto> = keys
                     .iter()
                     .map(|k| {
+                        self.light_views.remove(k);
                         self.protos
                             .insert(*k, None)
                             .flatten()
