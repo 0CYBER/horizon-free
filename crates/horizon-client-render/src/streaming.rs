@@ -13,11 +13,10 @@ use horizon_core::biome::BiomeZoom;
 use horizon_world::block_render::FaceVisibility;
 use horizon_world::worldgen::decoration_order::DecorationOrder;
 use std::{
-    collections::{BinaryHeap, HashSet},
+    collections::{BinaryHeap, HashSet, VecDeque},
     sync::{
-        Arc, Condvar, Mutex, RwLock,
+        Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     thread,
 };
@@ -220,11 +219,52 @@ struct Shared {
     /// What meshing reads (block models and sprites), swapped when resource
     /// packs reload; each mesh job takes the current one.
     context: RwLock<Arc<WorkerContext>>,
+    done: Mailbox,
+}
+/// Finished jobs, from the workers to the game thread, in the order they
+/// finished. Not an `mpsc` channel: its receiver waits for a sender it finds
+/// half way through a send, and a worker descheduled there on a busy machine
+/// held the frame for a scheduler quantum (10 to 30 ms, the RD 32 ocean
+/// flight's 1% lows). The frame takes what is there without waiting; while a
+/// worker holds the lock, it takes it the next frame.
+#[derive(Default)]
+struct Mailbox {
+    done: Mutex<VecDeque<Done>>,
+    arrived: Condvar,
+}
+impl Mailbox {
+    fn send(&self, done: Done) {
+        self.done.lock().unwrap().push_back(done);
+        self.arrived.notify_one();
+    }
+    fn try_lock(&self) -> Option<MutexGuard<'_, VecDeque<Done>>> {
+        match self.done.try_lock() {
+            Ok(done) => Some(done),
+            Err(TryLockError::WouldBlock) => None,
+            Err(TryLockError::Poisoned(e)) => panic!("{e}"),
+        }
+    }
+    /// Every finished job, or none while a worker is sending.
+    fn take(&self) -> VecDeque<Done> {
+        self.try_lock()
+            .map(|mut done| std::mem::take(&mut *done))
+            .unwrap_or_default()
+    }
+    fn try_recv(&self) -> Option<Done> {
+        self.try_lock()?.pop_front()
+    }
+    fn recv_timeout(&self, timeout: std::time::Duration) -> Option<Done> {
+        let done = self.done.lock().unwrap();
+        let (mut done, _) = self
+            .arrived
+            .wait_timeout_while(done, timeout, |done| done.is_empty())
+            .unwrap();
+        done.pop_front()
+    }
 }
 pub struct Streaming {
     shared: Arc<Shared>,
     light_view: Arc<dyn Fn(&Proto) -> Option<Chunk> + Send + Sync>,
-    results: mpsc::Receiver<Done>,
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
     /// Ticks since the columns and protos that fell out of range were swept.
@@ -461,14 +501,13 @@ impl Streaming {
             ready: Condvar::new(),
             stop: AtomicBool::new(false),
             context: RwLock::new(context.clone()),
+            done: Mailbox::default(),
         });
-        let (send, results) = mpsc::channel();
         let light_tables = context.light.clone();
         let saves: Arc<dyn Saves> = generator.clone();
         let threads = (0..threads.max(1))
             .map(|i| {
                 let shared = shared.clone();
-                let send = send.clone();
                 let generator = generator.clone();
                 let light = context.light.clone();
                 thread::Builder::new()
@@ -551,9 +590,7 @@ impl Streaming {
                                     Done::Meshed(x, sy, z, mesh, seq)
                                 }
                             };
-                            if send.send(done).is_err() {
-                                return;
-                            }
+                            shared.done.send(done);
                         }
                     })
                     .expect("spawn worker")
@@ -566,7 +603,6 @@ impl Streaming {
         Self {
             shared,
             light_view,
-            results,
             threads,
             order: 0,
             scan_age: 0,
@@ -930,10 +966,10 @@ impl Streaming {
         self.requeue();
         self.relight_edits(world);
         let deferred = std::mem::take(&mut self.deferred);
-        let received = std::iter::from_fn(|| self.results.try_recv().ok());
+        let received = self.shared.done.take();
         // Meshes made stale meanwhile, freed with the uploaded ones (`free`).
         let mut stale = Vec::new();
-        for done in deferred.into_iter().chain(received.collect::<Vec<_>>()) {
+        for done in deferred.into_iter().chain(received) {
             match done {
                 Done::Proto(x, z, proto, decorated) => {
                     self.generation_scan.exhausted = false;
@@ -1444,12 +1480,12 @@ impl Streaming {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while self.decorating > 0 || !self.finishing.is_empty() || self.saving > 0 {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            match self.results.recv_timeout(left) {
-                Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, *region),
-                Ok(Done::Generated(chunk)) => self.receive_generated(chunk, world),
-                Ok(Done::Saved(protos)) => self.receive_saved(protos),
-                Ok(other) => self.deferred.push(other),
-                Err(_) => {
+            match self.shared.done.recv_timeout(left) {
+                Some(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, *region),
+                Some(Done::Generated(chunk)) => self.receive_generated(chunk, world),
+                Some(Done::Saved(protos)) => self.receive_saved(protos),
+                Some(other) => self.deferred.push(other),
+                None => {
                     log::warn!("Horizon: chunk generation did not finish before saving");
                     break;
                 }
@@ -1471,7 +1507,7 @@ impl Streaming {
     /// in `save(true)`, so older generation cannot overwrite the final chunks.
     pub fn poll_save(&mut self, world: &mut World) -> bool {
         let started = std::time::Instant::now();
-        while let Ok(done) = self.results.try_recv() {
+        while let Some(done) = self.shared.done.try_recv() {
             match done {
                 Done::Decorated(x, z, region) => self.receive_decorated(x, z, *region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
@@ -1556,7 +1592,7 @@ impl Streaming {
     /// Wait up to `timeout` for a worker to finish a job; the next `update`
     /// takes it. A server pumps generation with this between its ticks.
     pub fn wait(&mut self, timeout: std::time::Duration) {
-        if let Ok(done) = self.results.recv_timeout(timeout) {
+        if let Some(done) = self.shared.done.recv_timeout(timeout) {
             self.deferred.push(done);
         }
     }
@@ -1837,10 +1873,10 @@ impl Drop for Streaming {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while self.saving > 0 {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            match self.results.recv_timeout(left) {
-                Ok(Done::Saved(_)) => self.saving -= 1,
-                Ok(_) => {}
-                Err(_) => break,
+            match self.shared.done.recv_timeout(left) {
+                Some(Done::Saved(_)) => self.saving -= 1,
+                Some(_) => {}
+                None => break,
             }
         }
         self.shared.stop.store(true, Ordering::Relaxed);
@@ -1877,6 +1913,37 @@ fn rank_again(queue: &mut BinaryHeap<Queued>, distance: impl Fn(i32, i32) -> i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frame never waits for a worker: while one holds the mailbox, the
+    /// frame takes nothing and finds the results, in order, the next time.
+    #[test]
+    fn the_frame_takes_finished_jobs_without_waiting() {
+        let mailbox = Mailbox::default();
+        let lit = |seq| Done::Lit(0, 0, Vec::new(), seq);
+        mailbox.send(lit(1));
+        mailbox.send(lit(2));
+        let sending = mailbox.done.lock().unwrap();
+        assert!(mailbox.take().is_empty());
+        assert!(mailbox.try_recv().is_none());
+        drop(sending);
+        let seqs: Vec<u64> = mailbox
+            .take()
+            .into_iter()
+            .map(|done| match done {
+                Done::Lit(_, _, _, seq) => seq,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(seqs, [1, 2]);
+        assert!(mailbox.take().is_empty());
+        let waiting = std::time::Instant::now();
+        assert!(
+            mailbox
+                .recv_timeout(std::time::Duration::from_millis(10))
+                .is_none()
+        );
+        assert!(waiting.elapsed() >= std::time::Duration::from_millis(10));
+    }
 
     #[test]
     fn queued_jobs_follow_the_centre_and_the_loading_screen() {

@@ -561,7 +561,7 @@ that are on, and only that one:
 | Mode | Runs server mods | Players they see |
 |---|---|---|
 | Single player (default) | the server thread | the window's player, a connection like any other |
-| Single player `--in-frame` | the window's own game, beside its client mods | the window's player |
+| Single player `--in-frame` (deprecated, will be removed) | the window's own game, beside its client mods | the window's player |
 | Open to LAN, Play with Friends | the host's server thread (or its window, in-frame) | the host and every guest |
 | Dedicated server (`--dedicated`, `horizon-server`) | the server | every connected player |
 

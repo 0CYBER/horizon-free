@@ -513,6 +513,56 @@ impl MeshTables {
         let mut tints = Tints::new(region, biomes, zoom, blend_radius, origin);
         Mesher::tint(info, 0, &mut tints, [x & 15, y & 15, z & 15])
     }
+    /// `BlockColors` for each of the state's tint indices at `pos`, as the
+    /// chunk mesher tints them (grass blocks included): `None` for an
+    /// untinted (-1) layer. For block models drawn outside the chunk mesh.
+    pub fn block_tints(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        region: &[[Option<&Chunk>; 3]; 3],
+        biomes: &Biomes,
+        zoom: BiomeZoom,
+        blend_radius: i32,
+    ) -> impl Fn(i32) -> Option<u32> + use<> {
+        let sources = self.info.get(state.0 as usize).map(|info| {
+            let [x, y, z] = pos;
+            let origin = [x >> 4, z >> 4, y & !15];
+            let mut tints = Tints::new(region, biomes, zoom, blend_radius, origin);
+            let local = [x & 15, y & 15, z & 15];
+            let colors = [0, 1].map(|i| Mesher::tint(info, i, &mut tints, local));
+            (colors, i32::from(info.tint_count))
+        });
+        move |index| {
+            let (colors, count) = sources?;
+            if index < 0 || index >= count {
+                return None;
+            }
+            colors[(index as usize).min(1)]
+        }
+    }
+    /// `ModelBlockRenderer.tesselateFlat`'s light coords (`LightCoordsUtil`
+    /// packing, the quad's own emission included) for `quad` of `state`
+    /// drawn as the only block at `pos`, as `MovingBlockRenderState` gives
+    /// it: `light` is the world's stored light (sky << 4 | block) at a
+    /// position. For block models drawn outside the chunk mesh.
+    pub fn flat_light(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        quad: &horizon_assets::bake::ModelQuad,
+        light: impl Fn([i32; 3]) -> u8,
+    ) -> u32 {
+        let own = self.info.get(state.0 as usize);
+        let full = own.is_some_and(|i| i.full);
+        let at = lighting::flat_position(pos, &quad.positions, quad.facing, quad.cull, full);
+        let packed = light(at);
+        let coords = match own {
+            Some(own) => lighting::packed_coords(own, packed),
+            None => u32::from(packed & 15) << 4 | u32::from(packed >> 4) << 20,
+        };
+        lighting::with_emission(coords, quad.light_emission)
+    }
     /// `BlockState.getOffset` for blocks with a random model offset.
     pub fn offset(&self, state: BlockStateId, x: i32, z: i32) -> Option<[f64; 3]> {
         offset(self.info.get(state.0 as usize)?, x, z)

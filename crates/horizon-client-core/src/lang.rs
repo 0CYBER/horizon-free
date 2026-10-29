@@ -269,6 +269,13 @@ mod tests {
         assert_eq!(en.get("horizon.options.controller"), Some("Controller"));
         let ru = Language::load(&[&empty], "ru_ru");
         assert_eq!(ru.get("horizon.options.controller"), Some("Геймпад"));
+        // Every bundled string carries both languages: a key added to one file
+        // and forgotten in the other shows as a key name on screen.
+        for key in en.map().keys() {
+            assert!(ru.get(key).is_some(), "{key} has no ru_ru value");
+        }
+        assert_eq!(en.get("horizon.pages.mods"), Some("Mods"));
+        assert_eq!(ru.get("horizon.pages.mods"), Some("Моды"));
         let uk = Language::load(&[&empty], "uk_ua");
         assert_eq!(
             uk.get("horizon.options.on_screen_keyboard"),

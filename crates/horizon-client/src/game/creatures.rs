@@ -4570,6 +4570,14 @@ impl Game<'_> {
                 self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+                self.player_pumpkin_geometry(
+                    mob,
+                    mob.extra.armor[0].as_ref(),
+                    camera,
+                    alpha,
+                    packed,
+                    out,
+                );
             }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {

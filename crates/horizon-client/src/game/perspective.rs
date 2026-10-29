@@ -372,9 +372,7 @@ impl Game<'_> {
             p.pose == Pose::Swimming || (!p.fall_flying && p.pose == Pose::FallFlying);
         let in_water = p.fluids.was_touching_water;
         let (yaw, pitch) = (self.yaw, self.pitch);
-        let main = self.inventory[self.selected]
-            .as_ref()
-            .map(|s| s.item.clone());
+        let main = self.inventory[self.selected].clone();
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
@@ -438,7 +436,7 @@ impl Game<'_> {
         m.age = m.age.wrapping_add(1);
         m.anim.attack_anim_o = attack.0;
         m.anim.attack_anim = attack.1;
-        m.extra.main_hand = main;
+        m.extra.set_main_hand_stack(main);
         m.extra.off_hand = off;
         m.extra.crouching = crouching;
         m.extra.passenger = riding;
@@ -539,6 +537,7 @@ impl Game<'_> {
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
+        self.player_pumpkin_geometry(m, self.armor[0].as_ref(), camera, alpha, packed, out);
         // LivingEntity.isCurrentlyGlowing: the Glowing effect.
         if self.potions.effects.get("glowing").is_some() {
             let color = super::glowing::team_color(self.own_team());
