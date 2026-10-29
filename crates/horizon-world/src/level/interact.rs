@@ -770,6 +770,26 @@ impl Behaviours {
             sim.game_event(pos, "minecraft:block_change");
             return InteractionResult::Success;
         }
+        // CandleBlock.useItemOn: an empty hand snuffs a lit candle (`mayBuild`).
+        if item.is_none()
+            && player.may_build
+            && self.data(state).chain.contains(&Class::Candle)
+            && self.table.bool(state, self.props.lit)
+        {
+            // AbstractCandleBlock.extinguish: unlit, the wick smoke, the
+            // extinguish sound, then the block-change game event.
+            let next = self.table.set_bool(state, self.props.lit, false);
+            let mut sim = self.sim(level, ticks);
+            sim.set_block_and_update(pos, next);
+            sim.emit(LevelEvent::BlockEvent {
+                pos,
+                state: next,
+                kind: "candle_smoke",
+            });
+            sim.sound(pos, &"minecraft:block.candle.extinguish".into(), 1.0, 1.0);
+            sim.game_event_state(pos, "minecraft:block_change", next);
+            return InteractionResult::Success;
+        }
         self.use_without_item(level, ticks, pos, face, hit, player)
     }
 
