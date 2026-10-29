@@ -1168,7 +1168,7 @@ impl Launcher {
             let log = |line: String| {
                 let _ = tx.send(Msg::Line(Job::Client, line));
             };
-            let cmd = backend::java_game(&instance, &log)
+            let cmd = backend::java_game(&instance, None, &log)
                 .map(|cmd| horizon_launcher::launch::wrap(cmd, &instance.launch));
             let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
         });
