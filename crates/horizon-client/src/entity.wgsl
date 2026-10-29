@@ -54,6 +54,8 @@ struct Out {
     // The `GLINT_TEXTURING` sample for overlay 7 (item foil), or the model UV
     // `ARMOR_ENTITY_GLINT_TEXTURING` scrolls for overlay 13 (armour).
     @location(11) glint_uv: vec2<f32>,
+    // 1 drops the quad's back-facing pixels (Vertex::normal w = 1), like a culling render type.
+    @location(12) @interpolate(flat) cull: u32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -102,7 +104,10 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     // minecraft_mix_light: the vertex colour times the cardinal light only.
     var c = color;
     var back = c;
-    if normal.w != 0.0 {
+    // Normal w: 0 keeps the baked colour, +-127 shades by the normal, and a small positive 1
+    // keeps the baked colour but culls back faces (entitySolid models such as the decorated pot).
+    out.cull = select(0u, 1u, normal.w > 0.0 && normal.w < 0.5);
+    if abs(normal.w) >= 0.5 {
         c = vec4(c.rgb * entity_light(normal.xyz, globals.time.y != 0.0), c.a);
         back = select(c, vec4(back.rgb * entity_light(-normal.xyz, globals.time.y != 0.0), back.a), normal.w < 0.0);
     }
@@ -234,7 +239,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
         // clouds.fsh: alpha fades out towards the cloud fog end.
         return vec4(color.rgb, color.a * (1.0 - linear_fog(in.spherical, 0.0, globals.fog_ends.y)));
     }
-    if color.a < 0.1 { discard; }
+    if color.a < 0.1 || (in.cull != 0u && !front) { discard; }
     // entity.fsh calculateFinalColor: the overlay (hurt red, TNT white) over the
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
@@ -258,6 +263,16 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 
 // rendertype_outline.fsh: the vertex colour (the team colour; outline vertices carry no
 // normal, so no cardinal light) wherever the texture is not fully clear.
+// rendertype_entity_shadow.fsh: the shadow texture times the vertex colour,
+// then fog, with no alpha cutout, so a faint shadow in dim light still draws.
+@fragment fn fs_entity_shadow(in: Out) -> @location(0) vec4<f32> {
+    var color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    color *= in.light_color;
+    let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
+                linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
+    return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+}
+
 @fragment fn fs_outline(in: Out) -> @location(0) vec4<f32> {
     if textureSample(atlas, atlas_sampler, in.uv).a == 0.0 { discard; }
     return vec4(in.color.rgb, 1.0);

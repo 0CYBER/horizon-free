@@ -28,7 +28,7 @@ pub struct StackData {
     pub charged: Vec<ItemStack>,
     /// `minecraft:fireworks`: flight duration and explosions (None: the
     /// item's default).
-    pub fireworks: Option<(u8, Vec<crate::particles::FireworkExplosion>)>,
+    pub fireworks: Option<(u8, Vec<crate::firework::FireworkExplosion>)>,
     /// `minecraft:map_id` (filled maps).
     pub map_id: Option<i32>,
     /// `minecraft:writable_book_content` pages.
@@ -36,7 +36,7 @@ pub struct StackData {
     /// `minecraft:written_book_content`.
     pub written: Option<WrittenBook>,
     /// `minecraft:banner_patterns` (banners and shields).
-    pub banner_patterns: Vec<crate::banner::BannerLayer>,
+    pub banner_patterns: Vec<crate::banner_layer::BannerLayer>,
     /// `minecraft:base_color` (a shield's dye).
     pub base_color: Option<Arc<str>>,
     /// The raid captain's banner: `minecraft:banner_patterns` with the
@@ -47,7 +47,7 @@ pub struct StackData {
     /// `minecraft:dyed_color` (leather armour, wolf armour, ... as RGB).
     pub dyed_color: Option<i32>,
     /// `minecraft:firework_explosion` (a firework star).
-    pub firework_explosion: Option<crate::particles::FireworkExplosion>,
+    pub firework_explosion: Option<crate::firework::FireworkExplosion>,
     /// `minecraft:pot_decorations`: back, left, right, front sherds.
     pub pot_decorations: Option<Box<[Option<ItemStack>; 4]>>,
     /// `minecraft:bundle_contents`.
@@ -61,6 +61,24 @@ pub struct StackData {
     /// Components Horizon does not model (lore, custom data, item name,
     /// max stack size...), kept as their saved values in key order.
     pub other: Vec<(String, Tag)>,
+    /// What the server sent for this stack, for sending it back unchanged.
+    pub wire: Wire,
+}
+/// The component patch a server sent for a stack, as the creative slot packet
+/// writes it, and the stack Horizon decoded from it, to tell whether anything
+/// changed since. Like vanilla's `BundleContents.selectedItem` it is left out
+/// when stacks are compared.
+#[derive(Clone, Debug, Default)]
+pub struct Wire(Option<Arc<(ItemStack, Arc<[u8]>)>>);
+impl Wire {
+    pub fn new(decoded: ItemStack, patch: Arc<[u8]>) -> Self {
+        Self(Some(Arc::new((decoded, patch))))
+    }
+}
+impl PartialEq for Wire {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 /// A bundle's selected item index (-1: none). Like vanilla's
 /// `BundleContents.equals` it is left out when stacks are compared.
@@ -106,6 +124,16 @@ impl StackData {
     pub fn other(&self, id: &str) -> Option<&Tag> {
         self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
     }
+    /// `SetNameFunction.run`: a loot text component stored as `custom_name`
+    /// (plain text, as modelled) or as the unmodelled `item_name`.
+    pub fn set_loot_name(&mut self, id: &str, text: &serde_json::Value) {
+        let tag = horizon_client_core::scoreboard::json_to_tag(text);
+        if id == "minecraft:custom_name" {
+            self.custom_name = read_text(&tag);
+        } else {
+            self.set_other(id, Some(tag));
+        }
+    }
     /// Set (or with None remove) an unmodelled component.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
         self.other.retain(|(k, _)| k != id);
@@ -149,7 +177,7 @@ pub struct WrittenBook {
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        self.wire.0.is_none() && *self == Self::default()
     }
 }
 
@@ -164,6 +192,16 @@ impl ItemStack {
     }
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
+    }
+    /// The patch the server sent for this stack, while the stack is still what
+    /// it decoded to (its count aside); None once anything else changed.
+    pub fn wire_patch(&self) -> Option<Arc<[u8]>> {
+        let (decoded, patch) = &**self.data()?.wire.0.as_ref()?;
+        let none = StackData::default();
+        (decoded.item == self.item
+            && decoded.damage == self.damage
+            && decoded.data().unwrap_or(&none) == self.data().unwrap_or(&none))
+        .then(|| patch.clone())
     }
     pub fn data_mut(&mut self) -> &mut StackData {
         self.extra.get_or_insert_with(Box::default)
@@ -242,7 +280,7 @@ impl ItemStack {
     /// by `ominous_banner` instead.
     pub fn item_name(&self) -> Option<String> {
         let name = self.data()?.other("minecraft:item_name")?;
-        Some(crate::entity_nbt::name_text(name).plain())
+        Some(horizon_client_core::component::name_text(name).plain())
     }
     pub fn potion(&self) -> Option<&str> {
         self.data().and_then(|d| d.potion.as_deref())
@@ -354,13 +392,15 @@ fn read_text(t: &Tag) -> Option<String> {
         // this), so flatten the whole component instead of reading one key.
         // ComponentSerialization.CODEC also takes a list (its first element
         // styling the rest), as servers behind ViaVersion send book pages.
-        Tag::Compound(_) | Tag::List(_) => Some(crate::entity_nbt::name_text(t).plain()),
+        Tag::Compound(_) | Tag::List(_) => {
+            Some(horizon_client_core::component::name_text(t).plain())
+        }
         _ => None,
     }
 }
 
 /// A `FireworkExplosion` as vanilla's codec writes it (defaults omitted).
-fn explosion_tag(e: &crate::particles::FireworkExplosion) -> Tag {
+fn explosion_tag(e: &crate::firework::FireworkExplosion) -> Tag {
     let colors = |c: &[u32]| Tag::List(c.iter().map(|c| Tag::Int(*c as i32)).collect());
     let mut fields = vec![("shape", Tag::String(e.shape.name().into()))];
     if !e.colors.is_empty() {
@@ -377,14 +417,14 @@ fn explosion_tag(e: &crate::particles::FireworkExplosion) -> Tag {
     }
     Tag::compound(fields)
 }
-fn explosion_from(e: &Tag) -> crate::particles::FireworkExplosion {
+fn explosion_from(e: &Tag) -> crate::firework::FireworkExplosion {
     let ints = |t: Option<&Tag>| match t {
         Some(Tag::IntArray(v)) => v.iter().map(|c| *c as u32).collect(),
         Some(Tag::List(v)) => v.iter().filter_map(int).map(|c| c as u32).collect(),
         _ => Vec::new(),
     };
-    crate::particles::FireworkExplosion {
-        shape: crate::particles::FireworkShape::from_name(
+    crate::firework::FireworkExplosion {
+        shape: crate::firework::FireworkShape::from_name(
             e.get("shape")
                 .and_then(string)
                 .as_deref()
@@ -428,6 +468,11 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
             })
         }
     }
+}
+/// The stack a `show_item` hover event holds (`HoverEvent.ShowItem`): its
+/// `{id, count?, components?}` object.
+pub fn stack_from_hover(event: &serde_json::Value) -> Option<ItemStack> {
+    template_from(&horizon_client_core::scoreboard::json_to_tag(event))
 }
 /// Sorted-key, type-annotated text of a tag (the differential harnesses
 /// print the same form from the vanilla side).
@@ -493,7 +538,7 @@ pub fn canon_tag(tag: &Tag) -> String {
 pub fn canon_stack(stack: Option<&ItemStack>) -> String {
     stack.map_or_else(
         || "-".to_owned(),
-        |s| canon_tag(&crate::save::item_to_nbt(s)),
+        |s| canon_tag(&crate::item_nbt::item_to_nbt(s)),
     )
 }
 /// The stack of an SNBT `ItemStack.CODEC` compound; None for "-".
@@ -502,7 +547,7 @@ pub fn parse_stack(snbt: &str) -> Result<Option<ItemStack>, String> {
         return Ok(None);
     }
     let (tag, _) = horizon_world::nbt::parse_snbt(snbt)?;
-    Ok(crate::save::item_from_nbt(&tag))
+    Ok(crate::item_nbt::item_from_nbt(&tag))
 }
 /// The `components` compound for a stack, or None when every component is default.
 pub fn encode_components(stack: &ItemStack) -> Option<Tag> {
@@ -551,7 +596,7 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         if !d.banner_patterns.is_empty() {
             entries.push((
                 "minecraft:banner_patterns",
-                crate::banner::layers_to_nbt(&d.banner_patterns),
+                crate::banner_layer::layers_to_nbt(&d.banner_patterns),
             ));
         }
         if let Some(color) = &d.base_color {
@@ -654,7 +699,7 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         if !d.charged.is_empty() {
             entries.push((
                 "minecraft:charged_projectiles",
-                Tag::List(d.charged.iter().map(crate::save::item_to_nbt).collect()),
+                Tag::List(d.charged.iter().map(crate::item_nbt::item_to_nbt).collect()),
             ));
         }
         if d.ominous_banner {
@@ -737,7 +782,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
-        banner_patterns: crate::banner::layers_from_nbt(c.get("minecraft:banner_patterns")),
+        banner_patterns: crate::banner_layer::layers_from_nbt(c.get("minecraft:banner_patterns")),
         base_color: c
             .get("minecraft:base_color")
             .and_then(string)
@@ -816,7 +861,10 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             None => None,
         },
         charged: match c.get("minecraft:charged_projectiles") {
-            Some(Tag::List(list)) => list.iter().filter_map(crate::save::item_from_nbt).collect(),
+            Some(Tag::List(list)) => list
+                .iter()
+                .filter_map(crate::item_nbt::item_from_nbt)
+                .collect(),
             _ => Vec::new(),
         },
         container: match c.get("minecraft:container") {
@@ -852,6 +900,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         }),
         bundle_selected: BundleSelected::default(),
         other: Vec::new(),
+        wire: Wire::default(),
     };
     let mut data = data;
     if let Tag::Compound(map) = c {
@@ -995,8 +1044,8 @@ mod tests {
         let mut stack = ItemStack::new("minecraft:shield", 1);
         stack.data_mut().base_color = Some(Arc::from("red"));
         stack.data_mut().banner_patterns = vec![
-            crate::banner::BannerLayer::new("minecraft:flower", "black"),
-            crate::banner::BannerLayer::new("minecraft:border", "white"),
+            crate::banner_layer::BannerLayer::new("minecraft:flower", "black"),
+            crate::banner_layer::BannerLayer::new("minecraft:border", "white"),
         ];
         let tag = encode_components(&stack).expect("components");
         let (_, extra) = decode_components(Some(&tag));
@@ -1067,7 +1116,7 @@ mod tests {
         assert_eq!(flight, 2);
         assert_eq!(
             explosions[0].shape,
-            crate::particles::FireworkShape::LargeBall
+            crate::firework::FireworkShape::LargeBall
         );
         assert_eq!(explosions[0].colors, vec![0xFF0000]);
         assert!(explosions[0].twinkle && !explosions[0].trail);

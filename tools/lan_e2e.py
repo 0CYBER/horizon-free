@@ -176,6 +176,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - riding:    the host and the guest each saddle and ride a horse (walk, jump), a pig and a strider
              (with their sticks), a camel and a donkey, sit on a llama and fly a happy ghast, and
              get off by sneaking; the other side sees the animal move.
+- portal_rider: (--server-thread) a survival guest rides a horse into a Nether portal: the horse goes
+             through at once and carries it, so it arrives in the Nether still riding the same horse.
 - riding_teleport: the host and the guest each /tp through chat while riding a horse; after 60
              ticks each stays dismounted at the destination and both sides see the horse left
              behind. The host also teleports a mounted guest by name.
@@ -274,8 +276,8 @@ both sides go to --out (host-*.png, guest-*.png).
     python3 tools/lan_e2e.py --check chest --check tab
     python3 tools/lan_e2e.py --server-thread --check portals   # the host's world on its server thread
 
-Needs the prepared resources in .local/horizon-client and, on Linux, vscreen (the desktop); on
-macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
+Needs the prepared resources in .local/horizon-client. On Linux the games run on vscreen (the
+desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
 """
 import argparse
 import json
@@ -4989,9 +4991,11 @@ def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
     # Either way explicitly: the game's default is the server thread.
     host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
-    # A headless run (HORIZON_E2E_HEADLESS) has no focused window to draw in: the games render
-    # offscreen and never pause on the focus loss, or the world would stand still.
-    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS'))
+    # A headless run (HORIZON_E2E_HEADLESS, or a Linux without vscreen) has no focused window to draw
+    # in: the games render offscreen and never pause on the focus loss, or the world would stand still
+    # (a host paused before its world loads waits at "Connecting to the server..." for ever).
+    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS')) or (
+        sys.platform.startswith('linux') and not shutil.which('vscreen'))
     launch = ['launch']
     if headless or sys.platform == 'darwin':
         launch.append('--offscreen')
@@ -6521,6 +6525,86 @@ CHECKS += ['riding_teleport']
 CHECK_FNS.update(riding_teleport=check_riding_teleport)
 
 
+def check_portal_rider(host, guest, out):
+    """#1486 (--server-thread): a survival guest rides a horse into a Nether portal. The horse goes
+    through at once (NetherPortalBlock.getPortalTransitionTime is 0 for an entity that isn't a
+    player; a passenger has no portal process of its own, Entity.canUsePortal) and carries its rider
+    (Entity.teleportCrossDimension): the guest leaves well before a player's own 80 ticks and
+    arrives in the Nether still on the same horse."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    x, y, z = apart(host, guest)['guest']
+    horse_at = (x + 1.0, y, z + 2.5)
+    # The portal's plane crosses the horse's box (z + 1.8 to z + 3.2), the rider's too.
+    pz = z + 2
+    tag = 'portal_rider'
+    home = 'execute in minecraft:overworld run'
+    try:
+        guest('command', command='clear @s')
+        guest('command', command='gamemode survival')
+        guest('command', command='gamerule players_nether_portal_default_delay 80')
+        guest('command', command='item replace entity @s weapon.mainhand with minecraft:saddle')
+        guest('command', command=f'summon minecraft:horse {horse_at[0]} {y} {horse_at[2]} '
+                                 f'{{Tame:1b,NoAI:1b,Tags:["{tag}"]}}')
+        guest.wait(5)
+        horses = [m for m in guest.raw('mobs', 16)['near'] if m['kind'] == 'minecraft:horse' and m['health'] > 0]
+        horse = next((m for m in horses if math.dist(m['pos'], horse_at) < 0.1), None)
+        assert horse, f'no live horse at {horse_at}: {horses}'
+        guest.raw('look-at', horse_at[0], y + 0.8, horse_at[2])
+        guest.raw('mouse', 'right', 'click')
+        guest.wait(5)
+        guest('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+        guest.wait(2)
+        guest.raw('mouse', 'right', 'click')
+        guest.wait(5)
+        assert guest('status').get('riding') == horse['id'], 'the guest is not riding the horse'
+        # The frame around the horse and its rider, then the portal inside it.
+        for corner in (f'{x - 1} {y - 1} {pz} {x + 2} {y - 1} {pz}', f'{x - 1} {y + 3} {pz} {x + 2} {y + 3} {pz}',
+                       f'{x - 1} {y} {pz} {x - 1} {y + 2} {pz}', f'{x + 2} {y} {pz} {x + 2} {y + 2} {pz}'):
+            guest('command', command=f'fill {corner} minecraft:obsidian')
+        guest('command', command=f'fill {x} {y} {pz} {x + 1} {y + 2} {pz} minecraft:nether_portal[axis=x]')
+        guest.shot(out, 'portal-rider-in')
+        left = None
+        for waited in range(0, 120, 5):
+            if guest('state').get('dimension') == NETHER:
+                left = waited
+                break
+            guest.wait(5)
+        assert left is not None, 'the guest on its horse did not go through the portal in 120 ticks'
+        assert left < 40, f'the guest left after {left} ticks: its own delay (80), not the horse\'s (0)'
+        # The server holds the guest until the chunks around the exit are lit, then places it there.
+        there = wait_dimension(guest, NETHER, 600)
+        seen = None
+        for _ in range(30):
+            guest.wait(20)
+            seen = {'riding': guest('status').get('riding'), 'horse': mob_seen(guest, horse['id']),
+                    'at': pos_of(guest)}
+            if seen['horse'] and math.dist(seen['horse']['pos'], seen['at']) < 3:
+                break
+        guest.wait(40)
+        seen = {'riding': guest('status').get('riding'), 'horse': mob_seen(guest, horse['id']), 'at': pos_of(guest)}
+        guest.shot(out, 'portal-rider-nether')
+        assert there.get('dimension') == NETHER, f'the guest is in {there.get("dimension")}'
+        assert seen['horse'], f'the horse {horse["id"]} did not come to the Nether with its rider: {seen}'
+        assert seen['riding'] == horse['id'], f'the guest arrived on foot: {seen}'
+        assert math.dist(seen['horse']['pos'], seen['at']) < 3, f'the horse is not under its rider: {seen}'
+        host_dim = host('state').get('dimension')
+        assert host_dim == OVERWORLD, f'the host went to {host_dim} with the guest'
+        return {'left_after_ticks': left, 'riding': seen['riding'], 'horse': seen['horse']['pos'], 'guest': seen['at']}
+    finally:
+        back_to_game(guest)
+        guest('command', command=f'kill @e[tag={tag}]')
+        guest('command', command=f'{home} fill {x - 1} {y - 1} {pz} {x + 2} {y + 3} {pz} minecraft:air')
+        guest('command', command=f'{home} fill {x - 1} {y - 1} {pz} {x + 2} {y - 1} {pz} minecraft:stone')
+        guest('command', command=f'{home} tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+        wait_dimension(guest, OVERWORLD, 600)
+        guest.wait(20)
+
+
+CHECKS += ['portal_rider']
+CHECK_FNS.update(portal_rider=check_portal_rider)
+
+
 def check_recipe_removal(host, guest, out):
     """ServerRecipeBook.removeRecipes sends ClientboundRecipeBookRemovePacket to the player:
     the open book updates immediately, reopening keeps it empty, and later grants still arrive."""
@@ -7884,6 +7968,46 @@ def check_team_push(host, guest, out):
 
 CHECKS += ['team-push']
 CHECK_FNS['team-push'] = check_team_push
+
+
+def check_dig_sounds(host, guest, out):
+    """#2277: the mining sound plays once per cadence, for everyone.
+
+    Vanilla plays the block's hit sound from the server's destroy progress
+    level events (2019 and 2020), so the digger and the players around hear
+    the same hits. Horizon's digger heard every hit twice: once from its own
+    client and once from the server, which is what the report called a sound
+    played too often.
+    """
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        other = guest if label == 'host' else host
+        x, y, z = spots[label]
+        cell = (x, y + 1, z + 2)
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 4} minecraft:air')
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+        player.wait(10)
+        before = {g.name: heard(g, 'minecraft:block.stone.hit') for g in (host, guest)}
+        player.raw('look-at', f'{cell[0] + 0.5:.2f}', f'{cell[1] + 0.5:.2f}', f'{cell[2] + 0.5:.2f}')
+        player.raw('mouse', 'left', 'down')
+        player.wait(40)
+        player.raw('mouse', 'left', 'up')
+        player.wait(5)
+        hits = {g.name: heard(g, 'minecraft:block.stone.hit') - before[g.name] for g in (host, guest)}
+        result[label] = hits
+        assert host.raw('block', *cell).get('block') == 'minecraft:stone', f'{label}: the stone broke: {result}'
+        assert hits[other.name] >= 3, f'{label}: the player nearby heard no mining sound: {result}'
+        assert hits[player.name] <= hits[other.name] + 3, \
+            f'{label}: the digger heard the mining sound twice: {result}'
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+    return result
+
+
+CHECKS += ['dig_sounds']
+CHECK_FNS['dig_sounds'] = check_dig_sounds
 
 
 if __name__ == '__main__':

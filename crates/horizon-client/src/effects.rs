@@ -29,6 +29,10 @@ impl EffectInstance {
     fn infinite(&self) -> bool {
         self.duration == -1
     }
+    /// `MobEffectInstance.endsWithin`.
+    pub fn ends_within(&self, ticks: i32) -> bool {
+        !self.infinite() && self.duration <= ticks
+    }
     fn shorter_than(&self, other: &Self) -> bool {
         !self.infinite() && (self.duration < other.duration || other.infinite())
     }
@@ -129,15 +133,16 @@ fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
         _ => None,
     }
 }
-/// `InstantenousMobEffect.applyInstantenousEffect` (potions apply these directly).
+/// `HealOrHarmMobEffect.applyInstantaneousEffect` (potions apply these directly;
+/// the amount rounds to the nearest whole point).
 pub fn instant(id: &str, amp: i32, scale: f64) -> Option<EffectAction> {
     match id {
         "instant_health" => Some(EffectAction::Heal(
-            (scale * f64::from(4 << amp.min(30))) as i32 as f32,
+            (scale * f64::from(4 << amp.min(30)) + 0.5) as i32 as f32,
         )),
         "instant_damage" => Some(EffectAction::Hurt(
             "minecraft:magic",
-            (scale * f64::from(6 << amp.min(30))) as i32 as f32,
+            (scale * f64::from(6 << amp.min(30)) + 0.5) as i32 as f32,
         )),
         "saturation" => Some(EffectAction::Eat(amp + 1, 1.0)),
         _ => None,

@@ -3,6 +3,7 @@ use super::{Game, Screen};
 use horizon_client::{
     Result,
     command::args::GameMode,
+    confirm_screen::Confirm,
     hud::{HudBatch, rgba},
     text::{self, Text},
     ui,
@@ -103,6 +104,14 @@ fn pause_icons(w: f32, h: f32, links: bool) -> [(f32, f32, &'static str); 4] {
     ]
 }
 /// DeathScreen.init: a hardcore player can only spectate.
+/// `DeathScreen.TitleConfirmScreen`: its title and the yes and no labels.
+fn death_confirm_texts() -> (Text, [Text; 2]) {
+    let t = |key: &str| Text::translate(key, &[]);
+    (
+        t("deathScreen.quit.confirm"),
+        [t("deathScreen.titleScreen"), t("deathScreen.respawn")],
+    )
+}
 fn death_buttons(w: f32, h: f32, hardcore: bool) -> [(f32, f32, &'static str, u8); 2] {
     let respawn = if hardcore {
         "deathScreen.spectate"
@@ -267,6 +276,20 @@ impl Game<'_> {
                 ),
             );
         }
+        // DeathScreen.handleExitToTitleScreen: the TitleConfirmScreen takes the
+        // screen over, on the same background.
+        if let Some(opened) = self.ui.death_confirm {
+            let (title, labels) = death_confirm_texts();
+            let size = self.gui_size();
+            Confirm::new(&atlas.font, size, &title, &Text::literal("")).draw_active(
+                batch,
+                atlas,
+                self.cursor,
+                [&labels[0], &labels[1]],
+                opened.elapsed().as_millis() >= 1000,
+            );
+            return;
+        }
         let title = if self.level.hardcore {
             "deathScreen.title.hardcore"
         } else {
@@ -382,6 +405,23 @@ impl Game<'_> {
         {
             return Ok(());
         }
+        if let Some(opened) = self.ui.death_confirm {
+            // ConfirmScreen.setDelay: both buttons wait 20 ticks.
+            if opened.elapsed().as_millis() < 1000 {
+                return Ok(());
+            }
+            let (title, _) = death_confirm_texts();
+            let confirm = Confirm::new(
+                &self.gui.atlas.font,
+                self.gui_size(),
+                &title,
+                &Text::literal(""),
+            );
+            if let Some(yes) = confirm.answer_at(self.cursor) {
+                self.death_confirm_answer(yes)?;
+            }
+            return Ok(());
+        }
         let size = self
             .renderer
             .as_ref()
@@ -391,6 +431,27 @@ impl Game<'_> {
             .into_iter()
             .find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);
+        // handleExitToTitleScreen: outside hardcore, Title Screen asks first.
+        if hit == Some(1) && !self.level.hardcore {
+            self.ui.death_confirm = Some(std::time::Instant::now());
+            self.audio.play_button_click();
+            return Ok(());
+        }
+        self.death_action(hit)
+    }
+    /// The confirm screen's answer: yes leaves the world, no respawns
+    /// (`DeathScreen.handleExitToTitleScreen`'s callback).
+    pub(super) fn death_confirm_answer(&mut self, yes: bool) -> Result<()> {
+        self.ui.death_confirm = None;
+        if yes {
+            self.audio.play_button_click();
+            self.close_world()
+        } else {
+            self.death_action(Some(0))
+        }
+    }
+    /// A death screen button: 0 respawns (or spectates in hardcore), 1 leaves.
+    fn death_action(&mut self, hit: Option<u8>) -> Result<()> {
         match hit {
             Some(0) => self.respawn_player()?,
             Some(1) => self.close_world()?,
