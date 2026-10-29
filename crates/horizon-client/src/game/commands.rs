@@ -28,6 +28,7 @@ use horizon_client::{
     text::{self, Style, Text},
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::registry::BlockStateId;
 
 pub(super) type R<T> = Result<T, CommandError>;
@@ -2611,6 +2612,15 @@ impl Game<'_> {
         if i == 0 {
             // Peaceful removes hostile mobs.
             self.mobs.retain(|m| !m.hostile());
+        }
+        // MinecraftServer.setDifficulty: every player, guests included, is
+        // sent the new difficulty.
+        if let Some(host) = self.lan.as_ref() {
+            host.hub
+                .broadcast(&C::ChangeDifficulty(play::ChangeDifficulty {
+                    difficulty: i32::from(i),
+                    locked: self.level.difficulty_locked,
+                }));
         }
         self.feedback(Text::translate("commands.difficulty.success", &[name(i)]));
         Ok(0)
