@@ -1080,3 +1080,82 @@ fn a_replacing_mod_tag_reaches_the_root() {
     );
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[test]
+fn content_block_default_state_is_validated_and_overlaid() {
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-default-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+    let facts = r#"{"states":[
+      ["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"up","extended":"false"}}],
+      ["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"false"}}],
+      ["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"true"}}]],
+      "defaults":{"minecraft:piston":0}}"#;
+    fs::write(base.join("facts.json"), facts).unwrap();
+    fs::write(base.join("gameplay-facts.json"), r#"{"states":[{"item":"minecraft:piston"},{"item":"minecraft:piston"},{"item":"minecraft:piston"}]}"#).unwrap();
+    fs::write(base.join("items.json"), r#"{"minecraft:piston":{}}"#).unwrap();
+    fs::write(base.join("registries.json"), r#"{"minecraft:item":{"entries":{"minecraft:piston":{"protocol_id":0}}},"minecraft:block":{"entries":{"minecraft:piston":{"protocol_id":0}}}}"#).unwrap();
+    for (declaration, expected) in [
+        (r#"{"template":"minecraft:piston"}"#, Some(3)),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"facing":"north"}}"#,
+            Some(4),
+        ),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"facing":"north","extended":"true"}}"#,
+            Some(5),
+        ),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"facing":"sideways"}}"#,
+            None,
+        ),
+        (
+            r#"{"template":"minecraft:piston","default_state":{"direction":"north"}}"#,
+            None,
+        ),
+    ] {
+        let m = folder_mod(
+            &scratch.join("mod"),
+            &[
+                ("horizon-mod.toml", &manifest("testmod", "")),
+                ("data/testmod/horizon/block/test.json", declaration),
+            ],
+        );
+        let mods = [m];
+        match (Plan::new(&base, &mods), expected) {
+            (Ok(plan), Some(id)) => {
+                let mut doc: J = serde_json::from_str(facts).unwrap();
+                plan.json("facts.json", &mut doc).unwrap();
+                assert_eq!(
+                    doc.get("defaults").unwrap().get("testmod:test"),
+                    Some(&J::Num(id.into()))
+                );
+            }
+            (Err(e), None) => assert!(e.to_string().contains("testmod:test"), "{e}"),
+            _ => panic!("unexpected result for {declaration}"),
+        }
+    }
+    // A malformed registry with duplicate states must not choose one silently.
+    let duplicate = facts.replace(
+        r#"["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"true"}}]"#,
+        r#"["minecraft:piston",false,false,"",{"id":"minecraft:piston","properties":{"facing":"north","extended":"false"}}]"#,
+    );
+    fs::write(base.join("facts.json"), duplicate).unwrap();
+    let m = folder_mod(
+        &scratch.join("mod"),
+        &[
+            ("horizon-mod.toml", &manifest("testmod", "")),
+            (
+                "data/testmod/horizon/block/test.json",
+                r#"{"template":"minecraft:piston","default_state":{"facing":"north"}}"#,
+            ),
+        ],
+    );
+    let error = match Plan::new(&base, &[m]) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("duplicate states accepted"),
+    };
+    assert!(error.contains("matches 2 states"), "{error}");
+    fs::remove_dir_all(scratch).unwrap();
+}

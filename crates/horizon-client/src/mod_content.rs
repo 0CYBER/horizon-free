@@ -234,6 +234,7 @@ struct NewBlock<'a> {
     rename: Rename,
     /// The template's item, if it has one.
     item: Option<String>,
+    default: u32,
 }
 /// An item being added (declared, or a block's).
 struct NewItem {
@@ -323,6 +324,58 @@ impl<'a> Plan<'a> {
                 let states = range(&decl.template).ok_or_else(|| {
                     format!("{}: template {} is not a block", decl.id, decl.template)
                 })?;
+                let mut default = *defaults.get(&decl.template).ok_or_else(|| {
+                    format!(
+                        "{}: template {} has no default state",
+                        decl.id, decl.template
+                    )
+                })?;
+                if !decl.default_state.is_empty() {
+                    let Some(J::Arr(rows)) = facts.get("states") else {
+                        unreachable!()
+                    };
+                    let properties = |id: u32| -> Option<&J> {
+                        let J::Arr(row) = rows.get(id as usize)? else {
+                            return None;
+                        };
+                        row.get(4)?.get("properties")
+                    };
+                    let mut wanted = properties(default).cloned().ok_or_else(|| {
+                        format!("{}: template default has no state properties", decl.id)
+                    })?;
+                    for (key, value) in &decl.default_state {
+                        if wanted.get(key).is_none() {
+                            return Err(format!(
+                                "{}: unknown state property {key} on {}",
+                                decl.id, decl.template
+                            )
+                            .into());
+                        }
+                        wanted.set(key, J::Str(value.clone()));
+                    }
+                    let matches: Vec<u32> = states
+                        .clone()
+                        .filter(|id| {
+                            properties(*id).is_some_and(|p| {
+                                let (J::Obj(a), J::Obj(b)) = (p, &wanted) else {
+                                    return false;
+                                };
+                                a.len() == b.len() && b.iter().all(|(k, v)| p.get(k) == Some(v))
+                            })
+                        })
+                        .collect();
+                    if matches.len() != 1 {
+                        return Err(format!(
+                            "{}: default_state {:?} matches {} states of {}",
+                            decl.id,
+                            decl.default_state,
+                            matches.len(),
+                            decl.template
+                        )
+                        .into());
+                    }
+                    default = matches[0];
+                }
                 let mut rename = Rename::new(&decl.template, &decl.id);
                 rename.first = next;
                 next += states.len() as u32;
@@ -337,6 +390,7 @@ impl<'a> Plan<'a> {
                     decl,
                     rename,
                     item: None,
+                    default,
                 });
             }
         }
@@ -546,7 +600,7 @@ impl<'a> Plan<'a> {
                 states(doc, "states", false, false)?;
                 let defaults = doc.at("defaults").ok_or("no defaults")?;
                 for b in &self.blocks {
-                    let default = self.defaults[&b.decl.template];
+                    let default = b.default;
                     let id = b.rename.id(default).ok_or("a default outside its block")?;
                     defaults.set(&b.decl.id, J::Num(id.into()));
                 }
