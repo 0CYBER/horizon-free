@@ -449,8 +449,14 @@ impl GenerationScan {
                     wanted.push((input.ranges.priority(x, z, input.loading), x, z));
                 }
             }
-            // Forced chunks and their generation neighbourhood.
-            let reach = margin - 1;
+            // Forced chunks and their generation neighbourhood: the ring that
+            // is decorated (or finished, without decoration) and the one its
+            // 3x3 needs.
+            let reach = if input.decorates {
+                FORCED_TERRAIN_RING
+            } else {
+                FORCED_FEATURES_RING
+            };
             for &(fx, fz) in input.ranges.forced {
                 for dz in -reach..=reach {
                     for dx in -reach..=reach {
@@ -1102,10 +1108,10 @@ impl Streaming {
                         && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
                         && !ranges.in_extra(x, z, 4)
                         && !ranges.in_band(x, z, 4)
-                        && !ranges
-                            .forced
-                            .iter()
-                            .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
+                        && !ranges.forced.iter().any(|f| {
+                            (x - f.0).abs() <= FORCED_TERRAIN_RING
+                                && (z - f.1).abs() <= FORCED_TERRAIN_RING
+                        })
                 })
                 .map(|(k, _)| *k)
                 .collect();
@@ -1628,6 +1634,14 @@ pub fn in_view_distance(center: (i32, i32), radius: i32, x: i32, z: i32) -> bool
     let (dx, dz) = (gap(x - center.0), gap(z - center.1));
     dx * dx + dz * dz < i64::from(radius) * i64::from(radius)
 }
+/// The rings around a `/forceload`ed chunk, in chunks. Vanilla's FORCED
+/// ticket is level 31 (`ChunkMap.FORCED_TICKET_LEVEL`), the level rises one
+/// per ring (`ChunkTracker.computeLevelFromNeighbor`), and the level picks
+/// the column's status (`ChunkLevel.generationStatus`): full (33) two rings
+/// out, features (34) at three, terrain (35) at four.
+const FORCED_FULL_RING: i32 = 2;
+const FORCED_FEATURES_RING: i32 = 3;
+const FORCED_TERRAIN_RING: i32 = 4;
 /// The areas kept loaded: circles around the player and `extra`, and forced chunks.
 struct Ranges<'a> {
     center: (i32, i32),
@@ -1883,7 +1897,16 @@ impl Ranges<'_> {
         if dx * dx + dz * dz <= r * r {
             return true;
         }
-        let reach = (margin - 1).max(0);
+        // A forced chunk holds a FORCED ticket at level 31
+        // (`ChunkMap.FORCED_TICKET_LEVEL`), and the level rises one per ring
+        // (`ChunkTracker.computeLevelFromNeighbor`): the margin is the
+        // vanilla status ring the caller asks for.
+        let reach = match margin {
+            1 => FORCED_FULL_RING,
+            2 => FORCED_FEATURES_RING,
+            3 => FORCED_TERRAIN_RING,
+            _ => margin + 1,
+        };
         self.forced
             .iter()
             .any(|f| (x - f.0).abs() <= reach && (z - f.1).abs() <= reach)
@@ -2152,9 +2175,14 @@ mod tests {
                 }
             }
         }
+        let forced_reach = if input.decorates {
+            FORCED_TERRAIN_RING
+        } else {
+            FORCED_FEATURES_RING
+        };
         for &(fx, fz) in input.ranges.forced {
-            for dz in -(margin - 1)..=(margin - 1) {
-                for dx in -(margin - 1)..=(margin - 1) {
+            for dz in -forced_reach..=forced_reach {
+                for dx in -forced_reach..=forced_reach {
                     let (x, z) = (fx + dx, fz + dz);
                     if missing(x, z) {
                         wanted.push((input.ranges.distance(x, z), x, z));
@@ -2554,6 +2582,57 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A `/forceload`ed chunk holds a FORCED ticket at level 31
+    /// (`ChunkMap.FORCED_TICKET_LEVEL`): the level rises one per ring
+    /// (`ChunkTracker.computeLevelFromNeighbor`) and picks the column's
+    /// status (`ChunkLevel.generationStatus`). So vanilla finishes the two
+    /// rings around it (33), gives the third its features (34) and the
+    /// fourth its terrain (35), and the rings past that are left alone.
+    #[test]
+    fn forced_chunks_reach_vanillas_rings() {
+        let forced: HashSet<(i32, i32)> = [(40, -40)].into();
+        let r = Ranges {
+            // The player's own area, far away.
+            center: (-400, 300),
+            radius: 2,
+            extra: &[],
+            forced: &forced,
+            cover: None,
+            band: None,
+        };
+        let level = |x: i32, z: i32| 31 + (x - 40).abs().max((z + 40).abs());
+        for x in 40 - 6..=40 + 6 {
+            for z in -40 - 6..=-40 + 6 {
+                // The full ring: the column becomes a level chunk.
+                assert_eq!(r.in_range(x, z, 1), level(x, z) <= 33, "({x}, {z})");
+                // The features ring, and the terrain ring.
+                assert_eq!(r.in_range(x, z, 2), level(x, z) <= 34, "({x}, {z})");
+                assert_eq!(r.in_range(x, z, 3), level(x, z) <= 35, "({x}, {z})");
+                assert_eq!(r.requested(x, z, true), level(x, z) <= 35, "({x}, {z})");
+                assert_eq!(r.chunk_kept(x, z, true), level(x, z) <= 35, "({x}, {z})");
+                assert_eq!(r.unloaded(x, z, true), level(x, z) > 35, "({x}, {z})");
+            }
+        }
+        // Generation reaches the terrain ring: the features ring is
+        // decorated from it.
+        let mut fixture = GenerationFixture::new(2, true);
+        fixture.center = (-400, 300);
+        fixture.forced = forced;
+        let candidates = GenerationScan::default()
+            .candidates(fixture.input(), usize::MAX)
+            .expect("a scan");
+        for (dx, dz) in [(-4, 0), (4, 0), (0, -4), (0, 4), (3, 3)] {
+            assert!(
+                candidates
+                    .iter()
+                    .any(|&(_, x, z)| (x, z) == (40 + dx, -40 + dz)),
+                "the terrain ring at ({}, {}) is not generated",
+                40 + dx,
+                -40 + dz
+            );
         }
     }
 }
