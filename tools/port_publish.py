@@ -115,8 +115,10 @@ def body(item, report, diff, store_path, limit=25):
                   for c, counts in sorted(details["items"].items(), key=lambda kv: -sum(kv[1].values()))[:limit]]
     if item["kind"] == "facts":
         lines += [f"- {key}: {a} → {b}" for key, (a, b) in details.items()]
-    # Forward slashes on every system: the issue reads the same whoever publishes it.
-    where = Path(store_path).as_posix().replace(Path.home().as_posix(), "~")
+    try:
+        where = "~/" + Path(store_path).relative_to(Path.home()).as_posix()
+    except ValueError:
+        where = Path(store_path).as_posix()
     lines += ["", f"The full diff stays on the maintainer's machine (`{where}`), with the vanilla files it was built "
               "from: they are never published.", END]
     text = "\n".join(lines) + "\n"
@@ -191,7 +193,8 @@ def plan(report, diff, store_path, open_issues):
 # --- GitHub and Kira (only with --yes) ---------------------------------------------------------------------
 
 def gh(*args):
-    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
+    # gh and node print UTF-8 whatever the system's code page (issue bodies hold "→").
+    return subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
 
 def open_version_port_issues():
@@ -223,7 +226,6 @@ def apply(actions, report, open_issues):
 
 def issue(action, name, text, number, new):
     """Create or update one issue; its URL."""
-    # gh reads the body as UTF-8, whatever the system's code page.
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as stream:
         stream.write(text)
     try:
@@ -241,7 +243,7 @@ def issue(action, name, text, number, new):
 
 def kira(tool, arguments):
     return json.loads(subprocess.run(["node", str(KIRA), tool, json.dumps(arguments)], capture_output=True,
-                                     text=True, check=True).stdout or "null")
+                                     text=True, encoding="utf-8", check=True).stdout or "null")
 
 
 def kira_card(new, url):
