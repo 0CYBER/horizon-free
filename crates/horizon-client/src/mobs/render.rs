@@ -682,7 +682,8 @@ pub fn layers(m: &Mob, alpha: f32) -> Vec<Layer> {
                 sheep_wool_rgb(m.extra.color)
             };
             let color = abgr(wool);
-            if !m.is_baby() && m.extra.color != 0 {
+            // SheepWoolUndercoatLayer.submit: a jeb_ sheep is drawn over even when white.
+            if !m.is_baby() && (jeb || m.extra.color != 0) {
                 push(
                     &mut v,
                     "sheep#wool_undercoat",
