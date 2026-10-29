@@ -12,6 +12,10 @@
 //! `native_known_recipes`, `native_place_recipe`, `native_give`): what a
 //! recipe viewer needs.
 //!
+//! API 3 adds block entities for a mod's blocks (`native_block_entity`,
+//! `native_block_entity_ticks`, `native_block_entity_tick`): made when the
+//! block is placed, ticked on the server and saved with the chunk.
+//!
 //! Names, parameters and call sites are kept from release to release, and
 //! hook points are only ever added: each addition raises [`NATIVE_HOOKS_API`].
 //! A bundle that hooks only these names the API it needs (`hooks`), and the
@@ -21,7 +25,9 @@
 //! either (`tests::hook_points_stay_hookable`).
 use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
 use horizon_client::{
+    block_entities::Pos,
     chat::ChatSource,
+    containers::{BlockEntity, ModBlockEntity},
     extras::Corner,
     extras_hud::Corners,
     hud::{HudBatch, rgba},
@@ -29,13 +35,14 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_world::nbt::Compound;
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 2;
+pub(crate) const NATIVE_HOOKS_API: u32 = 3;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -319,6 +326,31 @@ impl Game<'_> {
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
     }
+    /// Block `block` (`mymod:machine`) gets a block entity
+    /// (`EntityBlock.newBlockEntity`): set `entity` to its id and saved
+    /// compound when the block is yours and `entity` is none yet. The block's
+    /// template must have a block entity (a chest, a furnace...), so that
+    /// breaking the block removes it. API 3.
+    pub(super) fn native_block_entity(
+        &mut self,
+        block: &str,
+        entity: &mut Option<(String, Compound)>,
+    ) {
+        let _ = (block, entity);
+    }
+    /// Whether block `block`'s block entity ticks (`EntityBlock.getTicker`):
+    /// set `ticks` when it is yours. Asked for each of the block's states
+    /// when a world opens. API 3.
+    pub(super) fn native_block_entity_ticks(&self, block: &str, ticks: &mut bool) {
+        let _ = (block, ticks);
+    }
+    /// A server tick of block entity `id` at `pos`, in vanilla's order among
+    /// the others (`Level.tickBlockEntities`): read and change its saved
+    /// compound `nbt`. It is out of the world during the call; if the call
+    /// removes or replaces it, `nbt` is dropped. API 3.
+    pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], id: &str, nbt: &mut Compound) {
+        let _ = (pos, id, nbt);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -502,6 +534,37 @@ impl Game<'_> {
 
 /// Where the game calls the hook points.
 impl Game<'_> {
+    /// `EntityBlock.newBlockEntity` of block `name`: Horizon's own, else a
+    /// native mod's.
+    pub(super) fn new_block_entity(&mut self, name: &str) -> Option<BlockEntity> {
+        if let Some(entity) = BlockEntity::for_block(name) {
+            return Some(entity);
+        }
+        let mut entity = None;
+        self.native_block_entity(name, &mut entity);
+        let (id, nbt) = entity?;
+        Some(BlockEntity::Mod(Box::new(ModBlockEntity { id, nbt })))
+    }
+    /// Whether a native mod's block `name` has a ticking block entity.
+    pub(super) fn native_ticks(&self, name: &str) -> bool {
+        let mut ticks = false;
+        self.native_block_entity_ticks(name, &mut ticks);
+        ticks
+    }
+    /// The tick of the mod block entity at `pos`.
+    pub(super) fn tick_mod_block_entity(&mut self, pos: Pos) {
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) else {
+            return;
+        };
+        // An empty id marks its place while the mod has it.
+        let mut taken = std::mem::take(&mut **m);
+        self.native_block_entity_tick([pos.0, pos.1, pos.2], &taken.id, &mut taken.nbt);
+        if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
+            && m.id.is_empty()
+        {
+            **m = taken;
+        }
+    }
     /// Options > Mods' rows for the native mods, after the others.
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();

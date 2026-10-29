@@ -3,7 +3,7 @@
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
 pub use crate::chunk::block_entity::{
     Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
-    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, Shelf, Skull, SkullSkin,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, ModBlockEntity, Shelf, Skull, SkullSkin,
 };
 use crate::items::ItemStack;
 use std::collections::HashMap;
@@ -316,7 +316,7 @@ impl BlockEntity {
         };
         Some(Self::Chest(vec![None; size]))
     }
-    pub fn id(&self) -> &'static str {
+    pub fn id(&self) -> &str {
         match self {
             Self::Chest(items) => match items.len() {
                 HOPPER_SLOTS => "minecraft:hopper",
@@ -349,6 +349,7 @@ impl BlockEntity {
             Self::Campfire(_) => "minecraft:campfire",
             Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
             Self::Shelf(_) => "minecraft:shelf",
+            Self::Mod(m) => &m.id,
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -368,7 +369,8 @@ impl BlockEntity {
             | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector
-            | Self::Brushable(_) => Vec::new(),
+            | Self::Brushable(_)
+            | Self::Mod(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
@@ -403,7 +405,8 @@ impl BlockEntity {
             | Self::Beehive(_)
             | Self::CommandBlock(_)
             // Not a Container (only Clearable): hoppers don't reach in.
-            | Self::Campfire(_) => &[],
+            | Self::Campfire(_)
+            | Self::Mod(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -430,7 +433,8 @@ impl BlockEntity {
             | Self::Vault(_)
             | Self::Beehive(_)
             | Self::CommandBlock(_)
-            | Self::Campfire(_) => &mut [],
+            | Self::Campfire(_)
+            | Self::Mod(_) => &mut [],
         }
     }
 }

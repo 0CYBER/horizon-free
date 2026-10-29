@@ -80,6 +80,16 @@ pub enum BlockEntity {
     Shelf(Box<Shelf>),
     /// `ChiseledBookShelfBlockEntity`: a `Container` of six one-book slots.
     ChiseledBookshelf(Box<ChiseledBookshelf>),
+    /// A block entity of a mod (`native_block_entity`), kept as its saved
+    /// compound for the mod to read and change.
+    Mod(Box<ModBlockEntity>),
+}
+/// A mod's block entity: its type id (`mymod:machine`) and its saved
+/// compound without `id`, `x`, `y` and `z`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModBlockEntity {
+    pub id: String,
+    pub nbt: Compound,
 }
 /// `BrushableBlockEntity`: the loot table is resolved on the first brush.
 #[derive(Clone, Debug, Default)]

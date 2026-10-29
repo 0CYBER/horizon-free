@@ -424,6 +424,14 @@ pub fn encode_block_entity(
     block: &str,
 ) -> Tag {
     use crate::containers::BlockEntity;
+    if let BlockEntity::Mod(m) = e {
+        let mut map = m.nbt.clone();
+        map.insert("id".into(), string(&m.id));
+        for (key, v) in [("x", p.0), ("y", p.1), ("z", p.2)] {
+            map.insert(key.into(), Tag::Int(v));
+        }
+        return Tag::Compound(map);
+    }
     let components = match e {
         BlockEntity::Banner(b) => b.components.clone(),
         _ => Compound::new(),
@@ -564,7 +572,8 @@ pub fn encode_block_entity(
                 entries.push(("item", item_to_nbt(item)));
             }
         }
-        BlockEntity::DaylightDetector => {}
+        // Encoded above.
+        BlockEntity::DaylightDetector | BlockEntity::Mod(_) => {}
     }
     Tag::compound(entries)
 }
@@ -628,11 +637,28 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
         exact_teleport: number(tag.get("ExactTeleport")).unwrap_or(0) != 0,
     }
 }
+/// A mod's block entity: its compound without `id` and the position.
+fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::ModBlockEntity> {
+    let Tag::Compound(map) = tag else {
+        return None;
+    };
+    let mut nbt = map.clone();
+    for key in ["id", "x", "y", "z"] {
+        nbt.remove(&key.into());
+    }
+    Some(crate::containers::ModBlockEntity { id, nbt })
+}
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id.contains(':') && !id.starts_with("minecraft:") {
+        return Some((
+            pos,
+            BlockEntity::Mod(Box::new(decode_mod_block_entity(id, tag)?)),
+        ));
+    }
     if id == "minecraft:end_gateway" {
         return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
     }
@@ -800,7 +826,8 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::CreakingHeart(_)
         | BlockEntity::EndGateway(_)
         | BlockEntity::Skull(_)
-        | BlockEntity::DaylightDetector => {}
+        | BlockEntity::DaylightDetector
+        | BlockEntity::Mod(_) => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
@@ -4918,6 +4945,34 @@ mod tests {
             panic!("not a spawner");
         };
         assert_eq!(again.update_tag(), spawner.update_tag());
+    }
+    #[test]
+    fn mod_block_entity_round_trips() {
+        let saved = horizon_world::nbt::parse_snbt(
+            r#"{id:"gtmod:macerator",x:5,y:-60,z:12,energy:1200L,progress:7,Items:[{Slot:0b,id:"minecraft:iron_ore",count:3}]}"#,
+        )
+        .unwrap()
+        .0;
+        let (pos, back) = decode_block_entity(&saved).expect("mod block entity");
+        assert_eq!(pos, (5, -60, 12));
+        let crate::containers::BlockEntity::Mod(m) = &back else {
+            panic!("not a mod's");
+        };
+        assert_eq!(m.id, "gtmod:macerator");
+        // The mod sees its own fields only.
+        for key in ["id", "x", "y", "z"] {
+            assert!(!m.nbt.contains_key(&key.into()), "{key}");
+        }
+        assert_eq!(m.nbt.get(&"energy".into()), Some(&Tag::Long(1200)));
+        assert_eq!(encode_block_entity(pos, &back, "gtmod:macerator"), saved);
+        // Vanilla's types are never a mod's, modelled or not.
+        let ender = horizon_world::nbt::parse_snbt(r#"{id:"minecraft:ender_chest",x:0,y:0,z:0}"#)
+            .unwrap()
+            .0;
+        assert!(!matches!(
+            decode_block_entity(&ender),
+            Some((_, crate::containers::BlockEntity::Mod(_)))
+        ));
     }
     #[test]
     fn banner_block_entity_round_trips() {

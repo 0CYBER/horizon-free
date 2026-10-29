@@ -64,6 +64,7 @@ impl Game<'_> {
                 Some(BlockEntity::Brewing(_)) => self.tick_brewing_stand(pos)?,
                 Some(BlockEntity::DaylightDetector) => self.tick_daylight_detector(pos),
                 Some(BlockEntity::Campfire(_)) => self.tick_campfire(pos)?,
+                Some(BlockEntity::Mod(_)) => self.tick_mod_block_entity(pos),
                 _ => {}
             }
         }
@@ -113,6 +114,7 @@ impl Game<'_> {
                         if record { Ticking::Yes } else { Ticking::Idle }
                     }
                     n if FurnaceKind::from_block(n).is_some() => Ticking::Yes,
+                    n if !n.starts_with("minecraft:") && self.native_ticks(n) => Ticking::Yes,
                     _ => Ticking::No,
                 }
             })
