@@ -34,7 +34,8 @@ fn banner_matrix(head: glam::Mat4) -> glam::Mat4 {
 pub(super) const APPARITION_TICKS: i32 = 30;
 
 impl Game<'_> {
-    /// `CustomHeadLayer` for a pumpkin worn by a player.
+    /// `CustomHeadLayer` for a pumpkin worn by a LAN guest drawn on the
+    /// in-frame host, whose model has no worn stacks for `head_item_geometry`.
     pub(super) fn player_pumpkin_geometry(
         &self,
         mob: &Mob,
@@ -194,6 +195,7 @@ impl Game<'_> {
         self.captain_banner_geometry(mob, camera, alpha, light, out);
         self.held_item_geometry(mob, camera, alpha, light, true, out);
         self.worn_block_geometry(mob, camera, alpha, light, out);
+        self.head_item_geometry(mob, camera, alpha, light, true, out);
         self.golem_flower_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
@@ -393,6 +395,124 @@ impl Game<'_> {
             } else {
                 self.submit_item_unlit(&state, t, light, out);
             }
+        }
+    }
+    /// `CustomHeadLayer`: non-armour items worn in the head slot (carved
+    /// pumpkins, mob skulls and player heads, or custom blocks) on players
+    /// and mobs.
+    pub(super) fn head_item_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        lit: bool,
+        out: &mut Vec<Vertex>,
+    ) {
+        if horizon_client::mobs::trader::is_invisible(mob) {
+            return;
+        }
+        let species = mob.species();
+        if species == Species::SnowGolem
+            || horizon_client::mobs::species::body_slot(species)
+            || horizon_client::mobs::equine::is_equine(species)
+            || horizon_client::mobs::raider::is_captain(mob)
+        {
+            return;
+        }
+        let local_player = self
+            .player_model
+            .as_ref()
+            .is_some_and(|p| p.id == mob.id && p.kind.id == mob.kind.id);
+        let mut stack = if local_player {
+            let Some(stack) = &self.armor[0] else { return };
+            stack.clone()
+        } else if let Some(stack) = &mob.extra.armor[0] {
+            stack.clone()
+        } else if let Some(head) = &mob.extra.head {
+            ItemStack::new(head, 1)
+        } else {
+            return;
+        };
+        // Helmets are drawn by HumanoidArmorLayer, not CustomHeadLayer.
+        if self
+            .res
+            .items()
+            .get(&stack.item)
+            .and_then(|i| i.equip_asset.as_ref())
+            .is_some()
+        {
+            return;
+        }
+        if !local_player
+            && horizon_client::mobs::gear::enchanted(mob, horizon_client::mobs::gear::HEAD)
+        {
+            stack.enchant("minecraft:unbreaking", 1);
+        }
+        let Some(head) =
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        if let Some(kind) = super::armor_stands::skull_kind(&stack.item) {
+            let pose = head * glam::Mat4::from_scale(glam::Vec3::splat(1.1875));
+            let special = horizon_assets::item_model::SpecialModel {
+                kind: if kind == "player" {
+                    horizon_assets::item_model::SpecialKind::PlayerHead
+                } else {
+                    horizon_assets::item_model::SpecialKind::Head {
+                        kind: kind.to_owned(),
+                        texture: None,
+                        animation: 0.0,
+                    }
+                },
+            };
+            let mut sink = horizon_client::item_render::WorldSink {
+                out,
+                light,
+                lights: if lit {
+                    Some(horizon_client::block_entity_render::diffuse_lights(
+                        self.dim == super::Dim::Nether,
+                    ))
+                } else {
+                    None
+                },
+                glint: self.glint(),
+            };
+            let profile = stack
+                .extra
+                .as_deref()
+                .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
+                .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
+                .unwrap_or(serde_json::Value::Null);
+            let has_foil = stack.data().is_some_and(|d| !d.enchantments.is_empty());
+            self.pack.item_renderer.submit_special(
+                &special,
+                &profile,
+                has_foil,
+                pose,
+                &self.gui.atlas.sprites,
+                &self.item_host(),
+                &mut sink,
+            );
+            return;
+        }
+        use horizon_assets::item_model::DisplayContext;
+        let pose = head
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.25, 0.0))
+            * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+            * glam::Mat4::from_scale(glam::Vec3::new(0.625, -0.625, -0.625));
+        let owner = super::item_draw::owner_at(
+            [mob.position.x, mob.position.y, mob.position.z],
+            mob.body_yaw,
+            &mob.kind.id,
+        );
+        let seed = mob.id as i32 + 5;
+        let state = self.resolve_item(&stack, DisplayContext::Head, Some(&owner), seed);
+        if lit {
+            self.submit_item_world(&state, pose, light, out);
+        } else {
+            self.submit_item_unlit(&state, pose, light, out);
         }
     }
 }

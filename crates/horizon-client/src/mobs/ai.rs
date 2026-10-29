@@ -1598,6 +1598,12 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
         _ => m.kind.sounds,
     }
 }
+/// Whether `Animal.mobInteract` takes the animal's food: an adult at age 0
+/// that `canFallInLove` (not in love yet) or a baby that `canAgeUp` (not age
+/// locked). Tamed wolves and cats only sit or stand when it does not.
+pub fn takes_food(m: &Mob) -> bool {
+    (m.extra.age == 0 && m.extra.in_love <= 0) || (m.extra.age < 0 && !m.extra.age_locked)
+}
 /// `Animal.mobInteract` with its food in hand: an adult that can fall in
 /// love does, a baby grows up by a tenth, and either plays its eating sound
 /// (`Strider.mobInteract` plays its own afterwards). `None` when the animal
@@ -1610,15 +1616,16 @@ pub fn feed_animal(
     if super::armadillo::scared(m) {
         return None;
     }
-    if m.extra.age == 0 && m.extra.in_love <= 0 {
+    if !takes_food(m) {
+        return None;
+    }
+    if m.extra.age == 0 {
         m.extra.in_love = 600;
         m.extra.love_player = true;
-    } else if m.extra.age < 0 {
+    } else {
         // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age), true): a tenth.
         let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
         age_up(m, secs, true);
-    } else {
-        return None;
     }
     let mut sound = eating_sound(m, level);
     if m.species() == Species::Strider && !m.silent {
@@ -2349,5 +2356,51 @@ mod poison_effect_tests {
             zombie.health, initial_zombie_health,
             "undead mobs are immune to poison"
         );
+    }
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use super::*;
+    use crate::mobs::MobTypes;
+    use std::sync::Arc;
+
+    /// `Animal.mobInteract` (#2780): food grows a tamed baby cat or wolf
+    /// (`canAgeUp`), so `Wolf.mobInteract` and `Cat.mobInteract` see the click
+    /// consumed and do not make it sit. Only an adult that cannot breed now,
+    /// or an age-locked baby, leaves the food to the sit toggle.
+    #[test]
+    fn food_grows_a_tamed_baby_cat_or_wolf() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists() {
+            return;
+        }
+        let data = MobTypes::load(&root).unwrap();
+        let mut level = LegacyRandom::new(0);
+        for id in ["minecraft:wolf", "minecraft:cat"] {
+            let kind = Arc::new(data.types.get(id).unwrap().clone());
+            let mut m = Mob::new(1, kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+            m.extra.tame = true;
+            m.extra.age = -24000;
+            assert!(takes_food(&m), "{id}: a tamed baby takes its food");
+            assert!(feed_animal(&mut m, &mut level).is_some(), "{id}");
+            // getSpeedUpSecondsWhenFeeding(24000): a tenth of 1200 seconds.
+            assert_eq!(m.extra.age, -24000 + 120 * 20, "{id}: grew a tenth");
+            assert_eq!(m.extra.in_love, 0, "{id}: a baby does not fall in love");
+
+            m.extra.age_locked = true;
+            assert!(!takes_food(&m), "{id}: an age-locked baby cannot grow");
+            m.extra.age_locked = false;
+
+            m.extra.age = 0;
+            assert!(takes_food(&m), "{id}: an adult can breed");
+            m.extra.in_love = 600;
+            assert!(!takes_food(&m), "{id}: already in love");
+            m.extra.in_love = 0;
+            m.extra.age = 6000;
+            assert!(!takes_food(&m), "{id}: breeding cooldown");
+        }
     }
 }

@@ -1584,3 +1584,41 @@ fn survival_breaking_piston_head_drops_piston() {
         );
     }
 }
+
+/// A lever on the back of a piston stays through extend and retract.
+#[test]
+fn lever_on_piston_back_survives_extend_and_retract() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    for kind in ["piston", "sticky_piston"] {
+        let piston = w.id(kind, &[("facing", "east")]);
+        let lever = w.id("lever", &[("face", "wall"), ("facing", "west")]);
+        w.set(BlockPos::new(0, 1, 0), piston);
+        w.set(BlockPos::new(-1, 1, 0), lever);
+        let on = w.b().table.set_bool(lever, w.b().props.powered, true);
+        w.set(BlockPos::new(-1, 1, 0), on);
+        for _ in 0..4 {
+            w.full_tick();
+        }
+        assert_eq!(w.prop(BlockPos::new(0, 1, 0), "extended"), "true", "{kind}");
+        assert_eq!(
+            w.name(BlockPos::new(-1, 1, 0)),
+            "lever[face=wall,facing=west,powered=true]",
+            "{kind}"
+        );
+        w.set(BlockPos::new(-1, 1, 0), lever);
+        for _ in 0..4 {
+            w.full_tick();
+        }
+        assert_eq!(
+            w.prop(BlockPos::new(0, 1, 0), "extended"),
+            "false",
+            "{kind}"
+        );
+        assert_eq!(
+            w.name(BlockPos::new(-1, 1, 0)),
+            "lever[face=wall,facing=west,powered=false]",
+            "{kind}"
+        );
+    }
+}

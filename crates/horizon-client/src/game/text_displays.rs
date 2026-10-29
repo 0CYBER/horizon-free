@@ -51,6 +51,9 @@ pub(super) struct RemoteTextDisplay {
     /// `TextDisplay.clientDisplayCache`: the split lines, until the render
     /// state changes.
     lines: Option<Lines>,
+    /// `Entity.vehicle`: the mob it rides (`SetPassengers`), which places it
+    /// every tick (`positionRider`), as NPC plugins hang a name over a head.
+    pub(super) vehicle: Option<u32>,
 }
 
 /// `Display.RENDER_STATE_IDS` and `TextDisplay.TEXT_RENDER_STATE_IDS`: the
@@ -85,7 +88,16 @@ impl RemoteTextDisplay {
             initialized: false,
             last_progress: 0.0,
             lines: None,
+            vehicle: None,
         }
+    }
+    /// `Entity.positionRider` through `setPos`: where its vehicle seats it this
+    /// tick. The previous position stays the last tick's, so it moves smoothly
+    /// with the vehicle; a teleport's interpolation no longer applies.
+    pub(super) fn ride(&mut self, at: glam::DVec3) {
+        self.position = at;
+        self.target = at;
+        self.steps = 0;
     }
     fn progress(&self, partial: f32) -> f32 {
         if self.duration <= 0 {
@@ -371,5 +383,23 @@ mod tests {
         d.tick();
         assert_eq!(d.position.x, 2.0);
         assert_eq!(d.shown.blend(&d.from, d.progress(0.0)).translation[0], 2.0);
+    }
+
+    /// A display riding a vehicle sits where the vehicle seats it each tick,
+    /// moving from the last tick's seat, and a teleport sent meanwhile does
+    /// not drag it off the seat.
+    #[test]
+    fn a_ridden_display_moves_from_seat_to_seat() {
+        let mut d = RemoteTextDisplay::new(Shows::Text, [0.0, 64.0, 0.0], 0.0);
+        d.metadata(&[(10, 1, Value::Int(3))]);
+        d.move_to([9.0, 64.0, 9.0], None);
+        let seat = glam::DVec3::new(0.0, 65.8, 0.0);
+        d.ride(seat);
+        assert_eq!(d.position, seat);
+        d.tick();
+        assert_eq!((d.previous, d.position), (seat, seat));
+        let next = glam::DVec3::new(1.0, 65.8, 0.0);
+        d.ride(next);
+        assert_eq!((d.previous, d.position), (seat, next));
     }
 }
