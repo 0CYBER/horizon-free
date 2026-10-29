@@ -4881,6 +4881,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Drown => "minecraft:drown",
         K::DryOut => "minecraft:dry_out",
         K::Magic => "minecraft:magic",
+        K::IndirectMagic => "minecraft:indirect_magic",
         K::Sting => "minecraft:sting",
         K::Cactus => "minecraft:cactus",
         K::SweetBerryBush => "minecraft:sweet_berry_bush",

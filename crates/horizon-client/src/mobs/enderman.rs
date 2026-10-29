@@ -193,7 +193,13 @@ pub fn on_damage(m: &mut Mob, source: &Damage) -> bool {
     true
 }
 pub fn after_hurt(m: &mut Mob, source: &Damage) {
-    if source.attacker.is_none() && m.random.next_int_bound(10).unwrap_or(0) != 0 {
+    // A thrown potion's hit (`indirect_magic`, which only a splash potion
+    // deals to a mob) leaves `Enderman.hurtServer` before the random chance:
+    // `repeatedlyTryToTeleport` replaces it.
+    if source.kind != super::DamageKind::IndirectMagic
+        && source.attacker.is_none()
+        && m.random.next_int_bound(10).unwrap_or(0) != 0
+    {
         m.extra.counter2 = 1;
     }
 }
