@@ -1301,6 +1301,7 @@ impl Game<'_> {
                         self.note_attacker("minecraft:explosion", id);
                     }
                     self.combat.explosion_source = source_mob;
+                    self.combat.explosion_source_named = noted;
                     // Only a creeper or a wither empties the hives it blows up.
                     // The creeper is already gone from the list, so the event
                     // carries its kind.
@@ -1310,6 +1311,7 @@ impl Game<'_> {
                         self.explode(at, radius)
                     };
                     self.combat.explosion_source = None;
+                    self.combat.explosion_source_named = false;
                     result?
                 }
                 MobEvent::AttackMob {
