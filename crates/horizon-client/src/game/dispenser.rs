@@ -1176,8 +1176,9 @@ impl Game<'_> {
         let (content, sound, mob) =
             horizon_client::items::bucket_contents(&item).expect("filled bucket dispatcher");
         let target_pos = Self::pos_of(target);
-        let emptied = self
-            .with_level(|b, level, ticks| b.bucket_empty(level, ticks, target_pos, content, sound));
+        let emptied = self.with_level(|b, level, ticks| {
+            b.bucket_empty(level, ticks, target_pos, content, sound, false, false)
+        });
         self.process_level_events()?;
         if !emptied {
             return Ok((self.dispense_default(pos, facing, stack), CLICK));
@@ -1235,7 +1236,8 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = Self::pos_of(offset(pos, facing));
-        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target));
+        let picked =
+            self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target, false));
         self.process_level_events()?;
         match picked {
             Some(filled) => {
