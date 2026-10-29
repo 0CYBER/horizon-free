@@ -675,7 +675,7 @@ impl Game<'_> {
         // unless a client mod owns the command.
         if self.remote.is_some() {
             if let Some(command) = message.strip_prefix('/')
-                && self.mod_command(command)
+                && self.client_mod_command(command)
             {
                 return;
             }
@@ -684,7 +684,7 @@ impl Game<'_> {
         }
         if let Some(command) = message.strip_prefix('/') {
             // A client mod's command first, then a server mod's, as on a server.
-            if !self.mod_command(command) && !self.local_server_mod_command(command) {
+            if !self.client_mod_command(command) && !self.local_server_mod_command(command) {
                 self.run_command(command);
             }
         } else {
@@ -873,7 +873,7 @@ impl Game<'_> {
     /// parse; here the server answers it.)
     pub(super) fn click_command(&mut self, command: &str) {
         let command = command.strip_prefix('/').unwrap_or(command);
-        if self.mod_command(command) {
+        if self.client_mod_command(command) {
             return;
         }
         if self.remote.is_some() {
@@ -1029,10 +1029,7 @@ impl Game<'_> {
         self.ui.rules = GameRules::load(&self.world_root);
         self.ui.clock = WorldClock::default();
         // PrimaryLevelData: the difficulty comes back from level.dat's difficulty_settings.
-        self.ui.difficulty = horizon_client::title::DIFFICULTIES
-            .iter()
-            .position(|d| *d == self.level.difficulty)
-            .map_or(2, |i| i as u8);
+        self.ui.difficulty = self.level.difficulty_id();
         if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
             && let Ok((root, _)) =

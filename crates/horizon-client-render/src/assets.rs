@@ -42,11 +42,11 @@ impl HeightmapState for StateFacts {
 }
 #[derive(Clone)]
 pub struct Properties(Arc<Vec<StateFacts>>);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Properties {
     /// Heightmap facts for tests, per state: (air, has a fluid, blocks
     /// motion, blocks motion but is not leaves). State 0 is minecraft:air.
-    pub(crate) fn for_tests(states: &[(bool, bool, bool, bool)]) -> Self {
+    pub fn for_tests(states: &[(bool, bool, bool, bool)]) -> Self {
         Self(Arc::new(
             states
                 .iter()
@@ -196,7 +196,7 @@ impl Assets {
 impl RenderAssets {
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
         let registry = assets.registry;
-        let mut sprites = crate::sprites::Sprites::default();
+        let mut sprites = crate::sprites::Sprites::with_disk_cache(root);
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
@@ -217,6 +217,7 @@ impl RenderAssets {
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
+        sprites.save_disk_cache();
         sprites.finish();
         // `finish` grows the buffer by doubling: keep only the bytes in use.
         sprites.pixels.shrink_to_fit();

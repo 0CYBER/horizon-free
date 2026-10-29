@@ -153,7 +153,13 @@ impl Game<'_> {
     pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
         let e = &m.extra;
         self.armor_layers(
-            [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref().map(|i| (i, None))),
+            [
+                (e.head.as_deref(), e.armor[0].as_ref()),
+                (e.chest.as_deref(), e.armor[1].as_ref()),
+                (e.legs.as_deref(), e.armor[2].as_ref()),
+                (e.feet.as_deref(), e.armor[3].as_ref()),
+            ]
+            .map(|(item, stack)| item.map(|i| (i, stack))),
         )
     }
     /// The layers of the armour items `worn` (with their stacks when known,
@@ -220,6 +226,7 @@ impl Game<'_> {
             .armor
             .iter()
             .chain(guests.flat_map(|g| g.armor.iter()))
+            .chain(self.mobs.iter().flat_map(|m| m.extra.armor.iter()))
             .zip(
                 ["helmet", "chestplate", "leggings", "boots"]
                     .into_iter()
@@ -504,6 +511,25 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        // The stand's box and id, before the hit may remove it.
+        let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
+        let hurt = self.punch_armor_stand(i);
+        if hurt {
+            self.attack_effects(
+                area,
+                Some(id as i32),
+                super::mace::Spared::Stand(id),
+                magic.then_some(id as i32),
+            );
+            self.swing_arm();
+        }
+        hurt
+    }
+    /// `ArmorStand.hurtServer` for a player's attack (also a sweep's): a
+    /// creative player breaks it, otherwise the first hit wobbles it and a
+    /// second within five ticks breaks it.
+    pub(super) fn punch_armor_stand(&mut self, i: usize) -> bool {
         let time = self.world.game_time;
         let at = self.armor_stands[i].position;
         let at = [at.x, at.y, at.z];
