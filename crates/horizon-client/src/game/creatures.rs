@@ -807,6 +807,7 @@ impl Game<'_> {
             self.set_bed_occupied(bed, false);
         }
         let killer = self.last_hurt_by_player.remove(&m.id);
+        self.love_cause.remove(&m.id);
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
@@ -1921,9 +1922,9 @@ impl Game<'_> {
         let Some(p) = self.mobs.iter().find(|m| m.id == parent).cloned() else {
             return;
         };
-        // Animal.finalizeSpawnChildFromBreeding: the player who fed them.
-        if p.extra.love_player {
-            self.stats.custom("animals_bred", 1);
+        // Animal.finalizeSpawnChildFromBreeding: the player who fed the parent,
+        // or else the one who fed the partner.
+        if let Some(cause) = breeding_credit(&mut self.love_cause, parent, partner) {
             let parent = self.mob_entity(&p);
             let partner_view = self
                 .mobs
@@ -1947,7 +1948,14 @@ impl Game<'_> {
             ) {
                 child.kind = "minecraft:mule".into();
             }
-            self.trigger_bred(&parent, &partner_view, (!turtle).then_some(&child));
+            let who = cause.map_or(
+                super::commands::Target::Player,
+                super::commands::Target::Guest,
+            );
+            self.for_player(who, |g| {
+                g.stats.custom("animals_bred", 1);
+                g.trigger_bred(&parent, &partner_view, (!turtle).then_some(&child));
+            });
         }
         if let Some(q) = self.mobs.iter_mut().find(|m| m.id == partner) {
             q.extra.age = 6000;
@@ -4098,6 +4106,7 @@ impl Game<'_> {
                         // Animal.setInLove: entity event 18 (a baby that
                         // only grew is not in love).
                         if self.mobs[index].extra.in_love > 0 {
+                            self.love_cause.insert(self.mobs[index].id, self.lan_acting);
                             self.mob_event_particles(self.mobs[index].id, 18);
                         }
                     }
@@ -5006,5 +5015,36 @@ impl Game<'_> {
         if let Some(id) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
             self.set_portal_cooldown(id);
         }
+    }
+}
+
+/// `Animal.finalizeSpawnChildFromBreeding`'s player: the one who fed the
+/// parent, or else the one who fed the partner (`getLoveCause`). `Some(None)`
+/// is the host, `Some(Some(conn))` a guest. Both animals are spent.
+fn breeding_credit(
+    love_cause: &mut std::collections::HashMap<u32, Option<u32>>,
+    parent: u32,
+    partner: u32,
+) -> Option<Option<u32>> {
+    let from_parent = love_cause.remove(&parent);
+    let from_partner = love_cause.remove(&partner);
+    from_parent.or(from_partner)
+}
+
+#[cfg(test)]
+mod breeding_tests {
+    use super::*;
+
+    #[test]
+    fn the_player_who_fed_either_animal_is_credited() {
+        let mut love = std::collections::HashMap::from([(1, Some(7)), (2, Some(9))]);
+        // The parent's feeder first, and both animals are spent.
+        assert_eq!(breeding_credit(&mut love, 1, 2), Some(Some(7)));
+        assert!(love.is_empty());
+        // Only the partner was fed: still credited.
+        let mut love = std::collections::HashMap::from([(2, None)]);
+        assert_eq!(breeding_credit(&mut love, 1, 2), Some(None));
+        // Neither was fed by a player (a bred pair loaded from a save).
+        assert_eq!(breeding_credit(&mut love, 1, 2), None);
     }
 }
