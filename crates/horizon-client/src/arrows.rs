@@ -184,6 +184,8 @@ pub struct ArrowState {
     /// The arrow's own random (`Entity.random`).
     pub random: LegacyRandom,
     pub events: Vec<ArrowEvent>,
+    /// The speed (`deltaMovement.length()`) it hit a block at, before it stuck.
+    pub hit_speed: f64,
 }
 impl fmt::Debug for ArrowState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -227,6 +229,7 @@ impl ArrowState {
             removed: false,
             random,
             events: Vec::new(),
+            hit_speed: 0.0,
         }
     }
     /// The `AbstractArrow` constructor's `pickupItemStack`: the drawn ammo
@@ -840,6 +843,8 @@ impl Ticker<'_, '_, '_, '_> {
     /// it moved on, stop, and stick.
     fn on_hit_block(&mut self, pos: BlockPos, state: BlockStateId) {
         self.st.last_state = Some(state);
+        // BlockState.onProjectileHit still sees the deltaMovement it hit at.
+        self.st.hit_speed = self.p.velocity.length();
         // Projectile.onHitBlock: BlockState.onProjectileHit.
         if self.st.on_fire()
             && let Some(reaction) = self.block_reaction(state)
