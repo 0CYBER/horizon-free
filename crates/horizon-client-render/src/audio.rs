@@ -580,7 +580,8 @@ impl Audio {
     pub fn silent(root: &Path) -> Self {
         Self::with_output(root, false, "")
     }
-    /// Active audio device name, or empty for system default.
+    /// The output device asked for (`soundDevice`), empty for the system's default; the
+    /// default plays when that one can't be opened, as in vanilla.
     pub fn device(&self) -> &str {
         &self.device_name
     }
@@ -601,20 +602,20 @@ impl Audio {
         } else {
             Err("no output on a dedicated server".into())
         };
-        let (stream, live, actual_device) = match opened {
-            Ok((v, dev)) => (Some(v), true, dev),
+        let (stream, live) = match opened {
+            Ok(v) => (Some(v), true),
             Err(e) => {
                 if output {
                     log::warn!("Horizon: no sound: {e}");
                 }
-                (None, false, String::new())
+                (None, false)
             }
         };
         let mut engine = SoundEngine::new(registry);
         engine.loaded = live;
         Self {
             _stream: stream,
-            device_name: actual_device,
+            device_name: target_device.to_owned(),
             engine,
             backend: MixerBackend {
                 mixer,
@@ -636,11 +637,11 @@ impl Audio {
         }
     }
     #[cfg(not(feature = "audio"))]
-    fn open_named(_: Arc<Mutex<Mixer>>, _: &str) -> Result<(Stream, String)> {
+    fn open_named(_: Arc<Mutex<Mixer>>, _: &str) -> Result<Stream> {
         Err("this build has no sound output (built without the `audio` feature)".into())
     }
     #[cfg(feature = "audio")]
-    fn open_named(mixer: Arc<Mutex<Mixer>>, target: &str) -> Result<(Stream, String)> {
+    fn open_named(mixer: Arc<Mutex<Mixer>>, target: &str) -> Result<Stream> {
         if let Some(reason) = output_disabled(|name| std::env::var_os(name)) {
             return Err(reason.into());
         }
@@ -659,7 +660,7 @@ impl Audio {
                                 config.channels(),
                                 config.sample_format()
                             );
-                            return Ok((stream, target.to_owned()));
+                            return Ok(stream);
                         }
                         Err(e) => {
                             log::warn!(
@@ -671,8 +672,7 @@ impl Audio {
                 }
             }
         }
-        let stream = Self::open(mixer)?;
-        Ok((stream, String::new()))
+        Self::open(mixer)
     }
     #[cfg(feature = "audio")]
     pub fn set_device(&mut self, name: &str) -> Result<()> {
@@ -680,9 +680,8 @@ impl Audio {
             self.device_name = name.to_owned();
             return Ok(());
         }
-        let (stream, actual) = Self::open_named(self.backend.mixer.clone(), name)?;
-        self._stream = Some(stream);
-        self.device_name = actual;
+        self._stream = Some(Self::open_named(self.backend.mixer.clone(), name)?);
+        self.device_name = name.to_owned();
         self.backend.live = true;
         self.engine.loaded = true;
         Ok(())
