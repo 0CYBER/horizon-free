@@ -3117,7 +3117,7 @@ mod held_item_name_tests {
             return;
         }
         let data = crate::mobs::MobTypes::load(&root).unwrap();
-        let types = data
+        let types: HashMap<_, _> = data
             .types
             .into_iter()
             .map(|(id, kind)| (id, Arc::new(kind)))
