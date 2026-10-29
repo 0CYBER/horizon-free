@@ -349,6 +349,22 @@ fn glow_squid_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     });
 }
 
+/// `GlowSquidRenderer.getBlockLightLevel`: the block light a glow squid is
+/// drawn with, `lit` being what `EntityRenderer.getBlockLightLevel` gives (15
+/// when on fire). It glows brighter the fewer dark ticks are left.
+pub fn glow_squid_block_light(m: &Mob, lit: u32) -> u32 {
+    // Mth.clampedLerp(1.0F - darkTicks / 10.0F, 0.0F, 15.0F).
+    let factor = 1.0f32 - dark_ticks(m) as f32 / 10.0;
+    let glow = if factor < 0.0 {
+        0
+    } else if factor > 1.0 {
+        15
+    } else {
+        (factor * 15.0) as u32
+    };
+    if glow == 15 { 15 } else { glow.max(lit) }
+}
+
 /// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
 pub fn squid_cycle_event(m: &mut Mob) {
     if matches!(m.species(), Species::Squid | Species::GlowSquid) {

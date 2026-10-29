@@ -4533,6 +4533,13 @@ impl Game<'_> {
             if mob.fire_ticks > 0 || matches!(mob.species(), Species::Blaze | Species::MagmaCube) {
                 packed = (15 * 16) | ((15 * 16) << 8);
             }
+            // GlowSquidRenderer.getBlockLightLevel: the body brightens as the
+            // dark ticks run out (the block light is the second byte).
+            if mob.species() == Species::GlowSquid {
+                let lit = (packed >> 12) & 15;
+                let block = horizon_client::mobs::aquatic::glow_squid_block_light(mob, lit);
+                packed = (packed & 0xFF) | ((block * 16) << 8);
+            }
             if mob.species() == Species::SulfurCube
                 && !horizon_client::mobs::trader::is_invisible(mob)
             {
