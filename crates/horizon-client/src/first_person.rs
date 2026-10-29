@@ -932,6 +932,45 @@ mod tests {
             0.5
         );
     }
+
+    #[test]
+    fn switching_after_a_spear_jab_keeps_the_swing_but_resets_charge() {
+        use crate::attack_strength::{AttackStrength, HeldStack};
+
+        let held = |name: &str| {
+            Some(HeldStack {
+                item: name.into(),
+                rest: "1".into(),
+            })
+        };
+        let spear = held("minecraft:netherite_spear");
+        let sword = held("minecraft:wooden_sword");
+        let mut charge = AttackStrength::default();
+        for _ in 0..80 {
+            charge.tick(spear.clone());
+        }
+        let mut swing = SwingState::default();
+        assert!(swing.start_if_able(
+            Hand::Main,
+            SwingAnimation {
+                kind: 2,
+                duration: 23
+            },
+            23
+        ));
+        charge.reset_attack();
+        swing.tick();
+        charge.tick(spear);
+        assert_eq!((charge.ticker, charge.swap_ticker), (1, 80));
+
+        // Player.tick resets both counters on a different item, while the
+        // active swing keeps its original duration (vanilla 26.3 oracle).
+        swing.tick();
+        charge.tick(sword);
+        assert_eq!((charge.ticker, charge.swap_ticker), (0, 0));
+        assert_eq!(swing.current.unwrap().duration_ticks, 23);
+        assert_eq!(swing.animation.to_bits(), (1.0_f32 / 23.0).to_bits());
+    }
     #[test]
     fn drawing_a_bow_or_holding_a_charged_crossbow_hides_a_hand() {
         let (bow, apple) = (
