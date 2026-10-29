@@ -14,6 +14,12 @@ pub enum Output {
 }
 
 impl Output {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pq => "HDR10 (PQ)",
+            Self::ScRgb => "scRGB",
+        }
+    }
     pub fn format(self) -> wgpu::TextureFormat {
         match self {
             Self::Pq => wgpu::TextureFormat::Rgb10a2Unorm,

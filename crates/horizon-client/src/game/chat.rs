@@ -428,8 +428,18 @@ impl Game<'_> {
             .collect();
     }
     /// The block the player is looking at, for coordinate suggestions.
+    /// `ClientSuggestionProvider.getRelevantCoordinates` and
+    /// `getAbsoluteCoordinates` read `Minecraft.hitResult` only when it is a
+    /// block: an entity in front of the block leaves the `~` defaults.
     fn refresh_dynamic_registries(&mut self) {
-        self.ui.registries.target_block = self.pick().map(|h| h.pos);
+        let hit = if self.pick_entity_hit().is_some() {
+            None
+        } else {
+            self.pick()
+        };
+        self.ui.registries.target_block = hit.as_ref().map(|h| h.pos);
+        self.ui.registries.target_point =
+            hit.map(|h| h.point.map(horizon_client::java_text::format_fixed2));
         // ClientPacketListener.getOnlinePlayerNames on a server.
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;
@@ -973,7 +983,7 @@ impl Game<'_> {
         }
     }
     /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
-    fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
+    pub(super) fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
         let split = self
             .gui
             .atlas
@@ -1138,9 +1148,19 @@ impl Game<'_> {
             None => self.combat_death_message(),
         };
         self.ui.death_text = Some(message.clone());
-        // ServerPlayer.die: a team that hides death messages keeps it out of
-        // the dying player's own chat (the death screen still shows it).
-        if horizon_client::scoreboard::own_death_message_shown(self.player_team()) {
+        // ServerPlayer.die: the team's death message visibility decides who
+        // hears it, the dying player's own chat included (the death screen
+        // still shows it).
+        let board = &self.score.board;
+        if let Some(host) = &self.lan {
+            host.hub.system_message_to(
+                horizon_client::lan::data::component_nbt(&message.component()),
+                |other| {
+                    horizon_client::scoreboard::death_message_reaches(board, PLAYER_NAME, other)
+                },
+            );
+        }
+        if horizon_client::scoreboard::death_message_reaches(board, PLAYER_NAME, PLAYER_NAME) {
             self.system_message(message);
         }
     }

@@ -274,3 +274,29 @@ fn refuses_what_the_instance_cannot_run() {
     assert_eq!(err, "map has no version for Minecraft 1.20.1 with fabric.");
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn the_page_search_keeps_the_players_filters_but_not_their_version() {
+    let t = target("1.21.1", Some("fabric"));
+    let picked = details::Filters {
+        categories: vec!["optimization".into()],
+        loader: Some("neoforge".into()),
+        game_version: Some("26.3".into()),
+        environment: Some(details::Environment::Client),
+        sort: Some(details::Sort::Downloads),
+    };
+    let q = t.search("fps", Kind::Mod, &picked);
+    assert_eq!(q.text, "fps");
+    assert_eq!(
+        q.filters,
+        details::Filters {
+            game_version: Some("1.21.1".into()),
+            loader: Some("fabric".into()),
+            ..picked
+        }
+    );
+    assert!(t.takes(Kind::Mod) && t.takes(Kind::ResourcePack));
+    assert!(!t.takes(Kind::Modpack) && !t.takes(Kind::Shader) && !t.takes(Kind::DataPack));
+    assert_eq!(t.describe(Kind::Mod), "Minecraft 1.21.1 with fabric");
+    assert_eq!(t.describe(Kind::ResourcePack), "Minecraft 1.21.1");
+}
