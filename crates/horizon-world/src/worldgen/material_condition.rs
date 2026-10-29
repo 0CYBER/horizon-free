@@ -442,6 +442,9 @@ impl<R: RandomSource> Compiled<R> {
                 match &context.possible_biomes {
                     Some(possible) if names.is_disjoint(possible) => Kind::Constant(false),
                     Some(possible) if possible.is_subset(&names) => Kind::Constant(true),
+                    // An empty list would not ask whether the surface numbers
+                    // its biomes.
+                    _ if names.is_empty() => Kind::Biome(names),
                     _ => match names
                         .iter()
                         .map(|name| context.surface.biome_index(name))
