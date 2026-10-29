@@ -639,6 +639,55 @@ impl World<'_> {
             player,
         )
     }
+    /// Right-click the north face of `pos` holding `item` in the main hand.
+    fn use_item(&mut self, pos: BlockPos, item: &str) -> InteractionResult {
+        let player = PlayerContext {
+            yaw: 0.0,
+            pitch: 0.0,
+            may_build: true,
+            can_eat: true,
+            game_master: false,
+        };
+        let hit = horizon_core::geometry::Vec3::new(
+            f64::from(pos.x) + 0.5,
+            f64::from(pos.y) + 0.5,
+            f64::from(pos.z),
+        );
+        self.f.behaviours.use_item_on(
+            &mut self.level,
+            &mut self.ticks,
+            pos,
+            Direction::North,
+            hit,
+            player,
+            Some(item),
+        )
+    }
+}
+
+#[test]
+fn glowstone_charges_a_respawn_anchor_up_to_four() {
+    // RespawnAnchorBlock.useItemOn: glowstone on an anchor below 4 charges
+    // charges it and the click ends (SUCCESS), so no glowstone is placed (#3034).
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let empty = w.id("respawn_anchor", &[("charges", "0")]);
+    w.put(pos, empty);
+    for charges in 1..=4 {
+        assert_eq!(
+            w.use_item(pos, "minecraft:glowstone"),
+            InteractionResult::Success
+        );
+        assert_eq!(w.prop(pos, "charges"), charges.to_string());
+    }
+    // A full anchor can't be charged: TRY_WITH_EMPTY_HAND, then useWithoutItem
+    // (the respawn point), which leaves the charges alone.
+    w.use_item(pos, "minecraft:glowstone");
+    assert_eq!(w.prop(pos, "charges"), "4");
+    // Anything else on an empty anchor passes, so the item is used instead.
+    w.put(pos, empty);
+    assert_eq!(w.use_item(pos, "minecraft:stone"), InteractionResult::Pass);
+    assert_eq!(w.prop(pos, "charges"), "0");
 }
 
 #[test]
