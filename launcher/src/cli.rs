@@ -1215,6 +1215,9 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 });
                 let mut cmd =
                     backend::java_game(&instance, server.as_deref(), &|line| eprintln!("{line}"))?;
+                if let Some(e) = account::take_unsaved() {
+                    eprintln!("{e}");
+                }
                 cmd.args(arg);
                 let vars = instance.vars(cmd.get_program());
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
@@ -1672,8 +1675,8 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             accounts.add(account::store(), signed_in.clone(), &secrets)?;
             accounts.save()?;
             println!("Signed in as {}.", signed_in.name);
-            if !account::store().persistent() {
-                eprintln!("{}", account::NO_KEYCHAIN);
+            if let Some(said) = account::no_keychain() {
+                eprintln!("{said}");
             }
         }
         AccountCmd::SignOut { who } => {

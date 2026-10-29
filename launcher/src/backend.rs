@@ -2191,6 +2191,9 @@ pub fn client(tag: &str) -> Result<Command, String> {
     if let Some(e) = offline {
         eprintln!("Playing offline: {e}");
     }
+    if let Some(e) = account::take_unsaved() {
+        eprintln!("{e}");
+    }
     append_game_args(&mut cmd);
     Ok(cmd)
 }
@@ -2752,8 +2755,9 @@ pub enum Msg {
     LauncherUpdated(Result<(), String>),
     /// `reuse_prepared_everywhere` prepared these versions.
     Reused(Vec<(String, String)>),
-    /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
-    Keychain(bool),
+    /// None when secrets are kept in the OS keychain, else what to say: they last only until
+    /// the launcher closes, and why.
+    Keychain(Option<String>),
     /// Whether an account in the launcher owned the game at its last check (the owner gate).
     Owner(bool),
     /// The owner gate's answer for the game about to start: the selected account's session
