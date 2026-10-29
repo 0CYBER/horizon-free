@@ -228,6 +228,11 @@ impl Game<'_> {
                             });
                         }
                     }
+                    "minecraft:firework_rocket" => {
+                        if let Some(r) = entity_nbt::firework_rocket_from_nbt(&tag, player_uuid) {
+                            self.rockets.push(super::fireworks::Rocket::from_nbt(r));
+                        }
+                    }
                     // PrimedTnt.readAdditionalSaveData: its fuse (80 when absent) and motion.
                     "minecraft:tnt" => {
                         if let Some(position) = entity_nbt::position(&tag) {

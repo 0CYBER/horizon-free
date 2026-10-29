@@ -203,7 +203,7 @@ impl Game<'_> {
                     power,
                     1.0,
                 );
-                self.launch_angled_rocket(at, shot.velocity, ammo);
+                self.launch_angled_rocket(at, shot.velocity, ammo, Some(Who::Player));
             }
             if !rocket {
                 let kind = ProjectileKind::Arrow {
