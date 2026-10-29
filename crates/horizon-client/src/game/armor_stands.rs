@@ -336,7 +336,11 @@ impl Game<'_> {
         );
         let yaw =
             (((self.yaw - 180.0 + 180.0).rem_euclid(360.0) - 180.0 + 22.5) / 45.0).floor() * 45.0;
-        let stand = ArmorStand::new(self.next_entity + 1, foot, yaw);
+        let mut stand = ArmorStand::new(self.next_entity + 1, foot, yaw);
+        // Entity.applyImplicitComponents: a name from an anvil names the stand.
+        if let Some(name) = stack.custom_name() {
+            stand.custom_name = Some(horizon_client::text::Text::literal(name));
+        }
         let b = stand.bounds();
         // Touching the floor is not a collision.
         let (lo, hi) = (b.min_position(), b.max_position());
