@@ -4497,13 +4497,12 @@ fn main() {
         .run(|cx: &mut App| {
             cx.text_system()
                 .add_fonts(vec![
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_REGULAR),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_MEDIUM),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_SEMIBOLD),
                     Cow::Borrowed(horizon_theme::fonts::GEIST_MONO),
-                    Cow::Borrowed(horizon_theme::fonts::PIXEL_MEDIUM),
-                    Cow::Borrowed(horizon_theme::fonts::PIXEL_SEMIBOLD),
-                    Cow::Borrowed(horizon_theme::fonts::PIXEL_BOLD),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_REGULAR),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_MEDIUM),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_SEMIBOLD),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_BOLD),
+                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_DISPLAY_BOLD),
                 ])
                 .expect("bundled fonts");
             cx.bind_keys(key_bindings());
