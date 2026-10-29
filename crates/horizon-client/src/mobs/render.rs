@@ -1644,6 +1644,39 @@ pub fn part_transform(
     anim::setup(m, &s, &mut poses, &data.animations);
     part_matrix(&model, base, &poses, part, 0.0)
 }
+/// `PlayerItemInHandLayer.renderItemHeldToEye` up to the item: the root and
+/// the head with its pitch clamped to -30 to 90 degrees, `translateToHead`
+/// (`CustomHeadLayer.translateToHead`), then the hand's side of the eye.
+pub fn held_to_eye_matrix(
+    m: &Mob,
+    alpha: f32,
+    camera: glam::DVec3,
+    data: &MobData,
+    left: bool,
+) -> Option<glam::Mat4> {
+    use glam::{Mat4, Vec3};
+    let base = base_transform(m, alpha, camera);
+    let s = anim::state(m, alpha);
+    let (model_key, _) = body(m);
+    let model = m
+        .kind
+        .layer(&model_key)
+        .cloned()
+        .unwrap_or_else(|| m.kind.model.clone());
+    let mut poses = Poses::new(&model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    let pitch =
+        poses.get("head")[3].clamp(-std::f32::consts::FRAC_PI_6, std::f32::consts::FRAC_PI_2);
+    poses.xrot("head", pitch);
+    let head = part_matrix(&model, base, &poses, "head", 0.0)?;
+    let side = if left { -2.5 / 16.0 } else { 2.5 / 16.0 };
+    Some(
+        head * Mat4::from_translation(Vec3::new(0.0, -0.25, 0.0))
+            * Mat4::from_rotation_y(std::f32::consts::PI)
+            * Mat4::from_scale(Vec3::new(0.625, -0.625, -0.625))
+            * Mat4::from_translation(Vec3::new(side, -0.0625, 0.0)),
+    )
+}
 /// `FoxHeldItemLayer`: the item sits at the head's position under the render
 /// state's head roll, yaw and pitch (not the posed head's, which differ while
 /// it sleeps), pushed out to the mouth.

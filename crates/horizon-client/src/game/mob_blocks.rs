@@ -388,9 +388,19 @@ impl Game<'_> {
         for (item, off_hand) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
             let Some(item) = item else { continue };
             let left = off_hand != mob.main_arm_left();
-            let Some(t) =
+            // PlayerItemInHandLayer.submitArmWithItem (avatars only): a spyglass
+            // in use, with no swing in progress, is held to the eye (`heldOnHead`).
+            let spyglass_to_eye = &**item == "minecraft:spyglass"
+                && (&*mob.kind.id == "minecraft:player" || mob.species() == Species::Mannequin)
+                && off_hand == mob.extra.using_off_hand
+                && mob.extra.using_item > 0
+                && horizon_client::mobs::anim::state(mob, alpha as f32).swing < 1.0e-5;
+            let t = if spyglass_to_eye {
+                render::held_to_eye_matrix(mob, alpha as f32, camera, self.res.mob_data(), left)
+            } else {
                 render::held_item_transform(mob, alpha as f32, camera, self.res.mob_data(), left)
-            else {
+            };
+            let Some(t) = t else {
                 continue;
             };
             let slot = if off_hand {
@@ -444,6 +454,8 @@ impl Game<'_> {
             // PandaHoldsItemLayer and FoxHeldItemLayer show the item as it lies
             // on the ground.
             let (context, ordinal) = match (mob.species(), left) {
+                // The spyglass held to the eye is the HEAD display.
+                _ if spyglass_to_eye => (Context::Head, 5),
                 (Species::Panda | Species::Fox, _) => (Context::Ground, 7),
                 (_, true) => (Context::ThirdPersonLeftHand, 1),
                 (_, false) => (Context::ThirdPersonRightHand, 2),
