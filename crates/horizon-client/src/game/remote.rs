@@ -1385,10 +1385,21 @@ impl Game<'_> {
     }
     fn set_block(&mut self, pos: [i32; 3], state: i32) {
         let state = BlockStateId(state.max(0) as u32);
+        let previous = self.world.block(pos[0], pos[1], pos[2]);
         if self.world.loaded(pos[0], pos[2])
             && self.world.set(pos[0], pos[1], pos[2], state).is_ok()
         {
             self.sync_block_entity((pos[0], pos[1], pos[2]), state);
+            // LevelChunk.setBlockState removes the block entity of a block
+            // that changes: the moving piston the client's moveBlocks made
+            // stops when the server places what it moved (#3002).
+            let facts = self.res.facts();
+            let moving = |s: BlockStateId| &*facts.get(s).name == "minecraft:moving_piston";
+            if moving(previous) && !moving(state) {
+                let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                self.block_ticks.moving_pistons.retain(|(p, _)| *p != at);
+                self.sync_moving_pistons();
+            }
         }
         // A block we just placed: play its place sound (the server skips the placer).
         if let Some((target, _)) = self.remote.as_ref().and_then(|r| r.placing)
