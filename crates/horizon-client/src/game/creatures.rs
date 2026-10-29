@@ -2087,6 +2087,17 @@ impl Game<'_> {
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
             }
+            // MushroomCow.getOffspringVariant: either parent's colour, and the
+            // other colour 1 time in 1024 when both parents have the same one.
+            if p.species() == Species::Mooshroom {
+                let mate = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+                child.extra.variant = if coin { p.extra.variant } else { mate };
+                if p.extra.variant == mate
+                    && self.world.random.next_int_bound(1024).unwrap_or(1) == 0
+                {
+                    child.extra.variant = if p.extra.variant == 1 { 0 } else { 1 };
+                }
+            }
             if p.species() == Species::Sheep {
                 child.extra.color = p.extra.color;
             }
