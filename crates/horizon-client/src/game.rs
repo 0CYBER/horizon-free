@@ -311,7 +311,8 @@ struct Options {
     /// `HORIZON_SPIKES=MS`: print the timed spans of frames slower than MS.
     spikes: Option<f32>,
     /// Render into a texture instead of the window (`--offscreen`), so a
-    /// GPU the display cannot present from can still be benchmarked.
+    /// GPU the display cannot present from can still be benchmarked. The
+    /// window stays hidden and never grabs the system pointer.
     offscreen: bool,
     /// `--width` and `--height` (vanilla's own arguments): the window's
     /// starting size, 1280x720 by default.
@@ -5968,7 +5969,15 @@ impl Game<'_> {
         };
         let scale = HudBatch::new(size).scale;
         let was_grabbed = self.captured;
-        if capture {
+        if self.options.offscreen {
+            // `--offscreen` shows no window: the system pointer stays where the
+            // person at the computer has it, and the grab is the game's own (an
+            // agent turns the view with `mouse-move`).
+            if capture {
+                self.mouse.set_ignore_first_move();
+            }
+            self.captured = capture;
+        } else if capture {
             self.mouse.set_ignore_first_move();
             // macOS warps by re-associating the mouse with the pointer,
             // which undoes a Locked grab and leaves the pointer free: warp
@@ -6015,7 +6024,9 @@ impl Game<'_> {
         ) {
             self.cursor = pos;
         }
-        window.set_cursor_visible(!self.captured);
+        if !self.options.offscreen {
+            window.set_cursor_visible(!self.captured);
+        }
     }
     /// `GuiGraphicsExtractor.applyCursor` -> `Window.selectCursor` at the end
     /// of a frame: the cursor the frame's widgets asked for, set on the window
@@ -13062,10 +13073,12 @@ impl ApplicationHandler for Game<'_> {
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
             attributes, "horizon", "horizon",
         );
+        // `--offscreen` renders into a texture: its window would only show white.
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
-                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
+                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None)))
+                .with_visible(!self.options.offscreen),
         ) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -14091,9 +14104,11 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        // The real mouse never steers an offscreen game: its pointer is not grabbed.
         if self.pending_save.is_none()
             && self.captured
             && self.focused
+            && !self.options.offscreen
             && self.screen == Screen::Playing
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
         {
@@ -15625,10 +15640,12 @@ impl Loading {
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
             attributes, "horizon", "horizon",
         );
+        // `--offscreen` renders into a texture: its window would only show white.
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
-                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
+                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None)))
+                .with_visible(!self.options.as_ref().is_some_and(|o| o.offscreen)),
         ) {
             Ok(w) => Arc::new(w),
             Err(e) => {
