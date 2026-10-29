@@ -124,6 +124,8 @@ pub enum Mode {
     Error {
         message: String,
         return_to: Box<Mode>,
+        /// AlertScreen with the red `selectWorld.incompatible.title`, not the access failure.
+        incompatible: bool,
     },
     Multiplayer(crate::multiplayer::Screen),
     /// SafetyScreen: the warning before the first Multiplayer click, with its
@@ -587,6 +589,7 @@ impl Title {
         self.mode = Mode::Error {
             message: error.to_string(),
             return_to,
+            incompatible: false,
         };
     }
     /// Polling is done once per rendered frame so filesystem work never blocks drawing.
@@ -650,6 +653,24 @@ impl Title {
                 crate::toasts::Slide::default(),
                 WorldToast::AccessFailure(world.folder),
             ));
+            return Action::None;
+        }
+        // openWorldCheckVersionCompatibility: a world from another series is an AlertScreen.
+        if let Some(version) = crate::save::incompatible_version(&self.saves.join(&world.folder)) {
+            let version = if version.is_empty() {
+                lang::get_or("selectWorld.versionUnknown", "unknown")
+            } else {
+                version
+            };
+            self.mode = Mode::Error {
+                message: translate(
+                    "selectWorld.incompatible.description",
+                    "This world cannot be opened in this version.\nIt was last played in version %s.",
+                    &[&version],
+                ),
+                return_to: Box::new(self.mode.clone()),
+                incompatible: true,
+            };
             return Action::None;
         }
         if crate::save::needs_file_fixes(&self.saves.join(&world.folder)) {
@@ -1009,16 +1030,25 @@ impl Title {
                     ),
                 ]
             }
-            Mode::Error { .. } => vec![b(
-                (w / 2.0).floor() - 75.0,
-                confirm_top(h, self.message_lines.get())
-                    + 41.0
-                    + self.message_lines.get() as f32 * 9.0,
-                150.0,
-                &lang::get_or("gui.back", "Back"),
-                true,
-                39,
-            )],
+            Mode::Error { incompatible, .. } => {
+                let lines = self.message_lines.get();
+                let y = if *incompatible {
+                    // AlertScreen.init: the button follows the text, kept inside the screen.
+                    (90.0 + lines as f32 * 9.0 + 12.0)
+                        .max(h / 6.0 + 96.0)
+                        .min(h - 24.0)
+                } else {
+                    confirm_top(h, lines) + 41.0 + lines as f32 * 9.0
+                };
+                vec![b(
+                    (w / 2.0).floor() - 75.0,
+                    y,
+                    150.0,
+                    &lang::get_or("gui.back", "Back"),
+                    true,
+                    39,
+                )]
+            }
             Mode::BackupBeforeUpgrade { .. } => {
                 // BackupConfirmScreen.init: the buttons sit under the text at fixed offsets.
                 let y = 109.0 + self.message_lines.get() as f32 * 9.0;
@@ -1389,20 +1419,39 @@ impl Title {
                     );
                 }
             }
-            Mode::Error { message, .. } => {
+            Mode::Error {
+                message,
+                incompatible,
+                ..
+            } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
-                let lines = wrapped(atlas, message, w - 50.0);
+                let lines: Vec<String> = message
+                    .split('\n')
+                    .flat_map(|line| wrapped(atlas, line, w - 50.0))
+                    .collect();
                 self.message_lines.set(lines.len());
-                let top = confirm_top(h, lines.len());
-                centered(
-                    atlas,
-                    batch,
-                    &lang::get_or("selectWorld.access_failure", "Failed to access world"),
-                    top,
-                    u32::MAX,
-                );
+                // AlertScreen (an incompatible world): the red title at 70, the text at 90.
+                let (top, text_top, key, fallback, color) = if *incompatible {
+                    (
+                        70.0,
+                        90.0,
+                        "selectWorld.incompatible.title",
+                        "Incompatible version",
+                        rgba(255, 0, 0, 255),
+                    )
+                } else {
+                    let top = confirm_top(h, lines.len());
+                    (
+                        top,
+                        top + 17.0,
+                        "selectWorld.access_failure",
+                        "Failed to access world",
+                        u32::MAX,
+                    )
+                };
+                centered(atlas, batch, &lang::get_or(key, fallback), top, color);
                 for (i, line) in lines.iter().enumerate() {
-                    centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
+                    centered(atlas, batch, line, text_top + i as f32 * 9.0, u32::MAX);
                 }
             }
             Mode::MultiplayerWarning { check } => {
