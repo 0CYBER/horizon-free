@@ -181,5 +181,9 @@
   "These mods will run with full access to your computer": "Ces mods auront un accès complet à votre ordinateur",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Ils peuvent lire, modifier ou supprimer vos fichiers, et utiliser vos comptes et votre réseau, comme tout programme que vous lancez. Ne les compilez que si vous faites confiance à leurs auteurs : la page Mods les nomme.",
   "Mods: {mods}": "Mods : {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilation construit le jeu : une dizaine de minutes et quelques Go de disque la première fois, quelques minutes ensuite."
+  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilation construit le jeu : une dizaine de minutes et quelques Go de disque la première fois, quelques minutes ensuite.",
+  "Delete…": "Supprimer…",
+  "Keep": "Garder",
+  "Move to Trash": "Mettre à la corbeille",
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer."
 }

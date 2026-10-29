@@ -375,6 +375,16 @@ Rename an instance (its folder stays).
 
 MCP: `instance_rename`.
 
+## `horizon-launcher instance delete`
+
+Delete an instance: its folder (worlds, options, packs) goes to the Trash, where you can get it back. Horizon's own instance stays.
+
+    horizon-launcher instance delete <INSTANCE>
+
+- `INSTANCE`
+
+MCP: `instance_delete`.
+
 ## `horizon-launcher instance icon`
 
 Set an instance's icon: a block or item name from your prepared files (grass_block), a colour (#3fa7d6), or none.

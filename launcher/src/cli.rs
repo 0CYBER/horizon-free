@@ -243,6 +243,9 @@ enum InstanceCmd {
     },
     /// Rename an instance (its folder stays)
     Rename { instance: String, name: String },
+    /// Delete an instance: its folder (worlds, options, packs) goes to the Trash, where you can
+    /// get it back. Horizon's own instance stays
+    Delete { instance: String },
     /// Set an instance's icon: a block or item name from your prepared files (grass_block),
     /// a colour (#3fa7d6), or none
     Icon { instance: String, icon: String },
@@ -2255,6 +2258,13 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     java.jvm_args = args.trim().to_string();
                 }
             })?)
+        }
+        InstanceCmd::Delete { instance } => {
+            let gone = instances::delete(&instance)?;
+            match as_json {
+                true => json(serde_json::json!({"deleted": gone.id, "trashed": gone.work})),
+                false => println!("{} is in the Trash.", gone.name),
+            }
         }
         InstanceCmd::Rename { instance, name } => {
             changed(instances::edit(&instance, |m| m.name = Some(name))?)
