@@ -210,6 +210,16 @@ pub fn incompatible_version(world: &Path) -> Option<String> {
     }
     Some(text(version.and_then(|v| v.get("Name"))).unwrap_or_default())
 }
+/// `LevelSummary.backupStatus` DOWNGRADE: the saved game version's name (empty when it
+/// has none) when the world's DataVersion is newer than this build's.
+pub fn downgraded_from(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let data = root.get("Data")?;
+    if number(data.get("DataVersion")).unwrap_or(-1) <= i64::from(DATA_VERSION) {
+        return None;
+    }
+    Some(text(data.get("Version").and_then(|v| v.get("Name"))).unwrap_or_default())
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
