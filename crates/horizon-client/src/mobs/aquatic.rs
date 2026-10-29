@@ -12,6 +12,7 @@ use super::{
     nav::NavKind,
 };
 use crate::blocks::Fluid;
+use crate::particles::ParticleType;
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use std::f32::consts::PI;
@@ -188,7 +189,11 @@ pub fn puff_scale(state: i32) -> f64 {
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     use Species as S;
     match m.species() {
-        S::Squid | S::GlowSquid => squid_ai_step(m),
+        S::Squid => squid_ai_step(m),
+        S::GlowSquid => {
+            squid_ai_step(m);
+            glow_squid_ai_step(m, events);
+        }
         S::Tadpole => {
             // Tadpole.aiStep: growing up into a frog after 24000 ticks.
             if m.extra.age >= 0 && !m.extra.age_locked {
@@ -294,10 +299,14 @@ fn squid_ai_step(m: &mut Mob) {
 
 /// Squid.aiStep also runs on remote entities: animate from packet velocity,
 /// without running goals or replacing that velocity with the server's movement vector.
-pub fn squid_client_step(m: &mut Mob) {
+/// A glow squid's own `aiStep` follows it (the dark timer and the glow).
+pub fn squid_client_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if matches!(m.species(), Species::Squid | Species::GlowSquid) {
         m.anim.vo = m.anim.v;
         squid_step(m, true);
+    }
+    if m.species() == Species::GlowSquid {
+        glow_squid_ai_step(m, events);
     }
 }
 
@@ -316,6 +325,28 @@ pub fn set_dark_ticks(m: &mut Mob, ticks: i32) {
 /// ticks (called after `Squid.hurtServer`'s ink).
 pub fn hurt_server(m: &mut Mob) {
     set_dark_ticks(m, 100);
+}
+
+/// `GlowSquid.aiStep` after `super.aiStep()`: the dark timer counts down, and
+/// a `glow` particle appears at `getRandomX(0.6)`, `getRandomY()`,
+/// `getRandomZ(0.6)` (drawn in that order). A window that simulates the world
+/// and a client of a server both draw it, so the server's own `ai_step` pushes
+/// the event as well (as the nautilus bubbles do).
+fn glow_squid_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    let ticks = dark_ticks(m);
+    if ticks > 0 {
+        set_dark_ticks(m, ticks - 1);
+    }
+    let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+    let r = &mut m.random;
+    let x = m.position.x + w * ((2.0 * r.next_double() - 1.0) * 0.6);
+    let y = m.position.y + h * r.next_double();
+    let z = m.position.z + w * ((2.0 * r.next_double() - 1.0) * 0.6);
+    events.push(MobEvent::ParticleAt {
+        kind: ParticleType::Glow.name(),
+        at: [x, y, z],
+        velocity: [0.0; 3],
+    });
 }
 
 /// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
