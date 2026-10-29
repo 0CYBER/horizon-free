@@ -20,6 +20,7 @@ use horizon_client::{
         menu::{Rules, Slots},
     },
     motion::{MotionEvent, MotionWorld, PlayerMotion},
+    pose::Dimensions,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
@@ -2569,7 +2570,7 @@ impl Game<'_> {
             self.as_guest(host, conn, |game| game.handle_shoulder_entities());
             return;
         }
-        let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
+        let in_wall = !g.sleeping && self.in_wall(g.position, g.dimensions());
         let at = g.position;
         let (sneaking, sleeping) = (g.sneaking, g.sleeping);
         let riding = g.vehicle.is_some();
@@ -2658,10 +2659,10 @@ impl Game<'_> {
             let _ = w.server_hazards_tick(in_wall);
             // LivingEntity.aiStep: a Riptide spin counts down on the server's
             // copy too, or it would stay in the spin pose (eye 0.4) for good.
-            w.player.count_down_server_spin();
-            // Player.tick ends with updatePlayerPose: a swimmer, or a player
-            // crawling under a block, takes the short box its moves are checked with.
-            let _ = w.update_player_pose();
+            // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
+            // ends with updatePlayerPose: a swimmer, or a player crawling
+            // under a block, takes the short box its moves are checked with.
+            let _ = w.server_player_pose_tick();
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {
@@ -2884,15 +2885,16 @@ impl Game<'_> {
         });
     }
 
-    /// `Player.isInWall`: a suffocating block in the 0.48-wide box at the
-    /// eyes. Suffocating is a full collision box that is also a full render
-    /// cube (`BlockBehaviour.isSuffocating`'s default; glass and the like
-    /// opt out), as the mobs' check has it.
-    fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
-        let (y, half) = ((at[1] + eye_height).floor() as i32, 0.24);
-        let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
-        range(at[0]).any(|x| {
-            range(at[2]).any(|z| {
+    /// `Entity.isInWall`: a suffocating block in the box at the eyes as wide
+    /// as 0.8 of the body (0.48 at scale 1, 0.048 at scale 0.1). Suffocating
+    /// is a full collision box that is also a full render cube
+    /// (`BlockBehaviour.isSuffocating`'s default; glass and the like opt
+    /// out), as the mobs' check has it.
+    fn in_wall(&self, at: [f64; 3], body: Dimensions) -> bool {
+        let y = (at[1] + f64::from(body.eye_height)).floor() as i32;
+        let [xs, zs] = eye_columns(at, body);
+        xs.into_iter().any(|x| {
+            zs.clone().any(|z| {
                 let f = self.res.facts().get(self.world.block(x, y, z));
                 f.full_collision && f.solid_render
             })
@@ -3372,4 +3374,38 @@ fn swing_packet(id: i32, hand: Hand, animation: SwingAnimation) -> C {
         kind: i32::from(animation.kind),
         duration: animation.duration,
     })
+}
+
+/// The block columns `Entity.isInWall` looks at: `AABB.ofSize` around the
+/// eyes, 0.8 of the body's width across (`BlockPos.betweenClosedStream`).
+fn eye_columns(at: [f64; 3], body: Dimensions) -> [std::ops::RangeInclusive<i32>; 2] {
+    let half = f64::from(body.width * 0.8) / 2.0;
+    let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
+    [range(at[0]), range(at[2])]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eye_columns;
+    use horizon_client::pose::Pose;
+
+    /// #3684: a player shrunk to `minecraft:scale` 0.1 who stands 0.05 from a
+    /// wall has eyes 0.048 wide, which don't reach into it: they don't
+    /// suffocate there, as a full-sized player 0.3 from the wall doesn't.
+    #[test]
+    fn a_small_player_checks_only_the_blocks_at_their_small_eyes() {
+        let at = [205.95, 100.0, 530.5];
+        assert_eq!(
+            eye_columns(at, Pose::Standing.dimensions(0.1)),
+            [205..=205, 530..=530]
+        );
+        assert_eq!(
+            eye_columns(at, Pose::Standing.dimensions(1.0)),
+            [205..=206, 530..=530]
+        );
+        assert_eq!(
+            eye_columns([205.7, 100.0, 530.5], Pose::Standing.dimensions(1.0)),
+            [205..=205, 530..=530]
+        );
+    }
 }
