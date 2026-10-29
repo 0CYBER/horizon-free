@@ -284,14 +284,23 @@ impl MapData {
         })
     }
 }
-#[derive(Default)]
 pub(super) struct Maps {
     pub data: HashMap<i32, MapData>,
     /// The highest map id handed out (`maps/last_id.dat`), loaded on first use.
     last_id: Option<i32>,
-    /// (map id, atlas slot), most recently shown last.
-    slots: Vec<(i32, usize)>,
+    /// The atlas slots holding map textures.
+    pub slots: super::atlas_slots::AtlasSlots<i32>,
     missing: std::collections::HashSet<i32>,
+}
+impl Default for Maps {
+    fn default() -> Self {
+        Self {
+            data: HashMap::new(),
+            last_id: None,
+            slots: super::atlas_slots::AtlasSlots::new(MAP_SLOTS),
+            missing: Default::default(),
+        }
+    }
 }
 /// `MapColor.getColorFromPackedId` as RGBA bytes (NONE is transparent).
 fn packed_rgba(packed: u8) -> [u8; 4] {
@@ -1180,23 +1189,16 @@ impl Game<'_> {
     /// The atlas slot showing map `id`, its texture uploaded when it changed.
     pub(super) fn map_texture(&mut self, id: i32) -> Option<Rect> {
         self.map(id)?;
-        let slots = &mut self.maps.slots;
-        if let Some(i) = slots.iter().position(|e| e.0 == id) {
-            let e = slots.remove(i);
-            slots.push(e);
-        } else {
-            // A free slot, else the least recently shown one.
-            let slot = if slots.len() < MAP_SLOTS {
-                slots.len()
-            } else {
-                slots.remove(0).1
-            };
-            slots.push((id, slot));
-            if let Some(m) = self.maps.data.get_mut(&id) {
-                m.texture_dirty = true;
+        let slot = match self.maps.slots.show(&id) {
+            Some(slot) => slot,
+            None => {
+                let (slot, _) = self.maps.slots.claim(id);
+                if let Some(m) = self.maps.data.get_mut(&id) {
+                    m.texture_dirty = true;
+                }
+                slot
             }
-        }
-        let slot = self.maps.slots.last()?.1;
+        };
         let rect = self
             .gui
             .atlas
