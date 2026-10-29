@@ -849,6 +849,10 @@ impl Game<'_> {
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
         self.physical_keys.insert(key);
+        // The window's shortcuts come before any screen, here too.
+        if self.screenshot_shortcut(key, false) {
+            return Ok(());
+        }
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());
