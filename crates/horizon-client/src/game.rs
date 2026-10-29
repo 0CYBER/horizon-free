@@ -11945,6 +11945,9 @@ impl Game<'_> {
         });
     }
     fn render(&mut self) -> Result<bool> {
+        if self.renderer.as_mut().is_some_and(|r| r.display_changed()) {
+            self.apply_ui_settings();
+        }
         // Minecraft.doWorldLoad: the LevelLoadingScreen while single player's
         // server starts. Its chunk map and progress are the server's, which
         // the window doesn't see yet: the title alone, over the menu background.
