@@ -390,7 +390,7 @@ mod tests {
     /// not drag it off the seat.
     #[test]
     fn a_ridden_display_moves_from_seat_to_seat() {
-        let mut d = RemoteTextDisplay::new([0.0, 64.0, 0.0], 0.0);
+        let mut d = RemoteTextDisplay::new(Shows::Text, [0.0, 64.0, 0.0], 0.0);
         d.metadata(&[(10, 1, Value::Int(3))]);
         d.move_to([9.0, 64.0, 9.0], None);
         let seat = glam::DVec3::new(0.0, 65.8, 0.0);
