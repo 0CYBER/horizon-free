@@ -3145,6 +3145,18 @@ def check_cracks(host, guest, out):
 
 
 def check_eating(host, guest, out):
+    """Each player eats a loaf in front of the other: the other side draws the eater eating
+    (DATA_LIVING_ENTITY_FLAGS) and stops when it is done. The eater and the player beside it
+    each hear every bite once (#3129): the eater's own client plays its bites and the server
+    sends them to the others only (Player.playSound), and FoodProperties.onConsume's sound
+    reaches both. One bite per crumb burst the eater draws (5 crumbs, 16 for the last) plus
+    FoodProperties' sound, for each loaf eaten."""
+    eat = 'minecraft:entity.generic.eat'
+
+    def sounds(game):
+        status = game('status')
+        return status['heard'].get(eat, 0), status['particles'].get('item', 0)
+
     for g in (host, guest):
         g('command', command='gamemode survival')
         g('command', command='clear @s')
@@ -3165,6 +3177,8 @@ def check_eating(host, guest, out):
     seen = {}
     for name, eater, watcher in (('host eats', host, guest), ('guest eats', guest, host)):
         eater.raw('select', 'minecraft:bread')
+        loaves = eater('inventory')['counts'].get('minecraft:bread', 0)
+        (eater_heard, crumbs), (watcher_heard, _) = sounds(eater), sounds(watcher)
         hold = threading.Thread(target=eater.raw, args=('use-item', '--hold', 2.2))
         hold.start()
         samples = []
@@ -3174,9 +3188,18 @@ def check_eating(host, guest, out):
         watcher.shot(out, 'eating-' + name.replace(' ', '-'))
         hold.join()
         eater.wait(10)
-        seen[name] = {'during': samples, 'after': using(watcher)}
+        (eater_after, crumbs_after), (watcher_after, _) = sounds(eater), sounds(watcher)
+        eaten = loaves - eater('inventory')['counts'].get('minecraft:bread', 0)
+        seen[name] = {'during': samples, 'after': using(watcher), 'eaten': eaten,
+                      'bites': (crumbs_after - crumbs - 16 * eaten) / 5,
+                      'eater_heard': eater_after - eater_heard, 'watcher_heard': watcher_after - watcher_heard}
     for name, s in seen.items():
         assert sum(1 for u in s['during'] if u > 0) >= 3 and s['after'] == 0, f'{name}: {seen}'
+        assert s['eaten'] == 1, f'{name}: the server did not eat one loaf: {seen}'
+        want = s['bites'] + 2 * s['eaten']
+        assert s['eater_heard'] == want, f'{name}: the eater heard {s["eater_heard"]} bites, wants {want:g}: {seen}'
+        assert s['watcher_heard'] == want, \
+            f'{name}: the player beside the eater heard {s["watcher_heard"]} bites, wants {want:g}: {seen}'
     return seen
 
 
