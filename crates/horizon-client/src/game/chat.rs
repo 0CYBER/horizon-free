@@ -671,7 +671,7 @@ impl Game<'_> {
             ChatAction::None => {
                 // charTyped: the text the key typed.
                 if let Some(text) = typed_text
-                    && !ctrl
+                    && self.types_text()
                 {
                     screen.type_text(&m, &c, text);
                 }
