@@ -141,6 +141,7 @@ mod piglins;
 mod piston_push;
 mod player_equip;
 mod postprocess;
+mod potent_sulfur;
 mod potions;
 mod powder_snow;
 mod pumpkin;

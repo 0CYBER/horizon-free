@@ -90,7 +90,7 @@ pub(super) fn mob_effect_id(id: &str) -> Option<&'static str> {
 /// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,
 /// `Parched` weakness): the immune-to-infested and immune-to-oozing tags
 /// decide first, then the tag of mobs that ignore poison and regeneration.
-fn mob_can_be_affected(
+pub(super) fn mob_can_be_affected(
     tags: &std::collections::HashMap<String, std::collections::HashSet<String>>,
     kind: &str,
     effect: &str,
