@@ -186,6 +186,7 @@ impl Server {
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,
+            body: Default::default(),
         };
         let mut ctx = TickCtx {
             world: &mut self.world,
@@ -279,6 +280,75 @@ fn run<T: Send + 'static>(
 }
 
 #[test]
+fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "RecipeSettings", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    for book in 0..4 {
+        for flags in 0..4 {
+            let open = flags & 1 != 0;
+            let filtering = flags & 2 != 0;
+            let before = s.hub.guests[0].recipe_book.clone();
+            // Vanilla's wire payload: RecipeBookType VarInt, open, filtering.
+            let packet = S::decode(
+                horizon_protocol::ids::play::serverbound::RECIPE_BOOK_CHANGE_SETTINGS,
+                &[book, u8::from(open), u8::from(filtering)],
+            )
+            .unwrap();
+            s.hub.guests[0].inbox.push_back(packet);
+            s.tick(&[]);
+            let settings = &s.hub.guests[0].recipe_book;
+            for i in 0..4 {
+                assert_eq!(
+                    settings.open[i],
+                    if i == usize::from(book) {
+                        open
+                    } else {
+                        before.open[i]
+                    }
+                );
+                assert_eq!(
+                    settings.filtering[i],
+                    if i == usize::from(book) {
+                        filtering
+                    } else {
+                        before.filtering[i]
+                    }
+                );
+            }
+            let mut saved = horizon_client::save::Level::default();
+            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved);
+            let mut reopened = horizon_client::save::Level::default();
+            reopened.read_player(&saved.player_tag());
+            assert_eq!(reopened.recipe_book.open, settings.open);
+            assert_eq!(reopened.recipe_book.filtering, settings.filtering);
+        }
+    }
+    for book_type in [-1, 4] {
+        let mut wire = horizon_protocol::buf::Writer::new();
+        wire.varint(book_type);
+        wire.bool(true);
+        wire.bool(true);
+        assert!(
+            S::decode(
+                horizon_protocol::ids::play::serverbound::RECIPE_BOOK_CHANGE_SETTINGS,
+                &wire.data,
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn sprint_commands_survive_keyboard_input_changes() {
     let Some(resources) = resources() else {
         return;
@@ -334,6 +404,54 @@ fn sprint_commands_survive_keyboard_input_changes() {
     assert!(
         !s.hub.guests[0].sprinting,
         "keyboard input started a sprint"
+    );
+}
+
+#[test]
+fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Digger", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    s.hub.guests[0].loaded = true;
+    let at = s.hub.guests[0].position;
+    let below = [
+        at[0].floor() as i32,
+        at[1].floor() as i32 - 1,
+        at[2].floor() as i32,
+    ];
+    // A creative break as the client sends it in one tick: the dig, the arm swing,
+    // then the move into the block it predicted gone.
+    let inbox = &mut s.hub.guests[0].inbox;
+    inbox.push_back(S::PlayerAction(play::PlayerAction {
+        action: 0,
+        pos: below,
+        direction: 1,
+        sequence: 1,
+    }));
+    inbox.push_back(S::Punch(Empty));
+    inbox.push_back(S::MovePlayerPos(play::MovePlayerPos {
+        x: at[0],
+        y: at[1] - 0.0784,
+        z: at[2],
+        flags: 0,
+    }));
+    s.tick(&[]);
+    // The game breaks the block after the hub's pass: the move waits, or it would be
+    // checked against the block and sent back.
+    let g = &s.hub.guests[0];
+    assert_eq!(g.position, at, "the move was handled before the dig");
+    assert!(
+        matches!(g.inbox.back(), Some(S::MovePlayerPos(_))),
+        "the move left the queue"
     );
 }
 

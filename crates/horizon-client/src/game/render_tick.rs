@@ -7,6 +7,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
+    containers::BlockEntity,
     particles::{ParticleLevel, ParticleOptions, ParticleType},
     world::World,
 };
@@ -18,10 +19,29 @@ use horizon_core::random::{LegacyRandom, RandomSource};
 
 /// The first motion-blocking block at or below `from` (Heightmap MOTION_BLOCKING), plus one.
 fn motion_blocking(world: &World, facts: &BlockFacts, x: i32, z: i32, from: i32) -> i32 {
+    motion_blocking_leaves(world, facts, x, z, from, true)
+}
+/// `motion_blocking` where leaves count only for MOTION_BLOCKING, not for
+/// MOTION_BLOCKING_NO_LEAVES.
+fn motion_blocking_leaves(
+    world: &World,
+    facts: &BlockFacts,
+    x: i32,
+    z: i32,
+    from: i32,
+    leaves: bool,
+) -> i32 {
     let mut y = from.min(MIN_Y + HEIGHT - 1);
     while y > MIN_Y {
         let f = facts.get(world.block(x, y, z));
-        if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
+        // #minecraft:leaves block motion, but MOTION_BLOCKING_NO_LEAVES skips them
+        // (their water still counts).
+        let blocks = if f.name.ends_with("_leaves") {
+            leaves
+        } else {
+            f.full_collision
+        };
+        if blocks || f.fluid != Fluid::None {
             return y + 1;
         }
         y -= 1;
@@ -33,16 +53,7 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
     let Some(chunk) = world.chunks.get(&(x >> 4, z >> 4)) else {
         return false;
     };
-    let b = biomes.get(chunk.biome(x, y, z));
-    if !b.precipitation {
-        return false;
-    }
-    let t = if y > 80 {
-        b.temperature - (y - 80) as f32 * 0.05 / 40.0
-    } else {
-        b.temperature
-    };
-    t >= 0.15
+    biomes.get(chunk.biome(x, y, z)).snows_at(x, y, z) == Some(false)
 }
 
 impl Game<'_> {
@@ -91,14 +102,17 @@ impl Game<'_> {
                 distant_terrain: self.lod.is_some(),
                 cloud_range_chunks: self.settings.cloud_range,
                 camera_y: camera.y,
-                // level.getMinY(): the Nether and the End start at y 0.
-                min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
-                flat: false,
+                min_y: self.level_min_y(),
+                flat: self.level_flat(),
                 forward: forward.map(|c| c as f32),
                 rain,
                 thunder,
                 skybox: self.dim == Dim::Overworld,
-                blindness: None,
+                blindness: self
+                    .potions
+                    .effects
+                    .get("blindness")
+                    .map(|effect| (effect.duration, effect.duration == -1)),
                 darkness: self.darkness_fog(),
                 darken_world: self
                     .boss_overlay
@@ -107,9 +121,31 @@ impl Game<'_> {
             },
         )
     }
-    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.
+    /// `ClientLevelData.isFlat`: on the server thread, the world-wide flag.
+    fn level_flat(&self) -> bool {
+        match self.remote.as_ref() {
+            Some(r) => r.flat,
+            None => self.world_flat,
+        }
+    }
+    /// `Level.getMinY`: the current dimension type's minimum y.
+    fn level_min_y(&self) -> i32 {
+        match self.remote.as_ref() {
+            Some(r) => r.dimension.min_y,
+            None => self.dim.min_y(),
+        }
+    }
+    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under
+    /// water. `ClientLevelData.getHorizonHeight`: the bottom of a flat world,
+    /// otherwise y 63.
     pub(super) fn dark_disc(&self, camera: glam::DVec3) -> bool {
-        camera.y < 63.0
+        let horizon = if self.level_flat() {
+            f64::from(self.level_min_y())
+        } else {
+            63.0
+        };
+        self.dim == Dim::Overworld
+            && camera.y < horizon
             && fog_type(
                 &self.world,
                 self.res.facts(),
@@ -178,8 +214,8 @@ impl Game<'_> {
             percent_frozen: p.percent_frozen(),
             partial,
             portal: [fx.o_portal, fx.portal],
-            nausea: 0.0,
-            screen_effect_scale: 1.0,
+            nausea: self.nausea_blend(partial),
+            screen_effect_scale: self.screen_effect_scale(),
         };
         let mut scope = self.scope_scale;
         let gui_overlays =
@@ -216,6 +252,12 @@ impl Game<'_> {
             let brightness = self.eye_brightness(e);
             let inside_portal = self.client_portal_effect();
             self.screen_fx.tick(brightness, inside_portal);
+            let nausea = self
+                .potions
+                .effects
+                .get("nausea")
+                .map(|e| !e.ends_within(60));
+            self.screen_fx.tick_spinning(nausea);
             // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
             let in_water =
                 fog_type(&self.world, self.res.facts(), e, self.forward()) == FogType::Water;
@@ -244,6 +286,7 @@ impl Game<'_> {
                 1.0,
             );
         }
+        self.particles.particle_level = self.settings.particles;
         if let Some(e) = eye {
             self.particles.camera = e;
         }
@@ -271,6 +314,21 @@ impl Game<'_> {
                 && motion_blocking(world, facts, p[0], p[2], p[1] + 64) <= p[1]
                 && rains_at(world, biomes, p[0], p[1], p[2])
         };
+        let height_no_leaves =
+            |p: [i32; 3]| motion_blocking_leaves(world, facts, p[0], p[2], i32::MAX, false);
+        // The day timeline: firefly bush sounds from 12600 to 23400.
+        let firefly_bush_sounds = self.dim == Dim::Overworld
+            && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
+        let tables = &self.pack.context.tables;
+        let model_offset = |state, x, z| tables.offset(state, x, z);
+        let gateway_particles = |state, p| {
+            self.res
+                .block_entity_render()
+                .gateway_faces(world, state, p)
+                .len()
+        };
+        // Level.isThundering: a thunder level above 0.9 where the sky is open.
+        let thundering = self.dim == Dim::Overworld && world.weather.levels(1.0).1 > 0.9;
         let ctx = AnimateContext {
             world,
             facts,
@@ -278,7 +336,14 @@ impl Game<'_> {
             biomes,
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
+            height_no_leaves: &height_no_leaves,
+            firefly_bush_sounds,
+            sky_darken: self.sky_darken(),
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
+            model_offset: &model_offset,
+            gateway_particles: &gateway_particles,
+            thundering,
+            ultrawarm: self.dim == Dim::Nether,
         };
         if let Some(e) = eye {
             let block = [
@@ -287,12 +352,16 @@ impl Game<'_> {
                 e[2].floor() as i32,
             ];
             animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
-            if rain > 0.0 {
-                // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10).
+            // The Horizon Weather option off means no rain visuals or sounds at all.
+            if rain > 0.0 && self.settings.horizon.weather {
+                // ClientLevel.tickWeatherEffects: rain splashes within the weather
+                // radius, and the rain sound.
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
-                let radius = 10;
+                let radius = self.settings.weather_radius;
                 let diameter = 2 * radius + 1;
-                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32;
+                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32
+                    / if self.settings.particles == 1 { 2 } else { 1 };
+                let mut rain_position = None;
                 for _ in 0..count {
                     let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
                     let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
@@ -305,6 +374,12 @@ impl Game<'_> {
                         continue;
                     }
                     let below = top - 1;
+                    rain_position = Some([x, below, z]);
+                    // The Minimal option stops at the first spot that rains (the
+                    // rain sound still plays there).
+                    if self.settings.particles >= 2 {
+                        break;
+                    }
                     let (bx, bz) = (random.next_double(), random.next_double());
                     let state = world.block(x, below, z);
                     let f = facts.get(state);
@@ -336,6 +411,26 @@ impl Game<'_> {
                     self.particles
                         .add(&ParticleOptions::simple(ty), p, [0.0; 3]);
                 }
+                // The last rain column of the tick makes the sound, more often the
+                // longer it has been quiet; indoors it is the quieter one.
+                if let Some(at) = rain_position {
+                    let waited = self.rain_sound_time;
+                    self.rain_sound_time += 1;
+                    if random.next_int_bound(3).unwrap_or(0) < waited {
+                        self.rain_sound_time = 0;
+                        let roof =
+                            motion_blocking(world, facts, block[0], block[2], MIN_Y + HEIGHT);
+                        let (name, volume, pitch) = if at[1] > block[1] + 1 && roof > block[1] {
+                            ("minecraft:weather.rain.above", 0.1, 0.5)
+                        } else {
+                            ("minecraft:weather.rain", 0.2, 1.0)
+                        };
+                        let p = at.map(|c| f64::from(c) + 0.5);
+                        // playLocalSound: guests make their own rain, so a host
+                        // must not capture it for them.
+                        self.audio.play_unshared(name, Some(p), volume, pitch);
+                    }
+                }
             }
         }
         if let Some(r) = &self.renderer {
@@ -344,6 +439,10 @@ impl Game<'_> {
                 &mut self.particles,
                 &ctx,
                 r.block_entities(),
+                &|pos| match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                    Some(BlockEntity::Campfire(c)) => c.items.each_ref().map(Option::is_some),
+                    _ => [false; 4],
+                },
             );
         }
         let level = ParticleLevel {

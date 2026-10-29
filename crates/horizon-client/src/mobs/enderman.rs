@@ -97,10 +97,26 @@ pub fn teleport_to(
         return false;
     }
     let old = m.center();
+    let old_block = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
     m.position = Vec3::new(x, ny, z);
     m.previous = m.position;
     m.velocity = Vec3::ZERO;
     m.ai.nav.stop();
+    if !m.silent {
+        // Level event 2018: the portal trail, from the old block to the new
+        // one, packed as `BlockUtil.clampedPackDifferenceInPosition` does.
+        let new_block = [x.floor() as i32, ny.floor() as i32, z.floor() as i32];
+        let packed = |k: usize| ((new_block[k] - old_block[k]).clamp(-127, 127) + 127) & 255;
+        events.push(MobEvent::LevelEvent {
+            id: 2018,
+            pos: old_block,
+            data: packed(0) << 16 | packed(1) << 8 | packed(2),
+        });
+    }
     events.push(MobEvent::Sound("entity.enderman.teleport", old, 1.0, 1.0));
     events.push(MobEvent::Sound(
         "entity.enderman.teleport",
@@ -137,6 +153,15 @@ fn teleport_towards(
     let y = m.position.y + f64::from(m.random.next_int_bound(16).unwrap_or(8) - 8) - d[1] * 16.0;
     let z = m.position.z + (m.random.next_double() - 0.5) * 8.0 - d[2] * 16.0;
     teleport_to(m, w, x, y, z, events)
+}
+/// `Enderman.SPEED_MODIFIER_ATTACKING`, an ADD_VALUE modifier `setTarget`
+/// adds while the enderman has a target.
+pub fn attacking_speed(m: &Mob) -> f64 {
+    if m.species() == Species::Enderman && m.ai.target.is_some() {
+        f64::from(0.15f32)
+    } else {
+        0.0
+    }
 }
 /// Enderman.customServerAiStep: in daylight, flee by teleporting. The End has a
 /// fixed time, so `Level.isBrightOutside` is never true there.
@@ -184,15 +209,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             }
         }
     }
-    if (m.fluids.in_water
-        || w.raining
-            && w.can_see_sky(
-                m.position.x.floor() as i32,
-                m.eye_y().floor() as i32,
-                m.position.z.floor() as i32,
-            ))
-        && m.alive()
-    {
+    if (m.fluids.in_water || super::ai::in_rain(m, w)) && m.alive() {
         // Hurt by water: teleport away.
         m.extra.counter2 = m.extra.counter2.max(1);
     }

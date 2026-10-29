@@ -24,6 +24,37 @@ fn slot_in_group(group: &str, slot: &str) -> bool {
 }
 
 impl Game<'_> {
+    /// `getAttributeValue(KNOCKBACK_RESISTANCE)` of a mob: its own value plus
+    /// the modifiers of the items it wears or holds in matching slots.
+    pub(super) fn mob_knockback_resistance(&self, m: &Mob) -> f64 {
+        let e = &m.extra;
+        let slots = [
+            ("mainhand", &e.main_hand),
+            ("offhand", &e.off_hand),
+            ("feet", &e.feet),
+            ("legs", &e.legs),
+            ("chest", &e.chest),
+            ("head", &e.head),
+        ];
+        let mut extra = Vec::new();
+        for (slot, item) in slots {
+            let Some(info) = item.as_ref().and_then(|i| self.res.items().get(i)) else {
+                continue;
+            };
+            for (attribute, _, amount, op, group) in &info.modifiers {
+                if attribute == "minecraft:knockback_resistance" && slot_in_group(group, slot) {
+                    let op = match operation_named(op) {
+                        1 => Op::AddMultipliedBase,
+                        2 => Op::AddMultipliedTotal,
+                        _ => Op::AddValue,
+                    };
+                    extra.push((*amount, op));
+                }
+            }
+        }
+        finalize::value_with(m, Attr::KnockbackResistance, &extra)
+    }
+
     /// The registry id of a client-syncable attribute the entity type has
     /// (`AttributeMap.getInstance` is null for the others), by name.
     fn synced_attribute(&self, entity: &str, name: &str) -> Option<i32> {

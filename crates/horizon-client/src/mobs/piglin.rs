@@ -6,11 +6,12 @@ use super::{
     anim::{Poses, State},
     goals::{
         Avoid, AvoidEntity, Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
-        NearestTarget, Prey, RandomLookAround, Stroll, goal_clone,
+        NearestTarget, Prey, RandomLookAround, Stroll, TARGET, TargetState, goal_clone,
+        target_continue,
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
-use horizon_core::random::RandomSource;
+use horizon_core::random::{LegacyRandom, RandomSource};
 use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
@@ -20,6 +21,9 @@ pub const ADMIRE: i32 = 119;
 pub const ATE_RECENTLY: i32 = 200;
 /// `AbstractPiglin.CONVERSION_TIME` (and the hoglin's).
 const CONVERSION: i32 = 300;
+/// `PiglinAi.CELEBRATION_TIME`: how long the `CELEBRATE_LOCATION` and
+/// `DANCING` memories last.
+const CELEBRATION: i32 = 300;
 
 fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     if m.is_baby() {
@@ -50,6 +54,7 @@ pub fn register_piglin(m: &mut Mob) {
     g.add(3, MeleeAttack::new(1.0, true));
     g.add(4, PiglinAvoidRepellent);
     g.add(4, GoToWantedItem);
+    g.add(4, Celebrate);
     g.add(5, Stroll::avoiding_water(0.6));
     g.add(6, LookAtPlayer::new(8.0));
     g.add(7, RandomLookAround::default());
@@ -58,15 +63,94 @@ pub fn register_piglin(m: &mut Mob) {
     m.ai.targets.add(1, hurt);
     m.ai.targets
         .add(2, NearestTarget::player(true).when(hostile_to_player));
-    m.ai.targets.add(
-        3,
-        NearestTarget::new(
-            Prey::Filter(|s| s.species == Species::Hoglin && s.baby),
-            true,
-        )
-        .interval(10)
-        .when(|m, _| !m.is_baby()),
-    );
+    m.ai.targets.add(3, HuntHoglin::default());
+    // `PiglinAi.initMemories`: the first hunt waits too.
+    m.extra.ints[0] = time_between_hunts(m);
+}
+/// `PiglinAi.TIME_BETWEEN_HUNTS`: 30 to 120 seconds.
+fn time_between_hunts(m: &mut Mob) -> i32 {
+    m.random
+        .next_int_between_inclusive(600, 2400)
+        .unwrap_or(600)
+}
+/// `StartHuntingHoglin`: an adult piglin that is not angry, has not hunted
+/// recently and sees no adult piglin that has, goes for the nearest adult
+/// hoglin it sees; then it and the adult piglins near it wait before the next
+/// hunt, and the others join in (`broadcastAngerTarget`).
+#[derive(Clone, Debug)]
+struct HuntHoglin {
+    found: Option<u32>,
+    st: TargetState,
+}
+impl Default for HuntHoglin {
+    fn default() -> Self {
+        let mut st = TargetState::default();
+        st.unseen_memory = 60;
+        Self { found: None, st }
+    }
+}
+impl Goal for HuntHoglin {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        TARGET
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.is_baby() || m.extra.ints[0] > 0 || m.extra.anger > 0 || m.ai.target.is_some() {
+            return false;
+        }
+        let range = m.attrs.follow_range;
+        let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let id = m.id;
+        if cx
+            .w
+            .nearby(pos, range, |s| {
+                s.id != id && s.species == Species::Piglin && !s.baby && s.hunted_recently
+            })
+            .next()
+            .is_some()
+        {
+            return false;
+        }
+        let hoglins: Vec<(u32, Vec3)> =
+            cx.w.nearby(pos, range, |s| s.species == Species::Hoglin && !s.baby)
+                .map(|s| (s.id, s.position))
+                .collect();
+        self.found = hoglins
+            .into_iter()
+            .find(|&(hoglin, at)| {
+                m.distance_sqr(at) <= range * range && m.sees(cx.w, Who::Mob(hoglin))
+            })
+            .map(|(hoglin, _)| hoglin);
+        self.found.is_some()
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        target_continue(&mut self.st, true, m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(hoglin) = self.found else { return };
+        m.ai.target = Some(Who::Mob(hoglin));
+        m.extra.ints[0] = time_between_hunts(m);
+        let range = m.attrs.follow_range;
+        let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let id = m.id;
+        let others: Vec<u32> =
+            cx.w.nearby(pos, range, |s| {
+                s.id != id && s.species == Species::Piglin && !s.baby
+            })
+            .map(|s| s.id)
+            .collect();
+        for mob in others {
+            let ticks = time_between_hunts(m);
+            cx.events.push(MobEvent::HuntHoglin {
+                mob,
+                target: hoglin,
+                ticks,
+            });
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.target = None;
+    }
 }
 pub fn register_brute(m: &mut Mob) {
     let g = &mut m.ai.goals;
@@ -85,7 +169,8 @@ pub fn register_hoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, BabyPanic(super::goals::Panic::new(1.25)));
-    g.add(2, MeleeAttack::new(1.0, true));
+    // HoglinAi: MeleeAttack.create(40) for adults, 15 for babies.
+    g.add(2, MeleeAttack::new(1.0, true).intervals(40, 15));
     g.add(3, super::goals::Breed::new(1.0));
     g.add(3, HoglinAvoidRepellent);
     g.add(4, super::goals::FollowParent::new(1.1));
@@ -101,7 +186,8 @@ pub fn register_hoglin(m: &mut Mob) {
 pub fn register_zoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
-    g.add(2, MeleeAttack::new(1.0, true));
+    // Zoglin.initMemories: MeleeAttack.create(40) for adults, 15 for babies.
+    g.add(2, MeleeAttack::new(1.0, true).intervals(40, 15));
     g.add(5, Stroll::avoiding_water(0.4));
     g.add(6, LookAtPlayer::new(8.0));
     m.ai.targets.add(1, HurtByTarget::new());
@@ -243,6 +329,45 @@ impl Goal for Admire {
         m.nav_stop();
     }
 }
+/// The celebrate activity: `GoToTargetLocation` on the spot a killed target
+/// fell (within 2 blocks, or 4 and slower while dancing).
+#[derive(Clone, Debug)]
+struct Celebrate;
+impl Celebrate {
+    fn walk(m: &mut Mob, cx: &mut Cx) {
+        let Some(at) = m.extra.home else { return };
+        let (close, speed) = if m.extra.scratch[0] > 0 {
+            (4.0, 0.6)
+        } else {
+            (2.0, 1.0)
+        };
+        let center = Vec3::new(
+            f64::from(at[0]) + 0.5,
+            f64::from(at[1]),
+            f64::from(at[2]) + 0.5,
+        );
+        if m.distance_sqr(center) >= close * close {
+            m.nav_move_to(cx.w, [center.x, center.y, center.z], speed);
+        }
+    }
+}
+impl Goal for Celebrate {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.extra.scratch[1] > 0 && m.extra.home.is_some() && m.extra.using_item == 0
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        Self::walk(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if m.ai.nav.is_done() {
+            Self::walk(m, cx);
+        }
+    }
+}
 /// `GoToWantedItem`: walk to the gold the game spotted.
 #[derive(Clone, Debug)]
 struct GoToWantedItem;
@@ -294,6 +419,61 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
         m.ai.target = None;
     }
 }
+/// `StartCelebratingIfTargetDead` for a piglin (`scratch[0]` dancing,
+/// `scratch[1]` ticks of celebration left, `scratch[2]` the hit seen, `home`
+/// the `CELEBRATE_LOCATION`): a killed target starts a celebration at its
+/// spot, and a hoglin's death makes the piglin dance one time in ten.
+/// `PiglinAi.wasHurtBy` ends both. Runs before the target goals drop the
+/// dead target.
+pub fn celebrate(m: &mut Mob, w: &MobWorld) {
+    if m.extra.scratch[1] > 0 {
+        m.extra.scratch[1] -= 1;
+        if m.extra.scratch[1] == 0 {
+            m.extra.scratch[0] = 0;
+            m.extra.home = None;
+        }
+    }
+    if let Some(by) = m.ai.last_hurt_by
+        && m.ai.last_hurt_by_time != m.extra.scratch[2]
+    {
+        m.extra.scratch[2] = m.ai.last_hurt_by_time;
+        // PiglinAi.wasHurtBy: another piglin's hit ends nothing.
+        let piglin =
+            matches!(by, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Piglin));
+        if !piglin {
+            m.extra.scratch[0] = 0;
+            m.extra.scratch[1] = 0;
+            m.extra.home = None;
+        }
+    }
+    if m.extra.scratch[1] > 0 {
+        return;
+    }
+    let Some(target) = m.ai.target else { return };
+    let Some(t) = w.target_info(target).filter(|t| !t.alive) else {
+        return;
+    };
+    let hoglin =
+        matches!(target, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Hoglin));
+    // PiglinAi.wantsToDance: a fresh random seeded with the game time, not
+    // the piglin's own.
+    if hoglin && LegacyRandom::new(w.game_time).next_float() < 0.1 {
+        m.extra.scratch[0] = 1;
+    }
+    m.extra.scratch[1] = CELEBRATION;
+    m.extra.home = Some([
+        t.position.x.floor() as i32,
+        t.position.y.floor() as i32,
+        t.position.z.floor() as i32,
+    ]);
+}
+/// `Hoglin.isConverting` and `AbstractPiglin.isConverting` on a client: in a
+/// dimension that is not piglin safe (`nether` is false), a mob that is not
+/// immune (`flag2`) and has AI shakes. `counter2 > 0` draws the shake, as it
+/// does on the server while the zombification counts up.
+pub fn client_converting(m: &mut Mob, nether: bool) {
+    m.extra.counter2 = i32::from(!nether && !m.extra.flag2 && !m.no_ai);
+}
 /// Per-tick piglin and hoglin state: admiring, anger, zombification and the
 /// hoglin attack animation. Returns a conversion when it happens.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -302,6 +482,19 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     if m.species() == Species::Hoglin && m.alive() {
         hoglin_repellent(m, w);
+    }
+    if m.species() == Species::Piglin {
+        if m.extra.ints[0] > 0 {
+            m.extra.ints[0] -= 1;
+        }
+        // `StopAttackingIfTargetInvalid`: a hoglin handed over by a hunt
+        // broadcast has no target goal of its own to drop it when it dies.
+        if let Some(who @ Who::Mob(_)) = m.ai.target
+            && w.target_info(who)
+                .is_none_or(|t| !t.alive || !t.can_be_seen_as_enemy)
+        {
+            m.ai.target = None;
+        }
     }
     if m.extra.anger > 0 {
         m.extra.anger -= 1;
@@ -375,9 +568,44 @@ fn find_piglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
                 || w.prop(p[0], p[1], p[2], "lit") == Some("true"))
     })
 }
+/// `HoglinBase.throwTarget`: a shove away and up of the attack knockback less
+/// the target's knockback resistance (none at all when that is used up).
+fn throw_target(m: &mut Mob, who: Who, cx: &mut Cx) {
+    let resistance = match who {
+        Who::Mob(id) => cx.w.seen(id).map_or(0.0, |s| s.knockback_resistance),
+        Who::Player => 0.0,
+    };
+    let power = m.kind.attack_knockback - resistance;
+    let Some(t) = cx.w.target_info(who) else {
+        return;
+    };
+    if power <= 0.0 {
+        return;
+    }
+    let away = Vec3::new(
+        t.position.x - m.position.x,
+        0.0,
+        t.position.z - m.position.z,
+    );
+    // `yRot` takes the random whole number of degrees as radians, as vanilla does.
+    let angle = (m.random.next_int_bound(21).unwrap_or(10) - 10) as f32;
+    let scale = power * f64::from(m.random.next_float() * 0.5 + 0.2);
+    let push = away.normalize().scale(scale).rotate_y(angle);
+    let up = power * f64::from(m.random.next_float()) * 0.5;
+    cx.events.push(MobEvent::Push {
+        target: who,
+        velocity: [push.x, up, push.z],
+    });
+}
 /// `HoglinBase.hurtAndThrowTarget`.
 pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     m.extra.anim_ticks = 10;
+    // Entity event 4: clients start the headbutt.
+    cx.events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 4,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
     let attack = m.attrs.attack_damage;
     let amount = if !m.is_baby() && attack as i32 > 0 {
         attack / 2.0 + m.random.next_int_bound(attack as i32).unwrap_or(0) as f32
@@ -394,11 +622,7 @@ pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
         }),
     }
     if !m.is_baby() {
-        // throwTarget: a strong shove up and away.
-        cx.events.push(MobEvent::Launch {
-            target: who,
-            up: 0.5 * f64::from(m.random.next_float()) + 0.3,
-        });
+        throw_target(m, who, cx);
     }
     let sound = if m.species() == Species::Zoglin {
         "entity.zoglin.attack"
@@ -420,7 +644,10 @@ pub fn ears(p: &mut Poses, s: &State) {
 /// Piglins' and brutes' ears flap (`AbstractPiglinModel`), arms follow the
 /// arm pose (`PiglinModel`).
 pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
-    let pose = if m.extra.using_item > 0 {
+    // Piglin.getArmPose: dancing comes first.
+    let pose = if m.extra.scratch[0] > 0 {
+        PiglinPose::Dancing
+    } else if m.extra.using_item > 0 {
         PiglinPose::AdmiringItem
     } else if m.extra.flag {
         PiglinPose::CrossbowCharge
@@ -431,7 +658,14 @@ pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     } else {
         PiglinPose::Default
     };
-    piglin_pose(p, s, pose, 25.0, m.extra.using_item as f32);
+    piglin_pose(
+        p,
+        s,
+        pose,
+        25.0,
+        m.extra.using_item as f32,
+        m.main_arm_left(),
+    );
 }
 /// `PiglinArmPose`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -443,11 +677,19 @@ pub enum PiglinPose {
     CrossbowCharge,
     AdmiringItem,
 }
-/// `PiglinModel.setupAnim` for a piglin facing right-handed.
-pub fn piglin_pose(p: &mut Poses, s: &State, pose: PiglinPose, max_charge: f32, ticks: f32) {
-    use super::anim::{ArmPose, Hum, humanoid};
+/// `PiglinModel.setupAnim`; `left` when the piglin's main arm is the left one.
+pub fn piglin_pose(
+    p: &mut Poses,
+    s: &State,
+    pose: PiglinPose,
+    max_charge: f32,
+    ticks: f32,
+    left: bool,
+) {
+    use super::anim::{ArmPose, Hum, crossbow_charge, crossbow_hold, humanoid};
     let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
     h.weapon_swing = pose == PiglinPose::MeleeWeapon;
+    h.left_main = left;
     h.charge = (max_charge, ticks);
     humanoid(p, s, &h);
     ears(p, s);
@@ -474,29 +716,37 @@ pub fn piglin_pose(p: &mut Poses, s: &State, pose: PiglinPose, max_charge: f32, 
             p.get("left_arm")[1] += (dance * 40.0).msin() * 0.5 + 0.5;
             p.get("body")[1] += (dance * 40.0).msin() * 0.35;
         }
-        PiglinPose::MeleeWeapon if s.swing == 0.0 => p.xrot("right_arm", -1.8),
-        PiglinPose::CrossbowHold => {
-            p.yrot("right_arm", -0.3 + hy);
-            p.yrot("left_arm", 0.6 + hy);
-            p.xrot("right_arm", -PI / 2.0 + hx + 0.1);
-            p.xrot("left_arm", -1.5 + hx);
+        // holdWeaponHigh
+        PiglinPose::MeleeWeapon if s.swing == 0.0 => {
+            p.xrot(if left { "left_arm" } else { "right_arm" }, -1.8)
         }
-        PiglinPose::CrossbowCharge => {
-            p.yrot("right_arm", -0.8);
-            p.xrot("right_arm", -0.970_796_35);
-            p.xrot("left_arm", -0.970_796_35);
-            let alpha = ticks.clamp(0.0, max_charge) / max_charge;
-            p.yrot("left_arm", 0.4 + alpha * (0.85 - 0.4));
-            let x = -0.970_796_35 + alpha * (-PI / 2.0 - -0.970_796_35);
-            p.xrot("left_arm", x);
-        }
+        PiglinPose::CrossbowHold => crossbow_hold(p, hx, hy, !left),
+        PiglinPose::CrossbowCharge => crossbow_charge(p, max_charge, ticks, !left),
         PiglinPose::AdmiringItem => {
             p.xrot("head", 0.5);
             p.yrot("head", 0.0);
-            p.yrot("left_arm", 0.5);
-            p.xrot("left_arm", -0.9);
+            if left {
+                p.yrot("right_arm", -0.5);
+                p.xrot("right_arm", -0.9);
+            } else {
+                p.yrot("left_arm", 0.5);
+                p.xrot("left_arm", -0.9);
+            }
         }
         _ => {}
+    }
+}
+/// `Hoglin.handleEntityEvent` and `Zoglin`'s event 4 on a client: the
+/// headbutt, which `aiStep` then counts down.
+pub fn client_event(m: &mut Mob, event: u8) {
+    if event == 4 {
+        m.extra.anim_ticks = 10;
+    }
+}
+/// The headbutt's countdown (`Hoglin.aiStep`, `Zoglin.aiStep`) on a client.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.anim_ticks > 0 {
+        m.extra.anim_ticks -= 1;
     }
 }
 /// `HoglinModel.setupAnim`.

@@ -89,6 +89,9 @@ pub(super) struct ModsState {
     /// The HUD font's advances for `render.text-width`, made once.
     #[cfg(feature = "mods")]
     font_widths: std::sync::Arc<[f32]>,
+    /// Capability `recipes`'s tables, made once a mod reads them.
+    #[cfg(feature = "mods")]
+    pub(super) recipes: Option<std::sync::Arc<horizon_mods::Recipes>>,
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
@@ -258,6 +261,7 @@ impl Game<'_> {
                 "Horizon: {found} mod(s) not started: this build has no mod runtime (build with --features mods)"
             );
         }
+        self.list_native_mods();
     }
     pub(super) fn merge_remote_tree(&mut self) {}
     pub(super) fn sync_mods(&mut self) {}
@@ -293,14 +297,22 @@ impl Game<'_> {
             .filter_map(|p| horizon_mods::Package::read(p).ok())
             .map(|p| p.manifest.id)
             .collect();
+        // A native mod of the same id (one built into this game) takes over.
+        let mut native = Vec::new();
+        self.native_mods(&mut native);
         let enabled = &self.settings.mods.enabled;
-        let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
+        let on = |id: &str| {
+            (enabled.contains(id) || dev_ids.iter().any(|d| d == id))
+                && !native.iter().any(|n| n.id == id)
+        };
         let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
         // Entries were replaced wholesale: a screen's owner index is stale.
         self.mods.screen = None;
+        // Content mods may have changed the items: remade on the next read.
+        self.mods.recipes = None;
         self.list_mods();
         self.sync_mod_commands();
         self.show_mod_output();
@@ -338,6 +350,7 @@ impl Game<'_> {
                         problem,
                         dev: false,
                         has_settings: false,
+                        native: None,
                     };
                 };
                 // What it may do first: the row cuts long descriptions.
@@ -354,13 +367,18 @@ impl Game<'_> {
                     problem,
                     dev: dev.contains(&e.path),
                     has_settings: e.has_ui_settings(),
+                    native: None,
                 }
             })
             .collect();
+        self.list_native_mods();
     }
     /// The chat's tree after the running mods changed.
     fn sync_mod_commands(&mut self) {
-        let mut names = self.mods.mods.commands().peekable();
+        // In-frame, the window runs server mods too: their names, free text
+        // here (the server parses their arguments).
+        let server = self.mods.mods.server_commands().map(|c| c.name.as_str());
+        let mut names = self.mods.mods.commands().chain(server).peekable();
         self.mods.tree = names
             .peek()
             .is_some()
@@ -449,6 +467,7 @@ impl Game<'_> {
                 .map(|c| char::from_u32(c).map_or(6.0, |c| atlas.glyph_cell(c).1))
                 .collect();
         }
+        let (recipes, known_recipes) = self.mod_recipes();
         Snapshot {
             player,
             clock,
@@ -460,6 +479,10 @@ impl Game<'_> {
             font_widths: self.mods.font_widths.clone(),
             players,
             view_hit: self.mod_view_hit(),
+            recipes,
+            known_recipes,
+            placing: self.mod_recipe_screen(),
+            creative: self.creative,
         }
     }
     /// The first block along the player's view within
@@ -471,8 +494,7 @@ impl Game<'_> {
         if !self.mods.mods.wants_raycast() {
             return None;
         }
-        let eye = self.eye_position()?;
-        let dir = super::view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach = f64::from(horizon_mods::RAYCAST_MAX);
         let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
             Some(hit) => (
@@ -695,6 +717,18 @@ impl Game<'_> {
                 }
                 Output::Shake { strength, seconds } => {
                     self.mods.shake.add(strength, seconds);
+                    continue;
+                }
+                Output::PlaceRecipe { book_id, all } => {
+                    self.mod_place_recipe(book_id, all);
+                    continue;
+                }
+                Output::Give {
+                    item,
+                    count,
+                    components,
+                } => {
+                    self.mod_give(&item, count, &components);
                     continue;
                 }
                 Output::CloseScreen { owner } => {

@@ -28,6 +28,8 @@ pub const MARKINGS: [&str; 5] = ["", "white", "whitefield", "whitedots", "blackd
 pub const EAT: usize = 0;
 pub const STAND: usize = 1;
 pub const MOUTH: usize = 2;
+/// `AbstractHorse.tailCounter`: client-side, it only drives the model.
+pub const TAIL: usize = 3;
 
 /// What a rider asks of its mount this tick.
 #[derive(Clone, Copy, Debug, Default)]
@@ -112,28 +114,40 @@ pub fn register(m: &mut Mob) {
         g.add(3, Tempt::new(1.25, tempt, false));
     }
 }
-/// `generateMaxHealth`, `generateSpeed`, `generateJumpStrength` and the coat.
+/// `randomizeAttributes` of each class: horses roll health, speed and jump,
+/// donkeys and mules only health (their jump stays 0.5), skeleton horses only
+/// the jump, zombie horses a smaller jump and their own speed.
 pub fn finalize(m: &mut Mob) {
+    let species = m.species();
     let r = &mut m.random;
-    let health =
-        15.0 + r.next_int_bound(8).unwrap_or(0) as f32 + r.next_int_bound(9).unwrap_or(0) as f32;
-    let speed =
-        (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3) * 0.25;
-    let jump = 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
-    match m.species() {
+    if matches!(species, Species::Horse | Species::Donkey | Species::Mule) {
+        m.attrs.max_health = 15.0
+            + r.next_int_bound(8).unwrap_or(0) as f32
+            + r.next_int_bound(9).unwrap_or(0) as f32;
+    }
+    match species {
         Species::Horse => {
-            m.attrs.max_health = health;
-            m.attrs.speed = speed;
-            m.extra.vector[0] = jump;
-            m.extra.variant = m.random.next_int_bound(7).unwrap_or(0) as u8;
-            m.extra.variant2 = m.random.next_int_bound(5).unwrap_or(0) as u8;
+            m.attrs.speed =
+                (0.45 + r.next_double() * 0.3 + r.next_double() * 0.3 + r.next_double() * 0.3)
+                    * 0.25;
+            m.extra.vector[0] =
+                0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
+            m.extra.variant = r.next_int_bound(7).unwrap_or(0) as u8;
+            m.extra.variant2 = r.next_int_bound(5).unwrap_or(0) as u8;
         }
-        Species::Donkey | Species::Mule => {
-            // AbstractChestedHorse.randomizeAttributes: fixed speed, generated health.
-            m.attrs.max_health = health;
-            m.extra.vector[0] = jump;
+        Species::Donkey | Species::Mule => m.extra.vector[0] = 0.5,
+        Species::ZombieHorse => {
+            // ZombieHorse.generateZombieHorseJumpStrength and ...Speed.
+            let d = 0.066_666_666_666_666_67;
+            m.extra.vector[0] =
+                0.5 + r.next_double() * d + r.next_double() * d + r.next_double() * d;
+            m.attrs.speed =
+                (9.0 + r.next_double() + r.next_double() + r.next_double()) / f64::from(42.16f32);
         }
-        _ => m.extra.vector[0] = jump,
+        _ => {
+            m.extra.vector[0] =
+                0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2
+        }
     }
     m.health = m.attrs.max_health;
 }
@@ -278,13 +292,17 @@ pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.extra.counter = 20;
         m.extra.flag = false;
     }
+    // getAngrySound: null (silent) for the skeleton horse.
     let sound = match m.species() {
+        Species::SkeletonHorse => return,
         Species::Donkey => "entity.donkey.angry",
         Species::Mule => "entity.mule.angry",
+        Species::ZombieHorse => "entity.zombie_horse.angry",
         Species::Llama | Species::TraderLlama => "entity.llama.angry",
+        _ if m.is_baby() => "entity.baby_horse.angry",
         _ => "entity.horse.angry",
     };
-    events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+    m.voice(sound, events);
 }
 /// `RandomStandGoal`.
 #[derive(Clone, Debug)]
@@ -310,10 +328,113 @@ impl Goal for RandomStand {
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.counter = 20;
         m.extra.flag = false;
-        if m.species() == Species::Horse {
-            cx.events
-                .push(MobEvent::Sound("entity.horse.angry", m.center(), 1.0, 1.0));
+        // playStandSound: getAmbientStandSound is the ambient sound, plain
+        // playSound(sound) at volume and pitch 1.
+        let sound = super::ai::voice_sounds(m)[0];
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+    }
+}
+/// Horses that step with `AbstractHorse.playStepSound` (llamas and camels
+/// have their own).
+pub fn hoof_steps(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Horse
+            | Species::Donkey
+            | Species::Mule
+            | Species::SkeletonHorse
+            | Species::ZombieHorse
+    )
+}
+/// `AbstractHorse.playStepSound` (and `Horse.playGallopSound`) on the block
+/// `pos`: silent on liquids; a ridden horse walks on wood for five steps,
+/// then gallops every third; unridden, wood or the plain step by age.
+/// Donkeys and mules never gallop (`canGallop`).
+pub fn play_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    pos: [i32; 3],
+    state: horizon_world::registry::BlockStateId,
+    events: &mut Vec<MobEvent>,
+) {
+    if matches!(
+        &*w.facts.get(state).name,
+        "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
+    ) {
+        return;
+    }
+    let above = w.world.block(pos[0], pos[1] + 1, pos[2]);
+    let sound_type = if &*w.facts.get(above).name == "minecraft:snow" {
+        &w.facts.get(above).sounds
+    } else {
+        &w.facts.get(state).sounds
+    };
+    let (volume, pitch) = (sound_type.volume, sound_type.pitch);
+    let at = [m.position.x, m.position.y, m.position.z];
+    let baby = m.is_baby();
+    let can_gallop = !matches!(m.species(), Species::Donkey | Species::Mule);
+    if m.rider.is_some() && can_gallop {
+        m.ai.steps.gallop += 1;
+        let count = m.ai.steps.gallop;
+        if count > 5 && count % 3 == 0 {
+            events.push(MobEvent::Sound(
+                "entity.horse.gallop",
+                at,
+                volume * 0.15,
+                pitch,
+            ));
+            // Horse.playGallopSound: now and then it breathes too.
+            if m.species() == Species::Horse && m.random.next_int_bound(10).unwrap_or(1) == 0 {
+                let breathe = if baby {
+                    "entity.baby_horse.breathe"
+                } else {
+                    "entity.horse.breathe"
+                };
+                events.push(MobEvent::Sound(breathe, at, volume * 0.6, pitch));
+            }
+        } else if count <= 5 {
+            events.push(MobEvent::Sound(
+                "entity.horse.step_wood",
+                at,
+                volume * 0.15,
+                pitch,
+            ));
         }
+    } else if is_wood_sound_type(sound_type) {
+        events.push(MobEvent::Sound(
+            "entity.horse.step_wood",
+            at,
+            volume * 0.15,
+            pitch,
+        ));
+    } else {
+        let step = if baby {
+            "entity.baby_horse.step"
+        } else {
+            "entity.horse.step"
+        };
+        events.push(MobEvent::Sound(step, at, volume * 0.15, pitch));
+    }
+}
+/// `AbstractHorse.isWoodSoundType`: WOOD, NETHER_WOOD, STEM, CHERRY_WOOD and
+/// BAMBOO_WOOD (not HARD_CROP, which only shares WOOD's step).
+fn is_wood_sound_type(sounds: &horizon_items::blocks::Sounds) -> bool {
+    let step = sounds
+        .step
+        .strip_prefix("minecraft:")
+        .unwrap_or(&sounds.step);
+    let place = sounds
+        .place
+        .strip_prefix("minecraft:")
+        .unwrap_or(&sounds.place);
+    match step {
+        "block.wood.step" => place == "block.wood.place",
+        "block.nether_wood.step"
+        | "block.stem.step"
+        | "block.cherry_wood.step"
+        | "block.bamboo_wood.step" => true,
+        _ => false,
     }
 }
 /// The mount takes its rider's input (`getRiddenInput`, `tickRidden`).
@@ -321,6 +442,10 @@ pub fn ridden_step(m: &mut Mob) {
     let Some(r) = m.rider else {
         return;
     };
+    // AbstractHorse.tickRidden: not pressing forward ends the gallop.
+    if hoof_steps(m.species()) && r.forward <= 0.0 {
+        m.ai.steps.gallop = 0;
+    }
     // AbstractNautilus.tickRidden turns half way toward the rider.
     if super::nautilus::is_nautilus(m.species()) {
         return super::nautilus::ridden(m);
@@ -418,6 +543,20 @@ pub fn ridden_step(m: &mut Mob) {
         }
     }
 }
+/// `AbstractHorse.aiStep`'s `moveTail` (one in 200 ticks) and the counter's
+/// step in `tick` (it runs to 8, then stops). A client runs it on its own
+/// random, as vanilla's client-side `aiStep` does.
+pub fn tail_tick(m: &mut Mob) {
+    if m.random.next_int_bound(200).unwrap_or(1) == 0 {
+        m.anim.v[TAIL] = 1.0;
+    }
+    if m.anim.v[TAIL] > 0.0 {
+        m.anim.v[TAIL] += 1.0;
+        if m.anim.v[TAIL] > 8.0 {
+            m.anim.v[TAIL] = 0.0;
+        }
+    }
+}
 /// `AbstractHorse.aiStep` and `tick`: healing, grazing, the rear and the
 /// eating/standing/mouth animations.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -455,6 +594,11 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.counter > 0 {
         m.extra.counter -= 1;
     }
+    animate(m);
+}
+/// `AbstractHorse.tick`'s eat, stand and mouth animations, which follow the
+/// eating and standing flags (`flag` and `counter > 0`).
+pub fn animate(m: &mut Mob) {
     let (eating, standing) = (m.extra.flag, m.extra.counter > 0);
     let v = &mut m.anim.v;
     if standing {
@@ -471,6 +615,22 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         v[STAND] = (s + (0.8 * s * s * s - s) * 0.6 - 0.05).max(0.0);
     }
     v[MOUTH] = (v[MOUTH] - v[MOUTH] * 0.7 - 0.05).max(0.0);
+}
+/// `AbstractHorse.tick` on a client that is not the server: the animations
+/// follow the flags of the synched data (`set_flags`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    animate(m);
+}
+/// `AbstractHorse.DATA_ID_FLAGS` on a client: eating 16 and standing 32.
+pub fn set_flags(m: &mut Mob, flags: u8) {
+    m.extra.flag = flags & 16 != 0;
+    m.extra.counter = i32::from(flags & 32 != 0);
+}
+/// Whether `ai_step` above runs this species' grazing and rearing, so that
+/// the server's flags 16 and 32 mean eating and standing.
+pub fn grazes(s: Species) -> bool {
+    is_equine(s) && !super::camel::is_camel(s) && !super::llama::is_llama(s)
 }
 /// Body texture and the markings overlay.
 pub fn texture(m: &Mob) -> String {
@@ -603,7 +763,15 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         t[1] += speed * age;
         t[2] += speed * 2.0 * age;
     }
-    p.yrot("tail", 0.0);
+    // animateTail: the tail swings while the counter runs.
+    p.yrot(
+        "tail",
+        if m.anim.v[TAIL] > 0.0 {
+            (s.age * 0.7).mcos()
+        } else {
+            0.0
+        },
+    );
     if baby && donkey {
         // BabyDonkeyModel overrides the state's pitch with -30 degrees and
         // sets the head parts again.

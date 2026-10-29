@@ -6,6 +6,7 @@ use crate::cli_tools;
 use crate::game_tools::{self, GameTools};
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Logged};
+use horizon_launcher::instances;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -24,14 +25,16 @@ struct Session {
 /// The tools the session runs itself, under their CLI names: they keep a process (the game, a
 /// server) or a sign-in going between calls. Every other CLI command is generated (cli_tools.rs).
 fn session_tools() -> Value {
-    let version = json!({ "type": "string", "description": "An installed version tag such as v2026.10.13. Default: the selected version." });
+    let version = json!({ "type": "string", "description": "An installed version tag such as v2026.10.13. Default: the selected version (play: the instance's own first)." });
     let none = json!({ "type": "object", "properties": {} });
     json!([
         { "name": "play", "description": "Start the Horizon client (a game window on the player's screen) under agent control: the game_* tools then play it. Returns once it has started; game_wait_ready waits for the world. CLI: horizon-launcher play",
           "inputSchema": { "type": "object", "properties": { "version": version,
+            "instance": { "type": "string", "description": "The instance to play, by name or id (instance_list). Default: the selected one." },
             "world": { "type": "string", "description": "Open or create this world (a folder under saves) at once." },
             "creative": { "type": "boolean", "description": "Creative mode for a new world." },
             "join": { "type": "string", "description": "Join a friend's world with its invite code. Only when the player asks." },
+            "server": { "type": "string", "description": "Join this server at once: an address, or a server of the instance's list (multiplayer_list) by name or position. Only when the player asks." },
             "offscreen": { "type": "boolean", "description": "Render without showing a window (game_screenshot still works)." },
             "arg": { "type": "array", "items": { "type": "string" }, "description": "Extra game arguments, passed through as-is (for example \"--server-thread\")." } } } },
         { "name": "server", "description": "Start a Horizon dedicated server. It runs until server_stop or the end of this MCP session. Requires agreeing to the Minecraft EULA. CLI: horizon-launcher server",
@@ -66,8 +69,13 @@ impl Session {
                 if self.client.as_ref().is_some_and(|c| c.finished().is_none()) {
                     return Err("The client is already running.".into());
                 }
-                let tag = backend::resolve_version(arg_str(args, "version"))?;
+                let instance = match arg_str(args, "instance") {
+                    Some(name) => instances::find(name)?,
+                    None => instances::selected(),
+                };
+                let tag = instance.resolve_version(arg_str(args, "version"))?;
                 let mut cmd = backend::client(&tag)?;
+                instances::apply(&mut cmd, &instance)?;
                 cmd.args(game_tools::control_args());
                 if let Some(world) = arg_str(args, "world") {
                     cmd.arg("--world").arg(world);
@@ -79,6 +87,12 @@ impl Session {
                 }
                 if let Some(code) = arg_str(args, "join") {
                     backend::join_friend(&mut cmd, code)?;
+                }
+                if let Some(server) = arg_str(args, "server") {
+                    let list = horizon_launcher::server_list::List::load(&instance.home);
+                    let ip = horizon_launcher::server_list::find(&list, server)
+                        .map_or_else(|_| server.to_string(), |(_, s)| s.ip);
+                    cmd.arg("--server").arg(ip);
                 }
                 if let Some(extra) = args.get("arg").and_then(Value::as_array) {
                     cmd.args(extra.iter().filter_map(Value::as_str));
@@ -186,6 +200,8 @@ impl Session {
                     "plays_as": accounts.selected().map(|a| a.name.clone()),
                     "sign_in_configured": account::client_id().is_some(),
                     "keychain": account::store().persistent(),
+                    // Play needs an account that owns the game (the owner gate).
+                    "owner": accounts.has_owner(account::store()),
                     "sign_in": sign_in,
                 }))
                 .unwrap())

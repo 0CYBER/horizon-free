@@ -23,29 +23,35 @@
   "playhorizon": {
    "ssh": "ludovic@playhorizon",
    "root": ".actions-runners/horizon/parity-host",
-   "shell": "systemd-run --user --scope --quiet --slice=horizon-ci.slice --unit=horizon-parity-worker-$$ bash -c",
+   "shell": "systemd-run --user --scope --quiet --slice=horizon-ci.slice --unit=horizon-parity-worker-$$ taskset -c 0-3 bash -c",
    "setup": "test ! -e ~/.actions-runners/horizon/paused && set -a && . ~/.actions-runners/horizon/.env && set +a && export PATH=$(cat ~/.actions-runners/horizon/.path) && unset WAYLAND_DISPLAY && export DISPLAY=:$(cat ~/.actions-runners/horizon/display)",
    "python": "python3.13",
-   "jobs": 6,
+   "jobs": 3,
    "nice": 10,
    "exclude": {
     "mob_ai": "the vanilla oracle runs out of its 3 GB heap here (OutOfMemoryError in IO workers; passes on the desktop and the Mac) - 2026-10-26 trial",
     "lan_integration": "two clients rendered on the CPU (lavapipe): different timing subtests fail on each run (elytra, consume-release, barter, critical-hits) - 2026-10-26 trial",
-    "world_reopen": "failed twice here (no Save and Quit button after reopening; the minecart-count flake), passes on the desktop - 2026-10-26 trial"
+    "world_reopen": "failed twice here (no Save and Quit button after reopening; the minecart-count flake), passes on the desktop - 2026-10-26 trial",
+    "remote_fireball": "fails here even alone, at bare main 3b19c386c (2 of 2 runs and the retry), and passes on the Mac mini: the guest's egg is seen in 2 of 6 samples. CPU-starved: the whole horizon-ci slice (runner on 4-7, workers on 0-3) shares a 700% quota and was throttled in 27% of periods, so lavapipe frames and screenshots outlast the projectile's flight - 2026-10-27",
+    "remote_fireworks": "fails here even alone, at bare main 3b19c386c (2 of 2 runs and the retry), and passes on the Mac mini: the guest's sparks are gone by its trail screenshot (same CPU starvation as remote_fireball; a private Xvfb on CPUs 0-3 did not help) - 2026-10-27"
    },
-   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), used by nothing else: 6 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
+   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), its CI runner has CPUs 4-7, so workers get 0-3 (as tools/remote.sh runs do) and 3 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
   }
  },
  "local_only": {
   "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device, or offscreen in the logged-in macOS session"
  },
  "linux_only": {},
+ "solo": {
+  "remote_fireball": "two game windows (lan_e2e); on 4 CPUs beside other harnesses, screenshots and control requests take ticks the check needs",
+  "remote_fireworks": "two game windows (lan_e2e); a screenshot took ~1.5 s beside 3 other harnesses on playhorizon's runner, past the sparks' life (2026-10-27)",
+  "server_player_sculk": "two game windows (lan_e2e); failed on playhorizon's runner beside other harnesses, passes alone (2026-10-27)",
+  "world_reopen": "a game window reopening a world: failed on playhorizon's runner beside other harnesses (2026-10-27)"
+ },
  "named_only": {
   "lan_integration": "the whole lan_e2e suite: ~40 min a run on a loaded runner, and single checks flake under load; run it by name, or tools/lan_e2e.py"
  },
  "known_flaky": {
-  "dedicated_server": "its Java client moves to the next step on a 1.5 s timer, not on the server's reply: under load a respawn's add_entity/update_attributes or entity_event 19 lands in the wrong step (failed, then passed at the same head, 10-26)",
-  "remote_fireball": "samples the fireball on the wall clock, so a slow host sees it in too few samples (desktop runner, 3 times on 10-26)",
   "world_reopen": "counted 4 minecarts instead of 3 once on a loaded Mac mini runner, then passed at the same head (10-26)"
  }
 }

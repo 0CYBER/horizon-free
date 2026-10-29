@@ -1331,6 +1331,7 @@ impl Def {
         let mut v = vec![base];
         let extra: &[&str] = match self.species {
             Species::Pig => &["pig_baby", "cold_pig"],
+            Species::Mannequin => &["player_slim"],
             Species::Cow => &[
                 "cow_baby",
                 "cold_cow",
@@ -1447,7 +1448,6 @@ impl Def {
                     | S::IronGolem
                     | S::Cat
                     | S::Ocelot
-                    | S::Frog
                     | S::Slime
                     | S::MagmaCube
                     | S::Wither
@@ -1500,7 +1500,7 @@ impl Def {
                 ),
             // Nautilus.handleAirSupply: it dries out on land.
             needs_water: aquatic || s == S::Nautilus,
-            water_sensitive: matches!(s, S::Enderman | S::Blaze | S::SnowGolem),
+            water_sensitive: matches!(s, S::Enderman | S::Blaze | S::SnowGolem | S::Strider),
             animal: !matches!(s, S::Bat | S::SulfurCube | S::Mannequin)
                 && !self.hostile_class()
                 && !aquatic
@@ -1581,7 +1581,7 @@ impl Def {
             S::Bee => "bee_food",
             S::Turtle => "turtle_food",
             S::Armadillo => "armadillo_food",
-            S::Frog => "frog_food",
+            S::Frog | S::Tadpole => "frog_food",
             S::Axolotl => "axolotl_food",
             S::Hoglin => "hoglin_food",
             S::Strider => "strider_food",
@@ -1602,6 +1602,8 @@ impl Def {
     pub fn water_slowdown(&self) -> f32 {
         match self.species {
             Species::PolarBear => 0.98,
+            // SkeletonHorse.getWaterSlowDown.
+            Species::SkeletonHorse => 0.96,
             _ => 0.8,
         }
     }
@@ -1629,6 +1631,7 @@ impl Def {
         match self.species {
             Species::Dolphin | Species::Axolotl => 1.0,
             Species::Slime | Species::MagmaCube | Species::SulfurCube => 0.0,
+            Species::Guardian | Species::ElderGuardian | Species::Shulker => 180.0,
             _ => 40.0,
         }
     }
@@ -1640,6 +1643,9 @@ impl Def {
             Species::Sniffer => 50.0,
             Species::Goat => 15.0,
             Species::Armadillo => 32.0,
+            Species::Ravager => 45.0,
+            Species::Camel | Species::CamelHusk => 30.0,
+            Species::Shulker => 180.0,
             _ => 75.0,
         }
     }
@@ -1658,6 +1664,12 @@ impl Def {
             | S::Camel
             | S::CamelHusk => 400,
             S::Ocelot => 900,
+            // Guardian.getAmbientSoundInterval (the elder too).
+            S::Guardian | S::ElderGuardian => 160,
+            // Hoglin extends Animal; Shulker extends AbstractGolem.
+            S::Hoglin | S::Shulker => 120,
+            // Allay is a PathfinderMob: the Mob default.
+            S::Allay => 80,
             S::Squid
             | S::GlowSquid
             | S::Cod
@@ -1690,10 +1702,15 @@ impl Def {
     }
 }
 /// Mobs whose `body` equipment slot Horizon keeps in `Extra::head` (a
-/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block).
+/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block,
+/// a wolf's armor).
 pub fn body_slot(s: Species) -> bool {
     matches!(
         s,
-        Species::HappyGhast | Species::Nautilus | Species::ZombieNautilus | Species::SulfurCube
+        Species::HappyGhast
+            | Species::Nautilus
+            | Species::ZombieNautilus
+            | Species::SulfurCube
+            | Species::Wolf
     )
 }

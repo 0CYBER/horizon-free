@@ -93,7 +93,14 @@ impl WorldRequest {
             level.hardcore = o.hardcore;
             level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
             level.allow_commands = Some(o.commands(creative));
-            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+            horizon_client::save::write_world_gen_settings_with(
+                &save_root,
+                level.seed,
+                o.world_gen(),
+                o.flat_settings(),
+            )?;
+            // WorldCreationUiState.getGameRules, written with the level.
+            level.game_rules = o.rules.by_name();
         }
         // Worlds made without the Create New World screen (--world, the
         // control socket) take its default: commands on for Creative only.
@@ -196,6 +203,107 @@ impl WorldLoader {
     }
 }
 
+/// How long the preloaded world data outlives the world screens: a player
+/// who goes back to the title or to Multiplayer and opens no world for this
+/// long gets the memory back.
+const PRELOAD_KEPT: std::time::Duration = std::time::Duration::from_secs(60);
+
+enum Preload {
+    Idle,
+    /// Read, or being read, on the "World data preload" thread. `left`: when
+    /// the player last left the world screens.
+    Started {
+        thread: std::thread::JoinHandle<()>,
+        left: Option<std::time::Instant>,
+    },
+    /// A world opened: the data is the world's now, and stays.
+    Used,
+}
+
+static PRELOAD: std::sync::Mutex<Preload> = std::sync::Mutex::new(Preload::Idle);
+
+/// Each frame of the title: read what every world opening loads and keeps
+/// for the rest of the process (the worldgen bundle, the loot tables and the
+/// registries the server sends) on a helper thread while the player is on the
+/// world screens (`on_world_screens`: Singleplayer, Create World and their
+/// dialogs), so it overlaps the time spent choosing a world. A world opened
+/// meanwhile waits for the part being read instead of reading it again. Not
+/// at the title screen itself: many players only go to Multiplayer, and
+/// small machines need the memory. Dropped after `PRELOAD_KEPT` away from
+/// the world screens without a world opening.
+pub(super) fn preload_world_data(
+    on_world_screens: bool,
+    resources: &std::path::Path,
+    registry: &'static horizon_world::registry::BlockRegistry,
+) {
+    let mut preload = PRELOAD.lock().unwrap_or_else(|e| e.into_inner());
+    match &mut *preload {
+        Preload::Used => {}
+        Preload::Idle if on_world_screens => {
+            let resources = resources.to_owned();
+            let spawned = std::thread::Builder::new()
+                .name("World data preload".into())
+                .spawn(move || {
+                    horizon_threads::behind_server();
+                    // Errors are left for the world opening to report.
+                    if let Ok(data) = horizon_client::vanillagen::shared_data(
+                        &resources.join("worldgen"),
+                        registry,
+                    ) {
+                        // The Overworld's feature decoration, which every
+                        // seed shares: about 140 ms off opening the world.
+                        let _ = data.prepare_decoration("minecraft:normal", "minecraft:overworld");
+                    }
+                    let _ = horizon_client::structure_blocks::loot_data(&resources);
+                    let _ = super::lan::sync_data(&resources);
+                });
+            match spawned {
+                Ok(thread) => *preload = Preload::Started { thread, left: None },
+                Err(e) => log::warn!("Horizon: world data preload: {e}"),
+            }
+        }
+        Preload::Idle => {}
+        Preload::Started { left, .. } if on_world_screens => *left = None,
+        Preload::Started { thread, left } => {
+            let left = *left.get_or_insert_with(std::time::Instant::now);
+            if left.elapsed() >= PRELOAD_KEPT && thread.is_finished() {
+                horizon_client::vanillagen::forget_shared_data();
+                horizon_client::structure_blocks::forget_loot_data();
+                super::lan::forget_sync_data();
+                horizon_threads::release_free_memory();
+                *preload = Preload::Idle;
+                log::info!("Horizon: preloaded world data dropped, no world opened");
+            }
+        }
+    }
+}
+
+/// A world opens: what `preload_world_data` read is the world's from now on.
+pub(super) fn world_data_used() {
+    *PRELOAD.lock().unwrap_or_else(|e| e.into_inner()) = Preload::Used;
+}
+
+/// A server's world opens: the loot tables its first placed block or broken
+/// container needs (`loot_data`) are read on a helper thread while the
+/// connection is made, so the game thread never waits on them (~0.6 s on a
+/// phone). Kept from then on, as a local world keeps them.
+pub(super) fn preload_server_loot(resources: &std::path::Path) {
+    world_data_used();
+    if horizon_client::structure_blocks::loaded_loot_data().is_some() {
+        return;
+    }
+    let resources = resources.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("Loot preload".into())
+        .spawn(move || {
+            horizon_threads::behind_server();
+            let _ = horizon_client::structure_blocks::loot_data(&resources);
+        });
+    if let Err(e) = spawned {
+        log::warn!("Horizon: loot preload: {e}");
+    }
+}
+
 pub(super) fn make_streaming(
     res: &Resources,
     pack: &PackResources,
@@ -247,7 +355,8 @@ pub(super) fn make_streaming(
         // WorldOptions.generateStructures, from the world's settings.
         let structures =
             horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
-        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
+        let preset = horizon_client::save::WorldGen::preset(world_root);
+        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, preset, dim.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
         if dim == Dim::Overworld && structures {

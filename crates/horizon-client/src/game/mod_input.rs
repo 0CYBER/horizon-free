@@ -31,6 +31,9 @@ impl Game<'_> {
     pub(super) fn mod_minimap(&self) -> Option<ModMinimap> {
         None
     }
+    pub(super) fn mod_far_terrain(&self) -> Option<ModFarTerrain> {
+        None
+    }
 }
 
 /// A mod's zoom (`render.set-zoom`), clamped by the runtime.
@@ -49,6 +52,13 @@ pub(super) struct ModMinimap {
     pub(super) blocks_per_pixel: f32,
     pub(super) rotate: bool,
     pub(super) round: bool,
+}
+
+/// A mod's far terrain (`render.set-far-terrain`), clamped by the runtime.
+#[derive(Clone, Copy)]
+pub(super) struct ModFarTerrain {
+    pub(super) distance: u32,
+    pub(super) reduced: bool,
 }
 
 #[cfg(feature = "mods")]
@@ -109,6 +119,19 @@ impl Game<'_> {
     /// key still runs.
     pub(super) fn mod_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
         if repeat || !self.mods.mods.has_keys() {
+            return;
+        }
+        // Over an item on a container screen, the mods' keys are `browser`
+        // events (a recipe viewer's R and U).
+        if pressed
+            && self.screen == Screen::Inventory
+            && self.title.is_none()
+            && !self.mod_browser_typing()
+            && let Some(name) = horizon_client::keybinds::key_name(key)
+            && let Some(stack) = self.mod_browser_pointed()
+        {
+            let stack = super::mod_panel::browser_stack(stack);
+            self.mods.mods.browser_key(name, &stack);
             return;
         }
         if pressed && (self.screen != Screen::Playing || self.title.is_some()) {
@@ -176,6 +199,14 @@ impl Game<'_> {
             blocks_per_pixel: m.blocks_per_pixel,
             rotate: m.rotate,
             round: m.round,
+        })
+    }
+    /// The far terrain the first mod drawing one asks for.
+    pub(super) fn mod_far_terrain(&self) -> Option<ModFarTerrain> {
+        let f = self.mods.mods.far_terrain()?;
+        Some(ModFarTerrain {
+            distance: f.distance,
+            reduced: f.reduced,
         })
     }
 }

@@ -28,13 +28,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "roadmap" / "roadmap.toml"
 OUTPUT = ROOT / "ROADMAP.md"
-# What the website's hub reads from main at build time (ludovic111/horizon-site), and serves at /data/roadmap.json
+# What the website's hub reads from main at build time (horizon-rust/horizon-site), and serves at /data/roadmap.json
 # for Kira and others.
 SITE_DATA = ROOT / "roadmap" / "roadmap.json"
 # The journal's weekly summaries, one file per ISO week: roadmap/journal/2026-43.md (roadmap/README.md).
 JOURNAL = ROOT / "roadmap" / "journal"
 WEEK = re.compile(r"(\d{4})-(\d{2})\.md$")
-REPO = "ludovic111/horizon"
+REPO = "horizon-rust/horizon"
 SITE = "https://playhorizon.dev/hub"
 
 STATUSES = {
@@ -377,7 +377,7 @@ def online_problems(data, states, now):
 
 def family(paths):
     """Which releases carry a change: the launcher's, the website (deployed when merged) or the game's. The site
-    left this repository on 2026-10-26 (ludovic111/horizon-site), so only older pull requests are website-only;
+    left this repository on 2026-10-26 (horizon-rust/horizon-site), so only older pull requests are website-only;
     an item the site alone ships takes shipped_in = "website" by hand."""
     if paths and all(path.startswith("launcher/") for path in paths):
         return "launcher"

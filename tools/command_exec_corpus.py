@@ -327,6 +327,22 @@ def entities():
         cmd('/data get entity @e[tag=attr,limit=1] Health'),
         cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
         cmd('/kill @e[tag=attr]'),
+        # A summoned mob is not persistent: vanilla never calls
+        # `Mob.setPersistenceRequired` for a mob it spawns (#2787).
+        cmd('/summon minecraft:zombie 4.5 210 12.5'),
+        cmd('/execute if entity @e[type=minecraft:zombie,nbt={PersistenceRequired:1b}]'),
+        cmd('/kill @e[type=minecraft:zombie]'),
+        # An End crystal is an entity of its own: a type selector finds it,
+        # reads it and kills it (#1531).
+        cmd('/summon minecraft:end_crystal 4.5 210 8.5'),
+        cmd('/execute if entity @e[type=minecraft:end_crystal]'),
+        cmd('/data get entity @e[type=minecraft:end_crystal,limit=1] Pos'),
+        cmd('/kill @e[type=minecraft:end_crystal]'),
+        cmd('/execute if entity @e[type=minecraft:end_crystal]'),
+        cmd('/summon minecraft:ender_dragon 4.5 210 8.5'),
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd('/data get entity @e[type=minecraft:ender_dragon,limit=1] Pos'),
+        cmd('/kill @e[type=minecraft:ender_dragon]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
@@ -533,13 +549,21 @@ def execute():
 
 def levels():
     """A nether portal round trip: on the way back the Overworld's entities (the
-    pig left by `entities`) are found and a summon names what it summoned."""
+    pig left by `entities`) are found and a summon names what it summoned. An
+    unbounded selector also reaches the level the player is not in, while a
+    bounded one does not."""
     return [
         *setup('/fill 2 231 12 5 236 12 minecraft:obsidian', '/fill 3 232 12 4 235 12 minecraft:nether_portal[axis=x]',
-               '/tp @s 3.5 232 12.5 0 0'),
+               '/tp @s 3.5 232 12.5 0 0',
+               # A cow in the Overworld, in a chunk that stays loaded while the
+               # player is in the nether.
+               '/forceload add 0 0',
+               '/summon minecraft:cow 10.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["remote_cow"]}'),
         {'op': 'portal'},
         {'op': 'settle'},
         cmd('/execute if dimension minecraft:the_nether run say through the portal'),
+        cmd('/data get entity @e[tag=remote_cow,limit=1] Pos'),
+        cmd('/data get entity @e[tag=remote_cow,distance=..128,limit=1] Pos'),
         {'op': 'portal'},
         {'op': 'settle'},
         cmd('/execute if dimension minecraft:overworld run say back through the portal'),

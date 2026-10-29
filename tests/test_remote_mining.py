@@ -26,7 +26,7 @@ class RemoteMiningTests(unittest.TestCase):
 struct Hit { pos: [i32; 3], face: u8 }
 struct Mining { pos: [i32; 3], progress: f32, ticks: u32 }
 #[derive(Default)]
-struct Remote { destroy_delay: u32, destroying: Option<([i32; 3], u8, f32)> }
+struct Remote { destroy_delay: u32, destroying: Option<([i32; 3], u8, f32)>, destroying_item: String }
 struct Ground { on_ground: bool }
 struct Player { ground: Ground }
 #[derive(Clone)]
@@ -52,9 +52,11 @@ impl World {
         u32::from(!self.broken.contains(&[x, y, z]))
     }
 }
-struct Audio;
+struct Audio { played: Vec<String> }
 impl Audio {
-    fn play(&self, _: &str, _: Option<[f64; 3]>, _: f32, _: f32) {}
+    fn play(&mut self, name: &str, _: Option<[f64; 3]>, _: f32, _: f32) {
+        self.played.push(name.to_string());
+    }
 }
 mod play {
     #[derive(Debug, PartialEq)]
@@ -70,13 +72,16 @@ struct Game {
     hit: Hit, sequence: i32, packets: Vec<play::PlayerAction>,
 }
 impl Game {
+    fn main_hand_key(&self) -> String { String::new() }
+    fn reset_attack_strength(&mut self) {}
     fn new(hardness: f32, speed: f32, creative: bool) -> Self {
         Self {
             remote: Some(Remote::default()), mining: None, creative,
             world: World::default(),
             res: Resources { facts: Facts { hardness, name: "block".into(),
                 requires_tool: false, sounds: Sounds { hit: "hit".into(), volume: 1.0, pitch: 1.0 } }, speed, tool_allows_creative: true },
-            player: Some(Player { ground: Ground { on_ground: true } }), audio: Audio,
+            player: Some(Player { ground: Ground { on_ground: true } }),
+            audio: Audio { played: Vec::new() },
             hit: Hit { pos: [0, 64, 0], face: 1 }, sequence: 0, packets: vec![],
         }
     }
@@ -90,6 +95,13 @@ impl Game {
     fn predict_break(&mut self, pos: [i32; 3], _: u32, _: i32) { self.world.broken.push(pos); }
     fn send(&mut self, S::PlayerAction(packet): S) { self.packets.push(packet); }
     fn crack_particle(&mut self, _: [i32; 3], _: u8, _: u32) {}
+    // ClientLevel.addBreakingBlockEffects: the hit sound once, when the dig
+    // starts; the server's level events play it while the block is mined.
+    fn breaking_block_effects(&mut self, _: [i32; 3], _: u8, play_sound: bool) {
+        if play_sound {
+            self.audio.play("hit", None, 1.0, 1.0);
+        }
+    }
 METHOD
 }
 fn main() {
@@ -115,10 +127,14 @@ fn main() {
     let mut game = Game::new(1.0, 15.0, false);
     game.remote_mining(true);
     assert!(game.world.broken.is_empty());
+    // The dig plays the hit sound once, when it starts (#2277): the server's
+    // destroy progress level events play it while the block is mined.
+    assert_eq!(game.audio.played, ["hit"]);
     game.remote_mining(false);
     assert!(game.world.broken.is_empty());
     game.remote_mining(false);
     assert_eq!(game.world.broken.len(), 1);
+    assert_eq!(game.audio.played, ["hit"], "the client must not play the mining sound in the loop");
     assert_eq!(game.packets.iter().map(|p| p.action).collect::<Vec<_>>(), [0, 3]);
     assert_eq!(game.remote.as_ref().unwrap().destroy_delay, 5);
     game.hit.pos[0] = 1;
