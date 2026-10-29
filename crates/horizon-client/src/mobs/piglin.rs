@@ -6,9 +6,8 @@ use super::{
     anim::{Poses, State},
     brain::{Ttl, living_near},
     goals::{
-        Avoid, AvoidEntity, Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
-        NearestTarget, Prey, RandomLookAround, Stroll, TARGET, TargetState, goal_clone,
-        target_continue,
+        Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack, NearestTarget, Prey,
+        RandomLookAround, Stroll, TARGET, TargetState, goal_clone, target_continue,
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
@@ -214,8 +213,9 @@ pub fn activity(m: &Mob) -> Activity {
     }
 }
 /// `Brain.forgetOutdatedMemories` for the avoid target, which also keeps
-/// track of where it stands, and `updateActivity`'s record of the activity,
-/// at the end of `customServerAiStep`'s brain.
+/// track of where it stands, then the avoid target's copies of the core
+/// activity, the retreat's `EraseMemoryIf`, and `updateActivity`'s record of
+/// the activity, at the end of `customServerAiStep`'s brain.
 pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     let expired = match m.extra.piglin.avoid.as_mut() {
         Some(a) => {
@@ -232,11 +232,238 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     {
         a.at = p.position;
     }
+    if m.species() == Species::Piglin {
+        copy_to_avoid(m, cx);
+    }
+    if m.extra.piglin.activity == Activity::Avoid && wants_to_stop_fleeing(m, cx.w) {
+        m.extra.piglin.avoid = None;
+    }
     m.extra.piglin.activity = activity(m);
+}
+/// `PiglinAi.getAvoidTarget`: the avoid target while the memory is there.
+pub fn avoid_target(m: &Mob) -> Option<Who> {
+    m.extra.piglin.avoid.map(|a| a.who)
+}
+/// `AVOID_TARGET` for `ticks` more ticks (`Brain.setMemoryWithExpiry`).
+fn remember_avoid(m: &mut Mob, who: Who, at: Vec3, ticks: i32) {
+    let mut ttl = Ttl::default();
+    ttl.set(ticks);
+    m.extra.piglin.avoid = Some(AvoidTarget { who, at, ttl });
+}
+/// `TimeUtil.rangeOfSeconds(5, 7)` of `PiglinAi.AVOID_ZOMBIFIED_DURATION` and
+/// `BABY_AVOID_NEMESIS_DURATION`, sampled from the level random.
+fn avoid_duration(lr: &mut LegacyRandom) -> i32 {
+    lr.next_int_between_inclusive(100, 140).unwrap_or(100)
+}
+/// `PiglinAi.isNearZombified`: the nearest visible zombified piglin or zoglin
+/// when it is closer than 6 blocks, and where it stands.
+fn near_zombified(m: &Mob, w: &MobWorld) -> Option<(Who, Vec3)> {
+    let who = m.extra.piglin.zombified?;
+    let at = w.target_info(who)?.position;
+    (m.distance_sqr(at) < 36.0).then_some((who, at))
+}
+/// `PiglinAi.babyAvoidNemesis` and `PiglinAi.avoidZombified`, the core
+/// activity's `CopyMemoryWithExpiry` into `AVOID_TARGET`: a baby avoids a
+/// wither skeleton or wither it sees, anyone a zombified piglin or zoglin
+/// that is near. Each tick it applies draws its expiry from the level random.
+fn copy_to_avoid(m: &mut Mob, cx: &mut Cx) {
+    if m.is_baby()
+        && let Some(who) = m.extra.piglin.nemesis
+        && let Some(p) = cx.w.target_info(who)
+    {
+        let ticks = avoid_duration(cx.lr);
+        remember_avoid(m, who, p.position, ticks);
+    }
+    if let Some((who, at)) = near_zombified(m, cx.w) {
+        let ticks = avoid_duration(cx.lr);
+        remember_avoid(m, who, at, ticks);
+    }
+}
+/// `HoglinAi.piglinsOutnumberHoglins`: an adult hoglin counts itself and
+/// sees more adult piglins than hoglins.
+pub fn piglins_outnumber_hoglins(m: &Mob) -> bool {
+    !m.is_baby() && m.extra.piglin.piglins > m.extra.piglin.hoglins + 1
+}
+/// `PiglinAi.hoglinsOutnumberPiglins`: a piglin counts itself and sees more
+/// adult hoglins than adult piglins.
+pub fn hoglins_outnumber_piglins(m: &Mob) -> bool {
+    m.extra.piglin.hoglins > m.extra.piglin.piglins + 1
+}
+/// `HoglinAi.wantsToStopFleeing` and `PiglinAi.wantsToStopFleeing`, the
+/// retreat activity's `EraseMemoryIf`. A hoglin stops once it is an adult
+/// and piglins no longer outnumber hoglins; a piglin once the hoglins it
+/// avoids no longer outnumber piglins, or the zombified mob it avoids is not
+/// the nearest one it sees any more. Any other avoid target waits out its
+/// expiry.
+fn wants_to_stop_fleeing(m: &Mob, w: &MobWorld) -> bool {
+    let b = &m.extra.piglin;
+    let Some(a) = b.avoid else { return true };
+    if m.species() == Species::Hoglin {
+        return !m.is_baby() && !piglins_outnumber_hoglins(m);
+    }
+    match species_of(w, a.who) {
+        Some(Species::Hoglin) => !hoglins_outnumber_piglins(m),
+        Some(Species::ZombifiedPiglin | Species::Zoglin) => b.zombified != Some(a.who),
+        _ => false,
+    }
+}
+/// What kind of mob `who` is: none for the player.
+fn species_of(w: &MobWorld, who: Who) -> Option<Species> {
+    match who {
+        Who::Player => None,
+        Who::Mob(id) => w.seen(id).map(|s| s.species),
+    }
+}
+/// What `SetWalkTargetAwayFrom.entity` walks away from.
+#[derive(Clone, Copy, Debug)]
+enum AwayFrom {
+    /// The retreat activity's `AVOID_TARGET`.
+    AvoidTarget,
+    /// The idle activity's `NEAREST_VISIBLE_ADULT_PIGLIN` (a hoglin's).
+    AdultPiglin,
+}
+/// `SetWalkTargetAwayFrom.entity(memory, speed, desiredDistance, interruptCurrentWalk)`:
+/// closer than the desired distance to what it avoids, pick a spot away
+/// from it and walk there, unless a walk is on and may not be interrupted.
+/// A walk at the same speed whose spot lies away from it is left alone.
+#[derive(Clone, Debug)]
+struct WalkAway {
+    from: AwayFrom,
+    speed: f64,
+    desired: f64,
+    interrupt: bool,
+}
+impl WalkAway {
+    fn retreat(speed: f64, desired: f64, interrupt: bool) -> Self {
+        Self {
+            from: AwayFrom::AvoidTarget,
+            speed,
+            desired,
+            interrupt,
+        }
+    }
+    /// Where the avoided entity stands, while the activity this behaviour
+    /// belongs to is the active one.
+    fn source(&self, m: &Mob, w: &MobWorld) -> Option<Vec3> {
+        let b = &m.extra.piglin;
+        match self.from {
+            AwayFrom::AvoidTarget if b.activity == Activity::Avoid => b.avoid.map(|a| a.at),
+            AwayFrom::AdultPiglin if b.activity == Activity::Idle && !m.is_baby() => b
+                .nearest_piglin
+                .and_then(|id| w.seen(id))
+                .map(|s| s.position),
+            _ => None,
+        }
+    }
+    /// One run of the behaviour: whether it sets a new walk target, which
+    /// it leaves as the path in `pending_path`.
+    fn step(&self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(from) = self.source(m, cx.w) else {
+            return false;
+        };
+        let walking = !m.ai.nav.is_done();
+        if walking && !self.interrupt {
+            return false;
+        }
+        if m.distance_sqr(from) >= self.desired * self.desired {
+            return false;
+        }
+        if walking
+            && m.ai.nav.speed_modifier == self.speed
+            && let Some(end) = m.ai.nav.path.as_ref().and_then(|p| p.end())
+        {
+            let (cx0, cy0, cz0) = (
+                f64::from(end.x) + 0.5 - m.position.x,
+                f64::from(end.y) - m.position.y,
+                f64::from(end.z) + 0.5 - m.position.z,
+            );
+            let (ax, ay, az) = (
+                from.x - m.position.x,
+                from.y - m.position.y,
+                from.z - m.position.z,
+            );
+            if cx0 * ax + cy0 * ay + cz0 * az < 0.0 {
+                return false;
+            }
+        }
+        let away = [from.x, from.y, from.z];
+        for _ in 0..10 {
+            if let Some(p) = m.land_random_pos_away(cx.w, 16, 7, away) {
+                let at = [
+                    p[0].floor() as i32,
+                    p[1].floor() as i32,
+                    p[2].floor() as i32,
+                ];
+                m.ai.pending_path = m.create_path_to(cx.w, at, 0);
+                return m.ai.pending_path.is_some();
+            }
+        }
+        false
+    }
+}
+impl Goal for WalkAway {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.step(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.source(m, cx.w).is_some() && !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let path = m.ai.pending_path.take();
+        m.nav_move_to_path(path, self.speed);
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if self.step(m, cx) {
+            let path = m.ai.pending_path.take();
+            m.nav_move_to_path(path, self.speed);
+        }
+    }
+}
+/// A goal of the idle and fight activities: it waits while the brain is in
+/// the retreat activity.
+#[derive(Clone, Debug)]
+struct NotRetreating<G>(G);
+impl<G: Goal + Clone + 'static> Goal for NotRetreating<G> {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.piglin.activity != Activity::Avoid && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.piglin.activity != Activity::Avoid && self.0.can_continue(m, cx)
+    }
+    fn interruptable(&self) -> bool {
+        self.0.interruptable()
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx)
+    }
 }
 
 fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
-    if m.is_baby() {
+    // `StartAttacking` is in the idle and celebrate activities, not in the retreat.
+    if m.is_baby() || m.extra.piglin.activity == Activity::Avoid {
         return false;
     }
     match m.species() {
@@ -249,15 +476,8 @@ pub fn register_piglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, Admire);
-    g.add(
-        2,
-        AvoidEntity::new(
-            Avoid::Species(vec![Species::ZombifiedPiglin, Species::Zoglin]),
-            6.0,
-            1.0,
-            1.2,
-        ),
-    );
+    // `PiglinAi.initRetreatActivity`: `SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.0, 12, true)`.
+    g.add(2, WalkAway::retreat(1.0, 12.0, true));
     if crossbow {
         g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     }
@@ -305,7 +525,12 @@ impl Goal for HuntHoglin {
         TARGET
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if m.is_baby() || m.extra.ints[0] > 0 || m.extra.anger > 0 || m.ai.target.is_some() {
+        if m.is_baby()
+            || m.extra.ints[0] > 0
+            || m.extra.anger > 0
+            || m.ai.target.is_some()
+            || m.extra.piglin.activity == Activity::Avoid
+        {
             return false;
         }
         let range = m.attrs.follow_range;
@@ -378,19 +603,23 @@ pub fn register_brute(m: &mut Mob) {
 pub fn register_hoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
-    g.add(1, BabyPanic(super::goals::Panic::new(1.25)));
+    // `HoglinAi.initRetreatActivity`: `SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.3, 15, false)`.
+    g.add(1, WalkAway::retreat(1.3, 15.0, false));
     // HoglinAi: MeleeAttack.create(40) for adults, 15 for babies.
     g.add(2, MeleeAttack::new(1.0, true).intervals(40, 15));
-    g.add(3, super::goals::Breed::new(1.0));
+    g.add(3, NotRetreating(super::goals::Breed::new(1.0)));
     g.add(3, HoglinAvoidRepellent);
-    g.add(4, super::goals::FollowParent::new(1.1));
+    g.add(4, NotRetreating(super::goals::FollowParent::new(1.1)));
     g.add(5, Stroll::avoiding_water(0.4));
     g.add(6, LookAtPlayer::new(8.0));
     m.ai.targets.add(1, HurtByTarget::new().alert());
-    // `HoglinAi.findNearestValidAttackTarget`: nothing while pacified.
+    // `HoglinAi.findNearestValidAttackTarget`: nothing while pacified, and
+    // `StartAttacking` is not in the retreat activity.
     m.ai.targets.add(
         2,
-        NearestTarget::player(true).when(|m, _| !m.is_baby() && m.extra.ints[0] <= 0),
+        NearestTarget::player(true).when(|m, _| {
+            !m.is_baby() && m.extra.ints[0] <= 0 && m.extra.piglin.activity != Activity::Avoid
+        }),
     );
 }
 pub fn register_zoglin(m: &mut Mob) {
@@ -425,6 +654,10 @@ impl Goal for HoglinAvoidRepellent {
         let Some(r) = m.extra.repellent else {
             return false;
         };
+        // The idle activity's behaviour: not in the retreat.
+        if m.extra.piglin.activity == Activity::Avoid {
+            return false;
+        }
         // Vec3.atBottomCenterOf.
         let avoid = [
             f64::from(r[0]) + 0.5,
@@ -455,27 +688,6 @@ impl Goal for HoglinAvoidRepellent {
         m.nav_move_to_path(path, 1.0);
     }
 }
-/// Baby hoglins flee what hurts them; adults stand their ground.
-#[derive(Clone, Debug)]
-struct BabyPanic(super::goals::Panic);
-impl Goal for BabyPanic {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        self.0.flags()
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        m.is_baby() && self.0.can_use(m, cx)
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_continue(m, cx)
-    }
-    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.0.start(m, cx)
-    }
-    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.0.stop(m, cx)
-    }
-}
 /// `PiglinAi.avoidRepellent`: `SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0, 8, false)`
 /// of the idle activity. Closer than 8 blocks to a repellent and not walking
 /// anywhere, walk away from it.
@@ -490,8 +702,13 @@ impl Goal for PiglinAvoidRepellent {
         let Some(r) = m.extra.repellent else {
             return false;
         };
-        // The idle activity: not fighting or admiring, and no walk target yet.
-        if m.ai.target.is_some() || m.extra.using_item > 0 || !m.ai.nav.is_done() {
+        // The idle and celebrate activities: not fighting, admiring or
+        // retreating, and no walk target yet.
+        if m.ai.target.is_some()
+            || m.extra.using_item > 0
+            || m.extra.piglin.activity == Activity::Avoid
+            || !m.ai.nav.is_done()
+        {
             return false;
         }
         // Vec3.atBottomCenterOf.
@@ -625,7 +842,11 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
         m.extra.repellent = find_hoglin_repellent(m, w);
         hoglin_sense(m, w);
     }
-    if m.extra.ints[0] <= 0 && m.extra.repellent.is_some() {
+    // `BecomePassiveIfMemoryPresent` is in the idle and fight activities.
+    if m.extra.ints[0] <= 0
+        && m.extra.repellent.is_some()
+        && m.extra.piglin.activity != Activity::Avoid
+    {
         m.extra.ints[0] = 200;
         m.ai.target = None;
     }
