@@ -3294,12 +3294,25 @@ impl Game<'_> {
                 |location| self.gui.atlas.sprites.contains_key(location),
             );
             let id = skins::parse_profile(profile).id;
-            self.gui
-                .atlas
-                .set_object_skin(format!("id:{id:032x}"), skin.clone());
             let name = profile
                 .as_str()
                 .or_else(|| profile.get("name").and_then(serde_json::Value::as_str));
+            // The player list's skin for the same profile is drawn too.
+            let keys = [
+                Some(format!("id:{id:032x}")),
+                name.map(|n| format!("name:{}", n.to_ascii_lowercase())),
+            ];
+            for key in keys.iter().flatten() {
+                if let Some(listed) = self.gui.atlas.object_skins.get(key)
+                    && listed.starts_with("skins/")
+                {
+                    let listed = listed.clone();
+                    self.again_skin(&listed);
+                }
+            }
+            self.gui
+                .atlas
+                .set_object_skin(format!("id:{id:032x}"), skin.clone());
             if let Some(name) = name {
                 self.gui
                     .atlas
@@ -3367,18 +3380,16 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
-        resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
         // An offline name's cape from the launcher, where the profile has none.
         if !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
         {
             const OFFLINE: &str = "capes/offline";
-            if !self.show_skin(OFFLINE) {
+            if !self.skin_slots.contains(OFFLINE) {
                 self.store_skin(OFFLINE.into(), rgba.to_vec());
             }
             capes.insert(local, OFFLINE.into());
         }
-        capes.retain(|_, cape| self.again_skin(cape));
         // PlayerInfo.getSkin: the downloaded skin and its model, else the
         // profile's default skin (DefaultPlayerSkin.get), slim or wide.
         let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {
@@ -3401,27 +3412,36 @@ impl Game<'_> {
         }) else {
             return;
         };
+        // Only the skins drawn hold atlas slots: the level's players, not
+        // every entry of a busy server's player list.
         for (id, uuid) in level {
-            let (skin, is_slim) = skin_of(&skins, uuid);
-            if let Some(mob) = self
+            let Some(i) = self
                 .mobs
-                .iter_mut()
-                .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
-            {
-                mob.skin = Some(skin);
-                mob.slim = is_slim;
-                mob.cape = capes.get(&uuid).cloned();
-            }
-        }
-        if let Some(mob) = self.player_model.as_mut() {
-            let (skin, is_slim) = skin_of(&skins, own);
+                .iter()
+                .position(|m| m.id == id && &*m.kind.id == "minecraft:player")
+            else {
+                continue;
+            };
+            let (skin, is_slim) = self.drawn_skin(uuid, skin_of(&skins, uuid));
+            let cape = capes.get(&uuid).filter(|c| self.again_skin(c)).cloned();
+            let mob = &mut self.mobs[i];
             mob.skin = Some(skin);
             mob.slim = is_slim;
+            mob.cape = cape;
+        }
+        if self.player_model.is_some() {
+            let (skin, is_slim) = self.drawn_skin(own, skin_of(&skins, own));
             // Avatar.isModelPartShown(CAPE): the Skin Customization option.
-            mob.cape = capes
+            let cape = capes
                 .get(&own)
                 .filter(|_| self.settings.file.bool("modelPart_cape"))
+                .filter(|c| self.again_skin(c))
                 .cloned();
+            if let Some(mob) = self.player_model.as_mut() {
+                mob.skin = Some(skin);
+                mob.slim = is_slim;
+                mob.cape = cape;
+            }
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
@@ -3494,17 +3514,15 @@ impl Game<'_> {
             }
         }
     }
-    /// Puts a downloaded skin in an atlas skin slot: a free one, else the
-    /// least recently shown.
+    /// Puts a downloaded skin in an atlas skin slot (`SkinSlots::place`),
+    /// unless every slot holds a skin drawn in the last frame.
     pub(super) fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
-        use horizon_client::hud::SKIN_SLOTS;
-        let slot = if self.skin_slots.len() < SKIN_SLOTS {
-            self.skin_slots.len()
-        } else {
-            let (old, slot) = self.skin_slots.remove(0);
-            self.gui.atlas.sprites.remove(&old);
-            slot
+        let Some((slot, evicted)) = self.skin_slots.place(location.clone()) else {
+            return;
         };
+        if let Some(old) = evicted {
+            self.gui.atlas.sprites.remove(&old);
+        }
         let Some(mut rect) = self
             .gui
             .atlas
@@ -3526,21 +3544,38 @@ impl Game<'_> {
         if location.starts_with("capes/") {
             rect.v1 = (rect.v0 + rect.v1) / 2.0;
         }
-        self.gui.atlas.sprites.insert(location.clone(), rect);
-        self.skin_slots.push((location, slot));
+        self.gui.atlas.sprites.insert(location, rect);
     }
-    /// Whether a downloaded skin is in the atlas, marking it recently shown.
-    fn show_skin(&mut self, location: &str) -> bool {
-        let Some(i) = self.skin_slots.iter().position(|e| e.0 == location) else {
-            return false;
-        };
-        let e = self.skin_slots.remove(i);
-        self.skin_slots.push(e);
-        true
-    }
-    /// `show_skin`, or — its slot evicted — the image queued for upload again.
+    /// Whether a downloaded skin or cape is in the atlas to draw, marking it
+    /// drawn; if not (new, or its slot taken), its image is queued for upload
+    /// again and it is drawn from the next frame.
     fn again_skin(&mut self, location: &str) -> bool {
-        self.show_skin(location) || self.skin_downloads.borrow_mut().again(location)
+        let mut downloads = self.skin_downloads.borrow_mut();
+        if self.skin_slots.contains(location) {
+            downloads.drawn(location);
+            true
+        } else {
+            downloads.again(location);
+            false
+        }
+    }
+    /// A player's skin and model as drawn: the downloaded skin once it is in
+    /// the atlas, until then the profile's default (`DefaultPlayerSkin.get`),
+    /// as `PlayerInfo.getSkin` gives before the texture has loaded.
+    pub(super) fn drawn_skin(
+        &mut self,
+        uuid: u128,
+        (skin, slim): (String, bool),
+    ) -> (String, bool) {
+        if skin.starts_with("skins/") && !self.again_skin(&skin) {
+            let skin = horizon_client::tab_list::default_skin(uuid);
+            return (skin.to_owned(), skin.contains("/slim/"));
+        }
+        (skin, slim)
+    }
+    /// `drawn_skin` for a face in the player list or spectator menu.
+    pub(super) fn face_skin(&mut self, uuid: u128, skin: &str) -> String {
+        self.drawn_skin(uuid, (skin.to_owned(), false)).0
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
     /// ChatType.Bound.decorate: the chat type's translation, with the
