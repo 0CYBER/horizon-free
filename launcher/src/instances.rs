@@ -211,7 +211,7 @@ pub fn list() -> Vec<Instance> {
 }
 
 fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
-    let store = Store::load(data);
+    let mut store = Store::load(data);
     let mut found = vec![(
         DEFAULT.to_string(),
         "Horizon".to_string(),
@@ -227,6 +227,17 @@ fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
     own.sort();
+    // An own instance whose folder is gone (deleted outside the launcher) is forgotten, so a new
+    // one of that name starts clean. Only when the folder of instances itself can be read.
+    if game_home.join(OWN).is_dir() {
+        let before = store.instances.len();
+        store
+            .instances
+            .retain(|id, _| id == DEFAULT || id.contains(':') || own.contains(id));
+        if store.instances.len() != before {
+            let _ = store.save(data);
+        }
+    }
     for slug in own {
         let dir = game_home.join(OWN).join(&slug);
         found.push((slug.clone(), slug, Kind::Own, dir.clone(), dir));
@@ -285,6 +296,46 @@ fn find_in(all: &[Instance], query: &str) -> Result<Instance, String> {
         .or_else(|| all.iter().find(|i| bare(&i.id) == q))
         .cloned()
         .ok_or_else(|| format!("No instance {q}: horizon-launcher instance list shows them"))
+}
+
+/// Moves an instance's folder to the Trash (where the player can get it back, worlds and all)
+/// and forgets it: its choices, and the selection when Play started it. Horizon's own instance,
+/// the game's home, stays.
+pub fn delete(query: &str) -> Result<Instance, String> {
+    let gone = delete_in(
+        &backend::game_home(),
+        &backend::data_dir(),
+        query,
+        &crate::desktop_seams::to_trash,
+    )?;
+    let mut settings = backend::Settings::load();
+    if settings.instance.as_ref() == Some(&gone.id) {
+        settings.instance = None;
+        settings.save();
+    }
+    Ok(gone)
+}
+
+fn delete_in(
+    game_home: &Path,
+    data: &Path,
+    query: &str,
+    trash: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<Instance, String> {
+    let instance = find_in(&list_in(game_home, data), query)?;
+    if instance.kind == Kind::Default {
+        return Err(format!(
+            "{} is the game's own folder: it can't be deleted.",
+            instance.name
+        ));
+    }
+    trash(&instance.work)
+        .map_err(|e| format!("{} could not go to the Trash: {e}", instance.name))?;
+    let mut store = Store::load(data);
+    if store.instances.remove(&instance.id).is_some() {
+        store.save(data)?;
+    }
+    Ok(instance)
 }
 
 /// The instance Play starts: the one picked in the launcher, else Horizon.
