@@ -896,7 +896,7 @@ pub fn item(m: &Mob, slot: usize) -> Option<Arc<str>> {
 pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
     let v = Some(Arc::from(id));
     match slot {
-        MAINHAND => m.extra.main_hand = v,
+        MAINHAND => m.extra.set_main_hand(v),
         OFFHAND => m.extra.off_hand = v,
         FEET => m.extra.feet = v,
         LEGS => m.extra.legs = v,

@@ -78,6 +78,21 @@ pub fn spawn_ink(m: &mut Mob) {
 }
 pub fn register(m: &mut Mob) {
     use Species as S;
+    // WaterAnimal and AgeableWaterCreature: water costs nothing, so swim
+    // targets in water pass DefaultRandomPos's malus check.
+    if matches!(
+        m.species(),
+        S::Cod
+            | S::Salmon
+            | S::TropicalFish
+            | S::Pufferfish
+            | S::Tadpole
+            | S::Squid
+            | S::GlowSquid
+            | S::Dolphin
+    ) {
+        m.set_malus(super::path::PathType::Water, 0.0);
+    }
     match m.species() {
         S::Squid | S::GlowSquid => {
             m.ai.goals.add(0, SquidRandomMovement);
@@ -424,7 +439,7 @@ pub fn fish_move_control(m: &mut Mob) {
             m.velocity.y += f64::from(m.ai.speed) * (yd / dd) * 0.1;
         }
         if xd != 0.0 || zd != 0.0 {
-            let y_rot = (zd.atan2(xd).to_degrees() as f32) - 90.0;
+            let y_rot = horizon_core::geometry::trig::atan2_degrees(zd, xd) - 90.0;
             m.yaw = super::control::rotlerp(m.yaw, y_rot, 90.0);
             m.body_yaw = m.yaw;
         }

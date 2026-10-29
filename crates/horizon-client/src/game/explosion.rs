@@ -382,9 +382,21 @@ impl Game<'_> {
             }
             self.lan = Some(host);
         }
-        // Mobs.
+        // Mobs. `WitherBoss.hurtServer`: a wither shrugs off an undead cause.
+        let cause = self
+            .combat
+            .explosion_owner
+            .or(exploding)
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+            .map(|m| m.species());
+        // Mobs, but not the one exploding (`getEntities(source, box)`): a
+        // wither's spawn blast neither hurts nor pushes it.
+        let spared = exploding.filter(|_| self.combat.explosion_source_named);
         let mut mobs = std::mem::take(&mut self.mobs);
-        for m in mobs.iter_mut().filter(|m| m.alive()) {
+        for m in mobs
+            .iter_mut()
+            .filter(|m| m.alive() && spared != Some(m.id))
+        {
             let hurtable = teams_allow(self, self.mob_team(m.id));
             let feet = [m.position.x, m.position.y, m.position.z];
             let dist = distance(feet) / diameter;
@@ -412,7 +424,9 @@ impl Game<'_> {
                     .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
-            if hurtable && !m.damage(damage(dist, exposure), source) {
+            let shielded =
+                cause.is_some_and(|c| horizon_client::mobs::wither::shielded_from(m.species(), c));
+            if hurtable && (shielded || !m.damage(damage(dist, exposure), source)) {
                 continue;
             }
             // `EXPLOSION_KNOCKBACK_RESISTANCE`, not `KNOCKBACK_RESISTANCE`: its

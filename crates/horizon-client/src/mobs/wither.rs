@@ -55,6 +55,11 @@ pub fn register(m: &mut Mob) {
     m.ai.targets
         .add(2, NearestTarget::player(false).interval(0));
 }
+/// `WitherBoss.hurtServer`: a wither takes nothing from a `#wither_friends`
+/// mob (the undead, other withers included) that is not a player.
+pub fn shielded_from(victim: Species, attacker: Species) -> bool {
+    victim == Species::Wither && undead(attacker)
+}
 /// `#wither_friends`: the undead.
 fn undead(s: Species) -> bool {
     matches!(
@@ -241,12 +246,20 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// `WitherBoss.customServerAiStep`: charging, then the side heads' targets
 /// and volleys, block breaking and healing.
 pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    m.extra.point = m
-        .target_info(w)
-        .map(|t| [t.position.x, t.position.y, t.position.z]);
     if m.extra.counter > 0 {
         let left = m.extra.counter - 1;
         if left <= 0 {
+            // `level.explode(this, ...)`: the wither is the blast's source, so
+            // its entity query (`getEntities(source, box)`) leaves it out.
+            let name = match &m.custom_name {
+                Some(name) => crate::text::Text::literal(name.clone()),
+                None => crate::text::Text::translate("entity.minecraft.wither", &[]),
+            };
+            events.push(MobEvent::ExplosionSource {
+                mob: m.id,
+                charged: false,
+                name,
+            });
             events.push(MobEvent::Explode(
                 [m.position.x, m.eye_y(), m.position.z],
                 7.0,
@@ -268,6 +281,11 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
         }
         return;
     }
+    // `setAlternativeTarget(0, ...)` once charged: `aiStep` flies toward this
+    // target only after the charge, never during it.
+    m.extra.point = m
+        .target_info(w)
+        .map(|t| [t.position.x, t.position.y, t.position.z]);
     // The side heads pick targets and fire on their own.
     let age = m.age as i32;
     for i in 1..3 {
@@ -365,7 +383,10 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
                                 pos: [x, y, z],
                                 drop: true,
                             });
-                            destroyed = true;
+                            // destroyBlock is true when setBlock changed the
+                            // cell: a liquid is already its fluid's block.
+                            let state = w.world.block(x, y, z);
+                            destroyed |= !w.facts.get(state).has_class("LiquidBlock");
                         }
                     }
                 }
@@ -388,7 +409,7 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
 /// `WitherBoss.hurtServer` filter: not while charging, no arrows once
 /// powered, nothing from the undead.
 pub fn accepts(m: &mut Mob, kind: DamageKind, attacker: Option<Who>, others_undead: bool) -> bool {
-    if m.extra.counter > 0 && kind != DamageKind::Generic {
+    if m.extra.counter > 0 && !kind.bypasses_invulnerability() {
         return false;
     }
     if powered(m) && kind == DamageKind::Arrow {
@@ -441,4 +462,15 @@ pub fn scale(m: &Mob, alpha: f32) -> f32 {
         s -= (m.extra.counter as f32 - alpha) / INVULNERABLE as f32 * 0.5;
     }
     s
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn wither_ignores_wither_friends_only() {
+        assert!(shielded_from(Species::Wither, Species::Wither));
+        assert!(shielded_from(Species::Wither, Species::Skeleton));
+        assert!(!shielded_from(Species::Wither, Species::Creeper));
+        assert!(!shielded_from(Species::Zombie, Species::Wither));
+    }
 }
