@@ -787,6 +787,7 @@ impl Game<'_> {
             let mut downloads = self.skin_downloads.borrow_mut();
             if self.gui.atlas.sprites.contains_key(&location) {
                 let _ = downloads.state(skins::Kind::Skin, &url);
+                downloads.drawn(&location);
                 return Some(location);
             }
             // Its slot was evicted: offer the image again.
