@@ -123,6 +123,8 @@ pub enum ArrowParticle {
     Bubble,
     Crit,
     Splash,
+    /// `SpectralArrow.tick`'s white spell particle in flight.
+    Spectral,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrowSound {
@@ -626,6 +628,14 @@ impl Ticker<'_, '_, '_, '_> {
         } else {
             self.p.position = end;
             self.apply_effects_from_blocks(original, end);
+        }
+        // SpectralArrow.tick: after the move, while not in the ground.
+        if !self.st.in_ground && &*self.st.pickup_item.item == "minecraft:spectral_arrow" {
+            self.st.events.push(ArrowEvent::Particle {
+                kind: ArrowParticle::Spectral,
+                position: self.position(),
+                velocity: Vec3::ZERO,
+            });
         }
         self.finish();
         hit

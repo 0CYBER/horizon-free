@@ -2739,6 +2739,7 @@ impl Game<'_> {
             ArrowParticle::Bubble => ParticleType::Bubble,
             ArrowParticle::Crit => ParticleType::Crit,
             ArrowParticle::Splash => ParticleType::Splash,
+            ArrowParticle::Spectral => ParticleType::Effect,
         };
         match event {
             ArrowEvent::Particle {
@@ -2746,7 +2747,11 @@ impl Game<'_> {
                 position,
                 velocity,
             } => self.particles.add(
-                &ParticleOptions::simple(kind(k)),
+                &match k {
+                    // SpellParticleOption.create(EFFECT, -1, 1.0F): white, power 1.
+                    ArrowParticle::Spectral => ParticleOptions::colored(kind(k), [1.0; 4]),
+                    _ => ParticleOptions::simple(kind(k)),
+                },
                 [position.x, position.y, position.z],
                 [velocity.x, velocity.y, velocity.z],
             ),

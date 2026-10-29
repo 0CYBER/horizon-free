@@ -48,6 +48,7 @@ fn particle(k: ArrowParticle) -> &'static str {
         ArrowParticle::Bubble => "bubble",
         ArrowParticle::Crit => "crit",
         ArrowParticle::Splash => "splash",
+        ArrowParticle::Spectral => "spectral",
     }
 }
 pub fn main() -> Result<()> {

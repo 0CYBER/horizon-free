@@ -253,6 +253,12 @@ impl Game<'_> {
                         .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
                 }
                 let mut p = Projectile::new(k, at, None);
+                // The type id is all a client knows of which arrow this is.
+                if kind == "minecraft:spectral_arrow"
+                    && let Some(a) = p.arrow.as_mut()
+                {
+                    a.set_item(&horizon_client::items::ItemStack::new(kind, 1));
+                }
                 p.id = id;
                 p.velocity = velocity;
                 p.yaw = yaw;
@@ -479,6 +485,19 @@ impl Game<'_> {
             .map(|p| p.position)
             .collect();
         self.smoke_trails(trails);
+        // SpectralArrow.tick on a client: a white spell particle each tick
+        // while the arrow is not in the ground.
+        let spectral = ParticleOptions::colored(ParticleType::Effect, [1.0; 4]);
+        for p in &self.creatures.projectiles {
+            if !p.stuck
+                && p.arrow
+                    .as_ref()
+                    .is_some_and(|a| &*a.pickup_item.item == "minecraft:spectral_arrow")
+            {
+                let at = [p.position.x, p.position.y, p.position.z];
+                self.particles.add(&spectral, at, [0.0; 3]);
+            }
+        }
         // FireworkRocketEntity.tick: a rocket attached to an entity follows it
         // and boosts it client-side too (attachedToEntity.isFallFlying), and
         // every rocket leaves its spark trail on a client.
