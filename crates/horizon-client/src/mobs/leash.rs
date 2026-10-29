@@ -336,6 +336,13 @@ pub fn leash_offset(m: &Mob) -> [f64; 3] {
     if super::llama::is_llama(m.species()) {
         // Llama.getLeashOffset.
         [0.0, 0.75 * m.eye_height(), f64::from(m.width()) * 0.5]
+    } else if m.species() == super::Species::Wolf {
+        // Wolf.getLeashOffset: 0.6 of the eye height.
+        [
+            0.0,
+            f64::from(0.6_f32 * m.eye_height() as f32),
+            f64::from(m.width() * 0.4),
+        ]
     } else {
         [0.0, m.eye_height(), f64::from(m.width() * 0.4)]
     }
