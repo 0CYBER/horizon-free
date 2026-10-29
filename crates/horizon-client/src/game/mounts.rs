@@ -443,6 +443,12 @@ impl Game<'_> {
                 m.position.z + z * yaw.cos(),
             );
         }
+        // AbstractHorse.getPassengerAttachmentPoint: the rider slides back and
+        // up while the horse rears.
+        let rear = equine::rear_offset(m);
+        let rear = Vec3::new(rear[0], rear[1], rear[2])
+            .rotate_y(-m.yaw * (std::f64::consts::PI / 180.0) as f32);
+        at = Vec3::new(at.x + rear.x, at.y + rear.y, at.z + rear.z);
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;

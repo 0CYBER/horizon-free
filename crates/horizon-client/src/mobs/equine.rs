@@ -82,6 +82,18 @@ fn can_rear(s: Species) -> bool {
             | Species::ZombieHorse
     )
 }
+/// `AbstractHorse.getPassengerAttachmentPoint`: what it adds to its seat
+/// before the yaw turns it. A horse up on its hind legs slides its rider back
+/// and up by the stand animation of the last tick (`standAnimO`), at
+/// `getAgeScale`. Camels and llamas never rear.
+pub fn rear_offset(m: &Mob) -> [f64; 3] {
+    if !can_rear(m.species()) {
+        return [0.0; 3];
+    }
+    let stand = f64::from(m.anim.vo[STAND]);
+    let scale = f64::from(if m.is_baby() { 0.5_f32 } else { 1.0 });
+    [0.0, 0.15 * stand * scale, -0.7 * stand * scale]
+}
 /// `AbstractHorse.isImmobile`: no goals while it eats or rears. A mount its
 /// rider steers still takes their input (`travelRidden`).
 pub fn immobile(m: &Mob) -> bool {
