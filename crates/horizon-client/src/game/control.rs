@@ -349,7 +349,10 @@ impl Game<'_> {
                     self.native_key_event(physical, false, false);
                 }
                 // Text screens consume raw presses; releases follow key binds.
-                let typing = matches!(self.screen, Screen::Chat | Screen::Options);
+                let typing = matches!(
+                    self.screen,
+                    Screen::Chat | Screen::Options | Screen::CommandBlock
+                );
                 let key = if typing && arg(2)? != "up" {
                     key
                 } else {
@@ -855,6 +858,10 @@ impl Game<'_> {
         }
         if self.screen == Screen::Options {
             return self.options_key(key, None);
+        }
+        if self.screen == Screen::CommandBlock {
+            self.command_block_key_code(key, None, None);
+            return Ok(());
         }
         if self.keys.insert(key) {
             self.key_pressed(key)?;
