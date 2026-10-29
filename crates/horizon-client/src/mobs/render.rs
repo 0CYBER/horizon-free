@@ -20,12 +20,32 @@ pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 /// the model UV and reads `enchanted_glint_armor`.
 pub const ARMOR_GLINT: u32 = 13;
 
+/// `RenderTypes.breezeWind`: the texture of the breeze's wind layer scrolls
+/// by 0.02 of the texture per tick.
+pub const BREEZE_WIND_SCROLL: f32 = 0.02;
+/// `WindChargeRenderer.xOffset`: the wind charge's texture scrolls by 0.03 of
+/// the texture per tick.
+pub const WIND_CHARGE_SCROLL: f32 = 0.03;
+/// The offset of a scrolling texture: `RenderTypes.breezeWind` takes the
+/// texture's age times the speed, modulo one.
+pub fn scroll_offset(age: f32, speed: f32) -> f32 {
+    (age * speed) % 1.0
+}
+/// The vertex's U with the scroll: the texture matrix of
+/// `RenderTypes.breezeWind` moves the texture under the model, so the U
+/// moves by the offset and wraps around the texture.
+fn scroll_u(u: f32, scroll: f32) -> f32 {
+    if scroll == 0.0 { u } else { (u + scroll) % 1.0 }
+}
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
     pub texture: String,
     pub color: u32,
     pub full_bright: bool,
+    /// `RenderTypes.breezeWind`: the texture scrolls with the entity's age.
+    pub scroll: f32,
 }
 /// DyeColor.getTextureDiffuseColor (RGB).
 pub const DYE: [u32; 16] = [
@@ -54,6 +74,21 @@ pub const DYE_NAMES: [&str; 16] = [
 pub fn abgr(rgb: u32) -> u32 {
     let (r, g, b) = ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
     0xFF00_0000 | b << 16 | g << 8 | r
+}
+
+/// `EquipmentLayerRenderer.getColorForLayer`: a dyeable layer takes the
+/// stack's dye colour (`minecraft:dyed_color`), the colour it has when
+/// undyed otherwise; a layer that is not dyeable is not tinted.
+pub fn armor_tint(undyed: Option<u32>, stack: Option<&crate::items::ItemStack>) -> u32 {
+    let Some(undyed) = undyed else {
+        return 0xFFFF_FFFF;
+    };
+    let dyed = stack
+        .and_then(|s| s.extra.as_ref())
+        .and_then(|e| e.dyed_color)
+        .map(|d| d as u32)
+        .unwrap_or(undyed);
+    abgr(dyed)
 }
 /// ColorLerper.Type.SHEEP colour: white is 0xE6E6E6, others 75% of the dye.
 pub fn sheep_wool_rgb(color: u8) -> u32 {
@@ -437,6 +472,7 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             texture: texture.into(),
             color,
             full_bright,
+            scroll: 0.0,
         })
     };
     match m.species() {
@@ -490,16 +526,17 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
                 push(&mut v, "happy_ghast_harness#main", &texture, white, false);
             }
         }
-        // BreezeWindLayer (the scroll is not reproduced: atlas sprites do
-        // not wrap) and BreezeEyesLayer.
+        // BreezeWindLayer and BreezeEyesLayer. The wind layer's texture
+        // scrolls (`RenderTypes.breezeWind`): the offset is taken inside the
+        // sprite, so the atlas does not have to wrap.
         S::Breeze => {
-            push(
-                &mut v,
-                "breeze#wind",
-                "entity/breeze/breeze_wind",
-                white,
-                false,
-            );
+            v.push(Layer {
+                model: "breeze#wind".into(),
+                texture: "entity/breeze/breeze_wind".into(),
+                color: white,
+                full_bright: false,
+                scroll: scroll_offset(m.age as f32, BREEZE_WIND_SCROLL),
+            });
             push(
                 &mut v,
                 "breeze#eyes",
@@ -794,12 +831,12 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
         return;
     };
     let slots = [
-        (&m.extra.head, "helmet"),
-        (&m.extra.chest, "chestplate"),
-        (&m.extra.legs, "leggings"),
-        (&m.extra.feet, "boots"),
+        (&m.extra.head, &m.extra.armor[0], "helmet"),
+        (&m.extra.chest, &m.extra.armor[1], "chestplate"),
+        (&m.extra.legs, &m.extra.armor[2], "leggings"),
+        (&m.extra.feet, &m.extra.armor[3], "boots"),
     ];
-    for (item, layer) in slots {
+    for (item, stack, layer) in slots {
         let Some(name) = item.as_deref().and_then(|i| i.strip_prefix("minecraft:")) else {
             continue;
         };
@@ -817,8 +854,10 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
             "humanoid"
         };
         let model = format!("{base}#{layer}");
+        // EquipmentLayerRenderer.getColorForLayer: the leather layer takes
+        // the stack's dye colour, the colour it has when undyed otherwise.
         let tint = if asset == "leather" {
-            abgr(0xA06540)
+            armor_tint(Some(0xA06540), stack.as_ref())
         } else {
             0xFFFF_FFFF
         };
@@ -827,6 +866,7 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
             texture: format!("entity/equipment/{folder}/{asset}"),
             color: tint,
             full_bright: false,
+            scroll: 0.0,
         });
         if asset == "leather" {
             v.push(Layer {
@@ -834,6 +874,7 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
                 texture: format!("entity/equipment/{folder}/leather_overlay"),
                 color: 0xFFFF_FFFF,
                 full_bright: false,
+                scroll: 0.0,
             });
         }
     }
@@ -875,7 +916,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             let eye = if avatar(m) {
                 m.kind.eye_height as f32
             } else {
-                (m.eye_y() - m.position.y) as f32
+                m.awake_dims().2 as f32
             };
             let head = eye - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
@@ -1047,12 +1088,30 @@ pub fn draw(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
+    draw_scrolled(part, base, poses, uv, 0.0, color, light, overlay, out);
+}
+/// `draw` for a texture that scrolls: the vertex's U is moved by the offset
+/// and wraps inside the texture, as the texture matrix of
+/// `RenderTypes.breezeWind` does.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_scrolled(
+    part: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    uv: [f32; 4],
+    scroll: f32,
+    color: u32,
+    light: u32,
+    overlay: u32,
+    out: &mut Vec<Vertex>,
+) {
     draw_normals(
         part,
         base,
         ModelNormals::new(base),
         poses,
         uv,
+        scroll,
         color,
         light,
         overlay,
@@ -1066,6 +1125,7 @@ fn draw_normals(
     normals: ModelNormals,
     poses: &Poses,
     uv: [f32; 4],
+    scroll: f32,
     color: u32,
     light: u32,
     overlay: u32,
@@ -1103,7 +1163,7 @@ fn draw_normals(
                     normal,
                     pos: pos.to_array(),
                     uv: [
-                        uv[0] + (uv[2] - uv[0]) * v[3],
+                        uv[0] + (uv[2] - uv[0]) * scroll_u(v[3], scroll),
                         uv[1] + (uv[3] - uv[1]) * v[4],
                     ],
                     layer: overlay,
@@ -1115,7 +1175,7 @@ fn draw_normals(
         }
     }
     for c in &part.children {
-        draw_normals(c, m, normals, poses, uv, color, light, overlay, out);
+        draw_normals(c, m, normals, poses, uv, scroll, color, light, overlay, out);
     }
 }
 /// Render a mob with its variant model, texture and layers.
@@ -1236,6 +1296,7 @@ fn render_visible(
                     texture: texture.into(),
                     color: ((a.clamp(0.0, 1.0) * 255.0) as u32) << 24 | 0x00FF_FFFF,
                     full_bright: true,
+                    scroll: 0.0,
                 });
             }
         }
@@ -1277,11 +1338,12 @@ fn render_visible(
             None => overlay,
         };
         let start = out.len();
-        draw(
+        draw_scrolled(
             &part,
             base,
             &layer_poses,
             uv,
+            layer.scroll,
             layer.color,
             light,
             overlay,
@@ -1411,8 +1473,12 @@ fn hand_base(
             | Species::WitherSkeleton
     );
     let arm = if left { "left_arm" } else { "right_arm" };
+    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
+    // by 0.5 for slim arms: the hand is the middle of the arm.
     let offset = if skeleton {
         if left { -1.0 } else { 1.0 }
+    } else if avatar(m) && m.slim {
+        if left { -0.5 } else { 0.5 }
     } else {
         0.0
     };
@@ -1669,5 +1735,53 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn a_dyed_leather_armour_keeps_its_colour() {
+        // EquipmentLayerRenderer.getColorForLayer: a dyeable layer takes
+        // the stack's dye colour, the colour it has when undyed otherwise.
+        let mut stack = crate::items::ItemStack {
+            item: "minecraft:leather_helmet".into(),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        // Undyed leather: the colour the leather layer has when undyed.
+        assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0xA06540));
+        // Dyed: the stack's own colour.
+        stack.extra = Some(Box::new(crate::item_data::StackData {
+            dyed_color: Some(0x0000FF),
+            ..Default::default()
+        }));
+        assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
+        // A layer that is not dyeable is not tinted.
+        assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn the_scrolling_texture_wraps_around() {
+        // RenderTypes.breezeWind: the breeze's wind layer's texture scrolls
+        // by 0.02 of the texture per tick, the wind charge's by 0.03.
+        assert_eq!(scroll_offset(0.0, BREEZE_WIND_SCROLL), 0.0);
+        assert!((scroll_offset(25.0, BREEZE_WIND_SCROLL) - 0.5).abs() < 1e-6);
+        assert!((scroll_offset(50.0, BREEZE_WIND_SCROLL) - 0.0).abs() < 1e-6);
+        assert!((scroll_offset(50.0, WIND_CHARGE_SCROLL) - 0.5).abs() < 1e-6);
+        assert!((scroll_offset(100.0, WIND_CHARGE_SCROLL) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_scrolled_u_wraps_inside_the_texture() {
+        // Without a scroll the U is the vertex's own.
+        assert_eq!(scroll_u(0.25, 0.0), 0.25);
+        assert_eq!(scroll_u(1.0, 0.0), 1.0);
+        // With one, it moves and wraps around the texture.
+        assert!((scroll_u(0.25, 0.5) - 0.75).abs() < 1e-6);
+        assert!((scroll_u(0.75, 0.5) - 0.25).abs() < 1e-6);
+        assert!((scroll_u(1.0, 0.5) - 0.5).abs() < 1e-6);
     }
 }
