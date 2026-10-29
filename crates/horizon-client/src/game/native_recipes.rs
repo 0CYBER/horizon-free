@@ -1,17 +1,32 @@
-//! Capability `recipes` (docs/mods.md): every item and recipe the game
-//! knows, made once for the mods that read them, and the recipe book's
-//! known displays. The recipes are the window's own data: the world's in
-//! single player, vanilla's on a server (a client is sent no others), while
-//! the known displays follow the server's book as the recipe book does.
-use super::Game;
+//! Every item and recipe the game knows, made once for the mods that read
+//! them (native mods' `native_recipes`, capability `recipes` of WebAssembly
+//! mods, docs/mods.md), and the recipe book's known displays; placing a
+//! recipe and creative gifts. The recipes are the window's own data: the
+//! world's in single player, vanilla's on a server (a client is sent no
+//! others), while the known displays follow the server's book as the recipe
+//! book does.
+use super::{
+    Game,
+    native_hooks::{
+        NativeItem as RecipeItem, NativeRecipe as Recipe, NativeRecipeKind as RecipeKind,
+        NativeRecipeStack as RecipeStack, NativeRecipes as Recipes,
+    },
+};
 use horizon_client::{
     crafting::Ingredient,
     items::ItemStack,
     recipe_book::{Category, Display},
     stations::Smithing,
 };
-use horizon_mods::{Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
 use std::{collections::HashMap, sync::Arc};
+
+/// The tables, made once, and the recipe book's known displays with the
+/// book's version they are of.
+#[derive(Default)]
+pub(super) struct RecipeTables {
+    tables: Option<Arc<Recipes>>,
+    known: (Option<u64>, Arc<[i32]>),
+}
 
 /// Item id -> its index in [`Recipes::items`].
 struct Index(HashMap<Arc<str>, u32>);
@@ -70,6 +85,34 @@ fn recipe(id: String, kind: RecipeKind) -> Recipe {
 }
 
 impl Game<'_> {
+    /// `native_give`: `count` of `item`, refused outside a world, unless
+    /// creative and for an item the game doesn't have.
+    pub(super) fn recipe_give(&mut self, item: &str, count: u32) -> Result<(), String> {
+        if self.player.is_none() || self.res.rest.get().is_none() {
+            return Err("not in a world".into());
+        }
+        if !self.creative {
+            return Err("only in creative mode".into());
+        }
+        if self.res.items().get(item).is_none() {
+            return Err(format!("no item {item}"));
+        }
+        self.mod_give(item, count.clamp(1, 99), "");
+        Ok(())
+    }
+    /// `native_place_recipe`: refused as `recipes.place` refuses it.
+    pub(super) fn recipe_place(&mut self, book_id: i32, all: bool) -> Result<(), String> {
+        if !self.mod_recipe_screen() {
+            return Err("no screen that takes recipes is open".into());
+        }
+        if !self.known_displays().contains(&book_id) {
+            return Err(format!(
+                "recipe {book_id} is not in the player's recipe book"
+            ));
+        }
+        self.mod_place_recipe(book_id, all);
+        Ok(())
+    }
     /// `recipes.give`: a creative player takes the stack as from the
     /// creative inventory; a server hears it as `SetCreativeModeSlot`
     /// through the inventory's sync, and refuses it unless creative.
@@ -92,20 +135,25 @@ impl Game<'_> {
             extra,
         });
     }
-    /// Capability `recipes`'s tables and known displays for this tick's
-    /// snapshot; nothing while no running mod reads them.
-    pub(super) fn mod_recipes(&mut self) -> (Option<Arc<Recipes>>, Arc<[i32]>) {
-        if !self.mods.mods.wants_recipes() {
-            return (None, Arc::from([]));
+    /// The tables, made on the first call; none while the world resources
+    /// they come from are still loading behind the title on a slow start.
+    pub(super) fn made_recipes(&mut self) -> Option<Arc<Recipes>> {
+        self.res.rest.get()?;
+        if self.recipe_tables.tables.is_none() {
+            self.recipe_tables.tables = Some(Arc::new(self.make_mod_recipes()));
         }
-        if self.mods.recipes.is_none() {
-            self.mods.recipes = Some(Arc::new(self.make_mod_recipes()));
+        self.recipe_tables.tables.clone()
+    }
+    /// The `book_id`s the player's recipe book holds now.
+    pub(super) fn known_displays(&mut self) -> Arc<[i32]> {
+        if self.res.rest.get().is_none() {
+            return Arc::from([]);
         }
         let (version, known) = self.recipe_book_displays();
-        if self.mods.known_recipes.0 != Some(version) {
-            self.mods.known_recipes = (Some(version), known.into());
+        if self.recipe_tables.known.0 != Some(version) {
+            self.recipe_tables.known = (Some(version), known.into());
         }
-        (self.mods.recipes.clone(), self.mods.known_recipes.1.clone())
+        self.recipe_tables.known.1.clone()
     }
 
     fn make_mod_recipes(&mut self) -> Recipes {
@@ -269,6 +317,81 @@ impl Game<'_> {
         Recipes {
             items: table,
             recipes: out,
+        }
+    }
+}
+
+/// Capability `recipes` of WebAssembly mods: the same tables in the
+/// runtime's types.
+#[cfg(feature = "mods")]
+impl Game<'_> {
+    /// Capability `recipes`'s tables and known displays for this tick's
+    /// snapshot; nothing while no running mod reads them.
+    pub(super) fn mod_recipes(&mut self) -> (Option<Arc<horizon_mods::Recipes>>, Arc<[i32]>) {
+        if !self.mods.mods.wants_recipes() || self.res.rest.get().is_none() {
+            return (None, Arc::from([]));
+        }
+        if self.mods.recipes.is_none() {
+            self.mods.recipes = self.made_recipes().map(|t| Arc::new(wasm::recipes(&t)));
+        }
+        (self.mods.recipes.clone(), self.known_displays())
+    }
+}
+
+/// The native tables as the WebAssembly runtime's.
+#[cfg(feature = "mods")]
+mod wasm {
+    use super::{Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
+    use horizon_mods as m;
+
+    fn kind(k: RecipeKind) -> m::RecipeKind {
+        match k {
+            RecipeKind::CraftingShaped => m::RecipeKind::CraftingShaped,
+            RecipeKind::CraftingShapeless => m::RecipeKind::CraftingShapeless,
+            RecipeKind::Smelting => m::RecipeKind::Smelting,
+            RecipeKind::Blasting => m::RecipeKind::Blasting,
+            RecipeKind::Smoking => m::RecipeKind::Smoking,
+            RecipeKind::Campfire => m::RecipeKind::Campfire,
+            RecipeKind::Stonecutting => m::RecipeKind::Stonecutting,
+            RecipeKind::Smithing => m::RecipeKind::Smithing,
+            RecipeKind::Brewing => m::RecipeKind::Brewing,
+        }
+    }
+    fn stacks(list: &[RecipeStack]) -> Vec<m::RecipeStack> {
+        list.iter()
+            .map(|s| m::RecipeStack {
+                item: s.item,
+                count: s.count,
+                components: s.components.clone(),
+            })
+            .collect()
+    }
+    fn recipe(r: &Recipe) -> m::Recipe {
+        m::Recipe {
+            id: r.id.clone(),
+            kind: kind(r.kind),
+            category: r.category.clone(),
+            group: r.group.clone(),
+            width: r.width,
+            height: r.height,
+            slots: r.slots.iter().map(|s| stacks(s)).collect(),
+            results: stacks(&r.results),
+            cooking_time: r.cooking_time,
+            experience: r.experience,
+            book_id: r.book_id,
+        }
+    }
+    fn item(i: &RecipeItem) -> m::RecipeItem {
+        m::RecipeItem {
+            id: i.id.clone(),
+            name: i.name.clone(),
+            tags: i.tags.clone(),
+        }
+    }
+    pub(super) fn recipes(t: &Recipes) -> m::Recipes {
+        m::Recipes {
+            items: t.items.iter().map(item).collect(),
+            recipes: t.recipes.iter().map(recipe).collect(),
         }
     }
 }

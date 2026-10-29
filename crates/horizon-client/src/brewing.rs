@@ -4,8 +4,8 @@
 //! `BrewingStandBlockEntity.serverTick`.
 pub use crate::chunk::block_entity::BrewingStand;
 use crate::{
-    containers::Providers,
     items::{ItemStack, Items},
+    providers::Providers,
 };
 use serde_json::Value;
 use std::{collections::HashSet, fs, path::Path};

@@ -16,6 +16,21 @@ use horizon_core::{
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+/// `EquipmentLayerRenderer.getColorForLayer`: a dyeable layer (one with a
+/// colour when undyed) takes the stack's `minecraft:dyed_color`, else that
+/// colour; any other layer stays white, dyed or not. The result is in the
+/// renderer's byte order (R and B swapped).
+fn layer_color(undyed: Option<u32>, stack: Option<&ItemStack>) -> u32 {
+    let dyed = stack
+        .and_then(|s| s.data())
+        .and_then(|d| d.dyed_color)
+        .map(|c| c as u32 & 0xFF_FFFF);
+    undyed.map_or(0xFFFF_FFFF, |undyed| {
+        let c = dyed.unwrap_or(undyed);
+        0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
+    })
+}
+
 /// Armor stand models and the humanoid layers of every equipment asset.
 pub(super) struct ArmorStandAssets {
     pub main: Option<Part>,
@@ -138,7 +153,13 @@ impl Game<'_> {
     pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
         let e = &m.extra;
         self.armor_layers(
-            [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref().map(|i| (i, None))),
+            [
+                (e.head.as_deref(), e.armor[0].as_ref()),
+                (e.chest.as_deref(), e.armor[1].as_ref()),
+                (e.legs.as_deref(), e.armor[2].as_ref()),
+                (e.feet.as_deref(), e.armor[3].as_ref()),
+            ]
+            .map(|(item, stack)| item.map(|i| (i, stack))),
         )
     }
     /// The layers of the armour items `worn` (with their stacks when known,
@@ -179,9 +200,7 @@ impl Game<'_> {
             ) else {
                 continue;
             };
-            let color = undyed.map_or(0xFFFF_FFFF, |c| {
-                0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
-            });
+            let color = layer_color(*undyed, stack);
             out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
             // EquipmentLayerRenderer: the trim layer over the armour.
             if let Some(r) = stack
@@ -207,6 +226,7 @@ impl Game<'_> {
             .armor
             .iter()
             .chain(guests.flat_map(|g| g.armor.iter()))
+            .chain(self.mobs.iter().flat_map(|m| m.extra.armor.iter()))
             .zip(
                 ["helmet", "chestplate", "leggings", "boots"]
                     .into_iter()
@@ -695,9 +715,7 @@ impl Game<'_> {
                 else {
                     continue;
                 };
-                let color = undyed.map_or(0xFFFF_FFFF, |c| {
-                    0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
-                });
+                let color = layer_color(*undyed, Some(stack));
                 // ArmorStandRenderer's HumanoidArmorLayer: the armour glint
                 // when `stack.hasFoil()`, as on a living entity.
                 let item_glint = self
@@ -991,5 +1009,23 @@ mod burn_drop_tests {
         let (pos, drops) = burnt_armor_stand_equipment(stand);
         assert_eq!(pos, [-1, 5, 0]);
         assert_eq!(drops, vec![kept]);
+    }
+}
+#[cfg(test)]
+mod layer_color_tests {
+    use super::*;
+    #[test]
+    fn a_dyed_stack_overrides_the_undyed_leather_colour() {
+        let mut dyed = ItemStack::new("minecraft:leather_helmet", 1);
+        dyed.data_mut().dyed_color = Some(0x1E_90FF);
+        // Dyed blue, R and B swapped into the renderer's order, opaque.
+        assert_eq!(layer_color(Some(0xA06540), Some(&dyed)), 0xFFFF_901E);
+        // An undyed stack keeps the asset's brown.
+        let plain = ItemStack::new("minecraft:leather_helmet", 1);
+        assert_eq!(layer_color(Some(0xA06540), Some(&plain)), 0xFF40_65A0);
+        // No dye and no undyed colour: white.
+        assert_eq!(layer_color(None, Some(&plain)), 0xFFFF_FFFF);
+        // A layer that isn't dyeable stays white even on a dyed stack.
+        assert_eq!(layer_color(None, Some(&dyed)), 0xFFFF_FFFF);
     }
 }
