@@ -258,6 +258,8 @@ impl Game<'_> {
         if dist > 1.0 || p.health.dead_or_dying() {
             return;
         }
+        // ServerPlayer.onExplosionHit: the blast that hit the player is theirs.
+        self.adv.marks.blast = Some((feet, false));
         let w = f64::from(p.dimensions.width) / 2.0;
         let h = f64::from(p.dimensions.height);
         let eye = [
@@ -400,7 +402,14 @@ impl Game<'_> {
             // it kills drop its charged-creeper loot (`Creeper.killedEntity`).
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: exploding.map(horizon_client::mobs::Who::Mob),
+                // A projectile's owner (`getIndirectSourceEntity`), else
+                // the exploding mob itself.
+                attacker: self
+                    .combat
+                    .explosion_owner
+                    .or(exploding)
+                    .filter(|&o| o != m.id)
+                    .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
             if hurtable && !m.damage(damage(dist, exposure), source) {

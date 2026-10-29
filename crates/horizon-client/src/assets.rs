@@ -218,6 +218,8 @@ impl RenderAssets {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
         sprites.finish();
+        // `finish` grows the buffer by doubling: keep only the bytes in use.
+        sprites.pixels.shrink_to_fit();
         Ok(Self {
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
@@ -232,5 +234,83 @@ impl RenderAssets {
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::items::ConsumeEffect;
+
+    #[test]
+    fn always_edible_and_consume_effects_loaded() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
+
+        let apple = items.get("minecraft:golden_apple").expect("golden apple");
+        assert!(apple.can_always_eat);
+        assert!(apple.food.is_some());
+        assert!(!apple.consumable.as_ref().unwrap().effects.is_empty());
+
+        let enchanted = items
+            .get("minecraft:enchanted_golden_apple")
+            .expect("enchanted golden apple");
+        assert!(enchanted.can_always_eat);
+        assert!(enchanted.food.is_some());
+        assert!(!enchanted.consumable.as_ref().unwrap().effects.is_empty());
+
+        let beef = items.get("minecraft:cooked_beef").expect("cooked beef");
+        assert!(!beef.can_always_eat);
+        assert!(beef.food.is_some());
+
+        // Consumables without food, their style and their remainders.
+        use horizon_world::consumable::UseAnimation;
+        let milk = items.get("minecraft:milk_bucket").expect("milk bucket");
+        let drink = milk.consumable.as_ref().unwrap();
+        assert!(milk.food.is_none());
+        assert_eq!(drink.effects, [ConsumeEffect::ClearAllEffects]);
+        assert_eq!((drink.ticks(), drink.animation), (32, UseAnimation::Drink));
+        assert_eq!(drink.sound, "minecraft:entity.generic.drink");
+        assert!(!drink.particles);
+        assert_eq!(milk.use_remainder.as_deref(), Some("minecraft:bucket"));
+        let honey = items.get("minecraft:honey_bottle").expect("honey bottle");
+        let sip = honey.consumable.as_ref().unwrap();
+        assert_eq!(sip.ticks(), 40);
+        assert_eq!(sip.sound, "minecraft:item.honey_bottle.drink");
+        assert_eq!(
+            sip.effects,
+            [ConsumeEffect::RemoveEffects(vec![
+                "minecraft:poison".into()
+            ])]
+        );
+        assert_eq!(
+            honey.use_remainder.as_deref(),
+            Some("minecraft:glass_bottle")
+        );
+        let kelp = items.get("minecraft:dried_kelp").unwrap();
+        let bite = kelp.consumable.as_ref().unwrap();
+        assert_eq!((bite.ticks(), bite.animation), (16, UseAnimation::Eat));
+        assert_eq!(bite.sound, "minecraft:entity.generic.eat");
+        assert!(bite.particles && kelp.use_remainder.is_none());
+        let chorus = items.get("minecraft:chorus_fruit").unwrap();
+        assert_eq!(
+            chorus.consumable.as_ref().unwrap().effects,
+            [ConsumeEffect::TeleportRandomly(
+                horizon_world::teleport_consume::TeleportConsume {
+                    diameter: 16.0,
+                    directional_particles: true,
+                }
+            )]
+        );
+        let chicken = items.get("minecraft:chicken").unwrap();
+        assert!(matches!(
+            chicken.consumable.as_ref().unwrap().effects[..],
+            [ConsumeEffect::ApplyEffects { probability, .. }] if probability == 0.3
+        ));
     }
 }

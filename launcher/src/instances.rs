@@ -101,7 +101,30 @@ pub struct Meta {
     /// What runs around the game: a pre-launch command, a wrapper, variables (`launch`).
     #[serde(default, skip_serializing_if = "Launch::is_empty")]
     pub launch: Launch,
+    /// Set for a Minecraft: Java Edition instance: it plays the real game, not Horizon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub java: Option<JavaGame>,
 }
+
+/// A Minecraft: Java Edition instance: the real game of one version, with the Java it runs on
+/// (`crate::java` picks one when `home` is none).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JavaGame {
+    /// The Minecraft version, as Mojang names it (`1.21.4`).
+    pub minecraft: String,
+    /// A Java home to run it on instead of the automatic pick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<PathBuf>,
+    /// The most memory the game may use, in MiB (`-Xmx`); none: [`DEFAULT_MEMORY_MB`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    /// Extra JVM arguments, split on whitespace.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub jvm_args: String,
+}
+
+/// 4 GiB: enough for vanilla and most modpacks, as other launchers start with.
+pub const DEFAULT_MEMORY_MB: u32 = 4096;
 
 fn is_zero(n: &u64) -> bool {
     *n == 0
@@ -146,12 +169,28 @@ pub struct Instance {
     pub last_played: Option<SystemTime>,
     /// What runs around the game (`launch::wrap`).
     pub launch: Launch,
+    /// The Minecraft: Java Edition it plays, for a Java instance.
+    pub java: Option<JavaGame>,
 }
 
 impl Instance {
+    /// Ok when it plays Horizon; a Java instance's refusal, until the launcher starts the real
+    /// game.
+    fn horizon(&self) -> Result<(), String> {
+        match &self.java {
+            None => Ok(()),
+            Some(java) => Err(format!(
+                "{} plays Minecraft {} (Java Edition), which this launcher can't start yet: playing \
+                 Java instances comes in a coming update.",
+                self.name, java.minecraft
+            )),
+        }
+    }
+
     /// The installed version this instance plays: its pinned one, else `requested` (the
     /// command line's `--version`) or the launcher's (`backend::resolve_version`).
     pub fn resolve_version(&self, requested: Option<&str>) -> Result<String, String> {
+        self.horizon()?;
         match (requested, &self.version) {
             (None, Some(pinned)) => backend::resolve_version(Some(pinned)).map_err(|_| {
                 format!(
@@ -220,6 +259,7 @@ fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
                     .last_played
                     .map(|s| UNIX_EPOCH + Duration::from_secs(s)),
                 launch: meta.launch,
+                java: meta.java,
                 id,
                 kind,
                 work,
@@ -291,6 +331,19 @@ pub fn create(name: &str, from: Option<&str>) -> Result<Instance, String> {
         &backend::data_dir(),
         name,
         from.as_ref(),
+        None,
+    )
+}
+
+/// Creates a Minecraft: Java Edition instance named `name` playing `minecraft` (a version id
+/// from Mojang's list), with an empty game folder: the real game keeps its own options.
+pub fn create_java(name: &str, minecraft: &str) -> Result<Instance, String> {
+    create_in(
+        &backend::game_home(),
+        &backend::data_dir(),
+        name,
+        None,
+        Some(minecraft),
     )
 }
 
@@ -299,6 +352,7 @@ fn create_in(
     data: &Path,
     name: &str,
     from: Option<&Instance>,
+    minecraft: Option<&str>,
 ) -> Result<Instance, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -329,6 +383,7 @@ fn create_in(
     let dir = game_home.join(OWN).join(&slug);
     let made = match from {
         Some(from) => copy_home(&from.home, &dir),
+        None if minecraft.is_some() => fs::create_dir_all(&dir),
         None => fs::create_dir_all(&dir).and_then(|()| {
             for f in PLAYER_FILES {
                 let own = game_home.join(f);
@@ -348,6 +403,12 @@ fn create_in(
     meta.name = (name != slug).then(|| name.to_string());
     meta.icon = from.and_then(|f| f.icon.clone());
     meta.group = from.and_then(|f| f.group.clone());
+    meta.java = from.and_then(|f| f.java.clone()).or_else(|| {
+        minecraft.map(|v| JavaGame {
+            minecraft: v.to_string(),
+            ..JavaGame::default()
+        })
+    });
     store.save(data)?;
     find_in(&list_in(game_home, data), &slug)
 }
@@ -459,6 +520,7 @@ pub fn play_time(played: Duration) -> String {
 /// player's answers that hold everywhere follow it in: data collection and No AI as the
 /// launcher has them, and options.txt and the offline name when it has none yet.
 pub fn apply(cmd: &mut Command, instance: &Instance) -> Result<(), String> {
+    instance.horizon()?;
     match instance.kind {
         Kind::Default => return Ok(()),
         Kind::Own => {
@@ -489,6 +551,34 @@ fn follow_player(game_home: &Path, home: &Path) {
     if horizon_core::no_ai::is_on(home) != no_ai {
         let _ = horizon_core::no_ai::set(home, no_ai);
     }
+}
+
+/// A fresh made-up name everywhere the game keeps one: `horizon-player.txt` is per game
+/// folder (`PLAYER_FILES`), so the same new name goes to the default home and every
+/// instance's — the player stays one player in its worlds. The file's `name:` line and the
+/// `Player` + five digits scheme are horizon-client's (`offline_name.rs`).
+pub fn new_player_name() -> Result<String, String> {
+    new_player_name_in(&backend::game_home(), &backend::data_dir())
+}
+
+fn new_player_name_in(game_home: &Path, data: &Path) -> Result<String, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let name = format!(
+        "Player{:05}",
+        (nanos ^ u64::from(std::process::id()).rotate_left(32)) % 100_000
+    );
+    for instance in list_in(game_home, data) {
+        if instance.home.is_dir() {
+            fs::write(
+                instance.home.join("horizon-player.txt"),
+                format!("name:{name}\n"),
+            )
+            .map_err(|e| format!("{}: {e}", instance.home.display()))?;
+        }
+    }
+    Ok(name)
 }
 
 #[cfg(test)]

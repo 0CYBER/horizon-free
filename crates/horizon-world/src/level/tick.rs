@@ -127,8 +127,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
+                    // BrushableBlock.tick checks the brush reset first (the
+                    // caller keeps the brush counts).
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "brushable",
+                    });
                     if self.is_free(self.below_state(pos)) && pos.y >= self.level.min_y() {
-                        self.falling_block_fall(pos, state);
+                        self.falling_block_fall(pos, state, None);
                     }
                 }
                 Class::Farmland => {
@@ -505,7 +512,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         );
         if distance == 7 {
             if b.table.int(state, b.props.distance) == 7 {
-                self.falling_block_fall(pos, next);
+                self.falling_block_fall(pos, next, None);
             } else {
                 self.destroy_block(pos, true, 512);
             }
@@ -1145,7 +1152,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let block = b.block(state);
-        if self.rand_int(4) != 0 {
+        // The spread_vines rule, checked before the roll.
+        if !self.level.game_rules().spread_vines || self.rand_int(4) != 0 {
             return;
         }
         let direction = Direction::ALL[self.rand_int(6) as usize];

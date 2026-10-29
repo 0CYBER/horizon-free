@@ -15,7 +15,10 @@ use horizon_client::{
     gamerules::Value as RuleValue,
     item_data::{canon_stack, parse_stack},
     items::ItemStack,
-    mobs::{Mob, Species},
+    mobs::{
+        Mob, Species,
+        spawner::{SpawnDataExt, SpawnerExt},
+    },
     motion::PlayerMotion,
     projectiles::ProjectileKind,
     world::World,
@@ -672,6 +675,7 @@ impl Game<'_> {
         }
         let source = match source.kind {
             horizon_client::mobs::DamageKind::MaceSmash => "minecraft:mace_smash",
+            horizon_client::mobs::DamageKind::Spear => "minecraft:spear",
             _ => "minecraft:player_attack",
         };
         out.push(format!(

@@ -79,6 +79,31 @@ impl<T: Copy> PoiSections<T> {
     }
 }
 
+/// The POI types villagers use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Poi {
+    /// A job site, by profession index.
+    Job(u8),
+    Home,
+    Meeting,
+}
+impl Poi {
+    /// `PoiType.maxTickets`.
+    pub fn max_tickets(self) -> usize {
+        match self {
+            Poi::Meeting => 32,
+            _ => 1,
+        }
+    }
+    /// `PoiType.validRange`.
+    pub fn valid_range(self) -> i32 {
+        match self {
+            Poi::Meeting => 6,
+            _ => 1,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

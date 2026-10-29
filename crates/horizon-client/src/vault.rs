@@ -7,6 +7,7 @@
 //! the next one. The level's random draws the display item and throws the
 //! rewards; the loot tables go through the caller, so the game and a
 //! differential test world roll them the same way.
+pub use crate::chunk::block_entity::{Vault, VaultConfig};
 use crate::items::ItemStack;
 use horizon_core::random::RandomSource;
 use horizon_world::nbt::{Compound, Tag};
@@ -25,17 +26,6 @@ const MAX_REWARD_PLAYERS: usize = 128;
 const UNLOCKING_DELAY: i64 = 14;
 const INSERT_FAIL_SOUND_BUFFER: i64 = 15;
 const STATE_DELAY: i64 = 20;
-
-/// `VaultConfig`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct VaultConfig {
-    pub loot_table: String,
-    pub activation_range: f64,
-    pub deactivation_range: f64,
-    /// None when the config has no key (`ItemStack.EMPTY`): the vault never opens.
-    pub key_item: Option<ItemStack>,
-    pub override_loot_table_to_display: Option<String>,
-}
 
 impl Default for VaultConfig {
     /// `VaultConfig.DEFAULT`: the trial key and the trial chambers' reward.
@@ -58,7 +48,9 @@ impl VaultConfig {
         let Tag::Compound(_) = tag else {
             return None;
         };
-        let range = |k: &str, default: f64| crate::save::float(tag.get(k)).unwrap_or(default);
+        let range = |k: &str, default: f64| {
+            horizon_client_core::nbt_value::float(tag.get(k)).unwrap_or(default)
+        };
         let config = Self {
             loot_table: identifier(tag.get("loot_table"))
                 .unwrap_or_else(|| DEFAULT_LOOT_TABLE.into()),
@@ -91,7 +83,7 @@ impl VaultConfig {
             );
         }
         if let Some(key) = &self.key_item {
-            out.insert("key_item".into(), crate::save::item_to_nbt(key));
+            out.insert("key_item".into(), horizon_items::item_nbt::item_to_nbt(key));
         }
         if let Some(table) = &self.override_loot_table_to_display {
             out.insert(
@@ -169,28 +161,6 @@ pub trait VaultLevel {
 /// the table has one.
 pub type Roll<'a, R> = dyn FnMut(&str, &mut R, bool) -> Vec<ItemStack> + 'a;
 
-/// `VaultBlockEntity`: its config, server data and shared data.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Vault {
-    pub config: VaultConfig,
-    /// `VaultServerData`, oldest rewarded player first.
-    pub rewarded_players: Vec<Uuid>,
-    pub state_updating_resumes_at: i64,
-    /// Popped from the end.
-    pub items_to_eject: Vec<ItemStack>,
-    pub total_ejections_needed: i32,
-    pub last_insert_fail_timestamp: i64,
-    /// `VaultSharedData`.
-    pub display_item: Option<ItemStack>,
-    pub connected_players: Vec<Uuid>,
-    pub connected_particles_range: f64,
-    /// The shared data changed since the last tick sent it.
-    pub shared_dirty: bool,
-    /// `VaultClientData`: the display item's spin and the previous tick's, in degrees.
-    pub spin: f32,
-    pub o_spin: f32,
-}
-
 impl Default for Vault {
     fn default() -> Self {
         Self {
@@ -213,7 +183,7 @@ impl Default for Vault {
 /// An `Identifier` (`minecraft` when the namespace is left out).
 fn identifier(t: Option<&Tag>) -> Option<String> {
     match t? {
-        Tag::String(s) => crate::mobs::spawner::normalize_id(&s.to_string_lossy()),
+        Tag::String(s) => horizon_client_core::identifier::normalize_id(&s.to_string_lossy()),
         _ => None,
     }
 }
@@ -221,11 +191,12 @@ fn identifier(t: Option<&Tag>) -> Option<String> {
 fn stack(tag: &Tag) -> Option<ItemStack> {
     let id = identifier(tag.get("id"))?;
     if let Some(count) = tag.get("count")
-        && !crate::save::number(Some(count)).is_some_and(|c| (1..=99).contains(&c))
+        && !horizon_client_core::nbt_value::number(Some(count))
+            .is_some_and(|c| (1..=99).contains(&c))
     {
         return None;
     }
-    let mut item = crate::save::item_from_nbt(tag)?;
+    let mut item = horizon_items::item_nbt::item_from_nbt(tag)?;
     item.item = id.as_str().into();
     (&*item.item != "minecraft:air").then_some(item)
 }
@@ -298,7 +269,8 @@ impl Vault {
             let get = |k: &str| server.and_then(|s| s.get(k));
             v.rewarded_players = uuids(get("rewarded_players")).unwrap_or_default();
             v.state_updating_resumes_at =
-                crate::save::number(get("state_updating_resumes_at")).unwrap_or(0);
+                horizon_client_core::nbt_value::number(get("state_updating_resumes_at"))
+                    .unwrap_or(0);
             v.items_to_eject = match get("items_to_eject") {
                 Some(Tag::List(list)) => list
                     .iter()
@@ -313,8 +285,9 @@ impl Vault {
             let get = |k: &str| shared.and_then(|s| s.get(k));
             v.display_item = get("display_item").and_then(stack);
             v.connected_players = uuids(get("connected_players")).unwrap_or_default();
-            v.connected_particles_range = crate::save::float(get("connected_particles_range"))
-                .unwrap_or(DEFAULT_DEACTIVATION_RANGE);
+            v.connected_particles_range =
+                horizon_client_core::nbt_value::float(get("connected_particles_range"))
+                    .unwrap_or(DEFAULT_DEACTIVATION_RANGE);
         }
         v
     }
@@ -337,7 +310,7 @@ impl Vault {
             let items = self
                 .items_to_eject
                 .iter()
-                .map(crate::save::item_to_nbt)
+                .map(horizon_items::item_nbt::item_to_nbt)
                 .collect();
             server.insert("items_to_eject".into(), Tag::List(items));
         }
@@ -357,7 +330,10 @@ impl Vault {
     fn update_shared(&self) -> Tag {
         let mut out = Compound::new();
         if let Some(item) = &self.display_item {
-            out.insert("display_item".into(), crate::save::item_to_nbt(item));
+            out.insert(
+                "display_item".into(),
+                horizon_items::item_nbt::item_to_nbt(item),
+            );
         }
         if !self.connected_players.is_empty() {
             out.insert(
