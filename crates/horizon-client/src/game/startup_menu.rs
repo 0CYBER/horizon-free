@@ -149,9 +149,12 @@ impl StartupMenu {
         )
     }
 
-    fn title_key(&mut self, event: &KeyEvent) {
+    /// `Screen.keyPressed` on the title screens: the action a key starts (Enter confirms, see `confirm_key` in title.rs).
+    fn title_key(&mut self, event: &KeyEvent) -> Action {
         let shortcut = self.shortcut(event);
-        let Some(title) = &mut self.title else { return };
+        let Some(title) = &mut self.title else {
+            return Action::None;
+        };
         if let Some(shortcut) = shortcut {
             if title.has_caret_field() {
                 title.field_shortcut(shortcut, &mut self.clipboard);
@@ -164,13 +167,13 @@ impl StartupMenu {
             {
                 title.search_changed();
             }
-            return;
+            return Action::None;
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => title.escape(),
             PhysicalKey::Code(KeyCode::F5) => title.refresh_servers(),
             PhysicalKey::Code(KeyCode::Tab) => title.tab(),
-            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => title.confirm_edit(),
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => return title.confirm_key(),
             PhysicalKey::Code(
                 key @ (KeyCode::Backspace
                 | KeyCode::Delete
@@ -202,6 +205,7 @@ impl StartupMenu {
                 }
             }
         }
+        Action::None
     }
 }
 
@@ -638,8 +642,8 @@ impl Loading {
                         self.menu_option_events(events);
                     }
                 } else {
-                    self.menu.title_key(&event);
-                    self.save_menu_address();
+                    let action = self.menu.title_key(&event);
+                    self.menu_action(event_loop, action);
                 }
             }
             _ => {}

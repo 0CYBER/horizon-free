@@ -9247,6 +9247,39 @@ impl Game<'_> {
             (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
         (out, stars)
     }
+    /// What the title screen asked for, from a click or Enter.
+    fn title_action(&mut self, event_loop: &ActiveEventLoop, action: Action) -> Result<()> {
+        match action {
+            Action::Quit => event_loop.exit(),
+            Action::Options => self.open_options(true),
+            Action::Accessibility => {
+                self.open_options_at(true, horizon_client::options_ui::Page::Accessibility)
+            }
+            Action::Language => {
+                self.open_options_at(true, horizon_client::options_ui::Page::Language)
+            }
+            Action::Play { folder } => self.open_world(&folder, None, None, false, None)?,
+            Action::Create {
+                folder,
+                name,
+                seed,
+                creative,
+                options,
+            } => self.open_world(&folder, Some(&name), seed, creative, Some(&options))?,
+            Action::Connect { address } => {
+                self.connect_server(&address, &self.options.player_name())?
+            }
+            Action::DataPacks { dir, selected } => {
+                self.keys.clear();
+                self.screen = Screen::Options;
+                self.options_from_title = true;
+                let resources = self.vanilla_root();
+                self.ui.options.open_data_packs(dir, selected, resources);
+            }
+            Action::None => {}
+        }
+        Ok(())
+    }
     /// Enter a local world from the client, selecting its simulation mode.
     fn open_world(
         &mut self,
@@ -13456,38 +13489,7 @@ impl ApplicationHandler for Game<'_> {
                     if sound {
                         self.audio.play_button_click();
                     }
-                    match action {
-                        Action::Quit => event_loop.exit(),
-                        Action::Options => self.open_options(true),
-                        Action::Accessibility => self
-                            .open_options_at(true, horizon_client::options_ui::Page::Accessibility),
-                        Action::Language => {
-                            self.open_options_at(true, horizon_client::options_ui::Page::Language)
-                        }
-                        Action::Play { folder } => {
-                            self.open_world(&folder, None, None, false, None)?
-                        }
-                        Action::Create {
-                            folder,
-                            name,
-                            seed,
-                            creative,
-                            options,
-                        } => {
-                            self.open_world(&folder, Some(&name), seed, creative, Some(&options))?
-                        }
-                        Action::Connect { address } => {
-                            self.connect_server(&address, &self.options.player_name())?
-                        }
-                        Action::DataPacks { dir, selected } => {
-                            self.keys.clear();
-                            self.screen = Screen::Options;
-                            self.options_from_title = true;
-                            let resources = self.vanilla_root();
-                            self.ui.options.open_data_packs(dir, selected, resources);
-                        }
-                        Action::None => {}
-                    }
+                    self.title_action(event_loop, action)?;
                 }
                 WindowEvent::MouseInput { .. } if self.title.is_some() => {}
                 WindowEvent::MouseInput { state, button, .. } if self.book.is_some() => {
@@ -13789,9 +13791,12 @@ impl ApplicationHandler for Game<'_> {
                         }
                         match event.physical_key {
                             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
-                                if let Some(t) = self.title.as_mut() {
-                                    t.confirm_edit();
-                                }
+                                let action = self
+                                    .title
+                                    .as_mut()
+                                    .map_or(Action::None, |t| t.confirm_key());
+                                self.save_title_options();
+                                self.title_action(event_loop, action)?;
                             }
                             PhysicalKey::Code(
                                 key @ (KeyCode::Backspace

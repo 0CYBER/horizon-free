@@ -1985,6 +1985,21 @@ impl Title {
             Err(error) => self.failed(error),
         }
     }
+    /// Enter on the open screen: `CreateWorldScreen.keyPressed` creates the
+    /// world as its Create button does; a rename saves.
+    pub fn confirm_key(&mut self) -> Action {
+        if self.rules.get_mut().is_some() {
+            return Action::None;
+        }
+        if matches!(self.mode, Mode::Edit { .. }) {
+            self.confirm_edit();
+            return Action::None;
+        }
+        match &self.mode {
+            Mode::Create { .. } => self.create_action(),
+            _ => Action::None,
+        }
+    }
     pub fn tab(&mut self) {
         if self.rules.get_mut().is_some() {
             return;
