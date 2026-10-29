@@ -246,6 +246,7 @@ impl Game<'_> {
                     super::packs::open_folder(&dir);
                 }
                 Event::ModSettings(i) => self.open_mod_screen(i, true),
+                Event::NativeButton(i, b) => self.native_settings_event(i, b),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
         }
