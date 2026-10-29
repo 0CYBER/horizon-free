@@ -12263,7 +12263,7 @@ impl Game<'_> {
         let bolts = if title {
             Vec::new()
         } else {
-            self.bolt_instances()
+            self.bolt_instances(camera)
         };
         let mut additive = Vec::new();
         if !title && self.dim == Dim::End {
