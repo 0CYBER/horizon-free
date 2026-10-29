@@ -324,6 +324,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         );
     }
     match id {
+        // MushroomCow.addAdditionalSaveData: the colour under Type.
+        "minecraft:mooshroom" => {
+            let kind = if m.extra.variant == 1 { "brown" } else { "red" };
+            map.insert("Type".into(), string(kind));
+        }
         // Fox.addAdditionalSaveData; Horizon models only the type.
         "minecraft:fox" => {
             let kind = if m.extra.variant == 1 { "snow" } else { "red" };
@@ -1181,6 +1186,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     match m.species() {
         crate::mobs::Species::Fox => {
             m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("snow"));
+        }
+        crate::mobs::Species::Mooshroom => {
+            // MushroomCow.readAdditionalSaveData: an unknown Type is red.
+            m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("brown"));
         }
         crate::mobs::Species::Rabbit => {
             // Rabbit.Variant.byId: an unknown id is brown.
