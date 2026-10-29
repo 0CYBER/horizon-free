@@ -428,8 +428,18 @@ impl Game<'_> {
             .collect();
     }
     /// The block the player is looking at, for coordinate suggestions.
+    /// `ClientSuggestionProvider.getRelevantCoordinates` and
+    /// `getAbsoluteCoordinates` read `Minecraft.hitResult` only when it is a
+    /// block: an entity in front of the block leaves the `~` defaults.
     fn refresh_dynamic_registries(&mut self) {
-        self.ui.registries.target_block = self.pick().map(|h| h.pos);
+        let hit = if self.pick_entity_hit().is_some() {
+            None
+        } else {
+            self.pick()
+        };
+        self.ui.registries.target_block = hit.as_ref().map(|h| h.pos);
+        self.ui.registries.target_point =
+            hit.map(|h| h.point.map(horizon_client::java_text::format_fixed2));
         // ClientPacketListener.getOnlinePlayerNames on a server.
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;
@@ -973,7 +983,7 @@ impl Game<'_> {
         }
     }
     /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
-    fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
+    pub(super) fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
         let split = self
             .gui
             .atlas

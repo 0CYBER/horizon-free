@@ -200,6 +200,9 @@ impl Game<'_> {
                     self.sync_agent_control();
                     self.ui.options.agent_status = self.agent_status_lines();
                 }
+                Event::SliderDrag => {
+                    self.apply_settings();
+                }
                 Event::CopyAgentDetails => {
                     use horizon_client::clipboard::Clipboard;
                     let text = self.agent_details();
@@ -246,6 +249,7 @@ impl Game<'_> {
                     super::packs::open_folder(&dir);
                 }
                 Event::ModSettings(i) => self.open_mod_screen(i, true),
+                Event::NativeSettings(i) => self.native_settings_refresh(i),
                 Event::NativeButton(i, b) => self.native_settings_event(i, b),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }

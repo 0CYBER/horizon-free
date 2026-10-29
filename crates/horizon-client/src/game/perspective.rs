@@ -327,7 +327,7 @@ impl Game<'_> {
             self.player_model = Some(Mob::new(0, kind, p.position, self.yaw));
         }
         let crouching = p.pose == Pose::Crouching;
-        let (position, flying) = (p.position, p.flying || p.fall_flying);
+        let position = p.position;
         let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
         let spinning = p.auto_spin_attack_ticks > 0;
         let using = self.using.map(|(_, ticks)| ticks as i32 + 1).unwrap_or(0);
@@ -380,6 +380,7 @@ impl Game<'_> {
             at.y - m.position.y,
             at.z - m.position.z,
         );
+        let walked = player_walk_distance(m.position, at);
         m.previous = m.position;
         m.position = at;
         if dx * dx + dy * dy + dz * dz > 100.0 {
@@ -414,9 +415,8 @@ impl Game<'_> {
             m.body_yaw += diff - diff.signum() * 50.0;
         }
         // WalkAnimationState.update(min(distance * 4, 1), 0.4).
-        let dist = (dx * dx + dz * dz + if flying { dy * dy } else { 0.0 }).sqrt() as f32;
         m.previous_limb_speed = m.limb_speed;
-        m.limb_speed += ((dist * 4.0).min(1.0) - m.limb_speed) * 0.4;
+        m.limb_speed += ((walked * 4.0).min(1.0) - m.limb_speed) * 0.4;
         m.limb_position += m.limb_speed;
         m.age = m.age.wrapping_add(1);
         m.anim.attack_anim_o = attack.0;
@@ -792,9 +792,29 @@ fn player_preview_quads(
     quads
 }
 
+/// The distance `LivingEntity.calculateEntityAnimation` walks the player's
+/// model for a move from `from` to `to`. `omnidirectionalAirMover()` is false
+/// for every player (`Entity`'s, not overridden), so only the horizontal
+/// distance counts, flying and gliding included: rising or sinking straight
+/// up or down leaves the legs and arms still.
+fn player_walk_distance(from: Vec3, to: Vec3) -> f32 {
+    let (dx, dz) = (to.x - from.x, to.z - from.z);
+    (dx * dx + dz * dz).sqrt() as f32
+}
+
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+    #[test]
+    fn flying_straight_up_does_not_walk_the_player_model() {
+        let from = Vec3::new(0.5, 80.0, 0.5);
+        // Creative flight straight up (#3302) and straight down.
+        assert_eq!(player_walk_distance(from, Vec3::new(0.5, 80.375, 0.5)), 0.0);
+        assert_eq!(player_walk_distance(from, Vec3::new(0.5, 78.5, 0.5)), 0.0);
+        // Moving sideways while rising walks only the horizontal part.
+        let d = player_walk_distance(from, Vec3::new(0.8, 81.0, 0.9));
+        assert!((d - 0.5).abs() < 1e-6, "{d}");
+    }
     #[test]
     fn preview_keeps_crossing_faces_depth_and_clips_without_dropping_faces() {
         use horizon_client::{
