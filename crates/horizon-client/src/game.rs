@@ -12260,10 +12260,7 @@ impl Game<'_> {
             dynamic_lights: &self.dynamic_lights,
             lightning: horizon_client::gfx::lightning::Input {
                 bolts: &bolts,
-                uv: [
-                    self.gui.atlas.font.white().u0,
-                    self.gui.atlas.font.white().v0,
-                ],
+                uv: horizon_client::gfx::lightning::white_uv(&self.gui.atlas.font.white()),
             },
             additive: &additive,
             see_through: &see_through,
