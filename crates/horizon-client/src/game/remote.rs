@@ -980,7 +980,12 @@ impl Game<'_> {
         if self.remote.is_none() {
             return;
         }
-        let Some((id, command)) = self.ui.chat_screen.as_mut().and_then(|s| s.take_request())
+        let Some((id, command)) = self
+            .ui
+            .chat_screen
+            .as_mut()
+            .and_then(|s| s.take_request())
+            .or_else(|| self.command_block_suggestion_request())
         else {
             return;
         };
@@ -1020,7 +1025,8 @@ impl Game<'_> {
         })();
         if let Ok((id, start, length, list)) = decoded {
             let range = (start.max(0) as usize, length.max(0) as usize);
-            self.chat_server_suggestions(id, range, list);
+            self.chat_server_suggestions(id, range, list.clone());
+            self.command_block_server_suggestions(id, range, list);
         }
     }
     fn set_registries(&mut self, registries: Arc<Dynamic>) {
@@ -1214,10 +1220,14 @@ impl Game<'_> {
                 }
                 _ => {}
             }
+            let command_block = matches!(loaded, BlockEntity::CommandBlock(_));
             self.world.block_entities.insert(key, loaded);
             // The section is drawn again with what the block entity shows.
             let state = self.world.block(pos[0], pos[1], pos[2]);
             let _ = self.world.set(pos[0], pos[1], pos[2], state);
+            if command_block {
+                self.command_block_data_arrived(key);
+            }
         }
     }
     /// `handleAnimate`: a player wakes up, or an entity gets the critical

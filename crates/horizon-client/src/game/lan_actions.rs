@@ -626,7 +626,9 @@ impl Game<'_> {
             }) => Some(key),
             _ => None,
         };
-        self.command_block_screen = host_command_block;
+        // A command block the guest's use opened (Player.openCommandBlock).
+        let guest_command_block =
+            std::mem::replace(&mut self.command_block_screen, host_command_block).map(|s| s.pos());
         // A mount inventory the guest's action opened (shift + use, or the
         // inventory key while riding).
         let guest_mount = std::mem::replace(&mut self.mount_menu, host_mount_menu).opened_mob();
@@ -778,6 +780,9 @@ impl Game<'_> {
         }
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
+        }
+        if let Some(pos) = guest_command_block {
+            self.lan_open_command_block(host, conn, pos);
         }
         if let Some(pos) = opened_table {
             self.lan_open_crafting(host, conn, pos);

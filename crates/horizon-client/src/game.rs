@@ -13064,6 +13064,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Chat && d != 0.0 {
                         self.chat_scroll(d);
                     }
+                    if self.screen == Screen::CommandBlock && d != 0.0 {
+                        self.command_block_scroll(d);
+                    }
                     if self.screen == Screen::Options && d != 0.0 {
                         self.options_scroll(d);
                     }
