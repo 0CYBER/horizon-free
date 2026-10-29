@@ -1997,6 +1997,12 @@ impl Game<'_> {
         {
             push(&mut lines, text, rgba(85, 85, 255, 255));
         }
+        // OminousBottleAmplifier.addToTooltip.
+        if let Some((text, c)) =
+            horizon_client::item_tooltip::ominous_bottle_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, c);
+        }
         // BlockItemStateProperties.addToTooltip.
         if let Some(text) = horizon_client::item_tooltip::honey_line(stack, &display, &translate) {
             push(&mut lines, text, gray);

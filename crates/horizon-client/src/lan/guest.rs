@@ -667,6 +667,12 @@ fn network_stack(
                 horizon_protocol::item::Component::Int(i32::from(mode)),
             ));
         }
+        if let Some(amplifier) = d.ominous_amplifier {
+            stack.added.push((
+                horizon_protocol::item::component::OMINOUS_BOTTLE_AMPLIFIER,
+                horizon_protocol::item::Component::Int(i32::from(amplifier)),
+            ));
+        }
         stack.added.extend(firework_components(d));
         // The compass's lodestone target.
         if let Some(t) = d.other("minecraft:lodestone_tracker") {
