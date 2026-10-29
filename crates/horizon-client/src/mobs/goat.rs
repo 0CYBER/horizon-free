@@ -51,6 +51,8 @@ pub struct State {
     ram_target: Option<Vec3>,
     ram_direction: Vec3,
     time: i32,
+    /// `LivingEntity.discardFriction`, set through the long jump.
+    pub discard_friction: bool,
 }
 
 pub fn register(m: &mut Mob) {
@@ -64,6 +66,15 @@ pub fn entity_event(m: &mut Mob, event: u8) {
         59 => m.extra.goat.lowering_head = false,
         _ => {}
     }
+}
+/// `Entity.setPose` and the `refreshDimensions` it triggers, for a goat of a
+/// server: the pose's box (`Goat.getDefaultDimensions` scales a long jump's
+/// by 0.7), and a box that grew (the goat lands) is moved to a free spot
+/// (`fudgePositionAfterSizeChange`).
+pub fn set_pose(m: &mut Mob, w: &MobWorld, id: u8) {
+    let (old_w, old_h, _) = m.dims();
+    m.extra.pose = id;
+    m.fudge_position_after_size_change(w, old_w, old_h);
 }
 /// `Goat.aiStep`'s `lowerHeadTick`; a client runs it too.
 pub fn tick(m: &mut Mob) {
