@@ -469,4 +469,36 @@ impl Game<'_> {
     pub(super) fn hero_amplifier(&self) -> Option<i32> {
         self.potions.effects.amplifier("hero_of_the_village")
     }
+    /// `AbstractBedBlock.kickVillagerOutOfBed`: the first sleeping villager
+    /// whose box touches the bed's head block wakes up
+    /// (`Villager.stopSleeping`). Whether one did.
+    pub(super) fn kick_villager_out_of_bed(&mut self, head: [i32; 3]) -> bool {
+        let min = Vec3::new(f64::from(head[0]), f64::from(head[1]), f64::from(head[2]));
+        let max = Vec3::new(min.x + 1.0, min.y + 1.0, min.z + 1.0);
+        let Some(i) = self.mobs.iter().position(|m| {
+            m.species() == Species::Villager
+                && villager::sleeping(m)
+                && m.bounds().intersects_corners(min, max)
+        }) else {
+            return false;
+        };
+        let id = self.mobs[i].id;
+        self.wake_villager(id);
+        true
+    }
+    /// `LivingEntity.stopSleeping` for the villager `id`, outside its own
+    /// tick: it stands up and its bed is no longer occupied.
+    pub(super) fn wake_villager(&mut self, id: u32) {
+        let Some(i) = self.mobs.iter().position(|m| m.id == id) else {
+            return;
+        };
+        let mut mobs = std::mem::take(&mut self.mobs);
+        let mut events = Vec::new();
+        villager::stop_sleeping(&mut mobs[i], &self.mob_world_base(&[]), &mut events);
+        villager_brain::woken(&mut mobs[i], self.world.game_time);
+        self.mobs = mobs;
+        if let Err(e) = self.handle_mob_events(events) {
+            log::warn!("waking villager {id}: {e}");
+        }
+    }
 }

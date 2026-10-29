@@ -230,7 +230,7 @@ pub struct Info {
 /// `VibrationSelector`: the closest, then highest-frequency candidate of a tick.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Selector {
-    pub(crate) current: Option<(Info, i64)>,
+    pub current: Option<(Info, i64)>,
 }
 /// `VibrationSystem.Data`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -278,7 +278,7 @@ pub struct SpawnData {
 /// Which `SpawnData` is next: one of the potentials (the same object in
 /// vanilla, so changing it changes the potential) or its own.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Next {
+pub enum Next {
     Potential(usize),
     Own(SpawnData),
 }
@@ -288,7 +288,7 @@ pub struct Spawner {
     pub spawn_delay: i32,
     /// `SpawnPotentials`: data and weight.
     pub potentials: Vec<(SpawnData, i32)>,
-    pub(crate) next: Option<Next>,
+    pub next: Option<Next>,
     pub min_spawn_delay: i32,
     pub max_spawn_delay: i32,
     pub spawn_count: i32,

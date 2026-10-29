@@ -79,6 +79,12 @@ impl Game<'_> {
             f64::from(base[2]) + 0.5,
         ];
         let id = self.create_triggered(kind, at, 0.0);
+        // CarvedPumpkinBlock.trySpawnGolem: setPlayerCreated(true) on the iron golem.
+        if kind == "minecraft:iron_golem"
+            && let Some(m) = id.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id))
+        {
+            m.extra.player_created = true;
+        }
         self.trigger_golem_summoned(id);
         self.update_pattern_blocks(&blocks)
     }

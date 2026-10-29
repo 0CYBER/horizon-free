@@ -572,6 +572,9 @@ impl Game<'_> {
         self.streaming.paused = true;
         self.world = World::new(self.res.facts().air, 0);
         self.player = None;
+        // Out of the server's bed: InBedChatScreen goes with the level.
+        self.sleeping = None;
+        self.sleep_timer = 0;
         self.mobs.clear();
         self.clear_remote_objects();
         self.clear_remote_projectiles();
@@ -6176,6 +6179,8 @@ impl Game<'_> {
                 .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).
             "player_model": self.player_model.is_some(),
+            // The world view draws it now (third person, or lying in a bed).
+            "own_body": self.player_model_shown(),
             "text_display_vertices": self.text_display_vertices,
             "text_displays": self.text_displays.len(),
             "health": r.health.0,
