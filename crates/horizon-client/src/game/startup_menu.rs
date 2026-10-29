@@ -167,6 +167,7 @@ impl StartupMenu {
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => title.escape(),
+            PhysicalKey::Code(KeyCode::F5) => title.refresh_servers(),
             PhysicalKey::Code(KeyCode::Tab) => title.tab(),
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => title.confirm_edit(),
             PhysicalKey::Code(
@@ -392,7 +393,7 @@ impl Loading {
                     }
                 }
                 // Mods' settings pages open only in a running game.
-                Event::ModSettings(_) => {}
+                Event::ModSettings(_) | Event::NativeButton(..) => {}
                 // The startup menu runs before the game opens a control socket.
                 Event::ButtonClick | Event::CopyAgentDetails => {}
             }
