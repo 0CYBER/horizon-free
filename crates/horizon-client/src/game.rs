@@ -168,6 +168,7 @@ mod server_links;
 mod server_packs;
 mod server_travel;
 mod shader_packs;
+mod shelf;
 mod shield;
 mod shoulders;
 mod sign_edit;
@@ -3099,6 +3100,10 @@ impl Game<'_> {
             self.portals.sections.remove(&key);
             self.block_ticks
                 .remove_chunk(horizon_core::position::ChunkPos::new(key.0, key.1));
+            // Its moving pistons were saved with it and load back with it.
+            self.block_ticks
+                .moving_pistons
+                .retain(|(p, _)| (p.x >> 4, p.z >> 4) != key);
         }
         self.tick_chunks.recycle_added(added);
     }
@@ -3310,10 +3315,20 @@ impl Game<'_> {
             .iter()
             .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state()))
             .collect();
-        self.world.moving_piston_fallback = previous
+        let mut fallback: Vec<_> = previous
             .into_iter()
             .filter(|(pos, _)| !current.iter().any(|(next, _)| next == pos))
             .collect();
+        // A finished piston stays drawn until the chunk mesh shows the block
+        // it placed, however many ticks that takes.
+        let older = std::mem::take(&mut self.world.moving_piston_fallback);
+        for (pos, piston) in older {
+            let replaced = current.iter().chain(&fallback).any(|(p, _)| *p == pos);
+            if !replaced && self.section_mesh_pending(pos) {
+                fallback.push((pos, piston));
+            }
+        }
+        self.world.moving_piston_fallback = fallback;
         self.world.moving_pistons = current;
     }
     /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
@@ -3325,8 +3340,17 @@ impl Game<'_> {
                 continue;
             }
             loop {
-                let more =
-                    self.with_level(|b, level, ticks| b.scheduled_step(level, ticks, fluids));
+                // Due ticks run against one level while each leaves nothing for
+                // the game to apply (level events, spilled items or orbs): the
+                // next one would see the same level built again.
+                let more = self.with_level(|b, level, ticks| {
+                    loop {
+                        let more = b.scheduled_step(level, ticks, fluids);
+                        if !more || !level.events.is_empty() || !level.spill.is_empty() {
+                            break more;
+                        }
+                    }
+                });
                 if !self.level_events.is_empty() {
                     self.process_level_events()?;
                 }
@@ -4398,6 +4422,14 @@ impl Game<'_> {
             }
             if self.use_jukebox(hit.pos, held.as_ref()) {
                 self.swing_arm();
+                return Ok(true);
+            }
+            if let Some(swings) = self.use_shelf(hit) {
+                let used = held.unwrap_or_else(|| ItemStack::new("minecraft:air", 0));
+                self.trigger_block("minecraft:item_used_on_block", hit.pos, &used);
+                if swings {
+                    self.swing_arm();
+                }
                 return Ok(true);
             }
             if let Some(swings) = self.use_chiseled_bookshelf(hit, held.as_ref()) {
@@ -6181,6 +6213,7 @@ impl Game<'_> {
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
         self.draw_pad_cursor(&mut batch);
+        self.resolve_inline_profiles(&batch.inline_profiles);
         batch
     }
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
@@ -6531,7 +6564,9 @@ impl Game<'_> {
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
                 | BlockEntity::Campfire(_)
-                | BlockEntity::ChiseledBookshelf(_),
+                | BlockEntity::ChiseledBookshelf(_)
+                | BlockEntity::Brushable(_)
+                | BlockEntity::Shelf(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -6815,7 +6850,9 @@ impl Game<'_> {
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
                     | BlockEntity::Campfire(_)
-                    | BlockEntity::ChiseledBookshelf(_),
+                    | BlockEntity::ChiseledBookshelf(_)
+                    | BlockEntity::Brushable(_)
+                    | BlockEntity::Shelf(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -8295,6 +8332,8 @@ impl Game<'_> {
         // `CampfireRenderer`.
         self.mark_entity(out.len(), "");
         self.campfire_geometry(camera, &mut out);
+        self.brushable_geometry(camera, &mut out);
+        self.shelf_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:ominous_item_spawner");
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles (a span each).
@@ -9375,7 +9414,8 @@ impl Game<'_> {
             path: save_root.join("icon.png"),
             last_attempt: None,
         });
-        self.world_flat = horizon_client::save::WorldGen::read(&save_root).is_some_and(|w| w.flat);
+        self.world_flat = horizon_client::save::WorldGen::read(&save_root)
+            .is_some_and(|w| w.preset == horizon_client::save::WorldPreset::Flat);
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
         self.clear_entities();

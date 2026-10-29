@@ -694,7 +694,7 @@ impl ChunkGenerator for VanillaTerrain {
             crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
         out.block_entities = block_entities;
         // The block entities Horizon does not model (decorated pots with their
-        // sherds and loot table, brushable blocks) stay as placed, like a
+        // sherds and loot table) stay as placed, like a
         // loaded chunk's.
         let mut unmodelled: Vec<Tag> = chunk
             .block_entities

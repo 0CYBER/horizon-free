@@ -9,8 +9,13 @@ use horizon_client::{
     mobs::Who,
     save::{ChunkExtras, random_uuid},
 };
-use horizon_core::{geometry::Vec3, position::ChunkPos, random::RandomSource, ticks::ChunkTicks};
-use horizon_world::{chunk::BlockState, nbt::Tag, registry::BlockStateId};
+use horizon_core::{
+    geometry::{Direction, Vec3},
+    position::{BlockPos, ChunkPos},
+    random::RandomSource,
+    ticks::ChunkTicks,
+};
+use horizon_world::{chunk::BlockState, level::MovingPiston, nbt::Tag, registry::BlockStateId};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -66,6 +71,10 @@ fn painting_center(p: &horizon_client::entities::Painting) -> Vec3 {
         (lo[2] + hi[2]) / 2.0,
     )
 }
+fn block_entity_pos(tag: &Tag) -> [i32; 3] {
+    [tag.get("x"), tag.get("y"), tag.get("z")]
+        .map(|v| horizon_client::save::number(v).unwrap_or(0) as i32)
+}
 fn chunk_of(p: Vec3) -> (i32, i32) {
     ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
 }
@@ -86,6 +95,19 @@ impl Game<'_> {
             extras.fluid_ticks = t.pack(time);
         }
         extras.last_update = time;
+        // PistonMovingBlockEntity.saveAdditional: a block caught mid-move is
+        // saved with its chunk (#3310).
+        for (p, piston) in &self.block_ticks.moving_pistons {
+            if (p.x >> 4, p.z >> 4) != (chunk.x, chunk.z) {
+                continue;
+            }
+            extras
+                .block_entities
+                .retain(|tag| block_entity_pos(tag) != [p.x, p.y, p.z]);
+            extras
+                .block_entities
+                .push(self.moving_piston_to_nbt(*p, piston));
+        }
         // TheEndGatewayBlockEntity saves its Age (the server copy's).
         for tag in &mut extras.block_entities {
             let pos = [tag.get("x"), tag.get("y"), tag.get("z")]
@@ -142,6 +164,82 @@ impl Game<'_> {
                 s.fluid_ticks.clear();
             }
         }
+        // PistonMovingBlockEntity.loadAdditional: blocks saved mid-move carry
+        // on moving; later saves take them from the level (#3310).
+        let pistons: Vec<_> = saved.as_deref().map_or_else(Vec::new, |s| {
+            s.block_entities
+                .iter()
+                .filter_map(|tag| self.moving_piston_from_nbt(tag))
+                .collect()
+        });
+        if pistons.is_empty() {
+            return;
+        }
+        for &(pos, piston) in &pistons {
+            self.block_ticks.load_moving_piston(pos, piston);
+        }
+        if let Some(c) = self.world.chunks.get_mut(&key) {
+            let c = Arc::make_mut(c);
+            if let Some(s) = c.saved.as_mut() {
+                Arc::make_mut(s).block_entities.retain(|tag| {
+                    let at = block_entity_pos(tag);
+                    !pistons.iter().any(|(p, _)| [p.x, p.y, p.z] == at)
+                });
+            }
+        }
+    }
+    /// `PistonMovingBlockEntity.saveAdditional`.
+    fn moving_piston_to_nbt(&self, pos: BlockPos, piston: &MovingPiston) -> Tag {
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        Tag::compound([
+            ("id", Tag::String("minecraft:piston".into())),
+            ("x", Tag::Int(pos.x)),
+            ("y", Tag::Int(pos.y)),
+            ("z", Tag::Int(pos.z)),
+            ("blockState", self.state_to_nbt(piston.moved_state)),
+            // Direction.LEGACY_ID_CODEC: the 3D data value as a byte.
+            ("facing", Tag::Byte(piston.direction as i8)),
+            ("progress", Tag::Float(piston.progress_o.to_bits())),
+            ("extending", flag(piston.extending)),
+            ("source", flag(piston.source)),
+        ])
+    }
+    /// `PistonMovingBlockEntity.loadAdditional`, for a `minecraft:piston`
+    /// entity whose block is still a moving piston.
+    fn moving_piston_from_nbt(&self, tag: &Tag) -> Option<(BlockPos, MovingPiston)> {
+        use horizon_client::save::{float, number, text};
+        if text(tag.get("id")).as_deref() != Some("minecraft:piston") {
+            return None;
+        }
+        let [x, y, z] = block_entity_pos(tag);
+        let here = self.world.block(x, y, z);
+        if &*self.res.facts().get(here).name != "minecraft:moving_piston" {
+            return None;
+        }
+        let moved_state = tag
+            .get("blockState")
+            .and_then(|t| self.state_from_nbt(t))
+            .or_else(|| self.pack.assets.registry.default_state("minecraft:air"))?;
+        let direction = usize::try_from(number(tag.get("facing")).unwrap_or(0))
+            .ok()
+            .and_then(|i| Direction::ALL.get(i).copied())
+            .unwrap_or(Direction::Down);
+        let progress = float(tag.get("progress")).unwrap_or(0.0) as f32;
+        let flag = |k: &str| number(tag.get(k)).unwrap_or(0) != 0;
+        Some((
+            BlockPos::new(x, y, z),
+            MovingPiston {
+                moved_state,
+                direction,
+                extending: flag("extending"),
+                source: flag("source"),
+                progress,
+                progress_o: progress,
+                last_ticked: 0,
+                death_ticks: 0,
+                id: 0,
+            },
+        ))
     }
     /// Spawn the entities of chunks that finished loading.
     pub(super) fn spawn_loaded_entities(&mut self) {

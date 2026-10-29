@@ -183,6 +183,18 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 ("mob_factor", Tag::Float(v[5].to_bits())),
             ]),
             Component::Profile(p) => profile_tag(p),
+            // SuspiciousStewEffects' NBT: each effect by name and its duration.
+            Component::StewEffects(list) => Tag::List(
+                list.iter()
+                    .filter_map(|(id, duration)| {
+                        let name = builtin.get("minecraft:mob_effect")?.name(*id)?;
+                        Some(Tag::compound([
+                            ("id", Tag::String(name.into())),
+                            ("duration", Tag::Int(*duration)),
+                        ]))
+                    })
+                    .collect(),
+            ),
             // PotionContents' NBT: the potion by name and the custom colour.
             Component::Potion { potion, color, .. } => {
                 let potion = potion.and_then(|id| builtin.get("minecraft:potion")?.name(id));
@@ -523,7 +535,8 @@ mod tests {
     }
 
     /// What a creative client sends (`stack_to_network`) comes back whole on
-    /// the server: damage, both enchantment lists, repair cost, name, trim.
+    /// the server: damage, both enchantment lists, repair cost, name, trim,
+    /// potion and stew effects.
     #[test]
     fn a_creative_stack_keeps_its_components_across_the_wire() {
         let mut components = vec![String::new(); 60];
@@ -539,6 +552,10 @@ mod tests {
                 "minecraft:stored_enchantments",
             ),
             (component::TRIM, "minecraft:trim"),
+            (
+                component::SUSPICIOUS_STEW_EFFECTS,
+                "minecraft:suspicious_stew_effects",
+            ),
         ] {
             components[id as usize] = name.to_owned();
         }
@@ -551,6 +568,7 @@ mod tests {
                         "minecraft:air",
                         "minecraft:diamond_chestplate",
                         "minecraft:splash_potion",
+                        "minecraft:suspicious_stew",
                     ])),
                 ),
                 (
@@ -560,6 +578,10 @@ mod tests {
                 (
                     "minecraft:potion".to_owned(),
                     Ids::from_names(names(&["minecraft:water", "minecraft:swiftness"])),
+                ),
+                (
+                    "minecraft:mob_effect".to_owned(),
+                    Ids::from_names(names(&["minecraft:speed", "minecraft:fire_resistance"])),
                 ),
             ]
             .into(),
@@ -641,6 +663,23 @@ mod tests {
         assert_eq!(
             from_network(&wire, &builtin, &dynamic).potion(),
             Some("minecraft:swiftness")
+        );
+        // SuspiciousStewEffects, as a creative tab's stew has them: without
+        // them the server's stew gives no effect when eaten (#3137).
+        let mut stew = ItemStack::new("minecraft:suspicious_stew", 1);
+        stew.data_mut()
+            .stew_effects
+            .push((Arc::from("minecraft:fire_resistance"), 60));
+        let wire = crate::lan::guest::stack_to_network(
+            |name| id("minecraft:item", name).unwrap_or(0),
+            id,
+            &Some(stew),
+        )
+        .unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        assert_eq!(
+            back.data().map(|d| d.stew_effects.clone()),
+            Some(vec![(Arc::from("minecraft:fire_resistance"), 60)])
         );
     }
 }

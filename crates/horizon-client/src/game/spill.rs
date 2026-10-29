@@ -223,6 +223,12 @@ pub(super) struct Spill {
     pub(super) removed: Vec<([i32; 3], BlockEntity)>,
 }
 
+impl Spill {
+    pub(super) fn is_empty(&self) -> bool {
+        self.spawns.is_empty() && self.orbs.is_empty() && self.removed.is_empty()
+    }
+}
+
 /// `Block.popResource`: a spot around the block's centre from the level random.
 pub(super) fn pop_position(
     random: &mut impl horizon_core::random::RandomSource,
@@ -617,10 +623,7 @@ impl Game<'_> {
     /// Add the item entities the block behaviour spawned and follow up on the
     /// block entities it removed.
     pub(super) fn flush_spill(&mut self) {
-        if self.spill.spawns.is_empty()
-            && self.spill.removed.is_empty()
-            && self.spill.orbs.is_empty()
-        {
+        if self.spill.is_empty() {
             return;
         }
         let spill = std::mem::take(&mut self.spill);
