@@ -16,6 +16,21 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle"
     },
     {
+      "name": "server_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
+    },
+    {
+      "name": "block_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_changed"
+    },
+    {
+      "name": "neighbor_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"
+    },
+    {
       "name": "hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"
@@ -79,6 +94,51 @@
       "name": "block_entity_tick",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_tick"
+    },
+    {
+      "name": "register_commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands"
+    },
+    {
+      "name": "perform_command",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_perform_command"
+    },
+    {
+      "name": "menu_clicked",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_clicked"
+    },
+    {
+      "name": "menu_closed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"
+    },
+    {
+      "name": "tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
+    },
+    {
+      "name": "use_item_on",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"
+    },
+    {
+      "name": "use_item",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+    },
+    {
+      "name": "destroy_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"
+    },
+    {
+      "name": "place_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block"
     }
   ]
 }
