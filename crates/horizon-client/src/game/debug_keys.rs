@@ -93,7 +93,11 @@ impl Game<'_> {
         // releases still reach KeyboardHandler.
         let typing = matches!(
             self.screen,
-            Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
+            Screen::Chat
+                | Screen::Options
+                | Screen::WorldOptions
+                | Screen::CommandBlock
+                | Screen::BlockEditor
         ) || self.sign_edit.is_some()
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
