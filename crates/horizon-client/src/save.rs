@@ -198,6 +198,41 @@ pub fn needs_file_fixes(world: &Path) -> bool {
     let version = number(data.get("DataVersion")).unwrap_or(-1);
     i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
 }
+/// `LevelVersion.parse`: the saved game version's name, this build's when the `Version`
+/// compound has no `Name`, and empty without a `Version` (`getWorldVersionName` then
+/// shows `selectWorld.versionUnknown`).
+fn saved_version_name(version: Option<&Tag>) -> String {
+    match version {
+        Some(v) => text(v.get("Name")).unwrap_or_else(|| VERSION_NAME.to_string()),
+        None => String::new(),
+    }
+}
+/// `LevelSummary.isCompatible` (`DataVersion.isCompatible`: the saved series must be
+/// the current `main` one). None when the world opens; otherwise the saved game
+/// version's name, empty when it has none (`getWorldVersionName`).
+pub fn incompatible_version(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let version = root.get("Data")?.get("Version");
+    let series = text(version.and_then(|v| v.get("Series"))).unwrap_or_else(|| "main".into());
+    if series == "main" {
+        return None;
+    }
+    Some(saved_version_name(version))
+}
+/// `LevelSummary.backupStatus` DOWNGRADE: the saved game version's name (empty when it
+/// has none) when the world's `Version.Id` is newer than this build's `DataVersion`
+/// (`LevelVersion.parse`: no `Version` reads as 0, no `Id` as the current one).
+pub fn downgraded_from(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let version = root.get("Data")?.get("Version");
+    let id = version.map_or(0, |v| {
+        number(v.get("Id")).unwrap_or_else(|| i64::from(DATA_VERSION))
+    });
+    if id <= i64::from(DATA_VERSION) {
+        return None;
+    }
+    Some(saved_version_name(version))
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {

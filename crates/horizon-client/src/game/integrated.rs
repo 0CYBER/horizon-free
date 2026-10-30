@@ -340,6 +340,7 @@ impl Game<'_> {
             return Ok(());
         };
         handle.world_name = world_name;
+        self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
