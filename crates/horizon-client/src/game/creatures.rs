@@ -692,6 +692,12 @@ impl Game<'_> {
             _ => Vec::new(),
         };
         let mut guest_events = Vec::new();
+        // The block writes since the last tick: mobs re-path around them.
+        let path_writes = self
+            .world
+            .path_writes
+            .get_or_insert_with(Vec::new)
+            .split_off(0);
         // The mobs whose bodies go this tick: (id, feet, width, height).
         let mut gone = Vec::new();
         let level_random;
@@ -766,6 +772,7 @@ impl Game<'_> {
                     continue;
                 }
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
+                horizon_client::mobs::blocks_changed(m, &w, &path_writes);
                 let from = events.len();
                 let kept = m.tick(&w, &mut scratch, &mut events);
                 // A killed mob's body is removed: its effects that act on

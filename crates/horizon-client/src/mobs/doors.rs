@@ -105,7 +105,7 @@ impl Interact {
     }
 }
 /// `BlockPos.closerToCenterThan`.
-fn closer_to_center(p: [i32; 3], at: Vec3, distance: f64) -> bool {
+pub(super) fn closer_to_center(p: [i32; 3], at: Vec3, distance: f64) -> bool {
     Vec3::new(
         f64::from(p[0]) + 0.5,
         f64::from(p[1]) + 0.5,
