@@ -257,6 +257,7 @@ fn server(resources: &Path) -> Server {
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
+            levels: Default::default(),
         },
     );
     Server {

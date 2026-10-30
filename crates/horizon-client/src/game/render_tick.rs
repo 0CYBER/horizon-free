@@ -169,7 +169,7 @@ impl Game<'_> {
     fn level_min_y(&self) -> i32 {
         match self.remote.as_ref() {
             Some(r) => r.dimension.min_y,
-            None => self.dim.min_y(),
+            None => self.world.shape.min_y,
         }
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under

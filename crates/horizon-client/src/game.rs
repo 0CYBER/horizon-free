@@ -2126,6 +2126,8 @@ struct Game<'a> {
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
     integrated: Option<integrated::Integrated>,
+    /// The shapes of the open world's levels, from its dimension types.
+    level_shapes: horizon_client::chunk::LevelShapes,
     /// This game is that server thread's (game/integrated.rs).
     serving: Option<integrated::Serving>,
     /// The open world is shared behind an invite code (game/friends.rs).
@@ -2282,7 +2284,7 @@ impl Dim {
             _ => Self::Overworld,
         }
     }
-    /// The level's shape, from vanilla's dimension types.
+    /// The level's shape in a world of vanilla's dimension types.
     fn shape(self) -> horizon_client::save::LevelShape {
         use horizon_client::save::LevelShape;
         match self {
@@ -2290,18 +2292,6 @@ impl Dim {
             Self::Nether => LevelShape::NETHER,
             Self::End => LevelShape::END,
         }
-    }
-    /// `Level.getMinY`: the dimension type's minimum y.
-    fn min_y(self) -> i32 {
-        self.shape().min_y
-    }
-    /// `DimensionType.logicalHeight`.
-    fn logical_height(self) -> i32 {
-        self.shape().logical_height
-    }
-    /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
-    fn max_y(self) -> i32 {
-        self.shape().max_y() - 1
     }
 }
 fn facing_offset(facing: &str) -> [i32; 3] {
@@ -8909,7 +8899,7 @@ impl Game<'_> {
                 texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
-                max_y: self.dim.max_y(),
+                max_y: self.world.shape.max_y() - 1,
                 world: &self.world,
                 sprites: &self.gui.atlas.sprites,
                 nether: self.dim == Dim::Nether,
@@ -9847,6 +9837,7 @@ impl Game<'_> {
         self.reset_tutorial();
         let world_loading::PreparedWorld {
             save_root,
+            shapes,
             level,
             world,
             streaming,
@@ -9856,6 +9847,7 @@ impl Game<'_> {
             locator,
         } = prepared;
         let dim = Dim::from_id(&level.dimension);
+        self.level_shapes = shapes;
         self.world_root = save_root.clone();
         horizon_client::crash::set_detail(
             "World",
@@ -10018,6 +10010,7 @@ impl Game<'_> {
             &self.settings,
             world_root,
             dim,
+            self.level_shapes.get(dim.id()),
             seed,
         )?;
         self.end.set_locator(locator);
@@ -10065,7 +10058,7 @@ impl Game<'_> {
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
-        world.shape = target.shape();
+        world.shape = self.level_shapes.get(target.id());
         world.fast_lava = target == Dim::Nether;
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
@@ -15147,6 +15140,7 @@ impl<'a> Game<'a> {
             remote: None,
             lan: None,
             integrated: None,
+            level_shapes: Default::default(),
             serving: None,
             world_options: None,
             options_to_world_options: false,

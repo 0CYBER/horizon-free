@@ -155,6 +155,9 @@ impl Dynamic {
             if let Some(v) = int("height") {
                 d.height = v;
             }
+            if let Some(v) = int("logical_height") {
+                d.logical_height = v;
+            }
             if let Some(Tag::Byte(v)) = map.get(&JavaString::from("has_skylight")) {
                 d.has_skylight = *v != 0;
             }
@@ -168,19 +171,21 @@ pub struct DimensionType {
     pub name: String,
     pub min_y: i32,
     pub height: i32,
+    pub logical_height: i32,
     pub has_skylight: bool,
 }
 impl DimensionType {
     pub fn vanilla(name: &str) -> Self {
-        let (min_y, height, has_skylight) = match name {
-            "minecraft:the_nether" => (0, 256, false),
-            "minecraft:the_end" => (0, 256, false),
-            _ => (-64, 384, true),
+        let (min_y, height, logical_height, has_skylight) = match name {
+            "minecraft:the_nether" => (0, 256, 128, false),
+            "minecraft:the_end" => (0, 256, 256, true),
+            _ => (-64, 384, 384, true),
         };
         Self {
             name: name.to_owned(),
             min_y,
             height,
+            logical_height,
             has_skylight,
         }
     }
