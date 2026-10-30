@@ -2661,7 +2661,10 @@ impl Hub {
     }
 
     /// `ServerGamePacketListenerImpl.noBlocksAround`: every block of the
-    /// player's box grown by 0.0625 and stretched 0.55 down is air.
+    /// player's box grown by 0.0625 and stretched 0.55 down is air. Vanilla
+    /// loads a chunk it reads; a chunk not loaded here yet (a player's first
+    /// move after joining, before the spawn chunks are generated) is not
+    /// known to be air, so it never makes the player float.
     fn no_blocks_around(&self, i: usize, at: [f64; 3], world: &World) -> bool {
         let g = &self.guests[i];
         let d = g.dimensions();
@@ -2674,8 +2677,10 @@ impl Hub {
         ];
         let cell = |v: f64| v.floor() as i32;
         (cell(lo[0])..=cell(hi[0])).all(|x| {
-            (cell(lo[1])..=cell(hi[1]))
-                .all(|y| (cell(lo[2])..=cell(hi[2])).all(|z| world.is_air(world.block(x, y, z))))
+            (cell(lo[2])..=cell(hi[2])).all(|z| {
+                world.loaded(x, z)
+                    && (cell(lo[1])..=cell(hi[1])).all(|y| world.is_air(world.block(x, y, z)))
+            })
         })
     }
 
