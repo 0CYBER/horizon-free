@@ -304,6 +304,18 @@ pub enum LevelEvent {
 
 /// The world as seen by block behaviour. Implemented by the game and tests.
 pub trait LevelAccess {
+    /// Observe a committed `Level.setBlock` state change, before its side effects.
+    fn observe_block_changed(&self, _pos: BlockPos, _old: BlockStateId, _new: BlockStateId) {}
+    /// Observe `BlockState.handleNeighborChanged` before the block handles it.
+    /// The default does nothing; implementations must not alter the update queue.
+    fn observe_neighbor_changed(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _changed: BlockId,
+        _moved: bool,
+    ) {
+    }
     /// `Level.isClientSide`: this level is a client's copy (false on a
     /// server, a host or the test harness).
     fn is_client_side(&self) -> bool {
@@ -688,6 +700,18 @@ impl Behaviours {
         self.sim(level, ticks)
             .ice_destroyed_by_player(pos, destroyed, prevents_melting);
     }
+    /// `TurtleEggBlock.playerDestroy` after the drops: a mined stack of eggs
+    /// loses one egg and the rest stay. `destroyed` is the state that was broken.
+    pub fn turtle_egg_destroyed_by_player<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+    ) {
+        self.sim(level, ticks)
+            .turtle_egg_destroyed_by_player(pos, destroyed);
+    }
     /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
     /// otherwise fire shaped by its neighbours.
     pub fn fire_state_for<L: LevelAccess + ?Sized>(
@@ -804,6 +828,15 @@ impl Behaviours {
         pos: BlockPos,
     ) {
         self.sim(level, ticks).entity_inside(pos);
+    }
+    /// `LilyPadBlock.entityInside` for a boat whose box is inside `pos`.
+    pub fn boat_inside<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        self.sim(level, ticks).boat_inside(pos);
     }
     /// `DaylightDetectorBlock.tickEntity` of the daylight detector at `pos`:
     /// its signal follows the sky every 20 game ticks. The detector's ticker

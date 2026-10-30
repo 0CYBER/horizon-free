@@ -1,4 +1,4 @@
-//! Home's Console: the game's output of this run as it comes, with a search, Follow (keep the
+//! Home's Console tab: the game's output of this run as it comes, with a search, Follow (keep the
 //! newest line in view), Copy, and Share log (`horizon_launcher::game_log`): an upload to mclo.gs
 //! that happens only after the player confirms, without their home folder or names.
 use super::servers_page::Field;
@@ -7,7 +7,6 @@ use gpui::{ClipboardItem, ScrollHandle};
 use horizon_launcher::game_log::{self, Shared};
 
 pub(super) struct Console {
-    open: bool,
     follow: bool,
     scroll: ScrollHandle,
     /// Lines and search at the last draw: a change means scroll down when following.
@@ -20,7 +19,6 @@ pub(super) struct Console {
 impl Default for Console {
     fn default() -> Self {
         Console {
-            open: std::env::var("HORIZON_LAUNCHER_CONSOLE").is_ok(),
             follow: true,
             scroll: ScrollHandle::new(),
             seen: (0, String::new()),
@@ -109,48 +107,21 @@ impl Launcher {
         .detach();
     }
 
-    /// Home's Console section, once the game has said something (or is running).
-    pub(super) fn console_section(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+    /// Home's Console tab, once the game has said something (or is running): how many lines
+    /// (beside the tabs) and the log.
+    pub(super) fn console_section(&mut self, cx: &mut Context<Self>) -> Option<(Div, Div)> {
         let t = self.theme;
         if self.prepare_log.is_empty() && self.client.is_none() {
             return None;
         }
-        let open = self.console.open;
-        let toggle = button(
-            "console-toggle",
-            if open { "Hide" } else { "Show" },
-            Kind::Ghost,
-            &t,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.console.open = !this.console.open;
-            cx.notify();
-        }));
         let count = self.prepare_log.len();
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .child(section_title("Console", "terminal", &t))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(
-                        text(theme::CAPTION)
-                            .text_color(t.muted)
-                            .child(match self.client {
-                                Some(_) => format!("{count} lines, the game is running"),
-                                None => format!("{count} lines from the last run"),
-                            }),
-                    )
-                    .child(toggle),
-            );
-        let mut section = div().flex().flex_col().gap(px(10.)).child(header);
-        if !open {
-            return Some(section);
-        }
+        let header = text(theme::CAPTION)
+            .text_color(t.muted)
+            .child(match self.client {
+                Some(_) => format!("{count} lines, the game is running"),
+                None => format!("{count} lines from the last run"),
+            });
+        let mut section = div().flex().flex_col().gap(px(10.));
         let search = self.servers.value(Field::ConsoleSearch).trim().to_string();
         let lines: Vec<String> = self
             .prepare_log
@@ -315,6 +286,6 @@ impl Launcher {
                 };
                 div().text_color(color).child(line)
             }));
-        Some(section.child(body))
+        Some((header, section.child(body)))
     }
 }
