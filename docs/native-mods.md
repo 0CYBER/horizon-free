@@ -78,6 +78,13 @@ block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may can
 drops; `native_place_block` hears a block placed from an item (`BlockItem.place`). To stop a placement, a mod claims
 `native_use_item_on`, which runs before it. Bundles that use them need `"hooks": 14`.
 
+API 15 adds what a server mod needs to guard land and move players. `native_right_click_block` hears a player's right
+click on a block before the block's own use (a chest, a door, a lever) and the item's, and may cancel it: nothing
+happens and the player sees the block as it is. `native_acting_player` says who acts inside a player's hook (UUID,
+name, level, position, game mode, health); `native_run_command` runs a command as the server's console (level 4, no
+output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; and the players
+`native_server_players` lists carry their health. Bundles that use them need `"hooks": 15`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -264,6 +271,15 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
   component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
   many it counted, took or gave; the player's screen follows as for any change to their inventory.
+- API 15: `native_acting_player()`, the player whose state is swapped in (inside `native_perform_command`,
+  `native_right_click_block`, `native_use_item_on`, `native_destroy_block`...; None elsewhere);
+  `native_run_command(line)`, a command run as the server's console (level 4, no output), only where no player is
+  swapped in (`native_tick`, a menu hook): a teleport to another level (`execute in minecraft:the_nether run tp Alex 0
+  70 0`) lands at the next tick's start. `native_server_players()` and the acting player carry `health` (0 once dead).
+- **`native_right_click_block(pos, face, canceled)`** (API 15): a player's right click on a block, before the block's
+  own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
+  without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of
+  claimed land.
 
 ### Server menus
 

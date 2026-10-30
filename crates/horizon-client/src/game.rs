@@ -4814,6 +4814,15 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         let mut anchor_passed = false;
+        // Native mods, where ServerPlayerGameMode.useItemOn starts: a
+        // canceled click does nothing (a guest's block is sent back).
+        if let Some(hit) = block_hit {
+            let mut canceled = false;
+            self.native_right_click_block(hit.pos, hit.face, &mut canceled);
+            if canceled {
+                return Ok(true);
+            }
+        }
         // MultiPlayerGameMode.useItemOn: blocks react first.
         if !(sneaking && hands_full)
             && let Some(hit) = block_hit
