@@ -697,12 +697,11 @@ impl Game<'_> {
         }
     }
     /// A client's own effects (`LivingEntity.tickEffects` on the client,
-    /// `MobEffectInstance.tickClient`): they count down, and the server
-    /// removes them. Their modifiers and flags move the predicted player.
+    /// `MobEffectInstance.tickClient`): they count down and blend, and the
+    /// server removes them. Their modifiers and flags move the predicted
+    /// player.
     pub(super) fn tick_client_effects(&mut self) {
-        for e in &mut self.potions.effects.list {
-            e.tick_client();
-        }
+        client_tick_effects(&mut self.potions.effects, &mut self.sculk.darkness);
         self.apply_effect_status();
     }
     /// Add an active effect to the player and update attributes / absorption.
@@ -1307,5 +1306,65 @@ impl Game<'_> {
             "active": self.potions.effects.list.iter().map(|e| serde_json::json!({ "id": e.id, "duration": e.duration, "amplifier": e.amplifier })).collect::<Vec<_>>(),
             "thrown": self.potions.thrown.iter().map(|t| [t.position.x, t.position.y, t.position.z]).collect::<Vec<_>>(),
         })
+    }
+}
+
+/// `LivingEntity.tickEffects` on a client: each `MobEffectInstance.tickClient`
+/// counts its effect down, then ticks its `BlendState`. The darkness effect's
+/// is the fade `darkness_lighting` and `darkness_fog` draw; the integrated
+/// level's `tick_sculk_entities` is not run for a server's client (#3393).
+fn client_tick_effects(effects: &mut PlayerEffects, darkness: &mut (f32, f32)) {
+    for e in &mut effects.list {
+        e.tick_client();
+    }
+    *darkness = super::sculk::darkness_blend_tick(effects, *darkness);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::sculk::darkness_blend_added;
+    use super::*;
+
+    /// A server's client (multiplayer and the default single player) fades
+    /// the darkness effect in over its 22 blend ticks, holds it, and fades
+    /// it out over the last 22 (#3393).
+    #[test]
+    fn a_servers_client_blends_the_darkness_effect() {
+        let mut effects = PlayerEffects::default();
+        effects.add(EffectInstance::new("darkness", 60, 0));
+        let mut darkness = (0.0, 0.0);
+        client_tick_effects(&mut effects, &mut darkness);
+        assert_eq!(darkness, (0.0, 1.0 / 22.0), "the first tick fades in");
+        for _ in 1..22 {
+            client_tick_effects(&mut effects, &mut darkness);
+        }
+        assert!((darkness.1 - 1.0).abs() < 1e-5, "{darkness:?}");
+        // 38 ticks left: full until 22 remain, then the fade out.
+        for _ in 0..16 {
+            client_tick_effects(&mut effects, &mut darkness);
+        }
+        assert_eq!(effects.get("darkness").map(|e| e.duration), Some(22));
+        assert!(
+            darkness.1 < darkness.0,
+            "fading out at 22 left: {darkness:?}"
+        );
+        for _ in 0..21 {
+            client_tick_effects(&mut effects, &mut darkness);
+        }
+        assert!(darkness.1.abs() < 1e-5, "{darkness:?}");
+    }
+
+    /// `ClientPacketListener.handleUpdateMobEffect`: a new darkness fades in
+    /// when the server blends it; one sent unblended (joining, changing
+    /// dimension) is at full strength at once.
+    #[test]
+    fn a_new_darkness_starts_blended_or_at_once() {
+        let e = EffectInstance::new("darkness", 260, 0);
+        assert_eq!(darkness_blend_added(&e, true), (0.0, 0.0));
+        assert_eq!(darkness_blend_added(&e, false), (1.0, 1.0));
+        let ending = EffectInstance::new("darkness", 10, 0);
+        assert_eq!(darkness_blend_added(&ending, false), (0.0, 0.0));
+        let infinite = EffectInstance::new("darkness", -1, 0);
+        assert_eq!(darkness_blend_added(&infinite, false), (1.0, 1.0));
     }
 }

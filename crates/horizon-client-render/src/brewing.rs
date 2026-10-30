@@ -15,14 +15,19 @@ pub use horizon_client_core::potions::{
     BASE_POTION_COLOR, Category, EFFECTS, EffectDef, POTIONS, PotionDef, effect, namespaced,
     potion, potion_color,
 };
-/// `MobEffectUtil.formatDuration` at 20 TPS: m:ss or h:mm:ss.
+/// `MobEffectUtil.formatDuration` at 20 TPS.
 pub fn format_duration(ticks: i32) -> String {
-    let secs = ticks / 20;
+    format_tick_duration(ticks, 20.0)
+}
+/// `StringUtil.formatTickDuration`: mm:ss, or hh:mm:ss from an hour up, every
+/// field two digits.
+pub fn format_tick_duration(ticks: i32, tick_rate: f32) -> String {
+    let secs = (ticks as f32 / tick_rate).floor() as i32;
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
     if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
+        format!("{h:02}:{m:02}:{s:02}")
     } else {
-        format!("{m}:{s:02}")
+        format!("{m:02}:{s:02}")
     }
 }
 /// `item.minecraft.potion.effect.<name>` style translation key for a potion item.
@@ -46,20 +51,30 @@ pub fn tooltip(
             Category::Neutral,
         )];
     }
-    def.effects
-        .iter()
+    effect_lines(def.effects.iter().copied(), scale, translate)
+}
+/// `PotionContents.addPotionTooltip`'s line per effect: its name, potency and
+/// scaled duration, for (effect id, duration, amplifier) entries.
+pub fn effect_lines<'a>(
+    effects: impl IntoIterator<Item = (&'a str, i32, i32)>,
+    scale: f32,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, Category)> {
+    effects
+        .into_iter()
         .map(|(e, duration, amp)| {
+            let e = e.trim_start_matches("minecraft:");
             let mut line =
-                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| (*e).to_owned());
-            if *amp > 0 {
+                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| e.to_owned());
+            if amp > 0 {
                 line.push(' ');
                 line.push_str(
                     &translate(&format!("potion.potency.{amp}"))
-                        .unwrap_or_else(|| crate::enchant::level_name(*amp as u32 + 1)),
+                        .unwrap_or_else(|| crate::enchant::level_name(amp as u32 + 1)),
                 );
             }
             let instant = effect(e).is_some_and(|d| d.instant);
-            let scaled = (*duration as f32 * scale) as i32;
+            let scaled = (duration as f32 * scale) as i32;
             if !instant && scaled > 20 {
                 line = format!("{line} ({})", format_duration(scaled));
             }
@@ -336,10 +351,14 @@ mod tests {
             potion_name_key("minecraft:splash_potion", Some("minecraft:long_swiftness")),
             "item.minecraft.splash_potion.effect.swiftness"
         );
-        assert_eq!(format_duration(9600), "8:00");
-        assert_eq!(format_duration(450), "0:22");
+        assert_eq!(format_duration(9600), "08:00");
+        assert_eq!(format_duration(450), "00:22");
+        assert_eq!(format_duration(140), "00:07");
+        assert_eq!(format_duration(1800), "01:30");
+        assert_eq!(format_duration(72000), "01:00:00");
+        assert_eq!(format_tick_duration(9600, 40.0), "04:00");
         let t = tooltip(Some("minecraft:strong_poison"), 1.0, &|_| None);
-        assert_eq!(t[0].0, "poison II (0:21)");
+        assert_eq!(t[0].0, "poison II (00:21)");
         assert_eq!(POTIONS.len(), 46);
     }
 
@@ -395,5 +414,24 @@ mod tests {
         // No fuel left: nothing more brews.
         stand.tick(&brewing, &items, &providers);
         assert_eq!(stand.brew_time, 0);
+    }
+
+    /// #3312: `PotionContents.getPotionDescription` names the effects with
+    /// translatable components, so a Russian game reads them from ru_ru.json
+    /// (the prepared one; skipped without it), as the tooltip's other lines.
+    #[test]
+    fn effect_lines_read_the_selected_language() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("assets/minecraft/lang/ru_ru.json").exists() {
+            return;
+        }
+        let ru = crate::lang::Language::load(&[&root], "ru_ru");
+        let translate = |key: &str| ru.get(key).map(str::to_owned);
+        let lines = tooltip(Some("minecraft:turtle_master"), 0.125, &translate);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].0.starts_with("Замедление IV ("), "{lines:?}");
+        assert!(lines[1].0.starts_with("Сопротивление III ("), "{lines:?}");
     }
 }

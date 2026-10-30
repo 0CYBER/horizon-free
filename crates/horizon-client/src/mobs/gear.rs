@@ -173,16 +173,21 @@ pub fn protection(m: &Mob, kind: DamageKind) -> f32 {
     protection_points(g, kind).min(20.0)
 }
 pub fn protection_points(g: &Gear, kind: DamageKind) -> f32 {
-    if kind == DamageKind::Generic {
+    // Protection's `damage_protection` skips #bypasses_invulnerability.
+    if kind == DamageKind::Generic || kind.bypasses_invulnerability() {
         return 0.0;
     }
     let fire = matches!(
         kind,
-        DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
+        DamageKind::OnFire
+            | DamageKind::InFire
+            | DamageKind::Lava
+            | DamageKind::Fireball
+            | DamageKind::SulfurCubeHot
     );
     let projectile = matches!(
         kind,
-        DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball
+        DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball | DamageKind::WindCharge
     );
     let mut total = 0.0;
     for slot in ARMOR {
@@ -191,9 +196,17 @@ pub fn protection_points(g: &Gear, kind: DamageKind) -> f32 {
             total += match &**id {
                 "minecraft:protection" => l,
                 "minecraft:fire_protection" if fire => 2.0 * l,
-                "minecraft:blast_protection" if kind == DamageKind::Explosion => 2.0 * l,
+                "minecraft:blast_protection"
+                    if matches!(kind, DamageKind::Explosion | DamageKind::Fireworks) =>
+                {
+                    2.0 * l
+                }
                 "minecraft:projectile_protection" if projectile => 2.0 * l,
-                "minecraft:feather_falling" if kind == DamageKind::Fall => 3.0 * l,
+                "minecraft:feather_falling"
+                    if matches!(kind, DamageKind::Fall | DamageKind::Stalagmite) =>
+                {
+                    3.0 * l
+                }
                 _ => 0.0,
             };
         }

@@ -229,14 +229,7 @@ impl Game<'_> {
             && max > 0
             && !self.creative
         {
-            let loss = self.wear(stack, per_attack);
-            let cell = self.held_mut();
-            if let Some(held) = cell.as_mut() {
-                held.damage += loss;
-                if held.damage >= max {
-                    *cell = None;
-                }
-            }
+            self.damage_held(per_attack);
         }
     }
     /// `MaceItem.hurtEnemy` for a smash: the fall stops and its damage is

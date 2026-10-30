@@ -3818,7 +3818,7 @@ impl ParticleEngine {
                         layer: if layer {
                             crate::gfx::TRANSLUCENT_PARTICLE_OVERLAY
                         } else {
-                            0
+                            u32::from(hdr_tier(p.ty)) << 16
                         },
                         color,
                         light,
@@ -3828,6 +3828,27 @@ impl ParticleEngine {
                 }
             }
         }
+    }
+}
+/// How brightly particle `ty` shines in HDR output, as `mesher::hdr_tier`: flames and
+/// glowing drops, not their smoke. Only opaque-layer particles are marked.
+fn hdr_tier(ty: ParticleType) -> u8 {
+    use ParticleType as P;
+    match ty {
+        P::Flame
+        | P::SoulFireFlame
+        | P::CopperFireFlame
+        | P::SmallFlame
+        | P::Lava
+        | P::DrippingLava
+        | P::FallingLava
+        | P::LandingLava
+        | P::DrippingDripstoneLava
+        | P::FallingDripstoneLava => crate::mesher::INCANDESCENT,
+        P::DrippingObsidianTear | P::FallingObsidianTear | P::LandingObsidianTear => {
+            crate::mesher::LOW
+        }
+        _ => 0,
     }
 }
 /// `Particle.LifetimeAlpha.currentAlphaForAge`.
