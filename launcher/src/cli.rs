@@ -71,6 +71,9 @@ enum ServersCmd {
         /// Do not check players' Minecraft accounts (offline mode: anyone can use any name)
         #[arg(long)]
         offline: bool,
+        /// Kept for old scripts: account checking is now the default
+        #[arg(long, hide = true, conflicts_with = "offline")]
+        check_accounts: bool,
         /// Who may join (repeatable); the first becomes an operator
         #[arg(long = "player")]
         players: Vec<String>,
@@ -1898,6 +1901,7 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
             max_players,
             open,
             offline,
+            check_accounts: _,
             players,
             version,
             accept_eula,
