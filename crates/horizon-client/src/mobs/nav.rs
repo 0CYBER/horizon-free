@@ -307,7 +307,9 @@ impl Mob {
         ];
         self.create_path_to(w, p, reach)
     }
-    pub fn nav_move_to_path(&mut self, path: Option<Path>, speed: f64) -> bool {
+    /// `PathNavigation.moveTo(Path, speed)`: `trimPath` runs before the
+    /// node count is checked, so a path the trim empties is refused.
+    pub fn nav_move_to_path(&mut self, w: &MobWorld, path: Option<Path>, speed: f64) -> bool {
         let Some(path) = path else {
             self.ai.nav.path = None;
             return false;
@@ -318,6 +320,7 @@ impl Mob {
         if self.ai.nav.is_done() {
             return false;
         }
+        self.trim_path(w);
         if self.ai.nav.path.as_ref().is_none_or(|p| p.nodes.is_empty()) {
             return false;
         }
@@ -336,7 +339,7 @@ impl Mob {
             at[2].floor() as i32,
         ];
         let path = self.create_path_to(w, p, 1);
-        self.nav_move_to_path(path, speed)
+        self.nav_move_to_path(w, path, speed)
     }
     pub fn nav_move_to_entity(
         &mut self,
@@ -356,7 +359,7 @@ impl Mob {
             self.ai.nav.speed_modifier = speed;
             return true;
         }
-        path.is_some() && self.nav_move_to_path(path, speed)
+        path.is_some() && self.nav_move_to_path(w, path, speed)
     }
     pub fn nav_stop(&mut self) {
         self.ai.nav.path = None;
@@ -370,6 +373,28 @@ impl Mob {
             self.ai.nav.path = self.create_path_to(w, t, reach);
             self.ai.nav.time_last_recompute = w.game_time;
             self.ai.nav.delayed_recompute = false;
+        }
+    }
+    /// `GroundPathNavigation.trimPath` with `avoidSun`: a mob that is out of
+    /// the sun keeps only the nodes before the first one the sky sees.
+    fn trim_path(&mut self, w: &MobWorld) {
+        if !self.ai.nav.avoid_sun
+            || !matches!(self.ai.nav.kind, NavKind::Ground | NavKind::WallClimber)
+        {
+            return;
+        }
+        let at = [
+            self.position.x.floor() as i32,
+            (self.position.y + 0.5).floor() as i32,
+            self.position.z.floor() as i32,
+        ];
+        if w.can_see_sky(at[0], at[1], at[2]) {
+            return;
+        }
+        if let Some(path) = &mut self.ai.nav.path
+            && let Some(i) = path.nodes.iter().position(|n| w.can_see_sky(n.x, n.y, n.z))
+        {
+            path.nodes.truncate(i);
         }
     }
     /// PathNavigation.tick.

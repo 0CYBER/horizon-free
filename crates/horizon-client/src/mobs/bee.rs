@@ -946,7 +946,7 @@ impl GoToHive {
         let close_enough = if closer_than(m, p, 3) { 1 } else { 2 };
         m.ai.nav.max_visited_multiplier = 10.0;
         let path = m.create_path_to(w, p, close_enough);
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(w, path, 1.0);
         m.ai.nav.path.as_ref().is_some_and(|path| path.reached)
     }
 }
@@ -1188,7 +1188,7 @@ impl Goal for Wander {
                 at[2].floor() as i32,
             ];
             let path = m.create_path_to(cx.w, p, 1);
-            m.nav_move_to_path(path, 1.0);
+            m.nav_move_to_path(cx.w, path, 1.0);
         }
     }
 }

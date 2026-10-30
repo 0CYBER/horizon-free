@@ -1272,9 +1272,9 @@ impl Goal for MeleeAttack {
         }
         !(t.is_player && t.creative)
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.speed);
+        m.nav_move_to_path(cx.w, path, self.speed);
         m.ai.aggressive = true;
         self.recalc = 0;
         self.until_attack = 0;
@@ -1921,9 +1921,9 @@ impl Goal for AvoidEntity {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.walk);
+        m.nav_move_to_path(cx.w, path, self.walk);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let from = match &self.what {

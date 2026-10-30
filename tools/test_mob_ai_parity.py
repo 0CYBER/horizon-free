@@ -334,6 +334,10 @@ def scenarios():
     for seed in (201, 202):
         add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
                                                f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
+    # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
+    # avoidSun: the path stops at the first node the sky sees).
+    add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
+                                   'player 12.5 -60 0.5', 'mob minecraft:skeleton 0.5 -60 0.5 0 211 persistent'], 'time=1000')
     # A zombified piglin runs Zombie.registerGoals too (the turtle egg goal draws its start delay).
     add('zombified_piglin_player', 120, ['player 7.5 -60 0.5', 'mob minecraft:zombified_piglin 0.5 -60 0.5 0 241 persistent'])
     add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])

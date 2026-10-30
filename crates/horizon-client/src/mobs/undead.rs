@@ -1074,8 +1074,8 @@ impl Goal for MoveThroughVillage {
             )
     }
     /// `MoveThroughVillageGoal.start`.
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
-        m.nav_move_to_path(self.path.clone(), self.speed);
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.nav_move_to_path(cx.w, self.path.clone(), self.speed);
     }
     /// `MoveThroughVillageGoal.stop`: a point reached (or the walk ended) is
     /// visited.
