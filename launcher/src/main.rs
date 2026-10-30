@@ -279,6 +279,8 @@ struct Launcher {
     home_tab: home_tabs::HomeTab,
     /// The selected instance's mods, for Home's Mods tab (`instance_mods.rs`).
     instance_mods: instance_mods::InstanceMods,
+    /// Modrinth projects' icon URLs (`instance_mods.rs`).
+    project_icons: instance_mods::ProjectIcons,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -484,6 +486,7 @@ impl Launcher {
             download_seen: None,
             home_tab: home_tabs::HomeTab::from_env(),
             instance_mods: Default::default(),
+            project_icons: Default::default(),
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
