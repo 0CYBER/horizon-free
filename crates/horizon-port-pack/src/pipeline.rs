@@ -22,9 +22,10 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Strin
 }
 
 /// Step 1: the pack at `pack` to `<work>/pack.json`.
-pub fn import(pack: &Path, work: &Path, log: Log) -> Result<import::Pack, String> {
-    let pack = import::import(pack)?;
+pub fn import(source: &Path, work: &Path, log: Log) -> Result<import::Pack, String> {
+    let pack = import::import(source)?;
     fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
+    crate::resourcepacks::stage(source, work, &pack)?.save(work)?;
     write_json(&work.join("pack.json"), &pack)?;
     let mut kinds = BTreeMap::<&str, usize>::new();
     for f in &pack.files {

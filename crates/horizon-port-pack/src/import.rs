@@ -304,12 +304,7 @@ fn instance(dir: &Path) -> Result<Pack, String> {
             }
         }
     }
-    let game = [".minecraft", "minecraft", "."]
-        .iter()
-        .map(|g| dir.join(g))
-        .find(|g| g.join("mods").is_dir())
-        .or_else(|| dir.read_dir().is_ok().then(|| dir.to_path_buf()))
-        .ok_or_else(|| format!("{}: no mods folder", dir.display()))?;
+    let game = game_dir(dir)?;
     let mods = if game.join("mods").is_dir() {
         game.join("mods")
     } else {
@@ -341,6 +336,16 @@ fn instance(dir: &Path) -> Result<Pack, String> {
         }
     }
     Ok(pack)
+}
+
+/// Resolve the game root for both mod and resource-pack instance imports.
+pub(crate) fn game_dir(dir: &Path) -> Result<PathBuf, String> {
+    [".minecraft", "minecraft", "."]
+        .iter()
+        .map(|g| dir.join(g))
+        .find(|g| g.join("mods").is_dir() || g.join("resourcepacks").is_dir())
+        .or_else(|| dir.read_dir().is_ok().then(|| dir.to_path_buf()))
+        .ok_or_else(|| format!("{}: no game folder", dir.display()))
 }
 
 fn count_files(dir: &Path) -> usize {
