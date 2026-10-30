@@ -94,6 +94,11 @@ impl RemoteTextDisplay {
     /// `Entity.positionRider` through `setPos`: where its vehicle seats it this
     /// tick. The previous position stays the last tick's, so it moves smoothly
     /// with the vehicle; a teleport's interpolation no longer applies.
+    /// Where a passenger of this display sits, this tick and the last
+    /// (`Display`'s box is 0 by 0, so its passenger attachment is its feet).
+    pub(super) fn seat(&self) -> (glam::DVec3, glam::DVec3) {
+        (self.position, self.previous)
+    }
     pub(super) fn ride(&mut self, at: glam::DVec3) {
         self.position = at;
         self.target = at;

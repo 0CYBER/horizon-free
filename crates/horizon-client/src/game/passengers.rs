@@ -95,7 +95,25 @@ impl Game<'_> {
                 let Some(v) = self.mobs[i].extra.mount else {
                     continue;
                 };
-                let Some(&j) = index.get(&v) else { continue };
+                let Some(&j) = index.get(&v) else {
+                    // A mob on a text display: NPC plugins seat their sitting
+                    // NPCs on one. The server's position for a passenger
+                    // gives way to its seat, as `rideTick` places it.
+                    let Some((at, before)) = self.text_displays.get(&(v as i32)).map(|d| d.seat())
+                    else {
+                        continue;
+                    };
+                    let m = &mut self.mobs[i];
+                    let offset = riders::vehicle_attachment(m);
+                    m.position = Vec3::new(at.x, at.y - offset, at.z);
+                    m.previous = Vec3::new(before.x, before.y - offset, before.z);
+                    m.velocity = Vec3::ZERO;
+                    m.fall_distance = 0.0;
+                    m.on_ground = false;
+                    m.extra.passenger = true;
+                    m.ai.nav.stop();
+                    continue;
+                };
                 let vehicle = &self.mobs[j];
                 let attach = riders::passenger_attachment(vehicle);
                 let (pos, prev) = (vehicle.position, vehicle.previous);
@@ -117,7 +135,7 @@ impl Game<'_> {
         }
         // Text displays riding a mob, as NPC plugins put a name over a head:
         // `LivingEntity.getPassengerRidingPosition`, the vehicle's passenger
-        // attachment (the top of its box in its pose), less the display's own
+        // attachment (the top of its box in its pose and scale), less the display's own
         // vehicle attachment, which is 0 (Display's dimensions are 0 by 0).
         // On the local player, the top of its box in its pose and scale (`Avatar.POSES`).
         let me = self.remote.as_ref().map(|r| r.entity_id as u32);
