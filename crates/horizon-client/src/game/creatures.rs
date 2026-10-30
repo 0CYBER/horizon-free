@@ -2192,7 +2192,7 @@ impl Game<'_> {
             let mut child = parent.clone();
             child.baby = true;
             // TurtleBreedGoal.breed triggers it without a child.
-            let turtle = p.species() == Species::Turtle;
+            let turtle = matches!(p.species(), Species::Turtle | Species::Frog);
             if matches!(
                 (
                     p.species(),
@@ -2228,7 +2228,7 @@ impl Game<'_> {
         }
         // TurtleBreedGoal.breed: the goal gave the mother her egg; only the
         // experience is left, and only with mob loot on.
-        if p.species() == Species::Turtle {
+        if matches!(p.species(), Species::Turtle | Species::Frog) {
             // One `new ExperienceOrb` of 1 to 7 from the mother's random (not
             // split up as `ExperienceOrb.award` does).
             if self.ui.rules.bool("mob_drops")
