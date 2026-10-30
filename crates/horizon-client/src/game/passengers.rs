@@ -146,6 +146,32 @@ impl Game<'_> {
             };
             display.ride(glam::DVec3::new(at.x, at.y, at.z));
         }
+        // Armor stands riding a mob or the local player (a server's name tag
+        // hologram): seated like the displays above, so the name follows its
+        // vehicle instead of staying where the stand spawned.
+        for i in 0..self.armor_stands.len() {
+            let Some(vehicle) = self.armor_stands[i].vehicle else {
+                continue;
+            };
+            let at = if Some(vehicle) == me {
+                let Some(at) = own_seat else { continue };
+                at
+            } else {
+                let Some(&j) = index.get(&vehicle) else {
+                    continue;
+                };
+                let vehicle = &self.mobs[j];
+                riders::seat(
+                    riders::passenger_attachment(vehicle),
+                    0.0,
+                    vehicle.position,
+                    vehicle.yaw,
+                )
+            };
+            let stand = &mut self.armor_stands[i];
+            stand.position = at;
+            stand.velocity = Vec3::ZERO;
+        }
     }
 
     /// `finalizeSpawn` jockeys of a naturally spawned mob: baby zombies on
