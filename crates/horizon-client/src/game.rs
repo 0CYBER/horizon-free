@@ -3966,10 +3966,6 @@ impl Game<'_> {
             return;
         }
         if horizon_client::command_block::Mode::of_block(&name).is_some() {
-            // `ServerPlayer.openCommandBlock` sends the block entity's data
-            // (`ClientboundBlockEntityDataPacket`) so the opening client shows
-            // the stored command, not its stale copy.
-            self.mark_block_entity_updated(key);
             self.open_command_block(key);
             return;
         }

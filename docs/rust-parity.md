@@ -1451,8 +1451,9 @@ do not show attribute modifiers yet).
 `horizon_client::hotbar` reads the creative toolbars of an older `hotbar.nbt`
 through the `HOTBAR` data fixers (`EmptyItemInHotbarFix`, every item stack
 fixer): `tools/test_hotbar_parity.py` loads generated files of 34 versions with
-the real `HotbarManager`. The toolbar screen (save and load keys) is not wired
-to it yet.
+the real `HotbarManager`. The creative screen's Saved Hotbars tab shows its
+rows, and the save and load keys write and read it
+(`game/creative_hotbar.rs`).
 
 ## Player list and world border rendering
 
