@@ -389,6 +389,10 @@ pub struct Ctx<'a, L: FinalizeLevel + ?Sized, R: RandomSource> {
     /// Jockeys and mounts made along the way, finalized, with their riding
     /// links set (`Extra::mount` / `Extra::rider`).
     pub created: Vec<Mob>,
+    /// The rider as it was when its new chicken was added to the level, before
+    /// its equipment and attributes: what a generated chunk keeps of it
+    /// (`ProtoChunk.addEntity` saves the chicken with its passenger then).
+    pub jockey_rider: Option<Mob>,
 }
 
 // ---- attributes -----------------------------------------------------------
@@ -835,12 +839,12 @@ pub fn goat_spawn(m: &mut Mob) {
         .random
         .next_int_between_inclusive(600, 1200)
         .unwrap_or(600);
-    set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
     let ram = m
         .random
         .next_int_between_inclusive(600, 6000)
         .unwrap_or(600);
-    set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
     m.extra.screaming = m.random.next_double() < 0.02;
     age_boundary_reached(m);
     if !m.is_baby() && m.random.next_float() < 0.1 {
@@ -1290,6 +1294,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                         self.finalize(&mut chicken, Reason::Jockey, None);
                         chicken.extra.jockey = true;
                         self.ride(m, &mut chicken);
+                        self.jockey_rider = Some(m.clone());
                         self.created.push(chicken);
                     }
                 }
@@ -1641,7 +1646,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Frog => {
                 self.variant(m, |r| &r.frog);
                 let jump = self.uniform(100, 140);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 self.ageable(m, g)
             }
             S::ZombieNautilus => {
@@ -2024,9 +2029,9 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 /// cooldown (600 to 6000), drawn from `random`.
 pub fn goat_init_memories(m: &mut Mob, random: &mut impl RandomSource) {
     let jump = random.next_int_between_inclusive(600, 1200).unwrap_or(600);
-    set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
     let ram = random.next_int_between_inclusive(600, 6000).unwrap_or(600);
-    set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
