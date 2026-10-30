@@ -234,7 +234,7 @@ pub fn register(m: &mut Mob) {
         Family::Generic if m.species() == Species::Armadillo => super::armadillo::register(m),
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic if m.species() == Species::Fox => super::fox::register(m),
-        Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
+        Family::Generic if m.species() == Species::Parrot => super::parrot::register(m),
         Family::Generic if m.species() == Species::Rabbit => super::rabbit::register(m),
         Family::Generic if m.species() == Species::Ocelot => super::tame::register_ocelot(m),
         Family::Generic => {
@@ -551,6 +551,7 @@ pub fn tick(
     if m.species() == Species::Panda {
         super::panda::tick(m, w, events);
     }
+    aquatic::school_tick(m, w, level_random);
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
@@ -898,6 +899,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::finalize::variant_sound(m, "stray_ambient").unwrap_or("entity.cat.stray_ambient")
         }
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
+        // Turtle.getAmbientSound: only an adult on land makes a sound.
+        Species::Turtle if turtle_ambient_silent(m) => return,
         Species::Dolphin if !m.fluids.in_water => "entity.dolphin.ambient",
         Species::Guardian if !m.fluids.in_water => "entity.guardian.ambient_land",
         Species::ElderGuardian if !m.fluids.in_water => "entity.elder_guardian.ambient_land",
@@ -943,6 +946,11 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !sound.is_empty() {
         m.voice(sound, events);
     }
+}
+/// `Turtle.getAmbientSound`: `entity.turtle.ambient_land` only when the turtle
+/// is out of water, on the ground and not a baby; otherwise `null` (silent).
+fn turtle_ambient_silent(m: &Mob) -> bool {
+    m.fluids.in_water || !m.on_ground || m.is_baby()
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
@@ -1401,6 +1409,7 @@ fn species_ai_step(
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Parrot => super::parrot::calculate_flapping(m),
         Species::Armadillo => super::armadillo::tick(m),
         Species::Frog => super::frog::tick(m),
         Species::Goat => super::goat::tick(m),
@@ -1598,6 +1607,12 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
         _ => m.kind.sounds,
     }
 }
+/// Whether `Animal.mobInteract` takes the animal's food: an adult at age 0
+/// that `canFallInLove` (not in love yet) or a baby that `canAgeUp` (not age
+/// locked). Tamed wolves and cats only sit or stand when it does not.
+pub fn takes_food(m: &Mob) -> bool {
+    (m.extra.age == 0 && m.extra.in_love <= 0) || (m.extra.age < 0 && !m.extra.age_locked)
+}
 /// `Animal.mobInteract` with its food in hand: an adult that can fall in
 /// love does, a baby grows up by a tenth, and either plays its eating sound
 /// (`Strider.mobInteract` plays its own afterwards). `None` when the animal
@@ -1610,15 +1625,16 @@ pub fn feed_animal(
     if super::armadillo::scared(m) {
         return None;
     }
-    if m.extra.age == 0 && m.extra.in_love <= 0 {
+    if !takes_food(m) {
+        return None;
+    }
+    if m.extra.age == 0 {
         m.extra.in_love = 600;
         m.extra.love_player = true;
-    } else if m.extra.age < 0 {
+    } else {
         // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age), true): a tenth.
         let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
         age_up(m, secs, true);
-    } else {
-        return None;
     }
     let mut sound = eating_sound(m, level);
     if m.species() == Species::Strider && !m.silent {
@@ -1999,10 +2015,22 @@ pub fn ate(m: &mut Mob) {
         }
     }
 }
+/// `NeutralMob.playerDied` for a mob that is neutral: the anger at the
+/// player who died ends. The caller checks `forgive_dead_players`.
+pub fn forgive_dead_player(m: &mut Mob) {
+    match m.species() {
+        Species::Bee => super::bee::forgive_dead_player(m),
+        Species::PolarBear => super::polar_bear::forgive_dead_player(m),
+        _ => super::tame::forgive_dead_player(m),
+    }
+}
 /// Species-specific travel (fish, squid, dolphins swim with their own rules).
 pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
     if m.species() == Species::Drowned {
         return undead::drowned_travel(m, w, input, events);
+    }
+    if m.species() == Species::Turtle {
+        return super::turtle::travel(m, w, input, events);
     }
     match family(m.species()) {
         Family::Aquatic => aquatic::travel(m, w, input, events),
@@ -2349,5 +2377,79 @@ mod poison_effect_tests {
             zombie.health, initial_zombie_health,
             "undead mobs are immune to poison"
         );
+    }
+}
+
+#[cfg(test)]
+mod turtle_ambient_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn turtle() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:turtle".into();
+        k.species = Species::Turtle;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// `Turtle.getAmbientSound`: land ambient only for an adult on the ground
+    /// and out of water.
+    #[test]
+    fn a_turtle_is_silent_in_water_in_the_air_and_as_a_baby() {
+        let mut m = turtle();
+        m.on_ground = true;
+        assert!(!turtle_ambient_silent(&m));
+        m.on_ground = false;
+        assert!(turtle_ambient_silent(&m));
+        m.on_ground = true;
+        m.fluids.in_water = true;
+        assert!(turtle_ambient_silent(&m));
+    }
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use super::*;
+    use crate::mobs::MobTypes;
+    use std::sync::Arc;
+
+    /// `Animal.mobInteract` (#2780): food grows a tamed baby cat or wolf
+    /// (`canAgeUp`), so `Wolf.mobInteract` and `Cat.mobInteract` see the click
+    /// consumed and do not make it sit. Only an adult that cannot breed now,
+    /// or an age-locked baby, leaves the food to the sit toggle.
+    #[test]
+    fn food_grows_a_tamed_baby_cat_or_wolf() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists() {
+            return;
+        }
+        let data = MobTypes::load(&root).unwrap();
+        let mut level = LegacyRandom::new(0);
+        for id in ["minecraft:wolf", "minecraft:cat"] {
+            let kind = Arc::new(data.types.get(id).unwrap().clone());
+            let mut m = Mob::new(1, kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+            m.extra.tame = true;
+            m.extra.age = -24000;
+            assert!(takes_food(&m), "{id}: a tamed baby takes its food");
+            assert!(feed_animal(&mut m, &mut level).is_some(), "{id}");
+            // getSpeedUpSecondsWhenFeeding(24000): a tenth of 1200 seconds.
+            assert_eq!(m.extra.age, -24000 + 120 * 20, "{id}: grew a tenth");
+            assert_eq!(m.extra.in_love, 0, "{id}: a baby does not fall in love");
+
+            m.extra.age_locked = true;
+            assert!(!takes_food(&m), "{id}: an age-locked baby cannot grow");
+            m.extra.age_locked = false;
+
+            m.extra.age = 0;
+            assert!(takes_food(&m), "{id}: an adult can breed");
+            m.extra.in_love = 600;
+            assert!(!takes_food(&m), "{id}: already in love");
+            m.extra.in_love = 0;
+            m.extra.age = 6000;
+            assert!(!takes_food(&m), "{id}: breeding cooldown");
+        }
     }
 }

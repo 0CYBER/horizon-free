@@ -362,7 +362,7 @@ impl Game<'_> {
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):
     /// a burst at the player's feet that only knocks back and triggers
     /// blocks (`ExplodeEffect` with `block_interaction: trigger`).
-    fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
+    pub(super) fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
         let Some(p) = self.player.as_ref() else {
             return;
         };
@@ -480,6 +480,15 @@ impl Game<'_> {
                     .is_some_and(|i| s.damage >= i.max_damage)
                 {
                     self.armor[slot] = None;
+                    if let Some(eye) = self.eye_position() {
+                        self.audio.play(
+                            "minecraft:entity.item.break",
+                            Some(eye),
+                            0.8,
+                            0.8 + self.world.random.next_float() * 0.4,
+                        );
+                    }
+                    self.apply_equipment();
                 }
             }
         }
