@@ -9,14 +9,17 @@
 use super::{
     Mob, MobEvent, MobWorld, Species, Who,
     goals::{
-        Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, goal_clone,
+        Breed, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, Tempt,
+        goal_clone,
     },
     sync,
 };
+use crate::blocks::Fluid;
 use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource},
 };
+use std::fmt::Debug;
 
 const JUMP: usize = 0;
 const CROAK: usize = 1;
@@ -73,6 +76,8 @@ enum Phase {
 #[derive(Clone, Debug, Default)]
 pub struct State {
     croak: i32,
+    /// The land beside water `LaySpawn` walks to (its `WALK_TARGET`).
+    lay_target: Option<[i32; 3]>,
     /// Ticks to the attackables sensor's next scan, and `NEAREST_ATTACKABLE`.
     scan: i32,
     nearest: Option<u32>,
@@ -90,6 +95,7 @@ pub struct State {
 }
 
 pub fn register(m: &mut Mob) {
+    let food = m.kind.food.clone();
     // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true). The
     // frog's movement speed is 1.0, so the controller's 0.1 outside-water
     // speed is what keeps a walking frog at vanilla's pace; the plain ground
@@ -104,10 +110,17 @@ pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, Panic::new(1.25));
+    // `FrogAi.initIdleActivity`: `AnimalMakeLove` first, then `FollowTemptation(1.25)`.
+    g.add(2, Breed::new(1.0));
+    g.add(3, Unless(is_pregnant, Tempt::new(1.25, food, false)));
     g.add(2, ShootTongue);
+    g.add(2, LaySpawn::default());
     g.add(3, LongJump::default());
     g.add(4, Croak);
-    g.add(5, Stroll::avoiding_water(1.0).interval(1));
+    g.add(
+        5,
+        Unless(laying_trip, Stroll::avoiding_water(1.0).interval(1)),
+    );
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());
 }
@@ -220,6 +233,222 @@ impl Goal for Croak {
     fn every_tick(&self) -> bool {
         true
     }
+}
+
+/// `IS_PREGNANT`, set by `Frog.spawnChildFromBreeding` and erased once the
+/// frog has laid its frogspawn.
+const PREGNANT: &str = "is_pregnant";
+/// `LaySpawn`'s walk target is set.
+fn laying_trip(m: &Mob) -> bool {
+    m.extra.frog.lay_target.is_some()
+}
+pub fn is_pregnant(m: &Mob) -> bool {
+    m.extra.memories.iter().any(|x| x.0 == PREGNANT)
+}
+pub fn set_pregnant(m: &mut Mob, on: bool) {
+    let at = m.extra.memories.iter().position(|x| x.0 == PREGNANT);
+    match (at, on) {
+        (None, true) => m.extra.memories.push((PREGNANT, 1, i64::MAX)),
+        (Some(i), false) => {
+            m.extra.memories.remove(i);
+        }
+        _ => {}
+    }
+}
+
+/// A goal that waits while `blocked` holds: a pregnant frog is in the lay
+/// spawn activity, which has no `FollowTemptation`, and a frog with a walk
+/// target (`MoveToTargetSink`) does not run the stroll `RunOne`.
+#[derive(Clone)]
+struct Unless<G>(fn(&Mob) -> bool, G);
+impl<G: Debug> Debug for Unless<G> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.1.fmt(f)
+    }
+}
+impl<G: Goal + Clone + 'static> Goal for Unless<G> {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.1.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.1.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !(self.0)(m) && self.1.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !(self.0)(m) && self.1.can_continue(m, cx)
+    }
+    fn interruptable(&self) -> bool {
+        self.1.interruptable()
+    }
+    fn every_tick(&self) -> bool {
+        self.1.every_tick()
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.1.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.1.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.1.tick(m, cx)
+    }
+}
+
+/// `FrogAi.initLaySpawnActivity` for a pregnant frog: `TryFindLandNearLiquid(8, 1.0)`
+/// looks for land beside water and walks there, and `TryLaySpawnOnFluidNearLand`
+/// puts frogspawn on the water next to it. Both run every tick (the brain's
+/// walk target is `lay_target` here); the wandering `RunOne` is the goals below it.
+#[derive(Clone, Debug, Default)]
+struct LaySpawn {
+    /// `nextOkStartTime`: the search runs again once it has passed; every tick the
+    /// behaviour is tried before that pushes it 40 ticks on.
+    next_ok: i64,
+}
+impl LaySpawn {
+    fn is_air(w: &MobWorld, p: [i32; 3]) -> bool {
+        w.facts.is_air(w.world.block(p[0], p[1], p[2]))
+    }
+    fn empty(w: &MobWorld, p: [i32; 3]) -> bool {
+        w.collision_bounds(p).is_none()
+    }
+    /// `TryFindLandNearLiquid`'s `findFirst` test.
+    fn land_near_water(w: &MobWorld, p: [i32; 3]) -> bool {
+        if !Self::empty(w, p) || Self::empty(w, [p[0], p[1] - 1, p[2]]) {
+            return false;
+        }
+        HORIZONTAL.iter().any(|d| {
+            let n = [p[0] + d[0], p[1], p[2] + d[1]];
+            Self::is_air(w, n) && w.fluid(n[0], n[1] - 1, n[2]) == Fluid::Water
+        })
+    }
+    fn find(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let at = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        if cx.w.fluid(at[0], at[1], at[2]) == Fluid::Water {
+            return;
+        }
+        let now = cx.w.game_time;
+        let search = now >= self.next_ok;
+        self.next_ok = now + 40;
+        if !search {
+            return;
+        }
+        let found = manhattan_box(at, 8)
+            .into_iter()
+            .find(|p| (p[0] != at[0] || p[2] != at[2]) && Self::land_near_water(cx.w, *p));
+        if let Some(p) = found {
+            let to = [
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ];
+            m.look_at([to[0], to[1] + 0.5, to[2]]);
+            // `MoveToTargetSink`: `createPath(target block, 0)`.
+            let path = m.create_path_to(cx.w, p, 0);
+            m.nav_move_to_path(cx.w, path, 1.0);
+            m.extra.frog.lay_target = Some(p);
+        }
+    }
+    fn lay(m: &mut Mob, cx: &mut Cx) {
+        if m.fluids.in_water || !m.on_ground {
+            return;
+        }
+        let below = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32 - 1,
+            m.position.z.floor() as i32,
+        ];
+        for d in HORIZONTAL {
+            let rel = [below[0] + d[0], below[1], below[2] + d[1]];
+            // `getFaceShape(UP).isEmpty()`: nothing reaches the top of the block.
+            let open_top =
+                cx.w.collision_bounds(rel)
+                    .is_none_or(|b| b.max_position().y < 1.0);
+            let supports = cx.w.fluid(rel[0], rel[1], rel[2]) == Fluid::Water
+                || cx.w.has_tag(
+                    "minecraft:supports_frogspawn",
+                    cx.w.block_name(rel[0], rel[1], rel[2]),
+                );
+            let spawn = [rel[0], rel[1] + 1, rel[2]];
+            if open_top && supports && Self::is_air(cx.w, spawn) {
+                if let Some(state) = cx.w.registry.default_state("minecraft:frogspawn") {
+                    cx.events.push(MobEvent::SetBlock { pos: spawn, state });
+                }
+                cx.events.push(MobEvent::Sound(
+                    "entity.frog.lay_spawn",
+                    [m.position.x, m.position.y, m.position.z],
+                    1.0,
+                    1.0,
+                ));
+                set_pregnant(m, false);
+                return;
+            }
+        }
+    }
+}
+impl LaySpawn {
+    /// The brain's turn: `TryFindLandNearLiquid`, then `TryLaySpawnOnFluidNearLand`.
+    /// They run ahead of the wandering `RunOne`, so the selector runs them where it
+    /// asks first (`can_use` and `can_continue`), before the stroll can start.
+    fn step(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !is_pregnant(m) {
+            return false;
+        }
+        // `MoveToTargetSink` erases the walk target once the trip is over.
+        if m.extra.frog.lay_target.is_some() && m.ai.nav.is_done() {
+            m.extra.frog.lay_target = None;
+        }
+        if m.extra.frog.lay_target.is_none() && m.ai.nav.is_done() {
+            self.find(m, cx);
+        }
+        if m.extra.frog.lay_target.is_some() {
+            Self::lay(m, cx);
+        }
+        is_pregnant(m)
+    }
+}
+impl Goal for LaySpawn {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.step(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.step(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.extra.frog.lay_target = None;
+    }
+}
+/// `Direction.Plane.HORIZONTAL` as x and z steps: north, east, south, west.
+const HORIZONTAL: [[i32; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+/// `BlockPos.withinManhattan`: nearest first, then x, y, and +z before -z.
+fn manhattan_box(o: [i32; 3], range: i32) -> Vec<[i32; 3]> {
+    let mut out = Vec::new();
+    for depth in 0..=range * 3 {
+        let max_x = range.min(depth);
+        for x in -max_x..=max_x {
+            let max_y = range.min(depth - x.abs());
+            for y in -max_y..=max_y {
+                let z = depth - x.abs() - y.abs();
+                if z <= range {
+                    out.push([o[0] + x, o[1] + y, o[2] + z]);
+                    if z != 0 {
+                        out.push([o[0] + x, o[1] + y, o[2] - z]);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// `ShootTongue` with the tongue activity's `StartAttacking` and
@@ -614,10 +843,12 @@ impl Goal for LongJump {
         // water is in its swim activity; a goat has none, so its check below
         // sets the cooldown instead). FrogAi.initJumpActivity also wants
         // TEMPTING_PLAYER and BREED_TARGET absent, and the LAY_SPAWN activity
-        // (IS_PREGNANT) goes before LONG_JUMP.
-        // TODO: gate on them once frogs follow frog_food, breed and lay
-        // frogspawn here; none of the three exists for frogs yet.
-        if jump_cooldown(m).is_some() || m.species() != Species::Goat && m.fluids.in_water {
+        // (IS_PREGNANT) goes before LONG_JUMP. The tempting player and the
+        // breed target are not gated: Tempt and Breed hold MOVE at a better priority.
+        if jump_cooldown(m).is_some()
+            || m.species() == Species::Frog && is_pregnant(m)
+            || m.species() != Species::Goat && m.fluids.in_water
+        {
             return false;
         }
         // GoatAi.initLongJumpActivity's other memories, and the activity
@@ -805,6 +1036,40 @@ mod tests {
     /// `CountDownCooldownTicks`: the memory falls by one a tick and is gone
     /// the tick after it reached 0; the sample is 100..=140, halved after a
     /// failed search, drawn from the level's random and not the frog's.
+    #[test]
+    fn pregnancy_is_a_memory_that_the_laying_erases() {
+        let mut m = frog();
+        assert!(!is_pregnant(&m));
+        set_pregnant(&mut m, true);
+        set_pregnant(&mut m, true);
+        assert!(is_pregnant(&m));
+        assert_eq!(
+            m.extra.memories.iter().filter(|x| x.0 == PREGNANT).count(),
+            1
+        );
+        set_pregnant(&mut m, false);
+        assert!(!is_pregnant(&m));
+    }
+
+    #[test]
+    fn the_land_search_goes_out_by_manhattan_distance() {
+        let all = manhattan_box([0, 0, 0], 8);
+        assert_eq!(all[0], [0, 0, 0]);
+        assert_eq!(all.len(), 17 * 17 * 17);
+        // x, then y, and +z before -z, at distance 1.
+        assert_eq!(
+            all[1..7],
+            [
+                [-1, 0, 0],
+                [0, -1, 0],
+                [0, 0, 1],
+                [0, 0, -1],
+                [0, 1, 0],
+                [1, 0, 0]
+            ]
+        );
+    }
+
     #[test]
     fn the_long_jump_cooldown_counts_down_and_is_erased() {
         let mut m = frog();

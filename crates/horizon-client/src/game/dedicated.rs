@@ -34,6 +34,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod report;
 mod status;
 
 /// What the tick loop tells `ServerWatchdog`: when the tick in progress was
@@ -161,6 +162,29 @@ pub(super) fn player_joined(id: u128, name: &str) {
             id,
             name: name.to_owned(),
         });
+    }
+}
+
+/// `server.toml`'s `[anticheat]`, beside server.properties when horizon-server runs the game; off
+/// without the file or the section, or (with an error logged) when the section is wrong.
+fn load_anticheat() -> horizon_anticheat::Config {
+    let Ok(text) = std::fs::read_to_string("server.toml") else {
+        return Default::default();
+    };
+    match horizon_anticheat::Config::from_server_toml(&text) {
+        Ok(config) => {
+            if config.enabled {
+                log("INFO", "Anticheat on (server.toml [anticheat])");
+            }
+            config
+        }
+        Err(e) => {
+            log(
+                "ERROR",
+                &format!("server.toml: {e}; the anticheat stays off"),
+            );
+            Default::default()
+        }
     }
 }
 
@@ -311,6 +335,8 @@ pub(super) struct Lists {
     pub ip_bans: IpBanList,
     pub use_whitelist: bool,
     pub enforce_whitelist: bool,
+    /// `op-permission-level`: what `/op` grants (operatorUserPermissions).
+    pub op_level: i32,
 }
 impl Lists {
     fn load() -> Self {
@@ -321,6 +347,7 @@ impl Lists {
             ip_bans: IpBanList::new("banned-ips.json"),
             use_whitelist: false,
             enforce_whitelist: false,
+            op_level: 4,
         };
         // DedicatedPlayerList's constructor order and its LOGGER.warn lines.
         let warn = |what: &str, r: std::result::Result<(), String>| {
@@ -505,6 +532,11 @@ struct ServerState {
     broadcast_console: bool,
     /// `op-permission-level`: what `/op` grants (operatorUserPermissions).
     op_level: i32,
+    /// `horizon-report`: the ticks being recorded.
+    report: Option<report::Recording>,
+    /// View and simulation distance, and the player limit, for the report.
+    view: (u32, u32),
+    max_players: usize,
 }
 
 /// The dedicated-only commands' replies vanilla sends with `broadcast`
@@ -654,7 +686,9 @@ impl Game<'_> {
         let mut lists = Lists::load();
         lists.use_whitelist = props.white_list;
         lists.enforce_whitelist = props.enforce_whitelist;
+        lists.op_level = props.op_permission_level;
         let lists = Arc::new(Mutex::new(lists));
+        self.server_lists = Some(lists.clone());
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
         self.native_lifecycle_open_started();
@@ -695,6 +729,13 @@ impl Game<'_> {
             gate_lists.lock().unwrap().can_login(address, &user)
         });
         let bypass_lists = lists.clone();
+        // DedicatedServer's constructor: `enable-code-of-conduct` reads the
+        // `codeofconduct` folder, and a folder it can't read stops the start.
+        let code_of_conducts = if props.code_of_conduct {
+            horizon_client::lan::code_of_conduct::read(std::path::Path::new("codeofconduct"))?
+        } else {
+            Vec::new()
+        };
         let favicon = std::fs::read("server-icon.png")
             .ok()
             .filter(|b| png_size(b) == Some((64, 64)));
@@ -731,9 +772,14 @@ impl Game<'_> {
                 log_ips: props.log_ips,
             }),
             resource_pack: props.resource_pack.clone(),
+            code_of_conducts,
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
             levels: self.level_shapes,
+            horizon_clients_only: props
+                .raw
+                .get(horizon_client::lan::HORIZON_CLIENTS_ONLY)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
             } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {
@@ -748,8 +794,10 @@ impl Game<'_> {
                 );
                 Vec::new()
             },
+            owner_profile: None,
         };
         let config = HubConfig {
+            allow_flight: props.allow_flight,
             default_game_mode: game_mode,
             guest_commands: true,
             force_game_mode: props.force_game_mode,
@@ -775,7 +823,9 @@ impl Game<'_> {
             return Ok(());
         }
         self.sync_ops(&lists);
+        let anticheat = load_anticheat();
         if let Some(host) = self.lan.as_mut() {
+            host.hub.set_anticheat(anticheat);
             host.hub.spawn_protection = props.spawn_protection;
             host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
             host.hub.command_spam_threshold = props.command_spam_threshold_seconds.wrapping_mul(20);
@@ -805,6 +855,12 @@ impl Game<'_> {
             paused: false,
             broadcast_console: props.broadcast_console_to_ops,
             op_level: props.op_permission_level,
+            report: None,
+            view: (
+                props.view_distance.clamp(2, 32) as u32,
+                props.simulation_distance.clamp(2, 32) as u32,
+            ),
+            max_players: props.max_players.max(0) as usize,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
@@ -847,7 +903,17 @@ impl Game<'_> {
                 self.ticks = self.ticks.max(1);
             }
             // MinecraftServer.tickServer: while paused only the connections run.
-            self.tick_server_timed(paused)?;
+            match &mut state.report {
+                Some(recording) => self.tick_server_spans(paused, |wall, cpu, spans| {
+                    recording.add(wall, cpu, spans)
+                })?,
+                None => self.tick_server_timed(paused)?,
+            }
+            if state.report.as_ref().is_some_and(report::Recording::done)
+                && let Some(recording) = state.report.take()
+            {
+                self.finish_report(recording, state.view, state.max_players);
+            }
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
@@ -954,7 +1020,7 @@ impl Game<'_> {
     }
 
     /// Ops' permission levels for the hub (PlayerList.getProfilePermissions).
-    fn sync_ops(&mut self, lists: &Arc<Mutex<Lists>>) {
+    pub(super) fn sync_ops(&mut self, lists: &Arc<Mutex<Lists>>) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -970,7 +1036,7 @@ impl Game<'_> {
     }
 
     /// A player on the server, by name.
-    fn online_player(&self, name: &str) -> Option<NameAndId> {
+    pub(super) fn online_player(&self, name: &str) -> Option<NameAndId> {
         let hub = &self.lan.as_ref()?.hub;
         let g = hub
             .guests
@@ -986,7 +1052,18 @@ impl Game<'_> {
     /// service, else (offline) the offline player. None, told to the console:
     /// no such player.
     fn resolve(&self, name: &str) -> Option<NameAndId> {
-        let found = USER_CACHE.lock().unwrap().as_mut().and_then(|cache| {
+        let found = self.resolve_name(name);
+        if found.is_none() {
+            let unknown = Text::translate("argument.player.unknown", &[]);
+            log("INFO", &format!("System chat: {}", unknown.plain()));
+        }
+        found
+    }
+
+    /// `Services.nameToIdCache().get(name)`: the user cache, else the profile
+    /// service, else (offline) the offline player.
+    pub(super) fn resolve_name(&self, name: &str) -> Option<NameAndId> {
+        USER_CACHE.lock().unwrap().as_mut().and_then(|cache| {
             cache.get_by_name(name, |lower| {
                 let found = profiles::find_by_name(&profiles::discovery_url(), lower);
                 if found.is_none() {
@@ -994,12 +1071,7 @@ impl Game<'_> {
                 }
                 found
             })
-        });
-        if found.is_none() {
-            let unknown = Text::translate("argument.player.unknown", &[]);
-            log("INFO", &format!("System chat: {}", unknown.plain()));
-        }
-        found
+        })
     }
 
     /// MinecraftServer.sendSystemMessage: what the console is told; while
@@ -1044,6 +1116,33 @@ impl Game<'_> {
             "stop" => {
                 self.console_reply(Text::translate("commands.stop.stopping", &[]));
                 state.stop = true;
+            }
+            // Horizon's own, on the console only: a performance report (report.rs).
+            "horizon-report" => {
+                let seconds = match rest.first().map(|s| s.parse::<u32>()) {
+                    None => Ok(60),
+                    Some(Ok(s)) if (1..=report::MAX_SECONDS).contains(&s) => Ok(s),
+                    Some(_) => Err(()),
+                };
+                match (seconds, &state.report) {
+                    (Err(()), _) => log(
+                        "INFO",
+                        &format!(
+                            "horizon-report [SECONDS]: 1 to {} seconds, 60 by default",
+                            report::MAX_SECONDS
+                        ),
+                    ),
+                    (Ok(_), Some(_)) => {
+                        log("INFO", "A performance report is already being recorded")
+                    }
+                    (Ok(seconds), None) => {
+                        state.report = Some(report::Recording::start(seconds));
+                        log(
+                            "INFO",
+                            &format!("Recording a performance report for {seconds} s (reports/)"),
+                        );
+                    }
+                }
             }
             "save-all" => {
                 self.console_reply(Text::translate("commands.save.saving", &[]));
@@ -1422,8 +1521,15 @@ impl Game<'_> {
         }
     }
 
+    /// `DedicatedServer.setUsingWhitelist`: the flag, and `white-list` in
+    /// server.properties.
+    pub(super) fn set_using_whitelist(&mut self, lists: &Arc<Mutex<Lists>>, on: bool) {
+        lists.lock().unwrap().use_whitelist = on;
+        self.store_property("white-list", on.to_string());
+    }
+
     /// DedicatedServerSettings.update: change one key and store the file.
-    fn store_property(&mut self, key: &str, value: String) {
+    pub(super) fn store_property(&mut self, key: &str, value: String) {
         let path = PathBuf::from("server.properties");
         if let Ok(p) = ServerProperties::from_file(&path, &mut SystemEntropy::default())
             && let Ok(p) = p.update(key, value)
@@ -1435,7 +1541,7 @@ impl Game<'_> {
     /// MinecraftServer.kickUnlistedPlayers: with `enforce-whitelist` and the
     /// whitelist on, whoever is online and not on the whitelist file is
     /// disconnected (operators are not spared here).
-    fn kick_unlisted_players(&mut self, lists: &Arc<Mutex<Lists>>) {
+    pub(super) fn kick_unlisted_players(&mut self, lists: &Arc<Mutex<Lists>>) {
         let unlisted: Vec<u128> = {
             let l = lists.lock().unwrap();
             let Some(host) = self.lan.as_ref() else {
@@ -1464,7 +1570,7 @@ impl Game<'_> {
         }
     }
 
-    fn kick_uuid(&mut self, uuid: u128, reason: Tag) {
+    pub(super) fn kick_uuid(&mut self, uuid: u128, reason: Tag) {
         if let Some(h) = self.lan.as_mut() {
             let conns: Vec<u32> = h
                 .hub

@@ -143,9 +143,15 @@ pub struct Guest {
     /// (receivedMovePacketCount, knownMovePacketCount).
     pub received_moves: i32,
     pub known_moves: i32,
+    /// The last accepted move left the player hovering over air
+    /// (`clientIsFloating`), and the ticks it has (`aboveGroundTickCount`).
+    pub client_is_floating: bool,
+    pub above_ground_ticks: i32,
     /// A position move arrived since the client's last ClientTickEnd
     /// (receivedPositionThisTick): a second one is a protocol error.
     pub position_this_tick: bool,
+    /// Violation levels and the checks' state (the anticheat, when on).
+    pub anticheat: horizon_anticheat::Player,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -191,6 +197,8 @@ pub struct Guest {
     pub craft_result: Option<ItemStack>,
     /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
     pub ender_items: Vec<Option<ItemStack>>,
+    /// What a native mod's menu shows (`Slots::Native`), while one is open.
+    pub native_menu: Vec<Option<ItemStack>>,
     pub health: f32,
     /// The saved `AbsorptionAmount`, until the player's first body on the
     /// server takes it (the body holds the live amount).
@@ -324,7 +332,10 @@ impl Guest {
             first_good: position,
             received_moves: 0,
             known_moves: 0,
+            client_is_floating: false,
+            above_ground_ticks: 0,
             position_this_tick: false,
+            anticheat: Default::default(),
             moved: false,
             loaded: false,
             center: None,
@@ -347,6 +358,7 @@ impl Guest {
             craft_grid: Default::default(),
             craft_result: None,
             ender_items: vec![None; 27],
+            native_menu: Vec::new(),
             health: 20.0,
             saved_absorption: None,
             food: 20,
@@ -494,13 +506,19 @@ impl Guest {
     /// `Player.isWithinBlockInteractionRange(pos, 1.0)`, which the server
     /// checks a block action against (ServerPlayerGameMode.handleBlockBreakAction,
     /// ServerGamePacketListenerImpl.handleUseItemOn): from the eyes of the
-    /// guest's body in its pose (crouching, swimming, gliding).
-    pub fn may_reach_block(&self, pos: [i32; 3]) -> bool {
+    /// guest's body in its pose (crouching, swimming, gliding), with its
+    /// `block_interaction_range` (4.5, 5 in creative, more with `/attribute`).
+    pub fn may_reach_block(&mut self, pos: [i32; 3]) -> bool {
         let eye = self
             .motion
             .as_ref()
             .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let range = if self.creative() { 5.0 } else { 4.5 };
+        let otherwise = if self.creative() { 5.0 } else { 4.5 };
+        let range = self
+            .motion
+            .as_mut()
+            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
+            .unwrap_or(otherwise);
         within_block_range(
             [self.position[0], self.position[1] + eye, self.position[2]],
             range + 1.0,

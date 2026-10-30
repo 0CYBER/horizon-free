@@ -19,7 +19,7 @@ use super::{
 use horizon_client::{
     Result,
     audio::Audio,
-    lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
+    lan::{Lan, MAX_PLAYERS, NetConfig, OwnerProfile, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
 };
@@ -199,6 +199,8 @@ struct Launch {
     owner: u128,
     /// Its name, for the LAN's MOTD.
     player: String,
+    /// The signed-in account's profile, fetched while the world loads.
+    owner_profile: Option<Arc<OwnerProfile>>,
 }
 
 impl Game<'_> {
@@ -238,6 +240,21 @@ impl Game<'_> {
             // An offline-mode server names its players by their offline profile.
             owner: offline_uuid(&player),
             player: player.clone(),
+            owner_profile: auth.as_ref().map(|a| {
+                let id = a.uuid;
+                Arc::new(OwnerProfile::new(move || {
+                    horizon_client::skins::fetch_own_properties(id)
+                        .into_iter()
+                        .map(|(name, value, signature)| {
+                            horizon_protocol::packets::login::Property {
+                                name,
+                                value,
+                                signature,
+                            }
+                        })
+                        .collect()
+                }))
+            }),
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
@@ -461,6 +478,7 @@ impl Game<'_> {
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             // Only the owner until it is opened to the LAN.
             guest_commands: false,
@@ -488,6 +506,7 @@ impl Game<'_> {
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
             levels: self.level_shapes,
+            owner_profile: launch.owner_profile.clone(),
             // IntegratedServer.initServer: the MOTD names the owner and the world.
             ..NetConfig::lan(
                 0,

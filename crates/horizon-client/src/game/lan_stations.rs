@@ -392,6 +392,19 @@ impl Game<'_> {
         window: i32,
         id: i32,
     ) {
+        // A mod container's menu: its mod's buttons (`native_menu_button`),
+        // as handleContainerButtonClick checks them: the open menu, not a
+        // spectator, still valid.
+        if let Some(g) = host.hub.guest(conn)
+            && let Some(menu) = g.menu.as_ref().filter(|m| m.window == window)
+            && let Some(pos) = menu.pos
+            && self.mod_menu_at(pos).is_some()
+        {
+            if !g.spectator() && menu.slots.still_valid(&self.world, g, menu.pos) {
+                self.mod_menu_button(pos, id);
+            }
+            return;
+        }
         // LecternMenu's page buttons and Take Book.
         if self.lan_lectern_op(host, conn, window, |menu, env| {
             menu.button(env, id);

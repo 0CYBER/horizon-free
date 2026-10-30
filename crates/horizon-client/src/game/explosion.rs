@@ -284,7 +284,7 @@ impl Game<'_> {
             return None;
         }
         // ServerPlayer.onExplosionHit: the blast that hit the player is theirs.
-        self.adv.marks.blast = Some((feet, false));
+        self.adv.marks.blast = Some((feet, self.combat.explosion_cause.clone()));
         let w = f64::from(p.dimensions.width) / 2.0;
         let h = f64::from(p.dimensions.height);
         let eye = [

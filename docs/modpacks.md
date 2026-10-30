@@ -158,8 +158,8 @@ with advice if needed.
 Content mods (`.hmod`, API 0.2) carry data: blocks, items, and everything in the 26.3 data-pack and resource-pack
 formats ([mods.md](mods.md#content-mods-api-02)). Behaviour that needs code is not a content-mod feature: it is
 written as a native mod ([native-mods.md](native-mods.md)), one per ported mod. The "Planned in" column keeps the
-order of the original plan. The rows planned for 0.3 and later were designed as WebAssembly interfaces, which Horizon
-dropped: their "Shape" column is history, and a native mod hooks the game's code instead. What a content pack needs:
+order of the original plan; for the rows planned for 0.3 and later, a native mod hooks the game's code instead of
+using the "Shape" column. What a content pack needs:
 
 | Feature | Content mod today | Needed by (ATM10 content+integration, by tier) | Planned in | Shape |
 |---|---|---|---|---|
@@ -216,6 +216,28 @@ properties and shapes the new block takes, and overrides what differs:
   "item": true
 }
 ```
+
+A block may define `shapes` to replace both its selection outline and collision
+shape. It selects a list of boxes by one template state property:
+
+```json
+"shapes": { "property": "axis", "values": {
+  "x": [[0, 0.25, 0.25, 1, 0.75, 0.75]],
+  "y": [[0.25, 0, 0.25, 0.75, 1, 0.75]],
+  "z": [[0.25, 0.25, 0, 0.75, 0.75, 1]]
+} }
+```
+
+Each box is `[min_x, min_y, min_z, max_x, max_y, max_z]` in block units.
+Each value of the template property needs an entry. Up to 16 boxes form a union;
+an empty list is an empty shape. Invalid bounds or values reject the content root.
+Without `shapes`, both shapes remain the template's. Other properties such as
+occlusion, light, and support still come from the template.
+
+A declaration may also set `"default_state": {"facing": "north"}`. The map
+changes only those state properties on the template's default; omitted properties keep
+their template values. Names and values must identify exactly one template state, or
+the content root is rejected. Leave the map out to keep the template default.
 
 Most decoration and resource blocks are vanilla classes with other numbers: Macaw's doors are
 `DoorBlock`s, XTones are full cubes, ore sets are `DropExperienceBlock`s. So templates cover the

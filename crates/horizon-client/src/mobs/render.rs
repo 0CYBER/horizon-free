@@ -535,14 +535,32 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
             );
         }
         // SimpleEquipmentLayer: the harness over the body.
-        S::HappyGhast if !m.is_baby() => {
-            if let Some(texture) = m
+        S::HappyGhast => {
+            let harness = m
                 .extra
                 .head
                 .as_deref()
-                .and_then(super::happy_ghast::harness_texture)
+                .and_then(super::happy_ghast::harness_texture);
+            if !m.is_baby()
+                && let Some(texture) = &harness
             {
-                push(&mut v, "happy_ghast_harness#main", &texture, white, false);
+                push(&mut v, "happy_ghast_harness#main", texture, white, false);
+            }
+            // RopesLayer: the ropes over a harnessed body while the ghast
+            // holds a quad lead (`isLeashHolder`), the baby's model for a baby.
+            if harness.is_some() && super::happy_ghast::is_leash_holder(m) {
+                let model = if m.is_baby() {
+                    "happy_ghast_baby_ropes#main"
+                } else {
+                    "happy_ghast_ropes#main"
+                };
+                push(
+                    &mut v,
+                    model,
+                    "entity/ghast/happy_ghast_ropes",
+                    white,
+                    false,
+                );
             }
         }
         // BreezeWindLayer and BreezeEyesLayer. The wind layer's texture
@@ -554,7 +572,7 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
                 texture: "entity/breeze/breeze_wind".into(),
                 color: white,
                 full_bright: false,
-                scroll: scroll_offset(m.age as f32, BREEZE_WIND_SCROLL),
+                scroll: scroll_offset(age, BREEZE_WIND_SCROLL),
             });
             push(
                 &mut v,
@@ -954,7 +972,8 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         None => super::aquatic::rotations(m, alpha, body)
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
-    let mut base = origin * rotation;
+    // PufferfishRenderer.setupRotations: bobs before LivingEntityRenderer's.
+    let mut base = origin * pufferfish_bob(m, alpha) * rotation;
     if m.death_time > 0 && !super::creaking::tearing_down(m) {
         let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
             .sqrt()
@@ -1033,6 +1052,21 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
+}
+/// `PufferfishRenderer.setupRotations`: `translate(0, cos(ageInTicks * 0.05) * 0.08, 0)`
+/// before the usual rotations, so a pufferfish bobs up and down.
+fn pufferfish_bob(m: &Mob, alpha: f32) -> glam::Mat4 {
+    if m.species() != Species::Pufferfish {
+        return glam::Mat4::IDENTITY;
+    }
+    glam::Mat4::from_translation(glam::Vec3::new(
+        0.0,
+        pufferfish_bob_y(m.age as f32 + alpha),
+        0.0,
+    ))
+}
+fn pufferfish_bob_y(age_in_ticks: f32) -> f32 {
+    (age_in_ticks * 0.05).mcos() * 0.08
 }
 /// `LivingEntityRenderer.isShaking`: a fully frozen mob (the skeleton's own
 /// `isShaking` is its stray conversion only), converting zombies, piglins
@@ -1328,6 +1362,41 @@ pub fn cape(
     // RenderTypes.entitySolid with OverlayTexture.NO_OVERLAY.
     draw(model, base, &poses, uv, 0xFFFF_FFFF, light, 0, out);
 }
+/// `Deadmau5EarsLayer.submit` with `PlayerEarsModel`: the player model's
+/// head carrying two 6x6x1 ears (the model's other cubes are cleared),
+/// drawn with the player's skin as `RenderTypes.entitySolid`. The caller has
+/// checked `showExtraEars`; an invisible avatar draws no ears.
+#[allow(clippy::too_many_arguments)]
+pub fn ears(
+    m: &Mob,
+    alpha: f32,
+    base: glam::Mat4,
+    uv: [f32; 4],
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    if super::trader::is_invisible(m) {
+        return;
+    }
+    let Some(model) = m.kind.layer("player#ears") else {
+        return;
+    };
+    let s = anim::state(m, alpha);
+    let mut poses = Poses::new(model);
+    anim::setup(m, &s, &mut poses, &data.animations);
+    // LivingEntityRenderer.getOverlayCoords(state, 0.0F).
+    draw(
+        model,
+        base,
+        &poses,
+        uv,
+        0xFFFF_FFFF,
+        light,
+        body_overlay(m, alpha),
+        out,
+    );
+}
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
@@ -1383,7 +1452,16 @@ fn render_visible(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     let draw_body = |out: &mut Vec<Vertex>| {
-        if body_visible && let Some(uv) = atlas(&texture) {
+        // A player or mannequin whose skin has no atlas sprite (an evicted or
+        // never stored download) draws with its default skin, not invisibly.
+        let uv = atlas(&texture).or_else(|| {
+            if avatar(m) {
+                atlas(&m.kind.texture)
+            } else {
+                None
+            }
+        });
+        if body_visible && let Some(uv) = uv {
             draw(
                 &model,
                 base,
@@ -2251,6 +2329,15 @@ mod tests {
 
 #[cfg(test)]
 mod scroll_tests {
+    #[test]
+    fn a_pufferfish_bobs_by_eight_hundredths() {
+        // PufferfishRenderer.setupRotations: cos(ageInTicks * 0.05) * 0.08.
+        assert!((super::pufferfish_bob_y(0.0) - 0.08).abs() < 1e-6);
+        let quarter = std::f32::consts::FRAC_PI_2 / 0.05;
+        assert!(super::pufferfish_bob_y(quarter).abs() < 1e-3);
+        assert!(super::pufferfish_bob_y(2.0 * quarter) < -0.0799);
+    }
+
     use super::*;
 
     #[test]

@@ -75,6 +75,7 @@ pub mod compositor;
 mod cull;
 mod end_sky;
 mod flat;
+mod frame_gen;
 mod hdr;
 pub mod lightning;
 mod lod;

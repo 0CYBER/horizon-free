@@ -207,9 +207,10 @@ fn armor_equipment_loads_without_an_entity_model_document() {
     fs::create_dir_all(&equipment).unwrap();
     fs::write(
         equipment.join("leather.json"),
-        serde_json::to_vec(&json!({"layers": {"humanoid": [{
-            "texture": "minecraft:leather", "dyeable": {"color_when_undyed": 0x123456}
-        }]}}))
+        serde_json::to_vec(&json!({"layers": {"humanoid": [
+            {"texture": "minecraft:leather", "dyeable": {"color_when_undyed": 0x123456}},
+            {"texture": "minecraft:leather_overlay"}
+        ]}}))
         .unwrap(),
     )
     .unwrap();
@@ -219,7 +220,10 @@ fn armor_equipment_loads_without_an_entity_model_document() {
     assert!(assets.layers.is_empty());
     assert_eq!(
         assets.equipment["minecraft:leather"]["humanoid"],
-        vec![("entity/equipment/humanoid/leather".into(), Some(0x123456))]
+        vec![
+            ("entity/equipment/humanoid/leather".into(), Some(0x123456)),
+            ("entity/equipment/humanoid/leather_overlay".into(), None),
+        ]
     );
     assert!(!assets.equipment.contains_key("minecraft:invalid"));
 }

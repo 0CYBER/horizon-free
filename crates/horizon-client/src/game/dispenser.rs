@@ -1545,7 +1545,8 @@ impl Game<'_> {
         };
         let target = (placed.x, placed.y, placed.z);
         let state = self.apply_item_block_state([target.0, target.1, target.2], state, &stack)?;
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
+        let name = self.res.facts().get(state).name.clone();
+        if let Some(entity) = self.new_block_entity(&name) {
             self.world.block_entities.insert(target, entity);
             self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         }
