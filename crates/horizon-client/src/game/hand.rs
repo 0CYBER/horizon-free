@@ -155,7 +155,8 @@ impl Game<'_> {
         Ok(())
     }
     /// `BlockBehaviour.getDestroyProgress` with `Player.getDestroySpeed`.
-    pub(super) fn destroy_progress(&self, pos: [i32; 3]) -> f32 {
+    pub(super) fn destroy_progress(&mut self, pos: [i32; 3]) -> f32 {
+        let block_break_speed = self.block_break_speed();
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts().get(state);
         if facts.hardness == -1.0 {
@@ -164,6 +165,7 @@ impl Game<'_> {
         let held = self.held();
         let mut speed = self.res.items().mining_speed(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
+        speed *= block_break_speed;
         if let Some(eye) = self.eye_position()
             && self
                 .res
