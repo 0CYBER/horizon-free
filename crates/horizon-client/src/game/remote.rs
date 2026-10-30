@@ -3035,9 +3035,7 @@ impl Game<'_> {
                 }
             }
             C::ContainerSetContent(p) => {
-                if let Some(r) = self.remote.as_mut() {
-                    r.state_id = p.state;
-                }
+                self.remote_menu_state(p.container, p.state);
                 for (slot, item) in p.items.iter().enumerate() {
                     let stack = self.to_stack(item);
                     self.set_menu_slot(p.container, slot as i32, stack);
@@ -3046,9 +3044,7 @@ impl Game<'_> {
                 self.remote_synced();
             }
             C::ContainerSetSlot(p) => {
-                if let Some(r) = self.remote.as_mut() {
-                    r.state_id = p.state;
-                }
+                self.remote_menu_state(p.container, p.state);
                 let stack = self.to_stack(&p.item);
                 self.tutorial_get_item(stack.as_ref());
                 // ClientPacketListener.handleContainerSetSlot: a hotbar slot that
@@ -5031,11 +5027,17 @@ impl Game<'_> {
         // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
         let mut creative_slots = Vec::new();
         if self.creative {
+            // A server's open menu takes clicks, which it applies itself: what
+            // this client predicts for them isn't an edit to send (it would
+            // overwrite the server's stacks whenever the prediction is wrong).
+            let in_menu = r.menu.is_some();
             let stacks = creative_sync_stacks(&self.inventory, &self.offhand, &self.armor);
             for (i, stack) in stacks.into_iter().enumerate() {
                 if stack != r.synced[i] {
                     r.synced[i] = stack.clone();
-                    creative_slots.push((creative_sync_slot(i), stack));
+                    if !in_menu {
+                        creative_slots.push((creative_sync_slot(i), stack));
+                    }
                 }
             }
         }
@@ -6579,6 +6581,14 @@ impl Game<'_> {
             return;
         }
         self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
+    }
+    /// `AbstractContainerMenu.setItem`/`initializeContents`: the state id a
+    /// click answers with is the open menu's, not another window's.
+    fn remote_menu_state(&mut self, container: i32, state: i32) {
+        let open = self.remote_menu().0;
+        if let Some(r) = self.remote.as_mut().filter(|_| container == open) {
+            r.state_id = state;
+        }
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
     /// when none is open).
