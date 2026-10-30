@@ -1475,6 +1475,7 @@ impl Streaming {
             &mut changed,
         );
         Self::mark_light_changes(world, &changed);
+        Self::relight_beside_unlit(world, &changed);
         if !self.light_snapshots.is_empty() {
             for p in positions {
                 self.light_edit_sequence += 1;
@@ -1504,12 +1505,21 @@ impl Streaming {
                 &mut changed,
             );
             Self::mark_light_changes(world, &changed);
+            Self::relight_beside_unlit(world, &changed);
         }
         let oldest = self.light_snapshots.values().copied().min();
         match oldest {
             Some(oldest) => self.light_log.retain(|(seq, _)| *seq > oldest),
             None => self.light_log.clear(),
         }
+    }
+    /// A column whose light an edit changed beside a column not lit yet gets
+    /// a full light job ([`crate::light::beside_unlit`]).
+    fn relight_beside_unlit(world: &mut World, changed: &LightChanges) {
+        let columns = crate::light::beside_unlit(changed, |x, z| {
+            world.chunks.get(&(x, z)).is_some_and(|c| !c.lit)
+        });
+        world.dirty_light.extend(columns);
     }
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).
