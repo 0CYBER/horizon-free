@@ -2,7 +2,7 @@
 //! level events, animations and block containers with their clicks.
 use super::{
     hub::Hub,
-    menu::{self, Menu, Rules, Slots, View},
+    menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
 };
 use crate::{containers::BlockEntity, items::ItemStack, world::World};
 use horizon_protocol::{
@@ -245,6 +245,62 @@ impl Hub {
         self.send_menu_content(i, items);
     }
 
+    /// Opens a native mod's menu of `rows` rows (1 to 6, a chest's
+    /// `generic_9xN`) showing `items` (padded to the rows' slots), over the
+    /// guest's inventory: no click moves anything, each is a
+    /// [`NativeMenuEvent`]. The window's id, or None for an unknown guest.
+    pub fn open_native_menu(
+        &mut self,
+        conn: u32,
+        rows: u8,
+        title: Tag,
+        mut items: Vec<Option<ItemStack>>,
+    ) -> Option<i32> {
+        let rows = rows.clamp(1, 6);
+        let kind = self
+            .sync
+            .builtin
+            .get("minecraft:menu")
+            .and_then(|m| m.id(&format!("minecraft:generic_9x{rows}")))?;
+        let i = self.guests.iter().position(|g| g.conn == conn)?;
+        self.close_container_at(i);
+        let size = usize::from(rows) * 9;
+        items.resize(size, None);
+        let g = &mut self.guests[i];
+        g.native_menu = items.clone();
+        g.next_window = g.next_window % 100 + 1;
+        let window = g.next_window;
+        g.send(&C::OpenScreen(play::OpenScreen {
+            container: window,
+            menu: kind,
+            title,
+        }));
+        g.menu = Some(Menu {
+            window,
+            kind,
+            pos: None,
+            slots: Slots::Native,
+            size,
+            state: 0,
+            sent: Vec::new(),
+            drag: None,
+            sent_data: Vec::new(),
+        });
+        self.send_menu_content(i, items);
+        Some(window)
+    }
+
+    /// Replaces what a guest's open native menu shows; the changed slots go
+    /// out with the tick's container sync.
+    pub fn set_native_menu(&mut self, conn: u32, mut items: Vec<Option<ItemStack>>) {
+        if let Some(g) = self.guest_mut(conn)
+            && let Some(m) = g.menu.as_ref().filter(|m| m.slots == Slots::Native)
+        {
+            items.resize(m.size, None);
+            g.native_menu = items;
+        }
+    }
+
     /// Open a trading window for a guest (`Merchant.openTradingScreen`):
     /// its id, or None when the menu type is unknown.
     pub fn open_merchant_window(&mut self, conn: u32, title: Tag) -> Option<i32> {
@@ -336,6 +392,12 @@ impl Hub {
             g.send(&C::ContainerClose(play::ContainerClose {
                 container: menu.window,
             }));
+            if menu.slots == Slots::Native {
+                g.native_menu.clear();
+                let (uuid, window) = (g.uuid, menu.window);
+                self.native_menu_events
+                    .push(NativeMenuEvent::Closed { uuid, window });
+            }
         }
     }
 
@@ -354,7 +416,13 @@ impl Hub {
         if let Some(g) = self.guest_mut(conn)
             && g.menu.as_ref().is_some_and(|m| m.window == window)
         {
-            g.menu = None;
+            let native = g.menu.take().is_some_and(|m| m.slots == Slots::Native);
+            if native {
+                g.native_menu.clear();
+                let uuid = g.uuid;
+                self.native_menu_events
+                    .push(NativeMenuEvent::Closed { uuid, window });
+            }
         }
     }
 
@@ -403,6 +471,19 @@ impl Hub {
         if self.guests[i].spectator() {
             // A spectator's click changes nothing, and sendAllDataToRemote
             // takes back what its client predicted.
+            self.resend_menu(conn, p.container, world);
+            return Vec::new();
+        }
+        // A native mod's menu: the click is the mod's to answer, and the
+        // whole menu and the cursor go back as they were.
+        if in_menu && self.guests[i].menu.as_ref().map(|m| m.slots) == Some(Slots::Native) {
+            self.native_menu_events.push(NativeMenuEvent::Click {
+                uuid: self.guests[i].uuid,
+                window: p.container,
+                slot: i32::from(p.slot),
+                button: i32::from(p.button),
+                mode: p.input,
+            });
             self.resend_menu(conn, p.container, world);
             return Vec::new();
         }

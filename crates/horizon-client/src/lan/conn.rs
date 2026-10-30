@@ -861,6 +861,21 @@ fn login_and_configure(
             _ => {}
         }
     };
+    // horizon-clients-only: the brand the client sent ("vanilla" when it sent
+    // none) must be Horizon's.
+    if shared.config.horizon_clients_only && brand != "horizon" {
+        let text = super::HORIZON_CLIENTS_ONLY_REASON;
+        let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(text));
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        if let Some(log) = &shared.config.log {
+            let line = format!(
+                "Disconnecting {name}: its client is \"{brand}\", not Horizon (horizon-clients-only)"
+            );
+            (log.write)("Server thread", "INFO", &line);
+        }
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
+        return Ok(None);
+    }
     // A Horizon client hears that this server runs its mods' quiet commands
     // (horizon_protocol::quiet); a vanilla one is told nothing.
     if brand == "horizon" {
