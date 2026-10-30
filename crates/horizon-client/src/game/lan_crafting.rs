@@ -87,12 +87,12 @@ fn place_back(menu: &mut Menu, env: &Env, stacks: Vec<ItemStack>) {
 impl Game<'_> {
     pub(super) fn menu_env(&self) -> Env<'_> {
         Env {
-            items: self.res.items(),
-            recipes: self.res.recipes(),
-            brewing: &self.res.stations().brewing,
-            banners: &self.res.stations().banners,
-            station_recipes: &self.res.stations().recipes,
-            enchantments: &self.res.stations().enchantments,
+            items: self.items(),
+            recipes: self.recipes(),
+            brewing: &self.stations().brewing,
+            banners: &self.stations().banners,
+            station_recipes: &self.stations().recipes,
+            enchantments: &self.stations().enchantments,
             names: &self.pack.names,
             trade: None,
             maps: None,
@@ -129,14 +129,22 @@ impl Game<'_> {
         let dropped = std::mem::take(&mut menu.dropped);
         let equipped = std::mem::take(&mut menu.equipped);
         let brewed = std::mem::take(&mut menu.brewed);
+        let crafted = std::mem::take(&mut menu.crafted);
         menu.drops.clear();
-        menu.crafted.clear();
         store_player(menu, &mut host.hub.guests[gi]);
         if !brewed.is_empty() {
             let conn = host.hub.guests[gi].conn;
             self.as_guest(host, conn, |g| {
                 for stack in &brewed {
                     g.trigger_brewed_potion(stack);
+                }
+            });
+        }
+        if !crafted.is_empty() {
+            let conn = host.hub.guests[gi].conn;
+            self.as_guest(host, conn, |g| {
+                for (recipe, ingredients) in &crafted {
+                    g.trigger_recipe_crafted(recipe, ingredients);
                 }
             });
         }
@@ -242,6 +250,9 @@ impl Game<'_> {
             _ => None,
         };
         if host.hub.guests[gi].spectator() {
+            // handleContainerClick: nothing changes, and sendAllDataToRemote
+            // takes back what the client predicted.
+            host.hub.resend_menu(conn, p.container, &self.world);
             return true;
         }
         let mut menu = host
@@ -278,7 +289,7 @@ impl Game<'_> {
                     f.items[k] = menu.slot(k).cloned();
                 }
                 // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
-                f.input_clicked(self.res.recipes(), items[0].clone());
+                f.input_clicked(world_recipes!(self), items[0].clone());
             }
             // BrewingStandBlockEntity.serverTick notices a new ingredient itself.
             Some(BlockEntity::Brewing(b)) => {

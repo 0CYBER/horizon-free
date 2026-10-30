@@ -6,7 +6,7 @@
 //! A cushion is a `BlockAttachedEntity`, not a block: it has no block state,
 //! only an entity whose `Pos` is the click point's height. Placement uses
 //! outline bounds, collision shapes and suffocation predicates.
-use super::{Game, Hit, view_vector};
+use super::{Game, Hit};
 use horizon_client::entities::{Cushion, dye_index};
 use horizon_client::items::ItemStack;
 use horizon_client::mobs::anim::Poses;
@@ -107,8 +107,7 @@ impl horizon_client::cushion::World for PlacementWorld<'_, '_> {
 impl Game<'_> {
     /// The cushion under the crosshair, its distance and the hit point.
     pub(super) fn cushion_hit(&self) -> Option<(usize, f64, [f64; 3])> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+        let (eye, dir) = self.aim()?;
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(usize, f64, [f64; 3])> = None;
         for (i, c) in self.cushions.iter().enumerate() {
@@ -131,27 +130,15 @@ impl Game<'_> {
         let bounds = aabb(c.bounds()).next_deflated();
         blocks_in(bounds).any(|p| {
             let facts = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
-            self.res.items().block_in_tag("minecraft:fire", &facts.name)
+            self.items().block_in_tag("minecraft:fire", &facts.name)
         })
     }
 
-    /// `CushionItem.useOn`: on the top face only, spawning at the click's
-    /// height above the clicked block (or the replaceable block itself).
-    pub(super) fn place_cushion(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
-        let Some(info) = self.res.items().get(&stack.item).cloned() else {
-            return false;
-        };
-        let Some(default_color) = info.cushion_color.as_deref() else {
-            return false;
-        };
-        let color_override = stack
-            .data()
-            .and_then(|d| d.other("minecraft:cushion/color"))
-            .and_then(|tag| match tag {
-                horizon_world::nbt::Tag::String(s) => Some(s.to_string_lossy()),
-                _ => None,
-            });
-        let color = dye_index(color_override.as_deref().unwrap_or(default_color));
+    /// `CushionItem.useOn` up to `Cushion.canBePlacedAt`, which the client
+    /// checks too: on the top face only, at the click's height above the
+    /// clicked block (or the replaceable block itself). The position and
+    /// spawn box of a cushion that may go there.
+    pub(super) fn cushion_spawn(&self, hit: &Hit) -> Option<(Vec3, Aabb)> {
         // CushionItem.recalculateContextForSpecialCollisionShapes: open containers
         // (cauldrons, hoppers and composters) use the collision ray's actual height.
         let mut adjusted = Hit {
@@ -160,7 +147,7 @@ impl Game<'_> {
             point: hit.point,
         };
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if self.res.items().block_in_tag(
+        if self.items().block_in_tag(
             "minecraft:cushion_uses_collision_shape",
             &self.res.facts().get(state).name,
         ) && let Some(eye) = self.eye_position()
@@ -187,7 +174,7 @@ impl Game<'_> {
         }
         let hit = &adjusted;
         if hit.face != [0, 1, 0] {
-            return false;
+            return None;
         }
         // BlockPlaceContext: a replaceable clicked block is replaced.
         let clicked = self
@@ -206,9 +193,30 @@ impl Game<'_> {
             [position.x - 0.5, position.y, position.z - 0.5],
             [position.x + 0.5, position.y + 0.25, position.z + 0.5],
         ));
-        if !horizon_client::cushion::can_place(&PlacementWorld(self), bounds) {
+        horizon_client::cushion::can_place(&PlacementWorld(self), bounds)
+            .then_some((position, bounds))
+    }
+
+    /// `CushionItem.useOn`: spawn the cushion where `cushion_spawn` allows,
+    /// unless another cushion is in the way.
+    pub(super) fn place_cushion(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
+        let Some(info) = self.items().get(&stack.item).cloned() else {
             return false;
-        }
+        };
+        let Some(default_color) = info.cushion_color.as_deref() else {
+            return false;
+        };
+        let color_override = stack
+            .data()
+            .and_then(|d| d.other("minecraft:cushion/color"))
+            .and_then(|tag| match tag {
+                horizon_world::nbt::Tag::String(s) => Some(s.to_string_lossy()),
+                _ => None,
+            });
+        let color = dye_index(color_override.as_deref().unwrap_or(default_color));
+        let Some((position, bounds)) = self.cushion_spawn(hit) else {
+            return false;
+        };
         // `getEntitiesOfClass(Cushion.class, spawnAABB).isEmpty()`.
         if self
             .cushions
@@ -256,6 +264,8 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        // `CushionItem.useOn` returns SUCCESS: the hand swings.
+        self.swing_arm();
         true
     }
 
@@ -281,11 +291,9 @@ impl Game<'_> {
         if occupied {
             return false;
         }
-        // `Player.startRiding` gives up the vehicle it already has; the
-        // client never sends that click, so pass instead.
-        if self.riding.is_some() {
-            return false;
-        }
+        // `Entity.startRiding`: a passenger first gets off what it rides
+        // (`stopRiding`), so a seated player moves to this cushion.
+        self.stop_riding();
         self.riding = Some(id);
         let p = self.cushions[i].position;
         self.audio.play(
@@ -395,6 +403,26 @@ impl Game<'_> {
         }
     }
 
+    /// `LivingEntity.stopRiding` off a cushion: `dismountVehicle` beside it,
+    /// and `Cushion.removePassenger`'s get-up sound for a rider that left
+    /// rather than one whose cushion was killed.
+    pub(super) fn get_up_from_cushion(&mut self, c: &Cushion) {
+        let at = c.dismount();
+        self.riding = None;
+        if let Some(p) = self.player.as_mut() {
+            self.previous_position = p.position;
+            p.position = at;
+            p.velocity = Vec3::ZERO;
+            p.fall_distance = 0.0;
+        }
+        self.audio.play(
+            "minecraft:entity.cushion.get_up",
+            Some([c.position.x, c.position.y, c.position.z]),
+            1.0,
+            1.0,
+        );
+    }
+
     /// `Player.rideTick` on a cushion: hold the seat, and get up on sneak.
     pub(super) fn tick_cushion_riding(&mut self, keys: super::Keys) -> bool {
         let Some(c) = self
@@ -406,22 +434,7 @@ impl Game<'_> {
             return false;
         };
         if keys.shift {
-            let at = c.dismount();
-            self.riding = None;
-            if let Some(p) = self.player.as_mut() {
-                self.previous_position = p.position;
-                p.position = at;
-                p.velocity = Vec3::ZERO;
-                p.fall_distance = 0.0;
-            }
-            // `Cushion.removePassenger`: the get-up sound for a rider that
-            // left rather than one whose cushion was killed.
-            self.audio.play(
-                "minecraft:entity.cushion.get_up",
-                Some([c.position.x, c.position.y, c.position.z]),
-                1.0,
-                1.0,
-            );
+            self.get_up_from_cushion(&c);
             return true;
         }
         let seat = c.seat();

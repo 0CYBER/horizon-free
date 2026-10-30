@@ -36,11 +36,14 @@ use horizon_client::{
             SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt, StructureSpawns,
             spawn_box,
         },
-        spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
+        spawner::{
+            SpawnDataExt, Spawner, SpawnerAdded, SpawnerEvent, SpawnerExt, SpawnerLevel,
+            SpawnerSpawn,
+        },
         species::{self, Baby},
         trial_spawner::{
             Omen, TRIAL_OMEN_TICKS_PER_LEVEL, TrialEvent, TrialPlayer, TrialSpawner,
-            TrialSpawnerLevel, TrialState,
+            TrialSpawnerExt, TrialSpawnerLevel, TrialState,
         },
     },
     vault::{Vault, VaultEvent, VaultLevel, VaultPlayer, VaultState},
@@ -50,7 +53,8 @@ use horizon_core::{
     random::{LegacyRandom, RandomSource},
 };
 use horizon_world::{
-    block_collision::BlockCollisionRegistry, chunk::BlockState, nbt::Tag, registry::BlockStateId,
+    block_collision::BlockCollisionRegistry, chunk::BlockState, loot::PackOverlay, nbt::Tag,
+    registry::BlockStateId,
 };
 use serde_json::Value;
 use std::{
@@ -519,11 +523,11 @@ pub fn main() -> horizon_client::Result<()> {
     let registry = assets.registry;
     let facts = BlockFacts::load(root, registry)?;
     let data = MobData::load(root, &facts);
-    let items = Items::tags_only(root)?;
+    let items = Items::tags_only(root, &PackOverlay::NONE)?;
     // Trial spawner rewards: the loot tables and the configs.
     let loot = if input.contains("mode=trial") || input.contains("mode=vault") {
         horizon_client::mobs::trial_spawner::load_registry(root);
-        horizon_client::structure_blocks::loot_data(root)
+        horizon_client::structure_blocks::loot_data(root, &PackOverlay::NONE)
     } else {
         None
     };
@@ -792,7 +796,7 @@ pub fn main() -> horizon_client::Result<()> {
                 chunk,
                 &mut gen_random,
                 &mut rules,
-                &mut spawn,
+                &mut |l, r, _| spawn(l, r).is_some(),
                 &mut |e| match e {
                     GenEvent::Column(x, z) => log.push(format!("col {x} {z}")),
                     GenEvent::Spawn(t, p, yaw) => spawns.push(format!(
