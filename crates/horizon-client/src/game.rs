@@ -168,6 +168,7 @@ mod natural_spawning;
 mod nautili;
 mod net_harness;
 mod nether_portal;
+mod no_resources;
 mod ominous_item_spawner;
 mod options;
 mod packs;
@@ -16592,9 +16593,11 @@ fn missing_resources(root: &std::path::Path) -> Option<String> {
     let shown = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
     Some(format!(
         "Horizon's prepared game files are missing: no horizon-resources.json in {}\n\
-         Start Horizon from the Horizon launcher, which downloads and prepares them, \
-         or prepare them with: horizon-prepare --prepare (or pass --resources <folder>)",
-        shown.display()
+         Horizon is started from its launcher: download it at {} (Download). It needs your \
+         own Minecraft: Java Edition; the launcher signs you in and prepares the game files.\n\
+         Developers: horizon-prepare --prepare, or pass --resources <folder>",
+        shown.display(),
+        horizon_client::no_resources::DOWNLOAD_URL
     ))
 }
 
@@ -16677,6 +16680,23 @@ pub fn run() -> Result<()> {
         // 10 to 200 ms to get one back.
         horizon_threads::favour_current();
     }
+    if options.execution_role.is_client() {
+        horizon_threads::catch_stop_signals();
+    }
+    let started = Instant::now();
+    horizon_client::spans::enable(options.spikes.is_some());
+    let vanilla_root = options.resources.clone();
+    if let Some(error) = missing_resources(&vanilla_root) {
+        // The game build started by hand (the release's zip), not by the
+        // launcher: a window says where to get it. Scripts and servers get
+        // the error.
+        if !options.offscreen && !synchronous_startup(&options) {
+            log::error!("Horizon: {error}");
+            let settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+            return no_resources::show(&vanilla_root, &settings);
+        }
+        return Err(error.into());
+    }
     // Someone is playing: the anonymous ping behind the launcher's "N playing now", and the
     // official server in their list (servers.dat in the game folder, the working directory). Not
     // for a server, a benchmark, a run that quits by itself, a harness's fixture or a run that
@@ -16687,15 +16707,6 @@ pub fn run() -> Result<()> {
         {
             log::warn!("could not add the official server to servers.dat: {e}");
         }
-    }
-    if options.execution_role.is_client() {
-        horizon_threads::catch_stop_signals();
-    }
-    let started = Instant::now();
-    horizon_client::spans::enable(options.spikes.is_some());
-    let vanilla_root = options.resources.clone();
-    if let Some(error) = missing_resources(&vanilla_root) {
-        return Err(error.into());
     }
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     // "Playing Horizon" on Discord: never for a server; an automated run only talks to a test's fake Discord.
