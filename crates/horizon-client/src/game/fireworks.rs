@@ -43,8 +43,8 @@ pub(super) struct Rocket {
     /// `DATA_ATTACHED_TO_TARGET`: the server entity the rocket follows;
     /// boosting happens when it is the local player.
     pub(super) attached_to: Option<u32>,
-    /// `DATA_SHOT_AT_ANGLE` (dispensers): constant velocity, exploding on
-    /// the first block it hits.
+    /// `DATA_SHOT_AT_ANGLE` (dispensers, crossbows): constant velocity,
+    /// exploding on the first block it hits when it has explosions.
     pub(super) angled: bool,
     /// `DATA_ID_FIREWORKS_ITEM`: the stack it was launched from.
     pub(super) item: ItemStack,
@@ -334,8 +334,9 @@ impl Game<'_> {
                     binding: self.collision,
                     subject: None,
                 };
-                if r.free_flight(&mut scene) && r.angled {
-                    // hitTargetOrDeflectSelf: explode on the block.
+                if r.free_flight(&mut scene) && r.angled && !r.explosions.is_empty() {
+                    // onHitBlock: only a rocket with explosions (hasExplosion)
+                    // goes off on the block; a plain one flies on to its lifetime.
                     r.life = r.lifetime;
                 }
             }
