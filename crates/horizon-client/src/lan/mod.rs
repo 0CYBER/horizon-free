@@ -5,9 +5,11 @@
 //! ever exchanges decoded packets with these threads through channels, so a
 //! world that is not open to the network pays nothing.
 mod advancements;
+pub mod anticheat;
 pub mod attributes;
 pub mod border;
 pub mod chunks;
+pub mod code_of_conduct;
 mod command_order;
 pub mod command_suggestions;
 pub mod commands;
@@ -132,6 +134,12 @@ pub struct NetLog {
     pub log_ips: bool,
 }
 
+/// The server.properties key that lets only the Horizon client join (off unless "true").
+pub const HORIZON_CLIENTS_ONLY: &str = "horizon-clients-only";
+/// What another client is told.
+pub const HORIZON_CLIENTS_ONLY_REASON: &str =
+    "This server is for the Horizon client: playhorizon.dev";
+
 /// How the server side of the network behaves: an integrated server's LAN
 /// uses the defaults, a dedicated server takes them from server.properties.
 #[derive(Clone)]
@@ -169,10 +177,21 @@ pub struct NetConfig {
     /// server.properties `resource-pack`: offered to every player during
     /// configuration (a dedicated server's; MinecraftServer.getServerResourcePack).
     pub resource_pack: Option<crate::server::properties::ResourcePackInfo>,
+    /// `enable-code-of-conduct`: the `codeofconduct/<language>.txt` texts
+    /// (`MinecraftServer.getCodeOfConducts`), offered before the resource
+    /// pack. Empty: no code of conduct.
+    pub code_of_conducts: Vec<(String, String)>,
     /// MinecraftServer.serverLinks (a dedicated server's `bug-report-link`):
     /// sent in configuration when non-empty
     /// (ServerConfigurationPacketListenerImpl.startConfiguration).
     pub server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
+    /// An integrated server's owner profile: the properties the window's own
+    /// (memory) connection logs in with.
+    pub owner_profile: Option<Arc<OwnerProfile>>,
+    /// `horizon-clients-only` (Horizon's own server.properties key, off): a
+    /// client whose `minecraft:brand` isn't Horizon's is turned away during
+    /// configuration. A brand can be spoofed: a gate, not security.
+    pub horizon_clients_only: bool,
     /// The shapes of the world's levels: their dimension types go to
     /// clients when the world's data packs changed them.
     pub levels: crate::chunk::LevelShapes,
@@ -203,8 +222,55 @@ impl NetConfig {
             online: None,
             log: None,
             resource_pack: None,
+            code_of_conducts: Vec::new(),
             server_links: Vec::new(),
+            horizon_clients_only: false,
             levels: crate::chunk::LevelShapes::VANILLA,
+            owner_profile: None,
+        }
+    }
+}
+
+/// `IntegratedServer.getSingleplayerProfile` (`Minecraft.getGameProfile`):
+/// the signed-in account's profile properties, its signed `textures` among
+/// them, which the player list gives the owner so that LAN guests see the
+/// owner's skin. Fetched in the background from the world's start; nothing
+/// waits for it: until it answers (or when it fails) the owner is listed
+/// without properties, as before.
+pub struct OwnerProfile {
+    properties: std::sync::OnceLock<Vec<horizon_protocol::packets::login::Property>>,
+    fetch: Mutex<Receiver<Vec<horizon_protocol::packets::login::Property>>>,
+}
+
+impl OwnerProfile {
+    pub fn new(
+        fetch: impl FnOnce() -> Vec<horizon_protocol::packets::login::Property> + Send + 'static,
+    ) -> Self {
+        let (send, receive) = channel();
+        let _ = std::thread::Builder::new()
+            .name("Profile fetcher".into())
+            .spawn(move || {
+                let _ = send.send(fetch());
+            });
+        Self {
+            properties: std::sync::OnceLock::new(),
+            fetch: Mutex::new(receive),
+        }
+    }
+    /// The owner's properties once fetched; empty while the fetch is out
+    /// or when it failed. Never blocks.
+    pub fn properties(&self) -> &[horizon_protocol::packets::login::Property] {
+        if let Some(properties) = self.properties.get() {
+            return properties;
+        }
+        let received = self.fetch.lock().ok().and_then(|r| match r.try_recv() {
+            Ok(properties) => Some(properties),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Vec::new()),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        });
+        match received {
+            Some(properties) => self.properties.get_or_init(|| properties),
+            None => &[],
         }
     }
 }
@@ -251,7 +317,8 @@ impl SecureChat {
 
 /// State shared with the connection threads.
 pub struct Shared {
-    pub sync: Arc<data::SyncData>,
+    /// What the next login is sent; `PlayerList.reloadResources` swaps it.
+    sync: Mutex<Arc<data::SyncData>>,
     pub events: Sender<NetEvent>,
     pub config: NetConfig,
     motd: Mutex<String>,
@@ -265,6 +332,14 @@ pub struct Shared {
     random: Mutex<u64>,
 }
 impl Shared {
+    /// The registries and tags a new connection is sent.
+    pub fn sync(&self) -> Arc<data::SyncData> {
+        self.sync.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    /// `/reload`: the data new connections are sent from now on.
+    pub fn set_sync(&self, sync: Arc<data::SyncData>) {
+        *self.sync.lock().unwrap_or_else(|e| e.into_inner()) = sync;
+    }
     pub fn next_id(&self) -> u32 {
         self.next.fetch_add(1, Ordering::Relaxed)
     }
@@ -446,7 +521,7 @@ impl Lan {
         let (tx, events) = channel();
         let (listen, port, announce) = (config.listen, config.port, config.announce);
         let shared = Arc::new(Shared {
-            sync,
+            sync: Mutex::new(sync),
             events: tx,
             motd: Mutex::new(config.motd.clone()),
             max_players: AtomicUsize::new(config.max_players),

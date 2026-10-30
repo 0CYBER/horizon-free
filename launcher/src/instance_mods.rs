@@ -3,19 +3,27 @@
 //! it comes from, an update when the browser found one, and a switch. A Java instance turns a mod
 //! off by renaming its jar (`.disabled`, as `java_instance` does); a Horizon instance's mods are
 //! the registry's, switched as the game's Options > Mods does. Adding mods is the Mods page's.
+//!
+//! Each row shows the mod's own icon: Modrinth's for what the browser installed from it (the URLs
+//! asked for in one request and kept beside the image cache, the images through the Mods page's
+//! cache at the row's size), else the one its jar names, else a generic glyph.
 use super::*;
 use crate::plate::alpha;
 use crate::shell::{c, Action};
-use horizon_launcher::browser::{horizon, installed, java, Kind as PackKind, SourceId};
+use horizon_launcher::browser::{
+    horizon, images, installed, java, modrinth, Kind as PackKind, SourceId,
+};
 use servers_page::Field;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use theme::night;
 
 /// A turned-off jar's suffix, which the loaders don't read.
 const OFF: &str = ".disabled";
 
 /// A mod as the tab lists it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub(super) struct ModRow {
     /// Its file in the instance, as it is when on (`mods/lumen-0.6.2.jar`).
     file: String,
@@ -24,6 +32,21 @@ pub(super) struct ModRow {
     on: bool,
     /// What the browser knows of it; None: a file put in by hand.
     entry: Option<installed::Entry>,
+    /// The icon its jar names, scaled to the row (`images::ROW`) and decoded once by the UI.
+    icon: Option<Arc<gpui::Image>>,
+}
+
+/// Modrinth projects' icon URLs by project id, kept on disk beside the image cache so the icons
+/// show offline too; each id is asked for once a session.
+#[derive(Default)]
+pub(super) struct ProjectIcons {
+    urls: HashMap<String, String>,
+    loaded: bool,
+    asked: HashSet<String>,
+}
+
+fn project_icons_file() -> PathBuf {
+    backend::data_dir().join("mod-browser/project-icons.json")
 }
 
 #[derive(Default)]
@@ -34,6 +57,10 @@ pub(super) struct InstanceMods {
     list: Vec<ModRow>,
     /// The browser was installing at the last draw: its end changes the list.
     was_busy: bool,
+    /// Only the rows near the view are built (a modpack has hundreds), measured again when the
+    /// shown list changes (its length and the filter).
+    cull: cull::Cull,
+    shown: (usize, String),
 }
 
 /// The mods of the instance at `home`: a Java one's jars in `mods/` (on or off), a Horizon one's
@@ -64,12 +91,15 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                                 (jar.trim_end_matches(".jar").into(), String::new())
                             }),
                     };
+                    let icon = images::jar_icon(&f.path(), images::ROW)
+                        .map(|png| Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png)));
                     ModRow {
                         file,
                         name,
                         version,
                         on,
                         entry,
+                        icon,
                     }
                 })
             })
@@ -83,6 +113,7 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                 version: e.number.clone(),
                 on: horizon::mod_id(&e).is_some_and(|id| java::is_enabled(home, id)),
                 entry: Some(e),
+                icon: None,
             })
             .collect()
     };
@@ -138,10 +169,91 @@ impl Launcher {
                     m.list = list;
                     m.fresh = true;
                 }
+                let ids = this
+                    .instance_mods
+                    .list
+                    .iter()
+                    .filter_map(|r| r.entry.as_ref())
+                    .filter(|e| e.source == SourceId::Modrinth)
+                    .map(|e| e.project.clone())
+                    .collect();
+                this.ask_project_icons(ids, cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Asks Modrinth, in one request, for the icons of `ids` it hasn't been asked for.
+    pub(super) fn ask_project_icons(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let icons = &mut self.project_icons;
+        if !icons.loaded {
+            icons.loaded = true;
+            icons.urls = std::fs::read(project_icons_file())
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default();
+        }
+        let todo: Vec<String> = ids
+            .into_iter()
+            .filter(|id| !icons.urls.contains_key(id) && icons.asked.insert(id.clone()))
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        let task = cx
+            .background_executor()
+            .spawn(async move { modrinth::icons(&todo) });
+        cx.spawn(async move |this, cx| {
+            let Ok(found) = task.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let urls = &mut this.project_icons.urls;
+                urls.extend(found);
+                if let Ok(json) = serde_json::to_vec(urls) {
+                    let file = project_icons_file();
+                    let _ = std::fs::create_dir_all(file.parent().unwrap_or(Path::new(".")));
+                    let _ = std::fs::write(file, json);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The image of a Modrinth project's icon at a row's size, once its URL and image are here.
+    pub(super) fn project_icon(&mut self, e: &installed::Entry) -> Option<PathBuf> {
+        let url = (e.source == SourceId::Modrinth)
+            .then(|| self.project_icons.urls.get(&e.project).cloned())
+            .flatten()?;
+        self.mods_image(&url, images::ROW)
+    }
+
+    /// A mod's icon at the row's size: Modrinth's, else its jar's, else a glyph.
+    pub(super) fn mod_icon(
+        &mut self,
+        entry: Option<&installed::Entry>,
+        jar: Option<Arc<gpui::Image>>,
+        side: f32,
+    ) -> Div {
+        let n = self.theme.night;
+        let remote = entry.and_then(|e| self.project_icon(e));
+        let tile = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(side))
+            .rounded(px(night::RADIUS_CONTROL))
+            .overflow_hidden();
+        match (remote, jar) {
+            (Some(path), _) => tile.child(gpui::img(path).size(px(side))),
+            (None, Some(image)) => tile.child(gpui::img(image).size(px(side))),
+            (None, None) => tile
+                .bg(alpha(n.card_hi, n.card_hi_alpha))
+                .child(blocks::icon("box", side * 0.5, c(n.muted))),
+        }
     }
 
     /// How many mods the selected instance has; None while they are read.
@@ -233,16 +345,35 @@ impl Launcher {
                 .py(px(16.))
                 .child(tr(s).to_string())
         };
-        let body: Vec<AnyElement> = if !m.fresh {
-            vec![empty("Reading the mods…").into_any_element()]
+        let rule = |row: AnyElement| {
+            div()
+                .border_t_1()
+                .border_color(alpha(n.stroke, n.rule_alpha))
+                .child(row)
+        };
+        let body = if !m.fresh {
+            rule(empty("Reading the mods…").into_any_element())
         } else if m.list.is_empty() {
-            vec![empty("No mods yet: Add mods finds some for this instance.").into_any_element()]
+            rule(empty("No mods yet: Add mods finds some for this instance.").into_any_element())
         } else if rows.is_empty() {
-            vec![empty("No mod matches.").into_any_element()]
+            rule(empty("No mod matches.").into_any_element())
         } else {
-            rows.into_iter()
-                .map(|row| self.mod_row(row, busy, cx).into_any_element())
-                .collect()
+            let shown = (rows.len(), filter);
+            if self.instance_mods.shown != shown {
+                self.instance_mods.shown = shown;
+                self.instance_mods.cull.reset();
+            }
+            let (cull, scroll) = (
+                self.instance_mods.cull.clone(),
+                self.content_scroll.handle.clone(),
+            );
+            cull.column(
+                &scroll,
+                rows.len(),
+                0.,
+                |_| false,
+                |i| rule(self.mod_row(rows[i].clone(), busy, cx).into_any_element()),
+            )
         };
         let card = plate::cut(
             night::PIXEL_CORNER,
@@ -254,12 +385,7 @@ impl Launcher {
         .flex()
         .flex_col()
         .child(header)
-        .children(body.into_iter().map(|row| {
-            div()
-                .border_t_1()
-                .border_color(alpha(n.stroke, n.rule_alpha))
-                .child(row)
-        }));
+        .child(body);
         (
             actions,
             div()
@@ -271,34 +397,10 @@ impl Launcher {
         )
     }
 
-    fn mod_row(&self, row: ModRow, busy: bool, cx: &mut Context<Self>) -> Div {
+    fn mod_row(&mut self, row: ModRow, busy: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let n = t.night;
-        // Each mod its own colour, the same every time: a hue from its name.
-        let hue = row
-            .name
-            .bytes()
-            .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-        let icon = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .size(px(40.))
-            .rounded(px(night::RADIUS_CONTROL))
-            .bg(gpui::hsla((hue % 360) as f32 / 360., 0.42, 0.52, 1.))
-            .child(
-                shell::text(night::TITLE, c(n.on_accent))
-                    .font_weight(FontWeight::BOLD)
-                    .child(
-                        row.name
-                            .chars()
-                            .next()
-                            .unwrap_or('?')
-                            .to_uppercase()
-                            .to_string(),
-                    ),
-            );
+        let icon = self.mod_icon(row.entry.as_ref(), row.icon.clone(), 40.);
         let source = match &row.entry {
             Some(e) if e.dependency => trf(
                 "{source} · needed by another mod",

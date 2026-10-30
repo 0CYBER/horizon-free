@@ -1065,7 +1065,7 @@ pub fn carry(
                     .insert(name.to_owned(), "its block is left out".into());
                 continue;
             }
-            match facts.item(full) {
+            match facts.item(full, &owned) {
                 Ok((v, differences)) => {
                     write_decl("item", name, &v)?;
                     report.items += 1;
@@ -1092,14 +1092,6 @@ pub fn carry(
                 continue;
             }
             let Some((asset, copies)) = armor.equipment() else {
-                report
-                    .differences
-                    .entry(full[prefix.len()..].to_owned())
-                    .or_default()
-                    .push(format!(
-                        "armour layers of {} not in models/armor/",
-                        armor.material
-                    ));
                 continue;
             };
             for (from, to) in copies {

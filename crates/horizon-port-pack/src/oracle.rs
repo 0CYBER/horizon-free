@@ -114,6 +114,14 @@ pub struct ArmorLayer {
 }
 
 impl Armor {
+    /// Whether carry writes the material's equipment asset: in the mod's own namespaces, from layers it can place.
+    pub fn asset_carried(&self, owned: &[&str]) -> bool {
+        self.material
+            .split_once(':')
+            .is_some_and(|(ns, _)| owned.contains(&ns))
+            && self.equipment().is_some()
+    }
+
     /// The 26.3 equipment asset of the material (`layers` by kind), and the 1.21.1 textures to copy, as (from, to) paths in the mod.
     pub fn equipment(&self) -> Option<(Value, Vec<(String, String)>)> {
         self.material.split_once(':')?;
@@ -441,7 +449,7 @@ impl Facts {
     /// An item declaration for a mod item that is not a declared block's:
     /// the vanilla item of its class with its stack size, rarity and numbers,
     /// and what it does not reproduce.
-    pub fn item(&self, id: &str) -> Result<(Value, Vec<String>), String> {
+    pub fn item(&self, id: &str, owned: &[&str]) -> Result<(Value, Vec<String>), String> {
         let item = self.items.get(id).ok_or("not in the oracle")?;
         if item.block.is_some() {
             return Err("a block item without a block".into());
@@ -461,7 +469,15 @@ impl Facts {
         if item.rarity != "common" {
             decl["rarity"] = json!(item.rarity);
         }
-        let components = self.item_components(item, template);
+        if let Some(armor) = item.armor.as_ref().filter(|a| !a.material.is_empty())
+            && !self.armor_asset_exists(armor, owned)
+        {
+            differences.push(format!(
+                "armour material {} has no equipment asset: it draws the template's",
+                armor.material
+            ));
+        }
+        let components = self.item_components(item, template, owned);
         if !components.is_empty() {
             decl["components"] = Value::Object(components);
         }
@@ -469,7 +485,14 @@ impl Facts {
     }
 
     /// The item's numbers as a 26.3 component patch over `template`'s, leaving out what already matches.
-    fn item_components(&self, item: &Item, template: &str) -> Map<String, Value> {
+    fn armor_asset_exists(&self, armor: &Armor, owned: &[&str]) -> bool {
+        armor.asset_carried(owned)
+            || self.vanilla_items.values().any(|i| {
+                i["minecraft:equippable"]["asset_id"].as_str() == Some(armor.material.as_str())
+            })
+    }
+
+    fn item_components(&self, item: &Item, template: &str, owned: &[&str]) -> Map<String, Value> {
         if item.components.is_empty() {
             return Map::new();
         }
@@ -516,15 +539,17 @@ impl Facts {
             want.insert("minecraft:repairable".into(), items);
         }
         if let Some(armor) = item.armor.as_ref().filter(|a| !a.material.is_empty()) {
-            let mut equippable = base
-                .and_then(|b| b.get("minecraft:equippable"))
-                .cloned()
-                .unwrap_or_else(|| json!({"slot": armor.slot}));
-            equippable["asset_id"] = json!(armor.material);
-            if let Some(sound) = &armor.equip_sound {
-                equippable["equip_sound"] = json!(sound);
+            let mut equippable = base.and_then(|b| b.get("minecraft:equippable")).cloned();
+            if self.armor_asset_exists(armor, owned) {
+                equippable.get_or_insert_with(|| json!({"slot": armor.slot}))["asset_id"] =
+                    json!(armor.material);
             }
-            want.insert("minecraft:equippable".into(), equippable);
+            if let Some(mut equippable) = equippable {
+                if let Some(sound) = &armor.equip_sound {
+                    equippable["equip_sound"] = json!(sound);
+                }
+                want.insert("minecraft:equippable".into(), equippable);
+            }
         }
         let mut patch = Map::new();
         for (key, value) in want {
@@ -711,7 +736,7 @@ mod tests {
                 "minecraft:repairable": {"items": "#minecraft:repairs_iron_armor"}},
         }))
         .unwrap();
-        let (sword, _) = facts.item("m:sword").unwrap();
+        let (sword, _) = facts.item("m:sword", &["m"]).unwrap();
         assert_eq!(sword["template"], "minecraft:iron_sword");
         let c = &sword["components"];
         assert_eq!(c["minecraft:max_damage"], 905);
@@ -731,12 +756,12 @@ mod tests {
         );
         // Equal to the template's: left out.
         assert!(c.get("minecraft:enchantable").is_none());
-        let (boots, _) = facts.item("m:boots").unwrap();
+        let (boots, _) = facts.item("m:boots", &["m"]).unwrap();
         assert_eq!(boots["template"], "minecraft:iron_boots");
         assert_eq!(boots["components"]["!minecraft:enchantable"], json!({}));
         assert_eq!(boots["components"]["!minecraft:repairable"], json!({}));
         // Facts without components (exported before they were) keep the plain template.
-        let (gem, _) = facts.item("m:gem").unwrap();
+        let (gem, _) = facts.item("m:gem", &["m"]).unwrap();
         assert_eq!(gem, json!({"template": "minecraft:stick"}));
     }
 
@@ -769,7 +794,7 @@ mod tests {
         facts.vanilla_items = serde_json::from_value(json!({"minecraft:iron_leggings": {
             "minecraft:equippable": {"asset_id": "minecraft:iron", "equip_sound": "minecraft:item.armor.equip_iron", "slot": "legs"}}}))
         .unwrap();
-        let (decl, _) = facts.item("m:ruby_leggings").unwrap();
+        let (decl, _) = facts.item("m:ruby_leggings", &["m"]).unwrap();
         assert_eq!(
             decl["components"]["minecraft:equippable"],
             json!({"asset_id": "m:ruby", "equip_sound": "minecraft:item.armor.equip_diamond", "slot": "legs"})
@@ -780,6 +805,42 @@ mod tests {
             {"texture": "m:textures/odd.png", "texture_legs": "m:textures/odd.png"}]}))
             .unwrap();
         assert!(odd.equipment().is_none());
+    }
+
+    #[test]
+    fn armour_only_names_an_equipment_asset_that_exists() {
+        let leggings = |material: &str, layers: Value| {
+            json!({"class": "net.minecraft.world.item.ArmorItem", "max_stack_size": 1, "rarity": "common",
+                "components": {"minecraft:max_damage": 300},
+                "armor": {"slot": "legs", "material": material,
+                    "equip_sound": "minecraft:item.armor.equip_diamond", "layers": layers}})
+        };
+        let odd = json!([{"texture": "m:textures/odd.png", "texture_legs": "m:textures/odd.png"}]);
+        let mut facts: Facts = serde_json::from_value(json!({"blocks": {}, "items": {
+            "m:ruby": leggings("m:ruby", json!([])),
+            "m:odd": leggings("m:odd", odd),
+            "m:other": leggings("other:steel", json!([])),
+            "m:unknown": leggings("minecraft:steel", json!([])),
+            "m:diamond": leggings("minecraft:diamond", json!([]))}}))
+        .unwrap();
+        facts.vanilla_items = serde_json::from_value(json!({
+            "minecraft:iron_leggings": {"minecraft:equippable": {"asset_id": "minecraft:iron", "slot": "legs"}},
+            "minecraft:diamond_leggings": {"minecraft:equippable": {"asset_id": "minecraft:diamond", "slot": "legs"}}}))
+        .unwrap();
+        let asset = |id: &str| {
+            let (decl, differences) = facts.item(id, &["m"]).unwrap();
+            let asset = decl["components"]["minecraft:equippable"]["asset_id"].clone();
+            (asset, !differences.is_empty())
+        };
+        assert_eq!(asset("m:ruby"), (json!("m:ruby"), false));
+        assert_eq!(asset("m:diamond"), (json!("minecraft:diamond"), false));
+        for id in ["m:odd", "m:other", "m:unknown"] {
+            assert_eq!(asset(id), (json!("minecraft:iron"), true), "{id}");
+        }
+        // Without the game's tables the template's own component stays whole.
+        facts.vanilla_items.clear();
+        let (decl, _) = facts.item("m:odd", &["m"]).unwrap();
+        assert!(decl["components"].get("minecraft:equippable").is_none());
     }
 
     fn armor_json() -> Value {

@@ -432,6 +432,9 @@ impl PlayerMotion {
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
             self.fall_distance = level.fall_distance;
+            // LivingEntity.readAdditionalSaveData applies the saved attributes
+            // before it reads the health (a raised max_health keeps its hearts).
+            self.apply_saved_attributes(extra.and_then(|t| t.get("attributes")))?;
             self.set_health(level.health, false)?;
             // LivingEntity.readAdditionalSaveData: internalSetAbsorptionAmount.
             self.internal_set_absorption(level.absorption)?;
@@ -679,6 +682,94 @@ impl PlayerMotion {
                 Ok(())
             })
             .map_err(attribute_error)?;
+        Ok(())
+    }
+    /// `AttributeMap.pack` in `AttributeInstance.Packed.LIST_CODEC`'s form: the
+    /// player's `attributes` list (LivingEntity.addAdditionalSaveData), each
+    /// instance's id, base and permanent modifiers.
+    pub fn saved_attributes(&self) -> horizon_world::nbt::Tag {
+        use horizon_client_core::nbt_value::string;
+        use horizon_world::nbt::Tag;
+        let list = self
+            .attributes
+            .instances()
+            .map(|(_, key, instance)| {
+                let packed = instance.pack();
+                let mut entry = vec![
+                    ("id", string(key.name())),
+                    ("base", Tag::Double(packed.base.to_bits())),
+                ];
+                // `modifiers` is an optional field whose default is the empty list.
+                if !packed.modifiers.is_empty() {
+                    let modifiers = packed
+                        .modifiers
+                        .iter()
+                        .map(|m| {
+                            let operation = match m.operation() {
+                                Operation::AddValue => "add_value",
+                                Operation::AddMultipliedBase => "add_multiplied_base",
+                                Operation::AddMultipliedTotal => "add_multiplied_total",
+                            };
+                            Tag::compound([
+                                ("id", string(m.id())),
+                                ("amount", Tag::Double(m.amount().to_bits())),
+                                ("operation", string(operation)),
+                            ])
+                        })
+                        .collect();
+                    entry.push(("modifiers", Tag::List(modifiers)));
+                }
+                Tag::compound(entry)
+            })
+            .collect();
+        Tag::List(list)
+    }
+    /// `AttributeMap.apply` of a saved `attributes` list
+    /// (LivingEntity.readAdditionalSaveData): each known attribute takes its
+    /// saved base and permanent modifiers; unknown ones are skipped.
+    pub fn apply_saved_attributes(
+        &mut self,
+        saved: Option<&horizon_world::nbt::Tag>,
+    ) -> Result<()> {
+        use horizon_client_core::nbt_value::{float, text};
+        use horizon_world::{attributes::Packed, nbt::Tag};
+        let Some(Tag::List(list)) = saved else {
+            return Ok(());
+        };
+        for entry in list {
+            let Some(key) = text(entry.get("id")).and_then(|id| self.attributes.key(&id)) else {
+                continue;
+            };
+            let modifiers = match entry.get("modifiers") {
+                Some(Tag::List(l)) => l
+                    .iter()
+                    .filter_map(|m| {
+                        let operation = match text(m.get("operation"))?.as_str() {
+                            "add_value" => Operation::AddValue,
+                            "add_multiplied_base" => Operation::AddMultipliedBase,
+                            "add_multiplied_total" => Operation::AddMultipliedTotal,
+                            _ => return None,
+                        };
+                        Modifier::new(&text(m.get("id"))?, float(m.get("amount"))?, operation).ok()
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let packed = Packed {
+                base: float(entry.get("base")).unwrap_or(0.0),
+                modifiers,
+            };
+            let Some(handle) = self
+                .attributes
+                .get_instance(Some(key))
+                .map_err(attribute_error)?
+            else {
+                continue;
+            };
+            self.attributes
+                .edit(&handle, |value, observer| value.apply(&packed, observer))
+                .map_err(attribute_error)?;
+        }
         Ok(())
     }
     pub fn set_sprinting(&mut self, sprinting: bool) -> Result<()> {
@@ -2638,6 +2729,67 @@ mod tests {
         assert!(!p.is_sweep_attack(1.0, false, true));
         p.velocity = Vec3::new(f64::from(p.speed) * 2.5, 0.0, 0.0);
         assert!(!p.is_sweep_attack(1.0, false, true));
+    }
+
+    #[test]
+    fn attribute_bases_survive_a_save_and_reload() {
+        // #4425: LivingEntity.addAdditionalSaveData writes AttributeMap.pack
+        // and readAdditionalSaveData applies it (before the health).
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped attribute save: prepared resources unavailable");
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut p = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        let set_base = |p: &mut PlayerMotion, name: &str, v: f64| {
+            let key = p.attributes.key(name).unwrap();
+            let h = p.attributes.get_instance(Some(key)).unwrap().unwrap();
+            p.attributes
+                .edit(&h, |a, o| a.set_base_value(v, o))
+                .unwrap();
+        };
+        set_base(&mut p, "minecraft:scale", 2.0);
+        set_base(&mut p, "minecraft:max_health", 30.0);
+        let key = p.attributes.key("minecraft:max_health").unwrap();
+        let h = p.attributes.get_instance(Some(key)).unwrap().unwrap();
+        let bonus = Modifier::new("test:bonus", 0.5, Operation::AddMultipliedBase).unwrap();
+        p.attributes
+            .edit(&h, |a, o| a.add_permanent(bonus, o))
+            .unwrap();
+        let mut level = crate::save::Level {
+            health: 40.0,
+            food: 20,
+            saturation: 5.0,
+            player_extra: Some(horizon_world::nbt::Tag::compound([(
+                "attributes",
+                p.saved_attributes(),
+            )])),
+            ..Default::default()
+        };
+        // Through the player compound as the file holds it.
+        let tag = level.player_tag();
+        level = crate::save::Level::default();
+        level.read_player(&tag);
+        level.player_extra = Some(tag);
+        let mut back = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        let mut pending = true;
+        back.load_saved_state_once(&mut pending, &level).unwrap();
+        let base = |p: &mut PlayerMotion, name: &str| {
+            let key = p.attributes.key(name).unwrap();
+            p.attributes.value(Some(key), ValueKind::Base).unwrap()
+        };
+        assert_eq!(base(&mut back, "minecraft:scale"), 2.0);
+        assert_eq!(base(&mut back, "minecraft:max_health"), 30.0);
+        assert_eq!(back.attribute("minecraft:max_health").unwrap(), 45.0);
+        assert_eq!(back.health.health(), 40.0);
     }
 
     #[test]
