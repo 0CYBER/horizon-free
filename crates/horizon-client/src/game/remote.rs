@@ -58,6 +58,21 @@ fn remote_text(tag: &Tag) -> horizon_client::text::Text {
     comp_text(&tag_to_json(tag))
 }
 
+/// The hurt sound of a `ClientboundDamageEventPacket`'s damage type, by its
+/// synchronized registry id: `Player.getHurtSound` picks the type's effects.
+fn hurt_sound_for(
+    registries: &Dynamic,
+    damage: &horizon_world::damage_source::Catalog,
+    source_type: i32,
+) -> &'static str {
+    registries
+        .name("minecraft:damage_type", source_type)
+        .and_then(|name| damage.id(name).and_then(|id| damage.definition(id)))
+        .map_or(horizon_client::health::hurt_sound("hurt"), |d| {
+            horizon_client::health::hurt_sound(&d.effects)
+        })
+}
+
 /// `ClientboundOpenScreenPacket.title` as a container screen draws it: the
 /// component's styles, and the `§` codes a literal holds (`StringDecomposer`).
 fn menu_title(tag: &Tag) -> horizon_client::text::Text {
@@ -333,6 +348,16 @@ impl Game<'_> {
                     .name(sound.0)
                     .map(str::to_owned)
             }),
+        }
+    }
+    /// The hurt sound the hurt player's own client plays from
+    /// `ClientboundDamageEventPacket` (`LivingEntity.handleDamageEvent`):
+    /// `Player.getHurtSound` is the damage type's effects, with the codec's
+    /// `hurt` default when the type is unknown.
+    pub(super) fn remote_hurt_sound(&self, source_type: i32) -> &'static str {
+        match self.remote.as_ref() {
+            Some(r) => hurt_sound_for(&r.registries, &self.motion.health.damage, source_type),
+            None => horizon_client::health::hurt_sound("hurt"),
         }
     }
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
@@ -2773,14 +2798,34 @@ impl Game<'_> {
             // The same packet for another entity: Entity.lerpMotion.
             C::SetEntityMotion(p) => self.remote_motion(p.id, p.velocity),
             // ClientPacketListener.handleDamageEvent: LivingEntity.handleDamageEvent
-            // jolts the walk animation and restarts the hurt flash. Its hurt
-            // sound comes as a sound from Horizon's host, which plays it itself.
+            // jolts the walk animation and restarts the hurt flash, and the
+            // hurt player's own client plays its hurt sound (`Player.getHurtSound`:
+            // the damage type's effects) at `getSoundVolume` with a pitch that
+            // walks 1.0 ± 0.2 on the level random. The server's sound packet
+            // reaches every other player around, never this one (#4149).
             // This player's own hurt tilt and flash come from the server too
             // (sent to the player itself): its own moves never hurt it.
             C::DamageEvent(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    let at = self
+                        .player
+                        .as_ref()
+                        .map(|pl| [pl.position.x, pl.position.y, pl.position.z]);
                     if let Some(pl) = self.player.as_mut() {
                         pl.health.animate_hurt();
+                    }
+                    if let Some(at) = at {
+                        let sound = self.remote_hurt_sound(p.source_type);
+                        let pitch = 1.0
+                            + (self.world.random.next_float() - self.world.random.next_float())
+                                * 0.2;
+                        self.audio.play_on(
+                            horizon_client::settings::sound_source(sound),
+                            sound,
+                            Some(at),
+                            1.0,
+                            pitch,
+                        );
                     }
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.limb_speed = 1.5;
@@ -8085,6 +8130,65 @@ mod tests {
         assert_eq!(pitch(0.0, 120.0, false), 90.0);
     }
 
+    /// The hurt sound of `ClientboundDamageEventPacket` follows its damage
+    /// type (`Player.getHurtSound`: the type's effects), with the codec's
+    /// `hurt` default for an unknown type (#4149).
+    #[test]
+    fn the_hurt_sound_follows_the_damage_events_type() {
+        use super::hurt_sound_for;
+        use horizon_protocol::registry::Dynamic;
+        use horizon_world::damage_source::Catalog;
+        let types = [
+            ("minecraft:in_fire", "burning"),
+            ("minecraft:drown", "drowning"),
+            ("minecraft:sweet_berry_bush", "poking"),
+            ("minecraft:freeze", "freezing"),
+            ("minecraft:arrow", "hurt"),
+        ];
+        // The types the server synchronized, in registry order.
+        let mut registries = Dynamic::default();
+        registries.add(horizon_protocol::packets::configuration::RegistryData {
+            registry: "minecraft:damage_type".into(),
+            entries: types
+                .iter()
+                .map(
+                    |(id, _)| horizon_protocol::packets::configuration::RegistryEntry {
+                        id: (*id).into(),
+                        data: None,
+                    },
+                )
+                .collect(),
+        });
+        // The damage catalog: one entry per type above, each with its effects.
+        let bits = |f: f32| format!("{:08x}", f.to_bits());
+        let catalog = Catalog::from_json(
+            &serde_json::json!({
+                "data_version": i64::from(horizon_world::DATA_VERSION),
+                "types": types.iter().map(|(id, effects)| serde_json::json!({
+                    "id": id,
+                    "message_id": id.trim_start_matches("minecraft:"),
+                    "exhaustion": bits(0.1),
+                    "scaling": "when_caused_by_living_non_player",
+                    "effects": effects,
+                    "death_message_type": "default",
+                })).collect::<Vec<_>>(),
+            }),
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        for (id, (name, effects)) in types.iter().enumerate() {
+            assert_eq!(
+                hurt_sound_for(&registries, &catalog, id as i32),
+                horizon_client::health::hurt_sound(effects),
+                "{name}"
+            );
+        }
+        // An unknown id falls back to the codec's default effects.
+        assert_eq!(
+            hurt_sound_for(&registries, &catalog, types.len() as i32),
+            "minecraft:entity.player.hurt"
+        );
+    }
     /// Q over a slot of the inventory on a server (#3357): the predicted THROW
     /// drops the stack, so the player's hand swings, as `LivingEntity.drop`
     /// does for `Prediction.PREDICTED`; a plain pick up drops nothing.
