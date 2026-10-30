@@ -67,6 +67,7 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --seed N               default 12345
   --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
   --name PREFIX          bot names: PREFIX0, PREFIX1...; default Bot
+  --brand B              the client brand sent in configuration (minecraft:brand); default none
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
 
@@ -120,6 +121,8 @@ struct Options {
     flood: usize,
     no_read: bool,
     name: String,
+    /// The `minecraft:brand` to send, if any.
+    brand: Option<String>,
     report: Option<String>,
 }
 
@@ -138,6 +141,7 @@ fn options() -> Result<Options, String> {
         no_read: false,
         name: "Bot".into(),
         report: None,
+        brand: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -169,6 +173,7 @@ fn options() -> Result<Options, String> {
             "--flood" => o.flood = value.parse().map_err(|_| number("packets a tick"))?,
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
+            "--brand" => o.brand = Some(value),
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
@@ -398,6 +403,19 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
         .encode(),
     )
     .map_err(err)?;
+    // ClientBrandRetriever: vanilla's client says "vanilla", Horizon's "horizon".
+    if let Some(brand) = &o.brand {
+        let mut w = Writer::new();
+        w.string(brand);
+        c.send(
+            &configuration::Serverbound::CustomPayload(configuration::CustomPayload {
+                channel: "minecraft:brand".into(),
+                data: w.data,
+            })
+            .encode(),
+        )
+        .map_err(err)?;
+    }
     loop {
         let (id, body) = c.recv().map_err(err)?;
         let reply = match id {
@@ -425,8 +443,9 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
                             payload: None,
                         })
                     }
-                    configuration::Clientbound::Disconnect(_) => {
-                        return Err("disconnected during configuration".into());
+                    configuration::Clientbound::Disconnect(p) => {
+                        let reason = horizon_protocol::text::plain(&p.reason, &Default::default());
+                        return Err(format!("disconnected during configuration: {reason}"));
                     }
                     configuration::Clientbound::FinishConfiguration(_) => {
                         c.send(&configuration::Serverbound::FinishConfiguration(Empty).encode())

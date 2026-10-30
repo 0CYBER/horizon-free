@@ -221,6 +221,11 @@ console commands do. While it's stopped, they edit vanilla's files directly. Any
 To generate the world around spawn ahead of the players, Horizon has its own `pregen` command, off until
 `server.toml` has `horizon-pregen = true` under `[properties]`: `horizon-server cmd pregen start 2500`
 ([pregeneration](pregeneration.md)).
+To let only the Horizon client join, set `horizon-clients-only = true` under `[properties]` (off by default).
+Other clients are turned away while they connect with "This server is for the Horizon client:
+playhorizon.dev", and the console says which client it was. The check reads the brand a client names itself
+by (`minecraft:brand`), which any client can fake: it keeps out players who didn't install Horizon, not
+cheaters. The server's own checks (reach, movement) are what protect it.
 
 `config set` changes `server.toml` without opening it: `horizon-server config set world.difficulty=hard
 server.max_players=10`. Each key is a section and a name from the file (`properties.spawn-protection=0` for any

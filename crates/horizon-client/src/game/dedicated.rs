@@ -734,6 +734,10 @@ impl Game<'_> {
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
             levels: self.level_shapes,
+            horizon_clients_only: props
+                .raw
+                .get(horizon_client::lan::HORIZON_CLIENTS_ONLY)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
             } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {
