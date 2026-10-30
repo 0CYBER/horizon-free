@@ -6003,6 +6003,7 @@ impl Game<'_> {
                 if self.creative {
                     self.screen = Screen::Creative;
                     self.creative_screen.reopen();
+                    self.refresh_saved_hotbars();
                 } else {
                     self.screen = Screen::Inventory;
                 }
