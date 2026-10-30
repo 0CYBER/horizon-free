@@ -598,7 +598,7 @@ impl Game<'_> {
             Mode::Delete { world } => {
                 json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
             }
-            Mode::BackupBeforeUpgrade { world } => {
+            Mode::BackupBeforeUpgrade { world, .. } => {
                 json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
             }
             Mode::Error { message, .. } => {

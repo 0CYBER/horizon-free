@@ -22,7 +22,10 @@ use horizon_client::{
     motion::{MotionEvent, MotionWorld, PlayerMotion},
     pose::Dimensions,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    random::RandomSource,
+};
 use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::literal,
@@ -44,6 +47,10 @@ pub(super) struct GuestPlay {
     /// `ServerGamePacketListenerImpl.dropSpamThrottler` (`TickThrottler(20, 1480)`): 20 for each
     /// item a creative player drops from the creative screen, one less each tick.
     creative_drops: u32,
+    /// `ServerGamePacketListenerImpl.chatSpamThrottler`: 20 for each chat message, one less each tick.
+    pub(super) chat_spam: u32,
+    /// `commandSpamThrottler`: 20 for each command, one less each tick.
+    pub(super) command_spam: u32,
     /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
     pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
@@ -2247,6 +2254,11 @@ impl Game<'_> {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
             };
+            // ServerGamePacketListenerImpl.tick: the chat and command throttlers
+            // decay one a tick, dead or alive.
+            let play = host.play.entry(conn).or_default();
+            play.chat_spam = play.chat_spam.saturating_sub(1);
+            play.command_spam = play.command_spam.saturating_sub(1);
             self.guest_sleep_tick(host, gi);
             if host.hub.guests[gi].dead {
                 self.guest_tick_death(host, gi);
@@ -2347,6 +2359,7 @@ impl Game<'_> {
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
+            self.guest_arrows(host, gi);
             self.guest_orbs(host, gi);
             self.guest_die(host, gi, conn);
         }
@@ -2781,6 +2794,20 @@ impl Game<'_> {
                     count,
                     speed,
                 }) => self.landing_dust(Some(host), state, position, count, speed),
+                // LivingEntity.causeFallDamage: Player.playSound skips the
+                // guest, whose own client plays it; everyone else hears it.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Sound {
+                    sound,
+                    volume,
+                    pitch,
+                    ..
+                }) => {
+                    if let Some(name) = sound.player_fall_sound() {
+                        let source = horizon_client::settings::sound_source(name) as i32;
+                        self.audio.play_unshared(name, Some(at), volume, pitch);
+                        host.hub.sound(name, at, volume, pitch, source, Some(conn));
+                    }
+                }
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 // LivingEntity.baseTick's entity event 67, to every client
                 // around, the guest's own included; this window draws it too.
@@ -3080,7 +3107,8 @@ impl Game<'_> {
         );
     }
 
-    /// Dropped items touching a guest go into their inventory.
+    /// Dropped items touching a guest go into their inventory
+    /// (`ItemEntity.playerTouch`, then `ServerPlayer.onItemPickup`).
     fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) {
         let (conn, mode, position, id, uuid) = {
             let g = &host.hub.guests[gi];
@@ -3113,16 +3141,28 @@ impl Game<'_> {
         for i in near.into_iter().rev() {
             let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
             let before = stack.count;
+            let thrower = self.dropped[i].thrower;
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
                     let item = self.dropped.remove(i);
+                    if let Some(thrower) = thrower {
+                        self.as_guest(host, conn, |g| {
+                            g.trigger_thrown_picked_up_by_player(&item.stack, thrower);
+                        });
+                    }
                     self.guest_pickup(host, id, item);
                     taken.push((item_id, before));
                 }
                 Some(rest) if rest.count < before => {
                     self.guest_pickup(host, id, self.dropped[i].clone());
                     self.dropped[i].stack = rest;
+                    if let Some(thrower) = thrower {
+                        let left = self.dropped[i].stack.clone();
+                        self.as_guest(host, conn, |g| {
+                            g.trigger_thrown_picked_up_by_player(&left, thrower);
+                        });
+                    }
                     taken.push((item_id, before - self.dropped[i].stack.count));
                 }
                 Some(_) => {}
@@ -3132,6 +3172,75 @@ impl Game<'_> {
         // (handleTakeItemEntity).
         for (item, count) in taken {
             host.hub.take_item(item as i32, id, count as i32, position);
+        }
+    }
+
+    /// `Player.aiStep` touching arrows in the guest's box grown by (1, 0.5, 1):
+    /// `AbstractArrow.playerTouch` for a guest, as `touch_arrows` does for the
+    /// host's player. The guest's own client plays the pickup sound
+    /// (`handleTakeItemEntity`).
+    fn guest_arrows(&mut self, host: &mut LanHost, gi: usize) {
+        use horizon_client::arrows::Touch;
+        let (conn, id, at, creative, unable, dims) = {
+            let g = &host.hub.guests[gi];
+            (
+                g.conn,
+                g.entity_id,
+                g.position,
+                g.creative(),
+                g.spectator() || g.dead || g.health <= 0.0,
+                g.dimensions(),
+            )
+        };
+        if unable || self.creatures.projectiles.is_empty() {
+            return;
+        }
+        let w = f64::from(dims.width) / 2.0;
+        let reach = Aabb::new(
+            Vec3::new(at[0] - w, at[1], at[2] - w),
+            Vec3::new(at[0] + w, at[1] + f64::from(dims.height), at[2] + w),
+        )
+        .inflate(Vec3::new(1.0, 0.5, 1.0));
+        let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        let mut picked = Vec::new();
+        projectiles.retain(|shot| {
+            let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
+                return true;
+            };
+            let p = shot.position;
+            let bounds = Aabb::new(
+                Vec3::new(p.x - 0.25, p.y, p.z - 0.25),
+                Vec3::new(p.x + 0.25, p.y + 0.5, p.z + 0.25),
+            );
+            if !bounds.intersects(reach) {
+                return true;
+            }
+            let taken = match a.player_touch(creative) {
+                Touch::Ignore => false,
+                Touch::Take => true,
+                // Inventory.add: a creative player takes what does not fit.
+                Touch::Give(stack) => {
+                    self.as_guest(host, conn, |g| g.give(stack))
+                        .flatten()
+                        .is_none()
+                        || creative
+                }
+            };
+            if taken {
+                picked.push(shot.clone());
+            }
+            !taken
+        });
+        self.creatures.projectiles = projectiles;
+        for shot in picked {
+            host.hub.take_item(shot.id as i32, id, 1, at);
+            if let Some(target) = super::pickups::guest_target(host, id as u32) {
+                self.add_pickup_toward(
+                    super::pickups::Taken::Arrow(Box::new(shot)),
+                    super::pickups::Collector::Guest(id as u32),
+                    target,
+                );
+            }
         }
     }
 
