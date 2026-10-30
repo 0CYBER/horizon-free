@@ -2,8 +2,10 @@
 //! what players send, and a flag is carried out here (send back, alert, kick). The rules and the
 //! violation levels are `horizon_anticheat`'s. The hub holds none of this unless `server.toml` turns it
 //! on, so a server without it does exactly what vanilla's does.
-use super::hub::{HostEvent, Hub};
+use super::hub::{HostEvent, Hub, TickCtx};
+use crate::collisions::SceneCollisions;
 use horizon_anticheat::{Check, Config};
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::nbt::{JavaString, Tag};
 use std::{io::Write, time::Instant};
 
@@ -101,6 +103,92 @@ impl Hub {
                 events,
             );
         }
+    }
+
+    /// `ground`, for a move from guest `i` that says it ends on the ground at `to`: None when the claim
+    /// stands (or isn't judged), else whether the player was sent back. A false claim is dropped either
+    /// way. Only blocks that can't hold anyone are judged: nothing but air and fluids around the feet,
+    /// and no collision a tenth of a block below. Anything else (powder snow, scaffolding, a block the
+    /// server doesn't have yet) and a boat, minecart, shulker or happy ghast nearby: not judged.
+    pub(super) fn anticheat_ground(
+        &mut self,
+        i: usize,
+        to: [f64; 3],
+        ctx: &TickCtx,
+        events: &mut Vec<HostEvent>,
+    ) -> Option<bool> {
+        if !self.anticheat.as_deref()?.config.runs(Check::Ground) {
+            return None;
+        }
+        let g = &self.guests[i];
+        // No fall damage to skip.
+        if g.creative() || g.spectator() || g.fall_flying {
+            return None;
+        }
+        let binding = ctx.collision?;
+        let (fx, fz) = (to[0].floor() as i32, to[2].floor() as i32);
+        if !ctx.world.loaded(fx, fz) {
+            return None;
+        }
+        let half = f64::from(g.dimensions().width) / 2.0;
+        let lo =
+            [to[0] - half - 0.0625, to[1] - 0.6, to[2] - half - 0.0625].map(|v| v.floor() as i32);
+        let hi = [to[0] + half + 0.0625, to[1], to[2] + half + 0.0625].map(|v| v.floor() as i32);
+        for x in lo[0]..=hi[0] {
+            for z in lo[2]..=hi[2] {
+                for y in lo[1]..=hi[1] {
+                    let state = ctx.world.block(x, y, z).0;
+                    if !self.encoder.is_air(state) && !self.encoder.has_fluid(state) {
+                        return None;
+                    }
+                }
+            }
+        }
+        let carries = |kind: &str| {
+            kind.ends_with("boat")
+                || kind.ends_with("raft")
+                || kind.contains("minecart")
+                || kind == "minecraft:shulker"
+                || kind == "minecraft:happy_ghast"
+        };
+        if ctx
+            .entities
+            .iter()
+            .any(|e| carries(&e.kind) && (0..3).all(|k| (e.position[k] - to[k]).abs() < 4.0))
+        {
+            return None;
+        }
+        // A waterlogged slab or stairs: their shape holds the player.
+        let height = f64::from(g.dimensions().height);
+        let feet = Aabb::new(
+            Vec3::new(to[0] - half, to[1], to[2] - half),
+            Vec3::new(to[0] + half, to[1] + height, to[2] + half),
+        );
+        let mut scene = SceneCollisions {
+            world: ctx.world,
+            binding,
+            subject: None,
+        };
+        let down = Vec3::new(0.0, -0.1, 0.0);
+        if scene
+            .resolve(feet, down, 0.0, false)
+            .is_ok_and(|done| done.y > down.y)
+        {
+            return None;
+        }
+        let below = if self
+            .encoder
+            .has_fluid(ctx.world.block(fx, to[1].floor() as i32 - 1, fz).0)
+        {
+            "on a fluid"
+        } else {
+            "in the air"
+        };
+        let detail = format!(
+            "claims the ground {below} at {:.1} {:.1} {:.1}",
+            to[0], to[1], to[2]
+        );
+        Some(self.flag(i, Check::Ground, 1.0, &detail, events))
     }
 
     /// `check` failed for guest `i`: raise its level, log it, and act on it. Returns whether the move or
