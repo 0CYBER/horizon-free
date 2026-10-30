@@ -7204,9 +7204,10 @@ impl Game<'_> {
             x >= ox + sx && x < ox + sx + 16.0 && y >= oy + sy && y < oy + sy + 16.0
         })
     }
-    /// `AbstractContainerScreen.extractSlotHighlightBack` and `Front`: the
-    /// 24 x 24 `container/slot_highlight_back` sprite behind the slot at
-    /// `x`, `y` (its 16 x 16 item box), the `_front` one over its item.
+    /// `AbstractContainerScreen.extractSlotHighlightBack` and
+    /// `AbstractContainerScreen.extractSlotHighlightFront`: the 24 x 24
+    /// `container/slot_highlight_back` sprite behind the slot at `x`, `y` (its
+    /// 16 x 16 item box), the `_front` one over its item.
     fn draw_slot_highlight(&self, batch: &mut HudBatch, front: bool, x: f32, y: f32) {
         let sprite = if front {
             "gui/sprites/container/slot_highlight_front"
