@@ -15,7 +15,8 @@ use horizon_client::{
     chunk::Chunk,
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ExperienceOrb, ItemEntity},
-    hud::HudBatch,
+    hud::{HudBatch, rgba},
+    hud_layout, hud_overlays,
     items::ItemStack,
     menu::Input,
     mobs::{Mob, MobType, Who},
@@ -108,6 +109,22 @@ fn place_interpolated(m: &mut Mob, at: PosRot) {
     m.head_pitch = (at.pitch % 360.0).clamp(-90.0, 90.0);
 }
 
+/// `ClientPacketListener.determineLevelLoadingReason`: a respawn after a death
+/// is OTHER; otherwise a trip to or from the Nether, or the End, shows that
+/// dimension's portal.
+fn loading_reason(died: bool, to: Dim, from: Dim) -> horizon_client::level_loading::Reason {
+    use horizon_client::level_loading::Reason;
+    if died {
+        Reason::Other
+    } else if to == Dim::Nether || from == Dim::Nether {
+        Reason::NetherPortal
+    } else if to == Dim::End || from == Dim::End {
+        Reason::EndPortal
+    } else {
+        Reason::Other
+    }
+}
+
 /// What the network thread delivered, in order: an event, or a chunk packet
 /// handed to the decoder (with the format it decodes with), whose column
 /// comes back from `ChunkDecoder::next`.
@@ -125,6 +142,9 @@ pub(super) struct Remote {
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
     joined: bool,
+    /// `LevelLoadingScreen.reason`: what the loading screen shows behind its
+    /// text (`ClientPacketListener.determineLevelLoadingReason`).
+    loading_reason: horizon_client::level_loading::Reason,
     /// `handleLogin` ran: vanilla's `Minecraft.player` exists from then on,
     /// while here the player is made at the first teleport.
     pub(super) logged_in: bool,
@@ -510,6 +530,7 @@ impl Game<'_> {
             lang,
             registries: Arc::new(Dynamic::default()),
             joined: false,
+            loading_reason: horizon_client::level_loading::Reason::Other,
             logged_in: false,
             status: "Connecting to the server...".into(),
             entity_id: 0,
@@ -1121,6 +1142,8 @@ impl Game<'_> {
                     self.close_dialogs();
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
+                        // handleLogin: startWaitingForNewLevel with Reason.OTHER.
+                        r.loading_reason = horizon_client::level_loading::Reason::Other;
                         r.profile = uuid;
                         r.profile_name = name.clone();
                         // LevelLoadingScreen's line: no player name.
@@ -2169,6 +2192,13 @@ impl Game<'_> {
                     }
                 }
                 let dimension_changed = self.dim != Dim::from_id(&p.spawn.dimension);
+                // handleRespawn: determineLevelLoadingReason from whether the
+                // old player was dying and the two dimensions.
+                let died = self.remote.as_ref().is_some_and(|r| r.health.0 <= 0.0);
+                let reason = loading_reason(died, Dim::from_id(&p.spawn.dimension), self.dim);
+                if let Some(r) = self.remote.as_mut() {
+                    r.loading_reason = reason;
+                }
                 self.enter_remote_dimension(&p.spawn, true);
                 if dimension_changed {
                     let (music, _) = self.situational_music();
@@ -7157,8 +7187,19 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         if r.joined {
-            // LevelLoadingScreen: the world's terrain comes in.
-            horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+            // LevelLoadingScreen.extractBackground by its reason, then the
+            // text; a server sends no chunk map or progress.
+            use horizon_client::level_loading::Reason;
+            match r.loading_reason {
+                Reason::Other => {
+                    horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false)
+                }
+                Reason::NetherPortal => {
+                    let overlay = hud_overlays::portal_overlay(w as i32, h as i32, 1.0);
+                    hud_layout::paint(batch, atlas, &[overlay]);
+                }
+                Reason::EndPortal => batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255)),
+            }
             horizon_client::level_loading::draw(batch, atlas, None, None);
             return true;
         }
@@ -7171,6 +7212,14 @@ impl Game<'_> {
     /// `LevelLoadingScreen`, over the panorama with its blur.
     pub(super) fn remote_loading(&self) -> bool {
         self.remote.is_some() && self.player.is_none()
+    }
+    /// The loading screen of `Reason.OTHER` (and `ConnectScreen`) draws the
+    /// panorama and blurs it; the portal reasons draw their own background.
+    pub(super) fn remote_loading_panorama(&self) -> bool {
+        self.remote_loading()
+            && self.remote.as_ref().is_some_and(|r| {
+                !r.joined || r.loading_reason == horizon_client::level_loading::Reason::Other
+            })
     }
     /// `ConnectScreen`'s Cancel: a server's (single player's server isn't
     /// joined through `ConnectScreen`), until the login is done.

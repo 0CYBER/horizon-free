@@ -12806,7 +12806,7 @@ impl Game<'_> {
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
             || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other)
-            || self.remote_loading();
+            || self.remote_loading_panorama();
         let (yaw, pitch) = if title {
             // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
             (
@@ -13107,7 +13107,7 @@ impl Game<'_> {
     /// HUD, when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other)
-            || self.remote_loading();
+            || self.remote_loading_panorama();
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
                 matches!(self.screen, Screen::Options | Screen::Win)
