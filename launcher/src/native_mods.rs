@@ -58,7 +58,7 @@ pub fn is_native(version: &str) -> bool {
     version.starts_with(PREFIX)
 }
 
-fn root() -> PathBuf {
+pub(crate) fn root() -> PathBuf {
     backend::data_dir().join("native")
 }
 
@@ -160,7 +160,7 @@ pub fn bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
     Ok(found)
 }
 
-fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
+pub(crate) fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
     if dir.join(MANIFEST).is_file() {
         return bundle(dir, None).map(Some);
     }
@@ -536,9 +536,21 @@ fn source(revision: &str) -> Result<PathBuf, String> {
         backend::REPO
     );
     let partial = root().join("source").join(format!(".{revision}.partial"));
+    let top = unpack_archive(&archive, &partial, u64::MAX)?;
+    fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(&dir);
+    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
-    fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
-    let reader = flate2::read::GzDecoder::new(backend::get(&archive)?.into_reader());
+    Ok(dir)
+}
+
+/// GitHub's archive (`.tar.gz`) at `url`, unpacked into the fresh folder `partial`: the archive's
+/// one top folder, which is returned. Links are left out; at most `limit` bytes are unpacked.
+pub(crate) fn unpack_archive(url: &str, partial: &Path, limit: u64) -> Result<PathBuf, String> {
+    use std::io::Read;
+    let _ = fs::remove_dir_all(partial);
+    fs::create_dir_all(partial).map_err(|e| e.to_string())?;
+    let reader = flate2::read::GzDecoder::new(backend::get(url)?.into_reader()).take(limit);
     let mut tar = tar::Archive::new(reader);
     for entry in tar.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| format!("Download interrupted: {e}"))?;
@@ -547,21 +559,16 @@ fn source(revision: &str) -> Result<PathBuf, String> {
             continue;
         }
         entry
-            .unpack_in(&partial)
+            .unpack_in(partial)
             .map_err(|e| format!("Could not unpack the source: {e}"))?;
     }
-    // The archive's one top folder (horizon-<commit>/) is the source's root.
-    let top = fs::read_dir(&partial)
+    // The archive's one top folder (<repo>-<commit>/) is the source's root.
+    fs::read_dir(partial)
         .map_err(|e| e.to_string())?
         .flatten()
         .map(|e| e.path())
         .find(|p| p.is_dir())
-        .ok_or("The source archive is empty.")?;
-    fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&dir);
-    fs::rename(&top, &dir).map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&partial);
-    Ok(dir)
+        .ok_or_else(|| "The source archive is empty.".into())
 }
 
 /// Makes `to` hold `from`'s files, writing only those that changed, so Cargo, which goes by file
