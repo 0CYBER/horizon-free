@@ -67,6 +67,9 @@ impl Game<'_> {
     /// own handling. Returns true when it is used up (a debug combination,
     /// F3 itself, F3+Escape).
     pub(super) fn debug_key(&mut self, key: KeyCode, action: KeyAction) -> bool {
+        if self.title.is_some() {
+            return false;
+        }
         let Some(name) = keybinds::key_name(key) else {
             return false;
         };
@@ -275,8 +278,8 @@ impl Game<'_> {
     /// entries, over everything the frame drew (menus too), at the debug GUI
     /// scale. F1 hides it unless a screen is open.
     pub(super) fn draw_debug_overlay(&self, batch: &mut HudBatch, size: [u32; 2]) {
-        let screen_open = self.title.is_some() || self.screen != Screen::Playing;
-        if !self.debug || (self.ui.hide_gui && !screen_open) {
+        let screen_open = self.screen != Screen::Playing;
+        if self.title.is_some() || !self.debug || (self.ui.hide_gui && !screen_open) {
             return;
         }
         let framebuffer = size.map(|v| v as i32);

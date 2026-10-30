@@ -101,7 +101,7 @@ SulfurCube.requiresCustomPersistence	port	crates/horizon-client/src/mobs/ai.rs::
 SulfurCube.hurtServer	port	crates/horizon-client/src/mobs/sulfur_cube.rs::accepts_damage	fire or explosion primes; a held block shrugs off blows and only knocks back
 SulfurCube.matchingArchetypes	port	crates/horizon-client/src/mobs/sulfur_cube.rs::archetype_of	one archetype per item, not a list
 SulfurCube.tickFuse	inline	crates/horizon-client/src/mobs/sulfur_cube.rs::ai_step	gap: minor: fuse countdown and blast, but no leash drop or on-death effects at the blast
-SulfurCube.primeWhenOnPoweredPosition	missing		player: an explosive cube sitting on a powered block does not prime itself; no signal check here
+SulfurCube.primeWhenOnPoweredPosition	port	crates/horizon-client/src/game/sulfur_cubes.rs::Game::sulfur_cube_power_priming	lit when the best neighbour signal at the cube is not 0; no block has an own signal
 SulfurCube.customServerAiStep	port	crates/horizon-client/src/mobs/sulfur_cube.rs::ai_step	timers, buoyancy, facing, growing up and player push
 SulfurCube.collectEquipmentChanges	inline	crates/horizon-client/src/mobs/sulfur_cube.rs::ai_step	goals are disabled while a block is held; archetype effects are read on demand, not applied as modifiers
 SulfurCube.equipItem	port	crates/horizon-client/src/game/sulfur_cubes.rs::Game::interact_sulfur_cube	swallows the item; the old block is ejected

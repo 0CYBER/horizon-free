@@ -855,6 +855,7 @@ impl GraphicsUi {
                             value,
                             hover || self.dragging == Some(item),
                             live,
+                            self.dragging == Some(item),
                         ),
                         None => STYLE.button(
                             batch,

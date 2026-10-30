@@ -287,7 +287,7 @@ pub struct Book {
     /// Item id -> registry position, to order ingredient choices.
     pub order: HashMap<String, usize>,
 }
-fn crafting_category(name: &str) -> Category {
+pub(crate) fn crafting_category(name: &str) -> Category {
     match name {
         "building" => Category::CraftingBuilding,
         "redstone" => Category::CraftingRedstone,
@@ -647,7 +647,7 @@ struct Known {
     result: Option<String>,
 }
 /// `RecipeDisplay.craftingStation` of a recipe type.
-fn crafting_station(kind: &str) -> &'static str {
+pub(crate) fn crafting_station(kind: &str) -> &'static str {
     match kind {
         "minecraft:smelting" => "minecraft:furnace",
         "minecraft:blasting" => "minecraft:blast_furnace",

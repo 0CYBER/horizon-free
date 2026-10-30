@@ -24,7 +24,11 @@ use horizon_world::{
     registry::BlockStateId,
     world_ray::{RayBlockMode, RayFluidMode, RayWorld, clip_world},
 };
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 /// `Level.clip` with `ClipContext.Block.VISUAL` and no fluids:
 /// `BlockBehaviour.getVisualShape` is the collision shape except for the
@@ -137,8 +141,25 @@ fn own_invisible(effects: &horizon_client::effects::PlayerEffects, shared_flag: 
 fn body_visible(invisible: bool, team: Option<&horizon_client::scoreboard::Team>) -> bool {
     !horizon_client::scoreboard::invisible_to(team, team, false, invisible)
 }
-/// The player's model type (`PlayerModel` with the default skin).
+/// The player's model type for each resources root it was asked for.
+static PLAYER_TYPES: Mutex<Vec<(PathBuf, Option<Arc<MobType>>)>> = Mutex::new(Vec::new());
+
+/// The player's model type (`PlayerModel` with the default skin), read once
+/// per resources root: `entity-models.json` doesn't change while the game
+/// runs, and parsing it again held every world join for about 100 ms. The
+/// world resources read it as the game starts (`load_world_rest`), so a join
+/// finds it; a resource pack change's new root is read once.
 pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
+    let mut cache = PLAYER_TYPES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, kind)) = cache.iter().find(|(cached, _)| cached == root) {
+        return kind.clone();
+    }
+    let kind = load_player_type(root);
+    cache.push((root.to_owned(), kind.clone()));
+    kind
+}
+/// `player_type` from the document: the model and its layers from one parse.
+fn load_player_type(root: &Path) -> Option<Arc<MobType>> {
     let models = horizon_client::mobs::EntityModelDocument::load(root).ok()?;
     models.model("minecraft:player#main").map(|model| {
         Arc::new(MobType {
@@ -361,7 +382,8 @@ impl Game<'_> {
             m.head_pitch = self.pitch;
             self.player_model = Some(m);
         }
-        let crouching = p.pose == Pose::Crouching;
+        let pose = p.pose;
+        let crouching = pose == Pose::Crouching;
         let position = p.position;
         let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
         let spinning = p.auto_spin_attack_ticks > 0;
@@ -457,6 +479,8 @@ impl Game<'_> {
         // The worn stacks, for the elytra's glint (`WingsLayer`).
         m.extra.armor = armor;
         m.extra.crouching = crouching;
+        // Guests and server players take their pose from DATA_POSE, not here.
+        m.extra.avatar_pose = pose;
         m.extra.passenger = riding;
         m.velocity = velocity;
         m.extra.fall_flying = fall_flying;
@@ -593,6 +617,14 @@ impl Game<'_> {
         if !self.own_invisible() {
             self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
         }
+        self.player_ears_geometry(
+            m,
+            &self.own_profile_name(),
+            camera,
+            alpha as f32,
+            packed,
+            out,
+        );
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
@@ -684,6 +716,14 @@ impl Game<'_> {
         if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
+        self.player_ears_geometry(
+            &m,
+            &self.own_profile_name(),
+            camera,
+            1.0,
+            240 | 240 << 8,
+            &mut verts,
+        );
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
@@ -867,6 +907,40 @@ impl Game<'_> {
             out,
         );
     }
+    /// `Deadmau5EarsLayer` (`AbstractClientPlayer.showExtraEars`): the ears
+    /// of a player whose profile name is `deadmau5`, in the player's skin.
+    pub(super) fn player_ears_geometry(
+        &self,
+        m: &Mob,
+        name: &str,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        if name != "deadmau5" {
+            return;
+        }
+        let sprites = &self.gui.atlas.sprites;
+        // The body's own fallback: a skin with no sprite draws the default.
+        let Some(rect) = m
+            .skin
+            .as_deref()
+            .and_then(|s| sprites.get(s))
+            .or_else(|| sprites.get(&m.kind.texture))
+        else {
+            return;
+        };
+        horizon_client::mobs::render::ears(
+            m,
+            partial,
+            horizon_client::mobs::render::base_transform(m, partial, camera),
+            [rect.u0, rect.v0, rect.u1, rect.v1],
+            light,
+            self.res.mob_data(),
+            out,
+        );
+    }
     /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
     /// player (`SpinAttackEffectModel.setupAnim`).
     pub(super) fn spin_attack_geometry(
@@ -910,6 +984,18 @@ impl Game<'_> {
     }
 }
 
+/// `Lighting.Entry.ENTITY_IN_UI` through the entity shader's
+/// `minecraft_mix_light`: the two inventory lights, (0.2, -1, 1) and
+/// (-0.2, -1, 0), with the 0.6 light power and 0.4 ambient. `normal` is the
+/// face's outward normal in the preview's screen space (x right, y down, z
+/// towards the viewer), where a face that looks up has a negative y.
+fn entity_in_ui_shade(normal: glam::Vec3) -> f32 {
+    const LIGHT_0: glam::Vec3 = glam::Vec3::new(0.2, -1.0, 1.0);
+    const LIGHT_1: glam::Vec3 = glam::Vec3::new(-0.2, -1.0, 0.0);
+    let light = LIGHT_0.normalize().dot(normal).max(0.0) + LIGHT_1.normalize().dot(normal).max(0.0);
+    (light * 0.6 + 0.4).min(1.0)
+}
+
 fn player_preview_quads(
     mut verts: Vec<horizon_client::mesher::Vertex>,
     gui: glam::Mat4,
@@ -939,11 +1025,10 @@ fn player_preview_quads(
             continue;
         }
         let n = n.normalize_or_zero();
-        // Lighting.Entry.ENTITY_IN_UI, roughly: lit from the front and above.
         let shade = if index * 4 >= flame_start {
             1.0
         } else {
-            (0.55 + 0.45 * -n.z - 0.15 * n.y).clamp(0.4, 1.0)
+            entity_in_ui_shade(-n)
         };
         let c = q[0].color;
         let ch = |s: u32| ((((c >> s) & 255) as f32 * shade) as u32) << s;
@@ -1116,6 +1201,19 @@ mod preview_tests {
         assert!(shield[0].depth < arm[0].depth);
         assert!(shield[2].depth > arm[2].depth);
         assert_eq!(batch.runs(), vec![(0..12, Blend::Depth([1, 0, 1, 1]))]);
+    }
+
+    #[test]
+    fn the_inventory_preview_is_lit_as_entity_in_ui() {
+        // A face looking at the viewer, up, down, to the right and to the left.
+        let shade = |x, y, z| entity_in_ui_shade(glam::Vec3::new(x, y, z));
+        assert!((shade(0.0, 0.0, 1.0) - 0.8195).abs() < 1e-3);
+        assert_eq!(shade(0.0, -1.0, 0.0), 1.0);
+        assert!((shade(0.0, 1.0, 0.0) - 0.4).abs() < 1e-6);
+        assert!((shade(1.0, 0.0, 0.0) - 0.4839).abs() < 1e-3);
+        assert!((shade(-1.0, 0.0, 0.0) - 0.5176).abs() < 1e-3);
+        // Away from the viewer: only the ambient light.
+        assert!((shade(0.0, 0.0, -1.0) - 0.4).abs() < 1e-6);
     }
 
     #[test]

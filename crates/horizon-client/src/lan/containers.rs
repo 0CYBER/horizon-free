@@ -2,9 +2,10 @@
 //! level events, animations and block containers with their clicks.
 use super::{
     hub::Hub,
-    menu::{self, Menu, Rules, Slots, View},
+    menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
 };
 use crate::{containers::BlockEntity, items::ItemStack, world::World};
+use horizon_core::random::RandomSource;
 use horizon_protocol::{
     item::Hashed,
     packets::play::{self, Clientbound as C},
@@ -69,7 +70,9 @@ impl Hub {
         source: i32,
         except: Option<u32>,
     ) {
-        let packet = self.sound_packet(name, at, volume, pitch, source, self.ticks as i64);
+        // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
+        let seed = next_sound_seed(&mut *self.sound_seeds.lock().unwrap());
+        let packet = self.sound_packet(name, at, volume, pitch, source, seed);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
 
@@ -241,8 +244,79 @@ impl Hub {
             sent: Vec::new(),
             drag: None,
             sent_data: Vec::new(),
+            hidden: Vec::new(),
         });
         self.send_menu_content(i, items);
+    }
+
+    /// The open menu of `conn` has no `hidden` container slots: a mod's screen
+    /// does not show them, so a click or a shift-click never reaches them.
+    pub fn hide_menu_slots(&mut self, conn: u32, hidden: Vec<usize>) {
+        if let Some(m) = self
+            .guests
+            .iter_mut()
+            .find(|g| g.conn == conn)
+            .and_then(|g| g.menu.as_mut())
+        {
+            m.hidden = hidden;
+        }
+    }
+
+    /// Opens a native mod's menu of `rows` rows (1 to 6, a chest's
+    /// `generic_9xN`) showing `items` (padded to the rows' slots), over the
+    /// guest's inventory: no click moves anything, each is a
+    /// [`NativeMenuEvent`]. The window's id, or None for an unknown guest.
+    pub fn open_native_menu(
+        &mut self,
+        conn: u32,
+        rows: u8,
+        title: Tag,
+        mut items: Vec<Option<ItemStack>>,
+    ) -> Option<i32> {
+        let rows = rows.clamp(1, 6);
+        let kind = self
+            .sync
+            .builtin
+            .get("minecraft:menu")
+            .and_then(|m| m.id(&format!("minecraft:generic_9x{rows}")))?;
+        let i = self.guests.iter().position(|g| g.conn == conn)?;
+        self.close_container_at(i);
+        let size = usize::from(rows) * 9;
+        items.resize(size, None);
+        let g = &mut self.guests[i];
+        g.native_menu = items.clone();
+        g.next_window = g.next_window % 100 + 1;
+        let window = g.next_window;
+        g.send(&C::OpenScreen(play::OpenScreen {
+            container: window,
+            menu: kind,
+            title,
+        }));
+        g.menu = Some(Menu {
+            window,
+            kind,
+            pos: None,
+            slots: Slots::Native,
+            size,
+            state: 0,
+            sent: Vec::new(),
+            drag: None,
+            sent_data: Vec::new(),
+            hidden: Vec::new(),
+        });
+        self.send_menu_content(i, items);
+        Some(window)
+    }
+
+    /// Replaces what a guest's open native menu shows; the changed slots go
+    /// out with the tick's container sync.
+    pub fn set_native_menu(&mut self, conn: u32, mut items: Vec<Option<ItemStack>>) {
+        if let Some(g) = self.guest_mut(conn)
+            && let Some(m) = g.menu.as_ref().filter(|m| m.slots == Slots::Native)
+        {
+            items.resize(m.size, None);
+            g.native_menu = items;
+        }
     }
 
     /// Open a trading window for a guest (`Merchant.openTradingScreen`):
@@ -336,6 +410,12 @@ impl Hub {
             g.send(&C::ContainerClose(play::ContainerClose {
                 container: menu.window,
             }));
+            if menu.slots == Slots::Native {
+                g.native_menu.clear();
+                let (uuid, window) = (g.uuid, menu.window);
+                self.native_menu_events
+                    .push(NativeMenuEvent::Closed { uuid, window });
+            }
         }
     }
 
@@ -354,7 +434,13 @@ impl Hub {
         if let Some(g) = self.guest_mut(conn)
             && g.menu.as_ref().is_some_and(|m| m.window == window)
         {
-            g.menu = None;
+            let native = g.menu.take().is_some_and(|m| m.slots == Slots::Native);
+            if native {
+                g.native_menu.clear();
+                let uuid = g.uuid;
+                self.native_menu_events
+                    .push(NativeMenuEvent::Closed { uuid, window });
+            }
         }
     }
 
@@ -406,6 +492,19 @@ impl Hub {
             self.resend_menu(conn, p.container, world);
             return Vec::new();
         }
+        // A native mod's menu: the click is the mod's to answer, and the
+        // whole menu and the cursor go back as they were.
+        if in_menu && self.guests[i].menu.as_ref().map(|m| m.slots) == Some(Slots::Native) {
+            self.native_menu_events.push(NativeMenuEvent::Click {
+                uuid: self.guests[i].uuid,
+                window: p.container,
+                slot: i32::from(p.slot),
+                button: i32::from(p.button),
+                mode: p.input,
+            });
+            self.resend_menu(conn, p.container, world);
+            return Vec::new();
+        }
         // A menu that is no longer valid takes no clicks.
         if let Some(m) = self.guests[i].menu.as_ref().filter(|_| in_menu)
             && !m.slots.still_valid(world, &self.guests[i], m.pos)
@@ -426,6 +525,11 @@ impl Hub {
         } else {
             self.guests[i].drag.take()
         };
+        let hidden = self.guests[i]
+            .menu
+            .as_ref()
+            .filter(|_| in_menu)
+            .map_or_else(Vec::new, |m| m.hidden.clone());
         let guest = &mut self.guests[i];
         let mut items = source.and_then(|s| s.read(world, guest));
         if in_menu && items.is_none() {
@@ -435,6 +539,7 @@ impl Hub {
             guest,
             container: items.as_deref_mut(),
             shulker,
+            hidden: &hidden,
         };
         let (drops, changed) = menu::click(
             &mut view,
@@ -657,6 +762,8 @@ impl Hub {
                 .chain([&c.triggered])
                 .map(|&d| i32::from(d))
                 .collect(),
+            // A mod's menu: the data slots its tick set.
+            Some(BlockEntity::Mod(m)) if !m.data.is_empty() => m.data.clone(),
             _ => return,
         }
         .into_iter()
@@ -732,4 +839,32 @@ impl Hub {
 /// Inventory index of the n-th player slot of a container menu (27 main, then the hotbar).
 fn player_slot(n: usize) -> usize {
     if n < 27 { 9 + n } else { n - 27 }
+}
+
+/// `Level.soundSeedGenerator.nextLong` for `ClientboundSoundPacket.seed`.
+fn next_sound_seed(g: &mut impl RandomSource) -> i64 {
+    g.next_long()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_sound_seed;
+    use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn two_sounds_in_one_tick_get_different_seeds() {
+        let mut g = LegacyRandom::new(0);
+        let a = next_sound_seed(&mut g);
+        let b = next_sound_seed(&mut g);
+        assert_ne!(a, b);
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+    }
+
+    #[test]
+    fn the_tick_is_not_the_sound_seed() {
+        let ticks = 12i64;
+        let mut g = LegacyRandom::new(0);
+        assert_ne!(next_sound_seed(&mut g), ticks);
+    }
 }

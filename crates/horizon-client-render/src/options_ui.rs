@@ -141,8 +141,7 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the quit keys and the mouse don't read them yet.
-                | Opt::QuitShortcuts
+                // Saved, but the mouse doesn't read it yet.
                 | Opt::CtrlClickEmulatesRightClick
         )
     }
@@ -2551,6 +2550,7 @@ impl OptionsUi {
                         shown,
                         hover || dragging,
                         true,
+                        dragging,
                     );
                 }
                 WKind::Text {
@@ -3433,6 +3433,17 @@ mod tests {
     }
 
     #[test]
+    fn quit_shortcuts_option_can_be_switched() {
+        assert!(Opt::QuitShortcuts.available());
+        let s = Settings::default();
+        assert_eq!(Opt::QuitShortcuts.caption(), "options.quitShortcuts");
+        assert_eq!(
+            Opt::QuitShortcuts.tooltip_key(&s),
+            "options.quitShortcuts.tooltip"
+        );
+    }
+
+    #[test]
     fn operator_items_tab_option_can_be_switched() {
         // The creative screen reads it (CreativeModeInventoryScreen.hasPermissions).
         assert!(Opt::OperatorItemsTab.available());
@@ -3670,6 +3681,57 @@ mod tests {
         // Its labels were made with the list, maybe in another language.
         assert_eq!(events.last(), Some(&Event::NativeSettings(0)));
         assert_eq!(ui.page(), Page::NativeMod(0));
+    }
+
+    #[test]
+    fn a_native_mods_key_shows_and_keeps_the_key_pressed() {
+        // #3539: Zoom's key set to R showed another key.
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "zoom".into(),
+            title: "Zoom 2.0.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                keys: vec![["zoom".into(), "Zoom key".into(), "key.keyboard.z".into()]],
+                buttons: Vec::new(),
+            }),
+        });
+        ui.show(Page::NativeMod(0));
+        let key_label = |ui: &mut OptionsUi, s: &Settings| {
+            let (widgets, ..) = ui.layout(s, size.0, size.1);
+            widgets.into_iter().find_map(|w| match w.kind {
+                WKind::Button {
+                    label,
+                    act: Act::NativeKey(0, 0),
+                    ..
+                } => Some((label.plain(), w.x, w.y)),
+                _ => None,
+            })
+        };
+        let (label, x, y) = key_label(&mut ui, &s).expect("the key's row");
+        assert_eq!(label, "Z");
+        ui.click(
+            &mut s,
+            &atlas,
+            x + 1.0,
+            y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyR, Some("r")),
+            vec![Event::Changed]
+        );
+        assert_eq!(key_label(&mut ui, &s).unwrap().0, "R");
+        let saved = crate::mod_list::ModList::parse(&s.mods.serialize());
+        assert_eq!(saved.keys_of("zoom"), vec![("zoom", "key.keyboard.r")]);
     }
 
     #[test]
