@@ -624,6 +624,9 @@ impl Game<'_> {
         for c in self.crystals.iter().filter(|c| c.id != 0) {
             let mut e = state(c.id, "minecraft:end_crystal", at(c.position), 0.0, false);
             // EndCrystal.DATA_BEAM_TARGET and DATA_SHOW_BOTTOM (true by default).
+            // The beam's default is listed so that clearing it (the respawn
+            // sequence ending) is sent to the guests instead of leaving the old beam.
+            e.defaults = vec![(8, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(None))];
             if c.beam.is_some() {
                 e.meta
                     .push((8, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(c.beam)));
