@@ -22,8 +22,20 @@ fn abgr(r: f32, g: f32, b: f32) -> u32 {
     let c = |v: f32| (v * 255.0) as u32 & 255;
     0xFF00_0000 | c(b) << 16 | c(g) << 8 | c(r)
 }
+/// One leashed entity's rope, as `EntityRenderer.extractRenderState` reads it.
+struct Rope {
+    holder: Holder,
+    /// `getPosition(partialTicks)`.
+    here: glam::DVec3,
+    /// `getPreciseBodyRotation` in radians.
+    body: f64,
+    /// `getLeashOffset`.
+    offset: [f64; 3],
+    /// `getQuadLeashOffsets`, when the entity supports a quad lead.
+    quad: Option<[[f64; 3]; 4]>,
+}
 impl Game<'_> {
-    fn lead_sound(&mut self, sound: &str, at: [f64; 3]) {
+    pub(super) fn lead_sound(&mut self, sound: &str, at: [f64; 3]) {
         self.audio
             .play(&format!("minecraft:item.lead.{sound}"), Some(at), 1.0, 1.0);
     }
@@ -44,7 +56,7 @@ impl Game<'_> {
         );
         mine.distance(center) <= leash::SNAP
     }
-    fn player_center(&self) -> glam::DVec3 {
+    pub(super) fn player_center(&self) -> glam::DVec3 {
         self.player.as_ref().map_or(glam::DVec3::ZERO, |p| {
             glam::DVec3::new(
                 p.position.x,
@@ -67,7 +79,7 @@ impl Game<'_> {
     }
     /// `Entity.spawnAtLocation(level, Items.LEAD)`: the item entity draws its
     /// motion from its own random, not the level's.
-    fn drop_lead_item(&mut self, at: [f64; 3]) {
+    pub(super) fn drop_lead_item(&mut self, at: [f64; 3]) {
         let v = super::dispenser::new_item_motion();
         self.spawn_item(ItemStack::new("minecraft:lead", 1), at, v, 10);
     }
@@ -164,6 +176,8 @@ impl Game<'_> {
                     any = true;
                 }
             }
+            // The boats on the player's lead too (game/boat_leads.rs).
+            any |= self.tie_player_boats(center, Holder::Mob(id));
             if any {
                 self.lead_sound("tied", at);
                 return true;
@@ -185,6 +199,9 @@ impl Game<'_> {
                 self.break_leash(o, true, false);
                 dropped = true;
             }
+            let boats = self.boats_on(Holder::Mob(id));
+            dropped |= !boats.is_empty();
+            self.drop_boat_leashes(&boats);
             if dropped {
                 self.audio
                     .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
@@ -245,28 +262,35 @@ impl Game<'_> {
         let existing: Vec<usize> = (0..self.mobs.len())
             .filter(|&i| self.mobs[i].extra.leash == Some(Holder::Knot(knot_pos)))
             .collect();
+        let existing_boats = self.boats_on(Holder::Knot(knot_pos));
         let held_item = self.held().map(|s| s.item.to_string());
         let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
         // Shears snip every lead on the knot.
-        if held_item.as_deref() == Some("minecraft:shears") && !existing.is_empty() {
+        if held_item.as_deref() == Some("minecraft:shears")
+            && !(existing.is_empty() && existing_boats.is_empty())
+        {
             for i in existing {
                 let id = self.mobs[i].id;
                 self.break_leash(id, true, false);
             }
+            self.drop_boat_leashes(&existing_boats);
             self.audio
                 .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
             self.damage_held_tool();
             return true;
         }
         let in_hand = self.player_leashed(center);
+        let boats_in_hand = self.player_led_boats(center);
         // The knot is only made for the lead item, or when mobs already hang on it.
         if held_item.as_deref() != Some("minecraft:lead")
             && existing.is_empty()
+            && existing_boats.is_empty()
             && in_hand.is_empty()
+            && boats_in_hand.is_empty()
         {
             return false;
         }
-        let mut attached = false;
+        let mut attached = self.tie_player_boats(center, Holder::Knot(knot_pos));
         for j in in_hand {
             if self.can_attach_lead(j, center) {
                 self.mobs[j].extra.leash = Some(Holder::Knot(knot_pos));
@@ -281,6 +305,7 @@ impl Game<'_> {
                     attached = true;
                 }
             }
+            attached |= self.take_knot_boats(knot_pos);
         }
         if attached {
             self.lead_sound("tied", at);
@@ -306,48 +331,71 @@ impl Game<'_> {
             )
         };
         let mut knots: Vec<[i32; 3]> = Vec::new();
-        for m in &self.mobs {
-            let Some(holder) = m.extra.leash else {
-                continue;
-            };
-            let body = f64::from(
-                m.previous_body_yaw
-                    + horizon_client::mobs::living::wrap(m.body_yaw - m.previous_body_yaw)
-                        * alpha as f32,
+        // EntityRenderer.extractRenderState: a leashed mob or boat (an
+        // `AbstractBoat` is `Leashable` too) with where it hangs.
+        let body_of = |previous: f32, current: f32| {
+            f64::from(
+                previous + horizon_client::mobs::living::wrap(current - previous) * alpha as f32,
             )
-            .to_radians();
-            // EntityRenderer.extractRenderState: one lead from the mob's leash
-            // offset to the holder's rope hold position, or, when the holder
-            // is a happy ghast and the mob supports a quad lead, four from
-            // `getQuadLeashOffsets` to `getQuadLeashHolderOffsets`.
+            .to_radians()
+        };
+        let mut ropes: Vec<Rope> = Vec::new();
+        for m in &self.mobs {
+            if let Some(holder) = m.extra.leash {
+                ropes.push(Rope {
+                    holder,
+                    here: lerp3(m.previous, m.position),
+                    body: body_of(m.previous_body_yaw, m.body_yaw),
+                    offset: leash::leash_offset(m),
+                    quad: leash::supports_quad_leash(m.species())
+                        .then(|| leash::quad_leash_offsets(m)),
+                });
+            }
+        }
+        for b in &self.boats {
+            if let Some(holder) = b.leash {
+                ropes.push(Rope {
+                    holder,
+                    here: lerp3(b.previous, b.position),
+                    // Entity.getPreciseBodyRotation: the boat's yaw.
+                    body: body_of(b.previous_yaw, b.yaw),
+                    offset: leash::boat_leash_offset(),
+                    quad: Some(leash::boat_quad_leash_offsets()),
+                });
+            }
+        }
+        for rope in ropes {
+            let Rope {
+                holder,
+                here,
+                body,
+                offset,
+                quad,
+            } = rope;
+            // One lead from the leash offset to the holder's rope hold
+            // position, or, when the holder is a happy ghast and the leashee
+            // supports a quad lead, four from `getQuadLeashOffsets` to
+            // `getQuadLeashHolderOffsets`.
             let mut ends: Vec<(glam::DVec3, glam::DVec3, bool)> = Vec::new();
-            let quad = match holder {
-                Holder::Mob(id) if leash::supports_quad_leash(m.species()) => self
+            let quad = match (holder, quad) {
+                (Holder::Mob(id), Some(offsets)) => self
                     .mobs
                     .iter()
                     .find(|o| o.id == id)
-                    .and_then(|o| leash::quad_holder_offsets(o).map(|h| (o, h))),
+                    .and_then(|o| leash::quad_holder_offsets(o).map(|h| (o, h, offsets))),
                 _ => None,
             };
-            if let Some((roper, holder_points)) = quad {
-                let roper_body = f64::from(
-                    roper.previous_body_yaw
-                        + horizon_client::mobs::living::wrap(
-                            roper.body_yaw - roper.previous_body_yaw,
-                        ) * alpha as f32,
-                )
-                .to_radians();
+            if let Some((roper, holder_points, own)) = quad {
+                let roper_body = body_of(roper.previous_body_yaw, roper.body_yaw);
                 let holder_pos = lerp3(roper.previous, roper.position);
-                let here = lerp3(m.previous, m.position);
-                for (mine, theirs) in leash::quad_leash_offsets(m).iter().zip(holder_points) {
+                for (mine, theirs) in own.iter().zip(holder_points) {
                     let start = here + rot_y(glam::DVec3::from_array(*mine), -body);
                     let end = holder_pos + rot_y(glam::DVec3::from_array(theirs), -roper_body);
                     ends.push((start, end, false));
                 }
             } else {
-                let offset = leash::leash_offset(m);
                 let offset = rot_y(glam::DVec3::from_array(offset), -body);
-                let start = lerp3(m.previous, m.position) + offset;
+                let start = here + offset;
                 let end = match holder {
                     Holder::Knot(p) => {
                         if !knots.contains(&p) {
