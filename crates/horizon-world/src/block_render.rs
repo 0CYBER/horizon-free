@@ -55,6 +55,10 @@ impl FaceVisibility {
             cache: HashMap::new(),
         }
     }
+    /// [`Self::empty`]: no state is known.
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty()
+    }
     pub fn new(
         occlusion: &CachedCollisionRegistry<'_>,
         definitions: &BTreeMap<String, RenderDefinition>,
@@ -233,6 +237,7 @@ mod tests {
     #[test]
     fn empty_visibility_knows_no_state() {
         let mut visibility = FaceVisibility::empty();
+        assert!(visibility.is_empty());
         let stone = BlockStateId(1);
         assert!(visibility.occlusion_face(stone, Direction::Up).is_none());
         assert!(
