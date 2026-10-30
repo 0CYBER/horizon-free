@@ -1361,6 +1361,31 @@ impl Game<'_> {
                 } => {
                     self.mob_hits_mob(target, amount, source);
                 }
+                MobEvent::CubeHurtMob {
+                    cube,
+                    target,
+                    amount,
+                    source,
+                } => {
+                    // AbstractCubeMob.dealDamage: the attack sound (and its
+                    // two pitch draws, made even for a silent cube, whose
+                    // Entity.playSound is then skipped) only follows a hit
+                    // that landed.
+                    if self.mob_hits_mob(target, amount, source)
+                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == cube)
+                    {
+                        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+                        let at = m.center();
+                        if !m.silent {
+                            self.handle_mob_events(vec![MobEvent::Sound(
+                                "entity.slime.attack",
+                                at,
+                                1.0,
+                                pitch,
+                            )])?;
+                        }
+                    }
+                }
                 MobEvent::SonicBoom {
                     target,
                     attacker,

@@ -1303,6 +1303,15 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `AbstractCubeMob.dealDamage` on a mob (an iron golem it touches): the
+    /// hit, then, only when `hurtServer` let it land, the cube's
+    /// `entity.slime.attack` with its pitch drawn from the cube's random.
+    CubeHurtMob {
+        cube: u32,
+        target: u32,
+        amount: f32,
+        source: Damage,
+    },
     /// `LivingEntity.stabAttack`'s `target.stopRiding()`: a spear knocks the
     /// target off its mount.
     StabDismount {
