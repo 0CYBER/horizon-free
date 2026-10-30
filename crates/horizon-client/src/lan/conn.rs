@@ -1337,22 +1337,16 @@ fn write_loop(
             Err(RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
-        if let Some((id, at)) = sent_at {
-            if alive.load(Ordering::Relaxed) == id {
-                let ms = i32::try_from(at.elapsed().as_millis()).unwrap_or(i32::MAX);
-                let old = latency.load(Ordering::Relaxed);
-                latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
-                sent_at = None;
-            } else if at.elapsed() >= KEEP_ALIVE_EVERY {
-                let _ = writer.send(
-                    &play::Clientbound::Disconnect(cfg::Disconnect {
-                        reason: translatable("disconnect.timeout", &[]),
-                    })
-                    .encode(),
-                );
-                break;
-            }
+        if let Some((id, at)) = sent_at
+            && alive.load(Ordering::Relaxed) == id
+        {
+            let ms = i32::try_from(at.elapsed().as_millis()).unwrap_or(i32::MAX);
+            let old = latency.load(Ordering::Relaxed);
+            latency.store((old * 3 + ms) / 4, Ordering::Relaxed);
+            sent_at = None;
         }
+        // The game thread times a client out ([`PlayerSender::timed_out`]):
+        // this thread may be blocked on a client that stopped reading.
         if sent_at.is_none() && now >= next {
             let id = i64::try_from(start.elapsed().as_millis()).unwrap_or(0);
             if writer

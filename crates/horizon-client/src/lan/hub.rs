@@ -1192,10 +1192,16 @@ impl Hub {
                 }
             }
         }
-        // keepConnectionAlive's timeout, checked once a second here as well:
-        // a client that stops reading blocks its writer thread, which sends
-        // the keep-alives and checks them, and would hold its slot forever.
+        // keepConnectionAlive's timeout, checked once a second here, not on
+        // the writer thread: a client that stops reading blocks that thread
+        // and would hold its slot forever. Kicked, it gets the reason; still
+        // here a second later, its connection is closed under the writer.
         if self.ticks.is_multiple_of(20) {
+            for g in &self.guests {
+                if !g.left_reason.is_empty() && g.sender.timed_out() {
+                    g.sender.close();
+                }
+            }
             let silent: Vec<u32> = self
                 .guests
                 .iter()
@@ -1204,9 +1210,6 @@ impl Hub {
                 .collect();
             for conn in silent {
                 self.kick(conn, translatable("disconnect.timeout", &[]));
-                if let Some(g) = self.guest(conn) {
-                    g.sender.close();
-                }
             }
         }
         events
