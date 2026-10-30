@@ -1293,7 +1293,9 @@ impl Game<'_> {
             .unwrap_or_default();
         if let Some(r) = self.remote.as_mut() {
             let bits = ceil_log2(biomes.len());
-            r.chunk_format = Arc::new(ChunkFormat::new(&r.dimension, biomes, bits));
+            let column = r.chunk_format.layout();
+            r.chunk_format =
+                Arc::new(ChunkFormat::new(&r.dimension, biomes, bits).in_column(column));
             r.registries = registries;
         }
     }
@@ -1303,9 +1305,21 @@ impl Game<'_> {
             return;
         };
         let dimension = r.registries.dimension(spawn.dimension_type);
-        let shape = super::Dim::from_id(&dimension.name).shape();
+        // The server's dimension type gives the level's shape, and its
+        // chunks the shape's column.
+        let shape = horizon_client::chunk::LevelShape::new(
+            dimension.min_y,
+            dimension.height,
+            dimension.logical_height,
+            dimension.has_skylight,
+        )
+        .unwrap_or_else(|_| super::Dim::from_id(&dimension.name).shape());
         let same = r.dimension.name == dimension.name && keep_world;
-        r.chunk_format = Arc::new(r.chunk_format.with_dimension(&dimension));
+        r.chunk_format = Arc::new(
+            r.chunk_format
+                .with_dimension(&dimension)
+                .in_column(shape.column()),
+        );
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.flat = spawn.flat;

@@ -469,6 +469,7 @@ impl Game<'_> {
             view_distance,
             simulation_distance: self.settings.simulation_distance.max(2),
             dimension: self.dim.id().to_owned(),
+            levels: self.level_shapes,
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
             // No player of its own: the hub runs without a host.
@@ -486,6 +487,7 @@ impl Game<'_> {
                 (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
+            levels: self.level_shapes,
             // IntegratedServer.initServer: the MOTD names the owner and the world.
             ..NetConfig::lan(
                 0,
