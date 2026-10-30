@@ -85,6 +85,8 @@ pub enum BlockEntity {
     Mod(Box<ModBlockEntity>),
     /// `PotentSulfurBlockEntity` (`game/potent_sulfur.rs`).
     PotentSulfur(PotentSulfur),
+    /// `StructureBlockEntity` (`structure_block.rs`).
+    StructureBlock(Box<crate::structure_block::StructureBlock>),
 }
 /// A mod's block entity: its type id (`mymod:machine`), its saved
 /// compound without `id`, `x`, `y`, `z` and `Items`, its item slots

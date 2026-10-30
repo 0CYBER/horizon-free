@@ -7204,7 +7204,8 @@ impl Game<'_> {
                 | BlockEntity::Brushable(_)
                 | BlockEntity::Shelf(_)
                 | BlockEntity::Mod(_)
-                | BlockEntity::PotentSulfur(_),
+                | BlockEntity::PotentSulfur(_)
+                | BlockEntity::StructureBlock(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -7498,7 +7499,8 @@ impl Game<'_> {
                     | BlockEntity::Brushable(_)
                     | BlockEntity::Shelf(_)
                     | BlockEntity::Mod(_)
-                    | BlockEntity::PotentSulfur(_),
+                    | BlockEntity::PotentSulfur(_)
+                    | BlockEntity::StructureBlock(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
