@@ -113,6 +113,10 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds `Game::native_config_dir()`: the game's shared `config/` folder beside `options.txt` (beside
+`server.properties` on a dedicated server), where a mod names its own files, made when missing. It takes no `self`, so
+it works from any hook ([mods.md](mods.md#native-mods)). Bundles that use it need `"hooks": 23`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
