@@ -5023,7 +5023,11 @@ impl Game<'_> {
             let outline = self.mob_outline(mob);
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws (and
             // the outline of a glowing mob, LivingEntityRenderer.getRenderType).
-            if mob.invisible && outline.is_none() {
+            // A player keeps its armour, elytra and held items
+            // (`LivingEntityRenderer.submit` skips only the body).
+            let is_player = &*mob.kind.id == "minecraft:player";
+            let layers_only = mob.invisible && outline.is_none() && is_player;
+            if mob.invisible && outline.is_none() && !layers_only {
                 continue;
             }
             // LevelRenderer: the entity the view looks out of is not drawn
@@ -5088,12 +5092,17 @@ impl Game<'_> {
                 );
             }
             // Other players on a server: PlayerRenderer's HumanoidArmorLayer.
-            let armor = if &*mob.kind.id == "minecraft:player" {
+            let armor = if is_player {
                 self.worn_armor_layers(mob)
             } else {
                 Vec::new()
             };
-            horizon_client::mobs::render::render_with(
+            let render = if layers_only {
+                horizon_client::mobs::render::render_layers
+            } else {
+                horizon_client::mobs::render::render_with
+            };
+            render(
                 mob,
                 alpha as f32,
                 camera,
@@ -5103,10 +5112,14 @@ impl Game<'_> {
                 &armor,
                 out,
             );
-            if &*mob.kind.id == "minecraft:player" {
+            if is_player {
                 // PlayerRenderer's CapeLayer, WingsLayer and SpinAttackEffectLayer.
+                // Only the cape hides with the body; WingsLayer and
+                // SpinAttackEffectLayer have no `isInvisible` check.
                 let chest = mob.extra.chest.as_deref();
-                self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
+                if !layers_only {
+                    self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
+                }
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
             }
