@@ -99,6 +99,28 @@ impl Game<'_> {
         }
         true
     }
+    /// Puts the hand's stack (`right`: one of it) in `slot`, as a one-slot
+    /// drag (`QUICK_CRAFT`) and not a click: a server that has the hand empty
+    /// (the stack it was to come from just burned as fuel) ignores a drag, but
+    /// a click would pick up what's in `slot`.
+    fn tweak_put(&mut self, slot: usize, right: bool) -> bool {
+        let kind = i32::from(right) << 2;
+        let ops = [
+            (None, kind, Input::QuickCraft),
+            (Some(slot), kind | 1, Input::QuickCraft),
+            (None, kind | 2, Input::QuickCraft),
+        ];
+        if self.remote.is_some() {
+            return self.remote_menu_ops(&ops);
+        }
+        if !self.menu_ops(&ops) {
+            return false;
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
+        }
+        true
+    }
     /// A press on `slot`: true when the tweaks took it (a right-drag
     /// placing), else vanilla's press runs and the tweaks watch the drag.
     pub(super) fn tweak_press(&mut self, slot: Option<usize>, right: bool, shift: bool) -> bool {
@@ -143,7 +165,7 @@ impl Game<'_> {
         let Some(held) = drag.held.clone() else {
             return;
         };
-        if self.tweak_takes_one(slot, &held) && self.tweak_click(slot, 1, Input::Pickup) {
+        if self.tweak_takes_one(slot, &held) && self.tweak_put(slot, true) {
             drag.held = (held.count > 1).then(|| ItemStack {
                 count: held.count - 1,
                 ..held
@@ -291,15 +313,15 @@ impl Game<'_> {
         if self.tweak_result(slot) {
             if self.tweak_click(slot, 0, Input::Pickup) {
                 for target in landing {
-                    self.tweak_click(target, 0, Input::Pickup);
+                    self.tweak_put(target, false);
                 }
             }
             return;
         }
         if self.tweak_click(slot, 0, Input::Pickup) {
-            self.tweak_click(target, 1, Input::Pickup);
+            self.tweak_put(target, true);
             if stack.count > 1 {
-                self.tweak_click(slot, 0, Input::Pickup);
+                self.tweak_put(slot, false);
             }
         }
     }
@@ -326,9 +348,9 @@ impl Game<'_> {
             return;
         };
         if self.tweak_click(source, 0, Input::Pickup) {
-            self.tweak_click(slot, 1, Input::Pickup);
+            self.tweak_put(slot, true);
             if count > 1 {
-                self.tweak_click(source, 0, Input::Pickup);
+                self.tweak_put(source, false);
             }
         }
     }

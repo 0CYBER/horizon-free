@@ -2183,6 +2183,12 @@ def wheel(game, slot, steps):
     game.wait(4)
 
 
+def wheel_fast(game, slot, steps):
+    """Wheel events with no pause after them."""
+    x, y = slot_point(game, slot)
+    game.raw('scroll-at', f'{x:.1f}', f'{y:.1f}', steps)
+
+
 def set_mouse_tweaks(game, on):
     """The Extras page's switch, as a player flips it."""
     game('options', page='extras')
@@ -2206,7 +2212,7 @@ def check_wheel(host, guest, out):
 
     def place(block):
         guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:{block}')
-        guest.wait(5)
+        guest.wait(20)  # until the client has the block, to look at it
 
     def held(*stacks):
         guest('command', command='clear @s')
@@ -2309,6 +2315,61 @@ def check_wheel(host, guest, out):
         shut()
         counts = guest('inventory')['counts']
         assert counts.get('minecraft:oak_planks') == 4 and counts.get('minecraft:oak_log') == 1, f'the server has {counts}'
+
+        # Wheel events as fast as they come, with no time for the server to answer: nothing stays in the
+        # cursor and no item appears or goes.
+        for mode in ('survival', 'creative'):
+            guest('command', command=f'gamemode {mode}')
+            held(('cobblestone', 40), ('coal', 40))
+            place('air')  # a chest placed on a chest keeps its items
+            place('chest')
+            opened()
+            first, second = hotbar_slot(guest, 'minecraft:cobblestone'), hotbar_slot(guest, 'minecraft:coal')
+            for round_ in range(12):
+                wheel_fast(guest, first if round_ % 3 else second, -2)
+                wheel_fast(guest, 300, 1 if round_ % 2 else -1)
+            guest.wait(30)
+            assert guest('screen').get('carried') is None, f'{mode}: a stack stayed in the cursor'
+            total = {}
+            for item, count in server_view().values():
+                total[item] = total.get(item, 0) + count
+            assert total == {'cobblestone': 40, 'coal': 40}, f'{mode}: the items became {total}'
+            shut()
+        guest('command', command='gamemode survival')
+
+        # A furnace burning the fuel the wheel is taking: the click on the emptied slot takes nothing, and
+        # what comes next picks up nothing either.
+        held(('coal', 40), ('raw_copper', 40))
+        place('furnace')
+        opened()
+        coal, copper = hotbar_slot(guest, 'minecraft:coal'), hotbar_slot(guest, 'minecraft:raw_copper')
+        for round_ in range(10):
+            wheel_fast(guest, coal, -1)
+            wheel_fast(guest, copper, -1)
+            wheel_fast(guest, 301, -1)
+            guest.wait(4)
+        guest.wait(30)
+        assert guest('screen').get('carried') is None, 'a stack stayed in the cursor over a burning furnace'
+        shut()
+
+        # The crafting table, as fast: into the grid and out, and over the result.
+        held(('oak_log', 20), ('dirt', 20))
+        place('crafting_table')
+        opened('inventory')
+        log, dirt = hotbar_slot(guest, 'minecraft:oak_log'), hotbar_slot(guest, 'minecraft:dirt')
+        for round_ in range(12):
+            wheel_fast(guest, log if round_ % 2 else dirt, -2)
+            wheel_fast(guest, 100 + round_ % 3, -1)
+            wheel_fast(guest, 200, -1)
+        guest.wait(30)
+        assert guest('screen').get('carried') is None, 'a stack stayed in the cursor over a crafting table'
+        shut()
+        counts = guest('inventory')['counts']
+        assert counts.get('minecraft:dirt') == 20, f'the dirt became {counts}'
+        guest.raw('key', 'e', 'tap')
+        guest.wait(5)
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(5)
 
         # Hopper, dropper: plain slots, both ways.
         held(('cobblestone', 3))

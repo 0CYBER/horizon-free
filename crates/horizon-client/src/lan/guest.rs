@@ -517,6 +517,14 @@ impl Guest {
             _ => None,
         }
     }
+    /// The open menu's packets told the client every inventory slot: the
+    /// inventory menu's own sync has nothing to add. Sent again, it could land
+    /// on clicks the client has predicted since.
+    pub fn inventory_told(&mut self) {
+        for slot in 9..45 {
+            self.menu_sent[slot] = self.menu_slot(slot);
+        }
+    }
     pub fn set_menu_slot(&mut self, slot: usize, item: Option<ItemStack>) {
         match slot {
             0 => self.craft_result = item,
