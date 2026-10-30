@@ -94,7 +94,6 @@
   "Preparing…": "Przygotowywanie…",
   "Prepare": "Przygotuj",
   "Prepare again": "Przygotuj ponownie",
-  "Ready to play": "Gotowe do gry",
   "Resources": "Zasoby",
   "Minecraft folder": "Folder Minecrafta",
   "Choose…": "Wybierz…",
@@ -218,5 +217,11 @@
   "about a minute left": "zostało około minuty",
   "about {n} min left": "zostało około {n} min",
   "Game files": "Pliki gry",
-  "Sounds": "Dźwięki"
+  "Sounds": "Dźwięki",
+  "Overview": "Przegląd",
+  "Worlds": "Światy",
+  "Multiplayer": "Gra wieloosobowa",
+  "Packs": "Paczki",
+  "Screenshots": "Zrzuty ekranu",
+  "Console": "Konsola"
 }

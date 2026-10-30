@@ -99,7 +99,6 @@
   "Prepare": "准备",
   "Prepare again": "重新准备",
   "Not found. Choose the folder where your launcher keeps Minecraft.": "未找到。请选择你的启动器存放 Minecraft 的文件夹。",
-  "Ready to play": "可以开始游戏了",
   "Resources": "资源",
   "Minecraft folder": "Minecraft 文件夹",
   "Choose…": "选择…",
@@ -218,5 +217,11 @@
   "about a minute left": "还剩约 1 分钟",
   "about {n} min left": "还剩约 {n} 分钟",
   "Game files": "游戏文件",
-  "Sounds": "声音"
+  "Sounds": "声音",
+  "Overview": "概览",
+  "Worlds": "世界",
+  "Multiplayer": "多人游戏",
+  "Packs": "资源包",
+  "Screenshots": "截图",
+  "Console": "控制台"
 }

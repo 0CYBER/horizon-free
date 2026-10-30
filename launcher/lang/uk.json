@@ -100,7 +100,6 @@
   "Prepare again": "Підготувати знову",
   "None needed: Horizon downloads Minecraft from Mojang for your account.": "Не потрібна: Horizon завантажує Minecraft від Mojang для вашого облікового запису.",
   "Not found. Choose the folder where your launcher keeps Minecraft.": "Не знайдено. Виберіть теку, де ваш лаунчер зберігає Minecraft.",
-  "Ready to play": "Готово до гри",
   "Resources": "Ресурси",
   "Minecraft folder": "Тека Minecraft",
   "Choose…": "Вибрати…",
@@ -218,5 +217,11 @@
   "about a minute left": "залишилося близько хвилини",
   "about {n} min left": "залишилося близько {n} хв",
   "Game files": "Файли гри",
-  "Sounds": "Звуки"
+  "Sounds": "Звуки",
+  "Overview": "Огляд",
+  "Worlds": "Світи",
+  "Multiplayer": "Мережева гра",
+  "Packs": "Набори",
+  "Screenshots": "Знімки екрана",
+  "Console": "Консоль"
 }

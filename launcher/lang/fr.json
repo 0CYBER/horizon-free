@@ -100,7 +100,6 @@
   "Prepare again": "Préparer à nouveau",
   "None needed: Horizon downloads Minecraft from Mojang for your account.": "Aucun dossier nécessaire : Horizon télécharge Minecraft depuis Mojang pour votre compte.",
   "Not found. Choose the folder where your launcher keeps Minecraft.": "Introuvable. Choisissez le dossier où votre launcher garde Minecraft.",
-  "Ready to play": "Prêt à jouer",
   "Resources": "Ressources",
   "Minecraft folder": "Dossier Minecraft",
   "Choose…": "Choisir…",
@@ -218,5 +217,11 @@
   "about a minute left": "environ une minute restante",
   "about {n} min left": "environ {n} min restantes",
   "Game files": "Fichiers du jeu",
-  "Sounds": "Sons"
+  "Sounds": "Sons",
+  "Overview": "Aperçu",
+  "Worlds": "Mondes",
+  "Multiplayer": "Multijoueur",
+  "Packs": "Packs",
+  "Screenshots": "Captures d'écran",
+  "Console": "Console"
 }
