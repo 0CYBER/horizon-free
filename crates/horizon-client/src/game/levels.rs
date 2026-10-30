@@ -122,6 +122,11 @@ impl Levels {
         self.parked.get_mut(&dim)
     }
 
+    /// The mobs of a parked level.
+    pub(super) fn parked_mobs(&self, dim: Dim) -> Option<&[Mob]> {
+        self.parked.get(&dim).map(|level| level.mobs.as_slice())
+    }
+
     /// The levels that are not in place, by dimension.
     pub(super) fn parked_dims(&self) -> Vec<Dim> {
         self.parked.keys().copied().collect()
@@ -389,26 +394,39 @@ impl Game<'_> {
     /// `tick_server` as a server thread runs it. With `HORIZON_SPIKES=MS`, a
     /// tick longer than MS is logged with its thread CPU time and spans.
     pub(super) fn tick_server_timed(&mut self, paused: bool) -> Result<()> {
-        let Some(threshold) = self.options.spikes else {
+        self.tick_server_spans(paused, |_, _, _| {})
+    }
+
+    /// `tick_server_timed`, handing the tick's wall time, thread CPU time
+    /// and spans (milliseconds) to `record` while spans are on: a dedicated
+    /// server's performance report turns them on to record its ticks.
+    pub(super) fn tick_server_spans(
+        &mut self,
+        paused: bool,
+        record: impl FnOnce(f32, Option<f32>, Vec<horizon_client::spans::Span>),
+    ) -> Result<()> {
+        if self.options.spikes.is_none() && !horizon_client::spans::enabled() {
             return self.tick_server(paused);
-        };
+        }
         let (started, cpu) = (Instant::now(), horizon_client::spans::thread_cpu());
         let result = self.tick_server(paused);
         let wall = started.elapsed().as_secs_f32() * 1000.0;
+        let cpu = horizon_client::spans::thread_cpu()
+            .zip(cpu)
+            .map(|(end, start)| (end - start).as_secs_f32() * 1000.0);
         // Taken every tick: nothing else takes this thread's spans.
         let spans = horizon_client::spans::take();
-        if wall > threshold {
-            let cpu = horizon_client::spans::thread_cpu()
-                .zip(cpu)
-                .map_or_else(String::new, |(end, start)| {
-                    format!(", cpu {:.1} ms", (end - start).as_secs_f32() * 1000.0)
-                });
+        if let Some(threshold) = self.options.spikes
+            && wall > threshold
+        {
+            let cpu = cpu.map_or_else(String::new, |c| format!(", cpu {c:.1} ms"));
             log::info!(
                 "Horizon: slow tick {wall:.1} ms{cpu} ({} mobs): {}",
                 self.mobs.len(),
                 horizon_client::spans::describe(&spans)
             );
         }
+        record(wall, cpu, spans);
         result
     }
 
