@@ -95,9 +95,19 @@ impl OpenAttempt {
 #[derive(Default)]
 pub(super) struct NativeLifecycle {
     attempt: Option<OpenAttempt>,
+    read_scope: bool,
 }
 
 impl NativeLifecycle {
+    /// A read is valid only during a tick hook with its current tick context.
+    pub(super) fn permits_read(&self, context: &NativeLifecycleContext) -> bool {
+        self.read_scope
+            && self
+                .attempt
+                .as_ref()
+                .is_some_and(|a| a.session == OpenState::Ready && a.context() == *context)
+    }
+
     /// The open starts: a fresh process-wide epoch, never reused.
     pub(super) fn begin_open(&mut self, authority: NativeAuthority) {
         let epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed);
@@ -253,14 +263,18 @@ impl Game<'_> {
 
     pub(super) fn native_lifecycle_server_tick_start(&mut self, world_running: bool) {
         if let Some((context, phase)) = self.native_lifecycle.server_tick_start(world_running) {
+            self.native_lifecycle.read_scope = true;
             self.native_server_tick(&context, phase);
+            self.native_lifecycle.read_scope = false;
         }
     }
 
     /// An errored tick returned at `result?` before this site.
     pub(super) fn native_lifecycle_server_tick_end(&mut self, paused: bool) {
         if let Some((context, phase)) = self.native_lifecycle.server_tick_end(paused) {
+            self.native_lifecycle.read_scope = true;
             self.native_server_tick(&context, phase);
+            self.native_lifecycle.read_scope = false;
         }
     }
 }
@@ -303,6 +317,27 @@ mod tests {
         let mut lifecycle = NativeLifecycle::default();
         lifecycle.begin_open(NativeAuthority::IntegratedServer);
         lifecycle
+    }
+
+    #[test]
+    fn block_reads_require_the_current_hook_scope() {
+        let mut life = NativeLifecycle::default();
+        life.begin_open(NativeAuthority::IntegratedServer);
+        let ready = life.world_open_ready().unwrap();
+        assert!(!life.permits_read(&ready));
+        let (tick, _) = life.server_tick_start(true).unwrap();
+        life.read_scope = true;
+        assert!(life.permits_read(&tick));
+        assert!(!life.permits_read(&ready));
+        life.read_scope = false;
+        assert!(!life.permits_read(&tick));
+        life.server_tick_end(false).unwrap();
+        life.begin_close();
+        life.world_close_final().unwrap();
+        life.begin_open(NativeAuthority::IntegratedServer);
+        life.world_open_ready().unwrap();
+        life.read_scope = true;
+        assert!(!life.permits_read(&tick));
     }
 
     #[test]

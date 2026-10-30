@@ -158,3 +158,7 @@ Keep an existing contract or add a new version when it changes incompatibly.
 The catalog does not cover helper methods or arbitrary private game code.
 Named injection resolution needs a matching horizon-mixins change; existing raw
 targets and the `hooks` metadata continue to work as before.
+
+### Reading server blocks (draft)
+
+A native server tick hook can call `native_server_block` with its context, a dimension id and a block position. It returns the block name and state properties from a loaded chunk. It does not load a chunk or open a dimension. Reads outside that hook, from a stale context, from unavailable dimensions or outside the world bounds return an error.
