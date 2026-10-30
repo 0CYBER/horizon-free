@@ -3556,7 +3556,8 @@ def check_rocket_walls(host, guest, out):
     """A rocket shot at an angle explodes on a block only with explosions (#4281).
 
     FireworkRocketEntity.onHitBlock: `hasExplosion()`; a plain one flies on to its lifetime (20-31 ticks). A
-    dispenser shoots at an angle as a crossbow does, 4 ticks after it is powered, at a wall three blocks away.
+    dispenser shoots at an angle as a crossbow does, at a wall three blocks away (about 7 ticks of flight). The
+    host counts the rocket every tick in one ctl process, so how long it lived doesn't depend on the CLI's speed.
     """
     x, y, z = (int(v // 1) for v in pos_of(host))
     y += 3
@@ -3566,21 +3567,19 @@ def check_rocket_walls(host, guest, out):
     star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
     result = {}
     for label, item in (('plain', plain), ('star', star)):
-        host('command', command=f'setblock {x} {y} {z + 1} minecraft:air')
+        host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
         host('command', command=f'setblock {x} {y} {z} minecraft:dispenser[facing=south]')
         host('command', command=f'item replace block {x} {y} {z} container.0 with {item}')
         host.wait(5)
-        host('command', command=f'setblock {x} {y} {z + 1} minecraft:air')
-        host('command', command=f'setblock {x} {y + 1} {z} minecraft:redstone_block')
-        host.wait(18)
-        hit = {g.name: g('status')['rockets'] for g in (host, guest)}
-        host.wait(30)
-        later = {g.name: g('status')['rockets'] for g in (host, guest)}
-        host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
-        result[label] = {'after_wall': hit, 'after_lifetime': later}
-        assert not any(later.values()), f'{label} rocket outlived its lifetime: {later}'
-    assert all(n == 1 for n in result['plain']['after_wall'].values()),         f'plain rocket went off on the wall: {result}'
-    assert not any(result['star']['after_wall'].values()), f'star rocket did not explode on the wall: {result}'
+        replies = host.script([f'command setblock {x} {y + 1} {z} minecraft:redstone_block']
+                              + ['wait 1', 'status'] * 45, every=True)
+        counts = [r['rockets'] for r in replies if 'rockets' in r]
+        result[label] = {'ticks_seen': sum(1 for n in counts if n), 'last': counts[-1],
+                         'guest_last': guest('status')['rockets']}
+    host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()),         f'a rocket outlived its lifetime: {result}'
+    assert result['plain']['ticks_seen'] >= 18, f'plain rocket went off on the wall: {result}'
+    assert 0 < result['star']['ticks_seen'] < 15, f'star rocket did not explode on the wall: {result}'
     return result
 
 
