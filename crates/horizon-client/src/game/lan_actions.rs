@@ -51,6 +51,11 @@ pub(super) struct GuestPlay {
     pub(super) chat_spam: u32,
     /// `commandSpamThrottler`: 20 for each command, one less each tick.
     pub(super) command_spam: u32,
+    /// `ServerCommandSuggestionsProvider`: the latest suggestion request not answered yet (a
+    /// newer one replaces it, which then never gets an answer), and whether this tick's one
+    /// answer is still free.
+    suggestion: Option<Vec<u8>>,
+    suggestion_budget: bool,
     /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
     pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
@@ -1572,7 +1577,9 @@ impl Game<'_> {
             S::Unknown(id, payload)
                 if id == horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION =>
             {
-                self.guest_suggestions(host, conn, &payload);
+                // ServerCommandSuggestionsProvider.request, then trySchedule.
+                host.play.entry(conn).or_default().suggestion = Some(payload);
+                self.guest_try_suggestions(host, conn);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
             // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
@@ -2072,6 +2079,20 @@ impl Game<'_> {
     /// ServerGamePacketListenerImpl.handleCustomCommandSuggestions: the
     /// completions of the command typed so far (after an optional slash), for
     /// the nodes the tree marks `ask_server`.
+    /// ServerCommandSuggestionsProvider.tryProcessRequest: answer the latest request if this
+    /// tick's answer is free. One client asking a hundred times a tick costs one parse.
+    fn guest_try_suggestions(&mut self, host: &mut LanHost, conn: u32) {
+        let play = host.play.entry(conn).or_default();
+        if !play.suggestion_budget {
+            return;
+        }
+        let Some(payload) = play.suggestion.take() else {
+            return;
+        };
+        play.suggestion_budget = false;
+        self.guest_suggestions(host, conn, &payload);
+    }
+
     fn guest_suggestions(&mut self, host: &mut LanHost, conn: u32, payload: &[u8]) {
         let mut r = horizon_protocol::buf::Reader::new(payload);
         let (Ok(id), Ok(text)) = (r.varint(), r.string(32500)) else {
@@ -2272,6 +2293,9 @@ impl Game<'_> {
             let play = host.play.entry(conn).or_default();
             play.chat_spam = play.chat_spam.saturating_sub(1);
             play.command_spam = play.command_spam.saturating_sub(1);
+            // commandSuggestionsProvider.tick: one answer a tick, to the latest request.
+            play.suggestion_budget = true;
+            self.guest_try_suggestions(host, conn);
             self.guest_sleep_tick(host, gi);
             if host.hub.guests[gi].dead {
                 self.guest_tick_death(host, gi);
