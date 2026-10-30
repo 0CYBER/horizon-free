@@ -3673,6 +3673,57 @@ mod tests {
     }
 
     #[test]
+    fn a_native_mods_key_shows_and_keeps_the_key_pressed() {
+        // #3539: Zoom's key set to R showed another key.
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "zoom".into(),
+            title: "Zoom 2.0.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                keys: vec![["zoom".into(), "Zoom key".into(), "key.keyboard.z".into()]],
+                buttons: Vec::new(),
+            }),
+        });
+        ui.show(Page::NativeMod(0));
+        let key_label = |ui: &mut OptionsUi, s: &Settings| {
+            let (widgets, ..) = ui.layout(s, size.0, size.1);
+            widgets.into_iter().find_map(|w| match w.kind {
+                WKind::Button {
+                    label,
+                    act: Act::NativeKey(0, 0),
+                    ..
+                } => Some((label.plain(), w.x, w.y)),
+                _ => None,
+            })
+        };
+        let (label, x, y) = key_label(&mut ui, &s).expect("the key's row");
+        assert_eq!(label, "Z");
+        ui.click(
+            &mut s,
+            &atlas,
+            x + 1.0,
+            y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyR, Some("r")),
+            vec![Event::Changed]
+        );
+        assert_eq!(key_label(&mut ui, &s).unwrap().0, "R");
+        let saved = crate::mod_list::ModList::parse(&s.mods.serialize());
+        assert_eq!(saved.keys_of("zoom"), vec![("zoom", "key.keyboard.r")]);
+    }
+
+    #[test]
     fn option_tooltip_keys_follow_value_dependent_descriptions() {
         let mut s = Settings::default();
         assert_eq!(
