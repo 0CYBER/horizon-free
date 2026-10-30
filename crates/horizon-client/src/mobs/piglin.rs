@@ -1042,15 +1042,14 @@ fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     }
 }
 pub fn register_piglin(m: &mut Mob) {
-    let crossbow = m.extra.main_hand.as_deref() == Some("minecraft:crossbow");
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, Admire);
     // `PiglinAi.initRetreatActivity`: `SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.0, 12, true)`.
     g.add(2, WalkAway::retreat(1.0, 12.0, true));
-    if crossbow {
-        g.add(3, super::illager::crossbow_goal(1.0, 8.0));
-    }
+    // Registered before the spawn weapon is equipped, so the goal checks the
+    // held item itself (it only starts while a crossbow is in the main hand).
+    g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     // `PiglinAi.initFightActivity`: the spear behaviours come before the melee one.
     g.add(3, super::spear_use::PiglinSpear::new());
     g.add(
@@ -1859,4 +1858,34 @@ pub fn hoglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     p.xrot("left_front_leg", (pos + PI).mcos() * 1.2 * sp);
     p.xrot("right_hind_leg", (pos + PI).mcos() * 1.2 * sp);
     p.xrot("left_hind_leg", pos.mcos() * 1.2 * sp);
+}
+
+#[cfg(test)]
+mod crossbow_tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    fn piglin() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:piglin".into();
+        k.species = Species::Piglin;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// The spawn weapon is equipped after the goals are registered, so the
+    /// crossbow goal must exist on a piglin that holds nothing yet, and the
+    /// melee goal must be off once a crossbow is held.
+    #[test]
+    fn a_piglin_with_a_crossbow_shoots_instead_of_meleeing() {
+        let mut m = piglin();
+        assert!(format!("{:?}", m.ai.goals).contains("CrossbowAttack"));
+        assert!(!super::super::spear_use::holds_non_melee_weapon(&m));
+        m.extra.set_main_hand(Some("minecraft:crossbow".into()));
+        assert!(super::super::spear_use::holds_non_melee_weapon(&m));
+        m.extra.set_main_hand(Some("minecraft:golden_sword".into()));
+        assert!(!super::super::spear_use::holds_non_melee_weapon(&m));
+    }
 }
