@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 13 adds using an item (`native_use_item_on`, `native_use_item`).
+//!
 //! API 12 adds item tooltips (`native_tooltip`).
 //!
 //! API 11 adds server particle emission (`native_send_particles`).
@@ -69,7 +71,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 12;
+pub(crate) const NATIVE_HOOKS_API: u32 = 13;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -458,6 +460,30 @@ impl Game<'_> {
     /// hides. API 12.
     pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
         let _ = (stack, lines);
+    }
+    /// A player uses `stack` (right click) with `self.hand` on the block at
+    /// `pos`, `face` the face clicked (`[0, 1, 0]` is the top), once the
+    /// block itself let the click through (a chest still opens): where
+    /// `ItemStack.useOn` starts. Set `claimed` to take the use: the hand
+    /// swings and neither the item's `useOn` nor its `use` runs.
+    /// Server-side, for every player of the world (the helpers read the
+    /// acting one); an item on cooldown is never used. API 13.
+    pub(super) fn native_use_item_on(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        face: [i32; 3],
+        claimed: &mut bool,
+    ) {
+        let _ = (stack, pos, face, claimed);
+    }
+    /// A player uses `stack` (right click) with `self.hand`: in the air, or
+    /// on a block once `native_use_item_on` let it through, where `Item.use`
+    /// starts. Each click reaches it once. Set `claimed` to take the use: the
+    /// hand swings and the item's own use doesn't run. Server-side, for every
+    /// player of the world; an item on cooldown is never used. API 13.
+    pub(super) fn native_use_item(&mut self, stack: &ItemStack, claimed: &mut bool) {
+        let _ = (stack, claimed);
     }
 }
 

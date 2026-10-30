@@ -104,6 +104,16 @@
       "name": "tooltip",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
+    },
+    {
+      "name": "use_item_on",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"
+    },
+    {
+      "name": "use_item",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item"
     }
   ]
 }

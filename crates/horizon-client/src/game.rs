@@ -4966,6 +4966,21 @@ impl Game<'_> {
         {
             return Ok(false);
         }
+        // Native mods, where ItemStack.useOn and Item.use start: the block
+        // aimed at had its turn, and the item is off cooldown. A guest's
+        // UseItemOn reaches only useOn, its UseItem only use.
+        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
+        let mut claimed = false;
+        if let Some(hit) = block_hit {
+            self.native_use_item_on(&stack, hit.pos, hit.face, &mut claimed);
+        }
+        if !claimed && !on_block {
+            self.native_use_item(&stack, &mut claimed);
+        }
+        if claimed {
+            self.swing_arm();
+            return Ok(true);
+        }
         // ItemStack.useOn: after the block's own useItemOn/useWithoutItem
         // passed. DebugStickItem.useOn cycles the selected property.
         if let Some(hit) = block_hit
@@ -4989,7 +5004,6 @@ impl Game<'_> {
         }
         // A guest's UseItemOn stops at ItemStack.useOn: what Item.use does
         // (throw, drink, eat, raise, equip) waits for its UseItem.
-        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
         let spawn_egg = stack.item.ends_with("_spawn_egg");
         use horizon_client::first_person::UseResult;
         let swings = self.swings_started;
