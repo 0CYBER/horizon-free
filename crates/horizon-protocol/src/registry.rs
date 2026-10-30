@@ -41,6 +41,22 @@ impl Ids {
 pub struct Builtin {
     pub registries: HashMap<String, Ids>,
 }
+/// The names of both kinds of registry a connection knows: the built-in ones
+/// first (as a hub's `SyncData::id` does), then those the server synced.
+pub struct SyncedNames<'a> {
+    pub builtin: &'a Builtin,
+    pub dynamic: &'a Dynamic,
+}
+impl crate::item::Names for SyncedNames<'_> {
+    fn name(&self, registry: &str, id: i32) -> Option<String> {
+        self.builtin
+            .get(registry)
+            .and_then(|ids| ids.name(id))
+            .or_else(|| self.dynamic.name(registry, id))
+            .map(str::to_owned)
+    }
+}
+
 impl Builtin {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
