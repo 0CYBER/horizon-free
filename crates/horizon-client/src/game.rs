@@ -7198,6 +7198,9 @@ impl Game<'_> {
         }
     }
     fn slot_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<usize> {
+        if self.book_covers_menu(batch.width) {
+            return None;
+        }
         let (ox, oy) = self.inventory_origin(batch);
         self.slots().into_iter().find(|&i| {
             let (sx, sy) = self.slot_position(i);

@@ -140,6 +140,12 @@ impl Game<'_> {
             _ => 0.0,
         }
     }
+    /// `AbstractRecipeBookScreen.isHovering` is false while the book is
+    /// visible in a window narrower than `NARROW`: the book covers the menu,
+    /// so no slot is hovered or clicked.
+    pub(super) fn book_covers_menu(&self, width: f32) -> bool {
+        width < NARROW && self.active_book().is_some_and(|b| self.book_open(b))
+    }
     /// Whether typed keys go to the search box.
     pub(super) fn recipe_search_focused(&self) -> bool {
         self.active_book().is_some_and(|b| self.book_open(b))
@@ -616,8 +622,14 @@ impl Game<'_> {
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
-        if !self.book_open(book_type) || self.spectator() {
+        if !self.book_open(book_type) {
             return false;
+        }
+        // AbstractRecipeBookScreen.mouseClicked: in a narrow window the visible
+        // book takes every click, even one it does not use itself.
+        let narrow = batch.width < NARROW;
+        if self.spectator() {
+            return narrow;
         }
         self.refresh_book_view(book_type);
         let (xo, yo) = self.book_origin(&batch);
@@ -717,7 +729,7 @@ impl Game<'_> {
                 return true;
             }
         }
-        false
+        narrow
     }
     /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
     fn send_book_settings(&self, book_type: BookType) {
