@@ -82,13 +82,15 @@ impl Game<'_> {
             return None;
         }
         let m = self.player_model.as_ref()?;
-        // The name others see: the profile's on a server (single player's
-        // server thread included), else the local player's.
-        let name = match self.remote.as_ref() {
+        Some((m, self.own_profile_name()))
+    }
+    /// The local player's profile name as others see it: the session's on a
+    /// server (single player's server thread included), else the local player's.
+    pub(super) fn own_profile_name(&self) -> String {
+        match self.remote.as_ref() {
             Some(r) if !r.profile_name.is_empty() => r.profile_name.clone(),
             _ => self.acting_player_name().to_owned(),
-        };
-        Some((m, name))
+        }
     }
     /// The names the name tags show this frame (the control socket's status).
     pub(super) fn shown_name_tags(&self, camera: glam::DVec3) -> Vec<String> {
