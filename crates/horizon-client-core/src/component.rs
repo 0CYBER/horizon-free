@@ -202,7 +202,7 @@ fn style_event_object<'a>(
 fn style_flag(v: Option<&Value>) -> Option<bool> {
     match v {
         Some(Value::Bool(b)) => Some(*b),
-        Some(Value::Number(n)) => Some(n.as_i64().is_none_or(|i| i != 0)),
+        Some(Value::Number(n)) => n.as_i64().map(|i| i != 0),
         _ => None,
     }
 }
