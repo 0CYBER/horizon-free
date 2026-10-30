@@ -274,6 +274,48 @@ impl Game<'_> {
             damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
         })
     }
+    /// The killing blow as advancement predicates see it (`DamageSource` of the
+    /// last combat entry): its type and the causing entity. The projectile
+    /// damage types have the projectile as direct entity, not the shooter.
+    pub(super) fn combat_killing_blow(&self) -> Option<horizon_client::advancements::DamageView> {
+        use horizon_client::advancements::{DamageView, EntityView};
+        let e = self.combat.entries.last()?;
+        let source = e.attacker.as_ref().and_then(|(id, _)| {
+            self.mobs
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| self.mob_entity(m))
+        });
+        let projectile = matches!(
+            e.damage_type.as_str(),
+            "minecraft:arrow"
+                | "minecraft:trident"
+                | "minecraft:mob_projectile"
+                | "minecraft:fireball"
+                | "minecraft:unattributed_fireball"
+                | "minecraft:wither_skull"
+                | "minecraft:wind_charge"
+                | "minecraft:thrown"
+                | "minecraft:spit"
+        );
+        let direct = if projectile {
+            Some(EntityView {
+                kind: e.damage_type.clone(),
+                ..Default::default()
+            })
+        } else {
+            source.clone()
+        };
+        Some(DamageView {
+            kind: e.damage_type.clone(),
+            direct,
+            source,
+            is_direct: !projectile,
+            original: e.damage,
+            actual: e.damage,
+            blocked: false,
+        })
+    }
     /// The type of the mob that dealt the killing blow (`killed_by`).
     pub(super) fn combat_killer_kind(&self) -> Option<String> {
         let (id, _) = self.combat.entries.last()?.attacker.clone()?;

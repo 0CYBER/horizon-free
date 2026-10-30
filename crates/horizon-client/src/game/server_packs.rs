@@ -70,7 +70,11 @@ impl PackPrompt {
 impl ServerPackState {
     /// The `ToastManager` slots the download toasts hold.
     pub(super) fn toast_slots(&self) -> impl Iterator<Item = usize> + '_ {
-        self.notifiers.iter().filter_map(|n| n.toast.as_ref()?.slot)
+        self.notifiers
+            .iter()
+            .filter_map(|n| n.toast.as_ref())
+            .chain(self.load_fail.as_ref())
+            .filter_map(|t| t.slot)
     }
 }
 
@@ -89,6 +93,8 @@ pub(super) struct ServerPackState {
     pub(super) active: Vec<packs::Pack>,
     /// The download batches' notifiers, oldest first.
     notifiers: Vec<PackNotifier>,
+    /// `SystemToastId.PACK_LOAD_FAILURE`: the toast `Minecraft.clearResourcePacksOnError` adds.
+    pub(super) load_fail: Option<SystemToast>,
 }
 /// `DownloadedPackSource.createDownloadNotifier`: one batch's progress in its
 /// own `SystemToast`.
@@ -461,8 +467,14 @@ impl Game<'_> {
     pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = f64::from(self.settings.notification_display_time);
         let mut used = self.toast_slots_used();
-        for notifier in &mut self.server_packs.notifiers {
-            let Some(toast) = &mut notifier.toast else {
+        let packs = &mut self.server_packs;
+        for slot_toast in packs
+            .notifiers
+            .iter_mut()
+            .map(|n| &mut n.toast)
+            .chain(std::iter::once(&mut packs.load_fail))
+        {
+            let Some(toast) = slot_toast else {
                 continue;
             };
             if toast.slot.is_none() {
@@ -479,7 +491,7 @@ impl Game<'_> {
                     .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
             }
             if finished {
-                notifier.toast = None;
+                *slot_toast = None;
                 continue;
             }
             if let (false, Some(slot)) = (hidden, toast.slot) {

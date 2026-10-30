@@ -184,6 +184,16 @@ impl SessionLock {
 /// the latter as it reads each file; Horizon runs them all on opening, which reads
 /// the same data. Worlds older than the ported fixes (1.17) are refused.
 pub fn upgrade_older_world(world: &Path) -> Result<()> {
+    upgrade_older_world_with(
+        world,
+        &horizon_world::datafix::progress::UpgradeProgress::new(),
+    )
+}
+/// [`upgrade_older_world`] reporting to `progress`, which `FileFixerProgressScreen` reads.
+pub fn upgrade_older_world_with(
+    world: &Path,
+    progress: &horizon_world::datafix::progress::UpgradeProgress,
+) -> Result<()> {
     let Some(root) = read_dat(&world.join("level.dat")) else {
         return Ok(());
     };
@@ -202,7 +212,7 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
         )
         .into());
     }
-    horizon_world::datafix::files::upgrade_world(world)
+    horizon_world::datafix::files::upgrade_world_with(world, progress)
         .map_err(|e| format!("upgrading {}: {e}", world.display()))?;
     Ok(())
 }
@@ -621,6 +631,7 @@ pub fn encode_block_entity(
         BlockEntity::Vault(v) => entries.extend(v.save()),
         BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
         BlockEntity::CommandBlock(c) => entries.extend(c.save()),
+        BlockEntity::StructureBlock(b) => entries.extend(b.save()),
         BlockEntity::Brushable(b) => {
             if let Some(table) = &b.loot_table {
                 entries.push(("LootTable", table.clone()));
@@ -920,6 +931,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
         BlockEntity::Beehive(h) => **h = crate::beehive::Beehive::from_nbt(tag),
         BlockEntity::CommandBlock(c) => **c = crate::command_block::CommandBlock::load(tag),
+        BlockEntity::StructureBlock(b) => **b = crate::structure_block::StructureBlock::load(tag),
     }
     Some((pos, entity))
 }

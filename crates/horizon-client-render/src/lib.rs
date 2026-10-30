@@ -77,6 +77,7 @@ pub mod split_layout;
 mod sprite_cache;
 pub mod sprites;
 pub mod streaming;
+pub mod structure_block;
 pub mod tab_list;
 pub mod telemetry;
 pub mod testgen;

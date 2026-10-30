@@ -1118,6 +1118,8 @@ pub fn put_brain(map: &mut Compound, m: &Mob, dimension: &str) {
     for &(name, value, ttl) in &m.extra.memories {
         let value = match name {
             "hunted_recently" => Tag::Byte(value as i8),
+            // `Unit` memories save an empty compound.
+            "is_pregnant" => Tag::Compound(Compound::new()),
             "home" => match m.extra.home {
                 Some(p) => Tag::compound([
                     ("dimension", string(dimension)),
@@ -1536,6 +1538,15 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 pos: [p[0], p[1], p[2]],
             });
         }
+    }
+    if m.species() == crate::mobs::Species::Frog
+        && tag
+            .get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get("minecraft:is_pregnant"))
+            .is_some()
+    {
+        crate::mobs::frog::set_pregnant(&mut m, true);
     }
     if crate::mobs::camel::is_camel(m.species()) {
         // The tick is a game time: `camel::finish_load` puts it on the mob's

@@ -17,6 +17,18 @@ use horizon_core::{
 // Happy ghast state: `head` the harness, `scratch[0]` 1 once set up as a
 // baby and 2 as an adult, `ai.home` the restriction, `counter`
 // the end tick of the follow-an-adult range pick.
+// `scratch[1]` is `leashHolderTime` on the server and `IS_LEASH_HOLDER` (1 or 0) on a client.
+/// `HappyGhast.notifyLeashHolder` for a leashed mob that supports a quad lead.
+pub fn notify_leash_holder(m: &mut Mob) {
+    if m.species() == super::Species::HappyGhast {
+        m.extra.scratch[1] = 5;
+    }
+}
+/// `HappyGhast.isLeashHolder`: `IS_LEASH_HOLDER`, true while a quad-leashed
+/// mob hangs on it (and four ticks after).
+pub fn is_leash_holder(m: &Mob) -> bool {
+    m.extra.scratch[1] > 0
+}
 /// `Attributes.FLYING_SPEED` and the speed `travel` uses (`* 5 / 3`).
 pub const FLYING_SPEED: f64 = 0.05;
 pub const AIR_SPEED: f32 = 0.05 * 5.0 / 3.0;
@@ -522,6 +534,10 @@ pub fn ensure_setup(m: &mut Mob) {
 /// setup at the age boundary, the home, face-the-motion and slow healing.
 pub fn ai_step(m: &mut Mob, w: &MobWorld) {
     ensure_setup(m);
+    // HappyGhast.tick: `leashHolderTime` runs down (the synced flag follows it).
+    if m.extra.scratch[1] > 0 {
+        m.extra.scratch[1] -= 1;
+    }
     // checkRestriction.
     if m.extra.leash.is_none() && m.rider.is_none() {
         let radius = restriction_radius(m);

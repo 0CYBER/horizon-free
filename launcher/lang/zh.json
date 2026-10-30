@@ -237,5 +237,6 @@
   "No mod matches.": "没有匹配的模组。",
   "{source} · needed by another mod": "{source} · 其他模组需要",
   "Local file · {file}": "本地文件 · {file}",
-  "Update {version}": "更新到 {version}"
+  "Update {version}": "更新到 {version}",
+  "Choose image…": "选择图片…"
 }

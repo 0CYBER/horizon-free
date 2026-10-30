@@ -300,10 +300,14 @@ impl Game<'_> {
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
             // The first body after joining burns, breathes and falls on as saved.
-            if let Some(saved) = host.hub.guests[i].loaded_body.take()
-                && let Some(m) = host.hub.guests[i].motion.as_mut()
+            let g = &mut host.hub.guests[i];
+            if let Some(saved) = g.loaded_body.take()
+                && let Some(m) = g.motion.as_mut()
             {
                 saved.apply(m);
+                // LivingEntity.readAdditionalSaveData: the saved attributes.
+                let _ =
+                    m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
             }
             // The saved golden hearts go on the first body of a player who
             // has been here before.
@@ -981,8 +985,12 @@ impl Game<'_> {
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
+        let hidden = self.native_hidden_slots(pos, items.len());
         host.hub
             .open_container(conn, menu, title, pos, slots, items);
+        if !hidden.is_empty() {
+            host.hub.hide_menu_slots(conn, hidden);
+        }
         true
     }
 
@@ -2385,6 +2393,11 @@ impl Game<'_> {
         }
         // PlayerList.respawn removes the dead player (Player.remove).
         self.guest_drop_carried(host, i);
+        // AbstractContainerScreen.tick / ServerPlayer.closeContainer: the dead
+        // player's open container goes with it, so a chest's lid (its opener
+        // count) falls instead of staying up for a player who is gone.
+        self.guest_container_closed(host, conn);
+        host.hub.close_container(conn);
         // PlayerList.respawn: a server's player comes back in its respawn
         // point's level: the Overworld, where the world spawn and beds are,
         // or another one's anchor or forced point, which its block resolves
@@ -3064,7 +3077,13 @@ impl Game<'_> {
         });
         for event in events {
             match event {
-                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.playHurtSound: the server's `Entity.playSound`
+                // reaches every player around but the hurt one, whose own
+                // client plays it from handleDamageEvent (#4149).
+                MotionEvent::HurtSound(sound) => {
+                    let source = horizon_client::settings::sound_source(sound) as i32;
+                    host.hub.sound(sound, at, 1.0, 1.0, source, Some(conn));
+                }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,

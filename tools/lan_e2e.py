@@ -12,6 +12,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - nametags:  each side draws the other player's name above them;
 - chest:     a chest the guest opens opens on the guest's screen, its lid opens on both sides and
              closes on both when the guest closes it; the host keeps playing with its mouse look (#687);
+- menu-transfer: a chest the guest has open closes when the server replaces the guest's player (a
+             dimension change, a death and respawn); the inventory opens as its own menu, items kept;
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
              leaves the host's screen and mouse look alone;
 - spawned:   the host and a guest new to the world join on different spots (PlayerSpawnFinder), and the
@@ -170,6 +172,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - boats:     the host (single player, on its server thread or not) and the guest each right-click a
              boat on water and ride it, paddle it forward (the other side sees it move), sneak out,
              and break it with their fists (#1222).
+- boat_shoved: the host and the guest each sit in a boat a piston shoves and /tp moves; the server
+             takes the new spot as the boat's last good position, so the rider's next moves pass: at most a few
+             "moved wrongly" lines, not an endless loop of them.
 - minecarts: the host and the guest each get into a minecart on rails, sneak out beside it, and break
              it (#1222).
 - frames:    the host and the guest each put a diamond in an item frame and turn it, and put a
@@ -326,13 +331,13 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is deprecated.
 SERVER_THREAD = True
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'menu-transfer', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'wheel', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
-          'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
+          'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'boat_shoved', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
           'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'rocket-ceilings', 'tag-query']
 
@@ -540,6 +545,60 @@ def check_chest(host, guest, out):
     assert opened['guest'] > 0.9 and opened['host'] > 0.9, f'lid while open: {opened}'
     assert closed['guest'] < 0.1 and closed['host'] < 0.1, f'lid after closing: {closed}'
     return {'open': opened, 'closed': closed}
+
+
+def check_menu_transfer(host, guest, out):
+    """A container the guest has open does not outlive the server replacing its player (a dimension
+    change, a death and respawn): the screen is closed and the inventory opens as its own menu again."""
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:diamond 3')
+    home = pos_of(guest)
+    x, y, z = (int(v // 1) for v in home)
+    chest = (x, y, z + 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
+    guest.wait(10)
+    results = {}
+
+    def open_chest():
+        guest.raw('interact', *chest)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        guest.wait(10)
+
+    def settled(label):
+        """The menu is gone after the transfer; `e` opens the player's own 2x2 inventory with its items."""
+        screen = guest('state').get('screen')
+        guest.raw('key', 'e', 'tap')
+        guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
+        inventory = guest('screen')
+        stale = [s for s in inventory.get('slots', []) if s.get('slot', 0) >= 300]
+        diamonds = guest('inventory')['counts'].get('minecraft:diamond', 0)
+        guest.shot(out, f'menu-transfer-{label}')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(5)
+        results[label] = {'screen': screen, 'craft_size': inventory.get('craft_size'), 'stale': len(stale),
+                          'diamonds': diamonds}
+        assert screen in (None, 'playing'), f'{label}: the screen after the transfer was {screen}'
+        assert inventory.get('craft_size') == 2 and not stale, f'{label}: the inventory menu was {inventory}'
+        assert diamonds == 3, f'{label}: {diamonds} diamonds after the transfer'
+
+    try:
+        open_chest()
+        into_level(guest, NETHER, x, 100, z)
+        settled('dimension')
+        guest('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
+        wait_dimension(guest, OVERWORLD, 400)
+        guest.wait(20)
+        open_chest()
+        guest('command', command='kill @s')
+        guest.wait(20)
+        guest.raw('respawn')
+        wait_dimension(guest, OVERWORLD, 400)
+        guest.wait(40)
+        settled('respawn')
+    finally:
+        back_to_game(guest)
+        guest('command', command=f'execute in {OVERWORLD} run setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
+    return results
 
 
 def check_crafting(host, guest, out):
@@ -946,8 +1005,8 @@ def level_respawn_points(host, guest, out):
         results['anchor'] = die_and_respawn(guest)
         results['charges'] = guest.raw('block', x + 2, 100, z).get('state')
     finally:
-        sx, sy, sz = (int(v // 1) for v in pos_of(host))
-        guest('command', command=f'execute in {OVERWORLD} run spawnpoint @s {sx} {sy} {sz}')
+        # Leave no Overworld spawnpoint behind: with the anchor removed below, the guest's next death
+        # falls back to the world spawn and clears its point, which check_world_spawn relies on.
         guest('command', command=f'execute in {NETHER} run setblock {x + 2} 100 {z} minecraft:air')
         guest('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
         wait_dimension(guest, OVERWORLD, 400)
@@ -4875,6 +4934,73 @@ def check_boats(host, guest, out):
     return result
 
 
+def check_boat_shoved(host, guest, out):
+    """A piston shoves the boat its rider drives, then `/tp` moves it. The server moved it, so its
+    last good position is where it is now (`ServerGamePacketListenerImpl.tick` resets it every
+    tick). Before, it kept the old one: every move the rider's client sent failed, was sent back,
+    and failed again on each answer, and the boat stayed stuck (up to 6,700 "moved wrongly" lines a
+    second on the official server)."""
+    result = {}
+    spots = apart(host, guest)
+    log = host.socket.with_suffix('.log')
+
+    def wrongly():
+        return log.read_text(errors='replace').count('moved wrongly') if log.exists() else 0
+
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        # The boat east of the player, a piston north of it that shoves it south (out of the way
+        # of the player's right click).
+        bx = x + 3
+        player('command', command='gamemode survival')
+        player('command', command=f'fill {x - 1} {y} {z - 4} {bx + 2} {y + 3} {z + 3} minecraft:air')
+        player('command', command=f'fill {x - 1} {y - 1} {z - 4} {bx + 2} {y - 1} {z + 3} minecraft:stone')
+        player('command', command=f'setblock {bx} {y} {z - 2} minecraft:piston[facing=south]')
+        player('command', command=f'summon minecraft:oak_boat {bx + 0.5} {y} {z - 0.4}')
+        player.wait(30)
+        try:
+            boat = board(player, 'oak_boat', (bx + 0.5, y, z - 0.4))
+            player.wait(20)
+            before, start = wrongly(), boat['position']
+            player('command', command=f'setblock {bx} {y} {z - 3} minecraft:redstone_block')
+            player.wait(40)
+            assert player('status').get('riding') == boat['id'], f'the {label} left its boat'
+            shoved = [o for o in player('status')['objects'] if o['id'] == boat['id']][0]['position']
+            # Then it paddles on: the server takes these moves.
+            player.raw('key', 'w', 'down')
+            player.wait(30)
+            player.raw('key', 'w', 'up')
+            player.wait(20)
+            # A command moves it too (`/tp`, as an operator would): it paddles on from there.
+            player('command', command=f'tp @e[type=minecraft:oak_boat,x={bx},y={y},z={z},distance=..8] '
+                                      f'{bx - 1.5} {y} {z - 2.5}')
+            player.wait(20)
+            moved = [o for o in player('status')['objects'] if o['id'] == boat['id']][0]['position']
+            player.raw('key', 'w', 'down')
+            player.wait(30)
+            player.raw('key', 'w', 'up')
+            player.wait(20)
+            lines = wrongly() - before
+            mine = [o for o in player('status')['objects'] if o['id'] == boat['id']][0]['position']
+            # The server and the other side agree with the rider about where the boat is.
+            theirs = [o for o in objects_near(other, mine, 'objects') if o['kind'].endswith('oak_boat')]
+            assert theirs, f'the other side sees no boat near the {label}\'s'
+            far = min(math.dist(o['position'], mine) for o in theirs)
+            result[label] = {'shoved': round(shoved[2] - start[2], 2),
+                             'paddled': round(math.dist(moved, mine), 2), 'moved_wrongly_lines': lines,
+                             'other_side_off': round(far, 2)}
+            assert lines <= 5, f'moving it made {lines} "moved wrongly" lines: {result[label]}'
+            assert result[label]['paddled'] > 0.5, f'the {label}\'s boat stays where it was shoved: {result[label]}'
+            assert far < 1.0, f'the other side sees the {label}\'s boat {far:.2f} blocks off'
+            leave_vehicle(player, 'boat')
+        finally:
+            player('command', command=f'kill @e[type=minecraft:oak_boat,x={bx},y={y},z={z},distance=..8]')
+            player('command', command=f'fill {x - 1} {y} {z - 4} {bx + 2} {y + 3} {z + 3} minecraft:air')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+            player.wait(5)
+    return result
+
+
 def check_minecarts(host, guest, out):
     """#1222: the host and the guest each get into a minecart on rails with a right click, sneak out
     beside it, and break it with their fists."""
@@ -5697,7 +5823,7 @@ def check_worn(host, guest, out):
 
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
-             'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
+             'nametags': check_nametags, 'chest': check_chest, 'menu-transfer': check_menu_transfer, 'crafting': check_crafting,
              'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'flow-push': check_flow_push,
@@ -5722,7 +5848,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
              'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'leave': check_leave,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
-             'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
+             'boats': check_boats, 'boat_shoved': check_boat_shoved, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
              'lightning': check_lightning, 'riding': check_riding, 'occupied_horse': check_occupied_horse, 'mounts': check_mounts,
              'worldspawn': check_world_spawn, 'beds': check_beds, 'shield': check_shield, 'deathmining': check_death_mining,
              'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,

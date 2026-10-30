@@ -465,6 +465,14 @@ impl HudAtlas {
             }
         }
         let assets = root.join("assets");
+        // Content mods' GUI textures, for their screens: `<namespace>:gui/...`.
+        if full && let Ok(namespaces) = fs::read_dir(&assets) {
+            for ns in namespaces.flatten() {
+                if ns.file_name() != "minecraft" {
+                    walk(&ns.path().join("textures/gui"), &mut files);
+                }
+            }
+        }
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
@@ -686,6 +694,45 @@ pub struct HudVertex {
     /// The `GLINT_TEXTURING` UV into the repeating glint texture, unused
     /// unless `uv.x >= 2`.
     pub glint_uv: [f32; 2],
+}
+/// Sutherland-Hodgman against one half plane, interpolating every attribute.
+fn clip_polygon(poly: &[HudVertex], axis: usize, limit: f32, keep_below: bool) -> Vec<HudVertex> {
+    let inside = |v: &HudVertex| {
+        if keep_below {
+            v.pos[axis] < limit
+        } else {
+            v.pos[axis] >= limit
+        }
+    };
+    let lerp = |a: &HudVertex, b: &HudVertex, t: f32| {
+        let mix = |p: f32, q: f32| p + (q - p) * t;
+        let mut v = *a;
+        v.pos = [mix(a.pos[0], b.pos[0]), mix(a.pos[1], b.pos[1])];
+        v.uv = [mix(a.uv[0], b.uv[0]), mix(a.uv[1], b.uv[1])];
+        v.depth = mix(a.depth, b.depth);
+        v.glint_uv = [
+            mix(a.glint_uv[0], b.glint_uv[0]),
+            mix(a.glint_uv[1], b.glint_uv[1]),
+        ];
+        v.pos[axis] = limit;
+        v
+    };
+    let mut out = Vec::with_capacity(poly.len() + 2);
+    for i in 0..poly.len() {
+        let (a, b) = (&poly[i], &poly[(i + 1) % poly.len()]);
+        let (ia, ib) = (inside(a), inside(b));
+        if ia {
+            out.push(*a);
+        }
+        if ia != ib {
+            out.push(lerp(
+                a,
+                b,
+                (limit - a.pos[axis]) / (b.pos[axis] - a.pos[axis]),
+            ));
+        }
+    }
+    out
 }
 /// The GUI Scale option (0 = auto).
 pub static GUI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -926,8 +973,8 @@ impl HudBatch {
         }
     }
     /// Clip the quads drawn since `start` to `[x0, x1) x [y0, y1)` (the
-    /// GUI scissor): axis-aligned quads are cut with their UVs, others are
-    /// kept or dropped by their centre.
+    /// GUI scissor): axis-aligned quads are cut with their UVs, others (item
+    /// triangles) are clipped as polygons.
     /// Scale the vertices pushed since `start` about `(cx, cy)` (a GUI pose
     /// matrix of translate, scale, translate back).
     pub fn scale_since(&mut self, start: usize, cx: f32, cy: f32, sx: f32, sy: f32) {
@@ -939,7 +986,11 @@ impl HudBatch {
     pub fn clip_since(&mut self, start: usize, x0: f32, y0: f32, x1: f32, y1: f32) {
         let quads: Vec<[HudVertex; 6]> = self.vertices[start..].as_chunks::<6>().0.to_vec();
         self.vertices.truncate(start);
+        // Where each source quad now begins, to move the blend ranges (foil
+        // items are an additive run) along with their vertices.
+        let mut moved = Vec::with_capacity(quads.len() + 1);
         for q in quads {
+            moved.push(self.vertices.len() as u32);
             let corners = [q[0], q[1], q[2], q[5]];
             let (mut x_lo, mut x_hi) = (f32::INFINITY, f32::NEG_INFINITY);
             let (mut y_lo, mut y_hi) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -958,10 +1009,26 @@ impl HudBatch {
                 find(x_lo, y_hi),
             );
             let (Some(tl), Some(tr), Some(br), Some(bl)) = rect else {
-                let cx = corners.iter().map(|v| v.pos[0]).sum::<f32>() / 4.0;
-                let cy = corners.iter().map(|v| v.pos[1]).sum::<f32>() / 4.0;
-                if cx >= x0 && cx < x1 && cy >= y0 && cy < y1 {
-                    self.vertices.extend_from_slice(&q);
+                // Item geometry arrives as triangles: clip each against the
+                // rectangle and re-emit the fan, so a triangle straddling the
+                // edge keeps its visible part instead of vanishing whole.
+                for tri in [[q[0], q[1], q[2]], [q[3], q[4], q[5]]] {
+                    let area = (tri[1].pos[0] - tri[0].pos[0]) * (tri[2].pos[1] - tri[0].pos[1])
+                        - (tri[2].pos[0] - tri[0].pos[0]) * (tri[1].pos[1] - tri[0].pos[1]);
+                    if area == 0.0 {
+                        continue;
+                    }
+                    let mut poly = tri.to_vec();
+                    for (axis, limit, keep_below) in
+                        [(0, x0, false), (0, x1, true), (1, y0, false), (1, y1, true)]
+                    {
+                        poly = clip_polygon(&poly, axis, limit, keep_below);
+                    }
+                    for i in 1..poly.len().saturating_sub(1) {
+                        // A triangle as the quad `a, b, c, c`.
+                        let (a, b, c) = (poly[0], poly[i], poly[i + 1]);
+                        self.vertices.extend_from_slice(&[a, b, c, a, c, c]);
+                    }
                 }
                 continue;
             };
@@ -985,6 +1052,14 @@ impl HudBatch {
                 tl.color,
             );
         }
+        moved.push(self.vertices.len() as u32);
+        let at = |v: u32| moved[((v as usize).saturating_sub(start) / 6).min(moved.len() - 1)];
+        for (range, _) in &mut self.blends {
+            if range.start as usize >= start {
+                *range = at(range.start)..at(range.end);
+            }
+        }
+        self.blends.retain(|(range, _)| !range.is_empty());
     }
     /// `blit` of the top-left `w x h` texels of a `tw x th` texture.
     pub fn sprite_region(
@@ -1859,6 +1934,57 @@ impl HudRenderer {
 mod tests {
     use super::*;
 
+    #[test]
+    fn clip_since_keeps_the_visible_part_of_a_straddling_triangle() {
+        let mut batch = HudBatch::new([320, 240]);
+        let start = batch.vertices.len();
+        // A right triangle (a quad `a, b, c, c`) whose centre lies outside the rect.
+        batch.quad(
+            [[0.0, 0.0], [16.0, 0.0], [0.0, 16.0], [0.0, 16.0]],
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]],
+            u32::MAX,
+        );
+        batch.clip_since(start, 0.0, 0.0, 16.0, 4.0);
+        assert!(!batch.vertices.is_empty());
+        assert!(batch.vertices.iter().all(|v| v.pos[1] <= 4.0));
+        let area: f32 = batch
+            .vertices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                ((t[1].pos[0] - t[0].pos[0]) * (t[2].pos[1] - t[0].pos[1])
+                    - (t[2].pos[0] - t[0].pos[0]) * (t[1].pos[1] - t[0].pos[1]))
+                    .abs()
+                    / 2.0
+            })
+            .sum();
+        // Rows 0..4 of the triangle: 16 * 16 / 2 - 12 * 12 / 2.
+        assert!((area - 56.0).abs() < 1e-3, "{area}");
+    }
+
+    #[test]
+    fn clip_since_moves_blend_ranges_with_their_vertices() {
+        let mut batch = HudBatch::new([320, 240]);
+        let start = batch.vertices.len();
+        let tri = |batch: &mut HudBatch, y: f32| {
+            batch.quad(
+                [[0.0, y], [8.0, y], [0.0, y + 8.0], [0.0, y + 8.0]],
+                [[0.0; 2]; 4],
+                u32::MAX,
+            );
+        };
+        tri(&mut batch, 100.0); // outside, dropped
+        let foil = batch.vertices.len();
+        tri(&mut batch, 0.0); // straddles the bottom edge
+        batch.blend_since(foil, Blend::Additive);
+        batch.clip_since(start, 0.0, 0.0, 16.0, 4.0);
+        assert_eq!(
+            batch.blends,
+            [(0..batch.vertices.len() as u32, Blend::Additive)]
+        );
+    }
+
     /// Write a PNG `width x height` whose `frames` stacked rows are solid
     /// colours, then its mcmeta beside it.
     fn write_strip(path: &Path, width: u32, height: u32, frames: &[[u8; 4]], mcmeta: Option<&str>) {
@@ -2049,6 +2175,33 @@ mod tests {
             let r = atlas.sprites[name];
             assert_eq!(((r.w, r.h), r.texels(size)), (gui, texels), "{name}");
         }
+    }
+    /// A content mod's GUI textures join the atlas under its namespace;
+    /// its other textures and vanilla's names stay as they were.
+    #[test]
+    fn a_content_mods_gui_textures_are_sprites_under_its_namespace() {
+        let root = std::env::temp_dir().join(format!("horizon-mod-gui-{}", std::process::id()));
+        write_png(&root, "gui/container/furnace", 256, 256);
+        let png = |rel: &str, w: u32, h: u32| {
+            let path = root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut encoder = png::Encoder::new(fs::File::create(path).unwrap(), w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let pixels = vec![255; (w * h * 4) as usize];
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&pixels)
+                .unwrap();
+        };
+        png("assets/mymod/textures/gui/container/machine.png", 176, 166);
+        png("assets/mymod/textures/block/machine.png", 16, 16);
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(atlas.sprites["mymod:gui/container/machine"].w, 176);
+        assert!(atlas.sprites.contains_key("gui/container/furnace"));
+        assert!(!atlas.sprites.contains_key("mymod:block/machine"));
     }
     #[test]
     fn the_default_textures_keep_a_4096_wide_atlas() {

@@ -566,6 +566,7 @@ impl Game<'_> {
         p: &Projectile,
         at: glam::Vec3,
         light: u32,
+        partial: f32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
         static MODEL: std::sync::OnceLock<Option<horizon_client::mobs::Part>> =
@@ -583,7 +584,8 @@ impl Game<'_> {
         else {
             return;
         };
-        let age = p.age as f32;
+        // `EntityRenderState.ageInTicks`: the tick count plus the partial tick.
+        let age = p.age as f32 + partial;
         let mut poses = horizon_client::mobs::anim::Poses::new(model);
         poses.yrot("wind_charge", -age * 16.0_f32.to_radians());
         poses.yrot("wind", age * 16.0_f32.to_radians());

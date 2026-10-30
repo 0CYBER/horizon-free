@@ -174,7 +174,7 @@ impl Game<'_> {
         {
             s.properties.insert("lit".into(), lit.to_string());
             if let Ok(id) = self.pack.assets.registry.resolve(&s) {
-                self.world.set(pos.0, pos.1, pos.2, id)?;
+                self.level_set([pos.0, pos.1, pos.2], id)?;
             }
         }
         Ok(())

@@ -9,6 +9,7 @@ pub mod anticheat;
 pub mod attributes;
 pub mod border;
 pub mod chunks;
+pub mod code_of_conduct;
 mod command_order;
 pub mod command_suggestions;
 pub mod commands;
@@ -176,6 +177,10 @@ pub struct NetConfig {
     /// server.properties `resource-pack`: offered to every player during
     /// configuration (a dedicated server's; MinecraftServer.getServerResourcePack).
     pub resource_pack: Option<crate::server::properties::ResourcePackInfo>,
+    /// `enable-code-of-conduct`: the `codeofconduct/<language>.txt` texts
+    /// (`MinecraftServer.getCodeOfConducts`), offered before the resource
+    /// pack. Empty: no code of conduct.
+    pub code_of_conducts: Vec<(String, String)>,
     /// MinecraftServer.serverLinks (a dedicated server's `bug-report-link`):
     /// sent in configuration when non-empty
     /// (ServerConfigurationPacketListenerImpl.startConfiguration).
@@ -217,6 +222,7 @@ impl NetConfig {
             online: None,
             log: None,
             resource_pack: None,
+            code_of_conducts: Vec::new(),
             server_links: Vec::new(),
             horizon_clients_only: false,
             levels: crate::chunk::LevelShapes::VANILLA,
@@ -311,7 +317,8 @@ impl SecureChat {
 
 /// State shared with the connection threads.
 pub struct Shared {
-    pub sync: Arc<data::SyncData>,
+    /// What the next login is sent; `PlayerList.reloadResources` swaps it.
+    sync: Mutex<Arc<data::SyncData>>,
     pub events: Sender<NetEvent>,
     pub config: NetConfig,
     motd: Mutex<String>,
@@ -325,6 +332,14 @@ pub struct Shared {
     random: Mutex<u64>,
 }
 impl Shared {
+    /// The registries and tags a new connection is sent.
+    pub fn sync(&self) -> Arc<data::SyncData> {
+        self.sync.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    /// `/reload`: the data new connections are sent from now on.
+    pub fn set_sync(&self, sync: Arc<data::SyncData>) {
+        *self.sync.lock().unwrap_or_else(|e| e.into_inner()) = sync;
+    }
     pub fn next_id(&self) -> u32 {
         self.next.fetch_add(1, Ordering::Relaxed)
     }
@@ -506,7 +521,7 @@ impl Lan {
         let (tx, events) = channel();
         let (listen, port, announce) = (config.listen, config.port, config.announce);
         let shared = Arc::new(Shared {
-            sync,
+            sync: Mutex::new(sync),
             events: tx,
             motd: Mutex::new(config.motd.clone()),
             max_players: AtomicUsize::new(config.max_players),

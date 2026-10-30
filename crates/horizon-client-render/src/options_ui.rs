@@ -141,8 +141,7 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the quit keys and the mouse don't read them yet.
-                | Opt::QuitShortcuts
+                // Saved, but the mouse doesn't read it yet.
                 | Opt::CtrlClickEmulatesRightClick
         )
     }
@@ -3431,6 +3430,17 @@ mod tests {
         assert!(!loaded.quit_shortcuts);
         assert!(loaded.ctrl_click_emulates_right_click);
         assert!(loaded.toggle_attack && loaded.toggle_use);
+    }
+
+    #[test]
+    fn quit_shortcuts_option_can_be_switched() {
+        assert!(Opt::QuitShortcuts.available());
+        let s = Settings::default();
+        assert_eq!(Opt::QuitShortcuts.caption(), "options.quitShortcuts");
+        assert_eq!(
+            Opt::QuitShortcuts.tooltip_key(&s),
+            "options.quitShortcuts.tooltip"
+        );
     }
 
     #[test]
