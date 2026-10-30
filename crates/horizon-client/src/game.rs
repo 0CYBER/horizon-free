@@ -6743,7 +6743,9 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(batch);
         self.slots().into_iter().find(|&i| {
             let (sx, sy) = self.slot_position(i);
-            x >= ox + sx && x < ox + sx + 16.0 && y >= oy + sy && y < oy + sy + 16.0
+            // AbstractContainerScreen.isHovering: the 16x16 slot grows by one
+            // pixel on every side, so the gaps between slots still hover one.
+            x >= ox + sx - 1.0 && x < ox + sx + 17.0 && y >= oy + sy - 1.0 && y < oy + sy + 17.0
         })
     }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
