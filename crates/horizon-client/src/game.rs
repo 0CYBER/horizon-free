@@ -10925,8 +10925,7 @@ impl Game<'_> {
         ];
         if self.lan_acting.is_some() {
             self.audio.play_unshared(&sound, Some(at), 1.0, 1.0);
-            self.guest_player_sounds
-                .push((sound.clone(), at, 1.0, 1.0));
+            self.guest_player_sounds.push((sound.clone(), at, 1.0, 1.0));
         } else {
             self.audio.play(&sound, Some(at), 1.0, 1.0);
         }

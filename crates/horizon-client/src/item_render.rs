@@ -381,7 +381,7 @@ fn argb_pixels(rgba: &[u8]) -> Vec<u32> {
         .collect()
 }
 impl FileSprites {
-    fn translucent(&self, sprite: &str) -> bool {
+    pub(crate) fn translucent(&self, sprite: &str) -> bool {
         let known = |this: &Self| this.translucent.lock().ok()?.get(sprite).copied();
         known(self).unwrap_or_else(|| {
             self.mask(sprite);
@@ -892,6 +892,7 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     /// One frame's glint is read once and shared: every item drawn from the
     /// same `GlintFrame` scrolls by the same phase, and without the atlas
@@ -993,6 +994,88 @@ mod tests {
             serde_json::json!({"a": 3, "b": ["x"], "c": 1.5})
         );
     }
+    #[test]
+    fn slime_block_png_keeps_partial_alpha_for_item_translucency() {
+        // Indexed PNGs with tRNS (slime/honey) must expand to fractional alpha
+        // or dropped-item quads stay on the opaque sheet (#4508).
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION)
+            .join("assets/minecraft/textures/block");
+        for name in ["slime_block.png", "honey_block_side.png"] {
+            let path = root.join(name);
+            if !path.exists() {
+                return;
+            }
+            let (_w, _h, rgba) =
+                crate::hud::decode(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let partial = rgba.chunks(4).filter(|px| matches!(px[3], 1..=254)).count();
+            assert!(
+                partial > 0,
+                "{name}: expected tRNS partial alpha after decode, got none (len={})",
+                rgba.len()
+            );
+        }
+    }
+
+    #[test]
+    fn slime_and_honey_block_item_models_keep_the_outer_shell() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root
+            .join("assets/minecraft/items/slime_block.json")
+            .exists()
+        {
+            return;
+        }
+        let renderer = ItemRenderer::load(&root).expect("item renderer");
+        for (id, model) in [
+            ("slime", "minecraft:block/slime_block"),
+            ("honey", "minecraft:block/honey_block"),
+        ] {
+            let baked = horizon_assets::item_bake::bake_item_model(
+                &renderer.library,
+                &renderer.sprites,
+                model,
+            )
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+            // Inner cube (no cullface) + outer cube (6 cullfaces) → well over 6 quads.
+            assert!(
+                baked.quads.len() >= 12,
+                "{id}: expected inner+outer, got {} quads",
+                baked.quads.len()
+            );
+            let culled = baked.quads.iter().filter(|q| q.cull.is_some()).count();
+            assert!(
+                culled >= 6,
+                "{id}: outer shell cullface quads missing (culled={culled})"
+            );
+        }
+    }
+
+    #[test]
+    fn slime_block_sprite_is_marked_translucent_on_the_item_renderer() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root
+            .join("assets/minecraft/textures/block/slime_block.png")
+            .exists()
+        {
+            return;
+        }
+        let renderer = ItemRenderer::load(&root).expect("item renderer");
+        assert!(
+            renderer.sprites.translucent("block/slime_block"),
+            "slime_block must use the translucent item sheet"
+        );
+        assert!(
+            renderer.sprites.translucent("block/honey_block_side"),
+            "honey_block_side must use the translucent item sheet"
+        );
+    }
+
     #[test]
     fn normals_follow_the_inverse_transpose() {
         let m = Mat4::from_scale(Vec3::new(2.0, 1.0, 1.0));
