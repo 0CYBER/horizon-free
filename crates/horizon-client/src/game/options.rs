@@ -19,11 +19,17 @@ pub(super) const CONTROL_HELP: &[&str] = &[
 impl Game<'_> {
     pub(super) fn save_title_options(&mut self) {
         if let Some(title) = &self.title
-            && title.last_server != self.settings.file.string("lastServer")
+            && (title.last_server != self.settings.file.string("lastServer")
+                || title.skip_multiplayer_warning
+                    != self.settings.file.bool("skipMultiplayerWarning"))
         {
             self.settings.file.set(
                 "lastServer",
                 horizon_client::options_file::V::Str(title.last_server.clone()),
+            );
+            self.settings.file.set(
+                "skipMultiplayerWarning",
+                horizon_client::options_file::V::Bool(title.skip_multiplayer_warning),
             );
             self.settings.save(&Self::options_path());
         }
@@ -175,11 +181,23 @@ impl Game<'_> {
             .options
             .shortcut(&self.gui.atlas, shortcut, &mut self.clipboard)
     }
-    pub(super) fn options_scroll(&mut self, amount: f32) {
+    pub(super) fn options_scroll(&mut self, amount: f32) -> Result<()> {
+        let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
+            [r.config.width as i32, r.config.height as i32]
+        });
+        if self.ui.options.page() == Page::Video && self.has_control_down() {
+            // VideoSettingsScreen.mouseScrolled: Ctrl with the wheel steps the GUI scale.
+            let mut ui = std::mem::take(&mut self.ui.options);
+            let events = ui.video_wheel_gui_scale(&mut self.settings, framebuffer, amount);
+            self.ui.options = ui;
+            return self.handle_option_events(events);
+        }
         let size = self.gui_size();
-        self.ui
-            .options
-            .scroll_at(&self.settings, size, self.cursor, amount);
+        let events =
+            self.ui
+                .options
+                .wheel(&mut self.settings, size, self.cursor, framebuffer, amount);
+        self.handle_option_events(events)
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {
@@ -196,9 +214,11 @@ impl Game<'_> {
                 Event::Changed => {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
-                    self.sync_mods();
                     self.sync_agent_control();
                     self.ui.options.agent_status = self.agent_status_lines();
+                }
+                Event::SliderDrag => {
+                    self.apply_settings();
                 }
                 Event::CopyAgentDetails => {
                     use horizon_client::clipboard::Clipboard;
@@ -229,6 +249,15 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
+                Event::DataPacks(ids) => {
+                    if let Some(title) = &mut self.title {
+                        title.set_data_packs(ids);
+                    }
+                }
+                Event::OpenDataPackFolder(dir) => {
+                    let _ = std::fs::create_dir_all(&dir);
+                    super::packs::open_folder(&dir);
+                }
                 Event::OpenModFolder => {
                     let dir = Self::options_path().with_file_name(horizon_client::mod_list::DIR);
                     let _ = std::fs::create_dir_all(&dir);
@@ -245,7 +274,7 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
-                Event::ModSettings(i) => self.open_mod_screen(i, true),
+                Event::NativeSettings(i) => self.native_settings_refresh(i),
                 Event::NativeButton(i, b) => self.native_settings_event(i, b),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
@@ -269,11 +298,18 @@ impl Game<'_> {
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
-            r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
+            r.set_world_post(
+                s.horizon.resolution_scale as f32 / 100.0,
+                s.horizon.fxaa,
+                s.horizon.taa,
+                s.horizon.upscaling.ratio(),
+            );
             r.set_hdr(
                 s.horizon.hdr,
-                s.horizon.hdr_paper_white as f32,
-                s.horizon.hdr_peak as f32,
+                s.horizon.paper_white_nits() as f32,
+                s.horizon.peak_nits() as f32,
+                s.horizon.hdr_black_level as f32 / 100.0,
+                s.horizon.hdr_ui_brightness as f32 / 100.0,
                 &Self::options_path().with_file_name(horizon_client::graphics::HDR_MARKER),
             );
         }
