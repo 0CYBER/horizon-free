@@ -931,7 +931,7 @@ impl Game<'_> {
     }
 }
 
-fn player_preview_quads(
+pub(super) fn player_preview_quads(
     mut verts: Vec<horizon_client::mesher::Vertex>,
     gui: glam::Mat4,
     fire: Option<(f32, f32)>,
