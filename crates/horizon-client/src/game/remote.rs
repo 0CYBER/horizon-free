@@ -361,7 +361,11 @@ impl Game<'_> {
             .and_then(|p| Builtin::load(&p).ok())
             .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
-        let view = client_view_distance(self.settings.render_distance);
+        // Options.createInformation: what the server learns about this player,
+        // sent again when one of those options changes.
+        let info = self
+            .settings
+            .client_information(client_view_distance(self.settings.render_distance));
         if local.is_none() {
             horizon_client::crash::set_detail(
                 "Server",
@@ -382,7 +386,9 @@ impl Game<'_> {
         );
         self.server_packs_connect(local.is_none().then_some(address), user);
         let session = match local {
-            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone(), root.clone()),
+            Some(pipe) => {
+                Session::connect_local(pipe, name, info.clone(), lang.clone(), root.clone())
+            }
             None => {
                 self.extras_connecting(address, name);
                 match cookies {
@@ -390,7 +396,7 @@ impl Game<'_> {
                         address,
                         name,
                         auth.clone(),
-                        view,
+                        info.clone(),
                         lang.clone(),
                         cookies,
                         root.clone(),
@@ -399,7 +405,7 @@ impl Game<'_> {
                         address,
                         name,
                         auth.clone(),
-                        view,
+                        info.clone(),
                         lang.clone(),
                         root.clone(),
                     ),
@@ -494,7 +500,7 @@ impl Game<'_> {
             carried: None,
             abilities: None,
             loaded_sent: false,
-            sent_info: self.settings.client_information(view),
+            sent_info: info,
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
