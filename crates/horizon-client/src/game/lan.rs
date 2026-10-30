@@ -1012,6 +1012,28 @@ pub const HELP: &[&str] = &[
     "lan status                     the hosting state and the guests",
 ];
 
+/// With the game mode forced, the guests online take the default mode
+/// (setting a mode does nothing when it is already theirs). A world open to
+/// LAN is an integrated server, which leaves out the players who have game
+/// master permission; a dedicated server does not.
+fn enforce_guest_game_mode(host: &mut LanHost) {
+    if !host.hub.config.force_game_mode {
+        return;
+    }
+    let mode = host.hub.config.default_game_mode;
+    let spares_operators = !host.hub.config.dedicated || host.hub.config.integrated;
+    let stale: Vec<u32> = host
+        .hub
+        .guests
+        .iter()
+        .filter(|g| g.game_mode != mode && !(spares_operators && g.permission >= 2))
+        .map(|g| g.conn)
+        .collect();
+    for conn in stale {
+        host.hub.set_game_mode(conn, mode);
+    }
+}
+
 impl Game<'_> {
     /// `horizon-ctl lan ...`.
     pub(super) fn lan_control(&mut self, words: &[&str]) -> Result<Option<serde_json::Value>> {
@@ -1442,6 +1464,9 @@ impl Game<'_> {
         self.level.creative = mode == 1;
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.default_game_mode = mode;
+            // `setWorldGameType` and `DefaultGameModeCommands.setMode`: a
+            // world that forces its mode puts the guests online in it.
+            enforce_guest_game_mode(host);
         }
     }
 
@@ -1459,25 +1484,7 @@ impl Game<'_> {
             host.settings.force_game_mode = force;
             host.hub.config.guest_commands = effective;
             host.hub.config.force_game_mode = force;
-            // MinecraftServer.enforceGameTypeForPlayers: the guests online
-            // take the default mode (`setGameMode` does nothing when it is
-            // already theirs). A world open to LAN is an IntegratedServer,
-            // whose `updateGameModeBasedOnPermission` leaves out the players
-            // who have game master permission; a dedicated server does not.
-            if force {
-                let mode = host.hub.config.default_game_mode;
-                let spares_operators = !host.hub.config.dedicated || host.hub.config.integrated;
-                let stale: Vec<u32> = host
-                    .hub
-                    .guests
-                    .iter()
-                    .filter(|g| g.game_mode != mode && !(spares_operators && g.permission >= 2))
-                    .map(|g| g.conn)
-                    .collect();
-                for conn in stale {
-                    host.hub.set_game_mode(conn, mode);
-                }
-            }
+            enforce_guest_game_mode(host);
             host.hub.resend_commands();
         }
     }
