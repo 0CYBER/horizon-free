@@ -1,11 +1,15 @@
 # horizon-mod-registry
 
 The service behind the registry's submission form (`playhorizon.dev/mods/submit`). A creator signs in with GitHub and
-sends a file with its page; the service runs the file's own checks (`horizon_mods::index::inspect`, the signature, the
-entry's fields), uploads it to the `staging` release of
-[horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) as `<sha256>.<extension>`, and opens a pull
-request adding or updating `mods/<id>.toml`. That repository's CI checks it again, with a trial run of a mod in the
-sandbox; reviewers decide, and merging publishes. Formats and rules: [docs/api/mod-index.md](../../docs/api/mod-index.md).
+**lists a project by its GitHub repository and a page** (`repo` plus name, summary, licence...): the service checks that the
+repository is public and opens a pull request adding `mods/<id>.toml` to
+[horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods), where a reviewer reads the repository once.
+**It takes no versions for such a project**: they are the repository's GitHub releases, read and checked by that
+repository's CI with no pull request ("publish a GitHub release in <repo>", a 409). Projects listed before that
+(no `repo`) can still be sent as a file: the service runs the file's own checks
+(`horizon_mods::index::inspect`, the signature, the entry's fields), uploads it to the `staging` release as
+`<sha256>.<extension>` and opens a pull request adding or updating the entry. Formats and rules:
+[docs/api/mod-index.md](../../docs/api/mod-index.md).
 
 Signed-in players also rate published projects, 1 to 5 stars: one rating per GitHub account and project, which they can
 change, never their own project's. That is the only data it keeps, in one SQLite file (`REGISTRY_DB`); it only ever
@@ -18,7 +22,7 @@ is used once, to read them, and dropped. The sign-in asks for no scope.
 | `GET /api/mods/auth/callback` | GitHub's redirect: sets the session, back to `/mods/submit` or the `back` page |
 | `POST /api/mods/auth/logout` | Ends it |
 | `GET /api/mods/me` | `{login, csrf}`, or 401 |
-| `POST /api/mods/submit` | Multipart: `entry` (JSON: `id kind name summary description authors license source icon key signature version game changelog`) and `file`; `{pull_request}` or `{error}` |
+| `POST /api/mods/submit` | Multipart: `entry` (JSON: `id kind name summary description authors license icon key`, and either `repo` (no file: lists the project) or `source signature version game changelog` with the `file` (a project with no `repo`)); `{pull_request}` or `{error}` |
 | `GET /api/mods/ratings` | `{projects: {<id>: {average, count}}}` for every rated project; cached a minute |
 | `GET /api/mods/<id>/rating` | The signed-in account's own `{stars}` (null when it hasn't rated), or 401 |
 | `POST /api/mods/<id>/rating` | JSON `{stars}`, 1 to 5: sets or changes it; `{stars, average, count}` or `{error}` |
@@ -31,7 +35,7 @@ is a pull request by hand.
 
 ## Owner updates
 
-A reviewer's approval is not needed for an *owner update*: the submitter's login is in the entry's `owners` on the
+Only for projects with no `repo` (a project listed by its repository has no update to send). A reviewer's approval is not needed for an *owner update*: the submitter's login is in the entry's `owners` on the
 registry's `main`, and the only change to the entry is one new version (key, owners, icon, kind, id, name, summary,
 description, authors, licence and source as they were; a signature when the entry has a key). Then, and only when
 `REGISTRY_UPDATE_KEY` is set, the pull request's body ends with a trailer and it gets the label `owner-update`:

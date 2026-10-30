@@ -7,7 +7,7 @@ RETURN, MODIFY_ARG, OVERWRITE...; the tool's README lists them). A port such as 
 one module. Start a mod from [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template).
 
 Native mods are native code with the player's rights, not sandboxed. The launcher turns them on only when the player
-installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review; and
+installs one (after a notice) and builds them only behind a red warning; the registry lists one only after a review (its later releases are checked by machine); and
 they play in a game of their own, built for the instance they are installed in.
 
 ## Pinned to a Nightly
@@ -78,13 +78,16 @@ block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may can
 drops; `native_place_block` hears a block placed from an item (`BlockItem.place`). To stop a placement, a mod claims
 `native_use_item_on`, which runs before it. Bundles that use them need `"hooks": 14`.
 
-API 15 adds what a server mod needs to guard land and move players. `native_right_click_block` hears a player's right
+API 15 adds block entities for a mod's blocks (`native_block_entity`, `native_block_entity_ticks`,
+`native_block_entity_tick`): made when the block is placed, ticked on the server and saved with the chunk. Bundles that use them need `"hooks": 15`.
+
+API 16 adds what a server mod needs to guard land and move players. `native_right_click_block` hears a player's right
 click on a block before the block's own use (a chest, a door, a lever) and the item's, and may cancel it: nothing
 happens and the player sees the block as it is. `native_acting_player` says who acts inside a player's hook (UUID,
 name, level, position, game mode, health); `native_run_command` runs a command as the server's console (level 4, no
 output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player across levels; `native_action_bar`
 tells a player why, even inside their own hook; and the players
-`native_server_players` lists carry their health. Bundles that use them need `"hooks": 15`.
+`native_server_players` lists carry their health. Bundles that use them need `"hooks": 16`.
 
 ## What the launcher does
 
@@ -201,9 +204,12 @@ Only the native builds an instance plays are kept (`native_mods::prune`); `nativ
   versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
   Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
-  has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
+  has read the source and the repository they come from. Its entry names the GitHub repository (`repo`); each
+  release of it with a `.hnmod` asset is a version once the bundle passes the registry's checks, with no further
+  review (nothing is built or run by the registry; the player's launcher builds it behind its warning). The `.hnmod` contains `.rs` and `.toml` files and may contain data files under
   `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
-  The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  The file is pinned by SHA-256 like every registry file, and the version, game and pins are the bundle's own
+  `horizon-native.json`. `revoked.toml` takes a bad release down.
   A content mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod`; removing the mod removes both.
@@ -272,14 +278,14 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
   component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
   many it counted, took or gave; the player's screen follows as for any change to their inventory.
-- API 15: `native_acting_player()`, the player whose state is swapped in (inside `native_perform_command`,
+- API 16: `native_acting_player()`, the player whose state is swapped in (inside `native_perform_command`,
   `native_right_click_block`, `native_use_item_on`, `native_destroy_block`...; None elsewhere);
   `native_run_command(line)`, a command run as the server's console (level 4, no output), only where no player is
   swapped in (`native_tick`, a menu hook): a teleport to another level (`execute in minecraft:the_nether run tp Alex 0
   70 0`) lands at the next tick's start. `native_server_players()` and the acting player carry `health` (0 once dead).
   `native_action_bar(uuid, text)`, a line over a player's hotbar, which also reaches the acting player inside their
   hook (where `native_tell` reaches nobody).
-- **`native_right_click_block(pos, face, canceled)`** (API 15): a player's right click on a block, before the block's
+- **`native_right_click_block(pos, face, canceled)`** (API 16): a player's right click on a block, before the block's
   own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
   without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of
   claimed land.

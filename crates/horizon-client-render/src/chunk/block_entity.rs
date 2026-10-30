@@ -80,8 +80,18 @@ pub enum BlockEntity {
     Shelf(Box<Shelf>),
     /// `ChiseledBookShelfBlockEntity`: a `Container` of six one-book slots.
     ChiseledBookshelf(Box<ChiseledBookshelf>),
+    /// A block entity of a mod (`native_block_entity`), kept as its saved
+    /// compound for the mod to read and change.
+    Mod(Box<ModBlockEntity>),
     /// `PotentSulfurBlockEntity` (`game/potent_sulfur.rs`).
     PotentSulfur(PotentSulfur),
+}
+/// A mod's block entity: its type id (`mymod:machine`) and its saved
+/// compound without `id`, `x`, `y` and `z`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModBlockEntity {
+    pub id: String,
+    pub nbt: Compound,
 }
 /// `PotentSulfurBlockEntity`: the seconds left to the geyser's next change of
 /// state (`waitingCountdown`, saved as `countdown`) and the game time of its
