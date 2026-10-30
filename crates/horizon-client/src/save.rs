@@ -3840,6 +3840,9 @@ struct SavedLodSampler<G: ChunkGenerator> {
     /// Reduced far detail: saved chunks only in tiles up to
     /// `SAVED_LOD_STRIDE_REDUCED` blocks a column.
     approximate: bool,
+    /// Chunks the generator decorated for far terrain alone, kept from
+    /// earlier sessions; saved chunks take precedence over them.
+    generated: Arc<crate::lod::cache::DiskCache>,
 }
 impl<G: ChunkGenerator> SavedLodSampler<G> {
     fn saved_columns(&mut self, key: (i32, i32)) -> Option<LodSurfaces> {
@@ -3869,6 +3872,7 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
             cache: Default::default(),
             details: Vec::new(),
             approximate: self.approximate,
+            generated: self.generated.clone(),
         }))
     }
     fn set_approximate(&mut self, approximate: bool) {
@@ -3878,7 +3882,13 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
     fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
         let mut missing = Vec::new();
         for &key in chunks {
-            if let Some(columns) = self.saved_columns(key) {
+            // Generated chunks from earlier sessions answer only these
+            // requests: reading them for every sampled cell of a coarse tile
+            // slowed sampling more than it saved.
+            if let Some(columns) = self
+                .saved_columns(key)
+                .or_else(|| self.generated.get(key.0, key.1))
+            {
                 self.details.push((key, columns));
             } else {
                 missing.push(key);
@@ -3891,7 +3901,11 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
         for (key, generated) in self.inner.drain_details() {
             // A generation batch also returns neighbouring, unrequested chunks.
             // Their saved builds must take precedence too.
-            details.push((key, self.saved_columns(key).unwrap_or(generated)));
+            let columns = self.saved_columns(key).unwrap_or_else(|| {
+                self.generated.put(key.0, key.1, &generated);
+                generated
+            });
+            details.push((key, columns));
         }
         details
     }
@@ -4247,12 +4261,17 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn lod_sampler(self: Arc<Self>) -> Box<dyn crate::streaming::LodSampler> {
         let inner = ChunkGenerator::lod_sampler(self.inner.clone());
+        let generated = Arc::new(crate::lod::cache::DiskCache::new(
+            self.save.root.join("data/horizon_far_terrain"),
+            crate::lod::cache::build_key(self.registry.registry.len(), self.biomes.list.len()),
+        ));
         Box::new(SavedLodSampler {
             generator: self,
             inner,
             cache: Default::default(),
             details: Vec::new(),
             approximate: false,
+            generated,
         })
     }
     fn load(&self, x: i32, z: i32) -> Option<Chunk> {
@@ -4851,6 +4870,7 @@ mod tests {
             cache: Default::default(),
             details: Vec::new(),
             approximate: false,
+            generated: Arc::new(crate::lod::cache::DiskCache::new(dir.join("far"), 1)),
         };
         use crate::streaming::LodSampler;
         sampler.request_detail(&[(-2, 3)], [-32, 48]);
@@ -4871,6 +4891,15 @@ mod tests {
             "unrequested batch neighbours must preserve saved builds"
         );
         assert!(Arc::ptr_eq(&details[1].1, &generated));
+        assert!(
+            sampler.generated.get(-2, 3).is_none(),
+            "saved builds are not cached as generated"
+        );
+        assert_eq!(sampler.generated.get(-9, 9).unwrap(), generated);
+        // A later session reads the generated chunk back instead of
+        // generating it again.
+        sampler.request_detail(&[(-9, 9)], [-144, 144]);
+        assert_eq!(sampler.drain_details()[0].1, generated);
         sampler.inner =
             crate::streaming::ChunkGenerator::lod_sampler(sampler.generator.inner.clone());
         let grid = sampler.grid(-32, 48, 2, 16);
