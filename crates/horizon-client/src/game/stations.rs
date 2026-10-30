@@ -1609,6 +1609,7 @@ impl Game<'_> {
                     }
                 }
                 Kind::Smithing => {
+                    let mut onboarding: Option<String> = None;
                     let icons = ["smithing_template_netherite_upgrade", "", ""];
                     for (i, icon) in icons.iter().enumerate() {
                         if s.inputs[i].is_none() && !icon.is_empty() {
@@ -1629,14 +1630,57 @@ impl Game<'_> {
                             oy + 46.0,
                         );
                         if inside(local, 65.0, 46.0, 28.0, 21.0) {
-                            tooltip = Some(vec![(
-                                horizon_client::text::Text::literal(self.translate(
-                                    "container.upgrade.error_tooltip",
-                                    "Item can't be upgraded this way",
-                                )),
-                                u32::MAX,
-                            )]);
+                            onboarding = Some(self.translate(
+                                "container.upgrade.error_tooltip",
+                                "Item can't be upgraded this way",
+                            ));
                         }
+                    }
+                    // SmithingScreen.extractOnboardingTooltips: an empty template
+                    // slot asks for a template; an empty base or addition slot says
+                    // what the template wants there.
+                    let hovered = (0..3).find(|&i| {
+                        // AbstractContainerScreen.isHovering: a pixel round the slot.
+                        let (sx, sy) = kind.input_pos(i);
+                        inside(local, sx - 1.0, sy - 1.0, 18.0, 18.0)
+                    });
+                    match (hovered, &s.inputs[0]) {
+                        (Some(0), None) => {
+                            onboarding = Some(self.translate(
+                                "container.upgrade.missing_template_tooltip",
+                                "Add Smithing Template",
+                            ));
+                        }
+                        (Some(slot @ (1 | 2)), Some(template))
+                            if s.inputs[slot].is_none()
+                                && template.item.ends_with("_smithing_template") =>
+                        {
+                            let name = if &*template.item
+                                == "minecraft:netherite_upgrade_smithing_template"
+                            {
+                                "netherite_upgrade"
+                            } else {
+                                "armor_trim"
+                            };
+                            let what = if slot == 1 { "base" } else { "additions" };
+                            let key = format!(
+                                "item.minecraft.smithing_template.{name}.{what}_slot_description"
+                            );
+                            onboarding = Some(self.translate(&key, &key));
+                        }
+                        _ => {}
+                    }
+                    if let Some(text) = onboarding {
+                        // font.split(component, 115).
+                        tooltip = Some(
+                            self.gui
+                                .atlas
+                                .font
+                                .split_lines(&horizon_client::text::Text::literal(text), 115.0)
+                                .into_iter()
+                                .map(|(line, _)| (line, u32::MAX))
+                                .collect(),
+                        );
                     }
                 }
                 Kind::Merchant | Kind::Beacon | Kind::Cartography | Kind::Loom => {}
