@@ -277,9 +277,8 @@ impl Game<'_> {
         m.extra.using_item = ADMIRE;
         m.extra.point = None;
         m.nav_stop();
-        let at = m.center();
-        self.audio
-            .play("minecraft:entity.piglin.admiring_item", Some(at), 1.0, 1.0);
+        // The admiring grunt is `PiglinAi.updateActivity`'s: `piglin::brain_step`
+        // plays it when the activity changes.
     }
     /// `PiglinAi.mobInteract`: hand a piglin a gold ingot (only piglin
     /// currency is accepted from the hand; other loved items are passed over).
