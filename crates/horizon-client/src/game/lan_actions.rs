@@ -2087,6 +2087,37 @@ impl Game<'_> {
         {
             return;
         }
+        // Native mods, where Player.attack starts: a canceled blow does
+        // nothing (game/native_hooks.rs).
+        let aimed = if id == host.host_entity {
+            self.player.as_ref().map(|p| {
+                let at = [p.position.x, p.position.y, p.position.z];
+                ("minecraft:player".to_owned(), at)
+            })
+        } else if let Some(g) = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g))
+        {
+            Some(("minecraft:player".to_owned(), g.position))
+        } else {
+            self.level_entity(id).map(|t| {
+                (
+                    self.target_type(t),
+                    self.target_position(t).unwrap_or_default(),
+                )
+            })
+        };
+        if let Some((kind, at)) = aimed
+            && self.as_guest(host, conn, |g| {
+                let mut canceled = false;
+                g.native_attack_entity(id, &kind, at, &mut canceled);
+                canceled
+            }) == Some(true)
+        {
+            return;
+        }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
             if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
                 && self.pvp_land(host, victim, &strike)
