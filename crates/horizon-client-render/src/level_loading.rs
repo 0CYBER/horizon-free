@@ -165,6 +165,118 @@ pub fn draw_connecting(
     }
 }
 
+/// `FileFixerProgressScreen`'s Cancel button corner on a GUI `w` x `h`:
+/// ((width - 200) / 2, height / 2 + 100), 200 x 20.
+pub fn file_fixer_cancel(w: f32, h: f32) -> (f32, f32) {
+    (((w as i32 - 200) / 2) as f32, (h as i32 / 2 + 100) as f32)
+}
+
+/// `GuiGraphicsExtractor.centeredText` with the screen's grey (`-6250336`) or white.
+fn centered_line(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    text: &Text,
+    x_center: i32,
+    y: i32,
+    color: u32,
+) {
+    let tw = atlas.font.width_text(text) as i32;
+    batch.text_styled(
+        atlas,
+        text,
+        (x_center - tw / 2) as f32,
+        y as f32,
+        color,
+        true,
+    );
+}
+
+/// `FileFixerProgressScreen.extractProgressBar`.
+fn file_fixer_bar(batch: &mut HudBatch, atlas: &HudAtlas, x_center: i32, y: i32, progress: f32) {
+    let left = x_center - 100;
+    batch.fill(atlas, left as f32, y as f32, 200.0, 2.0, opaque(0));
+    batch.fill(
+        atlas,
+        left as f32,
+        y as f32,
+        (progress * 200.0).round(),
+        2.0,
+        opaque(0x00FF00),
+    );
+}
+
+/// `FileFixerProgressScreen.extractRenderState` (with `extractProgress`,
+/// `extractProgressBar`, `extractFileStats`, `extractFileFixerCount`,
+/// `extractTypeText`, `extractTypeProgress` and `extractScanning`) over the menu background: the
+/// title, then either the scanning line or the running fixer's bar, the
+/// totals, the stage, the type's label and its bar and percentage; and
+/// Cancel, inactive once pressed.
+pub fn draw_file_fixer(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    progress: &horizon_world::datafix::progress::UpgradeProgress,
+    cursor: (f32, f32),
+) {
+    const GREY: u32 = 0xFFA0_A0A0;
+    let (w, h) = (batch.width, batch.height);
+    crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+    let (x_center, y_center) = ((w as i32) / 2, (h as i32) / 2);
+    let text_top = y_center - 50;
+    centered_line(
+        batch,
+        atlas,
+        &Text::translate("upgradeWorld.title", &[]),
+        x_center,
+        text_top,
+        u32::MAX,
+    );
+    let total = progress.total_file_fix_stats();
+    if total.total_operations() > 0 {
+        let of_type = progress.type_file_fix_stats();
+        let running = progress.running_file_fixer_stats();
+        let mut y = text_top + 9 + 3;
+        file_fixer_bar(batch, atlas, x_center, y, running.progress());
+        y += 7;
+        // extractFileStats
+        let converted = Text::tr(
+            "upgradeWorld.info.converted",
+            &[&total.finished_operations()],
+        );
+        centered_line(batch, atlas, &converted, x_center, y, GREY);
+        let sum = Text::tr("upgradeWorld.info.total", &[&total.total_operations()]);
+        centered_line(batch, atlas, &sum, x_center, y + 9 + 3, GREY);
+        y += 9 * 2 + 6;
+        // extractFileFixerCount
+        let stage = Text::tr(
+            "upgradeWorld.info.file_fix_stage",
+            &[&running.finished_operations(), &running.total_operations()],
+        );
+        centered_line(batch, atlas, &stage, x_center, y, GREY);
+        y += 9 + 30 - 5;
+        // extractTypeText
+        if let Some(ty) = progress.upgrade_type() {
+            let label = Text::translate(&ty.label_key(), &[]);
+            centered_line(batch, atlas, &label, x_center, y, GREY);
+        }
+        y += 9 + 3;
+        file_fixer_bar(batch, atlas, x_center, y, of_type.progress());
+        y += 7;
+        // extractTypeProgress: Mth.floor(progress * 100)
+        let percent = (of_type.progress() * 100.0).floor() as i32;
+        let text = Text::tr("upgradeWorld.progress.percentage", &[&percent]);
+        centered_line(batch, atlas, &text, x_center, y, GREY);
+    } else {
+        // extractScanning
+        let scanning = Text::translate("upgradeWorld.info.scanning", &[]);
+        centered_line(batch, atlas, &scanning, x_center, text_top + 9 + 3, GREY);
+    }
+    let (x, y) = file_fixer_cancel(w, h);
+    let active = !progress.is_canceled();
+    let hover = crate::ui::hovered(cursor, x, y, 200.0, 20.0);
+    let label = Text::translate("gui.cancel", &[]);
+    crate::ui::button(batch, atlas, x, y, 200.0, 20.0, &label, active, hover);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +289,12 @@ mod tests {
         let eased = smooth(0.0, 1.0);
         assert_eq!(eased, 0.2);
         assert!((smooth(eased, 1.0) - 0.36).abs() < 1e-6);
+    }
+
+    #[test]
+    fn file_fixer_cancel_sits_below_the_centre() {
+        assert_eq!(file_fixer_cancel(427.0, 240.0), (113.0, 220.0));
+        assert_eq!(file_fixer_cancel(426.0, 241.0), (113.0, 220.0));
     }
 
     #[test]

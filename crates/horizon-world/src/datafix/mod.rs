@@ -25,6 +25,7 @@ mod fixes_old;
 mod flat_tables;
 mod items;
 pub mod json;
+pub mod progress;
 pub mod schema;
 mod text;
 
