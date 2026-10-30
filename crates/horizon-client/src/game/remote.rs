@@ -4623,7 +4623,8 @@ impl Game<'_> {
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
         // tropical fish lie on their side without `in_water`, #1591).
         // A frozen level ticks only the players, as below.
-        let (fluids, thundering): (Vec<_>, bool) = {
+        // Entity.isInRain for the wolves, which dry off by their own `Wolf.tick`.
+        let (fluids, rain, thundering): (Vec<_>, Vec<_>, bool) = {
             let w = self.mob_world_base(&[]);
             let players = self.remote.as_ref().map(|r| &r.level_players);
             let fluids = self
@@ -4634,7 +4635,15 @@ impl Game<'_> {
                         .then(|| w.fluids(m.bounds(), m.eye_y()))
                 })
                 .collect();
-            (fluids, w.thundering)
+            let rain = self
+                .mobs
+                .iter()
+                .map(|m| {
+                    m.species() == horizon_client::mobs::Species::Wolf
+                        && horizon_client::mobs::tame::in_rain(m, &w)
+                })
+                .collect();
+            (fluids, rain, w.thundering)
         };
         for (m, fluids) in self.mobs.iter_mut().zip(fluids) {
             if let Some(fluids) = fluids {
@@ -4682,7 +4691,7 @@ impl Game<'_> {
         let players = &r.level_players;
         let mut using = Vec::new();
         let mut mob_fx = Vec::new();
-        for m in &mut self.mobs {
+        for (m, rain) in self.mobs.iter_mut().zip(rain) {
             let player = players.contains_key(&(m.id as i32));
             if (!running && !player) || driven == Some(m.id) {
                 continue;
@@ -4723,8 +4732,11 @@ impl Game<'_> {
             }
             // The particles these mobs' own ticks draw on the client side.
             {
-                use horizon_client::mobs::{Species as S, cube, illusioner, nautilus, wither};
+                use horizon_client::mobs::{
+                    Species as S, cube, illusioner, nautilus, tame, wither,
+                };
                 match m.species() {
+                    S::Wolf => tame::client_tick(m, rain, &mut mob_fx),
                     S::Slime | S::MagmaCube | S::SulfurCube => cube::client_tick(m, &mut mob_fx),
                     S::Nautilus | S::ZombieNautilus => nautilus::client_tick(m, &mut mob_fx),
                     S::Illusioner => illusioner::client_tick(m, &mut mob_fx),
