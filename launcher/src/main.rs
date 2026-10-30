@@ -28,6 +28,7 @@ mod launch_page;
 mod line_edit;
 mod markdown;
 mod mcp;
+mod microsoft;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
@@ -2514,14 +2515,12 @@ impl Launcher {
                         cx.notify();
                     })),
                 ),
-            Some(false) => div().child(
-                button("prepare-sign-in", "Sign in", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.sign_in_to_play();
-                        cx.notify();
-                    },
-                )),
-            ),
+            Some(false) => div().child(microsoft::sign_in_button("prepare-sign-in", &t).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.sign_in_to_play();
+                    cx.notify();
+                }),
+            )),
             None => div().child(prepare),
         };
         let owner = self.owner == Some(true);
@@ -2596,7 +2595,7 @@ impl Launcher {
                             .into_any_element(),
                     ),
                     Some(
-                        button("gate-sign-in", "Sign in", Kind::Primary, &t)
+                        microsoft::sign_in_button("gate-sign-in", &t)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.sign_in_to_play();
                                 cx.notify();
@@ -3455,7 +3454,7 @@ impl Launcher {
             None
         } else {
             Some(
-                button("sign-in", "Sign in with Microsoft", Kind::Secondary, &t)
+                microsoft::sign_in_button("sign-in", &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.start_sign_in();
                         cx.notify();

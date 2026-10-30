@@ -266,7 +266,8 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   game folder: one the player chose with Choose image…, scaled to 128 pixels, or its modpack's
   icon from where it was installed), else the block or colour chosen in the dialog, else its
   mark: the loader's logo (Fabric, Quilt, Forge, NeoForge), the grass block for plain Minecraft,
-  Horizon's for Horizon. The letter tile is the last resort. Pixel-art logos are scaled by whole
+  Horizon's for Horizon. The letter tile is the last resort. The New instance dialog's loader
+  cards show the same logos. Pixel-art logos are scaled by whole
   pixels; each is decoded once per size.
 - **The instance's tabs** (`launcher/src/home_tabs.rs`): under Home's hero, one tab at a time
   instead of one long page: Overview (what Play needs: the instance, the game or its resources,
@@ -280,6 +281,11 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   "needed by another mod", or a local file by name), an update as an amber pill when the browser
   found one, and a switch (a Java jar turned off is renamed `.disabled`). Update all and Add mods
   sit at the strip's end (`HORIZON_LAUNCHER_PAGE=instance-mods`).
+- **Sign in with Microsoft** (`launcher/src/microsoft.rs`): every button that signs in is
+  Microsoft's own, drawn as Microsoft publishes it: 41 pixels tall, its four-square symbol, the text
+  semibold at 15 pixels, `#2F2F2F` with white text at night, white with `#5E5E5E` text and a
+  `#8C8C8C` border at dawn, square corners. Not one of the launcher's cut plates: Microsoft's
+  guidelines ask for the button as it is.
 - **The sign-in sheet** (`launcher/src/owner_page.rs`, the owner gate): an opaque plate over the
   dimmed launcher, never instead of it. It says why (the account that owns Java Edition, no install
   needed), the code in mono on a raised box with Copy, and Open link as the main action; the window
