@@ -699,9 +699,11 @@ fn serve_login(
         .as_ref()
         .map(|log| user_name(&hello.name, address, log))
         .unwrap_or_default();
-    // handleHello: online mode authenticates first; offline mode derives the
-    // profile from the name.
-    let (uuid, properties) = match &shared.config.online {
+    // handleHello: online mode authenticates first; offline mode, and the
+    // integrated server's own player through memory, derive the profile
+    // from the name.
+    let online = shared.config.online.as_ref().filter(|_| !c.is_memory());
+    let (uuid, properties) = match online {
         Some(online) => match authenticate(&mut c, shared, online, &hello.name, address, &user) {
             Ok(Ok(profile)) => profile,
             Ok(Err(refused)) => {

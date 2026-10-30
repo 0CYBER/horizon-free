@@ -141,6 +141,7 @@ mod piglins;
 mod piston_push;
 mod player_equip;
 mod postprocess;
+mod potent_sulfur;
 mod potions;
 mod powder_snow;
 mod pumpkin;
@@ -177,6 +178,7 @@ mod spawner;
 mod spear;
 mod spectator;
 mod spill;
+mod splash_water;
 mod startup_menu;
 mod station_control;
 mod stations;
@@ -555,6 +557,7 @@ struct Mining {
     progress: f32,
     ticks: u32,
 }
+#[derive(Clone, Copy)]
 struct Hit {
     pos: [i32; 3],
     face: [i32; 3],
@@ -1154,6 +1157,14 @@ impl LevelAccess for GameLevel<'_> {
     fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
         command_blocks::set_powered(self.world, self.registry, (pos.x, pos.y, pos.z), powered)
     }
+    /// `PotentSulfurBlockEntity.resetCountdown`.
+    fn reset_potent_sulfur_countdown(&mut self, pos: BlockPos) {
+        if let Some(BlockEntity::PotentSulfur(sulfur)) =
+            self.world.block_entities.get_mut(&(pos.x, pos.y, pos.z))
+        {
+            sulfur.waiting_countdown = -1;
+        }
+    }
 }
 /// FallingBlockEntity carrying a block state.
 #[derive(Clone, Debug)]
@@ -1630,6 +1641,8 @@ struct Game<'a> {
     sign_edit: Option<sign_edit::SignEditor>,
     /// An open book, book and quill or lectern screen.
     book: Option<books::BookScreen>,
+    /// The last click on the book screen, for double clicks.
+    book_last_click: Option<std::time::Instant>,
     /// Lecterns whose page-turn pulse is running (ticks left).
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     /// LevelLoadingScreen.smoothedProgress while the player is not placed yet.
@@ -1951,6 +1964,10 @@ struct Game<'a> {
     world_icon: Option<WorldIcon>,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
+    /// `Minecraft.hitResult` while the clicks of a tick act (game/remote.rs
+    /// `remote_handle_input`): picked once, so a creative break does not
+    /// move the use that follows it past the broken block.
+    tick_hit: Option<Option<Hit>>,
     /// The part of a right click a guest's packet asks for (game/lan_actions.rs).
     guest_use: Option<GuestUse>,
     /// Level events of this tick for the guests, and the guest acting now.
@@ -2121,6 +2138,21 @@ fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
     [-y.sin() * p.cos(), -p.sin(), y.cos() * p.cos()]
 }
+/// `Camera.setRotation` (`rotationYXZ(π - yaw, -pitch, 0)`) for the player's
+/// view, turned round in third-person front view (`Camera.setup`).
+fn camera_rotation(camera_type: perspective::CameraType, yaw: f32, pitch: f32) -> glam::Quat {
+    let (view_yaw, view_pitch) = if camera_type == perspective::CameraType::ThirdPersonFront {
+        (yaw + 180.0, -pitch)
+    } else {
+        (yaw, pitch)
+    };
+    glam::Quat::from_euler(
+        glam::EulerRot::YXZ,
+        std::f32::consts::PI - view_yaw.to_radians(),
+        -view_pitch.to_radians(),
+        0.0,
+    )
+}
 impl Game<'_> {
     fn eye_position(&self) -> Option<[f64; 3]> {
         let p = self.player.as_ref()?;
@@ -2203,12 +2235,11 @@ impl Game<'_> {
     /// each block's outline shape (`BlockGetter.clip` with `ClipContext.Block.OUTLINE`).
     fn pick(&self) -> Option<Hit> {
         // A guest of a hosted world acts on the block their client targeted.
-        if let Some(hit) = &self.forced_hit {
-            return Some(Hit {
-                pos: hit.pos,
-                face: hit.face,
-                point: hit.point,
-            });
+        if let Some(hit) = self.forced_hit {
+            return Some(hit);
+        }
+        if let Some(hit) = self.tick_hit {
+            return hit;
         }
         let (origin, dir) = self.aim()?;
         self.clip_ray(origin, dir, self.reach())
@@ -2888,9 +2919,13 @@ impl Game<'_> {
             if touching && item.pickup_delay == 0 && item.target.is_none_or(|t| t == own) {
                 let before = item.stack.count;
                 let kind = item.stack.item.clone();
+                let thrower = item.thrower;
                 match self.give(item.stack.clone()) {
                     None => {
                         self.stats.add("picked_up", &kind, before as i32);
+                        if let Some(thrower) = thrower {
+                            self.trigger_thrown_picked_up_by_player(&item.stack, thrower);
+                        }
                         self.add_pickup(
                             pickups::Taken::Item(Box::new(item)),
                             pickups::Collector::Player,
@@ -2908,6 +2943,9 @@ impl Game<'_> {
                         if rest.count < before {
                             self.stats
                                 .add("picked_up", &kind, (before - rest.count) as i32);
+                            if let Some(thrower) = thrower {
+                                self.trigger_thrown_picked_up_by_player(&rest, thrower);
+                            }
                             self.add_pickup(
                                 pickups::Taken::Item(Box::new(item.clone())),
                                 pickups::Collector::Player,
@@ -4039,22 +4077,7 @@ impl Game<'_> {
             ];
             return Ok(FallStep::Landed(pos));
         }
-        // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
-        // (Entity.makeStuckInBlock, which forgets the fall). Entity.move
-        // records the move unless it was blocked short of a tiny one.
-        let moved = movement.length_squared();
-        let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
-        let world = &self.world;
-        let facts = self.res.facts();
-        if horizon_client::falling_block::passes_cobweb(
-            from,
-            f.position,
-            recorded.then_some(wanted),
-            |p| &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb",
-        ) {
-            f.fall_distance = 0.0;
-            f.stuck = horizon_client::falling_block::web_multiplier();
-        }
+        // Entity.move stops it on the axes it collided on.
         if movement.x != wanted.x {
             f.velocity.x = 0.0;
         }
@@ -4063,6 +4086,37 @@ impl Game<'_> {
         }
         if movement.z != wanted.z {
             f.velocity.z = 0.0;
+        }
+        // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
+        // (Entity.makeStuckInBlock), BubbleColumnBlock.entityInside lifts or
+        // drags it. Entity.move records the move unless it was blocked short
+        // of a tiny one.
+        let moved = movement.length_squared();
+        let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
+        let world = &self.world;
+        let facts = self.res.facts();
+        let (registry, collision) = (self.pack.assets.registry, self.collision);
+        let stuck = horizon_client::falling_block::apply_effects_from_blocks(
+            from,
+            f.position,
+            recorded.then_some(wanted),
+            &mut f.velocity,
+            &mut f.fall_distance,
+            |p| {
+                use horizon_client::falling_block::Inside;
+                if &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb" {
+                    Inside::Cobweb
+                } else if let Some(column) =
+                    horizon_client::motion::bubble_column_at(world, registry, facts, collision, p)
+                {
+                    Inside::BubbleColumn(column)
+                } else {
+                    Inside::Nothing
+                }
+            },
+        );
+        if stuck {
+            f.stuck = horizon_client::falling_block::web_multiplier();
         }
         f.velocity = Vec3::new(
             f.velocity.x * 0.98,
@@ -4478,7 +4532,8 @@ impl Game<'_> {
             }
             // CeilingHangingSignBlock.useItemOn: a hanging sign aimed at the
             // underside passes, so the next sign chains below instead of
-            // opening the editor (signs here carry no click commands).
+            // opening the editor, unless the side has click commands to run
+            // (`shouldTryToChainAnotherHangingSign`).
             let chains_sign = hit.face == [0, -1, 0]
                 && held
                     .as_ref()
@@ -4496,7 +4551,8 @@ impl Game<'_> {
                         .block_entities
                         .get(&(hit.pos[0], hit.pos[1], hit.pos[2])),
                     Some(BlockEntity::Sign(_))
-                );
+                )
+                && !self.sign_can_execute_click_commands((hit.pos[0], hit.pos[1], hit.pos[2]));
             // TRY_WITH_EMPTY_HAND: only the main hand's turn uses the block
             // itself (useWithoutItem).
             if !anchor_passed && !chains_sign && self.hand == Hand::Main {
@@ -5518,14 +5574,8 @@ impl Game<'_> {
                     pitch,
                     ..
                 }) => {
-                    let name = match sound {
-                        horizon_client::landing::SceneSound::BigFall => {
-                            "minecraft:entity.player.big_fall"
-                        }
-                        horizon_client::landing::SceneSound::SmallFall => {
-                            "minecraft:entity.player.small_fall"
-                        }
-                        _ => continue,
+                    let Some(name) = sound.player_fall_sound() else {
+                        continue;
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
@@ -6575,7 +6625,8 @@ impl Game<'_> {
                 | BlockEntity::Campfire(_)
                 | BlockEntity::ChiseledBookshelf(_)
                 | BlockEntity::Brushable(_)
-                | BlockEntity::Shelf(_),
+                | BlockEntity::Shelf(_)
+                | BlockEntity::PotentSulfur(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -6861,7 +6912,8 @@ impl Game<'_> {
                     | BlockEntity::Campfire(_)
                     | BlockEntity::ChiseledBookshelf(_)
                     | BlockEntity::Brushable(_)
-                    | BlockEntity::Shelf(_),
+                    | BlockEntity::Shelf(_)
+                    | BlockEntity::PotentSulfur(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -6993,12 +7045,13 @@ impl Game<'_> {
             search.move_cursor_to_end(false);
             search.highlight = 0;
         }
-        let items = self.creative_screen.items(&self.pack.names);
         let first = self.creative_screen.first_row(&self.pack.names);
-        let shown = items.get(first * 9 + slot - Creative::DISPLAY);
+        let shown = self
+            .creative_screen
+            .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY);
         let catalog = self.res.items();
         let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
-        match click_display(&mut self.carried, shown, max, button, input) {
+        match click_display(&mut self.carried, shown.as_ref(), max, button, input) {
             DisplayClick::Hotbar(i, stack) if i < self.inventory.len() => {
                 self.inventory[i] = Some(stack);
             }
@@ -7597,9 +7650,11 @@ impl Game<'_> {
             None => Hover::Nothing,
             Some(slot) if slot >= Creative::DISPLAY => {
                 let first = self.creative_screen.first_row(&self.pack.names);
-                let shown = self.creative_screen.items(&self.pack.names).len();
                 Hover::Display {
-                    filled: first * 9 + slot - Creative::DISPLAY < shown,
+                    filled: self
+                        .creative_screen
+                        .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY)
+                        .is_some(),
                 }
             }
             Some(_) => Hover::Slot,
@@ -8213,18 +8268,7 @@ impl Game<'_> {
     /// `Camera.setRotation`: the camera's orientation, turned round in
     /// third-person front view.
     pub(super) fn camera_orientation(&self) -> glam::Quat {
-        let (view_yaw, view_pitch) =
-            if self.camera_type == perspective::CameraType::ThirdPersonFront {
-                (self.yaw + 180.0, -self.pitch)
-            } else {
-                (self.yaw, self.pitch)
-            };
-        glam::Quat::from_euler(
-            glam::EulerRot::YXZ,
-            std::f32::consts::PI - view_yaw.to_radians(),
-            -view_pitch.to_radians(),
-            0.0,
-        )
+        camera_rotation(self.camera_type, self.yaw, self.pitch)
     }
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
     fn entity_geometry(
@@ -9258,6 +9302,39 @@ impl Game<'_> {
         let stars =
             (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
         (out, stars)
+    }
+    /// What the title screen asked for, from a click or Enter.
+    fn title_action(&mut self, event_loop: &ActiveEventLoop, action: Action) -> Result<()> {
+        match action {
+            Action::Quit => event_loop.exit(),
+            Action::Options => self.open_options(true),
+            Action::Accessibility => {
+                self.open_options_at(true, horizon_client::options_ui::Page::Accessibility)
+            }
+            Action::Language => {
+                self.open_options_at(true, horizon_client::options_ui::Page::Language)
+            }
+            Action::Play { folder } => self.open_world(&folder, None, None, false, None)?,
+            Action::Create {
+                folder,
+                name,
+                seed,
+                creative,
+                options,
+            } => self.open_world(&folder, Some(&name), seed, creative, Some(&options))?,
+            Action::Connect { address } => {
+                self.connect_server(&address, &self.options.player_name())?
+            }
+            Action::DataPacks { dir, selected } => {
+                self.keys.clear();
+                self.screen = Screen::Options;
+                self.options_from_title = true;
+                let resources = self.vanilla_root();
+                self.ui.options.open_data_packs(dir, selected, resources);
+            }
+            Action::None => {}
+        }
+        Ok(())
     }
     /// Enter a local world from the client, selecting its simulation mode.
     fn open_world(
@@ -11648,7 +11725,7 @@ impl Game<'_> {
             let first = self.creative_screen.first_row(&self.pack.names);
             for r in 0..5 {
                 for c in 0..9 {
-                    let Some(stack) = items.get((first + r) * 9 + c) else {
+                    let Some(stack) = items.get((first + r) * 9 + c).filter(|s| s.count > 0) else {
                         continue;
                     };
                     let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
@@ -11758,6 +11835,7 @@ impl Game<'_> {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
                 select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
+                self.refresh_saved_hotbars();
                 self.inv_drag = None;
                 self.last_inv_click = None;
                 return;
@@ -12669,11 +12747,11 @@ impl Game<'_> {
                 && self.creative_screen.tab().search
                 && self.search_tab_hotbar_key(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
-            KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
+            KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat_method(""),
             // key.advancements.
             KeyCode::KeyL if self.screen == Screen::Playing => self.open_advancements(false),
             KeyCode::KeyL if self.screen == Screen::Advancements => self.close_advancements(),
-            KeyCode::Slash if self.screen == Screen::Playing => self.open_chat("/"),
+            KeyCode::Slash if self.screen == Screen::Playing => self.open_chat_method("/"),
             // key.toggleGui is a KeyMapping: it clicks only with no screen open.
             KeyCode::F1 if self.screen == Screen::Playing => self.toggle_hide_gui(),
             KeyCode::F11 => self.toggle_fullscreen(),
@@ -12691,6 +12769,7 @@ impl Game<'_> {
                         if self.creative {
                             self.screen = Screen::Creative;
                             self.creative_screen.reopen();
+                            self.refresh_saved_hotbars();
                         } else {
                             self.screen = Screen::Inventory;
                         }
@@ -13397,7 +13476,7 @@ impl ApplicationHandler for Game<'_> {
                         self.command_block_scroll(d);
                     }
                     if self.screen == Screen::Options && d != 0.0 {
-                        self.options_scroll(d);
+                        self.options_scroll(d)?;
                     }
                     // AbstractContainerScreen.mouseScrolled: a bundle under the
                     // cursor takes the wheel before the screen's own scrolling.
@@ -13503,38 +13582,7 @@ impl ApplicationHandler for Game<'_> {
                     if sound {
                         self.audio.play_button_click();
                     }
-                    match action {
-                        Action::Quit => event_loop.exit(),
-                        Action::Options => self.open_options(true),
-                        Action::Accessibility => self
-                            .open_options_at(true, horizon_client::options_ui::Page::Accessibility),
-                        Action::Language => {
-                            self.open_options_at(true, horizon_client::options_ui::Page::Language)
-                        }
-                        Action::Play { folder } => {
-                            self.open_world(&folder, None, None, false, None)?
-                        }
-                        Action::Create {
-                            folder,
-                            name,
-                            seed,
-                            creative,
-                            options,
-                        } => {
-                            self.open_world(&folder, Some(&name), seed, creative, Some(&options))?
-                        }
-                        Action::Connect { address } => {
-                            self.connect_server(&address, &self.options.player_name())?
-                        }
-                        Action::DataPacks { dir, selected } => {
-                            self.keys.clear();
-                            self.screen = Screen::Options;
-                            self.options_from_title = true;
-                            let resources = self.vanilla_root();
-                            self.ui.options.open_data_packs(dir, selected, resources);
-                        }
-                        Action::None => {}
-                    }
+                    self.title_action(event_loop, action)?;
                 }
                 WindowEvent::MouseInput { .. } if self.title.is_some() => {}
                 WindowEvent::MouseInput { state, button, .. } if self.book.is_some() => {
@@ -13835,10 +13883,21 @@ impl ApplicationHandler for Game<'_> {
                             return Ok(());
                         }
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
-                                if let Some(t) = self.title.as_mut() {
-                                    t.confirm_edit();
+                            // `WorldListEntry.keyPressed`: Space joins too, with the button click sound.
+                            PhysicalKey::Code(
+                                code @ (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space),
+                            ) if code != KeyCode::Space
+                                || self.title.as_ref().is_some_and(|t| t.list_focused()) =>
+                            {
+                                let action = self
+                                    .title
+                                    .as_mut()
+                                    .map_or(Action::None, |t| t.confirm_key());
+                                self.save_title_options();
+                                if matches!(action, Action::Play { .. }) {
+                                    self.audio.play_button_click();
                                 }
+                                self.title_action(event_loop, action)?;
                             }
                             PhysicalKey::Code(
                                 key @ (KeyCode::Backspace
@@ -13974,6 +14033,8 @@ impl ApplicationHandler for Game<'_> {
                             self.tick_fov();
                         }
                         self.tick_win_screen()?;
+                        // Gui.tick runs ChatListener.tick paused or not.
+                        self.tick_chat_queue();
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
@@ -14038,6 +14099,7 @@ impl ApplicationHandler for Game<'_> {
                         server.set_distances(
                             self.settings.render_distance,
                             self.settings.simulation_distance,
+                            self.settings.entity_distance,
                         );
                     }
                     self.clock.end_frame(self.pause);
@@ -14402,6 +14464,7 @@ impl<'a> Game<'a> {
             pickups: Default::default(),
             sign_edit: None,
             book: None,
+            book_last_click: None,
             lectern_pulses: Vec::new(),
             loading_progress: 0.0,
             spawn_origin: None,
@@ -14595,6 +14658,7 @@ impl<'a> Game<'a> {
             pending_save: None,
             world_icon: None,
             forced_hit: None,
+            tick_hit: None,
             guest_use: None,
             lan_events: Vec::new(),
             lan_songs: Vec::new(),
@@ -16027,13 +16091,10 @@ pub fn run() -> Result<()> {
         horizon_threads::favour_current();
     }
     // Someone is playing: the anonymous ping behind the launcher's "N playing now", and the
-    // official server in their list. Not for a server, a benchmark or a run that quits by itself.
-    if options.execution_role.is_client()
-        && options.benchmark.is_none()
-        && !options.offscreen
-        && options.frames.is_none()
-        && options.world_frames.is_none()
-    {
+    // official server in their list (servers.dat in the game folder, the working directory). Not
+    // for a server, a benchmark, a run that quits by itself, a harness's fixture or a run that
+    // horizon-ctl drives: those start in a source checkout and wrote the list there.
+    if !options.offscreen && !synchronous_startup(&options) {
         horizon_client::heartbeat::start();
         if let Err(e) = horizon_client::multiplayer::add_official_server(&std::env::current_dir()?)
         {
