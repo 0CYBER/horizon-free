@@ -1172,8 +1172,23 @@ impl Hub {
                     }
                 }
                 NetEvent::Packet(conn, packet) => {
-                    if let Some(g) = self.guest_mut(conn) {
-                        g.inbox.push_back(*packet);
+                    let Some(g) = self.guest_mut(conn) else {
+                        continue;
+                    };
+                    // A kicked player's packets wait for nothing.
+                    if !g.left_reason.is_empty() {
+                        continue;
+                    }
+                    g.inbox.push_back(*packet);
+                    // A client sending faster than its budget is handled
+                    // would grow the inbox until the server runs out of memory.
+                    if g.inbox.len() > INBOX_LIMIT {
+                        g.inbox = Default::default();
+                        events.push(HostEvent::Warn(format!(
+                            "{} sent more packets than the server handles ({INBOX_LIMIT} waiting)",
+                            g.name
+                        )));
+                        self.kick(conn, translatable("disconnect.exceeded_packet_rate", &[]));
                     }
                 }
                 NetEvent::Duplicate(uuid) => {
@@ -2126,7 +2141,7 @@ impl Hub {
         let g = &mut self.guests[i];
         g.first_good = g.position;
         g.known_moves = g.received_moves;
-        let mut budget = 400;
+        let mut budget = PACKETS_PER_TICK;
         while budget > 0 {
             let Some(packet) = self.guests[i].inbox.pop_front() else {
                 break;
@@ -2832,6 +2847,12 @@ fn wrap_degrees(degrees: f32) -> f32 {
     }
     wrapped
 }
+
+/// The packets of one player handled in a tick; the rest wait for the next.
+const PACKETS_PER_TICK: usize = 400;
+/// The packets a player may have waiting (a second of its budget) before it is
+/// disconnected, as vanilla's rate-limit does: no real client gets near it.
+const INBOX_LIMIT: usize = 20 * PACKETS_PER_TICK;
 
 fn invalid_movement() -> Tag {
     translatable("multiplayer.disconnect.invalid_player_movement", &[])
