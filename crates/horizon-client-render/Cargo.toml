@@ -23,6 +23,7 @@ horizon-theme = { path = "../horizon-theme" }
 horizon-threads = { path = "../horizon-threads" }
 horizon-world = { path = "../horizon-world" }
 ab_glyph = "0.2.32"
+base64 = "0.22"
 bytemuck = { version = "1.24", features = ["derive"] }
 # Sound (ALSA on Linux); the `audio` feature.
 cpal = { version = "0.16", optional = true }
@@ -36,6 +37,7 @@ png = "0.18"
 pollster = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+sha1 = "0.10"
 sha2 = "0.10.9"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 unicode-bidi = "0.3.18"
