@@ -21,18 +21,19 @@ use horizon_protocol::{
     connection::{ConnWriter, Connection},
     crypto::offline_uuid,
     ids,
+    item::Stack,
     packets::{
         Empty, configuration,
         handshake::{self, Intention},
         login::{self, ServerHello},
-        play,
+        play, recipes,
     },
 };
 use serde_json::json;
 use std::{
     collections::HashSet,
     sync::{
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
@@ -50,8 +51,16 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          flood-acks (--flood chunk batch acks asking for 64 chunks a tick, while exploring),
                          flood-packets (--flood rotations a tick),
                          flood-chunks (one move a tick, 9.9 blocks straight ahead: as fast as the
-                         moved-too-quickly check allows, never waiting for chunks)
+                         moved-too-quickly check allows, never waiting for chunks),
+                         and --flood a tick of packets that cost the server work:
+                         flood-use (place and break stone around itself), flood-click (inventory
+                         clicks with a stale state), flood-suggest (command suggestions, every
+                         other one 30 000 characters long), flood-book (100 pages of 1024 characters
+                         into a writable book), flood-sign (four 384-character lines on the block
+                         below), flood-recipe (recipe book placements)
   --flood N              packets a tick for the flood behaviours; default 100
+  --no-read              stop reading from the server once spawned (a client that lets the
+                         server's replies pile up)
   --join-every SECONDS   default 1
   --seconds N            how long to run after the first bot joins; default 60
   --view-distance N      what the bots ask for; default 10
@@ -70,6 +79,12 @@ enum Behaviour {
     FloodAcks,
     FloodPackets,
     FloodChunks,
+    FloodUse,
+    FloodClick,
+    FloodSuggest,
+    FloodBook,
+    FloodSign,
+    FloodRecipe,
 }
 
 impl Behaviour {
@@ -82,6 +97,12 @@ impl Behaviour {
             Self::FloodAcks => "flood-acks",
             Self::FloodPackets => "flood-packets",
             Self::FloodChunks => "flood-chunks",
+            Self::FloodUse => "flood-use",
+            Self::FloodClick => "flood-click",
+            Self::FloodSuggest => "flood-suggest",
+            Self::FloodBook => "flood-book",
+            Self::FloodSign => "flood-sign",
+            Self::FloodRecipe => "flood-recipe",
         }
     }
 }
@@ -97,6 +118,7 @@ struct Options {
     seed: u64,
     explore_speed: f64,
     flood: usize,
+    no_read: bool,
     name: String,
     report: Option<String>,
 }
@@ -113,6 +135,7 @@ fn options() -> Result<Options, String> {
         seed: 12345,
         explore_speed: 22.0,
         flood: 100,
+        no_read: false,
         name: "Bot".into(),
         report: None,
     };
@@ -121,6 +144,10 @@ fn options() -> Result<Options, String> {
         if arg == "-h" || arg == "--help" {
             print!("{HELP}");
             std::process::exit(0);
+        }
+        if arg == "--no-read" {
+            o.no_read = true;
+            continue;
         }
         let value = args.next().ok_or(format!("{arg} needs a value"))?;
         let number = |what: &str| format!("{arg} needs {what}, not {value:?}");
@@ -145,7 +172,7 @@ fn options() -> Result<Options, String> {
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
-    const BEHAVIOURS: [&str; 8] = [
+    const BEHAVIOURS: [&str; 14] = [
         "idle",
         "walk",
         "explore",
@@ -154,10 +181,16 @@ fn options() -> Result<Options, String> {
         "flood-acks",
         "flood-packets",
         "flood-chunks",
+        "flood-use",
+        "flood-click",
+        "flood-suggest",
+        "flood-book",
+        "flood-sign",
+        "flood-recipe",
     ];
     if !BEHAVIOURS.contains(&o.behaviour.as_str()) {
         return Err(format!(
-            "--behaviour {}: use idle, walk, explore, mixed, flood-move, flood-acks, flood-packets or flood-chunks",
+            "--behaviour {}: use idle, walk, explore, mixed or a flood behaviour (--help lists them)",
             o.behaviour
         ));
     }
@@ -184,6 +217,8 @@ struct Bot {
     teleport: Mutex<Option<[f64; 3]>>,
     error: Mutex<Option<String>>,
     joined_after_ms: AtomicU64,
+    /// The bot stopped reading (--no-read).
+    deaf: AtomicBool,
 }
 
 /// A small deterministic generator (SplitMix64), so every run moves the bots the same way.
@@ -211,6 +246,89 @@ fn raw(id: i32, write: impl FnOnce(&mut Writer)) -> Vec<u8> {
     w.varint(id);
     write(&mut w);
     w.data
+}
+
+/// Item ids of the pinned version (26.3's item registry).
+const STONE: i32 = 1;
+const WRITABLE_BOOK: i32 = 1371;
+
+/// The `i`th packet of a costly flood this tick, the bot at `pos`; none for other behaviours.
+fn costly(
+    behaviour: Behaviour,
+    i: usize,
+    sequence: i32,
+    pos: [f64; 3],
+    random: &mut Random,
+) -> Option<Vec<u8>> {
+    use ids::play::serverbound as sb;
+    static LONG_COMMAND: LazyLock<String> =
+        LazyLock::new(|| format!("/msg {}", "x".repeat(30_000)));
+    static BOOK: LazyLock<Vec<u8>> = LazyLock::new(|| {
+        play::Serverbound::EditBook(play::EditBook {
+            slot: 0,
+            pages: vec!["a".repeat(1024); 100],
+            title: None,
+        })
+        .encode()
+    });
+    let block = pos.map(|v| v.floor() as i32);
+    let packet = match behaviour {
+        Behaviour::FloodUse => {
+            // A block within reach: place stone there, or break what is there.
+            let at = [0, 1, 2].map(|k| block[k] + (random.unit() * 7.0) as i32 - 3);
+            if i % 2 == 0 {
+                play::Serverbound::UseItemOn(play::UseItemOn {
+                    hand: 0,
+                    pos: at,
+                    face: 1,
+                    cursor: [0.5, 1.0, 0.5],
+                    inside: false,
+                    world_border: false,
+                    sequence,
+                })
+            } else {
+                play::Serverbound::PlayerAction(play::PlayerAction {
+                    action: 0,
+                    pos: at,
+                    direction: 1,
+                    sequence,
+                })
+            }
+        }
+        Behaviour::FloodClick => play::Serverbound::ContainerClick(play::ContainerClick {
+            container: 0,
+            state: 0,
+            slot: 36 + (i % 9) as i16,
+            button: 0,
+            input: 0,
+            changed: Vec::new(),
+            carried: None,
+        }),
+        Behaviour::FloodSuggest => {
+            let text = if i % 2 == 0 {
+                "/"
+            } else {
+                LONG_COMMAND.as_str()
+            };
+            return Some(raw(sb::COMMAND_SUGGESTION, |w| {
+                w.varint(sequence);
+                w.string(text);
+            }));
+        }
+        Behaviour::FloodBook => return Some(BOOK.clone()),
+        Behaviour::FloodSign => play::Serverbound::SignUpdate(play::SignUpdate {
+            pos: [block[0], block[1] - 1, block[2]],
+            lines: std::array::from_fn(|_| "a".repeat(384)),
+            front: true,
+        }),
+        Behaviour::FloodRecipe => play::Serverbound::PlaceRecipe(recipes::PlaceRecipe {
+            container: 0,
+            recipe: (i % 2042) as i32,
+            use_max: true,
+        }),
+        _ => return None,
+    };
+    Some(packet.encode())
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -367,6 +485,12 @@ fn read(
     let mut batch = BatchSize::new();
     let mut teleports = 0u64;
     loop {
+        if bot.deaf.load(Ordering::Relaxed) {
+            while bot.online.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(100));
+            }
+            return;
+        }
         let (id, body) = match reader.recv() {
             Ok(packet) => packet,
             Err(e) => {
@@ -517,6 +641,24 @@ fn run_bot(
         .store(asked.elapsed().as_millis() as u64, Ordering::SeqCst);
     let send = |body: Vec<u8>| lock(&writer).send(&body).is_ok();
     send(raw(sb::PLAYER_LOADED, |_| {}));
+    bot.deaf.store(o.no_read, Ordering::Relaxed);
+    // What the costly floods need in hand (creative: the server takes the bot's word for it).
+    let tool = match behaviour {
+        Behaviour::FloodUse => Some(Stack::new(STONE, 64)),
+        Behaviour::FloodBook => Some(Stack::new(WRITABLE_BOOK, 1)),
+        _ => None,
+    };
+    if tool.is_some() {
+        send(
+            play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+                slot: 36,
+                item: tool,
+            })
+            .encode(),
+        );
+        send(play::Serverbound::SetCarriedItem(play::SetCarriedItem { slot: 0 }).encode());
+    }
+    let mut sequence = 0;
     let mut random = Random(o.seed ^ (index as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
     let mut pos = spawn;
     let cruise = spawn[1] + 24.0;
@@ -588,7 +730,14 @@ fn run_bot(
                         pos[2] += dz / distance * step;
                     }
                 }
-                Behaviour::FloodMove | Behaviour::FloodChunks => {}
+                Behaviour::FloodMove
+                | Behaviour::FloodChunks
+                | Behaviour::FloodUse
+                | Behaviour::FloodClick
+                | Behaviour::FloodSuggest
+                | Behaviour::FloodBook
+                | Behaviour::FloodSign
+                | Behaviour::FloodRecipe => {}
                 Behaviour::FloodPackets => {
                     for i in 0..o.flood {
                         send(
@@ -618,6 +767,13 @@ fn run_bot(
                     pos[0] += heading.cos() * step;
                     pos[2] += heading.sin() * step;
                 }
+            }
+        }
+        // The costly floods go out wherever the bot is, chunks or not (--no-read gets none).
+        for i in 0..o.flood {
+            sequence += 1;
+            if let Some(body) = costly(behaviour, i, sequence, pos, &mut random) {
+                send(body);
             }
         }
         let ok = send(
@@ -655,6 +811,12 @@ fn behaviour_of(mode: &str, index: usize) -> Behaviour {
         "flood-acks" => Behaviour::FloodAcks,
         "flood-packets" => Behaviour::FloodPackets,
         "flood-chunks" => Behaviour::FloodChunks,
+        "flood-use" => Behaviour::FloodUse,
+        "flood-click" => Behaviour::FloodClick,
+        "flood-suggest" => Behaviour::FloodSuggest,
+        "flood-book" => Behaviour::FloodBook,
+        "flood-sign" => Behaviour::FloodSign,
+        "flood-recipe" => Behaviour::FloodRecipe,
         // mixed: of every five bots, three walk, one explores, one stands.
         _ => match index % 5 {
             0 | 2 | 4 => Behaviour::Walk,
