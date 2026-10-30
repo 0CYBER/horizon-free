@@ -666,7 +666,7 @@ impl Padded {
         self.blocks.fill(0);
         self.light.resize(P * P * P, 0);
         let (blocks, light) = (&mut self.blocks, &mut self.light);
-        let base_y = MIN_Y + sy * 16;
+        let base_y = region[1][1].map_or(MIN_Y, Chunk::min_y) + sy * 16;
         // The section itself is unpacked in one pass; the border cells of the
         // neighbouring sections are read one by one.
         own.fill(0);
@@ -900,7 +900,7 @@ impl Mesher<'_> {
         scratch.padded.fill(region, sy, own);
         let pad = &scratch.padded;
         out.visibility = visibility_reusing(pad, &self.tables.info, &mut scratch.visibility);
-        let base_y = MIN_Y + sy * 16;
+        let base_y = center.min_y() + sy * 16;
         let mut tints = Tints::new(
             region,
             self.biomes,

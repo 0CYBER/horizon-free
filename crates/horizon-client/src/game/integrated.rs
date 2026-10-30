@@ -19,7 +19,6 @@ use super::{
 use horizon_client::{
     Result,
     audio::Audio,
-    hud::HudAtlas,
     lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
@@ -52,6 +51,9 @@ struct Flags {
     /// server follows while it runs (IntegratedServer.tickServer).
     render_distance: AtomicI32,
     simulation_distance: AtomicI32,
+    /// `options.entityDistanceScaling` (an `f32`'s bits), which
+    /// `IntegratedServer.getScaledTrackingDistance` reads on every call.
+    entity_distance: AtomicU32,
     /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
     saving: AtomicBool,
 }
@@ -79,12 +81,16 @@ impl Integrated {
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
     }
-    /// The window's render and simulation distances, for the server to follow.
-    pub fn set_distances(&self, render: i32, simulation: i32) {
+    /// The window's render and simulation distances and its Entity Distance
+    /// option, for the server to follow.
+    pub fn set_distances(&self, render: i32, simulation: i32, entity: f32) {
         self.flags.render_distance.store(render, Ordering::Relaxed);
         self.flags
             .simulation_distance
             .store(simulation, Ordering::Relaxed);
+        self.flags
+            .entity_distance
+            .store(entity.to_bits(), Ordering::Relaxed);
     }
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
@@ -255,6 +261,9 @@ impl Game<'_> {
         flags
             .simulation_distance
             .store(settings.simulation_distance, Ordering::Relaxed);
+        flags
+            .entity_distance
+            .store(settings.entity_distance.to_bits(), Ordering::Relaxed);
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
@@ -330,6 +339,7 @@ impl Game<'_> {
             return Ok(());
         };
         handle.world_name = world_name;
+        self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
         // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
         // the Select World list shows, and needs the save folder for it.
@@ -353,82 +363,28 @@ impl Game<'_> {
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
     ) -> Result<()> {
-        self.load_world(WorldRequest::new(
-            &launch.folder,
-            launch.name.as_deref(),
-            launch.seed,
-            launch.creative,
-            launch.create.as_ref(),
-        )?)?;
-        let saved = Box::new(self.level.clone());
-        // IntegratedServer runs the server mods; the window the client mods.
-        self.mods.dev = self.options.dev_mods.clone();
-        self.start_mods();
-        // Math.max(2, options.renderDistance): past vanilla's 32 when the
-        // window's render distance is (Horizon's options go to 64).
-        let view_distance = self.settings.render_distance.max(2);
-        let config = HubConfig {
-            default_game_mode: self.level.mode(),
-            // Only the owner until it is opened to the LAN.
-            guest_commands: false,
-            force_game_mode: false,
-            hardcore: self.level.hardcore,
-            view_distance,
-            simulation_distance: self.settings.simulation_distance.max(2),
-            dimension: self.dim.id().to_owned(),
-            seed: self.level.seed,
-            max_players: MAX_PLAYERS,
-            // No player of its own: the hub runs without a host.
-            dedicated: true,
-            integrated: true,
-        };
-        let owner = launch.owner;
-        let published = flags.clone();
-        let net = NetConfig {
-            // No network until it is opened to the LAN; the memory connection
-            // is not compressed (`Connection.isMemoryConnection`).
-            listen: false,
-            gate: Some(Arc::new(move |_, uuid, _| {
-                (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
-                    .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
-            })),
-            // IntegratedServer.initServer: the MOTD names the owner and the world.
-            ..NetConfig::lan(
-                0,
-                format!("{} - {}", launch.player, self.level.name),
-                MAX_PLAYERS,
-            )
-        };
-        let settings = LanSettings {
-            port: 0,
-            guest_commands: false,
-            force_game_mode: false,
-        };
-        self.lan_host(settings, net, config, None)?;
-        let commands = self.allow_commands();
-        let pipe = {
-            let host = self
-                .lan
-                .as_mut()
-                .ok_or("the integrated server did not start")?;
-            // The owner is an operator when the world allows commands
-            // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
-            host.hub.ops.insert(owner, if commands { 4 } else { 0 });
-            host.hub.singleplayer_owner = Some(owner);
-            host.owner = Some(Owner {
-                uuid: owner,
-                saved: Some(saved),
-            });
-            host.hub.lan.connect_local()?
-        };
-        self.serving = Some(Serving {
-            flags: flags.clone(),
-            tasks,
-            owner,
-            pending: None,
-        });
-        let _ = ready.send(Ok((pipe, self.level.name.clone())));
-        self.settle_spawn()?;
+        let result = self.run_integrated_inner(launch, flags, tasks, ready);
+        if let Err(error) = &result {
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_integrated_inner(
+        &mut self,
+        launch: Launch,
+        flags: Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        // The open segment runs as one unit (`integrated_open`) so its
+        // failures fire `WorldOpenFailed` with the engine's own error text.
+        if let Err(e) = self.integrated_open(&launch, &flags, tasks, ready) {
+            self.native_lifecycle_world_failed(&e.to_string());
+            return Err(e);
+        }
+        // The server thread's `WorldOpenReady` site, before the tick loop.
+        self.native_lifecycle_world_ready();
         if let (Some(script), Some(output)) = (
             std::env::var_os("HORIZON_COMMAND_SCRIPT"),
             std::env::var_os("HORIZON_COMMAND_OUTPUT"),
@@ -479,9 +435,101 @@ impl Game<'_> {
         self.stop_integrated()
     }
 
+    /// The integrated server's world open: `run_integrated`'s segment
+    /// from `load_world` through `settle_spawn`, whole so its failures are
+    /// one open failure (`WorldOpenFailed`, the engine's own error text).
+    fn integrated_open(
+        &mut self,
+        launch: &Launch,
+        flags: &Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        self.native_lifecycle_open_started();
+        self.load_world(WorldRequest::new(
+            &launch.folder,
+            launch.name.as_deref(),
+            launch.seed,
+            launch.creative,
+            launch.create.as_ref(),
+        )?)?;
+        let saved = Box::new(self.level.clone());
+        // IntegratedServer runs the server mods; the window the client mods.
+        self.mods.dev = self.options.dev_mods.clone();
+        self.start_mods();
+        // Math.max(2, options.renderDistance): past vanilla's 32 when the
+        // window's render distance is (Horizon's options go to 64).
+        let view_distance = self.settings.render_distance.max(2);
+        let config = HubConfig {
+            default_game_mode: self.level.mode(),
+            // Only the owner until it is opened to the LAN.
+            guest_commands: false,
+            force_game_mode: false,
+            hardcore: self.level.hardcore,
+            view_distance,
+            simulation_distance: self.settings.simulation_distance.max(2),
+            dimension: self.dim.id().to_owned(),
+            seed: self.level.seed,
+            max_players: MAX_PLAYERS,
+            // No player of its own: the hub runs without a host.
+            dedicated: true,
+            integrated: true,
+        };
+        let owner = launch.owner;
+        let published = flags.clone();
+        let net = NetConfig {
+            // No network until it is opened to the LAN; the memory connection
+            // is not compressed (`Connection.isMemoryConnection`).
+            listen: false,
+            online: horizon_client::lan::OnlineMode::lan(),
+            gate: Some(Arc::new(move |_, uuid, _| {
+                (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
+                    .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
+            })),
+            // IntegratedServer.initServer: the MOTD names the owner and the world.
+            ..NetConfig::lan(
+                0,
+                format!("{} - {}", launch.player, self.level.name),
+                MAX_PLAYERS,
+            )
+        };
+        let settings = LanSettings {
+            port: 0,
+            guest_commands: false,
+            force_game_mode: false,
+        };
+        self.lan_host(settings, net, config, None)?;
+        let commands = self.allow_commands();
+        let pipe = {
+            let host = self
+                .lan
+                .as_mut()
+                .ok_or("the integrated server did not start")?;
+            // The owner is an operator when the world allows commands
+            // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
+            host.hub.ops.insert(owner, if commands { 4 } else { 0 });
+            host.hub.singleplayer_owner = Some(owner);
+            host.owner = Some(Owner {
+                uuid: owner,
+                saved: Some(saved),
+            });
+            host.hub.lan.connect_local()?
+        };
+        self.serving = Some(Serving {
+            flags: flags.clone(),
+            tasks,
+            owner,
+            pending: None,
+        });
+        let _ = ready.send(Ok((pipe, self.level.name.clone())));
+        self.settle_spawn()
+    }
+
     /// `MinecraftServer.stopServer`: the players are saved and sent away,
     /// then the world is saved.
     fn stop_integrated(&mut self) -> Result<()> {
+        // The close request: lifecycle observation stops.
+        self.native_lifecycle.begin_close();
         // IntegratedServer.stopServer: teardownPublishedState.
         if let Some(s) = self.serving.take() {
             s.flags.published.store(0, Ordering::Relaxed);
@@ -507,6 +555,8 @@ impl Game<'_> {
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;
+        // `WorldCloseFinal` follows a successful final save.
+        self.native_lifecycle_world_closed();
         self.session_lock = None;
         Ok(())
     }
@@ -662,6 +712,9 @@ impl Game<'_> {
     /// IntegratedServer.tickServer: the server follows the window's render
     /// and simulation distances when they change.
     fn follow_distances(&mut self, flags: &Flags) {
+        // IntegratedServer.getScaledTrackingDistance reads the option each time.
+        self.settings.entity_distance =
+            f32::from_bits(flags.entity_distance.load(Ordering::Relaxed));
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -835,15 +888,7 @@ fn server_game(
     options: Options,
     settings: Settings,
 ) -> Result<Game<'_>> {
-    // It draws nothing: only the font, which books and chat measure with.
-    let atlas = HudAtlas::fonts(&options.resources)?;
-    let gui = UiResources {
-        atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-            size: 1,
-            pixels: [0u8; 4].repeat(6),
-        }),
-    };
+    let gui = UiResources::server(&options.resources)?;
     let audio = Audio::silent(&options.resources);
     Game::new(res, pack, gui, options, settings, audio, None)
 }

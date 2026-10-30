@@ -124,7 +124,10 @@ pub fn component_nbt(v: &Value) -> Tag {
 }
 
 impl SyncData {
-    pub fn load(resources: &Path) -> Result<Self, String> {
+    pub fn load(
+        resources: &Path,
+        overlay: &horizon_world::loot::PackOverlay,
+    ) -> Result<Self, String> {
         let builtin = Builtin::find(resources)
             .and_then(|p| Builtin::load(&p).ok())
             .ok_or("registries.json not found next to the resources")?;
@@ -160,9 +163,9 @@ impl SyncData {
             features: vec!["minecraft:vanilla".to_owned()],
             commands: super::commands::CommandTree::load(resources),
             recipes: Vec::new(),
-            advancements: super::advancements::ServerAdvancements::load(resources),
+            advancements: super::advancements::ServerAdvancements::load(resources, overlay),
         };
-        sync.recipes = super::recipes::update_recipes(resources, &sync);
+        sync.recipes = super::recipes::update_recipes(resources, &sync, overlay);
         Ok(sync)
     }
 

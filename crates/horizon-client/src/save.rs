@@ -17,7 +17,7 @@ use crate::{
     Result,
     beehive::BeehiveExt,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy},
     mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
     streaming::ChunkGenerator,
 };
@@ -197,6 +197,41 @@ pub fn needs_file_fixes(world: &Path) -> bool {
     };
     let version = number(data.get("DataVersion")).unwrap_or(-1);
     i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
+}
+/// `LevelVersion.parse`: the saved game version's name, this build's when the `Version`
+/// compound has no `Name`, and empty without a `Version` (`getWorldVersionName` then
+/// shows `selectWorld.versionUnknown`).
+fn saved_version_name(version: Option<&Tag>) -> String {
+    match version {
+        Some(v) => text(v.get("Name")).unwrap_or_else(|| VERSION_NAME.to_string()),
+        None => String::new(),
+    }
+}
+/// `LevelSummary.isCompatible` (`DataVersion.isCompatible`: the saved series must be
+/// the current `main` one). None when the world opens; otherwise the saved game
+/// version's name, empty when it has none (`getWorldVersionName`).
+pub fn incompatible_version(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let version = root.get("Data")?.get("Version");
+    let series = text(version.and_then(|v| v.get("Series"))).unwrap_or_else(|| "main".into());
+    if series == "main" {
+        return None;
+    }
+    Some(saved_version_name(version))
+}
+/// `LevelSummary.backupStatus` DOWNGRADE: the saved game version's name (empty when it
+/// has none) when the world's `Version.Id` is newer than this build's `DataVersion`
+/// (`LevelVersion.parse`: no `Version` reads as 0, no `Id` as the current one).
+pub fn downgraded_from(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let version = root.get("Data")?.get("Version");
+    let id = version.map_or(0, |v| {
+        number(v.get("Id")).unwrap_or_else(|| i64::from(DATA_VERSION))
+    });
+    if id <= i64::from(DATA_VERSION) {
+        return None;
+    }
+    Some(saved_version_name(version))
 }
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
@@ -565,6 +600,10 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::DaylightDetector => {}
+        // PotentSulfurBlockEntity.saveAdditional.
+        BlockEntity::PotentSulfur(sulfur) => {
+            entries.push(("countdown", Tag::Int(sulfur.waiting_countdown)))
+        }
     }
     Tag::compound(entries)
 }
@@ -793,6 +832,12 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             c.state_triggered = None;
             c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
         }
+        // PotentSulfurBlockEntity.loadAdditional.
+        BlockEntity::PotentSulfur(sulfur) => {
+            if let Some(countdown) = int("countdown") {
+                sulfur.waiting_countdown = countdown;
+            }
+        }
         BlockEntity::Jukebox(_)
         | BlockEntity::Beacon(_)
         | BlockEntity::Lectern(_)
@@ -822,7 +867,7 @@ pub fn encode_poi(chunk: &Chunk, tables: &SaveTables) -> Option<NamedTag> {
             continue;
         }
         section.unpack(&mut states);
-        let y = (MIN_Y >> 4) + si as i32;
+        let y = (chunk.min_y() >> 4) + si as i32;
         let records: Vec<Tag> = states
             .iter()
             .enumerate()
@@ -907,56 +952,13 @@ fn poi_root(sections: Compound) -> NamedTag {
     }
 }
 
-/// What a dimension's saved chunks depend on: skylight and the build height
-/// (`DimensionType.minY` and `height`). `Chunk` always holds the Overworld's
-/// sections; a level saves only the ones inside its own height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LevelShape {
-    pub sky_light: bool,
-    pub min_y: i32,
-    pub height: i32,
-}
-impl LevelShape {
-    pub const OVERWORLD: Self = Self {
-        sky_light: true,
-        min_y: MIN_Y,
-        height: SECTIONS as i32 * 16,
-    };
-    pub const NETHER: Self = Self {
-        sky_light: false,
-        min_y: 0,
-        height: 256,
-    };
-    pub const END: Self = Self {
-        sky_light: true,
-        min_y: 0,
-        height: 256,
-    };
-    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
-    /// old `DIM-1` and `DIM1`).
-    pub fn for_dir(root: &Path) -> Self {
-        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
-            Self::NETHER
-        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
-            Self::END
-        } else {
-            Self::OVERWORLD
-        }
-    }
-    fn min_section(self) -> i32 {
-        self.min_y >> 4
-    }
-    fn section_count(self) -> usize {
-        (self.height >> 4) as usize
-    }
-    fn has_section(self, y: i32) -> bool {
-        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
-    }
-}
+pub use crate::chunk::LevelShape;
 
 /// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
     sections: &'a [Arc<Section>],
+    /// The minimum Y of `sections[0]`.
+    column_min_y: i32,
     tables: &'a SaveTables,
     min_y: i32,
     height: i32,
@@ -975,11 +977,11 @@ impl HeightmapChunk for HeightmapView<'_> {
             .iter()
             .rposition(|s| !s.is_uniform(self.tables.air))
             .unwrap_or(0);
-        MIN_Y + top as i32 * 16
+        self.column_min_y + top as i32 * 16
     }
     fn block_state(&self, x: i32, y: i32, z: i32) -> Self::State {
         // Chunk.get: no block outside the sections.
-        let state = usize::try_from((y - MIN_Y) >> 4)
+        let state = usize::try_from((y - self.column_min_y) >> 4)
             .ok()
             .and_then(|s| self.sections.get(s))
             .map_or(0, |s| s.get(crate::chunk::index(x, y, z)));
@@ -1000,6 +1002,7 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
         .collect();
     let view = HeightmapView {
         sections: &chunk.sections,
+        column_min_y: chunk.min_y(),
         tables,
         min_y: shape.min_y,
         height: shape.height,
@@ -1015,10 +1018,11 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
         )
     }))
 }
-/// The client heightmaps of a column's sections, in a level from `min_y`,
-/// `height` blocks high.
+/// The client heightmaps of a column's sections (from `column_min_y`), in a
+/// level from `min_y`, `height` blocks high.
 pub fn client_heightmaps_in(
     sections: &[Arc<Section>],
+    column_min_y: i32,
     tables: &SaveTables,
     min_y: i32,
     height: i32,
@@ -1034,6 +1038,7 @@ pub fn client_heightmaps_in(
         .collect();
     let view = HeightmapView {
         sections,
+        column_min_y,
         tables,
         min_y,
         height,
@@ -1085,7 +1090,7 @@ pub fn encode_with(
         Light::Full(a) => a.iter().any(|v| v >> 4 != 15),
     });
     for (si, section) in chunk.sections.iter().enumerate() {
-        let y = (MIN_Y >> 4) + si as i32;
+        let y = (chunk.min_y() >> 4) + si as i32;
         if !shape.has_section(y) {
             continue;
         }
@@ -1313,7 +1318,7 @@ const GENERATED_KEYS: [&str; 14] = [
     "CarvingMask",
 ];
 pub fn decode(root: &NamedTag, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
-    decode_with(root, registry, biomes, None)
+    decode_with(root, registry, biomes, None, ColumnLayout::VANILLA)
 }
 /// Only full chunks load here; partially generated ones (vanilla's world
 /// border of proto chunks) resume generation through `decode_proto`.
@@ -1322,18 +1327,21 @@ pub fn decode_with(
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
+    layout: ColumnLayout,
 ) -> Option<Chunk> {
     if text(root.tag.get("Status")).is_some_and(|s| s != "minecraft:full" && s != "full") {
         return None;
     }
-    decode_column(root, registry, biomes, tables)
+    decode_column(root, registry, biomes, tables, layout)
 }
-/// `decode_with` whatever the chunk's status.
+/// `decode_with` whatever the chunk's status, into a chunk of `layout`
+/// (sections outside it are left out).
 fn decode_column(
     root: &NamedTag,
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
+    layout: ColumnLayout,
 ) -> Option<Chunk> {
     let tag = &root.tag;
     let Tag::Int(x) = tag.get("xPos")? else {
@@ -1342,7 +1350,7 @@ fn decode_column(
     let Tag::Int(z) = tag.get("zPos")? else {
         return None;
     };
-    let mut chunk = Chunk::empty(*x, *z);
+    let mut chunk = Chunk::with_layout(*x, *z, layout);
     // structures.References: structure id -> packed start chunk positions.
     if let Some(Tag::Compound(refs)) = tag.get("structures").and_then(|s| s.get("References")) {
         for (id, v) in refs {
@@ -1365,10 +1373,9 @@ fn decode_column(
         let Some(y) = number(section.get("Y")) else {
             continue;
         };
-        let si = y as i32 - (MIN_Y >> 4);
-        if !(0..SECTIONS as i32).contains(&si) {
+        let Some(si) = layout.section_index(y as i32 * 16) else {
             continue;
-        }
+        };
         if let Some(states) = section.get("block_states")
             && let Some(Tag::List(palette)) = states.get("palette")
         {
@@ -1399,7 +1406,7 @@ fn decode_column(
                     })
                 })
                 .collect();
-            let target = Arc::make_mut(&mut chunk.sections[si as usize]);
+            let target = Arc::make_mut(&mut chunk.sections[si]);
             let data = match states.get("data") {
                 Some(Tag::LongArray(data)) => {
                     Some(data.iter().map(|&w| w as u64).collect::<Vec<_>>())
@@ -1429,7 +1436,7 @@ fn decode_column(
                 _ => None,
             };
             let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
-            let target = Arc::make_mut(&mut chunk.sections[si as usize]);
+            let target = Arc::make_mut(&mut chunk.sections[si]);
             if let Ok(container) =
                 PalettedContainer::from_packed(BIOME_STRATEGY, palette.clone(), data.as_deref())
             {
@@ -1526,14 +1533,15 @@ pub fn decode_proto(
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
+    layout: ColumnLayout,
 ) -> Option<SavedProto> {
     let status = ChunkStatus::parse(&text(root.tag.get("Status"))?).ok()?;
     if !(ChunkStatus::Terrain..ChunkStatus::Full).contains(&status) {
         return None;
     }
-    let mut column = decode_column(root, registry, biomes, tables)?;
+    let mut column = decode_column(root, registry, biomes, tables, layout)?;
     column.block_entities.clear();
-    let base = number(root.tag.get("yPos")).map_or(MIN_Y, |y| y as i32 * 16);
+    let base = number(root.tag.get("yPos")).map_or(column.min_y(), |y| y as i32 * 16);
     if let Some(Tag::List(sections)) = root.tag.get("PostProcessing") {
         for (si, marks) in sections.iter().enumerate() {
             let Tag::List(marks) = marks else {
@@ -1575,20 +1583,19 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
     let Some(Tag::List(sections)) = tag.get("sections") else {
         return;
     };
-    let mut layers: Vec<(Option<&[u8]>, Option<&[u8]>)> = vec![(None, None); SECTIONS];
+    let mut layers: Vec<(Option<&[u8]>, Option<&[u8]>)> = vec![(None, None); chunk.sections.len()];
     for section in sections {
         let Some(y) = number(section.get("Y")) else {
             continue;
         };
-        let si = y as i32 - (MIN_Y >> 4);
-        if !(0..SECTIONS as i32).contains(&si) {
+        let Some(si) = chunk.section_index(y as i32 * 16) else {
             continue;
-        }
+        };
         let layer = |name: &str| match section.get(name) {
             Some(Tag::ByteArray(a)) if a.len() == 2048 => Some(&a[..]),
             _ => None,
         };
-        layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
+        layers[si] = (layer("SkyLight"), layer("BlockLight"));
     }
     // Uniform saved layers need no expanded allocation. Both nibbles of
     // each byte must match, not merely the bytes across the layer.
@@ -1966,8 +1973,8 @@ struct LodRegion {
 /// it was read show in the far view this long after.
 const LOD_REGION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 impl SaveDir {
-    pub fn new(root: PathBuf) -> Self {
-        let shape = LevelShape::for_dir(&root);
+    /// The saves of a level of `shape` at `root` (its dimension folder).
+    pub fn new(root: PathBuf, shape: LevelShape) -> Self {
         Self {
             root,
             regions: Default::default(),
@@ -2084,7 +2091,7 @@ impl SaveDir {
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
-        let mut chunk = decode_with(&root, registry, biomes, tables)?;
+        let mut chunk = decode_with(&root, registry, biomes, tables, self.shape.column())?;
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
         Some(chunk)
     }
@@ -2097,7 +2104,8 @@ impl SaveDir {
         biomes: &Biomes,
     ) -> Option<SavedProto> {
         let root = self.read_record("region", x, z)?;
-        decode_proto(&root, registry, biomes, self.tables.get().map(|t| &**t))
+        let tables = self.tables.get().map(|t| &**t);
+        decode_proto(&root, registry, biomes, tables, self.shape.column())
     }
     /// Queue proto chunks for the writer thread; loads see them meanwhile.
     pub fn save_protos(
@@ -3778,22 +3786,22 @@ fn lod_palette_index(
         & ((1 << bits) - 1)) as usize;
     (value < palette.len()).then_some(value)
 }
-fn lod_light_layers(sections: &[(i32, &Tag)], sky_light: bool) -> Box<[u8]> {
-    let mut layers = [(None, None); SECTIONS];
+fn lod_light_layers(sections: &[(i32, &Tag)], layout: ColumnLayout, sky_light: bool) -> Box<[u8]> {
+    let mut layers = vec![(None, None); layout.sections()];
     for &(y, section) in sections {
         let layer = |name: &str| match section.get(name) {
             Some(Tag::ByteArray(data)) if data.len() == 2048 => Some(&data[..]),
             _ => None,
         };
-        layers[(y - (MIN_Y >> 4)) as usize] = (
+        layers[(y - (layout.min_y() >> 4)) as usize] = (
             if sky_light { layer("SkyLight") } else { None },
             layer("BlockLight"),
         );
     }
-    let mut light = vec![0u8; SECTIONS * 4096].into_boxed_slice();
+    let mut light = vec![0u8; layout.sections() * 4096].into_boxed_slice();
     let mut above = [if sky_light { 15u8 } else { 0 }; 256];
     let nibble = |data: &[u8], index: usize| (data[index / 2] >> ((index & 1) * 4)) & 15;
-    for si in (0..SECTIONS).rev() {
+    for si in (0..layout.sections()).rev() {
         let (sky, block) = layers[si];
         let section = &mut light[si * 4096..(si + 1) * 4096];
         for (index, value) in section.iter_mut().enumerate() {
@@ -3817,7 +3825,7 @@ fn lod_face_light(light: &[u8], x: usize, y: usize, z: usize) -> u16 {
         (z > 0, index.wrapping_sub(16)),
         (z < 15, index + 16),
         (y > 0, index.wrapping_sub(256)),
-        (y + 1 < SECTIONS * 16, index + 256),
+        (index + 256 < light.len(), index + 256),
     ] {
         if valid {
             sky = sky.max(light[index] >> 4);
@@ -3830,6 +3838,7 @@ fn decode_lod_surfaces(
     root: &NamedTag,
     assets: &crate::assets::Assets,
     biomes: &Biomes,
+    layout: ColumnLayout,
     sky_light: bool,
 ) -> Option<LodSurfaces> {
     let Tag::List(sections) = root.tag.get("sections")? else {
@@ -3839,8 +3848,9 @@ fn decode_lod_surfaces(
         .iter()
         .filter_map(|section| {
             let y = number(section.get("Y"))? as i32;
-            (MIN_Y >> 4..(MIN_Y >> 4) + SECTIONS as i32)
-                .contains(&y)
+            layout
+                .section_index(y * 16)
+                .is_some()
                 .then_some((y, section))
         })
         .collect();
@@ -3851,7 +3861,7 @@ fn decode_lod_surfaces(
             spans: Vec::new(),
         }));
     let mut water = [None; 256];
-    let light = lod_light_layers(&sections, sky_light);
+    let light = lod_light_layers(&sections, layout, sky_light);
     let mut states = BTreeMap::new();
     for (section_y, section) in sections {
         if let Some(blocks) = section.get("block_states") {
@@ -3940,7 +3950,8 @@ fn decode_lod_surfaces(
                                 });
                             }
                         }
-                        let light = lod_face_light(&light, x, (height - 1 - MIN_Y) as usize, z);
+                        let light =
+                            lod_face_light(&light, x, (height - 1 - layout.min_y()) as usize, z);
                         let min = (height - 1) as i16;
                         let max = height as i16;
                         if let Some(previous) = column.spans.last_mut()
@@ -4030,7 +4041,13 @@ impl SaveDir {
         {
             return None;
         }
-        decode_lod_surfaces(&root, assets, biomes, self.shape.sky_light)
+        decode_lod_surfaces(
+            &root,
+            assets,
+            biomes,
+            self.shape.column(),
+            self.shape.sky_light,
+        )
     }
 }
 
@@ -4066,6 +4083,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     }
     fn prepare_loaded(&self, worker: &mut G::Worker, chunk: &Chunk) {
         self.inner.prepare_loaded(worker, chunk);
+    }
+    fn idle(&self, worker: &mut G::Worker) {
+        self.inner.idle(worker);
     }
     fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
         let mut proto = self.inner.proto(worker, x, z);
@@ -4200,7 +4220,7 @@ mod tests {
         let bell = assets.registry.default_state("minecraft:bell").unwrap().0;
         let dir = std::env::temp_dir().join(format!("horizon-poi-save-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let save = SaveDir::new(dir.clone());
+        let save = SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
         let _ = save.tables.set(Arc::new(SaveTables::new(&assets)));
         let mut chunk = Chunk::empty(0, 0);
         chunk.set(5, 71, 5, bell);
@@ -4216,7 +4236,10 @@ mod tests {
         save.save_later(&[Arc::new(chunk)], assets.registry, &biomes)
             .unwrap();
         save.flush().unwrap();
-        assert_eq!(sections(&SaveDir::new(dir.clone())), Some(0));
+        assert_eq!(
+            sections(&SaveDir::new(dir.clone(), LevelShape::OVERWORLD)),
+            Some(0)
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4334,6 +4357,61 @@ mod tests {
     }
 
     #[test]
+    fn a_tall_level_saves_and_loads_its_whole_height() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tables = SaveTables::new(&assets);
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        // To The Max's Overworld: -64..2032, 131 sections.
+        let shape = LevelShape::new(-64, 2096, 2096, true).unwrap();
+        let mut chunk = Chunk::with_layout(0, 0, shape.column());
+        chunk.set(0, -64, 0, stone.0);
+        chunk.set(0, 2000, 0, stone.0);
+        let saved = encode_with(&chunk, assets.registry, &biomes, Some(&tables), shape);
+        assert_eq!(number(saved.tag.get("yPos")), Some(-4));
+        let Some(Tag::List(sections)) = saved.tag.get("sections") else {
+            panic!("no sections");
+        };
+        assert_eq!(sections.len(), 131);
+        // 12-bit heightmap entries: y 2000's top reads 2001 - -64.
+        let Some(Tag::LongArray(surface)) = saved
+            .tag
+            .get("Heightmaps")
+            .and_then(|h| h.get("WORLD_SURFACE"))
+        else {
+            panic!("no WORLD_SURFACE");
+        };
+        assert_eq!(surface[0] & 0xfff, 2065);
+        let back = decode_with(
+            &saved,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            shape.column(),
+        )
+        .expect("decodes");
+        assert_eq!(back.sections.len(), 131);
+        assert_eq!(back.get(0, 2000, 0), stone.0);
+        assert_eq!(back.get(0, -64, 0), stone.0);
+        // Read into the vanilla column, the sections above it are left out.
+        let short = decode_with(
+            &saved,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            ColumnLayout::VANILLA,
+        )
+        .expect("decodes");
+        assert_eq!(short.sections.len(), SECTIONS);
+        assert_eq!(short.get(0, 2000, 0), 0);
+        assert_eq!(short.get(0, -64, 0), stone.0);
+    }
+
+    #[test]
     fn nether_and_end_chunks_save_with_their_own_height() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
             return;
@@ -4388,14 +4466,6 @@ mod tests {
             LevelShape::OVERWORLD,
         );
         assert_eq!(number(overworld.tag.get("yPos")), Some(-4));
-        assert_eq!(
-            LevelShape::for_dir(Path::new("w/dimensions/minecraft/the_end")),
-            LevelShape::END
-        );
-        assert_eq!(
-            LevelShape::for_dir(Path::new("w/DIM-1")),
-            LevelShape::NETHER
-        );
     }
 
     #[test]
@@ -4464,10 +4534,10 @@ mod tests {
         );
         let dir = std::env::temp_dir().join(format!("horizon-lod-save-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let save = SaveDir::new(dir.clone());
+        let save = SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
         save.write_records("region", vec![((-2, 3), Some(saved))], true)
             .unwrap();
-        let reopened = SaveDir::new(dir.clone());
+        let reopened = SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
         let surfaces = reopened
             .lod_surfaces(-2, 3, &assets, &biomes)
             .expect("saved summary");
@@ -4550,8 +4620,7 @@ mod tests {
             reopened.lod_surfaces(-3, 3, &assets, &biomes).is_none(),
             "unfinished proto saves must not suppress complete decoration"
         );
-        let mut nether = SaveDir::new(dir.clone());
-        nether.shape = LevelShape::NETHER;
+        let nether = SaveDir::new(dir.clone(), LevelShape::NETHER);
         let dark = nether.lod_surfaces(-2, 3, &assets, &biomes).unwrap();
         assert!(
             dark.iter()
@@ -4769,7 +4838,7 @@ mod tests {
     fn write_completion_polls_without_waiting_and_keeps_latest_snapshot() {
         let dir = std::env::temp_dir().join(format!("horizon-save-poll-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let save = super::SaveDir::new(dir.clone());
+        let save = super::SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
         let lock = super::SessionLock::acquire(&dir).unwrap();
         let path = save.region_path("entities", 0, 0);
         let region = super::cached_region(&save.entity_regions, (0, 0), &path, true)
@@ -4788,12 +4857,12 @@ mod tests {
         drop(blocked);
         save.flush().unwrap();
         assert!(save.writes_finished().unwrap());
-        let reopened = super::SaveDir::new(dir.clone());
+        let reopened = super::SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
         assert_eq!(reopened.load_entities(1, 2), vec![entity(2)]);
         save.save_entities_later(vec![((1, 2), vec![])]).unwrap();
         save.flush().unwrap();
         assert!(
-            super::SaveDir::new(dir.clone())
+            super::SaveDir::new(dir.clone(), LevelShape::OVERWORLD)
                 .load_entities(1, 2)
                 .is_empty()
         );
@@ -4808,7 +4877,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // A file where a directory is needed causes a real writer I/O error.
         std::fs::write(dir.join("entities"), b"blocked").unwrap();
-        let save = super::SaveDir::new(dir.clone());
+        let save = super::SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
         let entity = Tag::compound([("version", Tag::Int(3))]);
         save.save_entities_later(vec![((0, 0), vec![entity.clone()])])
             .unwrap();
@@ -4941,6 +5010,7 @@ mod tests {
         assert_eq!(back.components, banner.components);
     }
     use super::*;
+    use crate::chunk::{MIN_Y, SECTIONS};
 
     #[test]
     fn end_gateway_block_entity_round_trips() {
@@ -5569,14 +5639,14 @@ mod tests {
             "minecraft:the_end",
         ];
         for (i, dim) in dimensions.iter().enumerate() {
-            let save = SaveDir::new(dimension_dir(&root, dim));
+            let save = SaveDir::new(dimension_dir(&root, dim), LevelShape::OVERWORLD);
             assert!(save.load_forced_chunks().is_empty());
             let forced = HashSet::from([(i as i32, -17), (-23, i as i32), (-1, -1)]);
             save.save_forced_chunks(&forced).unwrap();
         }
         for (i, dim) in dimensions.iter().enumerate() {
             let path = dimension_dir(&root, dim);
-            let save = SaveDir::new(path.clone());
+            let save = SaveDir::new(path.clone(), LevelShape::OVERWORLD);
             let mut forced = save.load_forced_chunks();
             assert_eq!(
                 forced,
@@ -5601,10 +5671,14 @@ mod tests {
             forced.remove(&(-1, -1));
             save.save_forced_chunks(&forced).unwrap();
             drop(save);
-            let reopened = SaveDir::new(path.clone());
+            let reopened = SaveDir::new(path.clone(), LevelShape::OVERWORLD);
             assert_eq!(reopened.load_forced_chunks(), forced);
             reopened.save_forced_chunks(&HashSet::new()).unwrap();
-            assert!(SaveDir::new(path.clone()).load_forced_chunks().is_empty());
+            assert!(
+                SaveDir::new(path.clone(), LevelShape::OVERWORLD)
+                    .load_forced_chunks()
+                    .is_empty()
+            );
             assert_eq!(
                 read_saved_data(&path, "chunk_tickets")
                     .unwrap()

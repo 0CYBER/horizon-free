@@ -102,6 +102,10 @@ pub struct Hdr {
     /// output keeps the hand at the world's brightness.
     hand_mark: wgpu::RenderPipeline,
     params: wgpu::Buffer,
+    /// The same pass drawing HDR10 for a screenshot (`capture`), with its own parameters,
+    /// so it can differ from the swapchain's in one frame.
+    capture_pipeline: wgpu::RenderPipeline,
+    capture_params: wgpu::Buffer,
     pub output: Output,
     /// The frame's format: what every other pipeline draws in.
     format: wgpu::TextureFormat,
@@ -156,31 +160,33 @@ impl Hdr {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Horizon HDR"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_hdr"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_hdr"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: output.format(),
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline_for = |format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Horizon HDR"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_hdr"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_hdr"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let alpha_pass = |label, blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -223,18 +229,22 @@ impl Hdr {
                 alpha: scale_alpha,
             }),
         );
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Horizon HDR parameters"),
-            size: 80,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let params = || {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Horizon HDR parameters"),
+                size: 80,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
         Self {
             layout,
-            pipeline,
+            pipeline: pipeline_for(output.format()),
             clear_alpha,
             hand_mark,
-            params,
+            params: params(),
+            capture_pipeline: pipeline_for(Output::Pq.format()),
+            capture_params: params(),
             output,
             format,
             targets: None,
@@ -375,6 +385,64 @@ impl Hdr {
         let Some(t) = &self.targets else {
             return;
         };
+        queue.write_buffer(
+            &self.params,
+            0,
+            bytemuck::cast_slice(&self.params(world, self.output == Output::Pq)),
+        );
+        Self::draw(encoder, &self.pipeline, &t.group, target);
+    }
+
+    /// The frame `present` writes, as HDR10 (BT.2020, PQ, 10 bits a channel) whatever
+    /// the swapchain is, in a texture of its own for a screenshot (`Rgb10a2Unorm`).
+    pub fn capture(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        world: bool,
+    ) -> Option<wgpu::Texture> {
+        let t = self.targets.as_ref()?;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Horizon HDR screenshot"),
+            size: t.frame.size(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Output::Pq.format(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = |t: &wgpu::Texture| t.create_view(&Default::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Horizon HDR screenshot bindings"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view(&t.frame)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view(&t.world)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.capture_params.as_entire_binding(),
+                },
+            ],
+        });
+        queue.write_buffer(
+            &self.capture_params,
+            0,
+            bytemuck::cast_slice(&self.params(world, true)),
+        );
+        Self::draw(encoder, &self.capture_pipeline, &group, &texture);
+        Some(texture)
+    }
+
+    /// hdr.wgsl's `Params`.
+    fn params(&self, world: bool, pq: bool) -> [f32; 20] {
         let paper = self.paper_white.max(1.0);
         let mut params = [0.0; 20];
         params[..5].copy_from_slice(&[
@@ -382,7 +450,7 @@ impl Hdr {
             (self.peak / paper).max(1.0),
             f32::from(u8::from(world)),
             f32::from(u8::from(self.debug)),
-            f32::from(u8::from(self.output == Output::Pq)),
+            f32::from(u8::from(pq)),
         ]);
         params[5] = self.black.clamp(0.0, paper);
         params[6] = self.ui.clamp(0.25, 1.0);
@@ -391,7 +459,15 @@ impl Hdr {
             params[12 + i] = t.start;
             params[16 + i] = t.full;
         }
-        queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
+        params
+    }
+
+    fn draw(
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        group: &wgpu::BindGroup,
+        target: &wgpu::Texture,
+    ) {
         let view = target.create_view(&Default::default());
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
@@ -407,8 +483,8 @@ impl Hdr {
             color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &t.group, &[]);
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

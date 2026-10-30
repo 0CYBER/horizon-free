@@ -1,36 +1,41 @@
 use super::*;
 
 #[test]
-fn padded_reuse_resets_missing_neighbors_and_matches_chunk_reads() {
-    let mut center = Chunk::empty(0, 0);
-    center.set(0, MIN_Y, 0, 7);
-    center.set(15, MIN_Y + 15, 15, 9);
-    let mut neighbor = Chunk::empty(1, 0);
-    neighbor.set(0, MIN_Y + 2, 3, 11);
-    let mut region = [[None; 3]; 3];
-    region[1][1] = Some(&center);
-    region[1][2] = Some(&neighbor);
-    let mut pad = Padded::new(&region, 0);
-    let buffers = (pad.blocks.as_ptr(), pad.light.as_ptr());
+fn padded_reuse_resets_missing_neighbors_and_matches_chunk_reads_across_layouts() {
+    let mut pad = Padded::default();
     let mut own = Box::new([u32::MAX; 4096]);
-    for current in [region, [[None; 3]; 3], region] {
-        pad.fill(&current, 0, &mut own);
-        for y in -B..16 + B {
-            for z in -B..16 + B {
-                for x in -B..16 + B {
-                    let chunk = current[((z + 16) >> 4) as usize][((x + 16) >> 4) as usize];
-                    assert_eq!(
-                        pad.blocks[pi(x, y, z)],
-                        chunk.map_or(0, |c| c.get(x & 15, MIN_Y + y, z & 15))
-                    );
-                    assert_eq!(
-                        pad.light[pi(x, y, z)],
-                        chunk.map_or(0xF0, |c| c.light(x & 15, MIN_Y + y, z & 15))
-                    );
+    for min_y in [MIN_Y, -256, 0, 256] {
+        let layout = crate::chunk::ColumnLayout::new(min_y, 32).unwrap();
+        let base_y = min_y + 16;
+        let mut center = Chunk::with_layout(0, 0, layout);
+        center.set(0, base_y, 0, 7);
+        center.set(15, base_y + 15, 15, 9);
+        let mut neighbor = Chunk::with_layout(1, 0, layout);
+        neighbor.set(0, base_y + 2, 3, 11);
+        let mut region = [[None; 3]; 3];
+        region[1][1] = Some(&center);
+        region[1][2] = Some(&neighbor);
+        pad.fill(&region, 1, &mut own);
+        let buffers = (pad.blocks.as_ptr(), pad.light.as_ptr());
+        for current in [region, [[None; 3]; 3], region] {
+            pad.fill(&current, 1, &mut own);
+            for y in -B..16 + B {
+                for z in -B..16 + B {
+                    for x in -B..16 + B {
+                        let chunk = current[((z + 16) >> 4) as usize][((x + 16) >> 4) as usize];
+                        assert_eq!(
+                            pad.blocks[pi(x, y, z)],
+                            chunk.map_or(0, |c| c.get(x & 15, base_y + y, z & 15))
+                        );
+                        assert_eq!(
+                            pad.light[pi(x, y, z)],
+                            chunk.map_or(0xF0, |c| c.light(x & 15, base_y + y, z & 15))
+                        );
+                    }
                 }
             }
+            assert_eq!(buffers, (pad.blocks.as_ptr(), pad.light.as_ptr()));
         }
-        assert_eq!(buffers, (pad.blocks.as_ptr(), pad.light.as_ptr()));
     }
 }
 
@@ -73,6 +78,8 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
     let empty = Chunk::empty(0, 0);
     let mut neighbor = Chunk::empty(1, 0);
     neighbor.set(0, MIN_Y + 4, 0, state("minecraft:stone"));
+    let mut custom = Chunk::with_layout(2, -4, crate::chunk::ColumnLayout::new(-256, 64).unwrap());
+    custom.set(1, -252, 2, state("minecraft:chest"));
     let mut scratch = MeshScratch::default();
     let mut recycled = SectionMesh::default();
     // The same scratch and output buffers survive a resource reload. They must
@@ -99,6 +106,7 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
             (&sparse, None),
             (&empty, None),
             (&dense, None),
+            (&custom, None),
         ]
         .into_iter()
         .enumerate()
@@ -131,6 +139,12 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
                 assert!(!fresh.solid.is_empty());
                 assert!(!fresh.translucent.is_empty());
                 assert!(!fresh.block_entities.is_empty());
+            }
+            if std::ptr::eq(center, &custom) {
+                assert_eq!(
+                    fresh.block_entities,
+                    [([33, -252, -62], state("minecraft:chest"))]
+                );
             }
         }
     }
