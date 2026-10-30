@@ -2330,6 +2330,9 @@ impl FollowMob {
     }
 }
 impl Goal for FollowMob {
+    fn name(&self) -> &'static str {
+        "FollowMobGoal"
+    }
     goal_clone!();
     fn flags(&self) -> u8 {
         MOVE | LOOK
@@ -2373,9 +2376,6 @@ impl Goal for FollowMob {
         self.following = None;
         m.nav_stop();
         m.set_malus(super::path::PathType::Water, self.old_water);
-    }
-    fn every_tick(&self) -> bool {
-        true
     }
     /// `FollowMobGoal.tick`.
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
