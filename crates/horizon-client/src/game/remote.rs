@@ -4461,6 +4461,12 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Chicken {
                 horizon_client::mobs::farm::chicken_flap(m);
             }
+            // Parrot.calculateFlapping: the wings follow the server's
+            // on-ground flag and the shoulder it sits on (the glide is the
+            // server's).
+            if m.species() == horizon_client::mobs::Species::Parrot {
+                horizon_client::mobs::parrot::flap(m);
+            }
             // LivingEntity.updatingUsingItem: the ticks the item has been
             // used before this one. Another player's use particles; a mob's
             // drawn bow only needs the count (its pull follows it).
