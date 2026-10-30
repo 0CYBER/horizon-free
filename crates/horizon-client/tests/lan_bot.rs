@@ -306,7 +306,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 &[book, u8::from(open), u8::from(filtering)],
             )
             .unwrap();
-            s.hub.guests[0].inbox.push_back(packet);
+            s.hub.guests[0].inbox.push_back((packet, 0));
             s.tick(&[]);
             let settings = &s.hub.guests[0].recipe_book;
             for i in 0..4 {
@@ -366,13 +366,14 @@ fn sprint_commands_survive_keyboard_input_changes() {
     }
     let id = s.hub.guests[0].entity_id;
     s.hub.guests[0].loaded = true;
-    s.hub.guests[0]
-        .inbox
-        .push_back(S::PlayerCommand(play::PlayerCommand {
+    s.hub.guests[0].inbox.push_back((
+        S::PlayerCommand(play::PlayerCommand {
             id,
             action: 1,
             data: 0,
-        }));
+        }),
+        0,
+    ));
     s.tick(&[]);
     assert!(s.hub.guests[0].sprinting);
     // LocalPlayer keeps sprinting after Ctrl is released while W remains
@@ -380,7 +381,7 @@ fn sprint_commands_survive_keyboard_input_changes() {
     for flags in [65, 1, 0, 33] {
         s.hub.guests[0]
             .inbox
-            .push_back(S::PlayerInput(play::PlayerInput { flags }));
+            .push_back((S::PlayerInput(play::PlayerInput { flags }), 0));
         s.tick(&[]);
         let g = &s.hub.guests[0];
         assert!(
@@ -390,18 +391,19 @@ fn sprint_commands_survive_keyboard_input_changes() {
         assert_eq!(g.input, flags);
         assert_eq!(g.sneaking, flags & 32 != 0);
     }
-    s.hub.guests[0]
-        .inbox
-        .push_back(S::PlayerCommand(play::PlayerCommand {
+    s.hub.guests[0].inbox.push_back((
+        S::PlayerCommand(play::PlayerCommand {
             id,
             action: 2,
             data: 0,
-        }));
+        }),
+        0,
+    ));
     s.tick(&[]);
     assert!(!s.hub.guests[0].sprinting);
     s.hub.guests[0]
         .inbox
-        .push_back(S::PlayerInput(play::PlayerInput { flags: 65 }));
+        .push_back((S::PlayerInput(play::PlayerInput { flags: 65 }), 0));
     s.tick(&[]);
     assert!(
         !s.hub.guests[0].sprinting,
@@ -433,26 +435,32 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
     // A creative break as the client sends it in one tick: the dig, the arm swing,
     // then the move into the block it predicted gone.
     let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back(S::PlayerAction(play::PlayerAction {
-        action: 0,
-        pos: below,
-        direction: 1,
-        sequence: 1,
-    }));
-    inbox.push_back(S::Punch(Empty));
-    inbox.push_back(S::MovePlayerPos(play::MovePlayerPos {
-        x: at[0],
-        y: at[1] - 0.0784,
-        z: at[2],
-        flags: 0,
-    }));
+    inbox.push_back((
+        S::PlayerAction(play::PlayerAction {
+            action: 0,
+            pos: below,
+            direction: 1,
+            sequence: 1,
+        }),
+        0,
+    ));
+    inbox.push_back((S::Punch(Empty), 0));
+    inbox.push_back((
+        S::MovePlayerPos(play::MovePlayerPos {
+            x: at[0],
+            y: at[1] - 0.0784,
+            z: at[2],
+            flags: 0,
+        }),
+        0,
+    ));
     s.tick(&[]);
     // The game breaks the block after the hub's pass: the move waits, or it would be
     // checked against the block and sent back.
     let g = &s.hub.guests[0];
     assert_eq!(g.position, at, "the move was handled before the dig");
     assert!(
-        matches!(g.inbox.back(), Some(S::MovePlayerPos(_))),
+        matches!(g.inbox.back(), Some((S::MovePlayerPos(_), _))),
         "the move left the queue"
     );
 }
@@ -534,22 +542,28 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
     // A jump up a pillar as the client sends it in one tick: the click on the block
     // below from where the player was, the arm swing, then the move up the jump.
     let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back(S::UseItemOn(play::UseItemOn {
-        hand: 0,
-        pos: below,
-        face: 1,
-        cursor: [0.5, 1.0, 0.5],
-        inside: false,
-        world_border: false,
-        sequence: 1,
-    }));
-    inbox.push_back(S::Punch(Empty));
-    inbox.push_back(S::MovePlayerPos(play::MovePlayerPos {
-        x: at[0],
-        y: at[1] + 0.42,
-        z: at[2],
-        flags: 0,
-    }));
+    inbox.push_back((
+        S::UseItemOn(play::UseItemOn {
+            hand: 0,
+            pos: below,
+            face: 1,
+            cursor: [0.5, 1.0, 0.5],
+            inside: false,
+            world_border: false,
+            sequence: 1,
+        }),
+        0,
+    ));
+    inbox.push_back((S::Punch(Empty), 0));
+    inbox.push_back((
+        S::MovePlayerPos(play::MovePlayerPos {
+            x: at[0],
+            y: at[1] + 0.42,
+            z: at[2],
+            flags: 0,
+        }),
+        0,
+    ));
     s.tick(&[]);
     // The game places the block after the hub's pass: BlockItem.canPlace sees the
     // player where they clicked from, as their client's prediction did.
@@ -557,7 +571,7 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
     let g = &s.hub.guests[0];
     assert_eq!(g.position, at, "the move was handled before the use");
     assert!(
-        matches!(g.inbox.back(), Some(S::MovePlayerPos(_))),
+        matches!(g.inbox.back(), Some((S::MovePlayerPos(_), _))),
         "the move left the queue"
     );
 }

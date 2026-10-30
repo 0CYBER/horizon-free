@@ -66,7 +66,9 @@ impl Game<'_> {
                 .insert((at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4));
             return true;
         }
-        if !m.extra.saddled || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        // Pig.mobInteract: held food goes to Animal.mobInteract, not a ride.
+        let food = m.kind.food.iter().any(|f| f.as_str() == item);
+        if !m.extra.saddled || food || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
             return false;
         }
         self.riding = Some(m.id);

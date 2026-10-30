@@ -775,6 +775,10 @@ pub struct Extra {
     pub age: i32,
     /// `AgeLocked` (tadpoles fed a slime ball... and ageable mobs).
     pub age_locked: bool,
+    /// `AgeableMob.ageLockParticleTimer` (a tadpole's too): the ticks of
+    /// growth particles left after a golden dandelion, and the cooldown
+    /// before the next one can be used. Not saved.
+    pub age_lock_particle_timer: i32,
     /// AgeableMob.forcedAge: the age fed food added, restored as the age
     /// when it reaches 0 (`ForcedAge`).
     pub forced_age: i32,
@@ -911,6 +915,8 @@ pub struct Extra {
     pub positions: Vec<[i32; 3]>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
+    /// An allay's vibration listener and liked note block.
+    pub allay: Option<Box<allay::State>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
@@ -2313,6 +2319,8 @@ impl Mob {
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
+        // IronGolem.hurtServer: the crack level before the damage, compared after.
+        let crackiness = (self.species() == Species::IronGolem).then(|| golem::crackiness(self));
         let mut amount = if reflected { 1000.0 } else { amount };
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
@@ -2444,6 +2452,15 @@ impl Mob {
                 }
             }
         }
+        // IronGolem.hurtServer: a new crack level plays the damage sound.
+        if let Some(before) = crackiness
+            && before != golem::crackiness(self)
+            && !self.silent
+        {
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox
+                .push(MobEvent::Sound("entity.iron_golem.damage", at, 1.0, 1.0));
+        }
         if self.has_effect("minecraft:infested") {
             self.outbox.push(MobEvent::Infested { mob: self.id });
         }
@@ -2518,7 +2535,11 @@ impl Mob {
         }
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
+    /// `Creaking.knockback`: a creaking that cannot move is not shoved.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
+        if creaking::is_creaking(self) && !creaking::can_move(self) {
+            return;
+        }
         let power = power * (1.0 - self.attrs.knockback_resistance);
         if power <= 0.0 {
             return;
