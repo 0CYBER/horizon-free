@@ -2015,10 +2015,22 @@ pub fn ate(m: &mut Mob) {
         }
     }
 }
+/// `NeutralMob.playerDied` for a mob that is neutral: the anger at the
+/// player who died ends. The caller checks `forgive_dead_players`.
+pub fn forgive_dead_player(m: &mut Mob) {
+    match m.species() {
+        Species::Bee => super::bee::forgive_dead_player(m),
+        Species::PolarBear => super::polar_bear::forgive_dead_player(m),
+        _ => super::tame::forgive_dead_player(m),
+    }
+}
 /// Species-specific travel (fish, squid, dolphins swim with their own rules).
 pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
     if m.species() == Species::Drowned {
         return undead::drowned_travel(m, w, input, events);
+    }
+    if m.species() == Species::Turtle {
+        return super::turtle::travel(m, w, input, events);
     }
     match family(m.species()) {
         Family::Aquatic => aquatic::travel(m, w, input, events),
