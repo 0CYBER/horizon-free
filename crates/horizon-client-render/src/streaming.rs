@@ -16,10 +16,14 @@ use std::{
     collections::{BinaryHeap, HashSet, VecDeque},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
 };
+
+/// How long a worker waits with nothing to do before it gives back its
+/// generator's scratch buffers ([`ChunkGenerator::idle`]).
+pub const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A chunk under generation, opaque to the streamer.
 pub type Proto = Box<dyn std::any::Any + Send>;
@@ -57,6 +61,9 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// What a loaded chunk needs from the generator before the game uses it,
     /// on the worker that loaded it.
     fn prepare_loaded(&self, _worker: &mut Self::Worker, _chunk: &Chunk) {}
+    /// The worker has had nothing to do for [`IDLE_RELEASE`]: give back what
+    /// it keeps between jobs only to go faster.
+    fn idle(&self, _worker: &mut Self::Worker) {}
     fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto;
     fn decorates(&self) -> bool {
         false
@@ -220,6 +227,9 @@ struct Shared {
     /// packs reload; each mesh job takes the current one.
     context: RwLock<Arc<WorkerContext>>,
     done: Mailbox,
+    /// Workers that have freed their buffers ([`IDLE_RELEASE`]) and taken no
+    /// job since: the last of them gives the freed memory back to the OS.
+    released: AtomicUsize,
 }
 /// Finished jobs, from the workers to the game thread, in the order they
 /// finished. Not an `mpsc` channel: its receiver waits for a sender it finds
@@ -515,7 +525,9 @@ impl Streaming {
             stop: AtomicBool::new(false),
             context: RwLock::new(context.clone()),
             done: Mailbox::default(),
+            released: AtomicUsize::new(0),
         });
+        let workers = threads.max(1);
         let light_tables = context.light.clone();
         let saves: Arc<dyn Saves> = generator.clone();
         let threads = (0..threads.max(1))
@@ -536,14 +548,42 @@ impl Streaming {
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
+                                let mut released = false;
                                 loop {
                                     if shared.stop.load(Ordering::Relaxed) {
                                         return;
                                     }
                                     if let Some(job) = queue.pop() {
+                                        if released {
+                                            shared.released.fetch_sub(1, Ordering::Relaxed);
+                                        }
                                         break job.job;
                                     }
-                                    queue = shared.ready.wait(queue).unwrap();
+                                    if released {
+                                        queue = shared.ready.wait(queue).unwrap();
+                                        continue;
+                                    }
+                                    let (woken, wait) =
+                                        shared.ready.wait_timeout(queue, IDLE_RELEASE).unwrap();
+                                    queue = woken;
+                                    if wait.timed_out() && queue.is_empty() {
+                                        // A server nobody is on, a client standing still:
+                                        // free the generator's buffers (and the mesher's
+                                        // face cache) until the next job needs them.
+                                        drop(queue);
+                                        generator.idle(&mut worker);
+                                        faces = None;
+                                        released = true;
+                                        // The allocator keeps freed pages until memory
+                                        // runs short: once every worker has freed its own,
+                                        // hand them back.
+                                        if shared.released.fetch_add(1, Ordering::Relaxed) + 1
+                                            == workers
+                                        {
+                                            horizon_threads::release_free_memory();
+                                        }
+                                        queue = shared.queue.lock().unwrap();
+                                    }
                                 }
                             };
                             let done = match job {

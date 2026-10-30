@@ -3103,6 +3103,22 @@ impl GeneratorWorker {
     pub fn set_structure_mobs(&mut self, mobs: Arc<dyn StructureMobs>) {
         self.state.structure_mobs = Some(mobs);
     }
+    /// Give back the density scratch buffers and the lookup caches, which only
+    /// speed up the next chunks (a generating worker holds megabytes of them).
+    /// Results do not change: they are made again on demand.
+    pub fn release(&mut self) {
+        let state = &mut self.state;
+        for context in [
+            &mut state.terrain_context,
+            &mut state.biome_context,
+            &mut state.carver_context,
+        ] {
+            context.clear_scratch();
+        }
+        state.carver_biomes = HashMap::new();
+        state.structure_biomes = HashMap::new();
+        state.heights = HashMap::new();
+    }
 }
 
 #[cfg(test)]

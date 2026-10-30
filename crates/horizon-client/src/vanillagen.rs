@@ -518,6 +518,9 @@ impl ChunkGenerator for VanillaTerrain {
     fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
         Box::new(VanillaLodSampler::new(self))
     }
+    fn idle(&self, worker: &mut GeneratorWorker) {
+        worker.release();
+    }
     fn lod_surface(
         &self,
         worker: &mut GeneratorWorker,
