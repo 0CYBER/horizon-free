@@ -143,8 +143,8 @@ const GENES: [&str; 7] = [
     "aggressive",
 ];
 const MEMORIES: [&str; 7] = [
-    "long_jump_cooldown",
-    "ram_cooldown",
+    "long_jump_cooling_down",
+    "ram_cooldown_ticks",
     "attack_target_cooldown",
     "hunted_recently",
     "dig_cooldown",
@@ -507,6 +507,7 @@ pub fn main() -> horizon_client::Result<()> {
                 difficulty,
                 data: &data,
                 created: Vec::new(),
+                jockey_rider: None,
             };
             group = finalize::finalize(&mut cx, &mut mob, reason, group);
             let created = std::mem::take(&mut cx.created);

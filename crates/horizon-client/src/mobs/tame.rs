@@ -840,11 +840,6 @@ pub fn register_cat(m: &mut Mob) {
     g.add(3, CatRelaxOnOwner::default());
     g.add(4, CatTempt(super::goals::Tempt::new(0.6, food, true)));
     g.add(
-        4,
-        super::goals::AvoidEntity::new(super::goals::Avoid::Player, 16.0, 0.8, 1.33)
-            .when(|m| !m.extra.tame),
-    );
-    g.add(
         5,
         CatLieOnBlock(super::goals::MoveToBlock {
             vertical_start: -2,
@@ -858,6 +853,13 @@ pub fn register_cat(m: &mut Mob) {
     g.add(10, Breed::new(0.8));
     g.add(11, Stroll::avoiding_water(0.8));
     g.add(12, LookAtPlayer::new(10.0));
+    // `reassessTameGoals` adds the avoidance after `registerGoals`: goals run
+    // in insertion order, so it comes last.
+    g.add(
+        4,
+        super::goals::AvoidEntity::new(super::goals::Avoid::Player, 16.0, 0.8, 1.33)
+            .when(|m| !m.extra.tame),
+    );
     m.ai.targets.add(
         1,
         NearestTarget::species(&[Species::Rabbit], false).when(|m, _| !m.extra.tame),

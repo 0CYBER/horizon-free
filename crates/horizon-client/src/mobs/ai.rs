@@ -668,6 +668,18 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                         "minecraft:cactus" => {
                             m.damage(1.0, Damage::of(DamageKind::Cactus));
                         }
+                        // CampfireBlock.entityInside: a lit campfire hurts a
+                        // living entity by its fire damage (1, soul 2).
+                        name @ ("minecraft:campfire" | "minecraft:soul_campfire")
+                            if w.prop(x, y, z, "lit") == Some("true") =>
+                        {
+                            let damage = if name == "minecraft:campfire" {
+                                1.0
+                            } else {
+                                2.0
+                            };
+                            m.damage(damage, Damage::of(DamageKind::Campfire));
+                        }
                         // WebBlock.entityInside -> makeStuckInBlock, which a
                         // spider ignores for cobwebs and a wither always.
                         "minecraft:cobweb"
@@ -1130,6 +1142,9 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             // setAge at the age boundary: refreshDimensions.
             if m.extra.age >= 0 {
                 m.fudge_position_after_size_change(w, bw, bh);
+                if m.species() == Species::Villager {
+                    super::villager_brain::age_boundary_reached(m, w, level_random, events);
+                }
                 // Turtle.ageBoundaryReached: a grown turtle drops a scute.
                 if m.species() == Species::Turtle {
                     events.push(MobEvent::GiftLoot {

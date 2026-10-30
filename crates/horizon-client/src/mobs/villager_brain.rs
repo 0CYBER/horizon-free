@@ -503,6 +503,28 @@ pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<M
     sync(m, w.game_time);
 }
 
+/// `Villager.ageBoundaryReached`: a villager that grew up gets a new brain
+/// (the schedule it follows is the adult's), as `refreshBrain` builds it.
+pub fn age_boundary_reached(
+    m: &mut Mob,
+    w: &MobWorld,
+    lr: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    if brain(m).is_none() {
+        return;
+    }
+    let mut list = std::mem::take(&mut brain_mut(m).list);
+    let mut cx = Bx {
+        w,
+        lr,
+        events,
+        now: w.game_time,
+        refresh: false,
+    };
+    refresh(m, &mut list, usize::MAX, &mut cx);
+}
+
 /// `Villager.refreshBrain`: stop every running behaviour, then rebuild the
 /// brain from the remembered memories.
 fn refresh(m: &mut Mob, list: &mut [Entry], current: usize, cx: &mut Bx) {
