@@ -6,6 +6,9 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
+//! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
+//!
 //! API 9 adds the acting player's plain items (`native_held`,
 //! `native_count_items`, `native_take_items`, `native_give_items`... in
 //! `native_server.rs`).
@@ -60,7 +63,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 9;
+pub(crate) const NATIVE_HOOKS_API: u32 = 10;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -415,6 +418,27 @@ impl Game<'_> {
         ran: &mut bool,
     ) {
         let _ = (player, command, ran);
+    }
+    /// A click in a menu a mod opened (`native_open_menu`), which moved
+    /// nothing: the menu's `slot` (its own first, then the player's
+    /// inventory, `native_menu_inventory_slot`; -999 outside), the `button`
+    /// and the click's `mode` (`ClickType`'s id) of the player `uuid`.
+    /// No player's state is swapped in: the menu helpers take the player's
+    /// UUID. API 10.
+    pub(super) fn native_menu_clicked(
+        &mut self,
+        uuid: u128,
+        window: i32,
+        slot: i32,
+        button: i32,
+        mode: i32,
+    ) {
+        let _ = (uuid, window, slot, button, mode);
+    }
+    /// A menu a mod opened closed: the player closed it, the server or a mod
+    /// opened another, or the player left. API 10.
+    pub(super) fn native_menu_closed(&mut self, uuid: u128, window: i32) {
+        let _ = (uuid, window);
     }
 }
 

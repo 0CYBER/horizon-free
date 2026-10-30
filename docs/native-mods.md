@@ -53,6 +53,10 @@ command tree) and `native_perform_command` (a player's command on the server), w
 API 9 adds the acting player's plain items for server mods (count, take, give; [Server commands and
 players](#server-commands-and-players)). Bundles that use them need `"hooks": 9`.
 
+API 10 adds server menus: a vanilla chest menu a server mod opens and fills, whose clicks and closing reach the mod
+(`native_menu_clicked`, `native_menu_closed`), and `native_exchange_items`, two players' stacks swapped in one checked
+step ([Server menus](#server-menus)). Bundles that use them need `"hooks": 10`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -206,3 +210,24 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
   component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
   many it counted, took or gave; the player's screen follows as for any change to their inventory.
+
+### Server menus
+
+API 10, `crates/horizon-client/src/game/native_menus.rs`: menus a server mod builds from ordinary items, which a
+stock client shows as a chest (`generic_9x1` to `generic_9x6`); nothing is installed on the player's side.
+
+- `native_open_menu(uuid, rows, title, items)` opens one in place of the player's open menu (its window id);
+  `native_set_menu_items(uuid, items)` changes what it shows; `native_close_menu(uuid)` closes it.
+- **No click moves anything.** Each reaches `native_menu_clicked(uuid, window, slot, button, mode)`, and the client
+  is sent the menu, its inventory and its cursor as they were. `slot` counts the menu's own slots first, then the
+  player's inventory below it: `native_menu_inventory_slot(size, slot)` gives the inventory slot (0..9 the hotbar).
+- `native_menu_closed(uuid, window)`: the player closed it, another menu opened, or the player left.
+- `native_player_stacks(uuid)`: the player's 36 inventory slots, to show copies or offer them.
+- `native_exchange_items(a, a_offer, b, b_offer)`: each offer is inventory slots, each with the exact stack it must
+  still hold. Both offers leave their slots and go to the other player where they fit whole (onto matching stacks,
+  then empty slots), or nothing moves and the error says why (an offer that changed, no room, a player gone or
+  dead). A trade on these menus leaves the offered stacks in their owners' inventories until this one step, so
+  closing the menu, leaving or dying moves nothing.
+
+The menu hooks run with no player's state swapped in; `native_player_stacks` and `native_exchange_items` refuse a
+player whose state is (inside `native_perform_command`): call them from a menu hook or `native_server_tick`.

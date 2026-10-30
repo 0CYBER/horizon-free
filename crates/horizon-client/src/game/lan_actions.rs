@@ -954,6 +954,8 @@ impl Game<'_> {
                 };
                 horizon_client::containers::display_name(custom(k), key)
             }
+            // Opened by a mod (`native_open_menu`), never here.
+            Slots::Native => return false,
         };
         let Some(items) = host
             .hub
