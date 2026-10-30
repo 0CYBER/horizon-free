@@ -530,10 +530,21 @@ impl Game<'_> {
         });
         struck.into_iter().map(|(_, view)| view).collect()
     }
-    /// Simulation-order render inputs; seeded geometry lives in the renderer.
-    pub(super) fn bolt_instances(&self) -> Vec<horizon_client::gfx::lightning::Bolt> {
+    /// `LightningBolt.shouldRenderAtSqrDistance`: a bolt is drawn within 64
+    /// blocks times the view scale of the camera, and past that only its sky
+    /// flash and thunder remain. Simulation-order render inputs; seeded
+    /// geometry lives in the renderer.
+    pub(super) fn bolt_instances(
+        &self,
+        camera: glam::DVec3,
+    ) -> Vec<horizon_client::gfx::lightning::Bolt> {
+        let range = 64.0 * self.view_scale();
         self.bolts
             .iter()
+            .filter(|b| {
+                let at = glam::DVec3::new(b.at[0], b.at[1], b.at[2]);
+                at.distance_squared(camera) < range * range
+            })
             .map(|b| horizon_client::gfx::lightning::Bolt {
                 at: b.at,
                 seed: b.seed,

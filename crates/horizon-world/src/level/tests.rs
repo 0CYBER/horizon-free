@@ -384,14 +384,16 @@ fn bucket_source_removal_drains_spread_water() {
         &mut w.ticks,
         at,
         BucketContent::Fluid(crate::fluid::FluidKind::Water),
-        "minecraft:item.bucket.empty"
+        "minecraft:item.bucket.empty",
+        false,
+        false
     ));
     for _ in 0..60 {
         w.tick();
     }
     assert_ne!(w.get(BlockPos::new(1, 1, 0)), w.b().air());
     assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
         Some("minecraft:water_bucket")
     );
     for _ in 0..120 {
@@ -1296,18 +1298,21 @@ fn dispenser_buckets_pick_up_and_empty() {
     let at = BlockPos::new(0, 10, 0);
     let water = w.id("water", &[("level", "0")]);
     w.put(at, water);
-    let picked = w.b().bucket_pickup(&mut w.level, &mut w.ticks, at);
+    let picked = w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false);
     assert_eq!(picked, Some("minecraft:water_bucket"));
     assert_eq!(w.get(at), w.b().air());
     // Flowing water gives nothing.
     let flowing = w.id("water", &[("level", "3")]);
     w.put(at, flowing);
-    assert_eq!(w.b().bucket_pickup(&mut w.level, &mut w.ticks, at), None);
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
+        None
+    );
     // A waterlogged slab is drained and stays a slab.
     let slab = w.id("oak_slab", &[("waterlogged", "true")]);
     w.put(at, slab);
     assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
         Some("minecraft:water_bucket")
     );
     assert_eq!(w.prop(at, "waterlogged"), "false");
@@ -1315,31 +1320,63 @@ fn dispenser_buckets_pick_up_and_empty() {
     let snow = w.id("powder_snow", &[]);
     w.put(at, snow);
     assert_eq!(
-        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
         Some("minecraft:powder_snow_bucket")
     );
-    // Emptying water into air makes a source; stone refuses.
+    // A barrier only a creative player fills or drains.
+    let barrier = w.id("barrier", &[]);
+    w.put(at, barrier);
     let sound = "minecraft:item.bucket.empty";
     let content = BucketContent::Fluid(crate::fluid::FluidKind::Water);
     assert!(
+        !w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
+    assert!(
         w.b()
-            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, true)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "true");
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, false),
+        None
+    );
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at, true),
+        Some("minecraft:water_bucket")
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
+    // Emptying water into air makes a source; stone refuses.
+    let air = w.b().air();
+    w.put(at, air);
+    assert!(
+        w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
     );
     assert_eq!(w.name(at), "water[level=0]");
     let stone = w.id("stone", &[]);
     w.put(at, stone);
     assert!(
         !w.b()
-            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
     );
     // Water fills a waterloggable slab instead of replacing it.
     let dry = w.id("oak_slab", &[]);
     w.put(at, dry);
     assert!(
         w.b()
-            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound)
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, false, false)
     );
     assert_eq!(w.prop(at, "waterlogged"), "true");
+    // Sneak-clicking the slab refuses: only air takes a fluid under Shift.
+    let dry = w.id("oak_slab", &[]);
+    w.put(at, dry);
+    assert!(
+        !w.b()
+            .bucket_empty(&mut w.level, &mut w.ticks, at, content, sound, true, false)
+    );
+    assert_eq!(w.prop(at, "waterlogged"), "false");
     // Powder snow only goes into empty space.
     let air = w.b().air();
     w.put(at, air);
@@ -1348,7 +1385,9 @@ fn dispenser_buckets_pick_up_and_empty() {
         &mut w.ticks,
         at,
         BucketContent::Powder,
-        "minecraft:item.bucket.empty_powder_snow"
+        "minecraft:item.bucket.empty_powder_snow",
+        false,
+        false
     ));
     assert_eq!(w.name(at), "powder_snow[]");
 }
