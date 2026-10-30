@@ -475,7 +475,7 @@ impl Goal for FloatAround {
         let mut t = result.unwrap_or_else(|| choose(m));
         let top =
             cx.w.motion_blocking_height(t.x.floor() as i32, t.z.floor() as i32);
-        if top < t.y.floor() as i32 && top > crate::chunk::MIN_Y {
+        if top < t.y.floor() as i32 && top > cx.w.world.bottom_y() {
             t.y = m.position.y - (m.position.y - t.y).abs();
         }
         m.ai.mov.set_wanted(t.x, t.y, t.z, 1.0);

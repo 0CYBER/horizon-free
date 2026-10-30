@@ -237,7 +237,7 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
             _ => None,
         };
     }
-    // HoverEvent.ShowText and ShowItem.
+    // HoverEvent.ShowText, ShowItem and ShowEntity.
     if let Some(e) = o.get("hover_event").and_then(Value::as_object) {
         match e.get("action").and_then(Value::as_str) {
             Some("show_text") => {
@@ -247,6 +247,9 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
             }
             Some("show_item") if e.get("id").is_some_and(Value::is_string) => {
                 style.hover_item = Some(Box::new(Value::Object(e.clone())));
+            }
+            Some("show_entity") if e.get("id").is_some_and(Value::is_string) => {
+                style.hover_entity = Some(Box::new(Value::Object(e.clone())));
             }
             _ => {}
         }

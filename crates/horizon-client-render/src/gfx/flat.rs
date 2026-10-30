@@ -115,7 +115,7 @@ pub struct Flat {
 /// (9,300 draws) the CPU saves 1.3 ms. The bar was 4,096 draws when they
 /// were 2.2 to 2.5 per section; a section's draw count now depends on the
 /// sides it shows the eye (`mesher::Sides`), so it counts sections.
-const MIN_SECTIONS: usize = 1600;
+pub const MIN_SECTIONS: usize = 1600;
 
 /// Whether flat draws apply: the backend emulates multi-draw, and vertex
 /// shaders can read storage buffers large enough for an index page.
@@ -126,7 +126,20 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
         Ok("1") => return supported(adapter, device),
         _ => {}
     }
-    adapter.get_info().backend == wgpu::Backend::Metal && supported(adapter, device)
+    let info = adapter.get_info();
+    (info.backend == wgpu::Backend::Metal || is_broken_intel_vulkan(&info))
+        && supported(adapter, device)
+}
+
+/// Intel Gen11 (Ice Lake) ANV Vulkan driver has broken `first_instance` for instance-step
+/// vertex attributes (#3529), causing terrain sections to be drawn with another section's origin
+/// and flicker.
+pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
+    info.backend == wgpu::Backend::Vulkan
+        && info.vendor == 0x8086
+        && (info.name.contains("ICL")
+            || info.name.contains("Ice Lake")
+            || (info.device >= 0x8a50 && info.device <= 0x8a71))
 }
 
 fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
@@ -254,6 +267,7 @@ impl Flat {
         device: &wgpu::Device,
         terrain_layout: &wgpu::BindGroupLayout,
         page_vertices: u64,
+        min_sections: usize,
         pipeline: impl Fn(
             &wgpu::PipelineLayout,
             &str,
@@ -357,11 +371,7 @@ impl Flat {
             phase1_calls: 0,
             solid_calls: 0,
             shadow_calls: [0; 2],
-            min_sections: if std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1") {
-                0
-            } else {
-                MIN_SECTIONS
-            },
+            min_sections,
             range_align: (u64::from(device.limits().min_storage_buffer_offset_alignment) / 16)
                 .max(1),
         }

@@ -58,7 +58,53 @@ fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: boo
     distance >= f64::from(min - margin) && distance <= f64::from(max + margin)
 }
 
+/// `FirstPersonHandsAndItems.shouldInstantlyReplaceVisibleItem`'s
+/// `ItemStack.matchesIgnoringComponents(visible, held,
+/// DataComponentType::ignoreSwapAnimation)` for one hand (every item plays
+/// the swap animation, `ItemModelResolver.shouldPlaySwapAnimation`): the same
+/// stack object, or an equal one, whose damage (the one component built
+/// with `ignoreSwapAnimation`) may differ.
+///
+/// A stack that stays in its slot with the same item is the same object,
+/// whatever its count or damage (vanilla shrinks, grows and damages it in
+/// place), unless the slot was `replaced` by one the hand doesn't show yet:
+/// swapping the hands (`setItemInHand`, and the server's slot updates that
+/// answer it) puts another object in both (#2866).
+fn shows_held_stack(
+    visible: &(usize, Option<ItemStack>),
+    held: &(usize, Option<ItemStack>),
+    replaced: bool,
+) -> bool {
+    let same_object = visible.0 == held.0 && !replaced;
+    match (&visible.1, &held.1) {
+        (Some(a), Some(b)) if same_object => a.item == b.item,
+        (a, b) => matches_for_swap(a.as_ref(), b.as_ref()),
+    }
+}
+
+/// `ItemStack.matchesIgnoringComponents(a, b,
+/// DataComponentType::ignoreSwapAnimation)`: the same count, item and
+/// components but damage.
+pub(super) fn matches_for_swap(a: Option<&ItemStack>, b: Option<&ItemStack>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.count == b.count && a.item == b.item && a.extra == b.extra,
+        _ => false,
+    }
+}
+
 impl Game<'_> {
+    /// A slot of the inventory (`OFFHAND_SLOT` for the off hand) was set to
+    /// a new stack: the hand holding it compares it as another `ItemStack`
+    /// (`shows_held_stack`) until the hand shows the held stack again.
+    pub(super) fn hand_stack_replaced(&mut self, slot: usize) {
+        if slot == self.selected {
+            self.hands_replaced[0] = true;
+        }
+        if slot == super::shield::OFFHAND_SLOT {
+            self.hands_replaced[1] = true;
+        }
+    }
     /// Opening a screen stops breaking before the next game tick (which may pause).
     pub(super) fn stop_mining(&mut self) {
         if self.clicks.destroying.active {
@@ -155,7 +201,8 @@ impl Game<'_> {
         Ok(())
     }
     /// `BlockBehaviour.getDestroyProgress` with `Player.getDestroySpeed`.
-    pub(super) fn destroy_progress(&self, pos: [i32; 3]) -> f32 {
+    pub(super) fn destroy_progress(&mut self, pos: [i32; 3]) -> f32 {
+        let block_break_speed = self.block_break_speed();
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts().get(state);
         if facts.hardness == -1.0 {
@@ -164,6 +211,7 @@ impl Game<'_> {
         let held = self.held();
         let mut speed = self.items().mining_speed(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
+        speed *= block_break_speed;
         if let Some(eye) = self.eye_position()
             && self
                 .res
@@ -266,22 +314,13 @@ impl Game<'_> {
         }
         self.attack_item = main.as_ref().map(|s| s.item.clone());
         let next = [(self.selected, main), (OFFHAND, self.offhand.clone())];
-        // shouldInstantlyReplaceVisibleItem: the same stack, or an equal one
-        // (matchesIgnoringComponents; every item plays the swap animation).
-        // A stack that stays in its slot with the same item is the same
-        // stack, whatever its count (vanilla shrinks and grows it in place).
         let mut changed = [false; 2];
         for h in 0..2 {
-            let same = match (&self.visible_hands[h], &next[h]) {
-                ((_, None), (_, None)) => true,
-                ((slot, Some(a)), (next_slot, Some(b))) => {
-                    a.item == b.item
-                        && (slot == next_slot || (a.count == b.count && a.extra == b.extra))
-                }
-                _ => false,
-            };
+            let replaced = self.hands_replaced[h];
+            let same = shows_held_stack(&self.visible_hands[h], &next[h], replaced);
             if same {
                 self.visible_hands[h] = next[h].clone();
+                self.hands_replaced[h] = false;
             }
             changed[h] = !same;
         }
@@ -294,6 +333,7 @@ impl Game<'_> {
         for h in 0..2 {
             if replace[h] {
                 self.visible_hands[h] = next[h].clone();
+                self.hands_replaced[h] = false;
             }
         }
     }
@@ -418,7 +458,21 @@ impl Game<'_> {
     /// Haste and Mining Fatigue modifiers (`ADD_MULTIPLIED_TOTAL`), clamped to
     /// the attribute's range.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
-        let value = horizon_client::attack_strength::BASE_ATTACK_SPEED
+        // The base comes from the player's attribute map so `/attribute ... base set` applies.
+        let base = self
+            .player
+            .as_ref()
+            .and_then(|player| {
+                let key = player.attributes.key("minecraft:attack_speed")?;
+                let handle = player.attributes.lookup(Some(&key))?;
+                player
+                    .attributes
+                    .instance(&handle)
+                    .ok()
+                    .map(|value| value.base_value())
+            })
+            .unwrap_or(horizon_client::attack_strength::BASE_ATTACK_SPEED);
+        let value = base
             + self
                 .attack_item_info()
                 .map_or(0.0, |i| f64::from(i.attack_speed));
@@ -562,13 +616,15 @@ impl HandWorld for GameHands<'_, '_> {
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }
-    fn block_action_restricted(&mut self, _: [i32; 3]) -> bool {
-        !self.game.may_build()
+    fn block_action_restricted(&mut self, pos: [i32; 3]) -> bool {
+        self.game.block_action_restricted(pos)
     }
     fn within_border(&mut self, _: [i32; 3]) -> bool {
         true
     }
     fn attack_block(&mut self, pos: [i32; 3]) {
+        // RedStoneOreBlock.interact: the dust comes whether or not the ore was lit.
+        self.game.redstone_ore_particles(pos);
         let result = self.game.attack_block(pos);
         self.keep(result);
     }
@@ -659,6 +715,52 @@ mod tests {
         // A block nearer than the minimum reach takes the pick.
         let wall = |from: Vec3, _: Vec3| Some(from.add_vector(Vec3::new(0.0, 0.0, 1.0)));
         assert_eq!(reach_pick(&boxes, eye, look, Vec3::ZERO, reach, wall), None);
+    }
+
+    fn stack(item: &str, count: u32, damage: u32) -> Option<ItemStack> {
+        Some(ItemStack {
+            item: item.into(),
+            count,
+            damage,
+            extra: None,
+        })
+    }
+
+    #[test]
+    fn a_swapped_in_stack_of_the_same_item_re_equips() {
+        // #2866: F swaps 64 torches into the off hand that held 32. The off
+        // hand's slot stays, but the server's slot update puts another stack
+        // object there; a different count fails matchesIgnoringComponents,
+        // so the hand plays the swap animation.
+        let visible = (OFFHAND, stack("minecraft:torch", 32, 0));
+        let held = (OFFHAND, stack("minecraft:torch", 64, 0));
+        assert!(!shows_held_stack(&visible, &held, true));
+        // The same stack shrunk in place (a torch placed): no animation.
+        assert!(shows_held_stack(&visible, &held, false));
+        // An equal stack replaced it: shown at once.
+        assert!(shows_held_stack(&visible, &visible.clone(), true));
+        // DataComponents.DAMAGE ignores the swap animation: a sword with
+        // other damage swapped in shows at once.
+        let sword = (OFFHAND, stack("minecraft:iron_sword", 1, 3));
+        let worn = (OFFHAND, stack("minecraft:iron_sword", 1, 40));
+        assert!(shows_held_stack(&sword, &worn, true));
+        // Another component (an anvil's repair cost) differs.
+        let mut named = worn.clone();
+        named.1.as_mut().unwrap().extra = Some(Box::new(horizon_client::item_data::StackData {
+            repair_cost: 1,
+            ..Default::default()
+        }));
+        assert!(!shows_held_stack(&sword, &named, true));
+        // The main hand changing hotbar slot to an equal stack: instant; to
+        // a different count: animation.
+        let (a, b) = (
+            (0, stack("minecraft:torch", 32, 0)),
+            (1, stack("minecraft:torch", 32, 0)),
+        );
+        assert!(shows_held_stack(&a, &b, false));
+        let c = (1, stack("minecraft:torch", 5, 0));
+        assert!(!shows_held_stack(&a, &c, false));
+        assert!(shows_held_stack(&(0, None), &(OFFHAND, None), true));
     }
 
     #[test]

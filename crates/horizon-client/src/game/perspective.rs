@@ -123,15 +123,18 @@ impl CameraType {
         }
     }
 }
+/// `Entity.isInvisible` for the window's player: shared flag 5 as its server
+/// sets it (`shared_flag`), with the Invisibility effect or by a plugin's
+/// `setInvisible` alone, as pose plugins hide the real body under the pose
+/// (#3788); a world in the frame has only the effect.
+fn own_invisible(effects: &horizon_client::effects::PlayerEffects, shared_flag: bool) -> bool {
+    shared_flag || effects.get("invisibility").is_some()
+}
 /// `LivingEntityRenderer.isBodyVisible` and `isInvisibleTo` for the player's
-/// own body, seen by itself: the Invisibility effect (`Entity.isInvisible`)
-/// hides it unless its team sees friendly invisibles, where vanilla draws it
+/// own body, seen by itself: an invisible player (`own_invisible`) hides it
+/// unless its team sees friendly invisibles, where vanilla draws it
 /// translucent.
-fn body_visible(
-    effects: &horizon_client::effects::PlayerEffects,
-    team: Option<&horizon_client::scoreboard::Team>,
-) -> bool {
-    let invisible = effects.get("invisibility").is_some();
+fn body_visible(invisible: bool, team: Option<&horizon_client::scoreboard::Team>) -> bool {
     !horizon_client::scoreboard::invisible_to(team, team, false, invisible)
 }
 /// The player's model type (`PlayerModel` with the default skin).
@@ -213,6 +216,60 @@ impl Game<'_> {
     /// front of) it, pulled in where visual shapes are in the way. Returns the
     /// position, yaw and pitch to render from.
     pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
+        // Minecraft.cameraEntity: a server's spectator camera on a mob or
+        // another player.
+        let (entity, descending) = match self.camera_mob() {
+            Some(m) => (super::remote_camera::mob_camera_entity(m), false),
+            None => (
+                self.player_camera_entity()?,
+                self.player.as_ref()?.shift_key_down,
+            ),
+        };
+        let mut view = self.view;
+        let kind = match self.camera_type {
+            CameraType::FirstPerson => horizon_client::camera::CameraType::FirstPerson,
+            CameraType::ThirdPersonBack => horizon_client::camera::CameraType::ThirdPersonBack,
+            CameraType::ThirdPersonFront => horizon_client::camera::CameraType::ThirdPersonFront,
+        };
+        let context = CollisionContext::for_entity(
+            CollisionEntity {
+                identity: EntityIdentity(0),
+                y: entity.position[1],
+                descending,
+                main_hand: Some(CollisionItem::EMPTY),
+            },
+            false,
+        );
+        let mut rays = VisualRays {
+            scene: SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            },
+            facts: self.res.facts(),
+            context,
+        };
+        view.align_with_entity(&entity, partial, kind, |from, to| {
+            let hit = clip_world(
+                &mut rays,
+                Vec3::new(from[0], from[1], from[2]),
+                Vec3::new(to[0], to[1], to[2]),
+                RayBlockMode::Visual,
+                RayFluidMode::None,
+                4096,
+            )
+            .ok()?;
+            (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
+        });
+        self.view = view;
+        Some((
+            glam::DVec3::from_array(view.position),
+            view.y_rot,
+            view.x_rot,
+        ))
+    }
+    /// The player as `Camera.alignWithEntity` sees it.
+    fn player_camera_entity(&mut self) -> Option<CameraEntity> {
         let (scale, distance) = {
             let p = self.player.as_mut()?;
             (
@@ -282,48 +339,7 @@ impl Game<'_> {
             }),
             mount,
         };
-        let mut view = self.view;
-        let kind = match self.camera_type {
-            CameraType::FirstPerson => horizon_client::camera::CameraType::FirstPerson,
-            CameraType::ThirdPersonBack => horizon_client::camera::CameraType::ThirdPersonBack,
-            CameraType::ThirdPersonFront => horizon_client::camera::CameraType::ThirdPersonFront,
-        };
-        let context = CollisionContext::for_entity(
-            CollisionEntity {
-                identity: EntityIdentity(0),
-                y: p.position.y,
-                descending: p.shift_key_down,
-                main_hand: Some(CollisionItem::EMPTY),
-            },
-            false,
-        );
-        let mut rays = VisualRays {
-            scene: SceneCollisions {
-                world: &self.world,
-                binding: self.collision,
-                subject: None,
-            },
-            facts: self.res.facts(),
-            context,
-        };
-        view.align_with_entity(&entity, partial, kind, |from, to| {
-            let hit = clip_world(
-                &mut rays,
-                Vec3::new(from[0], from[1], from[2]),
-                Vec3::new(to[0], to[1], to[2]),
-                RayBlockMode::Visual,
-                RayFluidMode::None,
-                4096,
-            )
-            .ok()?;
-            (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
-        });
-        self.view = view;
-        Some((
-            glam::DVec3::from_array(view.position),
-            view.y_rot,
-            view.x_rot,
-        ))
+        Some(entity)
     }
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).
@@ -523,9 +539,16 @@ impl Game<'_> {
             None => self.player_team(),
         }
     }
+    /// `Entity.isInvisible` for the player itself (`own_invisible`).
+    pub(super) fn own_invisible(&self) -> bool {
+        own_invisible(
+            &self.potions.effects,
+            self.remote.as_ref().is_some_and(|r| r.own_invisible),
+        )
+    }
     /// Whether the player's own body is drawn (`body_visible`).
     pub(super) fn own_body_visible(&self) -> bool {
-        body_visible(&self.potions.effects, self.own_team())
+        body_visible(self.own_invisible(), self.own_team())
     }
     /// The player's model for the entity pass in third person.
     pub(super) fn player_model_geometry(
@@ -567,7 +590,7 @@ impl Game<'_> {
         );
         let chest = self.armor[1].as_ref().map(|s| &*s.item);
         // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks).
-        if self.potions.effects.get("invisibility").is_none() {
+        if !self.own_invisible() {
             self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
         }
         self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
@@ -658,7 +681,7 @@ impl Game<'_> {
             &mut verts,
         );
         let chest = self.armor[1].as_ref().map(|s| &*s.item);
-        if self.potions.effects.get("invisibility").is_none() {
+        if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
@@ -763,7 +786,12 @@ impl Game<'_> {
             return;
         };
         let assets = &self.armor_stand_assets;
-        let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
+        let Some((texture, _)) = assets
+            .equipment
+            .get(asset)
+            .and_then(|k| k.get("wings"))
+            .and_then(|layers| layers.first())
+        else {
             return;
         };
         let sprites = &self.gui.atlas.sprites;
@@ -1115,15 +1143,32 @@ mod preview_tests {
             .unwrap()
             .id;
         let mut effects = horizon_client::effects::PlayerEffects::default();
-        assert!(body_visible(&effects, None));
+        assert!(body_visible(own_invisible(&effects, false), None));
         effects.add(EffectInstance::new(id, 3600, 0));
-        assert!(!body_visible(&effects, None), "no team: the body is hidden");
+        let invisible = own_invisible(&effects, false);
+        assert!(
+            !body_visible(invisible, None),
+            "no team: the body is hidden"
+        );
         // Entity.isInvisibleTo: a team that sees friendly invisibles sees it.
         let mut board = Scoreboard::default();
         let team = board.add_team("blue");
-        assert!(body_visible(&effects, Some(team)));
+        assert!(body_visible(invisible, Some(team)));
         team.see_friendly_invisibles = false;
-        assert!(!body_visible(&effects, Some(team)));
+        assert!(!body_visible(invisible, Some(team)));
+    }
+
+    /// #3788: a pose plugin's `Player.setInvisible(true)` sets only the
+    /// shared flag (no effect); `Entity.isInvisible` reads that flag, so the
+    /// real body under the pose is not drawn.
+    #[test]
+    fn the_servers_invisible_flag_hides_the_own_body_without_the_effect() {
+        let effects = horizon_client::effects::PlayerEffects::default();
+        assert!(own_invisible(&effects, true));
+        assert!(!body_visible(own_invisible(&effects, true), None));
+        let mut board = horizon_client::scoreboard::Scoreboard::default();
+        let team = board.add_team("blue");
+        assert!(body_visible(own_invisible(&effects, true), Some(team)));
     }
 
     /// LivingEntityRenderer.submit: an invisible body is not drawn, its

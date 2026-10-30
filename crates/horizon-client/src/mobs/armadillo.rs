@@ -8,7 +8,8 @@
 use super::{
     Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     goals::{
-        Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, goal_clone,
+        Breed, Cx, Float, FollowParent, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround,
+        Stroll, Tempt, goal_clone,
     },
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -60,6 +61,12 @@ pub fn register(m: &mut Mob) {
     g.add(0, Float);
     g.add(1, ArmadilloPanic(panic));
     g.add(2, Rolled);
+    // ArmadilloAi.initIdleActivity: AnimalMakeLove(1.0), then RunOne of
+    // FollowTemptation(1.25, armadillo_food) and BabyFollowAdult(5..16, 1.25).
+    g.add(3, Idle(Breed::new(1.0)));
+    let tempt = Tempt::new(1.25, m.kind.food.clone(), false);
+    g.add(4, Idle(ArmadilloTempt(tempt)));
+    g.add(4, Idle(FollowParent::new(1.25)));
     g.add(5, Stroll::avoiding_water(1.0));
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());
@@ -158,7 +165,12 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
 pub fn environmental(kind: DamageKind) -> bool {
     matches!(
         kind,
-        DamageKind::Cactus | DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava
+        DamageKind::Cactus
+            | DamageKind::OnFire
+            | DamageKind::InFire
+            | DamageKind::Lava
+            | DamageKind::LightningBolt
+            | DamageKind::HotFloor
     )
 }
 /// The hurt sound: a ball's is muffled, and it has no ambient sound
@@ -392,6 +404,70 @@ impl Goal for ArmadilloPanic {
         self.0.stop(m, cx);
     }
 }
+/// A behaviour of the IDLE activity: `ArmadilloAi.updateActivity` picks
+/// PANIC over it while danger is in mind and it is not panicking, and a
+/// ball does not walk (`ArmadilloAi$1`, its `MoveToTargetSink`).
+#[derive(Clone, Debug)]
+struct Idle<G>(G);
+fn idle(m: &Mob) -> bool {
+    !scared(m) && !m.extra.armadillo.panic_activity
+}
+impl<G: Goal + Clone + 'static> Goal for Idle<G> {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        idle(m) && self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        idle(m) && self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx);
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx);
+    }
+    fn every_tick(&self) -> bool {
+        self.0.every_tick()
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.tick(m, cx);
+    }
+}
+/// `FollowTemptation` with `ArmadilloAi.initIdleActivity`'s close enough
+/// distance: 1 block for a baby, 2 for an adult.
+#[derive(Clone, Debug)]
+struct ArmadilloTempt(Tempt);
+impl Goal for ArmadilloTempt {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx);
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop_distance = if m.is_baby() { 1.0 } else { 2.0 };
+        self.0.tick(m, cx);
+    }
+}
 /// The behaviours that do not run while the armadillo is a ball: its
 /// `MoveToTargetSink` and the idle activity's walking and looking.
 #[derive(Clone, Debug)]
@@ -443,6 +519,125 @@ mod tests {
             tick(&mut m);
         }
         assert!(hiding_in_shell(&m), "the model shows the shell");
+    }
+
+    /// Runs the goals of `m` for `ticks` ticks; the events.
+    fn run_goals(m: &mut Mob, w: &MobWorld, ticks: u32) -> Vec<MobEvent> {
+        let mut events = Vec::new();
+        let mut goals = std::mem::take(&mut m.ai.goals);
+        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut cx = Cx {
+            w,
+            lr: &mut lr,
+            events: &mut events,
+        };
+        for _ in 0..ticks {
+            goals.tick(m, &mut cx);
+        }
+        m.ai.goals = goals;
+        events
+    }
+    /// Real armadillos from the vanilla data, with their goals, at these
+    /// spots; `None` without the data.
+    fn real<const N: usize>(at: [[f64; 3]; N]) -> Option<[Mob; N]> {
+        let mut out = None;
+        crate::mobs::world::with_test_world(&[], |_, types| {
+            let kind = Arc::new(types.types["minecraft:armadillo"].clone());
+            let mut id = 0;
+            out = Some(at.map(|[x, y, z]| {
+                id += 1;
+                let mut m = Mob::new(id, kind.clone(), Vec3::new(x, y, z), 0.0);
+                m.on_ground = true;
+                m
+            }));
+        });
+        out
+    }
+
+    #[test]
+    fn two_armadillos_in_love_make_a_baby() {
+        // ArmadilloAi.initIdleActivity: AnimalMakeLove(ARMADILLO, 1.0), so two
+        // armadillos fed spider eyes breed (#3512).
+        let Some([mut a, mut b, mut c]) =
+            real([[0.5, 64.0, 0.5], [2.5, 64.0, 0.5], [0.5, 64.0, 1.5]])
+        else {
+            return;
+        };
+        for m in [&mut a, &mut b, &mut c] {
+            m.extra.in_love = 600;
+        }
+        let partner = [b.seen(None)];
+        crate::mobs::world::with_test_world(&partner, |w, _| {
+            let events = run_goals(&mut a, w, 80);
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    MobEvent::Breed {
+                        parent: 1,
+                        partner: 2,
+                        ..
+                    }
+                )),
+                "the pair breeds"
+            );
+            assert_eq!(a.extra.in_love, 0);
+            assert_eq!(a.extra.age, 6000, "the parent rests");
+
+            // ArmadilloAi.updateActivity: with danger in mind and no panic,
+            // PANIC replaces IDLE and its behaviours do not run, nor do a
+            // ball's.
+            c.extra.armadillo.panic_activity = true;
+            let events = run_goals(&mut c, w, 80);
+            assert!(!events.iter().any(|e| matches!(e, MobEvent::Breed { .. })));
+            assert!(!c.ai.goals.is_running("Breed"));
+            c.extra.armadillo.panic_activity = false;
+            set_state(&mut c, SCARED);
+            run_goals(&mut c, w, 1);
+            assert!(!c.ai.goals.is_running("Breed"), "a ball does not breed");
+            set_state(&mut c, IDLE);
+            run_goals(&mut c, w, 1);
+            assert!(c.ai.goals.is_running("Breed"), "it looks for its mate");
+        });
+    }
+
+    #[test]
+    fn a_baby_armadillo_follows_an_adult() {
+        // BabyFollowAdult(5..16, 1.25) in the idle activity.
+        let Some([mut baby, adult]) = real([[0.5, 64.0, 0.5], [6.5, 64.0, 0.5]]) else {
+            return;
+        };
+        baby.extra.age = -24000;
+        crate::mobs::world::with_test_world(&[adult.seen(None)], |w, _| {
+            run_goals(&mut baby, w, 1);
+            assert!(baby.ai.goals.is_running("FollowParent"));
+            set_state(&mut baby, SCARED);
+            run_goals(&mut baby, w, 1);
+            assert!(!baby.ai.goals.is_running("FollowParent"), "not as a ball");
+        });
+    }
+
+    #[test]
+    fn a_tempted_baby_comes_closer_than_an_adult() {
+        // ArmadilloAi.initIdleActivity: FollowTemptation is close enough at
+        // 1 block for a baby and 2 for an adult.
+        let Some([mut baby, mut adult]) = real([[0.5, 64.0, 0.5], [4.5, 64.0, 0.5]]) else {
+            return;
+        };
+        baby.extra.age = -24000;
+        crate::mobs::world::with_test_world(&[], |w, _| {
+            let mut events = Vec::new();
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut cx = Cx {
+                w,
+                lr: &mut lr,
+                events: &mut events,
+            };
+            let mut tempt = ArmadilloTempt(Tempt::new(1.25, baby.kind.food.clone(), false));
+            tempt.tick(&mut baby, &mut cx);
+            assert_eq!(tempt.0.stop_distance, 1.0);
+            tempt.tick(&mut adult, &mut cx);
+            assert_eq!(tempt.0.stop_distance, 2.0);
+        });
     }
 
     #[test]
