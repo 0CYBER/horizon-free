@@ -2189,8 +2189,8 @@ impl Game<'_> {
                 ));
             }
         }
-        // Native mods last, as Fabric's `ItemTooltipCallback` follows
-        // `getTooltipLines`; a tooltip the stack hides stays hidden.
+        // Native mods last, once getTooltipLines has built every line; a
+        // tooltip the stack hides stays hidden.
         if !nested && !lines.is_empty() {
             self.native_tooltip(stack, &mut lines);
         }
