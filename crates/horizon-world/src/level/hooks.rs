@@ -18,6 +18,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         changed: BlockId,
         moved: bool,
     ) {
+        self.level
+            .observe_neighbor_changed(pos, state, changed, moved);
         let b = self.b;
         let block = b.block(state);
         let chain = &b.data(state).chain;
@@ -456,6 +458,32 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.game_event(pos, "minecraft:block_destroy");
         self.remove_block(pos, false)
     }
+    /// `TurtleEggBlock.playerDestroy` (after the drops): `decreaseEggs` plays the
+    /// break and puts back all but one egg of the mined stack. `destroyed` is the
+    /// state that was broken.
+    pub(crate) fn turtle_egg_destroyed_by_player(
+        &mut self,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+    ) {
+        let b = self.b;
+        if !b.data(destroyed).is(Class::TurtleEgg) {
+            return;
+        }
+        let pitch = 0.9 + self.random().next_float() * 0.2;
+        self.sound(
+            pos,
+            &std::sync::Arc::from("minecraft:block.turtle_egg.break"),
+            0.7,
+            pitch,
+        );
+        let eggs = b.table.int(destroyed, b.props.eggs);
+        if eggs > 1 {
+            self.set_block(pos, b.table.set_int(destroyed, b.props.eggs, eggs - 1), 2);
+            self.game_event(pos, "minecraft:block_destroy");
+            self.level_event(2001, pos, destroyed.0 as i32);
+        }
+    }
     /// `IceBlock.playerDestroy` (after the drops): mined ice turns into water
     /// when it sits over a solid block or a liquid, unless the tool prevents
     /// ice melting (silk touch). In the nether, where water evaporates, the
@@ -558,7 +586,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let state = self.state(pos);
                 if !b.is_water_fluid(self.fluid_at(pos).kind()) {
                     false
-                } else if self.pickup_block(pos, state) {
+                } else if self.pickup_block(pos, state, false) {
                     true
                 } else {
                     if b.instance_of(state, Class::Liquid) {

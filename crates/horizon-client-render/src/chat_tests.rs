@@ -245,6 +245,58 @@ fn mod_commands_are_coloured_and_complete_like_vanilla_ones() {
 }
 
 #[test]
+fn chat_completes_the_servers_custom_completions_with_the_players() {
+    // CommandSuggestions.updateCommandInfo completes chat from
+    // ClientSuggestionProvider.getCustomTabSuggestions: the online players
+    // and what ClientboundCustomChatCompletionsPacket added.
+    use crate::command::{CustomCompletionAction as Action, modify_custom_completions};
+    let font = font();
+    let m = Measure(&font);
+    let mut registries = Registries {
+        players: vec!["Steve".into()],
+        ..Registries::default()
+    };
+    let entries = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let set = &mut registries.custom_completions;
+    modify_custom_completions(set, Action::from_id(0), &entries(&["Alex", "#trade"]));
+    modify_custom_completions(set, Action::Add, &entries(&["Notch", "Steve"]));
+    modify_custom_completions(set, Action::Remove, &entries(&["Alex"]));
+    // An id past the last action is ADD (OutOfBoundsStrategy.ZERO).
+    modify_custom_completions(set, Action::from_id(7), &entries(&["Zuri"]));
+    assert_eq!(
+        registries
+            .custom_tab_suggestions()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["#trade", "Notch", "Steve", "Zuri"]
+    );
+    let completed = |registries: &Registries, line: &str| {
+        let dispatcher = crate::command::vanilla::game_dispatcher();
+        let c = Commands {
+            dispatcher,
+            registries,
+        };
+        let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, full());
+        screen.type_text(&m, &c, line);
+        // Chat shows no list by itself: Tab shows it, Tab again uses it.
+        for _ in 0..2 {
+            screen.key(&m, &c, &[], winit::keyboard::KeyCode::Tab, false, false);
+        }
+        screen.value().to_owned()
+    };
+    assert_eq!(completed(&registries, "hi no"), "hi Notch");
+    assert_eq!(completed(&registries, "sell #tr"), "sell #trade");
+    assert_eq!(completed(&registries, "hi st"), "hi Steve");
+    assert_eq!(completed(&registries, "hi al"), "hi al");
+    // SET replaces them all; the players stay.
+    let set = &mut registries.custom_completions;
+    modify_custom_completions(set, Action::Set, &entries(&["Alex"]));
+    assert_eq!(completed(&registries, "hi no"), "hi no");
+    assert_eq!(completed(&registries, "hi al"), "hi Alex");
+    assert_eq!(completed(&registries, "hi st"), "hi Steve");
+}
+
+#[test]
 fn ask_server_nodes_wait_for_the_servers_completions() {
     // ClientSuggestionProvider.customSuggestion: an `ask_server` node at the
     // cursor sends the command so far, and the list is done with the reply.

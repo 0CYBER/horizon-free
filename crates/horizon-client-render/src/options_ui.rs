@@ -141,9 +141,7 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the creative tabs, the quit keys and the mouse
-                // don't read them yet.
-                | Opt::OperatorItemsTab
+                // Saved, but the quit keys and the mouse don't read them yet.
                 | Opt::QuitShortcuts
                 | Opt::CtrlClickEmulatesRightClick
         )
@@ -952,6 +950,24 @@ pub fn set_slider(opt: Opt, s: &mut Settings, v: f32) {
         apply_preset(s);
     }
 }
+/// A slider pressed or dragged to `v`: apply it live, and tell the game when
+/// a category volume changed (`Options.createSoundSliderOptionInstance`'s
+/// callback, which `OptionInstance.set` runs only for a new value).
+fn drag_slider(opt: Opt, s: &mut Settings, v: f32, events: &mut Vec<Event>) {
+    let volume = |s: &Settings| match opt {
+        Opt::Volume(0) => Some(s.master_volume),
+        Opt::Volume(i) => Some(s.volumes[i]),
+        _ => None,
+    };
+    let before = volume(s);
+    set_slider(opt, s, v);
+    events.push(Event::SliderDrag);
+    if let (Opt::Volume(source), Some(after)) = (opt, volume(s))
+        && before != Some(after)
+    {
+        events.push(Event::Volume(source, after));
+    }
+}
 /// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set (texture
 /// filtering and anisotropy have no option here yet).
 pub fn apply_preset(s: &mut Settings) {
@@ -1106,6 +1122,9 @@ pub enum Event {
     Changed,
     /// A slider is being dragged: apply settings live but defer saving.
     SliderDrag,
+    /// A category volume slider (`SoundSource` index) moved to a new value,
+    /// after its `SliderDrag` (the sound slider's `onValueUpdate`).
+    Volume(usize, f32),
     /// The language changed (reload translations).
     Language(String),
     /// The pack selection changed (reload resources).
@@ -2747,8 +2766,7 @@ impl OptionsUi {
             {
                 let v = ui::slider_value(wd.x, wd.w, x);
                 self.slider_value = Some((opt, v, Instant::now()));
-                set_slider(opt, s, v);
-                events.push(Event::SliderDrag);
+                drag_slider(opt, s, v, &mut events);
             }
             return events;
         }
@@ -2861,8 +2879,7 @@ impl OptionsUi {
                     self.dragging = Some(opt);
                     let v = ui::slider_value(wd.x, wd.w, x);
                     self.slider_value = Some((opt, v, Instant::now()));
-                    set_slider(opt, s, v);
-                    events.push(Event::SliderDrag);
+                    drag_slider(opt, s, v, &mut events);
                 }
                 WKind::LanguageRow { code, .. } => {
                     if self.language_choice.as_deref() == Some(code.as_str()) {
@@ -3413,6 +3430,16 @@ mod tests {
         assert!(!loaded.quit_shortcuts);
         assert!(loaded.ctrl_click_emulates_right_click);
         assert!(loaded.toggle_attack && loaded.toggle_use);
+    }
+
+    #[test]
+    fn operator_items_tab_option_can_be_switched() {
+        // The creative screen reads it (CreativeModeInventoryScreen.hasPermissions).
+        assert!(Opt::OperatorItemsTab.available());
+        let mut s = Settings::default();
+        assert!(!s.operator_items_tab);
+        Opt::OperatorItemsTab.cycle(&mut s, false, [854, 480]);
+        assert!(s.operator_items_tab);
     }
 
     #[test]
@@ -4093,13 +4120,42 @@ mod tests {
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
                 ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
-                vec![Event::SliderDrag]
+                vec![Event::SliderDrag, Event::Volume(0, s.master_volume)]
             );
         }
         assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
         assert!(
             ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_moved_volume_slider_reports_its_category_and_value() {
+        let atlas = atlas();
+        let size = (480.0, 320.0);
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Sound);
+        let hostile = SOUND_SOURCES.iter().position(|n| *n == "hostile").unwrap();
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let slider = widgets
+            .iter()
+            .find(|wd| matches!(wd.kind, WKind::Slider { opt: Opt::Volume(i), .. } if i == hostile))
+            .unwrap();
+        let y = slider.y + 1.0;
+        let x = slider.x + 4.0 + (slider.w - 8.0) * 0.5;
+        let events = ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false);
+        let volume = s.volumes[hostile];
+        assert!((volume - 0.5).abs() < 1e-3, "{volume}");
+        assert_eq!(
+            events,
+            vec![Event::SliderDrag, Event::Volume(hostile, volume)]
+        );
+        // OptionInstance.set: an unchanged value runs no callback.
+        assert_eq!(
+            ui.click(&mut s, &atlas, x, -50.0, size, [854, 480], true, false),
+            vec![Event::SliderDrag]
         );
     }
 

@@ -8,7 +8,7 @@ use horizon_client::{
     effects,
     lan::attributes::{add_modifier, generic_syncable, instance, operation_named},
     mobs::{
-        Mob,
+        Mob, Species,
         finalize::{self, Attr, Op},
     },
 };
@@ -146,6 +146,25 @@ impl Game<'_> {
                     );
                 }
             }
+        }
+        // AbstractHorse.randomizeAttributes rolls a horse's jump strength as
+        // its base (kept in `vector[0]`), so the instance is synced: its
+        // rider's client jumps it (`getCustomJump`).
+        let rolled = matches!(
+            m.species(),
+            Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
+        );
+        let jump_base = m
+            .extra
+            .attributes
+            .as_deref()
+            .is_some_and(|s| s.bases.iter().any(|(a, _)| *a == Attr::JumpStrength));
+        if rolled
+            && !jump_base
+            && m.extra.vector[0] > 0.0
+            && let Some(a) = self.synced_attribute(kind, "minecraft:jump_strength")
+        {
+            instance(out, a, m.extra.vector[0]).base = m.extra.vector[0];
         }
         if let (Some(a), Some((amount, Op::AddMultipliedBase))) = (
             self.synced_attribute(kind, "minecraft:movement_speed"),

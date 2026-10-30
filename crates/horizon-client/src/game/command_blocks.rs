@@ -30,7 +30,7 @@ type Pos = (i32, i32, i32);
 
 /// The open `CommandBlockEditScreen`.
 pub(super) struct CommandBlockScreen {
-    pub(super) pos: Pos,
+    pos: Pos,
     /// The command box with its `CommandSuggestions`.
     command: ChatScreen,
     /// When the command box was focused, for its cursor's blink.
@@ -112,6 +112,7 @@ impl CommandBlockScreen {
         self.previous.set_value(&shown);
     }
 }
+
 fn state_of(registry: &BlockRegistry, state: BlockStateId) -> Option<&BlockState> {
     registry.state(state)
 }
@@ -240,21 +241,21 @@ impl Game<'_> {
         let at = BlockPos::new(pos.0, pos.1, pos.2);
         self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
     }
-    /// `CommandBlockEditScreen.updateGui`: the server's block-entity data
-    /// arrived while the screen is open; refresh the fields from the entity.
-    /// The mode and conditional live in the block state here (vanilla's
-    /// `CommandBlockEntity.Mode`).
-    pub(super) fn update_command_block_screen(&mut self) {
-        let Some(screen_pos) = self.command_block_screen.as_ref().map(|s| s.pos) else {
+    /// `ClientPacketListener.handleBlockEntityData` then
+    /// `CommandBlockEditScreen.updateGui`: new data for the command block the
+    /// edit screen shows refreshes its fields. The mode and conditional live in
+    /// the block state here (vanilla's `CommandBlockEntity.Mode`).
+    pub(super) fn command_block_data_arrived(&mut self, pos: Pos) {
+        if self.command_block_screen.as_ref().map(|s| s.pos) != Some(pos) {
             return;
-        };
-        let state = self.block_state_at(screen_pos).map(|s| {
+        }
+        let state = self.block_state_at(pos).map(|s| {
             (
                 Mode::of_block(&s.name).unwrap_or(Mode::Redstone),
                 conditional(s),
             )
         });
-        let block = self.command_block(screen_pos).cloned();
+        let block = self.command_block(pos).cloned();
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: super::chat::chat_tree(&self.remote),
@@ -824,18 +825,6 @@ impl Game<'_> {
                 tag,
             }),
         );
-    }
-    /// `ClientPacketListener.handleBlockEntityData`: new data for the command
-    /// block the edit screen shows refills it (`CommandBlockEditScreen.updateGui`).
-    pub(super) fn command_block_data_arrived(&mut self, pos: Pos) {
-        let open = self.screen == Screen::CommandBlock
-            && self
-                .command_block_screen
-                .as_ref()
-                .is_some_and(|s| s.pos == pos);
-        if open {
-            self.open_command_block(pos);
-        }
     }
     /// What `handleSetCommandBlock` does once the player may edit the block.
     fn apply_command_block(&mut self, s: &CommandBlockEdit) {
