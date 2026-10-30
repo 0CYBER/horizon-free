@@ -50,20 +50,30 @@ pub fn tooltip(
             Category::Neutral,
         )];
     }
-    def.effects
-        .iter()
+    effect_lines(def.effects.iter().copied(), scale, translate)
+}
+/// `PotionContents.addPotionTooltip`'s line per effect: its name, potency and
+/// scaled duration, for (effect id, duration, amplifier) entries.
+pub fn effect_lines<'a>(
+    effects: impl IntoIterator<Item = (&'a str, i32, i32)>,
+    scale: f32,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, Category)> {
+    effects
+        .into_iter()
         .map(|(e, duration, amp)| {
+            let e = e.trim_start_matches("minecraft:");
             let mut line =
-                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| (*e).to_owned());
-            if *amp > 0 {
+                translate(&format!("effect.minecraft.{e}")).unwrap_or_else(|| e.to_owned());
+            if amp > 0 {
                 line.push(' ');
                 line.push_str(
                     &translate(&format!("potion.potency.{amp}"))
-                        .unwrap_or_else(|| crate::enchant::level_name(*amp as u32 + 1)),
+                        .unwrap_or_else(|| crate::enchant::level_name(amp as u32 + 1)),
                 );
             }
             let instant = effect(e).is_some_and(|d| d.instant);
-            let scaled = (*duration as f32 * scale) as i32;
+            let scaled = (duration as f32 * scale) as i32;
             if !instant && scaled > 20 {
                 line = format!("{line} ({})", format_duration(scaled));
             }

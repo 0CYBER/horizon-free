@@ -3795,4 +3795,56 @@ mod tests {
             assert!(Arc::ptr_eq(first, hit));
         }
     }
+
+    /// The resources the worldgen tests read.
+    fn test_root() -> std::path::PathBuf {
+        std::env::var_os("HORIZON_TEST_RESOURCES")
+            .or_else(|| std::env::var_os("HORIZON_RESOURCES"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            })
+    }
+    /// The block registry the worldgen bundle needs. `GeneratorData` keeps it
+    /// for as long as the generator lives, so it is shared, not freed.
+    static TEST_REGISTRY: std::sync::LazyLock<BlockRegistry> = std::sync::LazyLock::new(|| {
+        crate::level::data::load_registry(&test_root()).expect("registry")
+    });
+
+    /// The world presets with their own noise settings generate the terrain
+    /// those settings describe: the amplified and large-biome presets are not
+    /// the overworld's terrain under another name.
+    #[test]
+    fn world_presets_use_their_own_noise_settings() {
+        let root = test_root();
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let data =
+            GeneratorData::load(&root.join("worldgen"), &TEST_REGISTRY).expect("worldgen data");
+        let surface = |preset: &str| {
+            let generator = OverworldGenerator::for_world(
+                data.clone(),
+                1234,
+                preset,
+                "minecraft:overworld",
+                false,
+            )
+            .expect("generator");
+            let mut worker = generator.worker();
+            (0..32)
+                .map(|i| {
+                    worker
+                        .surface_sample(i * 137, i * 91)
+                        .expect("surface")
+                        .height
+                })
+                .collect::<Vec<_>>()
+        };
+        let normal = surface("minecraft:normal");
+        assert!(normal.iter().all(|height| (0..384).contains(height)));
+        assert_ne!(normal, surface("minecraft:amplified"));
+        assert_ne!(normal, surface("minecraft:large_biomes"));
+    }
 }

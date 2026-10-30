@@ -6,6 +6,7 @@
 use super::{Game, Result};
 use horizon_client::{
     containers::BlockEntity,
+    effects::{EffectInstance, PlayerEffects},
     fast_hash::{FxHashMap, FxHashSet},
     mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
@@ -87,7 +88,7 @@ pub(super) struct SculkState {
     damaged: FxHashMap<u32, i64>,
     last_health: Option<f32>,
     /// The darkness effect's blend factor, previous and current tick.
-    darkness: (f32, f32),
+    pub darkness: (f32, f32),
     /// Who causes the block changes being processed (the player's actions).
     pub actor: Option<Who>,
     ticks: u32,
@@ -1196,23 +1197,10 @@ impl Game<'_> {
 
     // ---- darkness ----
 
-    /// `MobEffectInstance.BlendState.tick` for the darkness effect: it fades
-    /// in and out over 22 ticks.
+    /// The darkness effect's blend, where this game ticks the player in its
+    /// own level (a server's client ticks it in `tick_client_effects`).
     fn tick_darkness_blend(&mut self) {
-        const BLEND: f32 = 22.0;
-        let (_, current) = self.sculk.darkness;
-        let next = match self.potions.effects.get("darkness") {
-            Some(e) => {
-                let target = if e.duration == -1 || e.duration > BLEND as i32 {
-                    1.0
-                } else {
-                    0.0
-                };
-                current + (target - current).clamp(-1.0 / BLEND, 1.0 / BLEND)
-            }
-            None => 0.0,
-        };
-        self.sculk.darkness = (current, next);
+        self.sculk.darkness = darkness_blend_tick(&self.potions.effects, self.sculk.darkness);
     }
     /// The darkness effect's blend factor at the partial tick.
     fn darkness_blend(&self, partial: f32) -> f32 {
@@ -1837,6 +1825,41 @@ impl Game<'_> {
             ctx,
         );
     }
+}
+
+/// `MobEffects.DARKNESS`'s `setBlendDuration(22)`: its fade in, its fade out,
+/// and how long before the end the fade out starts.
+const DARKNESS_BLEND: i32 = 22;
+
+/// `MobEffectInstance.BlendState.hasEffect` for the darkness effect.
+fn darkness_target(e: &EffectInstance) -> f32 {
+    if e.ends_within(DARKNESS_BLEND) {
+        0.0
+    } else {
+        1.0
+    }
+}
+
+/// `MobEffectInstance.BlendState.tick` for the darkness effect: from the
+/// (previous, current) factors, the next ones. It fades in and out over 22
+/// ticks; with no darkness it is gone.
+pub(super) fn darkness_blend_tick(effects: &PlayerEffects, (_, current): (f32, f32)) -> (f32, f32) {
+    let next = match effects.get("darkness") {
+        Some(e) => {
+            let step = 1.0 / DARKNESS_BLEND as f32;
+            current + (darkness_target(e) - current).clamp(-step, step)
+        }
+        None => 0.0,
+    };
+    (current, next)
+}
+
+/// A new darkness instance's `BlendState`: from nothing, or, when the server
+/// asked for no blending, at once (`MobEffectInstance.skipBlending`'s
+/// `BlendState.setImmediate`).
+pub(super) fn darkness_blend_added(e: &EffectInstance, blend: bool) -> (f32, f32) {
+    let factor = if blend { 0.0 } else { darkness_target(e) };
+    (factor, factor)
 }
 
 #[cfg(test)]

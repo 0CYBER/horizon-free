@@ -168,11 +168,12 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let eaten = m.extra.ints[TICKS_SINCE_EATEN];
         if eaten > 600 {
             // ItemStack.finishUsingItem: the food is gone, a use remainder stays.
-            m.extra.main_hand = w
-                .items
-                .and_then(|i| i.items.get(&item))
-                .and_then(|i| i.use_remainder.as_deref())
-                .map(Into::into);
+            m.extra.set_main_hand(
+                w.items
+                    .and_then(|i| i.items.get(&item))
+                    .and_then(|i| i.use_remainder.as_deref())
+                    .map(Into::into),
+            );
             m.extra.ints[TICKS_SINCE_EATEN] = 0;
         } else if eaten > 560 && m.random.next_float() < 0.1 {
             let at = [m.position.x, m.position.y, m.position.z];
@@ -742,7 +743,8 @@ impl EatBerries {
                     .unwrap_or(0);
             let mut count = 1 + m.random.next_int_bound(2).unwrap_or(0) + i32::from(age == 3);
             if m.extra.main_hand.is_none() {
-                m.extra.main_hand = Some("minecraft:sweet_berries".into());
+                m.extra
+                    .set_main_hand(Some("minecraft:sweet_berries".into()));
                 count -= 1;
             }
             if count > 0 {

@@ -13,9 +13,13 @@
 //! cell from `size_horizontal`/`size_vertical`) are spelled out as data.
 //! Whatever has no faithful 26.3 form is kept as it is and listed in the
 //! report.
+mod density;
+mod features;
 mod noise;
 mod registries;
+mod settings;
 
+use density::Context;
 use noise::noise;
 pub use noise::parity_base_amplitude;
 use registries::{biome, carver, dimension_type, structure};
@@ -69,6 +73,7 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
             }
         }
     }
+    let mut ctx = Context::new(&json);
     let mut written: BTreeMap<String, Value> = BTreeMap::new();
     for (path, v) in &json {
         let Some(file) = PackFile::parse(path) else {
@@ -77,9 +82,15 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
         };
         let upgraded = match file.registry.as_str() {
             "worldgen/noise" => Some(noise(v, &mut report)),
+            "worldgen/density_function" => Some(ctx.named_function(&file.id(), v, &mut report)),
+            "worldgen/noise_settings" => Some(ctx.settings(&file.id(), v, &mut report)),
             "worldgen/configured_carver" => Some(carver(v, &mut report)),
+            "worldgen/configured_feature" => Some(features::feature(v, &mut report)),
+            "worldgen/placed_feature" => Some(features::placed(v, &mut report)),
             "worldgen/biome" => Some(biome(v, &mut report)),
             "worldgen/structure" => Some(structure(v)),
+            "worldgen/world_preset" => Some(ctx.world_preset(v, &mut report)),
+            "dimension" => Some(ctx.dimension(v, &mut report)),
             "dimension_type" => Some(dimension_type(v)),
             "worldgen/template_pool" | "worldgen/processor_list" => {
                 let mut v = v.clone();
@@ -90,6 +101,7 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
         };
         let path = match file.registry.as_str() {
             "worldgen/configured_carver" => file.with_registry("worldgen/carver"),
+            "worldgen/configured_feature" => file.with_registry("worldgen/feature"),
             _ => path.clone(),
         };
         match upgraded {
@@ -101,6 +113,16 @@ pub fn upgrade_pack(files: &BTreeMap<String, Vec<u8>>) -> (BTreeMap<String, Vec<
                 written.insert(path, v.clone());
             }
         }
+    }
+    for (id, v) in std::mem::take(&mut ctx.generated) {
+        let path = registry_path("worldgen/density_function", &id);
+        report.added.push(path.clone());
+        written.insert(path, v);
+    }
+    for (id, v) in std::mem::take(&mut ctx.rules) {
+        let path = registry_path("worldgen/material_rule", &id);
+        report.added.push(path.clone());
+        written.insert(path, v);
     }
     for (path, v) in written {
         out.insert(path, pretty(&v));
@@ -158,15 +180,41 @@ impl PackFile {
             path: path.into(),
         })
     }
+    fn id(&self) -> String {
+        format!("{}:{}", self.namespace, self.path)
+    }
     fn with_registry(&self, registry: &str) -> String {
         format!("data/{}/{registry}/{}.json", self.namespace, self.path)
     }
+}
+
+fn registry_path(registry: &str, id: &str) -> String {
+    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    format!("data/{ns}/{registry}/{path}.json")
 }
 
 /// A type name without its `minecraft:` prefix, as the codecs read both.
 fn kind(v: &Value) -> Option<&str> {
     let t = v.get("type")?.as_str()?;
     Some(t.strip_prefix("minecraft:").unwrap_or(t))
+}
+
+/// An id with its namespace (`minecraft:` when it has none).
+fn full_id(id: &str) -> String {
+    if id.contains(':') {
+        id.to_owned()
+    } else {
+        format!("minecraft:{id}")
+    }
+}
+
+/// Whether an object of type `t` appears anywhere in `v`.
+fn contains_type(v: &Value, t: &str) -> bool {
+    match v {
+        Value::Object(o) => kind(v) == Some(t) || o.values().any(|x| contains_type(x, t)),
+        Value::Array(a) => a.iter().any(|x| contains_type(x, t)),
+        _ => false,
+    }
 }
 
 fn vanilla(name: &str) -> Value {
@@ -350,6 +398,166 @@ mod tests {
         assert_eq!(
             v,
             json!({"base_amplitude": 0.955388882960065, "base_octave": -3})
+        );
+    }
+
+    #[test]
+    fn density_arguments_and_removed_types() {
+        let (v, _) = up(
+            "data/x/worldgen/density_function/f.json",
+            json!({"type": "minecraft:add", "argument1": {"type": "minecraft:constant", "argument": 2.0},
+                "argument2": {"type": "minecraft:abs", "argument": {"type": "minecraft:y_clamped_gradient",
+                    "from_y": -64, "to_y": 320, "from_value": 1.5, "to_value": -1.5}}}),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "minecraft:add", "left": 2.0, "right": {"type": "minecraft:abs",
+                "input": {"type": "minecraft:gradient", "axis": "y", "from_coordinate": -64,
+                    "to_coordinate": 320, "from_value": 1.5, "to_value": -1.5}}})
+        );
+        let (v, _) = up(
+            "data/x/worldgen/density_function/f.json",
+            json!({"type": "minecraft:shifted_noise", "noise": "minecraft:erosion",
+                "shift_x": "minecraft:shift_x", "shift_y": 0.0, "shift_z": "minecraft:shift_z",
+                "xz_scale": 0.25, "y_scale": 0.0}),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "minecraft:noise", "noise": "minecraft:erosion", "shift_x": "minecraft:shift_x",
+                "shift_z": "minecraft:shift_z", "xz_scale": 0.25, "y_scale": 0.0})
+        );
+    }
+
+    #[test]
+    fn flat_cache_slices_at_y_zero_only_what_depends_on_y() {
+        let flat = |argument: Value| {
+            up(
+                "data/x/worldgen/density_function/f.json",
+                json!({"type": "minecraft:flat_cache", "argument": argument}),
+            )
+            .0
+        };
+        let n = json!({"type": "minecraft:noise", "noise": "x:n", "xz_scale": 1.0, "y_scale": 0.0});
+        assert_eq!(
+            flat(n.clone()),
+            json!({"type": "minecraft:cache", "input": n})
+        );
+        let y = json!({"type": "minecraft:mul", "argument1": "minecraft:y", "argument2": 2.0});
+        assert_eq!(
+            flat(y),
+            json!({"type": "minecraft:cache", "input": {"type": "minecraft:slice", "axis": "y",
+                "coordinate": 0, "input": {"type": "minecraft:mul", "left": "minecraft:y", "right": 2.0}}})
+        );
+    }
+
+    #[test]
+    fn interpolation_cell_comes_from_the_settings() {
+        let settings = json!({"noise": {"min_y": 0, "height": 128, "size_horizontal": 2, "size_vertical": 1},
+            "noise_router": {}, "surface_rule": {"type": "minecraft:sequence", "sequence": []},
+            "default_block": {"Name": "minecraft:stone"}, "default_fluid": {"Name": "minecraft:water",
+                "Properties": {"level": "0"}}, "aquifers_enabled": false, "ore_veins_enabled": false,
+            "sea_level": 32, "disable_mob_generation": false, "legacy_random_source": false,
+            "spawn_target": []});
+        let files = BTreeMap::from([
+            (
+                "data/x/worldgen/noise_settings/s.json".to_owned(),
+                serde_json::to_vec(&settings).unwrap(),
+            ),
+            (
+                "data/x/worldgen/density_function/f.json".to_owned(),
+                serde_json::to_vec(&json!({"type": "minecraft:interpolated", "argument": 1.0}))
+                    .unwrap(),
+            ),
+        ]);
+        let (out, _) = upgrade_pack(&files);
+        let f: Value =
+            serde_json::from_slice(&out["data/x/worldgen/density_function/f.json"]).unwrap();
+        assert_eq!(
+            f,
+            json!({"type": "minecraft:interpolated", "cell_size_xz": 8, "cell_size_y": 4, "input": 1.0})
+        );
+        let s: Value =
+            serde_json::from_slice(&out["data/x/worldgen/noise_settings/s.json"]).unwrap();
+        assert_eq!(s["noise"], json!({"min_y": 0, "height": 128}));
+        assert_eq!(
+            s["default_fluid"],
+            json!({"id": "minecraft:water", "properties": {"level": "0"}})
+        );
+        assert_eq!(s["default_block"], json!("minecraft:stone"));
+        assert!(s.get("aquifers").is_none());
+        assert_eq!(
+            s["noise_router"]["final_density"]["right"],
+            json!({"type": "minecraft:beardifier"})
+        );
+    }
+
+    #[test]
+    fn settings_move_aquifers_veins_and_spawn_target() {
+        let settings = json!({"noise": {"min_y": -64, "height": 384, "size_horizontal": 1, "size_vertical": 2},
+            "noise_router": {"barrier": 1.0, "fluid_level_floodedness": 2.0, "fluid_level_spread": 3.0,
+                "lava": 4.0, "temperature": "x:t", "vegetation": "x:v", "continents": "x:c",
+                "erosion": "x:e", "depth": "x:d", "ridges": "x:r", "final_density": "x:f",
+                "preliminary_surface_level": {"type": "minecraft:constant", "argument": 64.0},
+                "vein_toggle": 0.5, "vein_ridged": -1.0, "vein_gap": 0.0},
+            "surface_rule": {"type": "minecraft:block", "result_state": {"Name": "minecraft:dirt"}},
+            "default_block": {"Name": "minecraft:stone"}, "default_fluid": {"Name": "minecraft:water"},
+            "aquifers_enabled": true, "ore_veins_enabled": true, "sea_level": 63,
+            "disable_mob_generation": false, "legacy_random_source": false,
+            "spawn_target": [{"temperature": [-1, 1], "humidity": [-1, 1], "continentalness": [-0.11, 1],
+                "erosion": [-1, 1], "weirdness": [-1, -0.16], "depth": 0, "offset": 0}]});
+        let files = BTreeMap::from([(
+            "data/x/worldgen/noise_settings/s.json".to_owned(),
+            serde_json::to_vec(&settings).unwrap(),
+        )]);
+        let (out, _) = upgrade_pack(&files);
+        let read = |p: &str| -> Value { serde_json::from_slice(&out[p]).unwrap() };
+        let s = read("data/x/worldgen/noise_settings/s.json");
+        assert_eq!(s["material_rule"], json!("x:s/upgraded/material_rule"));
+        let rule = read("data/x/worldgen/material_rule/s/upgraded/material_rule.json");
+        let aquifers = &s["aquifers"];
+        assert_eq!(aquifers["barrier"], json!(1.0));
+        assert_eq!(
+            aquifers["surface_level"],
+            json!("x:s/upgraded/preliminary_surface_level")
+        );
+        assert_eq!(aquifers["exclusion"]["left"]["right"], json!("x:e"));
+        let rules = rule["sequence"].as_array().unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0]["type"], json!("minecraft:ore_vein"));
+        assert_eq!(
+            rules[2],
+            json!({"type": "minecraft:block", "result_state": "minecraft:dirt"})
+        );
+        assert_eq!(
+            s["spawn_target"],
+            json!([{"x:t": [-1, 1], "x:v": [-1, 1], "x:c": [-0.11, 1], "x:e": [-1, 1], "x:r": [-1, -0.16]}])
+        );
+        assert_eq!(
+            s["noise_router"]["chunk_surface_level"],
+            json!({"type": "minecraft:interpolated", "cell_size_xz": 16, "cell_size_y": 1,
+                "input": "x:s/upgraded/preliminary_surface_level"})
+        );
+    }
+
+    #[test]
+    fn features_lose_their_config_and_placements_their_spread() {
+        let (v, _) = up(
+            "data/x/worldgen/configured_feature/f.json",
+            json!({"type": "minecraft:disk", "config": {"state_provider": {"type":
+                "minecraft:simple_state_provider", "state": {"Name": "minecraft:clay"}}, "radius": 2}}),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "minecraft:disk", "state_provider": "minecraft:clay", "radius": 2})
+        );
+        let (v, _) = up(
+            "data/x/worldgen/placed_feature/p.json",
+            json!({"feature": "x:f", "placement": [{"type": "minecraft:random_offset",
+                "xz_spread": 0, "y_spread": -1}]}),
+        );
+        assert_eq!(
+            v,
+            json!({"feature": "x:f", "placement": [{"type": "minecraft:offset", "x": 0, "y": -1, "z": 0}]})
         );
     }
 
