@@ -1376,16 +1376,24 @@ def check_looting(host, guest, out):
     face_each_other(host, guest)
     hx, hy, hz = pos_of(host)
     counts = []
+
+    def porkchops():
+        # On the ground, or already picked up by either player (the pig dies at the guest's feet).
+        items = host.raw('entities', 8, 'minecraft:item')['entities']
+        ground = sum(e['item']['count'] for e in items if e['item']['item'] == 'minecraft:porkchop')
+        return ground + sum(g('inventory')['counts'].get('minecraft:porkchop', 0) for g in (host, guest))
+
     try:
         for _ in range(2):
+            for g in (host, guest):
+                g('command', command='clear @s minecraft:porkchop')
             host('command', command=f'summon minecraft:pig {hx + 1.5:.2f} {hy:.2f} {hz:.2f} {{NoAI:1b,Health:1.0f}}')
             guest.wait(30)
             guest.raw('look-at', f'{hx + 1.5:.2f}', f'{hy + 0.5:.2f}', f'{hz:.2f}')
             guest.wait(10)
             guest.raw('attack')
             guest.wait(30)
-            items = host.raw('entities', 8, 'minecraft:item')['entities']
-            counts.append(sum(e['item']['count'] for e in items if e['item']['item'] == 'minecraft:porkchop'))
+            counts.append(porkchops())
             host('command', command='kill @e[type=minecraft:item]')
             if counts[-1] > 3:
                 break
@@ -5879,7 +5887,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
              'cracks': check_cracks, 'time': check_time, 'growth': check_growth, 'doors': check_doors,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
-             'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'leave': check_leave,
+             'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'looting': check_looting, 'leave': check_leave,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
              'boats': check_boats, 'boat_shoved': check_boat_shoved, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
              'lightning': check_lightning, 'riding': check_riding, 'occupied_horse': check_occupied_horse, 'mounts': check_mounts,
