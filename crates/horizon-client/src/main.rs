@@ -4,20 +4,36 @@ mod game;
 
 use horizon_client::{crash, logging};
 
+#[global_allocator]
+static ALLOCATOR: horizon_threads::Allocator = horizon_threads::Allocator;
+
 /// The mod API level this game serves, kept in the program for the launcher
 /// to read without running it (`horizon_mods::api_level::MARK`). `main`
 /// reads it, so the linker keeps it.
 static MOD_API_LEVEL: [u8; 27] = horizon_mods::api_level::MARK;
 
 fn main() {
+    horizon_threads::configure_allocator();
     std::hint::black_box(&MOD_API_LEVEL);
     horizon_client::telemetry::mark_start();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let game_args = args.iter().take_while(|a| *a != "--dedicated");
-    let help = game_args.clone().any(|a| a == "--help" || a == "-h");
-    // The dedicated server logs in its own folder, as vanilla's does; the game in its home.
+    let help = game_args
+        .clone()
+        .any(|a| a == "--help" || a == "-h" || a == "--launch-api");
+    // --home before the log opens in it.
+    if let Some(dir) = game_args.clone().skip_while(|a| *a != "--home").nth(1) {
+        logging::set_game_home(std::path::absolute(dir).unwrap_or_else(|_| dir.into()));
+    }
+    // The dedicated server logs in its own folder (--game-dir's), as vanilla's does; the game in its home.
     let (home, side, thread) = if args.iter().any(|a| a == "--dedicated") {
-        (std::path::PathBuf::from("."), "server", "Server thread")
+        let folder = game_args
+            .clone()
+            .skip_while(|a| *a != "--game-dir" && *a != "--gameDir")
+            .nth(1)
+            .and_then(|dir| std::path::absolute(dir).ok())
+            .unwrap_or_else(|| ".".into());
+        (folder, "server", "Server thread")
     } else {
         (logging::game_home(), "client", "Render thread")
     };
@@ -28,8 +44,12 @@ fn main() {
         crash::install(home.clone(), side);
     }
     if let Err(error) = game::run() {
+        // A bad command line is the caller's mistake, not a crash: no report.
+        let usage = error.is::<game::UsageError>();
         log::error!("Horizon: {error}");
-        if !help {
+        logging::flush();
+        // The report's path is the last line on stderr (crash::SAVED_LINE).
+        if !help && !usage {
             crash::report_error(&home, side, &*error);
         }
         // Started from Explorer, the console window closes with the game:
@@ -39,7 +59,11 @@ fn main() {
             eprintln!("Press Enter to close.");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
-        std::process::exit(1);
+        std::process::exit(if usage {
+            game::exit_code::USAGE
+        } else {
+            game::exit_code::ERROR
+        });
     }
     logging::flush();
 }

@@ -186,6 +186,8 @@ pub struct ArrowState {
     /// The arrow's own random (`Entity.random`).
     pub random: LegacyRandom,
     pub events: Vec<ArrowEvent>,
+    /// The speed (`deltaMovement.length()`) it hit a block at, before it stuck.
+    pub hit_speed: f64,
 }
 impl fmt::Debug for ArrowState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -230,6 +232,7 @@ impl ArrowState {
             removed: false,
             random,
             events: Vec::new(),
+            hit_speed: 0.0,
         }
     }
     /// The `AbstractArrow` constructor's `pickupItemStack`: the drawn ammo
@@ -374,6 +377,61 @@ impl ArrowScene<'_, '_> {
         }
         true
     }
+}
+/// `AbstractArrow.tick`'s block phase for a thrown trident: the zero-width
+/// `level().clip(new ClipContext(position(), position().add(movement),
+/// ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this))`, then
+/// `AbstractArrow.onHitBlock`'s `position().subtract(signum * 0.05)`. Returns
+/// the position to stop at (pull-back included) and the block that was hit.
+pub fn clip_block_stop(
+    world: &World,
+    facts: &BlockFacts,
+    collision: &BlockCollisionRegistry<'_>,
+    from: Vec3,
+    movement: Vec3,
+) -> Option<(Vec3, BlockPos)> {
+    let to = Vec3::new(
+        from.x + movement.x,
+        from.y + movement.y,
+        from.z + movement.z,
+    );
+    let mut scene = SceneCollisions {
+        world,
+        binding: collision,
+        subject: None,
+    };
+    let hit = horizon_core::geometry::traverse_blocks(from, to, 1024, |p: BlockPos| {
+        let state = world.block(p.x, p.y, p.z);
+        if facts.is_air(state) {
+            return None;
+        }
+        let shape = collision
+            .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+            .ok()?;
+        shape.clip(from, to, p)
+    })
+    .ok()
+    .flatten()?;
+    Some((back_off(hit.location, movement), hit.block))
+}
+/// `AbstractArrow.onHitBlock`'s back-off: vanilla scales `(double) 0.05f` by
+/// `Math.signum` per axis, whose value at zero is zero (not Rust's -1.0).
+pub fn back_off(location: Vec3, movement: Vec3) -> Vec3 {
+    fn signum(v: f64) -> f64 {
+        if v > 0.0 {
+            1.0
+        } else if v < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    }
+    let offset = f64::from(0.05f32);
+    Vec3::new(
+        location.x - signum(movement.x) * offset,
+        location.y - signum(movement.y) * offset,
+        location.z - signum(movement.z) * offset,
+    )
 }
 fn bounds(at: Vec3) -> Aabb {
     // EntityDimensions.makeBoundingBox: half the float width.
@@ -664,7 +722,7 @@ impl Ticker<'_, '_, '_, '_> {
         if !self.st.first_tick && self.st.fluids.is_in_fluid(&Tags, LAVA) {
             self.st.fall_distance *= 0.5;
         }
-        if self.position().y < f64::from(crate::chunk::MIN_Y - 64) {
+        if self.position().y < f64::from(self.scene.world.bottom_y() - 64) {
             self.st.removed = true;
         }
         self.st.first_tick = false;
@@ -848,6 +906,8 @@ impl Ticker<'_, '_, '_, '_> {
     /// it moved on, stop, and stick.
     fn on_hit_block(&mut self, pos: BlockPos, state: BlockStateId) {
         self.st.last_state = Some(state);
+        // BlockState.onProjectileHit still sees the deltaMovement it hit at.
+        self.st.hit_speed = self.p.velocity.length();
         // Projectile.onHitBlock: BlockState.onProjectileHit.
         if self.st.on_fire()
             && let Some(reaction) = self.block_reaction(state)
@@ -1159,10 +1219,10 @@ impl FluidInteractionWorld for Ticker<'_, '_, '_, '_> {
         Ok(self.scene.world.chunks.contains_key(&(x, z)).then_some(()))
     }
     fn chunk_sections(&mut self, _: ()) -> Result<FluidSections<'_>, Error> {
-        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        let layout = self.scene.world.layout();
         Ok(FluidSections {
-            minimum_section_y: crate::chunk::MIN_Y >> 4,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() >> 4,
+            has_fluid: crate::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {
