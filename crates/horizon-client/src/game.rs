@@ -15412,6 +15412,7 @@ fn load_resources(
                     visibility,
                     &progress,
                     started,
+                    true,
                 )
                 .map_err(|error| error.to_string())?;
                 resources
@@ -15440,6 +15441,7 @@ fn load_resources(
             visibility,
             progress,
             started,
+            !headless,
         )?;
         resources
             .rest
@@ -15468,6 +15470,9 @@ fn load_world_rest(
     visibility: horizon_world::block_render::FaceVisibility,
     progress: &Progress,
     started: Instant,
+    // False on a dedicated server, which draws nothing: no block entity
+    // renderer or animate tables (client-side display ticks).
+    draws: bool,
 ) -> Result<WorldRest> {
     let facts = resources.facts();
     let biomes = resources.biomes();
@@ -15501,8 +15506,11 @@ fn load_world_rest(
         &items,
         &horizon_world::loot::PackOverlay::NONE,
     );
-    let animate =
-        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
+    let animate = if draws {
+        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?
+    } else {
+        Default::default()
+    };
     let fog = horizon_client::fog::FogTables::load(root, biomes);
     Ok(WorldRest {
         stations,
@@ -15510,12 +15518,15 @@ fn load_world_rest(
         recipes,
         transformers,
         providers: Providers::load(root),
-        block_entity_render:
+        block_entity_render: if draws {
             horizon_client::block_entity_render::BlockEntityRenderer::load_with_visibility(
                 root,
                 registry_owner.registry,
                 visibility,
-            )?,
+            )?
+        } else {
+            Default::default()
+        },
         animate,
         fog,
         music: horizon_client::music::MusicTables::load(root),
