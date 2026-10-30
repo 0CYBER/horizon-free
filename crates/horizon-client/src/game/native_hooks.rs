@@ -6,6 +6,11 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 21 adds right clicking a block (`native_right_click_block`), and in
+//! `native_server.rs` the acting player (`native_acting_player`), a player's
+//! health, the action bar (`native_action_bar`) and commands run as the
+//! server (`native_run_command`).
+//!
 //! API 20 adds buttons, tooltips and item icons on mod screens
 //! (`native_screen_click`, `native_screen_tooltip`, `native_menu_button`,
 //! and `native_item`, `native_screen_title`, `native_data`, `native_block`,
@@ -106,7 +111,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 20;
+pub(crate) const NATIVE_HOOKS_API: u32 = 21;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -700,6 +705,21 @@ impl Game<'_> {
         state: BlockStateId,
     ) {
         let _ = (stack, pos, state);
+    }
+    /// A player right clicks the block at `pos` with `self.hand`, `face` the
+    /// face clicked: where `ServerPlayerGameMode.useItemOn` starts, before
+    /// the block's own use (a chest, a door, a lever) and before
+    /// `native_use_item_on`. Set `canceled` to stop the click: neither the
+    /// block nor the item acts, the hand doesn't swing, and a guest sees the
+    /// block as it is. Server-side, for every player of the world
+    /// (`native_acting_player` says who), once per hand. API 21.
+    pub(super) fn native_right_click_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, face, canceled);
     }
 }
 

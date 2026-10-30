@@ -58,6 +58,9 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The exploding mob as predicates see it (`ServerExplosion.source`,
+    /// `ServerPlayer.currentExplosionCause`), for a mob already out of the list.
+    pub(super) explosion_cause: Option<horizon_client::advancements::EntityView>,
     /// The exploding mob named itself (`MobEvent::ExplosionSource`), so the
     /// blast leaves it out (`getEntities(source, box)`). A source guessed
     /// from the mobs near the centre is still hurt: it may be a bystander.
@@ -272,6 +275,48 @@ impl Game<'_> {
         let damage = &self.motion.health.damage;
         damage.id(name).is_some_and(|id| {
             damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
+        })
+    }
+    /// The killing blow as advancement predicates see it (`DamageSource` of the
+    /// last combat entry): its type and the causing entity. The projectile
+    /// damage types have the projectile as direct entity, not the shooter.
+    pub(super) fn combat_killing_blow(&self) -> Option<horizon_client::advancements::DamageView> {
+        use horizon_client::advancements::{DamageView, EntityView};
+        let e = self.combat.entries.last()?;
+        let source = e.attacker.as_ref().and_then(|(id, _)| {
+            self.mobs
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| self.mob_entity(m))
+        });
+        let projectile = matches!(
+            e.damage_type.as_str(),
+            "minecraft:arrow"
+                | "minecraft:trident"
+                | "minecraft:mob_projectile"
+                | "minecraft:fireball"
+                | "minecraft:unattributed_fireball"
+                | "minecraft:wither_skull"
+                | "minecraft:wind_charge"
+                | "minecraft:thrown"
+                | "minecraft:spit"
+        );
+        let direct = if projectile {
+            Some(EntityView {
+                kind: e.damage_type.clone(),
+                ..Default::default()
+            })
+        } else {
+            source.clone()
+        };
+        Some(DamageView {
+            kind: e.damage_type.clone(),
+            direct,
+            source,
+            is_direct: !projectile,
+            original: e.damage,
+            actual: e.damage,
+            blocked: false,
         })
     }
     /// The type of the mob that dealt the killing blow (`killed_by`).
