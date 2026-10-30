@@ -6,7 +6,11 @@ use super::{
     anim::{Poses, State},
     keyframes::Animation,
 };
-use horizon_core::{geometry::Vec3, jmath, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    jmath,
+    random::RandomSource,
+};
 use std::collections::HashMap;
 
 // `variant3` is the pose, `variant` the pose the animations last saw,
@@ -103,8 +107,15 @@ pub(super) fn dangerous_block(name: &str) -> bool {
             | "minecraft:powder_snow"
     )
 }
-/// `LongJumpUtil.calculateJumpVectorForAngle` without the collision check.
-fn jump_vector(m: &Mob, target: Vec3, max_velocity: f32, angle: i32) -> Option<Vec3> {
+/// `LongJumpUtil.calculateJumpVectorForAngle`; with a world, the arc is
+/// checked for collisions (`checkCollision`).
+pub(super) fn jump_vector(
+    m: &Mob,
+    target: Vec3,
+    max_velocity: f32,
+    angle: i32,
+    collide: Option<&MobWorld>,
+) -> Option<Vec3> {
     let pos = m.position;
     let plane = Vec3::new(target.x - pos.x, 0.0, target.z - pos.z)
         .normalize()
@@ -130,7 +141,47 @@ fn jump_vector(m: &Mob, target: Vec3, max_velocity: f32, angle: i32) -> Option<V
         return None;
     }
     let (v0r, v0y) = (v0 * cos, v0 * sin);
+    if let Some(w) = collide {
+        // `ceil(r / v0r) * 2` points along the arc, each step clear of blocks.
+        let samples = (r / v0r).ceil() as i32 * 2;
+        let (sin_xz, cos_xz) = (jmath::sin(xz), jmath::cos(xz));
+        let mut ri = 0.0;
+        let mut previous: Option<Vec3> = None;
+        for _ in 0..samples - 1 {
+            ri += r / f64::from(samples);
+            let yi = sin / cos * ri - jmath::pow(ri, 2.0) * g / (2.0 * v0sq * jmath::pow(cos, 2.0));
+            let p = Vec3::new(pos.x + ri * cos_xz, pos.y + yi, pos.z + ri * sin_xz);
+            if previous.is_some_and(|q| !clear_transition(m, w, q, p)) {
+                return None;
+            }
+            previous = Some(p);
+        }
+    }
     Some(Vec3::new(v0r * jmath::cos(xz), v0y, v0r * jmath::sin(xz)).scale(f64::from(0.95_f32)))
+}
+/// `LongJumpUtil.isClearTransition`: the box of `Pose.LONG_JUMPING` fits at
+/// points no further apart than nine tenths of its smaller side.
+fn clear_transition(m: &Mob, w: &MobWorld, from: Vec3, to: Vec3) -> bool {
+    let (width, height, _) = m.awake_dims_in(true);
+    let (width, height) = (width as f32, height as f32);
+    let d = to.subtract(from);
+    let min = f64::from(width.min(height));
+    let checks = (d.length() / min).ceil() as i32;
+    let step = d.normalize().scale(min * f64::from(0.9_f32));
+    let half = f64::from(width) / 2.0;
+    let mut p = from;
+    (0..checks).all(|i| {
+        p = if i == checks - 1 {
+            to
+        } else {
+            p.add_vector(step)
+        };
+        // `EntityDimensions.makeBoundingBox`.
+        w.no_collision(Aabb::new(
+            Vec3::new(p.x - half, p.y, p.z - half),
+            Vec3::new(p.x + half, p.y + f64::from(height), p.z + half),
+        ))
+    })
 }
 /// `LongJump.calculateOptimalJumpVector`: the allowed angles shuffled, the
 /// first that reaches the target.
@@ -143,7 +194,7 @@ pub(super) fn optimal_jump_vector(m: &mut Mob, target: Vec3) -> Option<Vec3> {
     let max = 0.058_333_334_f32 * m.attrs.follow_range as f32;
     let v = angles
         .iter()
-        .find_map(|&a| jump_vector(m, target, max, a))?;
+        .find_map(|&a| jump_vector(m, target, max, a, None))?;
     if m.has_effect("minecraft:jump_boost") {
         let amp = m
             .extra

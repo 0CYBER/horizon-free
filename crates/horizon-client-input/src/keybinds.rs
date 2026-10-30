@@ -145,6 +145,22 @@ const KEYS: &[(&str, KeyCode)] = &[
     ("key.keyboard.period", KeyCode::Period),
     ("key.keyboard.slash", KeyCode::Slash),
     ("key.keyboard.caps.lock", KeyCode::CapsLock),
+    ("key.keyboard.world.1", KeyCode::IntlBackslash),
+    ("key.keyboard.international1", KeyCode::IntlRo),
+    ("key.keyboard.international3", KeyCode::IntlYen),
+    ("key.keyboard.lang1", KeyCode::Lang1),
+    ("key.keyboard.lang2", KeyCode::Lang2),
+    ("key.keyboard.lang3", KeyCode::Lang3),
+    ("key.keyboard.lang4", KeyCode::Lang4),
+    ("key.keyboard.lang5", KeyCode::Lang5),
+    ("key.keyboard.help", KeyCode::Help),
+    ("key.keyboard.select", KeyCode::Select),
+    ("key.keyboard.again", KeyCode::Again),
+    ("key.keyboard.undo", KeyCode::Undo),
+    ("key.keyboard.cut", KeyCode::Cut),
+    ("key.keyboard.copy", KeyCode::Copy),
+    ("key.keyboard.paste", KeyCode::Paste),
+    ("key.keyboard.find", KeyCode::Find),
     ("key.keyboard.f1", KeyCode::F1),
     ("key.keyboard.f2", KeyCode::F2),
     ("key.keyboard.f3", KeyCode::F3),
@@ -157,6 +173,18 @@ const KEYS: &[(&str, KeyCode)] = &[
     ("key.keyboard.f10", KeyCode::F10),
     ("key.keyboard.f11", KeyCode::F11),
     ("key.keyboard.f12", KeyCode::F12),
+    ("key.keyboard.f13", KeyCode::F13),
+    ("key.keyboard.f14", KeyCode::F14),
+    ("key.keyboard.f15", KeyCode::F15),
+    ("key.keyboard.f16", KeyCode::F16),
+    ("key.keyboard.f17", KeyCode::F17),
+    ("key.keyboard.f18", KeyCode::F18),
+    ("key.keyboard.f19", KeyCode::F19),
+    ("key.keyboard.f20", KeyCode::F20),
+    ("key.keyboard.f21", KeyCode::F21),
+    ("key.keyboard.f22", KeyCode::F22),
+    ("key.keyboard.f23", KeyCode::F23),
+    ("key.keyboard.f24", KeyCode::F24),
     ("key.keyboard.print.screen", KeyCode::PrintScreen),
     ("key.keyboard.scroll.lock", KeyCode::ScrollLock),
     ("key.keyboard.pause", KeyCode::Pause),
@@ -188,6 +216,36 @@ const KEYS: &[(&str, KeyCode)] = &[
     ("key.keyboard.keypad.0", KeyCode::Numpad0),
     ("key.keyboard.keypad.period", KeyCode::NumpadDecimal),
     ("key.keyboard.keypad.equal", KeyCode::NumpadEqual),
+    ("key.keyboard.keypad.comma", KeyCode::NumpadComma),
+    ("key.keyboard.keypad.backspace", KeyCode::NumpadBackspace),
+    (
+        "key.keyboard.keypad.left.parenthesis",
+        KeyCode::NumpadParenLeft,
+    ),
+    (
+        "key.keyboard.keypad.right.parenthesis",
+        KeyCode::NumpadParenRight,
+    ),
+    ("key.keyboard.keypad.hash", KeyCode::NumpadHash),
+    (
+        "key.keyboard.keypad.memory.store",
+        KeyCode::NumpadMemoryStore,
+    ),
+    (
+        "key.keyboard.keypad.memory.recall",
+        KeyCode::NumpadMemoryRecall,
+    ),
+    (
+        "key.keyboard.keypad.memory.clear",
+        KeyCode::NumpadMemoryClear,
+    ),
+    ("key.keyboard.keypad.memory.add", KeyCode::NumpadMemoryAdd),
+    (
+        "key.keyboard.keypad.memory.subtract",
+        KeyCode::NumpadMemorySubtract,
+    ),
+    ("key.keyboard.keypad.clear", KeyCode::NumpadClear),
+    ("key.keyboard.keypad.clear.entry", KeyCode::NumpadClearEntry),
     ("key.keyboard.menu", KeyCode::ContextMenu),
     ("key.keyboard.left.control", KeyCode::ControlLeft),
     ("key.keyboard.left.shift", KeyCode::ShiftLeft),
@@ -242,9 +300,8 @@ impl Default for KeyBinds {
     }
 }
 /// Each default key once, in order: two mappings that share a default key
-/// (Advancements and the debug profiler both on L) are one press of it, not
-/// two (the second would close the screen the first opened). Vanilla clicks
-/// both mappings, but the profiler one only acts with F3 held.
+/// (Pick Block and the spectator hotbar both on the middle button) are one
+/// press of it, not two.
 fn distinct<T: PartialEq>(keys: Vec<T>) -> Vec<T> {
     let mut out = Vec::with_capacity(keys.len());
     for k in keys {
@@ -310,6 +367,25 @@ impl KeyBinds {
             .map(|m| m.0)
             .filter(move |n| self.get(n) == key)
     }
+    /// The mappings bound to `key` that [`KeyBinds::translate_all`] follows:
+    /// all but the debug keys. Those act only with F3 held
+    /// (`KeyboardHandler.handleDebugKeys`, `debug_keys.rs` reads the physical
+    /// key and the binding itself); their defaults (A, S, D, T, L, 1 to 4...)
+    /// would otherwise turn the key back into its old gameplay meaning.
+    fn translated_mappings<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'static str> + 'a {
+        MAPPINGS
+            .iter()
+            .filter(|m| m.2 != "debug")
+            .map(|m| m.0)
+            .filter(move |n| self.get(n) == key)
+    }
+    /// Whether a mapping (other than a debug key) whose default is `key` was
+    /// bound elsewhere.
+    fn default_moved(&self, key: &str) -> bool {
+        MAPPINGS
+            .iter()
+            .any(|(n, d, c)| *d == key && *c != "debug" && !self.is_default(n))
+    }
     /// Translate a physical key into the default key of the mapping it is
     /// bound to, so game code written against vanilla defaults follows the
     /// player's bindings. `None` means the key now does nothing; mouse
@@ -326,7 +402,7 @@ impl KeyBinds {
             return vec![Ok(key)];
         };
         let bound: Vec<_> = self
-            .mappings_for(name)
+            .translated_mappings(name)
             .filter_map(|mapping| {
                 let default = Self::default_of(mapping);
                 match key_code(default) {
@@ -339,10 +415,7 @@ impl KeyBinds {
             return distinct(bound);
         }
         // An unbound key whose default meaning was moved elsewhere is inert.
-        if MAPPINGS
-            .iter()
-            .any(|(n, d, _)| *d == name && !self.is_default(n))
-        {
+        if self.default_moved(name) {
             return Vec::new();
         }
         vec![Ok(key)]
@@ -355,7 +428,7 @@ impl KeyBinds {
     pub fn translate_mouse_all(&self, button: MouseButton) -> Vec<Result<KeyCode, MouseButton>> {
         let name = mouse_name(button);
         let bound: Vec<_> = self
-            .mappings_for(&name)
+            .translated_mappings(&name)
             .filter_map(|mapping| {
                 let default = Self::default_of(mapping);
                 match mouse_button(default) {
@@ -367,10 +440,7 @@ impl KeyBinds {
         if !bound.is_empty() {
             return distinct(bound);
         }
-        if MAPPINGS
-            .iter()
-            .any(|(n, d, _)| *d == name && !self.is_default(n))
-        {
+        if self.default_moved(&name) {
             return Vec::new();
         }
         vec![Err(button)]
@@ -448,6 +518,29 @@ mod tests {
         assert!(k.conflicts("key.forward").is_empty());
         k.set("key.jump", "key.keyboard.up");
         assert_eq!(k.conflicts("key.forward"), ["key.jump"]);
+    }
+    #[test]
+    fn a_moved_key_keeps_no_default_action() {
+        // #3158: the debug keys (F3+A, F3+1...) share these keys' defaults,
+        // and must not hand them back their gameplay meaning.
+        let mut k = KeyBinds::default();
+        k.set("key.hotbar.1", "key.keyboard.q");
+        assert_eq!(k.translate_all(KeyCode::Digit1), []);
+        assert_eq!(
+            k.translate_all(KeyCode::KeyQ),
+            [Ok(KeyCode::KeyQ), Ok(KeyCode::Digit1)]
+        );
+        k.set("key.inventory", "key.keyboard.a");
+        k.set("key.left", "key.keyboard.e");
+        assert_eq!(k.translate_all(KeyCode::KeyA), [Ok(KeyCode::KeyE)]);
+        assert_eq!(k.translate_all(KeyCode::KeyE), [Ok(KeyCode::KeyA)]);
+        k.set("key.back", "key.keyboard.down");
+        assert_eq!(k.translate_all(KeyCode::KeyS), []);
+        // Keys left alone still act, and a moved debug key changes nothing.
+        k.set("key.debug.fpsCharts", "key.keyboard.9");
+        assert_eq!(k.translate_all(KeyCode::Digit2), [Ok(KeyCode::Digit2)]);
+        assert_eq!(k.translate_all(KeyCode::Digit9), [Ok(KeyCode::Digit9)]);
+        assert_eq!(k.translate_all(KeyCode::F3), [Ok(KeyCode::F3)]);
     }
     #[test]
     fn display_names() {

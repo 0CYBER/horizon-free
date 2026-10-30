@@ -8,7 +8,7 @@ use crate::{
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
-    item::{Component, Hashed, HashedSlot, Slot, Stack},
+    item::{Component, DelimitedSlot, Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
@@ -111,6 +111,7 @@ impl From<NetCost> for Stack {
             count: cost.count,
             added: cost.components,
             removed: Vec::new(),
+            wire: Default::default(),
         }
     }
 }
@@ -210,6 +211,18 @@ packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i1
 // ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
 // its entry lasts (0 ends it).
 packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
+packet!(
+    /// ClientboundCustomChatCompletionsPacket: how the server changes the
+    /// extra chat completions (`custom_chat_action`) and the entries.
+    CustomChatCompletions { action: i32 => VarInt, entries: Vec<String> => List<Str> }
+);
+/// ClientboundCustomChatCompletionsPacket.Action, by id (`ByIdMap.continuous`
+/// with `OutOfBoundsStrategy.ZERO`: an unknown id is `ADD`).
+pub mod custom_chat_action {
+    pub const ADD: i32 = 0;
+    pub const REMOVE: i32 = 1;
+    pub const SET: i32 = 2;
+}
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -721,6 +734,20 @@ packet!(
     /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
     ProjectilePower { id: i32 => VarInt, power: f64 => Double }
 );
+packet!(
+    /// ClientboundPlayerLookAtPacket's entity target: its id and the anchor
+    /// (`EntityAnchorArgument.Anchor`: 0 feet, 1 eyes) to look at on it.
+    LookAtEntity { id: i32 => VarInt, anchor: i32 => VarInt }
+);
+packet!(
+    /// ClientboundPlayerLookAtPacket: turn this player's `from` anchor towards
+    /// a point, or towards an entity when the client knows it.
+    PlayerLookAt {
+        from: i32 => VarInt,
+        target: [f64; 3] => Vec3d,
+        entity: Option<LookAtEntity> => Opt<LookAtEntity>,
+    }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -782,6 +809,11 @@ packet!(SetEquipment { id: i32 => VarInt, slots: Vec<(u8, Option<Stack>)> => Equ
 packet!(SetExperience { progress: f32 => Float, level: i32 => VarInt, total: i32 => VarInt });
 packet!(SetHealth { health: f32 => Float, food: i32 => VarInt, saturation: f32 => Float });
 packet!(SetHeldSlot { slot: i32 => VarInt });
+packet!(
+    /// ClientboundSetCameraPacket: the entity the view is attached to (the
+    /// player's own id puts it back on the player).
+    SetCamera { camera_id: i32 => VarInt }
+);
 packet!(SetPlayerInventory { slot: i32 => VarInt, item: Option<Stack> => Slot });
 packet!(
     /// ClockNetworkState for one world clock (registry id).
@@ -823,6 +855,11 @@ packet!(Sound {
     seed: i64 => Long,
 });
 packet!(SystemChat { content: Tag => Nbt, overlay: bool => Bool });
+packet!(
+    /// ClientboundTagQueryPacket: the answer to a debug NBT query (F3+I), with
+    /// the transaction it answers; `Tag::End` when there was no block entity.
+    TagQuery { transaction: i32 => VarInt, tag: Tag => Nbt }
+);
 packet!(TakeItemEntity { item: i32 => VarInt, player: i32 => VarInt, amount: i32 => VarInt });
 packet!(TeleportEntity {
     id: i32 => VarInt,
@@ -1825,6 +1862,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
     Cooldown(Cooldown) = COOLDOWN,
+    CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
@@ -1857,6 +1895,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerCombatKill(PlayerCombatKill) = PLAYER_COMBAT_KILL,
     PlayerInfoRemove(PlayerInfoRemove) = PLAYER_INFO_REMOVE,
     PlayerInfoUpdate(PlayerInfoUpdate) = PLAYER_INFO_UPDATE,
+    PlayerLookAt(PlayerLookAt) = PLAYER_LOOK_AT,
     PlayerPosition(PlayerPosition) = PLAYER_POSITION,
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
@@ -1875,6 +1914,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetBorderWarningDelay(SetBorderWarningDelay) = SET_BORDER_WARNING_DELAY,
     SetBorderWarningDistance(SetBorderWarningDistance) = SET_BORDER_WARNING_DISTANCE,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
+    SetCamera(SetCamera) = SET_CAMERA,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
     SetCursorItem(SetCursorItem) = SET_CURSOR_ITEM,
     SetDefaultSpawnPosition(SetDefaultSpawnPosition) = SET_DEFAULT_SPAWN_POSITION,
@@ -1909,6 +1949,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
+    TagQuery(TagQuery) = TAG_QUERY,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
     TickingState(TickingState) = TICKING_STATE,
@@ -2048,6 +2089,11 @@ packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Dou
 packet!(Attack { id: i32 => VarInt });
 packet!(TeleportToEntity { uuid: u128 => Uuid });
 packet!(
+    /// ServerboundSpectatorActionPacket: the entity a spectator clicked, or
+    /// none for a click on nothing.
+    SpectatorAction { target: Option<i32> => OptVarInt }
+);
+packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
 );
@@ -2146,6 +2192,16 @@ packet!(
     }
 );
 packet!(SelectTrade { item: i32 => VarInt });
+packet!(
+    /// ServerboundBlockEntityTagQueryPacket: an operator's F3+I asks for the
+    /// block entity's data at a position.
+    BlockEntityTagQuery { transaction: i32 => VarInt, pos: [i32; 3] => Pos }
+);
+packet!(
+    /// ServerboundEntityTagQueryPacket: an operator's F3+I asks for an
+    /// entity's data, by its network id.
+    EntityTagQuery { transaction: i32 => VarInt, entity: i32 => VarInt }
+);
 packet!(
     /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
     /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
@@ -2266,7 +2322,7 @@ packet!(
     SelectBundleItem { slot: i32 => VarInt, index: i32 => VarInt }
 );
 packet!(SetCarriedItem { slot: i16 => Short });
-packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => Slot });
+packet!(SetCreativeModeSlot { slot: i16 => Short, item: Option<Stack> => DelimitedSlot });
 packet!(UseItem { hand: i32 => VarInt, sequence: i32 => VarInt, yaw: f32 => Float, pitch: f32 => Float });
 packet!(UseItemOn {
     hand: i32 => VarInt,
@@ -2294,7 +2350,10 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    BlockEntityTagQuery(BlockEntityTagQuery) = BLOCK_ENTITY_TAG_QUERY,
+    EntityTagQuery(EntityTagQuery) = ENTITY_TAG_QUERY,
     TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
+    SpectatorAction(SpectatorAction) = SPECTATOR_ACTION,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -2383,6 +2442,34 @@ mod tests {
         for len in 0..bytes.len() {
             assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
         }
+    }
+
+    #[test]
+    fn custom_chat_completions_are_an_action_and_a_string_list() {
+        // ClientboundCustomChatCompletionsPacket.STREAM_CODEC: Action.STREAM_CODEC
+        // (ByteBufCodecs.idMapper, a VarInt), then STRING_UTF8 in a list.
+        let payload = b"Steve#tag";
+        let packet = Clientbound::CustomChatCompletions(CustomChatCompletions {
+            action: custom_chat_action::SET,
+            entries: vec!["Steve".into(), "#tag".into()],
+        });
+        assert_eq!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                payload
+            )
+            .unwrap(),
+            packet
+        );
+        assert_eq!(&packet.encode()[1..], payload);
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        assert!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                &payload[..payload.len() - 1]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3034,6 +3121,54 @@ mod tests {
     }
 
     #[test]
+    fn debug_tag_queries_decode_as_their_packets() {
+        use crate::ids::play::{clientbound, serverbound};
+        // ServerboundBlockEntityTagQueryPacket: VarInt transaction, BlockPos.
+        let pos = [3, 64, -2];
+        let mut body = vec![7];
+        body.extend_from_slice(&crate::buf::pack_block_pos(pos).to_be_bytes());
+        let packet = Serverbound::decode(serverbound::BLOCK_ENTITY_TAG_QUERY, &body).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::BlockEntityTagQuery(BlockEntityTagQuery {
+                transaction: 7,
+                pos
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ServerboundEntityTagQueryPacket: VarInt transaction, VarInt entity id.
+        let packet = Serverbound::decode(serverbound::ENTITY_TAG_QUERY, &[0, 42]).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::EntityTagQuery(EntityTagQuery {
+                transaction: 0,
+                entity: 42
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ClientboundTagQueryPacket: VarInt transaction, then the nullable
+        // compound of FriendlyByteBuf.writeNbt (a bare End tag for null).
+        let packet = Clientbound::decode(clientbound::TAG_QUERY, &[1, 0]).unwrap();
+        assert_eq!(
+            packet,
+            Clientbound::TagQuery(TagQuery {
+                transaction: 1,
+                tag: Tag::End
+            })
+        );
+        let mut items = horizon_world::nbt::Compound::new();
+        items.insert("Lock".into(), Tag::String("key".into()));
+        round_trip(
+            Clientbound::TagQuery(TagQuery {
+                transaction: 2,
+                tag: Tag::Compound(items),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+    }
+
+    #[test]
     fn change_game_mode_uses_the_game_type_varint() {
         for mode in 0..=3 {
             let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
@@ -3061,12 +3196,61 @@ mod tests {
     }
 
     #[test]
+    fn player_look_at_round_trips() {
+        let at_point = PlayerLookAt {
+            from: 1,
+            target: [1.5, 64.0, -2.25],
+            entity: None,
+        };
+        let at_entity = PlayerLookAt {
+            from: 0,
+            target: [0.0, 70.0, 0.0],
+            entity: Some(LookAtEntity { id: 42, anchor: 1 }),
+        };
+        for p in [at_point, at_entity] {
+            let bytes = Clientbound::PlayerLookAt(p.clone()).encode();
+            // 1 id byte, 1 anchor, 3 doubles, the flag; the entity adds 2 VarInts.
+            let len = 1 + 1 + 24 + 1 + if p.entity.is_some() { 2 } else { 0 };
+            assert_eq!(bytes.len(), len);
+            assert_eq!(
+                Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &bytes[1..])
+                    .unwrap(),
+                Clientbound::PlayerLookAt(p)
+            );
+        }
+    }
+
+    /// ClientboundSetCameraPacket: one VarInt, the camera entity's id.
+    #[test]
+    fn set_camera_is_the_camera_entity_id() {
+        // 300 as a VarInt: 0xAC 0x02.
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::SET_CAMERA, &[0xAC, 0x02]).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert!(format!("{p:?}").contains("camera_id: 300"), "{p:?}");
+        assert_eq!(p.encode()[1..], [0xAC, 0x02]);
+    }
+
+    /// ServerboundSpectatorActionPacket: `OPTIONAL_VAR_INT`, the clicked
+    /// entity's id plus one, or 0 for a click on nothing.
+    #[test]
+    fn spectator_action_is_an_optional_entity_id() {
+        let id = crate::ids::play::serverbound::SPECTATOR_ACTION;
+        for (bytes, shown) in [([8u8], "Some(7)"), ([0u8], "None")] {
+            let p = Serverbound::decode(id, &bytes).unwrap();
+            assert!(!matches!(p, Serverbound::Unknown(..)), "{p:?}");
+            assert!(format!("{p:?}").contains(shown), "{p:?}");
+            assert_eq!(p.encode()[1..], bytes);
+        }
+    }
+
+    #[test]
     fn unknown_packets_keep_their_payload() {
         let p =
-            Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &[1, 2, 3]).unwrap();
+            Clientbound::decode(crate::ids::play::clientbound::DEBUG_SAMPLE, &[1, 2, 3]).unwrap();
         assert_eq!(
             p,
-            Clientbound::Unknown(crate::ids::play::clientbound::PLAYER_LOOK_AT, vec![1, 2, 3])
+            Clientbound::Unknown(crate::ids::play::clientbound::DEBUG_SAMPLE, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
     }

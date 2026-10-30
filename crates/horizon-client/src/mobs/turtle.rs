@@ -3,9 +3,8 @@
 //! (`TurtleLayEggGoal`). `extra.flag` is `hasEgg`, `extra.flag2` `isLayingEgg`,
 //! `extra.counter` `layEggCounter`, `extra.home` `homePos`, `extra.counter2`
 //! `goingHome` and `extra.point` `travelPos`. Its own `TurtleMoveControl`
-//! sets the speed it walks and swims at. Not ported yet: `Turtle.travelInWater`
-//! (swimming still uses the generic fluid travel), so movement in water still
-//! differs from vanilla.
+//! sets the speed it walks and swims at, and `travel` swims with its own
+//! `travelInWater`.
 use super::{
     Mob, MobEvent, MobWorld,
     control::{EPSILON, Operation, rotlerp},
@@ -17,7 +16,10 @@ use super::{
     path::PathType,
 };
 use crate::blocks::Fluid;
-use horizon_core::{geometry::trig, random::RandomSource};
+use horizon_core::{
+    geometry::{Vec3, trig},
+    random::RandomSource,
+};
 
 /// `Turtle.registerGoals`, and the path maluses and navigation `Turtle` and
 /// `TurtlePathNavigation` give it.
@@ -146,6 +148,21 @@ pub fn move_control(m: &mut Mob) {
     // Mth.lerp(0.125F, getSpeed(), wanted).
     m.set_speed(m.ai.speed + 0.125 * (wanted - m.ai.speed));
     m.velocity.y += f64::from(m.ai.speed) * (yd / dist) * 0.1;
+}
+/// `Turtle.travelInWater`: swims at 0.1 move speed with 0.9 drag, and sinks
+/// slowly unless it has a target or is going home and near its home. On
+/// land the usual travel.
+pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
+    if !m.fluids.in_water {
+        return false;
+    }
+    m.move_relative(0.1, input);
+    m.do_move(w, events);
+    m.velocity = m.velocity.scale(0.9);
+    if m.ai.target.is_none() && (!going_home(m) || !close_to_home(m, 20.0)) {
+        m.velocity.y -= 0.005;
+    }
+    true
 }
 /// `Turtle.aiStep`: while digging, sand crumbs fly every fifth tick.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -540,6 +557,47 @@ mod tests {
         assert!(!m.ai.jump);
         assert_eq!(m.ai.mov.operation, Operation::MoveTo);
         assert_eq!(m.velocity.y, 0.0);
+    }
+
+    #[test]
+    fn the_leg_animation_runs_at_vanilla_s_rate() {
+        // LivingEntity.updateWalkAnimation turns the distance a tick into
+        // min(distance * 4, 1), and TurtleModel.setupAnim swings the legs
+        // by 8 * that speed, so the rate of the walk animation is the rate
+        // of the walk. The turtle walks at its own pace, so the animation
+        // runs at vanilla's rate instead of at the maximum (#1776).
+        let mut m = strolling_turtle();
+        let mut last = m.position;
+        let mut distance = 0.0_f64;
+        for _ in 0..40 {
+            // Entity.tick keeps the position the tick started at.
+            m.previous = last;
+            // TurtleMoveControl.tick: the forward input.
+            move_control(&mut m);
+            // LivingEntity.travelInAir on grass: the friction influenced
+            // speed is the input speed (grass' friction is 0.6, so it is
+            // not above it), the move uses the motion as it is, and the
+            // motion is then scaled by the friction (0.6) times the air
+            // drag (0.91). The move itself needs a world, so the flat
+            // ground is stepped here.
+            m.move_relative(m.ai.speed, Vec3::new(0.0, 0.0, 1.0));
+            m.position.x += m.velocity.x;
+            m.position.z += m.velocity.z;
+            let drag = f64::from(0.6_f32 * 0.91_f32);
+            m.velocity.x *= drag;
+            m.velocity.z *= drag;
+            // LivingEntity.updateWalkAnimation.
+            m.update_walk_animation();
+            distance = (m.position.x - m.previous.x).hypot(m.position.z - m.previous.z);
+            last = m.position;
+        }
+        // The ground speed: the input (0.06 + 0.125 * (0.25 - 0.06) =
+        // 0.08375) over one minus the drag (0.546) = 0.18447 blocks a tick.
+        assert!((distance - 0.083_75 / (1.0 - 0.546)).abs() < 1.0e-6);
+        // min(distance * 4, 1) for that pace: 0.73789. The generic
+        // MoveControl walked the turtle at the full 0.25, which put it at
+        // 0.55066 blocks a tick and saturated the walk animation at 1.0.
+        assert!((m.limb_speed - 0.737_885_5).abs() < 1.0e-6);
     }
 
     #[test]

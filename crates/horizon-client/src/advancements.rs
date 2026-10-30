@@ -5,7 +5,8 @@
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,8 +67,36 @@ fn frame(v: &Value) -> Frame {
     }
 }
 impl Tree {
+    /// [`Tree::load`], shared while anyone holds it: a server's advancement
+    /// packets (`ServerAdvancements`) and its game's criteria read the same
+    /// files, and each kept its own copy (7 MB). A world whose data packs bring
+    /// advancements gets its own tree ([`Tree::load_with`]).
+    pub fn shared(data: &Path, overlay: &horizon_world::loot::PackOverlay) -> Arc<Tree> {
+        if overlay.kind("advancement").next().is_some() {
+            return Arc::new(Tree::load_with(data, overlay));
+        }
+        static TREES: Mutex<Vec<(PathBuf, Weak<Tree>)>> = Mutex::new(Vec::new());
+        // Held while loading: a second reader waits for the first one's tree.
+        let mut trees = TREES.lock().unwrap_or_else(|e| e.into_inner());
+        trees.retain(|(_, tree)| tree.strong_count() > 0);
+        if let Some(tree) = trees
+            .iter()
+            .find(|(path, _)| path == data)
+            .and_then(|(_, tree)| tree.upgrade())
+        {
+            return tree;
+        }
+        let tree = Arc::new(Tree::load(data));
+        trees.push((data.to_path_buf(), Arc::downgrade(&tree)));
+        tree
+    }
     /// Loads `<data>/<namespace>/advancement/**/*.json`.
     pub fn load(data: &Path) -> Tree {
+        Self::load_with(data, &horizon_world::loot::PackOverlay::NONE)
+    }
+    /// The tree with a world's data packs' advancement files over the game's
+    /// own: the top pack's file for each id replaces it.
+    pub fn load_with(data: &Path, overlay: &horizon_world::loot::PackOverlay) -> Tree {
         let mut tree = Tree::default();
         let Ok(namespaces) = std::fs::read_dir(data) else {
             return tree;
@@ -77,6 +106,8 @@ impl Tree {
             let root = ns.path().join("advancement");
             collect(&root, &root, &ns.file_name().to_string_lossy(), &mut files);
         }
+        // One JSON per id, the packs' over the game's own.
+        let mut json: BTreeMap<String, Value> = BTreeMap::new();
         files.sort();
         for (id, path) in files {
             let Ok(text) = std::fs::read_to_string(&path) else {
@@ -85,6 +116,17 @@ impl Tree {
             let Ok(v) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
+            json.insert(id, v);
+        }
+        for (id, files) in overlay.kind("advancement") {
+            match serde_json::from_slice::<Value>(horizon_world::loot::PackOverlay::top(files)) {
+                Ok(v) => {
+                    json.insert(id.to_owned(), v);
+                }
+                Err(e) => log::warn!("Horizon: pack advancement {id} not loaded: {e}"),
+            }
+        }
+        for (id, v) in json {
             if let Some(a) = parse(&id, &v) {
                 let index = tree.list.len();
                 for (ci, c) in a.criteria.iter().enumerate() {
@@ -444,6 +486,8 @@ pub struct EntityView {
     pub gamemode: Option<String>,
     /// Lightning: entities it struck.
     pub struck: Vec<EntityView>,
+    /// Lightning: blocks it set on fire (`LightningBolt.blocksSetOnFire`).
+    pub blocks_set_on_fire: i32,
     pub fishing_open_water: Option<bool>,
     pub variant: Option<String>,
     /// The data components the entity reports (`Entity.get`): id and value.
@@ -535,6 +579,11 @@ pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
     let comps = &v["components"];
     if let Some(p) = comps["minecraft:potion_contents"].as_str()
         && it.potion.as_deref() != Some(p)
+    {
+        return false;
+    }
+    if let Some(d) = comps["minecraft:damage"].as_u64()
+        && u64::from(it.damage) != d
     {
         return false;
     }
@@ -734,7 +783,7 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                         .is_some_and(|t| entity(&p["looking_at"], t, w, origin)))
             }
             "minecraft:type_specific/lightning" => {
-                range_i(&p["blocks_set_on_fire"], 0)
+                range_i(&p["blocks_set_on_fire"], i64::from(e.blocks_set_on_fire))
                     && (p["entity_struck"].is_null()
                         || e.struck
                             .iter()
@@ -818,7 +867,13 @@ pub fn damage(v: &Value, d: &DamageView, w: &dyn World, origin: [f64; 3]) -> boo
     {
         return false;
     }
-    let ty = &v["type"];
+    damage_source(&v["type"], d, w, origin)
+}
+/// `DamageSourcePredicate`: the damage type's tags and the entities behind it.
+pub fn damage_source(ty: &Value, d: &DamageView, w: &dyn World, origin: [f64; 3]) -> bool {
+    if ty.is_null() {
+        return true;
+    }
     let tags_ok = ty["tags"].as_array().into_iter().flatten().all(|t| {
         let tag = t["id"].as_str().unwrap_or("");
         let tag = tag.strip_prefix('#').unwrap_or(tag);
@@ -862,6 +917,22 @@ pub fn item_entity(
     conditions(&v["player"], &pctx, w)
         && conditions(&v["entity"], &ectx, w)
         && item(&v["item"], stack, w)
+}
+
+/// `RecipeCraftedTrigger.TriggerInstance.matches`: each ingredient predicate
+/// takes a different one of the stacks used, in order.
+pub fn recipe_ingredients(v: &Value, used: &[ItemView], w: &dyn World) -> bool {
+    let Some(preds) = v.as_array() else {
+        return true;
+    };
+    let mut remaining: Vec<&ItemView> = used.iter().collect();
+    preds.iter().all(|p| {
+        let Some(i) = remaining.iter().position(|it| item(p, it, w)) else {
+            return false;
+        };
+        remaining.remove(i);
+        true
+    })
 }
 
 /// A `ContextAwarePredicate`: a list of loot conditions (or one condition).
@@ -1326,7 +1397,46 @@ mod tests {
         fn in_tag(&self, _: &str, tag: &str, id: &str) -> bool {
             (tag == "minecraft:stone_tool_materials" && id == "minecraft:cobblestone")
                 || (tag == "minecraft:sulfur_cube_archetype/explosive" && id == "minecraft:tnt")
+                || (tag == "minecraft:is_projectile"
+                    && matches!(id, "minecraft:fireball" | "minecraft:arrow"))
         }
+    }
+    /// Return to Sender's `killing_blow`: only the ghast's own fireball, as a
+    /// projectile, kills it for the advancement; a sword or an arrow does not.
+    #[test]
+    fn killing_blow_needs_the_fireball() {
+        let blow = serde_json::json!({
+            "direct_entity": {"minecraft:entity_type": "minecraft:fireball"},
+            "tags": [{"expected": true, "id": "#minecraft:is_projectile"}]
+        });
+        let entity = |kind: &str| EntityView {
+            kind: kind.into(),
+            ..Default::default()
+        };
+        let player = entity("minecraft:player");
+        let fireball = DamageView {
+            kind: "minecraft:fireball".into(),
+            direct: Some(entity("minecraft:fireball")),
+            source: Some(player.clone()),
+            ..Default::default()
+        };
+        assert!(damage_source(&blow, &fireball, &Flat, [0.0; 3]));
+        let sword = DamageView {
+            kind: "minecraft:player_attack".into(),
+            direct: Some(player.clone()),
+            source: Some(player.clone()),
+            is_direct: true,
+            ..Default::default()
+        };
+        assert!(!damage_source(&blow, &sword, &Flat, [0.0; 3]));
+        let arrow = DamageView {
+            kind: "minecraft:arrow".into(),
+            direct: Some(entity("minecraft:arrow")),
+            source: Some(player),
+            ..Default::default()
+        };
+        assert!(!damage_source(&blow, &arrow, &Flat, [0.0; 3]));
+        assert!(damage_source(&Value::Null, &sword, &Flat, [0.0; 3]));
     }
     #[test]
     fn uh_oh_accepts_either_tnt_event_only_for_adult_sulfur_cubes() {

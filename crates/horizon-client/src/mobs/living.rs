@@ -19,12 +19,15 @@ use horizon_world::{
     registry::BlockStateId,
 };
 
-/// `Entity.moveDist`, `flyDist` and `nextStep`.
+/// `Entity.moveDist`, `flyDist`, `nextStep` and `Parrot.nextFlap`.
 #[derive(Clone, Copy, Debug)]
 pub struct Steps {
     pub move_dist: f32,
     pub fly_dist: f32,
     pub next_step: f32,
+    pub next_flap: f32,
+    /// `AbstractHorse.gallopSoundCounter`.
+    pub gallop: i32,
 }
 impl Default for Steps {
     fn default() -> Self {
@@ -32,6 +35,8 @@ impl Default for Steps {
             move_dist: 0.0,
             fly_dist: 0.0,
             next_step: 1.0,
+            next_flap: 1.0,
+            gallop: 0,
         }
     }
 }
@@ -385,6 +390,17 @@ impl Mob {
         if super::villager::sleeping(self) {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
+        self.awake_dims()
+    }
+    /// `dims` without the sleeping box: a sleeping villager's
+    /// `getDimensions(Pose.STANDING)`, whose eye height lays it in the bed
+    /// (`LivingEntityRenderer.submit`).
+    pub fn awake_dims(&self) -> (f64, f64, f64) {
+        self.awake_dims_in(self.extra.pose == super::sync::LONG_JUMPING)
+    }
+    /// `Entity.getDimensions(Pose)` of the standing pose, or of
+    /// `Pose.LONG_JUMPING` (what `LongJumpUtil` checks an arc with).
+    pub fn awake_dims_in(&self, long_jumping: bool) -> (f64, f64, f64) {
         let k = &self.kind;
         // Avatar.POSES: a player's or mannequin's box follows its pose.
         if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
@@ -411,6 +427,10 @@ impl Mob {
                 }
                 super::species::Baby::None => {}
             }
+        }
+        // Goat.getDefaultDimensions: a long jump scales the box by 0.7.
+        if long_jumping && k.species == super::Species::Goat {
+            (w, h, e) = (w * 0.7_f32, h * 0.7_f32, e * 0.7_f32);
         }
         // Warden.getDefaultDimensions: a metre tall while digging or emerging.
         if self.kind.species == super::Species::Warden && super::warden::digging_or_emerging(self) {
@@ -706,7 +726,11 @@ impl Mob {
                 && (self.on_ground || climbable)
                 && !self.fluids_swimming();
             if produced {
-                if let Some((sound, volume, pitch)) =
+                if super::equine::hoof_steps(self.species()) {
+                    if !self.silent {
+                        super::equine::play_step(self, w, legacy, legacy_state, events);
+                    }
+                } else if let Some((sound, volume, pitch)) =
                     super::ai::step_sound(self, w, legacy, legacy_state)
                     && !self.silent
                 {
@@ -746,6 +770,22 @@ impl Mob {
                     ));
                 }
             }
+        } else if w.facts.is_air(state)
+            && self.species() == super::Species::Bee
+            && !self.on_ground
+            && self.age.is_multiple_of(2)
+        {
+            // Entity.processFlappingMovement: a flying bee beats its wings on
+            // every other tick (Bee.isFlapping, TICKS_PER_FLAP is 2).
+            events.push(MobEvent::GameEvent {
+                event: "minecraft:flap",
+                at: [self.position.x, self.position.y, self.position.z],
+                source: self.id,
+                state: horizon_world::registry::BlockStateId(0),
+            });
+        } else if w.facts.is_air(state) && self.species() == super::Species::Parrot {
+            // Entity.processFlappingMovement: a move ending in the air.
+            super::parrot::process_flapping(self, events);
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
@@ -852,23 +892,44 @@ impl Mob {
         if self.species() == super::Species::Creeper {
             self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
         }
+        // AbstractHorse.causeFallDamage (llamas override it): a landing of more
+        // than a block thuds, and the horse's fall makes no generic fall sound.
+        let thud =
+            super::equine::is_equine(self.species()) && !super::llama::is_llama(self.species());
+        if thud && self.fall_distance > 1.0 && !self.silent {
+            let at = [self.position.x, self.position.y, self.position.z];
+            let sound = if self.is_baby() {
+                "entity.baby_horse.land"
+            } else {
+                "entity.horse.land"
+            };
+            events.push(MobEvent::Sound(sound, at, 0.4, 1.0));
+        }
         if self.kind.flags.fall_immune {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
         let mut damage = (power * self.kind.fall_damage_multiplier).floor();
-        // Frog.calculateFallDamage: five points less than the base damage.
-        if self.species() == super::Species::Frog {
-            damage -= 5.0;
+        // Frog.calculateFallDamage: five points less than the base damage;
+        // Goat.calculateFallDamage: ten, so a long jump down a ledge is safe.
+        match self.species() {
+            super::Species::Frog => damage -= 5.0,
+            super::Species::Goat => damage -= 10.0,
+            _ => {}
         }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
-            let sound = if damage > 4.0 {
-                "entity.generic.big_fall"
-            } else {
-                "entity.generic.small_fall"
+            // Monster.getFallSounds: the hostile pair.
+            let monster = super::ai::is_monster(self.species());
+            let sound = match (monster, damage > 4.0) {
+                (true, true) => "entity.hostile.big_fall",
+                (true, false) => "entity.hostile.small_fall",
+                (false, true) => "entity.generic.big_fall",
+                (false, false) => "entity.generic.small_fall",
             };
-            events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            if !thud {
+                events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            }
             self.damage(damage as f32, super::Damage::fall());
         }
     }
@@ -925,12 +986,33 @@ impl Mob {
         } else {
             0.02
         };
+        self.travel_flying_speeds(
+            w,
+            input,
+            events,
+            fluid_speed,
+            fluid_speed,
+            self.kind.air_speed,
+        );
+    }
+    /// `LivingEntity.travelFlying(input, waterSpeed, lavaSpeed, airSpeed)`:
+    /// the speeds vary per mob (an allay flies at the speed its move control
+    /// set, `Allay.travel`).
+    pub fn travel_flying_speeds(
+        &mut self,
+        w: &MobWorld,
+        input: Vec3,
+        events: &mut Vec<MobEvent>,
+        water_speed: f32,
+        lava_speed: f32,
+        air_speed: f32,
+    ) {
         let (speed, drag) = if self.fluids.in_water {
-            (fluid_speed, f64::from(0.8_f32))
+            (water_speed, f64::from(0.8_f32))
         } else if self.fluids.in_lava {
-            (fluid_speed, 0.5)
+            (lava_speed, 0.5)
         } else {
-            (self.kind.air_speed, f64::from(0.91_f32))
+            (air_speed, f64::from(0.91_f32))
         };
         self.move_relative(speed, input);
         self.do_move(w, events);
@@ -1008,8 +1090,12 @@ impl Mob {
         } else {
             y -= self.gravity();
         }
-        // LivingEntity.shouldDiscardFriction (a breeze's long jump).
-        if super::breeze::discards_friction(self) {
+        // LivingEntity.shouldDiscardFriction (a breeze's, a frog's or a goat's
+        // long jump).
+        if super::breeze::discards_friction(self)
+            || self.extra.frog.discard_friction
+            || self.extra.goat.discard_friction
+        {
             self.velocity = Vec3::new(movement.x, y, movement.z);
             return;
         }
@@ -1032,7 +1118,11 @@ impl Mob {
         let old_y = self.position.y;
         let gravity = self.gravity();
         if self.fluids.in_water {
-            let mut slow = self.kind.water_slowdown;
+            let mut slow = if self.extra.sprinting {
+                0.9
+            } else {
+                self.kind.water_slowdown
+            };
             let mut speed = 0.02f32;
             let mut efficiency = self.kind.water_efficiency as f32;
             if !self.on_ground {
@@ -1053,7 +1143,7 @@ impl Mob {
                 m.y * f64::from(0.8_f32),
                 m.z * f64::from(slow),
             );
-            self.velocity = fluid_falling(gravity, falling, m);
+            self.velocity = fluid_falling(gravity, falling, self.extra.sprinting, m);
         } else {
             self.move_relative(0.02, input);
             self.do_move(w, events);
@@ -1063,7 +1153,8 @@ impl Mob {
                     self.velocity.y * f64::from(0.8_f32),
                     self.velocity.z * 0.5,
                 );
-                self.velocity = fluid_falling(gravity, falling, self.velocity);
+                self.velocity =
+                    fluid_falling(gravity, falling, self.extra.sprinting, self.velocity);
             } else {
                 self.velocity = Vec3::new(
                     self.velocity.x * 0.5,
@@ -1163,6 +1254,12 @@ impl Mob {
         let power = self.jump_power();
         if power > 1.0e-5 {
             self.velocity.y = f64::from(power).max(self.velocity.y);
+            // A sprint jump (a dashing cat or ocelot) adds 0.2 along its yaw.
+            if self.extra.sprinting {
+                let angle = f64::from(self.yaw * trig::DEG_TO_RAD);
+                self.velocity.x += f64::from(-trig::sin(angle)) * 0.2;
+                self.velocity.z += f64::from(trig::cos(angle)) * 0.2;
+            }
         }
     }
     pub fn jump_power(&self) -> f32 {
@@ -1183,6 +1280,8 @@ impl Mob {
             // Creaking.updateWalkAnimation walks the model faster.
             let target = if self.species() == super::Species::Creaking {
                 (distance * 25.0).min(3.0)
+            } else if self.species() == super::Species::Frog {
+                super::frog::walk_target(self, distance)
             } else {
                 (distance * 4.0).min(1.0)
             };
@@ -1194,8 +1293,8 @@ impl Mob {
     }
 }
 /// LivingEntity.getFluidFallingAdjustedMovement.
-fn fluid_falling(gravity: f64, falling: bool, m: Vec3) -> Vec3 {
-    if gravity != 0.0 {
+fn fluid_falling(gravity: f64, falling: bool, sprinting: bool, m: Vec3) -> Vec3 {
+    if gravity != 0.0 && !sprinting {
         let y = if falling && (m.y - 0.005).abs() >= 0.003 && (m.y - gravity / 16.0).abs() < 0.003 {
             -0.003
         } else {

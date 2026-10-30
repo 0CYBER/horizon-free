@@ -23,61 +23,7 @@ use horizon_core::{
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
 
-/// A `natural_mob_spawns` / `spawn_overrides` entry list.
-pub fn parse_entries(list: &Value) -> Vec<SpawnEntry> {
-    list.as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|e| {
-            let count = &e["count"];
-            let (min, max, constant) = match count {
-                Value::Number(n) => {
-                    let n = n.as_u64().unwrap_or(1) as u32;
-                    (n, n, true)
-                }
-                c if c["type"].as_str() == Some("minecraft:constant") => {
-                    let n = c["value"].as_u64().unwrap_or(1) as u32;
-                    (n, n, true)
-                }
-                c => (
-                    c["min_inclusive"].as_u64().unwrap_or(1) as u32,
-                    c["max_inclusive"].as_u64().unwrap_or(1) as u32,
-                    false,
-                ),
-            };
-            Some(SpawnEntry {
-                entity: e["type"].as_str()?.to_owned(),
-                weight: e["weight"].as_u64().unwrap_or(1) as u32,
-                min,
-                max,
-                constant,
-            })
-        })
-        .collect()
-}
-/// `MobSpawnSettings.MobSpawnCost`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpawnCost {
-    pub energy_budget: f64,
-    pub charge: f64,
-}
-/// The `spawn_costs` of a `natural_mob_spawns` value.
-pub fn parse_costs(costs: &Value) -> HashMap<String, SpawnCost> {
-    costs
-        .as_object()
-        .into_iter()
-        .flatten()
-        .map(|(k, c)| {
-            (
-                k.clone(),
-                SpawnCost {
-                    energy_budget: c["energy_budget"].as_f64().unwrap_or(0.0),
-                    charge: c["charge"].as_f64().unwrap_or(0.0),
-                },
-            )
-        })
-        .collect()
-}
+pub use crate::biome::{SpawnCost, parse_costs, parse_entries};
 
 /// `MobCategory`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -593,18 +539,21 @@ pub fn spawn_aabb(s: Species, x: f64, y: f64, z: f64, width: f32, height: f32) -
         Vec3::new(x + half, y + f64::from(scale * height), z + half),
     )
 }
-/// `checkSpawnObstruction` of a freshly created mob with the given box.
+/// `checkSpawnObstruction` of a freshly created mob with the given box, with
+/// the mobs already `spawned` in the way; None in a generation region, which
+/// has no entities (`WorldGenRegion.getEntities`).
 pub(crate) fn spawn_obstruction<L: NaturalLevel>(
     s: Species,
     l: &L,
     bounds: Aabb,
-    spawned: &[Aabb],
+    spawned: Option<&[Aabb]>,
     x: i32,
     y: i32,
     z: i32,
 ) -> bool {
-    let unobstructed =
-        |l: &L| l.unobstructed(bounds) && !spawned.iter().any(|b| b.intersects(bounds));
+    let unobstructed = |l: &L| {
+        spawned.is_none_or(|s| l.unobstructed(bounds) && !s.iter().any(|b| b.intersects(bounds)))
+    };
     match obstruction(s) {
         Obstruction::NoLiquidUnobstructed => !contains_any_liquid(l, bounds) && unobstructed(l),
         Obstruction::Unobstructed => unobstructed(l),
@@ -1138,7 +1087,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
             let far = distance > despawn && removed_when_far(species);
             if far
                 || !mob_spawn_rules(species, l, x, y, z)
-                || !spawn_obstruction(species, l, bounds, &spawned, x, y, z)
+                || !spawn_obstruction(species, l, bounds, Some(&spawned), x, y, z)
             {
                 continue;
             }
@@ -1291,8 +1240,8 @@ pub enum GenEvent {
     Spawn(String, [f64; 3], f32),
 }
 /// `NaturalSpawner.spawnMobsForChunkGeneration`: creature packs placed on
-/// the chunk's surface. `rules` is the level's own random, which the spawn
-/// predicates draw from.
+/// the chunk's surface. `rules` is the region's random, which the spawn
+/// predicates and `spawn` (finalizeSpawn) draw from.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: RandomSource>(
     l: &L,
@@ -1300,7 +1249,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
     chunk: (i32, i32),
     random: &mut R,
     rules: &mut Q,
-    spawn: &mut dyn FnMut(&L, &SpawnRequest) -> Option<Spawned>,
+    spawn: &mut dyn FnMut(&L, &SpawnRequest, &mut Q) -> bool,
     trace: &mut dyn FnMut(GenEvent),
 ) {
     if !l.spawn_mobs() {
@@ -1323,7 +1272,6 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
         };
         let count = sample_count(&entry, random);
         let mut group_index = 0u32;
-        let mut spawned: Vec<Aabb> = Vec::new();
         let mut x = xo + random.next_int_bound(16).unwrap_or(0);
         let mut z = zo + random.next_int_bound(16).unwrap_or(0);
         let (start_x, start_z) = (x, z);
@@ -1365,7 +1313,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                     let yaw = random.next_float() * 360.0;
                     let bounds = spawn_box(fx, fy, fz, width, height);
                     if mob_spawn_rules(species, l, bx, pos[1], bz)
-                        && spawn_obstruction(species, l, bounds, &spawned, bx, pos[1], bz)
+                        && spawn_obstruction(species, l, bounds, None, bx, pos[1], bz)
                     {
                         let request = SpawnRequest {
                             entity: &entry.entity,
@@ -1375,9 +1323,8 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                             group_index,
                             reason: Reason::ChunkGeneration,
                         };
-                        if let Some(result) = spawn(l, &request) {
+                        if spawn(l, &request, rules) {
                             group_index += 1;
-                            spawned.push(result.bounds);
                             trace(GenEvent::Spawn(entry.entity.clone(), [fx, fy, fz], yaw));
                             success = true;
                         }

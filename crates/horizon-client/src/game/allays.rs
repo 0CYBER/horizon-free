@@ -2,7 +2,11 @@
 //! throwing their load to the player or note block, dancing to jukeboxes,
 //! and the hand-over interaction (`Allay.mobInteract`).
 use super::Game;
-use horizon_client::{containers::BlockEntity, items::ItemStack, mobs::Species};
+use horizon_client::{
+    containers::BlockEntity,
+    items::ItemStack,
+    mobs::{Species, allay},
+};
 use horizon_core::random::RandomSource;
 
 impl Game<'_> {
@@ -89,6 +93,16 @@ impl Game<'_> {
             }
         }
     }
+    /// The UUID of the player an allay likes (`LIKED_PLAYER`).
+    fn allay_liked_uuid(&self, i: usize) -> [i32; 4] {
+        // An allay saved before its player was kept belongs to the host.
+        self.mobs[i]
+            .extra
+            .owner
+            .filter(|u| *u != [0, 0, 0, 1])
+            .or(self.level.player_uuid)
+            .unwrap_or([0, 0, 0, 1])
+    }
     /// `AllayAi.getLikedPlayer`: the player the allay was given an item by,
     /// found by UUID among the host and the guests of the level (the window
     /// is a guest on the server thread), when they are not a spectator and
@@ -98,13 +112,7 @@ impl Game<'_> {
         if !m.extra.tame {
             return None;
         }
-        // An allay saved before its player was kept belongs to the host.
-        let uuid = m
-            .extra
-            .owner
-            .filter(|u| *u != [0, 0, 0, 1])
-            .or(self.level.player_uuid)
-            .unwrap_or([0, 0, 0, 1]);
+        let uuid = self.allay_liked_uuid(i);
         let host = self
             .player_view()
             .filter(|p| !p.spectator && self.level.player_uuid.unwrap_or([0, 0, 0, 1]) == uuid)
@@ -127,14 +135,20 @@ impl Game<'_> {
         if m.extra.ints[1] <= 0 {
             return;
         }
+        // AllayAi.getItemDepositPosition: the liked note block, else the player.
+        let dimension = self.dim.id();
+        let noteblock = allay::noteblock_deposit(&mut self.mobs[i], dimension, |p| {
+            &*self
+                .res
+                .facts()
+                .get(self.world.block(p[0], p[1], p[2]))
+                .name
+                == "minecraft:note_block"
+        });
         let player = self.allay_liked_player(i);
         let m = &self.mobs[i];
-        let target = match m.extra.home.filter(|_| m.extra.ints[2] > 0) {
-            Some(h) => horizon_core::geometry::Vec3::new(
-                f64::from(h[0]) + 0.5,
-                f64::from(h[1]) + 1.0,
-                f64::from(h[2]) + 0.5,
-            ),
+        let target = match noteblock {
+            Some(p) => horizon_core::geometry::Vec3::new(p[0], p[1], p[2]),
             None => match player.filter(|_| m.extra.tame) {
                 Some(p) => p,
                 None => return,
@@ -159,11 +173,29 @@ impl Game<'_> {
         ];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
         let v = [d[0] / len * 0.2, d[1] / len * 0.3, d[2] / len * 0.2];
+        // AllayAi.throwItem: the liked player hears of the block below the deposit.
+        let below = [
+            target.x.floor() as i32,
+            (target.y - 1.0).floor() as i32,
+            target.z.floor() as i32,
+        ];
+        let uuid = self.allay_liked_uuid(i);
+        let stack = ItemStack::new(&item, 1);
+        self.for_each_player(|g| {
+            if g.acting_uuid() == uuid && !g.spectator() {
+                g.trigger_block("minecraft:allay_drop_item_on_block", below, &stack);
+            }
+        });
         let m = &mut self.mobs[i];
         m.extra.ints[1] -= 1;
         m.extra.ints[3] = 60;
         // ItemEntity.setDefaultPickUpDelay.
         self.spawn_item(ItemStack::new(&item, 1), from, v, 10);
+        // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
+        let allay = self.mob_uuid(self.mobs[i].id);
+        if let Some(thrown) = self.dropped.last_mut() {
+            thrown.thrower = Some(allay);
+        }
         if self.world.game_time % 7 == 0 && self.world.random.next_double() < 0.9 {
             const PITCHES: [f32; 16] = [
                 0.5625, 0.625, 0.75, 0.9375, 1.0, 1.0, 1.125, 1.25, 1.5, 1.875, 2.0, 2.25, 2.5,
@@ -202,7 +234,7 @@ impl Game<'_> {
         let holds = m.extra.main_hand.is_some();
         if !holds && !item.is_empty() {
             let m = &mut self.mobs[index];
-            m.extra.main_hand = Some(item.into());
+            m.extra.set_main_hand(Some(item.into()));
             m.extra.tame = true;
             // `Allay.mobInteract` remembers LIKED_PLAYER by UUID.
             m.extra.owner = Some(acting);

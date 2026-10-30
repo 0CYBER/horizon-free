@@ -16,6 +16,7 @@ use super::{
     nav::NavKind,
     path::PathType,
 };
+use crate::beehive::BeehiveExt;
 use horizon_core::random::{LegacyRandom, RandomSource};
 use std::collections::HashMap;
 
@@ -207,6 +208,12 @@ pub fn stop_being_angry(m: &mut Mob) {
     let b = st(m);
     b.angry_at = None;
     b.anger_end = -1;
+}
+/// `NeutralMob.playerDied`: the anger at the player who died ends.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if get(m).and_then(|b| b.angry_at) == Some(Who::Player) {
+        stop_being_angry(m);
+    }
 }
 /// `Bee.startPersistentAngerTimer`: 20 to 39 seconds.
 fn start_anger_timer(m: &mut Mob, w: &MobWorld) {
@@ -939,7 +946,7 @@ impl GoToHive {
         let close_enough = if closer_than(m, p, 3) { 1 } else { 2 };
         m.ai.nav.max_visited_multiplier = 10.0;
         let path = m.create_path_to(w, p, close_enough);
-        m.nav_move_to_path(path, 1.0);
+        m.nav_move_to_path(w, path, 1.0);
         m.ai.nav.path.as_ref().is_some_and(|path| path.reached)
     }
 }
@@ -1181,7 +1188,7 @@ impl Goal for Wander {
                 at[2].floor() as i32,
             ];
             let path = m.create_path_to(cx.w, p, 1);
-            m.nav_move_to_path(path, 1.0);
+            m.nav_move_to_path(cx.w, path, 1.0);
         }
     }
 }

@@ -78,6 +78,18 @@ impl Dimensions {
     }
 }
 impl PlayerMotion {
+    /// `LivingEntity.aiStep` counting down `autoSpinAttackTicks` for a
+    /// server's copy of a player, which runs no client tick: the spin ends
+    /// after its ticks and its damage goes with it, so the pose (and the eye
+    /// a bow or a trident is shot from) comes back to standing.
+    pub fn count_down_server_spin(&mut self) {
+        if self.auto_spin_attack_ticks > 0 {
+            self.auto_spin_attack_ticks -= 1;
+            if self.auto_spin_attack_ticks <= 0 {
+                self.auto_spin_attack_dmg = 0.0;
+            }
+        }
+    }
     pub fn dimensions_for_pose(&mut self, pose: Pose) -> Result<Dimensions> {
         Ok(pose.dimensions(self.attribute("minecraft:scale")? as f32))
     }
@@ -154,5 +166,24 @@ impl MotionWorld<'_, '_, '_> {
             Pose::Swimming
         };
         self.player.set_pose(pose)
+    }
+    /// The end of a server's copy of a player's tick (`ServerPlayer.doTick`
+    /// runs `Player.tick`): `LivingEntity.aiStep` counts a Riptide spin down,
+    /// `LivingEntity.tick` then runs `refreshDirtyAttributes` (a changed
+    /// `minecraft:scale` rebuilds the box, `onAttributeUpdated`), and
+    /// `Player.tick` ends with `updatePlayerPose`. The server checks the
+    /// player's moves with that box (#3684).
+    pub fn server_player_pose_tick(&mut self) -> Result<()> {
+        self.player.count_down_server_spin();
+        self.player.refresh_attributes()?;
+        self.update_player_pose()
+    }
+    /// The pose part of `Player.tick` for a passenger (`Entity.rideTick` runs
+    /// `tick`, not the travel): `Entity.updateSwimming` stops a swim, since it
+    /// needs `!isPassenger()`, and `updatePlayerPose` follows. A player who
+    /// boards a boat while swimming sits up instead of lying under it (#3308).
+    pub fn passenger_pose_tick(&mut self) -> Result<()> {
+        self.player.swimming = false;
+        self.update_player_pose()
     }
 }

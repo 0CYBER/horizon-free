@@ -4,7 +4,8 @@
 //! what its server sends, a server for a creative client's
 //! `SetCreativeModeSlot`. The other direction is `lan::guest::stack_to_network`.
 use crate::items::ItemStack;
-use horizon_protocol::item::{Component, Profile, Stack, component};
+use horizon_protocol::buf::{Codec, Reader};
+use horizon_protocol::item::{Component, Profile, Stack, Template, component};
 use horizon_protocol::registry::{Builtin, Dynamic};
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
@@ -25,7 +26,20 @@ pub fn from_network(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> ItemStack
         *out.data_mut() = *data;
     }
     out.tidy();
+    // What it decoded to, to send the server's own patch back if that holds.
+    if let Some(patch) = &s.wire.0 {
+        let decoded = out.clone();
+        out.data_mut().wire = crate::item_data::Wire::new(decoded, patch.clone());
+    }
     out
+}
+
+/// `DyeColor.byId`: an unknown id is white (`OutOfBoundsStrategy.ZERO`).
+fn dye_name(id: i32) -> &'static str {
+    usize::try_from(id)
+        .ok()
+        .and_then(|i| crate::block_entity_render::DYES.get(i))
+        .map_or("white", |d| d.0)
 }
 
 fn item_name(builtin: &Builtin, id: i32) -> Arc<str> {
@@ -46,6 +60,21 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             continue;
         };
         let value = match c {
+            // `ItemContainerContents`: a shulker box's items, for its tooltip.
+            Component::Raw(bytes) if *kind == component::CONTAINER => {
+                let Some(slots) = container_tag(bytes, builtin, synced) else {
+                    continue;
+                };
+                slots
+            }
+            // `TypedEntityData`: a block item's block entity, which the op
+            // warning and a spawner's tooltip read.
+            Component::Raw(bytes) if *kind == component::BLOCK_ENTITY_DATA => {
+                let Some(data) = block_entity_data_tag(bytes, builtin) else {
+                    continue;
+                };
+                data
+            }
             // Read past, not decoded: the item keeps its prototype's value.
             Component::Raw(_) => continue,
             // Trim materials and patterns are synced registries, as enchantments are.
@@ -61,6 +90,37 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                     ("pattern", Tag::String(pattern.into())),
                 ])
             }
+            // Instruments are a synced registry: a goat horn names its own.
+            Component::Instrument(id) => match synced.name("minecraft:instrument", *id) {
+                Some(name) => Tag::String(name.into()),
+                None => continue,
+            },
+            // BannerPatternLayers: each layer's pattern is a synced registry entry.
+            Component::BannerPatterns(layers) => {
+                let layers: Option<Vec<Tag>> = layers
+                    .iter()
+                    .map(|(pattern, color)| {
+                        let pattern = synced.name("minecraft:banner_pattern", *pattern)?;
+                        Some(Tag::compound([
+                            ("pattern", Tag::String(pattern.into())),
+                            ("color", Tag::String(dye_name(*color).into())),
+                        ]))
+                    })
+                    .collect();
+                let Some(layers) = layers else {
+                    continue;
+                };
+                Tag::List(layers)
+            }
+            // `painting/variant`: a synced registry entry, as trims are.
+            Component::PaintingVariant(id) => {
+                let Some(name) = synced.name("minecraft:painting_variant", *id) else {
+                    continue;
+                };
+                Tag::String(name.into())
+            }
+            // A shield's `base_color`: the dye's id.
+            Component::Int(v) if *kind == component::BASE_COLOR => Tag::String(dye_name(*v).into()),
             Component::Int(v) if *kind == component::RARITY => {
                 let rarity = ["common", "uncommon", "rare", "epic"];
                 Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
@@ -130,6 +190,18 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 ("mob_factor", Tag::Float(v[5].to_bits())),
             ]),
             Component::Profile(p) => profile_tag(p),
+            // SuspiciousStewEffects' NBT: each effect by name and its duration.
+            Component::StewEffects(list) => Tag::List(
+                list.iter()
+                    .filter_map(|(id, duration)| {
+                        let name = builtin.get("minecraft:mob_effect")?.name(*id)?;
+                        Some(Tag::compound([
+                            ("id", Tag::String(name.into())),
+                            ("duration", Tag::Int(*duration)),
+                        ]))
+                    })
+                    .collect(),
+            ),
             // PotionContents' NBT: the potion by name and the custom colour.
             Component::Potion { potion, color, .. } => {
                 let potion = potion.and_then(|id| builtin.get("minecraft:potion")?.name(id));
@@ -144,19 +216,7 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             Component::Stacks(stacks) => Tag::List(
                 stacks
                     .iter()
-                    .map(|t| {
-                        let mut entries = vec![
-                            (
-                                "id",
-                                Tag::String(item_name(builtin, t.item).as_ref().into()),
-                            ),
-                            ("count", Tag::Int(t.count)),
-                        ];
-                        if let Some(c) = components_tag(t, builtin, synced) {
-                            entries.push(("components", c));
-                        }
-                        Tag::compound(entries)
-                    })
+                    .map(|t| template_tag(t, builtin, synced))
                     .collect(),
             ),
             Component::CustomModelData {
@@ -200,6 +260,51 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
         entries.push((key, value));
     }
     Some(Tag::compound(entries))
+}
+
+/// An `ItemStackTemplate` as its NBT codec writes it: id, count and components.
+fn template_tag(t: &Stack, builtin: &Builtin, synced: &Dynamic) -> Tag {
+    let mut entries = vec![
+        (
+            "id",
+            Tag::String(item_name(builtin, t.item).as_ref().into()),
+        ),
+        ("count", Tag::Int(t.count)),
+    ];
+    if let Some(c) = components_tag(t, builtin, synced) {
+        entries.push(("components", c));
+    }
+    Tag::compound(entries)
+}
+
+/// `TypedEntityData.streamCodec` of a block entity: its type's registry id,
+/// then its data without the id, which the saved component keeps.
+fn block_entity_data_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let id = r.varint().ok()?;
+    let kind = builtin.get("minecraft:block_entity_type")?.name(id)?;
+    let Tag::Compound(mut data) = r.nbt().ok()? else {
+        return None;
+    };
+    data.insert("id".into(), Tag::String(kind.into()));
+    Some(Tag::Compound(data))
+}
+
+/// `ItemContainerContents.STREAM_CODEC`, one optional template per slot, as
+/// the saved `container` lists the slots that hold one.
+fn container_tag(bytes: &[u8], builtin: &Builtin, synced: &Dynamic) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let mut slots = Vec::new();
+    for slot in 0..r.count(256).ok()? {
+        if r.bool().ok()? {
+            let stack = Template::read(&mut r).ok()?;
+            slots.push(Tag::compound([
+                ("slot", Tag::Int(slot as i32)),
+                ("item", template_tag(&stack, builtin, synced)),
+            ]));
+        }
+    }
+    Some(Tag::List(slots))
 }
 
 /// A wire `FireworkExplosion` as vanilla's NBT codec writes it
@@ -366,6 +471,7 @@ mod tests {
         };
         let dynamic = Dynamic {
             registries: Default::default(),
+            ..Default::default()
         };
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
         bundle.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 32)];
@@ -384,8 +490,60 @@ mod tests {
         );
     }
 
+    /// An ominous bottle's `ominous_bottle_amplifier` reaches the client
+    /// through the packet's bytes, so its tooltip names the Bad Omen level.
+    #[test]
+    fn an_ominous_bottle_keeps_its_amplifier_across_the_wire() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); 80];
+        components[component::OMINOUS_BOTTLE_AMPLIFIER as usize] =
+            "minecraft:ominous_bottle_amplifier".into();
+        let items = ["minecraft:air", "minecraft:ominous_bottle"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic {
+            registries: Default::default(),
+            ..Default::default()
+        };
+        for amplifier in [None, Some(0), Some(3)] {
+            let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
+            if let Some(a) = amplifier {
+                bottle.data_mut().ominous_amplifier = Some(a);
+            }
+            let wire = crate::lan::guest::stack_to_network(
+                |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+                |_, _| None,
+                &Some(bottle),
+            );
+            let mut w = Writer::new();
+            Slot::write(&wire, &mut w);
+            let mut r = Reader::new(&w.data);
+            let read = Slot::read(&mut r).unwrap().unwrap();
+            assert_eq!(r.remaining(), 0);
+            let back = from_network(&read, &builtin, &dynamic);
+            assert_eq!(
+                back.data().and_then(|d| d.ominous_amplifier),
+                amplifier,
+                "{amplifier:?}"
+            );
+        }
+    }
+
     /// What a creative client sends (`stack_to_network`) comes back whole on
-    /// the server: damage, both enchantment lists, repair cost, name, trim.
+    /// the server: damage, both enchantment lists, repair cost, name, trim,
+    /// potion and stew effects.
     #[test]
     fn a_creative_stack_keeps_its_components_across_the_wire() {
         let mut components = vec![String::new(); 60];
@@ -401,6 +559,10 @@ mod tests {
                 "minecraft:stored_enchantments",
             ),
             (component::TRIM, "minecraft:trim"),
+            (
+                component::SUSPICIOUS_STEW_EFFECTS,
+                "minecraft:suspicious_stew_effects",
+            ),
         ] {
             components[id as usize] = name.to_owned();
         }
@@ -413,6 +575,7 @@ mod tests {
                         "minecraft:air",
                         "minecraft:diamond_chestplate",
                         "minecraft:splash_potion",
+                        "minecraft:suspicious_stew",
                     ])),
                 ),
                 (
@@ -422,6 +585,10 @@ mod tests {
                 (
                     "minecraft:potion".to_owned(),
                     Ids::from_names(names(&["minecraft:water", "minecraft:swiftness"])),
+                ),
+                (
+                    "minecraft:mob_effect".to_owned(),
+                    Ids::from_names(names(&["minecraft:speed", "minecraft:fire_resistance"])),
                 ),
             ]
             .into(),
@@ -443,6 +610,7 @@ mod tests {
                 ),
             ]
             .into(),
+            ..Default::default()
         };
         let mut stack = ItemStack::new("minecraft:diamond_chestplate", 1);
         stack.damage = 5;
@@ -451,7 +619,7 @@ mod tests {
         d.stored_enchantments
             .push((Arc::from("minecraft:sharpness"), 2));
         d.repair_cost = 9;
-        d.custom_name = Some("Keeper".to_owned());
+        d.custom_name = Some(Tag::String("Keeper".into()));
         // A translatable item name reaches the client as the same component.
         let item_name = Tag::compound([("translate", Tag::String("filled_map.monument".into()))]);
         d.other
@@ -484,7 +652,7 @@ mod tests {
             vec![(Arc::from("minecraft:sharpness"), 2)]
         );
         assert_eq!(d.repair_cost, 9);
-        assert_eq!(d.custom_name.as_deref(), Some("Keeper"));
+        assert_eq!(d.custom_name_plain().as_deref(), Some("Keeper"));
         assert_eq!(d.other("minecraft:item_name"), Some(&item_name));
         assert_eq!(
             d.trim,
@@ -502,6 +670,86 @@ mod tests {
         assert_eq!(
             from_network(&wire, &builtin, &dynamic).potion(),
             Some("minecraft:swiftness")
+        );
+        // SuspiciousStewEffects, as a creative tab's stew has them: without
+        // them the server's stew gives no effect when eaten (#3137).
+        let mut stew = ItemStack::new("minecraft:suspicious_stew", 1);
+        stew.data_mut()
+            .stew_effects
+            .push((Arc::from("minecraft:fire_resistance"), 60));
+        let wire = crate::lan::guest::stack_to_network(
+            |name| id("minecraft:item", name).unwrap_or(0),
+            id,
+            &Some(stew),
+        )
+        .unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        assert_eq!(
+            back.data().map(|d| d.stew_effects.clone()),
+            Some(vec![(Arc::from("minecraft:fire_resistance"), 60)])
+        );
+    }
+
+    /// A painting's `painting/variant` (a `painting_variant` holder, id 109)
+    /// crosses the wire both ways: a server's creative slot gets the variant
+    /// its client picked, and a client's tooltip names the server's.
+    #[test]
+    fn a_painting_keeps_its_variant_across_the_wire() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); 110];
+        components[109] = "minecraft:painting/variant".into();
+        let items = ["minecraft:air", "minecraft:painting"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let variants = ["minecraft:alban", "minecraft:kebab"];
+        let dynamic = Dynamic {
+            registries: [(
+                "minecraft:painting_variant".to_owned(),
+                variants.iter().map(|v| (v.to_string(), None)).collect(),
+            )]
+            .into(),
+            ..Default::default()
+        };
+        // ItemStack.OPTIONAL_STREAM_CODEC: count 1, the painting, one added
+        // component (109: the reference to kebab, its id plus one), none removed.
+        let vanilla = [1u8, 1, 1, 0, 109, 2];
+        let stack = Slot::read(&mut Reader::new(&vanilla)).unwrap().unwrap();
+        let back = from_network(&stack, &builtin, &dynamic);
+        let variant = |s: &ItemStack| {
+            s.data()
+                .and_then(|d| d.other("minecraft:painting/variant"))
+                .cloned()
+        };
+        assert_eq!(variant(&back), Some(Tag::String("minecraft:kebab".into())));
+        let mut alban = ItemStack::new("minecraft:painting", 1);
+        alban.data_mut().set_other(
+            "minecraft:painting/variant",
+            Some(Tag::String("minecraft:alban".into())),
+        );
+        let wire = crate::lan::guest::stack_to_network(
+            |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+            |registry, name| dynamic.id(registry, name),
+            &Some(alban.clone()),
+        );
+        let mut w = Writer::new();
+        Slot::write(&wire, &mut w);
+        assert_eq!(w.data, [1, 1, 1, 0, 109, 1]);
+        let wire = Slot::read(&mut Reader::new(&w.data)).unwrap().unwrap();
+        assert_eq!(
+            variant(&from_network(&wire, &builtin, &dynamic)),
+            variant(&alban)
         );
     }
 }

@@ -24,6 +24,8 @@ class RemoteMiningTests(unittest.TestCase):
 #![allow(dead_code)]
 #[derive(Clone, Copy)]
 struct Hit { pos: [i32; 3], face: u8 }
+/// The held stack: `ItemStack.item`, which the debug-stick check reads.
+struct Stack { item: &'static str }
 struct Mining { pos: [i32; 3], progress: f32, ticks: u32 }
 #[derive(Default)]
 struct Remote { destroy_delay: u32, destroying: Option<([i32; 3], u8, f32)>, destroying_item: String }
@@ -35,7 +37,7 @@ struct Sounds { hit: String, volume: f32, pitch: f32 }
 struct Facts { hardness: f32, name: String, requires_tool: bool, sounds: Sounds }
 struct Resources { facts: Facts, speed: f32, tool_allows_creative: bool }
 impl Resources {
-    fn can_destroy_block(&self, _: Option<&()>, creative: bool) -> bool {
+    fn can_destroy_block(&self, _: Option<&Stack>, creative: bool) -> bool {
         !creative || self.tool_allows_creative
     }
     fn facts(&self) -> &Self { self }
@@ -52,9 +54,11 @@ impl World {
         u32::from(!self.broken.contains(&[x, y, z]))
     }
 }
-struct Audio;
+struct Audio { played: Vec<String> }
 impl Audio {
-    fn play(&self, _: &str, _: Option<[f64; 3]>, _: f32, _: f32) {}
+    fn play(&mut self, name: &str, _: Option<[f64; 3]>, _: f32, _: f32) {
+        self.played.push(name.to_string());
+    }
 }
 mod play {
     #[derive(Debug, PartialEq)]
@@ -67,7 +71,7 @@ fn face_direction(face: u8) -> u8 { face }
 struct Game {
     remote: Option<Remote>, mining: Option<Mining>, creative: bool,
     world: World, res: Resources, player: Option<Player>, audio: Audio,
-    hit: Hit, sequence: i32, packets: Vec<play::PlayerAction>,
+    hit: Hit, sequence: i32, packets: Vec<play::PlayerAction>, restricted: bool,
 }
 impl Game {
     fn main_hand_key(&self) -> String { String::new() }
@@ -78,12 +82,16 @@ impl Game {
             world: World::default(),
             res: Resources { facts: Facts { hardness, name: "block".into(),
                 requires_tool: false, sounds: Sounds { hit: "hit".into(), volume: 1.0, pitch: 1.0 } }, speed, tool_allows_creative: true },
-            player: Some(Player { ground: Ground { on_ground: true } }), audio: Audio,
+            player: Some(Player { ground: Ground { on_ground: true } }),
+            audio: Audio { played: Vec::new() },
             hit: Hit { pos: [0, 64, 0], face: 1 }, sequence: 0, packets: vec![],
+            restricted: false,
         }
     }
     fn pick(&self) -> Option<Hit> { Some(self.hit) }
-    fn held(&self) -> Option<&()> { None }
+    fn held(&self) -> Option<&Stack> { None }
+    // Player.blockActionRestricted: adventure without a can_break item.
+    fn remote_break_restricted(&self) -> bool { self.restricted }
     // Game::destroy_progress (hand.rs) for a harvestable block on the ground.
     fn destroy_progress(&self, _: [i32; 3]) -> f32 {
         self.res.speed / self.res.facts.hardness / 30.0
@@ -92,7 +100,17 @@ impl Game {
     fn predict_break(&mut self, pos: [i32; 3], _: u32, _: i32) { self.world.broken.push(pos); }
     fn send(&mut self, S::PlayerAction(packet): S) { self.packets.push(packet); }
     fn crack_particle(&mut self, _: [i32; 3], _: u8, _: u32) {}
-    fn breaking_block_effects(&mut self, _: [i32; 3], _: u8, _: bool) {}
+    // RedStoneOreBlock.attack's dust (sculk.rs): no particles in this fixture.
+    fn redstone_ore_particles(&mut self, _: [i32; 3]) {}
+    // ClientLevel.addBreakingBlockEffects: the hit sound once, when the dig
+    // starts; the server's level events play it while the block is mined.
+    fn breaking_block_effects(&mut self, _: [i32; 3], _: u8, play_sound: bool) {
+        if play_sound {
+            self.audio.play("hit", None, 1.0, 1.0);
+        }
+    }
+    // Tutorial.onDestroyBlock (tutorial.rs): the hints play no part in mining.
+    fn tutorial_destroy<T>(&mut self, _: T, _: f32) {}
 METHOD
 }
 fn main() {
@@ -118,10 +136,14 @@ fn main() {
     let mut game = Game::new(1.0, 15.0, false);
     game.remote_mining(true);
     assert!(game.world.broken.is_empty());
+    // The dig plays the hit sound once, when it starts (#2277): the server's
+    // destroy progress level events play it while the block is mined.
+    assert_eq!(game.audio.played, ["hit"]);
     game.remote_mining(false);
     assert!(game.world.broken.is_empty());
     game.remote_mining(false);
     assert_eq!(game.world.broken.len(), 1);
+    assert_eq!(game.audio.played, ["hit"], "the client must not play the mining sound in the loop");
     assert_eq!(game.packets.iter().map(|p| p.action).collect::<Vec<_>>(), [0, 3]);
     assert_eq!(game.remote.as_ref().unwrap().destroy_delay, 5);
     game.hit.pos[0] = 1;
@@ -161,6 +183,21 @@ fn main() {
     assert!(game.remote.as_ref().unwrap().destroying.is_none());
     assert!(game.mining.is_none());
     assert!(game.world.broken.is_empty());
+    // An adventure player without can_break (#3027): startDestroyBlock
+    // refuses before predicting, so nothing breaks, cracks or is sent.
+    for (hardness, speed) in [(0.0, 1.0), (1.0, 15.0)] {
+        let mut game = Game::new(hardness, speed, false);
+        game.restricted = true;
+        game.remote_mining(true);
+        for _ in 0..40 {
+            game.remote_mining(false);
+        }
+        assert!(game.world.broken.is_empty());
+        assert!(game.packets.is_empty());
+        assert!(game.audio.played.is_empty());
+        assert!(game.mining.is_none());
+        assert!(game.remote.as_ref().unwrap().destroying.is_none());
+    }
 }
 '''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn"))
         with tempfile.TemporaryDirectory(prefix="remote-mining-") as directory:

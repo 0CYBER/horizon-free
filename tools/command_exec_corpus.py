@@ -168,6 +168,7 @@ def player_state():
         cmd('/effect clear @s'),
         cmd('/give @s minecraft:diamond 3'),
         cmd('/give @s minecraft:diamond_sword[minecraft:custom_name="Blade"]'),
+        cmd('/give @s minecraft:diamond[item_name={text:"ItemName",color:"red"}]'),
         cmd('/give @s minecraft:stone 130'),
         cmd('/clear @s minecraft:diamond 0'),
         cmd('/clear @s minecraft:stone 0'),
@@ -327,6 +328,11 @@ def entities():
         cmd('/data get entity @e[tag=attr,limit=1] Health'),
         cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
         cmd('/kill @e[tag=attr]'),
+        # A summoned mob is not persistent: vanilla never calls
+        # `Mob.setPersistenceRequired` for a mob it spawns (#2787).
+        cmd('/summon minecraft:zombie 4.5 210 12.5'),
+        cmd('/execute if entity @e[type=minecraft:zombie,nbt={PersistenceRequired:1b}]'),
+        cmd('/kill @e[type=minecraft:zombie]'),
         # An End crystal is an entity of its own: a type selector finds it,
         # reads it and kills it (#1531).
         cmd('/summon minecraft:end_crystal 4.5 210 8.5'),
@@ -341,6 +347,27 @@ def entities():
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
+    ]
+
+
+def wither_spawn():
+    """A wither charging up (`Invul`) neither moves toward its target nor is hurt by
+    the blast that ends the charge (#3322): `WitherBoss.customServerAiStep` sets no
+    alternative target while invulnerable, and `ServerLevel.explode`'s entity query
+    skips the source."""
+    wither = '@e[type=minecraft:wither,limit=1]'
+    return [
+        *setup('/fill 0 209 4 9 209 20 minecraft:stone',
+               '/summon minecraft:pig 4.5 210 18.5 {NoAI:1b,Tags:["wither_prey"]}',
+               '/summon minecraft:wither 4.5 210 8.5 {Invul:20}'),
+        {'op': 'tick', 'n': 10},
+        cmd(f'/data get entity {wither} Pos'),
+        cmd(f'/data get entity {wither} Invul'),
+        {'op': 'tick', 'n': 12},
+        cmd(f'/data get entity {wither} Invul'),
+        cmd(f'/data get entity {wither} Health'),
+        *setup('/kill @e[type=minecraft:wither]', '/kill @e[tag=wither_prey]', '/fill 0 200 0 15 228 20 air'),
+        {'op': 'tick', 'n': 5},
     ]
 
 
@@ -396,6 +423,32 @@ def mob_riding():
         cmd(f'/ride {rider} dismount'),
         cmd(f'/data get entity {rider} Pos'),
         *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+    ]
+
+
+def camel_riders():
+    """A husk riding a camel (#3199): the camel and its rider never push each other
+    (Entity.push skips passengers of the same vehicle), so the camel stays near
+    where it was summoned instead of sliding off backwards, and it never sits down
+    with a controlling passenger (CamelAi.RandomSitting needs none)."""
+    camel = '@e[tag=camel_v,limit=1]'
+    return [
+        # A walled pen, and a camel that cannot walk: only a push would move it.
+        *setup('/fill 0 200 0 15 203 15 minecraft:glass hollow', '/fill 1 203 1 14 203 14 minecraft:air',
+               '/scoreboard objectives add camel_pose dummy',
+               '/summon minecraft:camel 8.0 201 8.0 {Tags:["camel_v"],'
+               'Passengers:[{id:"minecraft:husk",Tags:["camel_r"]}]}',
+               f'/attribute {camel} minecraft:movement_speed base set 0'),
+        {'op': 'tick', 'n': 100},
+        cmd('/execute as @e[tag=camel_r] on vehicle run say carrying'),
+        cmd('/execute if entity @e[tag=camel_v,x=8,y=201,z=8,distance=..4]'),
+        {'op': 'tick', 'n': 500},
+        *setup(f'/execute store result score camel camel_pose run data get entity {camel} LastPoseTick'),
+        # Negative while sitting.
+        cmd('/execute if score camel camel_pose matches ..-1'),
+        cmd('/execute as @e[tag=camel_r] on vehicle run say still carrying'),
+        *setup('/kill @e[tag=camel_r]', '/kill @e[tag=camel_v]', '/scoreboard objectives remove camel_pose',
+               '/fill 0 200 0 15 203 15 minecraft:air'),
     ]
 
 
@@ -1108,6 +1161,91 @@ def server_clock():
     ]
 
 
+def wither_breaks():
+    """WitherBoss.customServerAiStep 20 ticks after it is hurt: Level.destroyBlock around it, which leaves
+    each cell's fluid (FluidState.createLegacyBlock), so water stays and a waterlogged block turns to water."""
+    return [
+        *setup('/fill 4 206 4 12 217 12 minecraft:glass hollow', '/fill 5 207 5 11 216 11 minecraft:water',
+               '/setblock 7 210 7 minecraft:stone', '/setblock 9 211 9 minecraft:oak_stairs[waterlogged=true]',
+               '/setblock 7 212 9 minecraft:oak_slab[waterlogged=false]'),
+        {'op': 'tick', 'n': 10},
+        *setup('/summon minecraft:wither 8.5 210 8.5 {NoGravity:1b,Tags:["wb"]}'),
+        cmd('/damage @e[tag=wb,limit=1] 1'),
+        # WaterAvoidingRandomFlyingGoal may set off on a stroll (the wither's random is unseeded in vanilla),
+        # which moves the box destroyBlocksTick breaks. Hold it in place each tick until then: customServerAiStep
+        # runs before travel, so the break sees the teleported position.
+        *[op for _ in range(25) for op in (*setup('/tp @e[tag=wb] 8.5 210 8.5'), {'op': 'tick', 'n': 1})],
+        {'op': 'tick', 'n': 15},
+        cmd('/execute if block 8 212 8 minecraft:water'),
+        cmd('/execute if block 9 211 9 minecraft:water'),
+        cmd('/execute if block 9 211 9 minecraft:oak_stairs'),
+        cmd('/execute if block 7 210 7 minecraft:stone'),
+        cmd('/execute if block 7 212 9 minecraft:oak_slab'),
+        # The broken cells' neighbours were updated (setBlock flag 3): the pool flows back in.
+        cmd('/execute if block 7 210 7 minecraft:water'),
+        cmd('/execute if block 7 212 9 minecraft:water'),
+        cmd('/execute if block 6 210 6 minecraft:water'),
+        *setup('/kill @e[tag=wb]', '/fill 4 206 4 12 217 12 minecraft:air'),
+        {'op': 'tick', 'n': 25},
+    ]
+
+
+def ender_dragon():
+    """`/kill` on the fight's dragon ends the fight (#3319): `EnderDragon.kill` removes it and calls
+    `EnderDragonFight.setDragonKilled`, so no new dragon takes its place, the exit portal opens and the
+    first dragon leaves its egg. The player stays over the exit portal, in the fight (`validPlayer`)."""
+    end = '/execute in minecraft:the_end run'
+    return [
+        *setup('/gamemode creative', f'{end} tp @s 0.5 100 0.5 0 0'),
+        {'op': 'settle'},
+        # updatePlayers, the arena scan and createNewDragon once the 17 by 17 arena chunks are block ticking
+        # (EnderDragonFight.isArenaLoaded). The oracle generates them on worker threads: a tick op with a
+        # `record` key gives it a moment of wall time before its ticks.
+        *[{'op': 'tick', 'n': 20, 'record': False}] * 10,
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd('/kill @e[type=minecraft:ender_dragon]'),
+        {'op': 'tick', 'n': 40},
+        cmd('/execute if entity @e[type=minecraft:ender_dragon]'),
+        cmd(f'{end} fill -3 0 -3 3 120 3 minecraft:air replace minecraft:end_portal'),
+        cmd(f'{end} fill -3 0 -3 3 120 3 minecraft:air replace minecraft:dragon_egg'),
+        *setup('/execute in minecraft:overworld run tp @s 8.5 230 8.5 0 0'),
+        {'op': 'settle'},
+    ]
+
+
+def tame_wolf_kills():
+    # LivingEntity.resolvePlayerResponsibleForDamage: a tame wolf's hit is its
+    # owner's (the harness player, OfflinePlayer:Player), so the kill drops
+    # experience and ServerPlayer.awardKillScore counts it (mob_kills,
+    # totalKillCount); the killed statistic stays the wolf's
+    # (Player.killedEntity). A wild wolf's kill is nobody's.
+    owner = '[I;-1608632253,-450807400,-1786055591,-2146546415]'
+    return [
+        *setup('/gamerule mob_drops true', '/scoreboard objectives add wolf_kills minecraft.killed:minecraft.zombie',
+               '/scoreboard objectives add wolf_mob_kills minecraft.custom:minecraft.mob_kills',
+               '/scoreboard objectives add wolf_total totalKillCount'),
+        cmd('/summon minecraft:wolf 4.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["wild"]}'),
+        cmd('/summon minecraft:zombie 6.5 210 4.5 {NoAI:1b,NoGravity:1b,Tags:["prey"]}'),
+        cmd('/damage @e[tag=prey,limit=1] 100 minecraft:mob_attack by @e[tag=wild,limit=1]'),
+        {'op': 'tick', 'n': 25},
+        cmd('/execute if entity @e[type=minecraft:experience_orb,limit=1]'),
+        cmd('/scoreboard players get @s wolf_kills'),
+        cmd('/scoreboard players get @s wolf_mob_kills'),
+        cmd('/scoreboard players get @s wolf_total'),
+        cmd(f'/summon minecraft:wolf 4.5 210 8.5 {{NoAI:1b,NoGravity:1b,Owner:{owner},Tags:["pet"]}}'),
+        cmd('/summon minecraft:zombie 6.5 210 8.5 {NoAI:1b,NoGravity:1b,Tags:["prey"]}'),
+        cmd('/damage @e[tag=prey,limit=1] 100 minecraft:mob_attack by @e[tag=pet,limit=1]'),
+        {'op': 'tick', 'n': 25},
+        cmd('/execute if entity @e[type=minecraft:experience_orb,limit=1]'),
+        cmd('/scoreboard players get @s wolf_kills'),
+        cmd('/scoreboard players get @s wolf_mob_kills'),
+        cmd('/scoreboard players get @s wolf_total'),
+        *setup('/kill @e[type=!player]', '/scoreboard objectives remove wolf_kills',
+               '/scoreboard objectives remove wolf_mob_kills', '/scoreboard objectives remove wolf_total',
+               '/gamerule mob_drops false'),
+    ]
+
+
 def groups():
     return [
         ('setup', group_setup()),
@@ -1117,8 +1255,10 @@ def groups():
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
+        ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('mob riding', mob_riding()),
+        ('camel riders', camel_riders()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),
@@ -1130,4 +1270,7 @@ def groups():
         ('compute', compute()),
         ('social and scoreboard', social()),
         ('test', test_command()),
+        ('wither breaks', wither_breaks()),
+        ('ender dragon', ender_dragon()),
+        ('tame wolf kills', tame_wolf_kills()),
     ]

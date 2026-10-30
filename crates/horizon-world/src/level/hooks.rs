@@ -1,7 +1,7 @@
 //! `neighborChanged`, `onPlace`, `affectNeighborsAfterRemoval` and
 //! `updateIndirectNeighbourShapes` for the overriding vanilla classes.
 use super::{
-    LevelAccess, Sim,
+    LevelAccess, LevelEvent, Sim,
     classes::Class,
     states::BlockId,
     update::{below, rel},
@@ -18,6 +18,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         changed: BlockId,
         moved: bool,
     ) {
+        self.level
+            .observe_neighbor_changed(pos, state, changed, moved);
         let b = self.b;
         let block = b.block(state);
         let chain = &b.data(state).chain;
@@ -165,6 +167,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.piston_check_if_extend(pos, state);
                     }
                 }
+                Class::PotentSulfur => self.potent_sulfur_on_place(pos, state),
                 Class::Observer => {
                     if !same
                         && b.table.bool(state, b.props.powered)
@@ -189,6 +192,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     self.schedule_tick(pos, block, 1);
                 }
                 Class::Shelf => self.shelf_on_place(pos, state, old),
+                // CarvedPumpkinBlock.onPlace: a pumpkin placed by any means may
+                // complete a golem; the caller builds it.
+                Class::CarvedPumpkin if !same => self.emit(LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "golem",
+                }),
                 Class::SnifferEgg => {
                     let boosted = b.is_block(self.below_state(pos), b.named.moss_block);
                     if boosted {
@@ -386,7 +396,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     /// `ServerPlayerGameMode.destroyBlock`: `playerWillDestroy` then
     /// `removeBlock`. Drops are the caller's (tool-dependent loot).
-    pub(crate) fn player_destroy(&mut self, pos: BlockPos, creative: bool) -> bool {
+    pub(crate) fn player_destroy(
+        &mut self,
+        pos: BlockPos,
+        creative: bool,
+        correct_tool: bool,
+    ) -> bool {
         let b = self.b;
         let p = b.props;
         let state = self.state(pos);
@@ -394,8 +409,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         }
         let data = b.data(state);
-        if creative
-            && (data.is(Class::DoublePlant) || data.is(Class::Door))
+        // DoorBlock also clears the bottom half when the tool would not drop it.
+        if ((creative && data.is(Class::DoublePlant))
+            || (data.is(Class::Door) && (creative || !correct_tool)))
             && b.table.text(state, p.half) == "upper"
         {
             let bottom = below(pos);
@@ -420,6 +436,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 self.level_event(2001, head_pos, head.0 as i32);
             }
         }
+        // PistonHeadBlock.playerWillDestroy: in creative, destroy the base piston
+        // without drops so removing the head does not drop a piston item.
+        if creative && data.is(Class::PistonHead) {
+            let base_pos = rel(pos, b.facing(state).opposite());
+            let base = self.state(base_pos);
+            if self.piston_head_fitting_base(state, base) {
+                self.destroy_block(base_pos, false, super::flags::UPDATE_LIMIT);
+            }
+        }
         // TntBlock.playerWillDestroy: unstable TNT primes unless instabuild.
         if !creative && data.is(Class::Tnt) && b.table.bool(state, p.unstable) {
             self.prime_tnt(pos);
@@ -432,6 +457,32 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         self.game_event(pos, "minecraft:block_destroy");
         self.remove_block(pos, false)
+    }
+    /// `TurtleEggBlock.playerDestroy` (after the drops): `decreaseEggs` plays the
+    /// break and puts back all but one egg of the mined stack. `destroyed` is the
+    /// state that was broken.
+    pub(crate) fn turtle_egg_destroyed_by_player(
+        &mut self,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+    ) {
+        let b = self.b;
+        if !b.data(destroyed).is(Class::TurtleEgg) {
+            return;
+        }
+        let pitch = 0.9 + self.random().next_float() * 0.2;
+        self.sound(
+            pos,
+            &std::sync::Arc::from("minecraft:block.turtle_egg.break"),
+            0.7,
+            pitch,
+        );
+        let eggs = b.table.int(destroyed, b.props.eggs);
+        if eggs > 1 {
+            self.set_block(pos, b.table.set_int(destroyed, b.props.eggs, eggs - 1), 2);
+            self.game_event(pos, "minecraft:block_destroy");
+            self.level_event(2001, pos, destroyed.0 as i32);
+        }
     }
     /// `IceBlock.playerDestroy` (after the drops): mined ice turns into water
     /// when it sits over a solid block or a liquid, unless the tool prevents
@@ -535,7 +586,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let state = self.state(pos);
                 if !b.is_water_fluid(self.fluid_at(pos).kind()) {
                     false
-                } else if self.pickup_block(pos, state) {
+                } else if self.pickup_block(pos, state, false) {
                     true
                 } else {
                     if b.instance_of(state, Class::Liquid) {

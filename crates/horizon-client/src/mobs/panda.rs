@@ -182,7 +182,8 @@ pub fn is_sitting(m: &Mob) -> bool {
 fn is_rolling(m: &Mob) -> bool {
     flag(m, FLAG_ROLL)
 }
-fn is_on_back(m: &Mob) -> bool {
+/// `Panda.isOnBack`.
+pub fn is_on_back(m: &Mob) -> bool {
     flag(m, FLAG_ON_BACK)
 }
 fn is_eating(m: &Mob) -> bool {

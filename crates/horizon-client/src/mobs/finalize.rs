@@ -389,6 +389,10 @@ pub struct Ctx<'a, L: FinalizeLevel + ?Sized, R: RandomSource> {
     /// Jockeys and mounts made along the way, finalized, with their riding
     /// links set (`Extra::mount` / `Extra::rider`).
     pub created: Vec<Mob>,
+    /// The rider as it was when its new chicken was added to the level, before
+    /// its equipment and attributes: what a generated chunk keeps of it
+    /// (`ProtoChunk.addEntity` saves the chicken with its passenger then).
+    pub jockey_rider: Option<Mob>,
 }
 
 // ---- attributes -----------------------------------------------------------
@@ -497,22 +501,28 @@ pub fn transient(m: &Mob, a: Attr) -> Option<(f64, Op)> {
         _ => None,
     }
 }
-/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`,
-/// scaled by the amplifier plus one): strength and speed.
+/// The attribute modifier one status effect grants (`MobEffect.addAttributeModifier`),
+/// scaled by the amplifier plus one; `None` when the effect does not touch `a`.
+fn effect_modifier(effect: &str, amplifier: i32, a: Attr) -> Option<(f64, Op)> {
+    let level = f64::from(amplifier + 1);
+    match (effect.trim_start_matches("minecraft:"), a) {
+        ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
+        ("weakness", Attr::AttackDamage) => Some((-4.0 * level, Op::AddValue)),
+        ("speed", Attr::MovementSpeed) => Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal)),
+        ("slowness", Attr::MovementSpeed) => {
+            Some((f64::from(-0.15f32) * level, Op::AddMultipliedTotal))
+        }
+        ("health_boost", Attr::MaxHealth) => Some((4.0 * level, Op::AddValue)),
+        _ => None,
+    }
+}
+/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`),
+/// scaled by the amplifier plus one.
 fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
     m.extra
         .effects
         .iter()
-        .filter_map(move |&(effect, _, amplifier)| {
-            let level = f64::from(amplifier + 1);
-            match (effect.trim_start_matches("minecraft:"), a) {
-                ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
-                ("speed", Attr::MovementSpeed) => {
-                    Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal))
-                }
-                _ => None,
-            }
-        })
+        .filter_map(move |&(effect, _, amplifier)| effect_modifier(effect, amplifier, a))
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
@@ -617,6 +627,29 @@ pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op)
         None => s.modifiers.push(new),
     }
     refresh(m, a);
+}
+/// `AttributeInstance.removeModifier`.
+pub fn remove_modifier(m: &mut Mob, a: Attr, id: &str) {
+    if let Some(s) = m.extra.attributes.as_mut() {
+        s.modifiers.retain(|x| x.attr != a || x.id != id);
+    }
+    refresh(m, a);
+}
+/// `Mob.finalizeSpawn`, which every mob's own `finalizeSpawn` reaches
+/// through `super`: the `random_spawn_bonus` follow range modifier (once)
+/// and `setLeftHanded(nextFloat() < 0.05F)`.
+pub fn mob_spawn(m: &mut Mob, random: &mut impl RandomSource) {
+    if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
+        let bonus = random.triangle(0.0, 0.114_850_000_000_000_01);
+        add_modifier(
+            m,
+            Attr::FollowRange,
+            "minecraft:random_spawn_bonus",
+            bonus,
+            Op::AddMultipliedBase,
+        );
+    }
+    m.extra.left_handed = random.next_float() < 0.05;
 }
 /// `Zombie.handleAttributes`, from the zombie's own random.
 pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
@@ -793,8 +826,8 @@ pub fn allowed_in_peaceful(kind: &str) -> bool {
             | "zombified_piglin"
     )
 }
-/// `getBabyStartAge`.
-fn baby_start_age(s: Species) -> i32 {
+/// `AgeableMob.getBabyStartAge` (a sniffer's is -48000).
+pub fn baby_start_age(s: Species) -> i32 {
     if s == Species::Sniffer {
         super::sniffer::BABY_START_AGE
     } else {
@@ -819,6 +852,47 @@ fn age_boundary_reached(m: &mut Mob) {
         Species::Hoglin => set_base(m, Attr::AttackDamage, if baby { 0.5 } else { 6.0 }),
         Species::SulfurCube if !baby => sulfur_size(m, 2),
         _ => {}
+    }
+}
+/// `Goat.finalizeSpawn` on a natural spawn (the spawn path in spawning.rs): the ram
+/// cooldowns (`GoatAi.initMemories`), screaming 2 percent of the time and a
+/// horn lost 10 percent of the time, adults only.
+pub fn goat_spawn(m: &mut Mob) {
+    let jump = m
+        .random
+        .next_int_between_inclusive(600, 1200)
+        .unwrap_or(600);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
+    let ram = m
+        .random
+        .next_int_between_inclusive(600, 6000)
+        .unwrap_or(600);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
+    m.extra.screaming = m.random.next_double() < 0.02;
+    age_boundary_reached(m);
+    if !m.is_baby() && m.random.next_float() < 0.1 {
+        let left = m.random.next_boolean();
+        m.extra.lost_horns[usize::from(!left)] = true;
+    }
+}
+/// `SpawnEggItem.spawnsEntity`: the spawn egg is for the mob's own kind, so
+/// it is used on it (`Mob.checkAndHandleImportantInteractions`).
+pub fn spawn_egg_is_for(egg: &str, kind: &str) -> bool {
+    egg.strip_suffix("_spawn_egg") == Some(kind)
+}
+
+/// `SpawnEggItem.spawnOffspringFromSpawnEgg`: the offspring of a spawn egg
+/// used on a mob of the same kind is a baby of that kind: it starts with
+/// the age of a baby and keeps the parent's variant and colour.
+pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color: u8) {
+    set_baby(child, true);
+    child.extra.variant = variant;
+    if species == Species::Sheep {
+        child.extra.color = color;
+    }
+    // `SulfurCube.getBreedOffspring`: `setSize(1, true)`.
+    if species == Species::SulfurCube {
+        sulfur_size(child, 1);
     }
 }
 /// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
@@ -880,7 +954,7 @@ pub fn item(m: &Mob, slot: usize) -> Option<Arc<str>> {
 pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
     let v = Some(Arc::from(id));
     match slot {
-        MAINHAND => m.extra.main_hand = v,
+        MAINHAND => m.extra.set_main_hand(v),
         OFFHAND => m.extra.off_hand = v,
         FEET => m.extra.feet = v,
         LEGS => m.extra.legs = v,
@@ -904,8 +978,8 @@ pub fn set_slot_enchantments(m: &mut Mob, slot: usize, levels: gear::Levels) {
     gear::set(m, gear_slot(slot), levels);
 }
 /// `EquipmentUser.equip` for one rolled stack: `setItemSlot` puts the item in
-/// `slot` with its own enchantments, then the slot's drop chance is stored
-/// when the table names one.
+/// `slot` with its own enchantments and trim (set_components), then the
+/// slot's drop chance is stored when the table names one.
 pub fn equip_stack(
     m: &mut Mob,
     slot: usize,
@@ -920,6 +994,17 @@ pub fn equip_stack(
             .map(|(id, level)| (Arc::from(id.as_str()), (*level).max(0) as u32))
             .collect();
         gear::set(m, gear_slot(slot), levels);
+        let trim = stack
+            .components
+            .iter()
+            .find(|(id, _)| id == "minecraft:trim")
+            .and_then(|(_, v)| {
+                Some((
+                    Arc::from(v["material"].as_str()?),
+                    Arc::from(v["pattern"].as_str()?),
+                ))
+            });
+        gear::set_trim(m, gear_slot(slot), trim);
     }
     if let Some(chance) = drop_chance {
         set_drop_chance(m, slot, chance);
@@ -962,17 +1047,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
 
     /// `Mob.finalizeSpawn`: the follow range spawn bonus and left-handedness.
     fn mob(&mut self, m: &mut Mob, g: Option<Group>) -> Option<Group> {
-        if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
-            let bonus = self.random.triangle(0.0, 0.114_850_000_000_000_01);
-            add_modifier(
-                m,
-                Attr::FollowRange,
-                "minecraft:random_spawn_bonus",
-                bonus,
-                Op::AddMultipliedBase,
-            );
-        }
-        m.extra.left_handed = self.float() < 0.05;
+        mob_spawn(m, self.random);
         g
     }
     /// `AgeableMob.finalizeSpawn`.
@@ -1236,6 +1311,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                         self.finalize(&mut chicken, Reason::Jockey, None);
                         chicken.extra.jockey = true;
                         self.ride(m, &mut chicken);
+                        self.jockey_rider = Some(m.clone());
                         self.created.push(chicken);
                     }
                 }
@@ -1587,7 +1663,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Frog => {
                 self.variant(m, |r| &r.frog);
                 let jump = self.uniform(100, 140);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 self.ageable(m, g)
             }
             S::ZombieNautilus => {
@@ -1701,10 +1777,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 self.horse(m, g)
             }
             S::Goat => {
-                let jump = self.uniform(600, 1200);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
-                let ram = self.uniform(600, 6000);
-                set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+                goat_init_memories(m, self.random);
                 m.extra.screaming = self.random.next_double() < 0.02;
                 age_boundary_reached(m);
                 if !m.is_baby() && self.float() < 0.1 {
@@ -1969,6 +2042,14 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
         None => m.extra.memories.push((name, value, ttl)),
     }
 }
+/// `GoatAi.initMemories`: a long jump cooldown (600 to 1200 ticks) and a ram
+/// cooldown (600 to 6000), drawn from `random`.
+pub fn goat_init_memories(m: &mut Mob, random: &mut impl RandomSource) {
+    let jump = random.next_int_between_inclusive(600, 1200).unwrap_or(600);
+    set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
+    let ram = random.next_int_between_inclusive(600, 6000).unwrap_or(600);
+    set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
+}
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
 pub fn panda_gene(roll: i32) -> u8 {
@@ -2046,6 +2127,46 @@ pub fn sound_variants(s: Species) -> &'static [&'static str] {
         _ => &[],
     }
 }
+/// A sound of the mob's `*_sound_variant` set (`Pig.getSoundSet`,
+/// `Wolf.getSoundSet`, `Cat.getSoundSet`, ...): `kind` is the sound's key
+/// (`ambient`, `hurt`, `step`, `growl`, `purreow`...). Babies use the species'
+/// baby set (cows have none); an adult's set is `entity.<species>.*` for
+/// `classic` and `entity.<species>_<variant>.*` otherwise, except the
+/// footsteps that every variant shares (not the cow's). None for a species
+/// without sound variants.
+pub fn variant_sound(m: &Mob, kind: &str) -> Option<&'static str> {
+    use std::{collections::HashMap, sync::Mutex};
+    let species = m.species();
+    let name = match species {
+        Species::Pig => "pig",
+        Species::Cow => "cow",
+        Species::Chicken => "chicken",
+        Species::Wolf => "wolf",
+        Species::Cat => "cat",
+        _ => return None,
+    };
+    let variant = m
+        .extra
+        .sound_variant
+        .and_then(|i| sound_variants(species).get(i as usize))
+        .copied()
+        .unwrap_or("classic");
+    let id = if m.is_baby() && species != Species::Cow {
+        format!("entity.baby_{name}.{kind}")
+    } else if variant == "classic" || (kind == "step" && species != Species::Cow) {
+        format!("entity.{name}.{kind}")
+    } else {
+        format!("entity.{name}_{variant}.{kind}")
+    };
+    // A handful of ids in all: keep each one as a `&'static str`.
+    static IDS: Mutex<Option<HashMap<String, &'static str>>> = Mutex::new(None);
+    let mut ids = IDS.lock().ok()?;
+    let ids = ids.get_or_insert_with(HashMap::new);
+    Some(
+        *ids.entry(id)
+            .or_insert_with_key(|k| Box::leak(k.clone().into_boxed_str())),
+    )
+}
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {
     let i = index as usize;
@@ -2097,6 +2218,74 @@ mod tests {
         assert_eq!(panda_variant(4, 0), 0);
         assert_eq!(panda_variant(4, 4), 4);
         assert_eq!(panda_variant(6, 0), 6);
+    }
+    /// #2269: the offspring of a spawn egg used on a mob is a baby of that
+    /// kind (`SpawnEggItem.spawnOffspringFromSpawnEgg`), and only the mob's
+    /// own kind takes the egg.
+    #[test]
+    fn a_spawn_egg_offspring_is_a_baby() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(data.types.get("minecraft:cow").unwrap().clone());
+        let mut child = crate::mobs::Mob::new(
+            2,
+            kind,
+            horizon_core::geometry::Vec3::new(0.0, 4.0, 0.0),
+            0.0,
+        );
+        assert!(!child.is_baby());
+        spawn_egg_offspring(&mut child, Species::Cow, 3, 0);
+        // The offspring is a baby of the mob's kind.
+        assert!(child.is_baby());
+        // It keeps the parent's variant.
+        assert_eq!(child.extra.variant, 3);
+        // The egg is for the mob's own kind.
+        assert!(spawn_egg_is_for("minecraft:cow_spawn_egg", "minecraft:cow"));
+        assert!(!spawn_egg_is_for(
+            "minecraft:pig_spawn_egg",
+            "minecraft:cow"
+        ));
+        assert!(!spawn_egg_is_for("minecraft:stick", "minecraft:cow"));
+    }
+    /// #3887: Weakness and Slowness (and Health Boost) carry attribute
+    /// modifiers in vanilla (`MobEffects`), and every effect's amount is
+    /// scaled by the amplifier plus one (`MobEffect.addAttributeModifier`);
+    /// before this only strength and speed were mapped.
+    #[test]
+    fn weakness_slowness_and_health_boost_carry_attribute_modifiers() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let modifier = |effect: &str, amplifier: i32, attr: Attr| {
+            effect_modifier(effect, amplifier, attr).expect("the effect should carry a modifier")
+        };
+        // MobEffects.WEAKNESS: attack damage -4 per level, ADD_VALUE.
+        let (amount, op) = modifier("minecraft:weakness", 0, Attr::AttackDamage);
+        assert!(close(amount, -4.0));
+        assert_eq!(op, Op::AddValue);
+        let (amount, _) = modifier("weakness", 1, Attr::AttackDamage);
+        assert!(close(amount, -8.0));
+        // MobEffects.SLOWNESS: movement speed -0.15F per level, ADD_MULTIPLIED_TOTAL.
+        let (amount, op) = modifier("minecraft:slowness", 0, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(-0.15f32)));
+        assert_eq!(op, Op::AddMultipliedTotal);
+        let (amount, _) = modifier("slowness", 1, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(-0.15f32) * 2.0));
+        // MobEffects.HEALTH_BOOST: max health +4 per level, ADD_VALUE.
+        let (amount, op) = modifier("minecraft:health_boost", 0, Attr::MaxHealth);
+        assert!(close(amount, 4.0));
+        assert_eq!(op, Op::AddValue);
+        // The effects that already worked keep their vanilla amounts.
+        let (amount, _) = modifier("strength", 0, Attr::AttackDamage);
+        assert!(close(amount, 3.0));
+        let (amount, _) = modifier("speed", 0, Attr::MovementSpeed);
+        assert!(close(amount, f64::from(0.2f32)));
+        // An effect does not touch attributes it does not modify.
+        assert!(effect_modifier("weakness", 0, Attr::MovementSpeed).is_none());
+        assert!(effect_modifier("poison", 0, Attr::AttackDamage).is_none());
     }
     #[test]
     fn reasons_round_trip() {

@@ -6,7 +6,7 @@ use super::Game;
 use horizon_client::{
     hud::HudBatch,
     items::ItemStack,
-    mobs::{MobEvent, Species, equine},
+    mobs::{MobEvent, Species, Who, equine},
     sprint::Keys,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -66,7 +66,9 @@ impl Game<'_> {
                 .insert((at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4));
             return true;
         }
-        if !m.extra.saddled || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        // Pig.mobInteract: held food goes to Animal.mobInteract, not a ride.
+        let food = m.kind.food.iter().any(|f| f.as_str() == item);
+        if !m.extra.saddled || food || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
             return false;
         }
         self.riding = Some(m.id);
@@ -87,16 +89,20 @@ impl Game<'_> {
             return false;
         }
         if !self.creative
-            && let Some(stack) = self.inventory[self.selected].as_mut()
+            && let Some(stack) = self.inventory[self.selected].clone()
         {
-            stack.damage += wear;
-            let max = self
-                .res
-                .items()
-                .get(&stack.item)
-                .map_or(25, |i| i.max_damage);
-            if stack.damage >= max {
-                self.inventory[self.selected] = Some(ItemStack::new("minecraft:fishing_rod", 1));
+            self.trigger_item_durability(&stack);
+            if let Some(stack) = self.inventory[self.selected].as_mut() {
+                stack.damage += wear;
+                let max = self
+                    .res
+                    .items()
+                    .get(&stack.item)
+                    .map_or(25, |i| i.max_damage);
+                if stack.damage >= max {
+                    self.inventory[self.selected] =
+                        Some(ItemStack::new("minecraft:fishing_rod", 1));
+                }
             }
         }
         self.swing_arm();
@@ -138,13 +144,36 @@ impl Game<'_> {
         {
             return false;
         }
+        // SkeletonHorse.mobInteract: nothing for an untamed one.
+        if species == Species::SkeletonHorse && !m.extra.tame {
+            return false;
+        }
+        let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+            || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
+        // Horse / ZombieHorse.mobInteract: food is fed, and anything else in
+        // hand makes an untamed one mad instead of seating the player.
+        let dandelion = [self.held(), self.offhand.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|s| &*s.item == "minecraft:golden_dandelion");
+        let mut events = Vec::new();
+        match equine::held_item(
+            &mut self.mobs[index],
+            item,
+            sneaking,
+            dandelion,
+            &mut events,
+        ) {
+            Some(equine::HeldItem::Feed) => return self.feed_mount(index, item),
+            Some(equine::HeldItem::Refused) => {
+                let _ = self.handle_mob_events(events);
+                return true;
+            }
+            None => {}
+        }
         let m = &self.mobs[index];
         // AbstractHorse.mobInteract: shift + use opens a tamed adult's inventory.
-        if !m.is_baby()
-            && m.extra.tame
-            && (self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
-                || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight))
-        {
+        if !m.is_baby() && m.extra.tame && sneaking {
             self.open_mount_menu(index);
             return true;
         }
@@ -159,7 +188,12 @@ impl Game<'_> {
         let tamed = m.extra.tame;
         let sound = if item == "minecraft:saddle" && tamed && !m.extra.saddled {
             m.set_saddle(held);
-            Some("minecraft:entity.horse.saddle")
+            // Camel.getSaddleSound (the equip sound of a camel's saddle).
+            Some(match species {
+                Species::Camel => "minecraft:entity.camel.saddle",
+                Species::CamelHusk => "minecraft:entity.camel_husk.saddle",
+                _ => "minecraft:entity.horse.saddle",
+            })
         } else if item.ends_with("_horse_armor")
             && species == Species::Horse
             && tamed
@@ -259,12 +293,14 @@ impl Game<'_> {
             Species::CamelHusk => "minecraft:entity.camel_husk.eat",
             Species::Donkey => "minecraft:entity.donkey.eat",
             Species::Mule => "minecraft:entity.mule.eat",
+            Species::Horse if m.is_baby() => "minecraft:entity.baby_horse.eat",
             _ => "minecraft:entity.horse.eat",
         };
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
         self.audio.play(sound, Some(at), 1.0, pitch);
         // Animal.setInLove: entity event 18.
         if loved {
+            self.love_cause.insert(id, self.lan_acting);
             self.mob_event_particles(id, 18);
         }
         self.consume_held();
@@ -337,7 +373,16 @@ impl Game<'_> {
             }
             // The nautilus plays its dash sound itself.
             if equine::is_equine(m.species()) {
-                let sound = "minecraft:entity.horse.jump";
+                // playJumpSound: Donkey and Mule have their own; a skeleton
+                // horse in water splashes.
+                let sound = match m.species() {
+                    Species::Donkey => "minecraft:entity.donkey.jump",
+                    Species::Mule => "minecraft:entity.mule.jump",
+                    Species::SkeletonHorse if m.fluids.in_water => {
+                        "minecraft:entity.skeleton_horse.jump_water"
+                    }
+                    _ => "minecraft:entity.horse.jump",
+                };
                 let at = m.center();
                 self.audio.play(sound, Some(at), 0.4, 1.0);
             }
@@ -353,6 +398,9 @@ impl Game<'_> {
             steer,
             sprint: keys.sprint || self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
             jumping: keys.jump,
+            // A server's player (a LAN guest, single player's window) drives
+            // a horse from its own client (`handleMoveVehicle`).
+            client: self.lan_acting.is_some(),
         });
         true
     }
@@ -475,10 +523,31 @@ impl Game<'_> {
             MobEvent::Buck { mob } => {
                 if self.riding == Some(mob) {
                     self.dismount_mount();
+                } else {
+                    // ejectPassengers: a server's player gets off too
+                    // (leave_guest tells their client).
+                    let rider = self.lan.as_ref().and_then(|h| {
+                        h.hub
+                            .guests
+                            .iter()
+                            .find(|g| g.vehicle == Some(mob))
+                            .map(|g| g.conn)
+                    });
+                    if let Some(conn) = rider
+                        && let Some(mut host) = self.lan.take()
+                    {
+                        self.as_guest(&mut host, conn, |g| g.dismount_mount());
+                        self.lan = Some(host);
+                    }
                 }
                 // RunAroundLikeCrazyGoal.tick: entity event 6, smoke.
                 self.mob_event_particles(mob, 6);
             }
+            // `LivingEntity.stabAttack`: `target.stopRiding()`.
+            MobEvent::StabDismount { target } => match target {
+                Who::Player => self.stop_riding(),
+                Who::Mob(id) => self.dismount_mob(id),
+            },
             _ => {}
         }
     }

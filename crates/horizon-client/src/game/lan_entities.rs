@@ -7,9 +7,10 @@ use super::Game;
 use horizon_client::lan::{
     entity::{EntityState, Riding, States},
     hub::Hub,
+    playerdata::ints_uuid,
 };
 use horizon_protocol::entity_data::{Value, serializer};
-use horizon_world::nbt::Tag;
+use horizon_world::{nbt::Tag, registry::BlockStateId};
 
 fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> EntityState {
     EntityState {
@@ -30,6 +31,7 @@ fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> 
         precise: false,
         needs_sync: false,
         leash: None,
+        spectator: false,
     }
 }
 
@@ -123,8 +125,12 @@ impl Game<'_> {
             e.meta = vehicle_meta(c.hurt_time, c.hurt_dir, c.damage);
             match c.kind {
                 // MinecartFurnace.DATA_ID_FUEL.
-                super::minecarts::CartKind::Furnace if c.fuel > 0 => {
-                    e.meta.push((13, serializer::BOOLEAN, Value::Bool(true)));
+                super::minecarts::CartKind::Furnace => {
+                    e.defaults
+                        .push((13, serializer::BOOLEAN, Value::Bool(false)));
+                    if c.fuel > 0 {
+                        e.meta.push((13, serializer::BOOLEAN, Value::Bool(true)));
+                    }
                 }
                 // MinecartCommandBlock.DATA_ID_COMMAND_NAME.
                 super::minecarts::CartKind::CommandBlock => {
@@ -153,8 +159,15 @@ impl Game<'_> {
             );
             e.head_yaw = a.yaw;
             e.velocity = [a.velocity.x, a.velocity.y, a.velocity.z];
+            let mut flags = 0i8;
             if a.fire_ticks > 0 {
-                e.meta.push((0, serializer::BYTE, Value::Byte(1)));
+                flags |= 1;
+            }
+            if a.invisible {
+                flags |= 0x20;
+            }
+            if flags != 0 {
+                e.meta.push((0, serializer::BYTE, Value::Byte(flags)));
             }
             // LivingEntity.DATA_HEALTH_ID: 1 until the stand's max health is set.
             e.meta.push((9, serializer::FLOAT, Value::Float(a.health)));
@@ -167,6 +180,24 @@ impl Game<'_> {
                 e.meta.push((15, serializer::BYTE, Value::Byte(flags)));
             }
             e.meta.extend(stand_poses(a));
+            // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE: a hologram's text.
+            if let Some(name) = &a.custom_name {
+                e.meta.push((
+                    2,
+                    serializer::OPTIONAL_COMPONENT,
+                    Value::OptText(Some(horizon_client::scoreboard::json_to_tag(
+                        &name.component(),
+                    ))),
+                ));
+                if a.name_visible {
+                    e.meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
+                }
+            }
+            // A name taken away or hidden again (`/data`) is sent as none / false.
+            e.defaults
+                .push((2, serializer::OPTIONAL_COMPONENT, Value::OptText(None)));
+            e.defaults
+                .push((3, serializer::BOOLEAN, Value::Bool(false)));
             // A pose put back to its default (`/data`) is sent as that default.
             e.defaults.push((15, serializer::BYTE, Value::Byte(0)));
             for (i, default) in horizon_client::entities::ArmorStand::DEFAULT_POSE
@@ -203,6 +234,9 @@ impl Game<'_> {
                 _ => 0.0,
             };
             e.data = i32::from(f.facing);
+            if f.invisible {
+                e.meta.push((0, serializer::BYTE, Value::Byte(0x20)));
+            }
             // HangingEntity.DATA_DIRECTION, south by default.
             if f.facing != 3 {
                 e.meta
@@ -258,18 +292,110 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        // DATA_ITEM, `ItemStack.EMPTY` by default.
+        for o in self.ominous_spawners.iter().filter(|o| o.id != 0) {
+            let mut e = state(
+                o.id,
+                "minecraft:ominous_item_spawner",
+                o.position,
+                0.0,
+                false,
+            );
+            e.meta.push((
+                8,
+                serializer::ITEM_STACK,
+                Value::Item(hub.stack(&Some(o.item.clone()))),
+            ));
+            out.push(e);
+        }
         self.lan_projectile_states(host_entity, hub, out);
         for o in &self.others {
             let p = o.position;
             let mut e = state(o.id, &o.kind, [p.x, p.y, p.z], o.yaw, false);
             e.pitch = o.pitch;
             e.head_yaw = o.yaw;
+            if let Some(tag) = self.persist.raw.get(&o.id) {
+                self.lan_display_data(tag, hub, &mut e);
+            }
             out.push(e);
         }
     }
 }
 
 impl Game<'_> {
+    /// The synched data of a text, block or item display kept unsimulated,
+    /// from its compound (`Display.readAdditionalSaveData`), with the
+    /// defaults to send when a value goes back to one.
+    fn lan_display_data(&self, tag: &Tag, hub: &mut Hub, e: &mut EntityState) {
+        use horizon_client::text_display::{display_data, text_display_data};
+        let empty = Tag::Compound(Default::default());
+        let (meta, defaults) = match e.kind.as_str() {
+            "minecraft:text_display" => (
+                text_display_data(tag, false),
+                text_display_data(&empty, true),
+            ),
+            "minecraft:block_display" => {
+                // DATA_BLOCK_STATE_ID, air by default.
+                let state = |t: Option<BlockStateId>| {
+                    (
+                        23,
+                        serializer::BLOCK_STATE,
+                        Value::Id(t.map_or(0, |s| s.0 as i32)),
+                    )
+                };
+                let air = self.pack.assets.registry.default_state("minecraft:air");
+                let shown = tag.get("block_state").and_then(|t| self.state_from_nbt(t));
+                (vec![state(shown.or(air))], vec![state(air)])
+            }
+            "minecraft:item_display" => {
+                // DATA_ITEM_STACK and DATA_ITEM_DISPLAY_ID (`ItemDisplayContext`).
+                let item = tag
+                    .get("item")
+                    .and_then(horizon_client::save::item_from_nbt);
+                let context = match tag.get("item_display") {
+                    Some(Tag::String(s)) => match s.to_string_lossy().as_str() {
+                        "thirdperson_lefthand" => 1,
+                        "thirdperson_righthand" => 2,
+                        "firstperson_lefthand" => 3,
+                        "firstperson_righthand" => 4,
+                        "head" => 5,
+                        "gui" => 6,
+                        "ground" => 7,
+                        "fixed" => 8,
+                        "on_shelf" => 9,
+                        _ => 0,
+                    },
+                    _ => 0,
+                };
+                (
+                    vec![
+                        (23, serializer::ITEM_STACK, Value::Item(hub.stack(&item))),
+                        (24, serializer::BYTE, Value::Byte(context)),
+                    ],
+                    vec![
+                        (23, serializer::ITEM_STACK, Value::Item(None)),
+                        (24, serializer::BYTE, Value::Byte(0)),
+                    ],
+                )
+            }
+            _ => return,
+        };
+        e.meta = display_data(tag, false);
+        e.meta.extend(meta);
+        e.defaults = display_data(&empty, true);
+        e.defaults.extend(defaults);
+    }
+
+    /// `ClientboundAddEntityPacket(Entity, ServerEntity, int)`: the entity's
+    /// own UUID (`Entity.getUUID`), the one `/data`, saves and UUID
+    /// selectors use, so a client can name it back (the crosshair UUID that
+    /// `ClientSuggestionProvider.getSelectedEntities` suggests).
+    pub(super) fn lan_entity_uuids(&mut self, states: &mut States) {
+        for e in states.as_mut_slice() {
+            e.uuid = ints_uuid(self.uuid_for(e.id as u32));
+        }
+    }
+
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {
@@ -308,6 +434,9 @@ impl Game<'_> {
         self.rockets.iter_mut().for_each(|r| give(&mut r.id));
         self.crystals.iter_mut().for_each(|c| give(&mut c.id));
         self.bolts.iter_mut().for_each(|b| give(&mut b.id));
+        self.ominous_spawners
+            .iter_mut()
+            .for_each(|o| give(&mut o.id));
         self.potions.thrown_ids().for_each(&mut give);
         self.end.eye_ids().for_each(&mut give);
         self.breath_clouds.iter_mut().for_each(|b| give(&mut b.id));
@@ -359,7 +488,12 @@ impl Game<'_> {
         }
         for p in self.creatures.projectiles.iter().filter(|p| p.id != 0) {
             use horizon_client::projectiles::ProjectileKind as K;
-            let kind = p.kind.id();
+            // A spectral arrow is its own entity type.
+            let kind = if p.is_spectral_arrow() {
+                "minecraft:spectral_arrow"
+            } else {
+                p.kind.id()
+            };
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
@@ -378,6 +512,11 @@ impl Game<'_> {
                         a.map_or(0, |a| a.pierce),
                         a.is_some_and(|a| a.in_ground) || p.stuck,
                     ));
+                    // Arrow.ID_EFFECT_COLOR, -1 by default.
+                    let color = p.arrow_effect_color();
+                    if color != -1 {
+                        e.meta.push((11, serializer::INT, Value::Int(color)));
+                    }
                 }
                 // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
                 // AbstractArrow's flags.
@@ -425,9 +564,12 @@ impl Game<'_> {
             let mut e = state(t.id, "minecraft:trident", at(t.position), t.yaw, false);
             e.pitch = t.pitch;
             e.velocity = at(t.velocity);
-            // Projectile.getAddEntityPacket: the owner's id; a trident here is
-            // always the host player's.
-            e.data = owner(Some(horizon_client::mobs::Who::Player));
+            // Projectile.getAddEntityPacket: the owner's id, the guest's that
+            // threw it.
+            e.data = match t.guest.and_then(|conn| hub.guest(conn)) {
+                Some(g) => g.entity_id,
+                None => owner(Some(horizon_client::mobs::Who::Player)),
+            };
             e.meta = arrow_meta(false, t.no_physics, 0, t.in_ground);
             // ThrownTrident.ID_LOYALTY and ID_FOIL.
             if t.loyalty != 0 {

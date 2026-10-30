@@ -1,7 +1,7 @@
 //! Primed TNT (`PrimedTnt`): 80-tick fuse, gravity and drag, explosion of
 //! power 4, `TntRenderer` swell and white flash, and `TntBlock.useItemOn`
 //! (flint and steel / fire charge).
-use super::{Game, explosion::BlockInteraction};
+use super::Game;
 use horizon_client::{Result, collisions::SceneCollisions, items::ItemStack, mesher::Vertex};
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -178,8 +178,10 @@ impl Game<'_> {
                 ];
                 self.tnts.remove(i);
                 count -= 1;
+                // ExplosionInteraction.TNT: the tnt_explosion_drop_decay rule.
+                let interaction = self.destroy_type("tnt_explosion_drop_decay");
                 self.with_hive_emptying_blast(|g| {
-                    g.server_explode(center, 4.0, BlockInteraction::Destroy, false)
+                    g.server_explode(center, 4.0, interaction, false)
                 })?;
             } else {
                 i += 1;
@@ -409,11 +411,10 @@ impl FluidInteractionWorld for TntFluidWorld<'_> {
         Ok(self.world.chunks.contains_key(&(x, z)).then_some((x, z)))
     }
     fn chunk_sections(&mut self, _: Self::Chunk) -> std::io::Result<FluidSections<'_>> {
-        static SECTIONS: [bool; horizon_client::chunk::SECTIONS] =
-            [true; horizon_client::chunk::SECTIONS];
+        let layout = self.world.layout();
         Ok(FluidSections {
-            minimum_section_y: horizon_client::chunk::MIN_Y / 16,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() / 16,
+            has_fluid: horizon_client::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {
