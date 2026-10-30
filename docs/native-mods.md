@@ -113,6 +113,10 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds `native_level_tick_pre` and `native_level_tick_post`, server-side observations around each
+level tick pass. Each receives the dimension ID; neither can cancel the tick. Paused and held passes fire
+neither hook, and an error skips the post hook. Bundles that use them need `"hooks": 23`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
