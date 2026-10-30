@@ -130,6 +130,50 @@ impl ServerAdvancements {
         }
     }
 
+    /// `PlayerAdvancements.reload` (`PlayerList.reloadResources`): the
+    /// progress is read again against the new tree (`applyFrom` ignores an
+    /// advancement that no longer exists and `AdvancementProgress.update`
+    /// drops a criterion it lost), the next `flushDirty` is a first packet
+    /// again, and the next `CriteriaTriggers.TICK` meets the new tree's
+    /// `minecraft:tick` criteria, rewarding the recipes of the advancements
+    /// that complete. Returns the recipe book packet those recipes need.
+    pub fn reload(
+        &self,
+        sync: &SyncData,
+        now_millis: i64,
+        progress: &mut Progress,
+        book: &mut Settings,
+    ) -> Option<Vec<u8>> {
+        let by_id: HashMap<&str, &crate::advancements::Advancement> =
+            self.tree.list.iter().map(|a| (a.id.as_str(), a)).collect();
+        progress
+            .criteria
+            .retain(|id, got| match by_id.get(id.as_str()) {
+                Some(a) => {
+                    got.retain(|name, _| a.criteria.iter().any(|c| &c.name == name));
+                    true
+                }
+                None => false,
+            });
+        let date = crate::advancements::date_text(now_millis.div_euclid(1000));
+        let mut entries = Vec::new();
+        for a in &self.tree.list {
+            let was_done = progress.done(a);
+            for c in &a.criteria {
+                if c.trigger == "minecraft:tick" && c.conditions.is_null() {
+                    progress.grant(&a.id, &c.name, &date);
+                }
+            }
+            if !was_done && progress.done(a) {
+                book.add_recipes(&self.displays, &a.rewards.recipes);
+                for id in &a.rewards.recipes {
+                    entries.extend(self.book_entries(id, sync, NOTIFY_AND_HIGHLIGHT));
+                }
+            }
+        }
+        (!entries.is_empty()).then(|| book_add(entries, false))
+    }
+
     /// `PlayerAdvancements.flushDirty`: the advancements that became visible
     /// or hidden since `visible` (which it updates; empty before the first
     /// packet, which resets the client's and carries everything visible) and
