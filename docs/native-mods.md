@@ -42,6 +42,10 @@ mod shows one.
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
+API 4 adds authoritative server tick events through `native_server_tick`: start and end of each non-paused
+server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
+use these events need `"hooks": 4`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -154,3 +158,15 @@ Keep an existing contract or add a new version when it changes incompatibly.
 The catalog does not cover helper methods or arbitrary private game code.
 Named injection resolution needs a matching horizon-mixins change; existing raw
 targets and the `hooks` metadata continue to work as before.
+
+### Reading server blocks (draft)
+
+A native server tick hook can call `native_server_block` with its context, a dimension id and a block position. It returns the block name and state properties from a loaded chunk. It does not load a chunk or open a dimension. Reads outside that hook, from a stale context, from unavailable dimensions or outside the world bounds return an error.
+
+### Neighbour observations (draft)
+
+`native_neighbor_changed` observes each authoritative server `neighborChanged` before the block handles it. It supplies the dimension, position, current state ID, changed block ID and moved flag. Resolve IDs with the level's registries during the hook; the hook does not load chunks or change the update queue.
+
+### Server block changes (draft)
+
+`native_block_changed` observes a committed authoritative server `Level.setBlock` change before block side effects and neighbour updates. It supplies the dimension, position and old and new state IDs. It does not observe chunk loading or direct storage writes that bypass `Level.setBlock`.

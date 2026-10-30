@@ -29,6 +29,10 @@ submissions per account and sixty in all per hour; thirty ratings per account an
 rate it, and only projects on the registry's `main` can be rated. Only an entry's `owners` publish its updates; a key change, an icon in the repository or anything else
 is a pull request by hand.
 
+A refused submission is always `{error}` JSON, sent once the upload is over (a browser still sending when the answer
+comes reports a network error instead): 413 for a file over 64 MiB, 504 when GitHub doesn't answer in time (30 s a
+call, 5 minutes for the file's upload), 502 for GitHub's other failures.
+
 ## Running it
 
 ```sh

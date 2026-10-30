@@ -37,6 +37,10 @@ pub struct GitHub {
     pub client_secret: String,
     /// Fine-grained, this repository only: contents and pull requests.
     pub bot_token: String,
+    /// How long one call may take, and the file's upload: past it, the
+    /// submitter is told GitHub is slow rather than left waiting.
+    pub call_timeout: Duration,
+    pub upload_timeout: Duration,
     agent: ureq::Agent,
 }
 
@@ -45,6 +49,25 @@ pub struct GitHub {
 pub struct Failure {
     pub status: u16,
     pub message: String,
+    /// GitHub didn't answer in time.
+    pub timed_out: bool,
+}
+
+/// Whether `e`, or what caused it, is a timeout.
+fn timed_out(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(e);
+    while let Some(e) = cause {
+        if e.downcast_ref::<std::io::Error>().is_some_and(|e| {
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            )
+        }) {
+            return true;
+        }
+        cause = e.source();
+    }
+    false
 }
 
 type Result<T> = std::result::Result<T, Failure>;
@@ -59,9 +82,11 @@ fn failure(e: ureq::Error) -> Failure {
                 .chars()
                 .take(300)
                 .collect(),
+            timed_out: false,
         },
         other => Failure {
             status: 0,
+            timed_out: timed_out(&other),
             message: other.to_string(),
         },
     }
@@ -70,6 +95,7 @@ fn failure(e: ureq::Error) -> Failure {
 fn read(response: ureq::Response) -> Result<Value> {
     response.into_json().map_err(|e| Failure {
         status: 0,
+        timed_out: timed_out(&e),
         message: e.to_string(),
     })
 }
@@ -83,7 +109,7 @@ impl GitHub {
         bot_token: String,
     ) -> GitHub {
         let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(60))
+            .timeout_connect(Duration::from_secs(10))
             .user_agent("horizon-mod-registry")
             .build();
         GitHub {
@@ -92,6 +118,8 @@ impl GitHub {
             client_id,
             client_secret,
             bot_token,
+            call_timeout: Duration::from_secs(30),
+            upload_timeout: Duration::from_secs(300),
             agent,
         }
     }
@@ -112,6 +140,7 @@ impl GitHub {
         let token = self
             .agent
             .post(&format!("{}/login/oauth/access_token", self.at.web))
+            .timeout(self.call_timeout)
             .set("Accept", "application/json")
             .send_json(json!({
                 "client_id": self.client_id,
@@ -125,11 +154,13 @@ impl GitHub {
             return Err(Failure {
                 status: 401,
                 message: "GitHub refused the sign-in".into(),
+                timed_out: false,
             });
         };
         let user = self
             .agent
             .get(&format!("{}/user", self.at.api))
+            .timeout(self.call_timeout)
             .set("Authorization", &format!("Bearer {token}"))
             .set("Accept", "application/vnd.github+json")
             .call()
@@ -140,6 +171,7 @@ impl GitHub {
             _ => Err(Failure {
                 status: 0,
                 message: "GitHub sent no login".into(),
+                timed_out: false,
             }),
         }
     }
@@ -150,6 +182,7 @@ impl GitHub {
                 method,
                 &format!("{}/repos/{}{path}", self.at.api, self.repo),
             )
+            .timeout(self.call_timeout)
             .set("Authorization", &format!("Bearer {}", self.bot_token))
             .set("Accept", "application/vnd.github+json")
             .set("X-GitHub-Api-Version", "2022-11-28")
@@ -174,6 +207,7 @@ impl GitHub {
         let entry = toml::from_str(&String::from_utf8_lossy(&bytes)).map_err(|e| Failure {
             status: 0,
             message: format!("mods/{id}.toml on main: {e}"),
+            timed_out: false,
         })?;
         Ok(Some((entry, file["sha"].as_str().unwrap_or("").to_owned())))
     }
@@ -196,6 +230,7 @@ impl GitHub {
         let bytes = std::fs::read(path).map_err(|e| Failure {
             status: 0,
             message: e.to_string(),
+            timed_out: false,
         })?;
         self.agent
             .post(&format!(
@@ -203,6 +238,7 @@ impl GitHub {
                 self.at.uploads, self.repo
             ))
             .query("name", name)
+            .timeout(self.upload_timeout)
             .set("Authorization", &format!("Bearer {}", self.bot_token))
             .set("Accept", "application/vnd.github+json")
             .set("Content-Type", "application/octet-stream")
