@@ -157,6 +157,7 @@ mod moving_pistons;
 mod music;
 mod names;
 mod native_hooks;
+mod native_lifecycle;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
@@ -1974,6 +1975,8 @@ struct Game<'a> {
     panel: native_panel::Panel,
     /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
     native_shaders: native_shaders::NativeShaders,
+    /// The native lifecycle bookkeeping.
+    native_lifecycle: native_lifecycle::NativeLifecycle,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -14740,6 +14743,7 @@ impl<'a> Game<'a> {
             recipe_tables: Default::default(),
             panel: Default::default(),
             native_shaders: Default::default(),
+            native_lifecycle: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,
