@@ -637,6 +637,12 @@ impl Game<'_> {
     pub(super) fn native_screen_title(&self) -> Option<String> {
         self.remote_menu_title().map(|t| t.plain())
     }
+    /// The block at `pos` (`mymod:cable`; air where nothing is loaded).
+    /// API 9.
+    pub(super) fn native_block(&self, pos: [i32; 3]) -> String {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.res.facts().get(state).name.to_string()
+    }
     /// Property `key` of the block at `pos` (a machine's `facing`), if it
     /// has one. API 9.
     pub(super) fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> {
