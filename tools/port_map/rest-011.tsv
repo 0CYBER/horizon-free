@@ -49,7 +49,7 @@ HoverEvent.EntityTooltipInfo.getTooltipLines	missing		player: hovering a player 
 HoverEvent.EntityTooltipInfo.equals	skip:java		value equality
 HoverEvent.EntityTooltipInfo.hashCode	skip:java		hashing
 LastSeenMessages.updateSignature	inline	crates/horizon-protocol/src/secure_chat.rs::signed_payload	the last-seen list written into the signed payload
-LastSeenMessages.Packed.unpack	missing		minor: the client does not unpack the packed last-seen list of other players' messages
+LastSeenMessages.Packed.unpack	inline	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm
 LastSeenMessages.Update.verifyChecksum	inline	crates/horizon-protocol/src/secure_chat.rs::LastSeenValidator::apply_update	the checksum check; 0 means not checked
 LastSeenMessagesTracker.addPending	missing		minor: the client-side last-seen tracker is absent; Horizon's client sends an empty last-seen update
 LastSeenMessagesTracker.addEntry	missing		minor: part of the client-side last-seen tracker, which is absent
@@ -58,7 +58,7 @@ LastSeenMessagesTracker.generateAndApplyUpdate	missing		minor: the client never 
 LastSeenTrackedEntry.acknowledge	missing		minor: part of the client-side last-seen tracker, which is absent
 LocalChatSession.createMessageEncoder	missing		player: Horizon's client never signs chat (no chat key); on a server that enforces secure chat, its messages are refused
 MessageSignature.equals	skip:java		value equality
-MessageSignature.Packed.unpack	missing		minor: the client does not unpack packed signatures from other players' messages
+MessageSignature.Packed.unpack	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::unpack	
 MessageSignatureCache.push	port	crates/horizon-protocol/src/secure_chat.rs::SignatureCache::push	
 MutableComponent.withColor	port	crates/horizon-client-core/src/text.rs::Text::with_color	
 MutableComponent.getVisualOrderText	skip:ui		bidi reordering for drawing; Horizon lays text out in logical order
@@ -78,7 +78,7 @@ RemoteChatSession.createMessageValidator	port	crates/horizon-protocol/src/secure
 ResolutionContext.Builder.build	skip:java		builder
 SignableCommand.getArgument	port	crates/horizon-client/src/lan/hub/chat.rs::Hub::signed_arguments	the command's message arguments, looked up by name
 SignedMessageBody.updateSignature	inline	crates/horizon-protocol/src/secure_chat.rs::signed_payload	salt, time, content and last seen in the signed payload
-SignedMessageBody.Packed.unpack	missing		minor: the client does not unpack packed bodies of other players' messages
+SignedMessageBody.Packed.unpack	inline	crates/horizon-client/src/game/remote.rs::Game::handle_packet	PlayerChat arm: the last seen only, the body is not kept
 SignedMessageChain.encoder	missing		player: client-side signing; Horizon's client never signs, so chat is refused on servers that enforce secure chat
 SignedMessageChain.Decoder.unsigned	port	crates/horizon-protocol/src/secure_chat.rs::Chain::unpack	no session: unsigned, or refused when the server enforces secure chat
 SignedMessageLink.updateSignature	inline	crates/horizon-protocol/src/secure_chat.rs::signed_payload	sender, session and index in the signed payload

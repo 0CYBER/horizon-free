@@ -12,6 +12,8 @@ pub(super) struct WorldRequest {
 
 pub(super) struct PreparedWorld {
     pub save_root: PathBuf,
+    /// The levels' shapes, from the world's dimension types.
+    pub shapes: horizon_client::chunk::LevelShapes,
     pub level: Level,
     pub world: World,
     pub streaming: Streaming,
@@ -115,11 +117,14 @@ impl WorldRequest {
             level.position = None;
         }
         let dim = Dim::from_id(&level.dimension);
-        let (mut streaming, save, locator) =
-            make_streaming(res, pack, options, settings, &save_root, dim, level.seed)?;
+        let shapes = level_shapes(&save_root, res.biomes());
+        let shape = shapes.get(dim.id());
+        let (mut streaming, save, locator) = make_streaming(
+            res, pack, options, settings, &save_root, dim, shape, level.seed,
+        )?;
         streaming.radius = settings.render_distance;
         let mut world = World::new(res.facts().air, level.seed);
-        world.shape = dim.shape();
+        world.shape = shape;
         world.fast_lava = dim == Dim::Nether;
         world.game_time = level.time;
         world.day_time = options.time.unwrap_or(level.day_time);
@@ -146,6 +151,7 @@ impl WorldRequest {
         }
         Ok(PreparedWorld {
             save_root,
+            shapes,
             level,
             world,
             streaming,
@@ -337,6 +343,46 @@ fn world_worldgen_overrides(
     overrides
 }
 
+/// The shapes of the world's levels: their dimension types, the world's
+/// enabled data packs' over vanilla's. A type the codec refuses keeps the
+/// vanilla shape, with a warning.
+pub(super) fn level_shapes(
+    world_root: &std::path::Path,
+    biomes: &horizon_client::biome::Biomes,
+) -> horizon_client::chunk::LevelShapes {
+    use horizon_client::chunk::{LevelShape, LevelShapes};
+    let packs = horizon_client::datapack::discover(world_root);
+    let enabled = horizon_client::datapack::enabled_ids(world_root, &packs);
+    let enabled: Vec<_> = enabled
+        .iter()
+        .filter_map(|id| packs.iter().find(|p| &p.id == id))
+        .collect();
+    let mut shapes = LevelShapes::VANILLA;
+    if enabled.is_empty() {
+        return shapes;
+    }
+    // What the packs leave out is logged when the generator reads them.
+    let (overrides, _) =
+        horizon_client::datapack::worldgen_overrides(&enabled, |b| biomes.contains(b));
+    for level in [
+        "minecraft:overworld",
+        "minecraft:the_nether",
+        "minecraft:the_end",
+    ] {
+        let shape = overrides.level_height(level).and_then(|h| {
+            LevelShape::new(h.min_y, h.height, h.logical_height, h.has_skylight).ok()
+        });
+        match shape {
+            Some(shape) => *shapes.get_mut(level) = shape,
+            None => log::warn!(
+                "Horizon: data pack worldgen: the dimension type of {level} is not one the \
+                 game accepts; the level keeps the vanilla build height"
+            ),
+        }
+    }
+    shapes
+}
+
 pub(super) fn make_streaming(
     res: &Resources,
     pack: &PackResources,
@@ -344,11 +390,12 @@ pub(super) fn make_streaming(
     settings: &Settings,
     world_root: &std::path::Path,
     dim: Dim,
+    shape: horizon_client::chunk::LevelShape,
     seed: i64,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
     let save = Arc::new(SaveDir::new(
         horizon_client::save::dimension_dir(world_root, dim.id()),
-        dim.shape(),
+        shape,
     ));
     let mut locator = None;
     let flat = (dim == Dim::Overworld)
@@ -359,7 +406,7 @@ pub(super) fn make_streaming(
                 &s,
                 pack.assets.registry,
                 res.biomes(),
-                dim.shape(),
+                shape,
             )
         });
     let mut streaming = if let Some(inner) = flat {

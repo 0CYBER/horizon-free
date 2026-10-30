@@ -607,7 +607,7 @@ pub fn tick(
     } else {
         ai_step(m, w, level_random, events);
     }
-    effects_from_blocks(m, w);
+    effects_from_blocks(m, w, level_random, events);
     if m.species() == Species::Rabbit {
         super::rabbit::post_tick(m);
     }
@@ -648,12 +648,30 @@ pub fn tick(
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
-/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1), the
-/// cobweb (stuck at 0.25, 0.05, 0.25) and the sweet berry bush
+/// that hurt, hold or slide a mob: the cactus (`CactusBlock.entityInside`, 1),
+/// the cobweb (stuck at 0.25, 0.05, 0.25), the sweet berry bush
 /// (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75, 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
-/// or Z this tick). The blocks are those the mob's box touches anywhere along
-/// its move this tick, from where it started to where it ended.
-fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
+/// or Z this tick) and the honey block (`honey_slide`). The blocks are those
+/// the mob's box touches anywhere along its move this tick, from where it
+/// started to where it ended.
+fn effects_from_blocks(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    // Block.stepOn for the block under a mob on the ground (`getOnPosLegacy`):
+    // MagmaBlock.stepOn's hot floor, 1 damage (a mob never sneaks).
+    if m.on_ground && m.alive() {
+        let (x, y, z) = (
+            m.position.x.floor() as i32,
+            (m.position.y - f64::from(0.2_f32)).floor() as i32,
+            m.position.z.floor() as i32,
+        );
+        if w.block_name(x, y, z) == "minecraft:magma_block" {
+            m.damage(1.0, Damage::of(DamageKind::HotFloor));
+        }
+    }
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);
     let longest = travel.x.abs().max(travel.y.abs()).max(travel.z.abs());
@@ -719,12 +737,63 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                                 m.damage(1.0, Damage::of(DamageKind::SweetBerryBush));
                             }
                         }
+                        "minecraft:honey_block" => honey_slide(m, p, level_random, events),
                         _ => continue,
                     }
                     visited.push(p);
                 }
             }
         }
+    }
+}
+/// `HoneyBlock.entityInside` for a mob: a falling mob beside the honey block at
+/// `p` slides down it (`isSlidingDown`, `doSlideMovement`, `maybeDoSlideEffects`).
+fn honey_slide(
+    m: &mut Mob,
+    p: [i32; 3],
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+    let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+    let [x, y, z] = p.map(f64::from);
+    let pos = m.position;
+    if m.on_ground || pos.y > y + 0.9375 - 1.0e-7 || old_delta_y(m.velocity.y) >= -0.08 {
+        return;
+    }
+    let dx = (x + 0.5 - pos.x).abs();
+    let dz = (z + 0.5 - pos.z).abs();
+    let overlap = 0.4375 + f64::from(m.width()) / 2.0;
+    if dx + 1.0e-7 <= overlap && dz + 1.0e-7 <= overlap {
+        return;
+    }
+    // doSlideMovement
+    let v = m.velocity;
+    let old = old_delta_y(v.y);
+    m.velocity = if old < -0.13 {
+        let factor = -0.05 / old;
+        Vec3::new(v.x * factor, new_delta_y(-0.05), v.z * factor)
+    } else {
+        Vec3::new(v.x, new_delta_y(-0.05), v.z)
+    };
+    m.fall_distance = 0.0;
+    // maybeDoSlideEffects: the slide sound (one time in five, unless silent),
+    // then the server's entity event 53 (one time in five).
+    let sound = level_random.next_int_bound(5).unwrap_or(1) == 0;
+    if sound && !m.silent {
+        events.push(MobEvent::Sound(
+            "block.honey_block.slide",
+            [pos.x, pos.y, pos.z],
+            1.0,
+            1.0,
+        ));
+    }
+    if level_random.next_int_bound(5).unwrap_or(1) == 0 {
+        events.push(MobEvent::EntityEvent {
+            mob: m.id,
+            event: 53,
+            at: [pos.x, pos.y, pos.z],
+        });
     }
 }
 /// LivingEntity.updateSwingTime.
@@ -932,7 +1001,7 @@ fn freeze_tick(m: &mut Mob, w: &MobWorld) {
 }
 /// Whether the mob's box (shrunk by `1.0E-5`, as in `Entity.checkInsideBlocks`)
 /// touches powder snow.
-fn in_powder_snow(m: &Mob, w: &MobWorld) -> bool {
+pub(super) fn in_powder_snow(m: &Mob, w: &MobWorld) -> bool {
     let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
     let (min, max) = (b.min_position(), b.max_position());
     for x in min.x.floor() as i32..=max.x.floor() as i32 {
@@ -1124,7 +1193,13 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         f64::from(m.ai.yya),
         f64::from(m.ai.zza),
     );
-    m.travel(w, input, events);
+    if super::equine::moved_by_client(m) {
+        // LivingEntity.travelRidden: the rider's client moves it
+        // (handleMoveVehicle), so the server only stops it.
+        m.velocity = Vec3::ZERO;
+    } else {
+        m.travel(w, input, events);
+    }
     push_entities(m, w, events);
     // Spider.tick: climbing while pressed against a wall.
     if m.kind.flags.climber {
@@ -2624,6 +2699,51 @@ mod same_vehicle_push_tests {
         assert_eq!(velocity, Vec3::ZERO, "its rider pushes the camel");
         let (pushed, _) = push(true).unwrap();
         assert_eq!(pushed, vec![3], "the camel pushes the zombie");
+    }
+}
+
+#[cfg(test)]
+mod ridden_tests {
+    use super::*;
+    use crate::mobs::world::with_test_world;
+
+    /// #2920: a saddled horse ridden forward, ticked on the server; with
+    /// `client` its rider's client moves it (`travelRidden` without
+    /// `canSimulateMovement`): it only turns to the rider's look and stops.
+    fn ridden(client: bool) -> Option<Mob> {
+        let mut out = None;
+        with_test_world(&[], |w, types| {
+            let kind = std::sync::Arc::new(types.types["minecraft:horse"].clone());
+            let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.set_saddle(Some(crate::items::ItemStack::new("minecraft:saddle", 1)));
+            m.persistent = true;
+            m.rider = Some(super::super::equine::Rider {
+                forward: 1.0,
+                yaw: 90.0,
+                client,
+                ..Default::default()
+            });
+            let (mut random, mut events) = (LegacyRandom::new(0), Vec::new());
+            for _ in 0..5 {
+                tick(&mut m, w, &mut random, &mut events);
+            }
+            out = Some(m);
+        });
+        out
+    }
+
+    #[test]
+    fn the_server_leaves_a_horse_to_its_riders_client() {
+        let Some(moved) = ridden(false) else {
+            return;
+        };
+        // The host's own ride: the horse walks west and falls through the air.
+        assert!(moved.position.x < 0.4, "{:?}", moved.position);
+        assert!(moved.position.y < 64.0, "{:?}", moved.position);
+        let held = ridden(true).unwrap();
+        assert_eq!(held.position, Vec3::new(0.5, 64.0, 0.5));
+        assert_eq!(held.velocity, Vec3::ZERO);
+        assert_eq!(held.yaw, 90.0, "tickRidden still turns it");
     }
 }
 
