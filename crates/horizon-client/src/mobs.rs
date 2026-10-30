@@ -21,6 +21,7 @@ pub mod breeze;
 pub mod camel;
 pub mod caravan;
 pub mod control;
+pub mod conversion;
 pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
@@ -1316,6 +1317,14 @@ pub enum MobEvent {
         kind: String,
         at: [f64; 3],
         setup: SpawnSetup,
+    },
+    /// `Mob.convertTo` with `ConversionType.SINGLE` ([`conversion::single`]):
+    /// a new mob of `kind` takes the place of `from` (already removed) and
+    /// keeps its gear, name and flags.
+    Convert {
+        from: Box<Mob>,
+        kind: &'static str,
+        params: conversion::Params,
     },
     DropItem {
         item: Arc<str>,
