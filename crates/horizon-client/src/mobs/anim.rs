@@ -1,7 +1,7 @@
 //! Model animation: ports of each vanilla `EntityModel.setupAnim` family
 //! (quadrupeds, humanoids, creepers, spiders, chickens...) applied to a map of
 //! part poses before the model is drawn.
-use super::{keyframes::AnimationState, living::wrap, Mob, Part};
+use super::{Mob, Part, keyframes::AnimationState, living::wrap};
 use horizon_core::geometry::trig::Mth;
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_6, PI};
