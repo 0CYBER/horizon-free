@@ -202,10 +202,15 @@ impl Game<'_> {
                     attacker,
                     from,
                 };
-                self.mobs
+                let hurt = self
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id)
-                    .is_some_and(|m| m.damage(amount, damage))
+                    .is_some_and(|m| m.damage(amount, damage));
+                if hurt {
+                    self.resolve_player_responsible(id, damage);
+                }
+                hurt
             }
             _ => false,
         };
@@ -1278,12 +1283,12 @@ impl Game<'_> {
         let respect = matches!(ctx.get("respectTeams"), Some(Arg::Bool(true)));
         let max_y = match ctx.get("maxHeight") {
             Some(Arg::Int(h)) => *h,
-            _ => horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT,
+            _ => self.world.top_y(),
         };
-        if max_y < horizon_client::chunk::MIN_Y {
+        if max_y < self.world.bottom_y() {
             return Err(err(
                 "commands.spreadplayers.failed.invalid.height",
-                &[&max_y, &horizon_client::chunk::MIN_Y],
+                &[&max_y, &self.world.bottom_y()],
             ));
         }
         let targets = self.entities(ctx, "targets", false)?;
@@ -1484,7 +1489,7 @@ impl Game<'_> {
         let mut air2 = air(y);
         y -= 1;
         let mut air1 = air(y);
-        while y > horizon_client::chunk::MIN_Y {
+        while y > self.world.bottom_y() {
             y -= 1;
             let current = air(y);
             if !current && air1 && air2 {

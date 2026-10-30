@@ -363,6 +363,89 @@ impl Game<'_> {
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
     ) -> Result<()> {
+        let result = self.run_integrated_inner(launch, flags, tasks, ready);
+        if let Err(error) = &result {
+            self.native_lifecycle_close_failed(&error.to_string());
+        }
+        result
+    }
+
+    fn run_integrated_inner(
+        &mut self,
+        launch: Launch,
+        flags: Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        // The open segment runs as one unit (`integrated_open`) so its
+        // failures fire `WorldOpenFailed` with the engine's own error text.
+        if let Err(e) = self.integrated_open(&launch, &flags, tasks, ready) {
+            self.native_lifecycle_world_failed(&e.to_string());
+            return Err(e);
+        }
+        // The server thread's `WorldOpenReady` site, before the tick loop.
+        self.native_lifecycle_world_ready();
+        if let (Some(script), Some(output)) = (
+            std::env::var_os("HORIZON_COMMAND_SCRIPT"),
+            std::env::var_os("HORIZON_COMMAND_OUTPUT"),
+        ) {
+            // The script owns the clock: connection setup and terrain loading
+            // cannot add wall-clock-dependent world ticks to oracle output.
+            let result = self.run_command_harness(script.as_ref(), output.as_ref());
+            let stopped = self.stop_integrated();
+            return result.and(stopped);
+        }
+        let mut next = Instant::now();
+        let mut was_paused = false;
+        while !flags.stop.load(Ordering::Relaxed) {
+            self.run_tasks();
+            if self.agent.hold_server {
+                // Keep servicing control requests so the fixture can release the barrier.
+                // Unlike /tick freeze, no player's queued packets are applied here.
+                self.wait_for_next_server_tick(&mut next, true);
+                continue;
+            }
+            let paused = flags.paused.load(Ordering::Relaxed);
+            if paused && !was_paused {
+                // IntegratedServer.tickServer: the tick the game pauses saves
+                // everything (saveEverything, without flushing), as an
+                // autosave does.
+                log::info!("Saving and pausing game...");
+                self.save_game_with(false)?;
+            }
+            was_paused = paused;
+            if paused {
+                // Only the connections run.
+                self.tick_server_timed(true)?;
+            } else {
+                self.follow_distances(&flags);
+                let started = Instant::now();
+                self.tick_server_timed(false)?;
+                // MinecraftServer.tickServer's tick times, for /tick query.
+                self.clock.record(started.elapsed());
+                self.debug_charts.log_tick(started, started.elapsed());
+                flags.smoothed_tick_ms.store(
+                    self.debug_charts.smoothed_tick_ms.to_bits(),
+                    Ordering::Relaxed,
+                );
+            }
+            self.apply_publish();
+            self.wait_for_next_server_tick(&mut next, paused);
+        }
+        self.stop_integrated()
+    }
+
+    /// The integrated server's world open: `run_integrated`'s segment
+    /// from `load_world` through `settle_spawn`, whole so its failures are
+    /// one open failure (`WorldOpenFailed`, the engine's own error text).
+    fn integrated_open(
+        &mut self,
+        launch: &Launch,
+        flags: &Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
+    ) -> Result<()> {
+        self.native_lifecycle_open_started();
         self.load_world(WorldRequest::new(
             &launch.folder,
             launch.name.as_deref(),
@@ -439,60 +522,14 @@ impl Game<'_> {
             pending: None,
         });
         let _ = ready.send(Ok((pipe, self.level.name.clone())));
-        self.settle_spawn()?;
-        if let (Some(script), Some(output)) = (
-            std::env::var_os("HORIZON_COMMAND_SCRIPT"),
-            std::env::var_os("HORIZON_COMMAND_OUTPUT"),
-        ) {
-            // The script owns the clock: connection setup and terrain loading
-            // cannot add wall-clock-dependent world ticks to oracle output.
-            let result = self.run_command_harness(script.as_ref(), output.as_ref());
-            let stopped = self.stop_integrated();
-            return result.and(stopped);
-        }
-        let mut next = Instant::now();
-        let mut was_paused = false;
-        while !flags.stop.load(Ordering::Relaxed) {
-            self.run_tasks();
-            if self.agent.hold_server {
-                // Keep servicing control requests so the fixture can release the barrier.
-                // Unlike /tick freeze, no player's queued packets are applied here.
-                self.wait_for_next_server_tick(&mut next, true);
-                continue;
-            }
-            let paused = flags.paused.load(Ordering::Relaxed);
-            if paused && !was_paused {
-                // IntegratedServer.tickServer: the tick the game pauses saves
-                // everything (saveEverything, without flushing), as an
-                // autosave does.
-                log::info!("Saving and pausing game...");
-                self.save_game_with(false)?;
-            }
-            was_paused = paused;
-            if paused {
-                // Only the connections run.
-                self.tick_server_timed(true)?;
-            } else {
-                self.follow_distances(&flags);
-                let started = Instant::now();
-                self.tick_server_timed(false)?;
-                // MinecraftServer.tickServer's tick times, for /tick query.
-                self.clock.record(started.elapsed());
-                self.debug_charts.log_tick(started, started.elapsed());
-                flags.smoothed_tick_ms.store(
-                    self.debug_charts.smoothed_tick_ms.to_bits(),
-                    Ordering::Relaxed,
-                );
-            }
-            self.apply_publish();
-            self.wait_for_next_server_tick(&mut next, paused);
-        }
-        self.stop_integrated()
+        self.settle_spawn()
     }
 
     /// `MinecraftServer.stopServer`: the players are saved and sent away,
     /// then the world is saved.
     fn stop_integrated(&mut self) -> Result<()> {
+        // The close request: lifecycle observation stops.
+        self.native_lifecycle.begin_close();
         // IntegratedServer.stopServer: teardownPublishedState.
         if let Some(s) = self.serving.take() {
             s.flags.published.store(0, Ordering::Relaxed);
@@ -518,6 +555,8 @@ impl Game<'_> {
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;
+        // `WorldCloseFinal` follows a successful final save.
+        self.native_lifecycle_world_closed();
         self.session_lock = None;
         Ok(())
     }

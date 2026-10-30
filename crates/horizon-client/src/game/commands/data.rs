@@ -318,6 +318,9 @@ impl Game<'_> {
                     self.take_loot_table(key, &tag, &mut new);
                     self.world.block_entities.insert(key, new);
                     self.update_spawner_display(key);
+                    // BlockDataAccessor.setData: setChanged and sendBlockUpdated(3),
+                    // even when the block state itself stays the same.
+                    self.mark_block_entity_updated(key);
                     let state = self.world.block(p[0], p[1], p[2]);
                     // Redraw what shows the block entity (signs, banners).
                     let _ = self.world.set(p[0], p[1], p[2], state);

@@ -100,6 +100,23 @@ pub fn sheep_wool_rgb(color: u8) -> u32 {
     let f = |c: u32| ((c as f32 * 0.75).floor() as u32).min(255);
     f(src >> 16 & 255) << 16 | f(src >> 8 & 255) << 8 | f(src & 255)
 }
+/// `ColorLerper.getLerpedColor(ColorLerper.Type.SHEEP, ageInTicks)`: the 16
+/// wool colours in DyeColor order, one per 25 ticks, lerped in between. The
+/// colour a `jeb_` sheep's wool takes.
+pub fn jeb_wool_rgb(age: f32) -> u32 {
+    // ageInTicks is the tick count plus the partial tick: never negative.
+    let i = age.floor();
+    let ticks = i as u64;
+    let j = ticks / 25;
+    let f = ((ticks % 25) as f32 + (age - i)) / 25.0;
+    let lo = sheep_wool_rgb((j % 16) as u8);
+    let hi = sheep_wool_rgb(((j + 1) % 16) as u8);
+    let mix = |shift: u32| {
+        let (lo, hi) = ((lo >> shift & 255) as f32, (hi >> shift & 255) as f32);
+        ((lo + (hi - lo) * f) as u32) << shift
+    };
+    mix(16) | mix(8) | mix(0)
+}
 pub const VILLAGER_TYPES: [&str; 7] = [
     "plains", "desert", "jungle", "savanna", "snow", "swamp", "taiga",
 ];
@@ -459,8 +476,9 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
         _ => 0xFFFF_FFFF,
     }
 }
-/// Extra render layers drawn over the body with the same pose.
-pub fn layers(m: &Mob) -> Vec<Layer> {
+/// Extra render layers drawn over the body with the same pose. `age` is the
+/// render state's `ageInTicks` (`Mob.age` plus the partial tick).
+pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
     if avatar(m) {
@@ -657,8 +675,14 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {
-            let color = abgr(sheep_wool_rgb(m.extra.color));
-            if !m.is_baby() && m.extra.color != 0 {
+            // MobRenderer.checkMagicName(entity, "jeb_"): an exact custom name.
+            let jeb = m.custom_name.as_deref() == Some("jeb_");
+            let color = abgr(if jeb {
+                jeb_wool_rgb(age)
+            } else {
+                sheep_wool_rgb(m.extra.color)
+            });
+            if !m.is_baby() && (jeb || m.extra.color != 0) {
                 push(
                     &mut v,
                     "sheep#wool_undercoat",
@@ -1370,7 +1394,7 @@ fn render_visible(
     for (part, uv, color, layer_overlay) in extra {
         draw(part, base, &poses, *uv, *color, light, *layer_overlay, out);
     }
-    let mut all_layers = layers(m);
+    let mut all_layers = layers(m, s.age);
     // WardenRenderer: the translucent emissive layers fade with the animations.
     if m.species() == Species::Warden {
         for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
@@ -1696,7 +1720,7 @@ pub fn held_item_transform(
         t *= crate::spear::third_person_attack_item(s.swing, forward);
     }
     let off_hand = left != m.main_arm_left();
-    if m.extra.using_item > 0
+    if super::spear_use::is_using_item(m)
         && m.extra.using_off_hand == off_hand
         && let Some(kinetic) = (if off_hand {
             &m.extra.off_hand
@@ -1737,7 +1761,7 @@ mod tests {
                         m.extra.age = if baby { -24000 } else { 0 };
                         (m.extra.variant, m.extra.variant2, m.extra.variant3) =
                             (t as u8, p as u8, 5);
-                        let layers = layers(&m);
+                        let layers = layers(&m, m.age as f32);
                         let group = if baby { "/baby/" } else { "/type/" };
                         assert!(
                             layers.iter().any(|l| l.texture.contains(group)),
@@ -2051,6 +2075,86 @@ mod tests {
         assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
         // A layer that is not dyeable is not tinted.
         assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
+    }
+
+    /// `ColorLerper.getLerpedColor(Type.SHEEP, ageInTicks)`: the points the
+    /// 26.3 jar gave — 0, half a step, one whole step, a step boundary, the
+    /// last step back into white, and the 400-tick (16-step) wrap.
+    #[test]
+    fn jeb_wool_lerps_through_the_sixteen_dye_colours() {
+        assert_eq!(jeb_wool_rgb(0.0), 0xE6E6E6);
+        assert_eq!(jeb_wool_rgb(12.5), 0xD0A37D);
+        assert_eq!(jeb_wool_rgb(25.0), 0xBA6015);
+        assert_eq!(jeb_wool_rgb(25.0), sheep_wool_rgb(1));
+        assert_eq!(jeb_wool_rgb(50.0), 0x953A8D);
+        assert_eq!(jeb_wool_rgb(399.0), 0xDDDDDD);
+        assert_eq!(jeb_wool_rgb(400.0), 0xE6E6E6);
+    }
+
+    fn sheep_layer(m: &Mob, model: &str, age: f32) -> Option<Layer> {
+        layers(m, age).into_iter().find(|l| l.model == model)
+    }
+
+    /// SheepRenderer.extractRenderState's `jeb_` magic name: the wool layer
+    /// takes the lerped colour and cycles with the age, a white `jeb_` sheep
+    /// keeps its undercoat (SheepWoolUndercoatLayer draws for it too), and
+    /// the dye colour, the baby model and the shears still win.
+    #[test]
+    fn a_jeb_sheep_cycles_its_wool_colour_and_keeps_the_undercoat() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:sheep"].clone());
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        mob.custom_name = Some("jeb_".into());
+        let young = sheep_layer(&mob, "sheep#wool", 0.0)
+            .expect("an unsheared sheep draws its wool")
+            .color;
+        assert_eq!(young, abgr(0xE6E6E6));
+        let older = sheep_layer(&mob, "sheep#wool", 100.0)
+            .expect("an unsheared sheep draws its wool")
+            .color;
+        assert_ne!(young, older, "the colour cycles with the age");
+        let undercoat = sheep_layer(&mob, "sheep#wool_undercoat", 0.0)
+            .expect("a jeb_ sheep keeps its undercoat");
+        assert_eq!(undercoat.color, abgr(0xE6E6E6));
+        // A name that is not exactly "jeb_" leaves a dyed sheep's colour, and
+        // a non-white sheep has its undercoat too.
+        mob.custom_name = Some("jeb".into());
+        mob.extra.color = 14;
+        let dyed = abgr(sheep_wool_rgb(14));
+        assert_eq!(
+            sheep_layer(&mob, "sheep#wool", 0.0)
+                .expect("an unsheared sheep draws its wool")
+                .color,
+            dyed
+        );
+        assert_eq!(
+            sheep_layer(&mob, "sheep#wool_undercoat", 0.0)
+                .expect("a dyed sheep keeps its undercoat")
+                .color,
+            dyed
+        );
+        // A baby `jeb_` sheep gets the lerped colour on the baby wool and
+        // never an undercoat.
+        mob.custom_name = Some("jeb_".into());
+        mob.extra.color = 0;
+        mob.extra.age = -24000;
+        assert!(mob.is_baby());
+        assert_eq!(
+            sheep_layer(&mob, "sheep_baby#wool", 50.0)
+                .expect("a baby sheep draws its wool")
+                .color,
+            abgr(0x953A8D)
+        );
+        assert!(sheep_layer(&mob, "sheep#wool_undercoat", 50.0).is_none());
+        // Sheared: no wool layer at all.
+        mob.extra.age = 0;
+        mob.extra.sheared = true;
+        assert!(sheep_layer(&mob, "sheep#wool", 0.0).is_none());
     }
 }
 
