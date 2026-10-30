@@ -5679,6 +5679,12 @@ impl Game<'_> {
             if passes {
                 return false;
             }
+            // MinecartCommandBlock.interact on the client: the editor opens.
+            if self.carts.iter().any(|c| {
+                c.id as i32 == hit.id && c.kind == super::minecarts::CartKind::CommandBlock
+            }) {
+                self.open_cart_command_block(hit.id as u32);
+            }
             if response.unwrap_or(true) {
                 self.swing_arm();
             }

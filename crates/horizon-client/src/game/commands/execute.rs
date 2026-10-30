@@ -32,6 +32,8 @@ pub(in crate::game) struct Source {
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
     pub block: Option<(i32, i32, i32)>,
+    /// The command block minecart whose output this source is.
+    pub cart: Option<u32>,
 }
 
 /// Where `execute store` writes.
@@ -94,6 +96,7 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
     /// The server as a source (function ticks and schedules): the world spawn.
@@ -108,6 +111,7 @@ impl Game<'_> {
             dimension: self.dim,
             level: None,
             block: None,
+            cart: None,
         }
     }
     pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {

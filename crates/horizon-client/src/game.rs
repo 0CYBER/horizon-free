@@ -73,6 +73,7 @@ mod code_of_conduct;
 mod combat;
 mod command_blocks;
 mod command_harness;
+mod command_minecarts;
 mod commands;
 mod composter;
 mod consume;
@@ -899,8 +900,7 @@ impl GameLevel<'_> {
             )
     }
     /// `DetectorRailBlock.getAnalogOutputSignal`: a powered rail reads the
-    /// minecart on it, a command block cart first (its success count, which
-    /// is 0 here), else the first container cart's fullness.
+    /// minecart on it, a command block cart first (its success count), else the first container cart's fullness.
     fn detector_rail_signal(&self, pos: BlockPos, powered: bool) -> i32 {
         if !powered {
             return 0;
@@ -920,7 +920,7 @@ impl GameLevel<'_> {
                 continue;
             }
             match cart.kind {
-                minecarts::CartKind::CommandBlock => return 0,
+                minecarts::CartKind::CommandBlock => return cart.command.success_count,
                 minecarts::CartKind::Chest | minecarts::CartKind::Hopper => {
                     // Counted here, for the cart a comparator reads, not for
                     // every cart on every block tick.

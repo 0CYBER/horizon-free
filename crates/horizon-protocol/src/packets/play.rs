@@ -2316,6 +2316,11 @@ packet!(
     /// conditional (2) and automatic (4) flags.
     SetCommandBlock { pos: [i32; 3] => Pos, command: String => Str, mode: i32 => VarInt, flags: i8 => Byte }
 );
+packet!(
+    /// ServerboundSetCommandMinecartPacket: the command minecart's entity id,
+    /// its command and whether it tracks output.
+    SetCommandMinecart { entity: i32 => VarInt, command: String => Str, track_output: bool => Bool }
+);
 /// ServerboundSetStructureBlockPacket: the structure block's edit screen.
 /// `update_type` and `mode` are `StructureBlockEntity.UpdateType` and
 /// `StructureMode` ordinals, `mirror` and `rotation` the enums' ordinals.
@@ -2590,6 +2595,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
+    SetCommandMinecart(SetCommandMinecart) = SET_COMMAND_MINECART,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     SetJigsawBlock(SetJigsawBlock) = SET_JIGSAW_BLOCK,
     SetTestBlock(SetTestBlock) = SET_TEST_BLOCK,
@@ -3704,6 +3710,27 @@ mod tests {
             }),
             Serverbound::encode,
             Serverbound::decode,
+        );
+    }
+
+    #[test]
+    fn set_command_minecart_writes_entity_command_then_track_output() {
+        let packet = SetCommandMinecart {
+            entity: 300,
+            command: "say hi".into(),
+            track_output: true,
+        };
+        round_trip(
+            Serverbound::SetCommandMinecart(packet.clone()),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
+        // ServerboundSetCommandMinecartPacket.write: VarInt, UTF, boolean.
+        let mut w = Writer::new();
+        SetCommandMinecart::write(&packet, &mut w);
+        assert_eq!(
+            w.data,
+            [0xAC, 0x02, 6, b's', b'a', b'y', b' ', b'h', b'i', 1]
         );
     }
 

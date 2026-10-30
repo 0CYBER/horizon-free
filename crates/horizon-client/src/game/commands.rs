@@ -221,6 +221,10 @@ impl Game<'_> {
             self.command_block_output(block, message);
             return;
         }
+        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+            self.cart_command_output(cart, message);
+            return;
+        }
         self.system_message(message);
     }
     /// `sendSuccess(message, false)`: the source is told (when it takes
@@ -231,6 +235,10 @@ impl Game<'_> {
         }
         if let Some(block) = self.command_source.and_then(|s| s.block) {
             self.command_block_success(block, message);
+            return;
+        }
+        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+            self.cart_command_success(cart, message);
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {
@@ -244,6 +252,10 @@ impl Game<'_> {
         }
         if let Some(block) = self.command_source.and_then(|s| s.block) {
             self.command_block_success(block, message);
+            return;
+        }
+        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+            self.cart_command_success(cart, message);
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {
