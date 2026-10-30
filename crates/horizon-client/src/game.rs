@@ -1159,6 +1159,13 @@ impl LevelAccess for GameLevel<'_> {
             // player is this client's own: the block's `playSound(null, ...)`
             // (a piston's move, a note) reaches it from the server instead.
             LevelEvent::Sound { .. } if self.client_side => {}
+            // NoteBlock.triggerEvent plays the head's sound with a null
+            // player, so only the server's level plays it; a guest or a
+            // remote client hears it from the sound packet.
+            LevelEvent::BlockEvent {
+                kind: "note_custom_sound",
+                ..
+            } if self.client_side => {}
             // Block.popResource of the block's own item (tall flowers, flower beds).
             LevelEvent::BlockEvent {
                 pos,
