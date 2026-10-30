@@ -1121,9 +1121,26 @@ impl Launcher {
         out
     }
 
-    fn mods_installed_list(&self, cx: &mut Context<Self>) -> Option<Div> {
+    fn mods_installed_list(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let kind = self.mods.kind;
+        // Each project's own icon (Modrinth's, asked for once), at the row's size.
+        let ids = self
+            .mods
+            .installed
+            .iter()
+            .filter(|e| e.kind == kind && e.source == SourceId::Modrinth)
+            .map(|e| e.project.clone())
+            .collect();
+        self.ask_project_icons(ids, cx);
+        let icons: Vec<Option<PathBuf>> = self
+            .mods
+            .installed
+            .clone()
+            .iter()
+            .filter(|e| e.kind == kind)
+            .map(|e| self.project_icon(e))
+            .collect();
         let entries: Vec<&installed::Entry> = self
             .mods
             .installed
@@ -1248,8 +1265,13 @@ impl Launcher {
                         .font_family(theme::MONO)
                         .child(format!("checked: {}", short_sum(&e.checksum))),
                 );
-            index_row(
-                i + 1,
+            slot_row(
+                Some(blocks::slot(
+                    icons[i].clone().map(gpui::ImageSource::from),
+                    &e.title,
+                    40.,
+                    &t,
+                )),
                 e.title.clone(),
                 Some(detail.into_any_element()),
                 Some(right.into_any_element()),
