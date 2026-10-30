@@ -1204,7 +1204,7 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
-        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let below_world = p.position.y < f64::from(self.world.bottom_y() - 64);
         let name = self.player_display_text();
         let message = match cause {
             Some(key) => Text::translate(&key, &[name]),

@@ -1206,6 +1206,7 @@ impl Game<'_> {
             return;
         };
         let dimension = r.registries.dimension(spawn.dimension_type);
+        let shape = super::Dim::from_id(&dimension.name).shape();
         let same = r.dimension.name == dimension.name && keep_world;
         r.chunk_format = Arc::new(r.chunk_format.with_dimension(&dimension));
         r.dimension = dimension;
@@ -1243,6 +1244,7 @@ impl Game<'_> {
             let count = old.len();
             horizon_client::chunk::free_columns(old, count);
             self.world = World::new(self.res.facts().air, spawn.seed);
+            self.world.shape = shape;
             self.world.game_time = time;
             self.world.day_time = day;
             self.world.weather = weather;

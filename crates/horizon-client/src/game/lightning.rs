@@ -119,7 +119,7 @@ impl Game<'_> {
                     if !section.blocks.maybe_has(&mut rod) {
                         continue;
                     }
-                    let base_y = horizon_client::chunk::MIN_Y + 16 * i as i32;
+                    let base_y = self.world.bottom_y() + 16 * i as i32;
                     for j in 0..4096 {
                         if !rod(section.get(j)) {
                             continue;

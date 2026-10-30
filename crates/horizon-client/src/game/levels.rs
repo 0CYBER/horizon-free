@@ -136,6 +136,7 @@ impl Game<'_> {
             self.level.seed,
         )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
+        world.shape = dim.shape();
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
             world,
