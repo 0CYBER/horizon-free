@@ -165,6 +165,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.piston_check_if_extend(pos, state);
                     }
                 }
+                Class::PotentSulfur => self.potent_sulfur_on_place(pos, state),
                 Class::Observer => {
                     if !same
                         && b.table.bool(state, b.props.powered)
@@ -431,6 +432,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if b.is_block(head, b.block(state)) && b.table.text(head, p.part) == "head" {
                 self.set_block(head_pos, b.air(), 35);
                 self.level_event(2001, head_pos, head.0 as i32);
+            }
+        }
+        // PistonHeadBlock.playerWillDestroy: in creative, destroy the base piston
+        // without drops so removing the head does not drop a piston item.
+        if creative && data.is(Class::PistonHead) {
+            let base_pos = rel(pos, b.facing(state).opposite());
+            let base = self.state(base_pos);
+            if self.piston_head_fitting_base(state, base) {
+                self.destroy_block(base_pos, false, super::flags::UPDATE_LIMIT);
             }
         }
         // TntBlock.playerWillDestroy: unstable TNT primes unless instabuild.

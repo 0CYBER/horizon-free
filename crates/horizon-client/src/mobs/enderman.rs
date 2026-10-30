@@ -182,9 +182,14 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     // Being angry (target set) makes the head "creepy" (render).
     m.extra.flag = m.ai.target.is_some();
 }
+/// Whether a hit teleports the enderman away instead of hurting it: any
+/// projectile, unless it rides something (`!isPassenger()`).
+pub fn dodges(m: &Mob, source: &Damage) -> bool {
+    source.is_projectile() && !m.extra.passenger
+}
 /// Enderman.hurtServer: projectiles miss (teleport away), others may teleport.
 pub fn on_damage(m: &mut Mob, source: &Damage) -> bool {
-    if source.is_projectile() {
+    if dodges(m, source) {
         // repeatedlyTryToTeleport is applied by the next AI step.
         m.extra.counter2 = 64;
         return false;
@@ -192,7 +197,13 @@ pub fn on_damage(m: &mut Mob, source: &Damage) -> bool {
     true
 }
 pub fn after_hurt(m: &mut Mob, source: &Damage) {
-    if source.attacker.is_none() && m.random.next_int_bound(10).unwrap_or(0) != 0 {
+    // A thrown potion's hit (`indirect_magic`, which only a splash potion
+    // deals to a mob) leaves `Enderman.hurtServer` before the random chance:
+    // `repeatedlyTryToTeleport` replaces it.
+    if source.kind != super::DamageKind::IndirectMagic
+        && source.attacker.is_none()
+        && m.random.next_int_bound(10).unwrap_or(0) != 0
+    {
         m.extra.counter2 = 1;
     }
 }
@@ -431,6 +442,38 @@ impl Goal for LeaveBlock {
                 state: carried,
             });
             m.extra.carried = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::DamageKind;
+    use std::sync::Arc;
+
+    fn enderman() -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::Enderman;
+        Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0)
+    }
+
+    /// Enderman.hurtServer: a projectile makes a free enderman teleport away
+    /// unhurt, but one that rides something (`isPassenger`) takes the hit.
+    #[test]
+    fn projectiles_hit_a_seated_enderman() {
+        for kind in [DamageKind::Arrow, DamageKind::Thrown, DamageKind::Fireball] {
+            let mut free = enderman();
+            assert!(!on_damage(&mut free, &Damage::of(kind)), "{kind:?}");
+            assert_eq!(free.extra.counter2, 64);
+            // The arrow handler keeps the arrow flying when the enderman dodges.
+            assert!(dodges(&free, &Damage::of(kind)), "{kind:?}");
+
+            let mut seated = enderman();
+            seated.extra.passenger = true;
+            assert!(on_damage(&mut seated, &Damage::of(kind)), "{kind:?}");
+            assert_eq!(seated.extra.counter2, 0, "no teleport while seated");
+            assert!(!dodges(&seated, &Damage::of(kind)), "{kind:?}");
         }
     }
 }
