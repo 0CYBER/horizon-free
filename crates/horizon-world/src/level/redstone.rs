@@ -1226,7 +1226,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `TntBlock.prime` then `removeBlock`.
     pub(crate) fn tnt_check(&mut self, pos: BlockPos) {
-        if self.has_neighbor_signal(pos) {
+        // TntBlock.prime succeeds only on a ServerLevel. A client's piston
+        // replay must leave priming and block removal to the server.
+        if !self.level.is_client_side() && self.has_neighbor_signal(pos) {
             self.prime_tnt(pos);
             self.remove_block(pos, false);
         }

@@ -14,11 +14,12 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
-/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
-/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
-/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
-/// the model UV and reads `enchanted_glint_armor`.
-pub const ARMOR_GLINT: u32 = 13;
+/// The overlay code of an enchanted armour layer's glint, past the ones
+/// `gfx/entity_batch.rs` gives materials (13 is the boat water mask, which
+/// draws depth only: armour with 13 vanished; 35 is text pulled toward the
+/// camera). It marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl
+/// transforms the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 36;
 
 /// `RenderTypes.breezeWind`: the texture of the breeze's wind layer scrolls
 /// by 0.02 of the texture per tick.
@@ -98,6 +99,23 @@ pub fn sheep_wool_rgb(color: u8) -> u32 {
     let src = DYE[color as usize & 15];
     let f = |c: u32| ((c as f32 * 0.75).floor() as u32).min(255);
     f(src >> 16 & 255) << 16 | f(src >> 8 & 255) << 8 | f(src & 255)
+}
+/// `ColorLerper.getLerpedColor(ColorLerper.Type.SHEEP, ageInTicks)`: the 16
+/// wool colours in DyeColor order, one per 25 ticks, lerped in between. The
+/// colour a `jeb_` sheep's wool takes.
+pub fn jeb_wool_rgb(age: f32) -> u32 {
+    // ageInTicks is the tick count plus the partial tick: never negative.
+    let i = age.floor();
+    let ticks = i as u64;
+    let j = ticks / 25;
+    let f = ((ticks % 25) as f32 + (age - i)) / 25.0;
+    let lo = sheep_wool_rgb((j % 16) as u8);
+    let hi = sheep_wool_rgb(((j + 1) % 16) as u8);
+    let mix = |shift: u32| {
+        let (lo, hi) = ((lo >> shift & 255) as f32, (hi >> shift & 255) as f32);
+        ((lo + (hi - lo) * f) as u32) << shift
+    };
+    mix(16) | mix(8) | mix(0)
 }
 pub const VILLAGER_TYPES: [&str; 7] = [
     "plains", "desert", "jungle", "savanna", "snow", "swamp", "taiga",
@@ -458,8 +476,9 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
         _ => 0xFFFF_FFFF,
     }
 }
-/// Extra render layers drawn over the body with the same pose.
-pub fn layers(m: &Mob) -> Vec<Layer> {
+/// Extra render layers drawn over the body with the same pose. `age` is the
+/// render state's `ageInTicks` (`Mob.age` plus the partial tick).
+pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
     if avatar(m) {
@@ -656,8 +675,14 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         // SlimeOuterLayer: the translucent outer cube.
         S::Slime => push(&mut v, "slime#outer", "entity/slime/slime", white, false),
         S::Sheep if !m.extra.sheared => {
-            let color = abgr(sheep_wool_rgb(m.extra.color));
-            if !m.is_baby() && m.extra.color != 0 {
+            // MobRenderer.checkMagicName(entity, "jeb_"): an exact custom name.
+            let jeb = m.custom_name.as_deref() == Some("jeb_");
+            let color = abgr(if jeb {
+                jeb_wool_rgb(age)
+            } else {
+                sheep_wool_rgb(m.extra.color)
+            });
+            if !m.is_baby() && (jeb || m.extra.color != 0) {
                 push(
                     &mut v,
                     "sheep#wool_undercoat",
@@ -1211,7 +1236,8 @@ pub fn render(
     render_with(m, alpha, camera, atlas, light, data, &[], out);
 }
 /// `render` plus extra layers posed like the body (`HumanoidArmorLayer`:
-/// the armour model's parts copy the body's): (model, texture rect, colour).
+/// the armour model's parts copy the body's): (model, texture rect, colour,
+/// overlay: 0 or `ARMOR_GLINT`, as `EquipmentLayerRenderer` never tints them).
 #[allow(clippy::too_many_arguments)]
 pub fn render_with(
     m: &Mob,
@@ -1220,7 +1246,7 @@ pub fn render_with(
     atlas: Atlas,
     light: u32,
     data: &MobData,
-    extra: &[(&Part, [f32; 4], u32)],
+    extra: &[(&Part, [f32; 4], u32, u32)],
     out: &mut Vec<Vertex>,
 ) {
     // The invisibility effect hides the model (a drinking wandering trader);
@@ -1304,7 +1330,7 @@ pub fn render_layers(
     atlas: Atlas,
     light: u32,
     data: &MobData,
-    extra: &[(&Part, [f32; 4], u32)],
+    extra: &[(&Part, [f32; 4], u32, u32)],
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform(m, alpha, camera);
@@ -1332,7 +1358,7 @@ fn render_visible(
     atlas: Atlas,
     light: u32,
     data: &MobData,
-    extra: &[(&Part, [f32; 4], u32)],
+    extra: &[(&Part, [f32; 4], u32, u32)],
     body_visible: bool,
     out: &mut Vec<Vertex>,
 ) {
@@ -1365,10 +1391,10 @@ fn render_visible(
     if !shell_last {
         draw_body(out);
     }
-    for (part, uv, color) in extra {
-        draw(part, base, &poses, *uv, *color, light, overlay, out);
+    for (part, uv, color, layer_overlay) in extra {
+        draw(part, base, &poses, *uv, *color, light, *layer_overlay, out);
     }
-    let mut all_layers = layers(m);
+    let mut all_layers = layers(m, s.age);
     // WardenRenderer: the translucent emissive layers fade with the animations.
     if m.species() == Species::Warden {
         for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
@@ -1413,7 +1439,7 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the armour glint (13) when enchanted.
+        // the hurt tint, the armour glint (`ARMOR_GLINT`) when enchanted.
         let overlay = match armor_slot(&layer.model) {
             Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
@@ -1694,7 +1720,7 @@ pub fn held_item_transform(
         t *= crate::spear::third_person_attack_item(s.swing, forward);
     }
     let off_hand = left != m.main_arm_left();
-    if m.extra.using_item > 0
+    if super::spear_use::is_using_item(m)
         && m.extra.using_off_hand == off_hand
         && let Some(kinetic) = (if off_hand {
             &m.extra.off_hand
@@ -1735,7 +1761,7 @@ mod tests {
                         m.extra.age = if baby { -24000 } else { 0 };
                         (m.extra.variant, m.extra.variant2, m.extra.variant3) =
                             (t as u8, p as u8, 5);
-                        let layers = layers(&m);
+                        let layers = layers(&m, m.age as f32);
                         let group = if baby { "/baby/" } else { "/type/" };
                         assert!(
                             layers.iter().any(|l| l.texture.contains(group)),
@@ -1953,6 +1979,82 @@ mod tests {
             );
         }
     }
+    /// `EquipmentLayerRenderer.renderLayers`: the extra armour layers (a
+    /// player's) take their own overlay, `NO_OVERLAY` or the armour glint,
+    /// never the hurt tint of the body, and the glint samples the model UV.
+    #[test]
+    fn extra_armour_layers_carry_their_glint_not_the_hurt_tint() {
+        // The batch gives these overlays their own materials (13, the water
+        // mask, draws depth only): the glint must not be one of them.
+        use crate::gfx::{
+            ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
+            TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
+            WATER_MASK_OVERLAY,
+        };
+        assert!(
+            ![
+                WATER_MASK_OVERLAY,
+                SHADOW_OVERLAY,
+                TRANSLUCENT_PARTICLE_OVERLAY,
+                TRANSLUCENT_ITEM_OVERLAY,
+                TRANSLUCENT_GLINT_ITEM_OVERLAY,
+                ENERGY_SWIRL_OVERLAY,
+                TEXT_POLYGON_OFFSET_OVERLAY,
+            ]
+            .contains(&ARMOR_GLINT)
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:zombie"].clone());
+        let mut mob = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+        mob.hurt_time = 5;
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
+        let part = &kind.model;
+        for overlay in [ARMOR_GLINT, 0] {
+            let mut vertices = Vec::new();
+            render_with(
+                &mob,
+                0.5,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xf0f0,
+                &data,
+                &[(part, [0.5, 0.5, 0.75, 0.75], 0xFFFF_FFFF, overlay)],
+                &mut vertices,
+            );
+            let (armour, body): (Vec<&Vertex>, Vec<&Vertex>) =
+                vertices.iter().partition(|v| v.uv[0] >= 0.5);
+            assert!(!armour.is_empty() && !body.is_empty());
+            // The hurt body keeps its red overlay.
+            let hurt = body_overlay(&mob, 0.5);
+            assert_ne!(hurt, 0);
+            assert!(body.iter().all(|v| v.layer == hurt));
+            assert!(armour.iter().all(|v| v.layer == overlay));
+            // The glint scrolls the layer's model UV (0..1 over the texture).
+            for v in &armour {
+                if overlay == ARMOR_GLINT {
+                    assert!((v.glint_uv[0] - (v.uv[0] - 0.5) * 4.0).abs() < 1e-4);
+                    assert!((v.glint_uv[1] - (v.uv[1] - 0.5) * 4.0).abs() < 1e-4);
+                } else {
+                    assert_eq!(v.glint_uv, [0.0, 0.0]);
+                }
+            }
+        }
+    }
     #[test]
     fn a_dyed_leather_armour_keeps_its_colour() {
         // EquipmentLayerRenderer.getColorForLayer: a dyeable layer takes
@@ -1973,6 +2075,86 @@ mod tests {
         assert_eq!(armor_tint(Some(0xA06540), Some(&stack)), abgr(0x0000FF));
         // A layer that is not dyeable is not tinted.
         assert_eq!(armor_tint(None, Some(&stack)), 0xFFFF_FFFF);
+    }
+
+    /// `ColorLerper.getLerpedColor(Type.SHEEP, ageInTicks)`: the points the
+    /// 26.3 jar gave — 0, half a step, one whole step, a step boundary, the
+    /// last step back into white, and the 400-tick (16-step) wrap.
+    #[test]
+    fn jeb_wool_lerps_through_the_sixteen_dye_colours() {
+        assert_eq!(jeb_wool_rgb(0.0), 0xE6E6E6);
+        assert_eq!(jeb_wool_rgb(12.5), 0xD0A37D);
+        assert_eq!(jeb_wool_rgb(25.0), 0xBA6015);
+        assert_eq!(jeb_wool_rgb(25.0), sheep_wool_rgb(1));
+        assert_eq!(jeb_wool_rgb(50.0), 0x953A8D);
+        assert_eq!(jeb_wool_rgb(399.0), 0xDDDDDD);
+        assert_eq!(jeb_wool_rgb(400.0), 0xE6E6E6);
+    }
+
+    fn sheep_layer(m: &Mob, model: &str, age: f32) -> Option<Layer> {
+        layers(m, age).into_iter().find(|l| l.model == model)
+    }
+
+    /// SheepRenderer.extractRenderState's `jeb_` magic name: the wool layer
+    /// takes the lerped colour and cycles with the age, a white `jeb_` sheep
+    /// keeps its undercoat (SheepWoolUndercoatLayer draws for it too), and
+    /// the dye colour, the baby model and the shears still win.
+    #[test]
+    fn a_jeb_sheep_cycles_its_wool_colour_and_keeps_the_undercoat() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types["minecraft:sheep"].clone());
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        mob.custom_name = Some("jeb_".into());
+        let young = sheep_layer(&mob, "sheep#wool", 0.0)
+            .expect("an unsheared sheep draws its wool")
+            .color;
+        assert_eq!(young, abgr(0xE6E6E6));
+        let older = sheep_layer(&mob, "sheep#wool", 100.0)
+            .expect("an unsheared sheep draws its wool")
+            .color;
+        assert_ne!(young, older, "the colour cycles with the age");
+        let undercoat = sheep_layer(&mob, "sheep#wool_undercoat", 0.0)
+            .expect("a jeb_ sheep keeps its undercoat");
+        assert_eq!(undercoat.color, abgr(0xE6E6E6));
+        // A name that is not exactly "jeb_" leaves a dyed sheep's colour, and
+        // a non-white sheep has its undercoat too.
+        mob.custom_name = Some("jeb".into());
+        mob.extra.color = 14;
+        let dyed = abgr(sheep_wool_rgb(14));
+        assert_eq!(
+            sheep_layer(&mob, "sheep#wool", 0.0)
+                .expect("an unsheared sheep draws its wool")
+                .color,
+            dyed
+        );
+        assert_eq!(
+            sheep_layer(&mob, "sheep#wool_undercoat", 0.0)
+                .expect("a dyed sheep keeps its undercoat")
+                .color,
+            dyed
+        );
+        // A baby `jeb_` sheep gets the lerped colour on the baby wool and
+        // never an undercoat.
+        mob.custom_name = Some("jeb_".into());
+        mob.extra.color = 0;
+        mob.extra.age = -24000;
+        assert!(mob.is_baby());
+        assert_eq!(
+            sheep_layer(&mob, "sheep_baby#wool", 50.0)
+                .expect("a baby sheep draws its wool")
+                .color,
+            abgr(0x953A8D)
+        );
+        assert!(sheep_layer(&mob, "sheep#wool_undercoat", 50.0).is_none());
+        // Sheared: no wool layer at all.
+        mob.extra.age = 0;
+        mob.extra.sheared = true;
+        assert!(sheep_layer(&mob, "sheep#wool", 0.0).is_none());
     }
 }
 

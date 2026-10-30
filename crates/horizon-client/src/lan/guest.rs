@@ -129,6 +129,10 @@ pub struct Guest {
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
+    /// Through a portal, until `LanHub::land` gives the client its position:
+    /// the moves it sent from the old level are ignored, as they would be
+    /// while it had a teleport to accept.
+    pub landing: bool,
     pub teleport_counter: i32,
     /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
     pub teleport_tick: u64,
@@ -219,7 +223,9 @@ pub struct Guest {
     /// The last action sequence to acknowledge at the next tick (-1: none).
     pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
-    pub inbox: VecDeque<play::Serverbound>,
+    /// Packets waiting for the player's next turn, and their bytes on the wire.
+    pub inbox: VecDeque<(play::Serverbound, usize)>,
+    pub inbox_bytes: usize,
     pub joined_tick: u64,
     pub ticks: u64,
     /// The moves accepted since the game last looked (movement, on ground),
@@ -309,6 +315,7 @@ impl Guest {
             spawn: None,
             respawn_elsewhere: None,
             awaiting_teleport: None,
+            landing: false,
             teleport_counter: 0,
             teleport_tick: 0,
             first_good: position,
@@ -356,6 +363,7 @@ impl Guest {
             ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
+            inbox_bytes: 0,
             joined_tick: 0,
             ticks: 0,
             moves: Vec::new(),
@@ -662,6 +670,18 @@ fn network_stack(
                 horizon_protocol::item::Component::BannerPatterns(layers),
             ));
         }
+        // `painting/variant`: a reference into the synced registry.
+        if let Some(id) = crate::save::text(d.other("minecraft:painting/variant")).and_then(|v| {
+            synced_id(
+                "minecraft:painting_variant",
+                &horizon_world::datafix::dynamic::namespaced(&v),
+            )
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::PAINTING_VARIANT,
+                horizon_protocol::item::Component::PaintingVariant(id),
+            ));
+        }
         // A shield's `base_color`.
         if let Some(id) = d.base_color.as_deref().and_then(dye_id) {
             stack.added.push((
@@ -766,6 +786,41 @@ fn network_stack(
             stack.added.push((
                 horizon_protocol::item::component::CHARGED_PROJECTILES,
                 horizon_protocol::item::Component::Stacks(charged),
+            ));
+        }
+        // `ItemContainerContents`: a shulker box's items, for its tooltip
+        // (ClientContainerTooltip). The wire form is the slot count, then one
+        // optional template per slot, so the guest's stack lists the same items
+        // the host's holds.
+        if !d.container.is_empty() {
+            let slots: Vec<(i32, Stack)> = d
+                .container
+                .iter()
+                .filter_map(|(slot, s)| {
+                    Some((
+                        i32::from(*slot),
+                        network_stack(item_id, synced_id, &Some(s.clone()))?,
+                    ))
+                })
+                .collect();
+            // The saved list names only the filled slots; the codec counts them
+            // all, from the first to the last that holds one.
+            let size = slots.iter().map(|(slot, _)| slot + 1).max().unwrap_or(0);
+            let mut w = horizon_protocol::buf::Writer::new();
+            w.varint(size);
+            for slot in 0..size {
+                let stack = slots.iter().find(|(at, _)| *at == slot).map(|(_, s)| s);
+                w.bool(stack.is_some());
+                if let Some(stack) = stack {
+                    <horizon_protocol::item::Template as horizon_protocol::buf::Codec<Stack>>::write(
+                        stack,
+                        &mut w,
+                    );
+                }
+            }
+            stack.added.push((
+                horizon_protocol::item::component::CONTAINER,
+                horizon_protocol::item::Component::Raw(w.data),
             ));
         }
         // What a bundle holds, for its tooltip (ClientBundleTooltip).
@@ -981,5 +1036,42 @@ mod tests {
         assert!(g.may_reach_block([0, 71, 0]));
         g.sneaking = true;
         assert!(!g.may_reach_block([0, 71, 0]));
+    }
+
+    /// A shulker box's `minecraft:container` crosses to a guest, so its
+    /// tooltip can list the items it holds (#2979).
+    #[test]
+    fn shulker_contents_survive_inventory_sync() {
+        let name = Tag::compound([("text", Tag::String("Gold bit".into()))]);
+        let mut inner = ItemStack::new("minecraft:diamond", 2);
+        inner.data_mut().custom_name = Some(name);
+        let mut boxed = ItemStack::new("minecraft:shulker_box", 1);
+        boxed.data_mut().container = vec![(0, inner)];
+        let id = |name: &str| if name.ends_with(":diamond") { 22 } else { 7 };
+
+        let sent = stack_to_network(id, |_, _| None, &Some(boxed));
+        let mut writer = Writer::new();
+        horizon_protocol::item::Slot::write(&sent, &mut writer);
+        let mut reader = Reader::new(&writer.data);
+        let received = horizon_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reader.remaining(), 0);
+
+        let Some(Component::Raw(bytes)) = received.component(component::CONTAINER) else {
+            panic!("the stack carried no container component");
+        };
+        // ItemContainerContents.STREAM_CODEC: the slot count, then one
+        // optional template per slot.
+        let mut r = Reader::new(bytes);
+        assert_eq!(r.count(256).unwrap(), 1);
+        assert!(r.bool().unwrap());
+        let template = horizon_protocol::item::Template::read(&mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        assert_eq!((template.item, template.count), (22, 2));
+        assert!(matches!(
+            template.component(component::CUSTOM_NAME),
+            Some(Component::Text(_))
+        ));
     }
 }
