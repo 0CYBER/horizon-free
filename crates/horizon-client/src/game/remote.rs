@@ -4385,15 +4385,7 @@ impl Game<'_> {
         self.ticks += 1;
         // Hud.tick ends with ChatComponent.tick.
         self.ui.chat.tick(&self.gui.atlas, self.ticks);
-        // AbstractSignEditScreen.tick: the editor closes once its sign is removed.
-        if let Some(edit) = &self.sign_edit
-            && !matches!(
-                self.world.block_entities.get(&edit.pos),
-                Some(BlockEntity::Sign(_))
-            )
-        {
-            self.close_sign_editor();
-        }
+        self.tick_sign_editor();
         self.track_experience_display();
         // Leaving a slot clears its bundle's selection here and on the server.
         self.tick_bundle_hover();
