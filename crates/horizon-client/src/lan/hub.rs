@@ -2498,7 +2498,15 @@ impl Hub {
         );
         let fail = !g.creative()
             && scene
-                .resolve(old, movement, 0.6, g.on_ground)
+                .resolve_with_context(
+                    old,
+                    movement,
+                    0.6,
+                    g.on_ground,
+                    // The mover's own sneaking, as CollisionContext.of(player):
+                    // a sneaking player descends through scaffolding.
+                    CollisionContext::position(g.position[1]).with_descending(g.sneaking),
+                )
                 .is_ok_and(|done| {
                     let (dx, dz) = (movement.x - done.x, movement.z - done.z);
                     dx * dx + dz * dz > 0.0625
@@ -2513,7 +2521,7 @@ impl Hub {
         let Ok(old_shape) = VoxelShape::from_box(old.deflate(shrink)) else {
             return (fail, false);
         };
-        let context = CollisionContext::position(g.position[1]);
+        let context = CollisionContext::position(g.position[1]).with_descending(g.sneaking);
         let Ok(scan) =
             BlockCollisionScan::new(&mut scene, context, new.deflate(shrink), false, 1 << 20)
         else {
