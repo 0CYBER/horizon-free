@@ -158,6 +158,8 @@ pub struct SectionMesh {
     /// each frame by `block_entity_render` like vanilla's per-section
     /// `SectionCompiler.Results.blockEntities`.
     pub block_entities: Vec<([i32; 3], u32)>,
+    /// Axis-aligned bounding box [min, max] of actual terrain mesh vertices in section-local space [0, 16].
+    pub bounds: Option<[glam::Vec3; 2]>,
 }
 impl Default for SectionMesh {
     fn default() -> Self {
@@ -167,6 +169,7 @@ impl Default for SectionMesh {
             translucent: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
+            bounds: None,
         }
     }
 }
@@ -175,6 +178,28 @@ impl SectionMesh {
     /// leave out those facing away from the eye (`sides`).
     pub fn sort_solid(&mut self) {
         self.sides = sides::sort(&mut self.solid);
+        self.bounds = self.compute_bounds();
+    }
+
+    /// Computes the tight axis-aligned bounding box [min, max] of actual terrain geometry vertices.
+    pub fn compute_bounds(&self) -> Option<[glam::Vec3; 2]> {
+        if self.solid.is_empty() && self.translucent.is_empty() {
+            return None;
+        }
+        let mut min = glam::Vec3::splat(f32::INFINITY);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        for v in &self.solid {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        for v in &self.translucent {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let pad = glam::Vec3::splat(0.05);
+        Some([min - pad, max + pad])
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;

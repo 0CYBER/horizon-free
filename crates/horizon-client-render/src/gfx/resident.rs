@@ -30,6 +30,7 @@ pub struct Resident<T> {
     /// The minimum Y of section index 0 (the level's column).
     min_y: i32,
     items: Vec<(SectionKey, T)>,
+    bounds: Vec<Option<[Vec3; 2]>>,
     slots: FxHashMap<SectionKey, u32>,
     columns: Vec<Column>,
     column_index: FxHashMap<(i32, i32), u32>,
@@ -40,6 +41,7 @@ impl<T> Default for Resident<T> {
         Self {
             min_y: crate::chunk::MIN_Y,
             items: Vec::new(),
+            bounds: Vec::new(),
             slots: FxHashMap::default(),
             columns: Vec::new(),
             column_index: FxHashMap::default(),
@@ -70,18 +72,26 @@ impl<T> Resident<T> {
     }
     pub fn clear(&mut self) {
         self.items.clear();
+        self.bounds.clear();
         self.slots.clear();
         self.columns.clear();
         self.column_index.clear();
     }
-    /// Adds or replaces `key`'s value.
+    /// Adds or replaces `key`'s value with default 16x16x16 bounds.
+    #[allow(dead_code)]
     pub fn insert(&mut self, key: SectionKey, value: T) {
+        self.insert_with_bounds(key, value, None);
+    }
+    /// Adds or replaces `key`'s value with optional tight geometry bounds.
+    pub fn insert_with_bounds(&mut self, key: SectionKey, value: T, bounds: Option<[Vec3; 2]>) {
         if let Some(&slot) = self.slots.get(&key) {
             self.items[slot as usize].1 = value;
+            self.bounds[slot as usize] = bounds;
             return;
         }
         let slot = self.items.len() as u32;
         self.items.push((key, value));
+        self.bounds.push(bounds);
         self.slots.insert(key, slot);
         let column = match self.column_index.get(&(key.0, key.2)) {
             Some(&c) => &mut self.columns[c as usize],
@@ -121,6 +131,7 @@ impl<T> Resident<T> {
         } else {
             column.bounds();
         }
+        let _ = self.bounds.swap_remove(slot as usize);
         let (_, value) = self.items.swap_remove(slot as usize);
         // The last item now sits in `slot`: point its key and column at it.
         if let Some(&(moved, _)) = self.items.get(slot as usize) {
@@ -176,7 +187,7 @@ fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Op
     if !in_view_distance(camera_column(camera), radius, key.0, key.2) {
         return None;
     }
-    in_frustum(key, crate::chunk::MIN_Y, camera, frustum, false)
+    in_frustum(key, crate::chunk::MIN_Y, camera, frustum, false, None)
 }
 
 /// `in_view` without the distance test; `inside`: the section's column is
@@ -187,10 +198,15 @@ fn in_frustum(
     camera: DVec3,
     frustum: &Frustum,
     inside: bool,
+    bounds: Option<[Vec3; 2]>,
 ) -> Option<(f64, Vec3)> {
     let origin = origin(key, min_y, camera);
     let min = origin.as_vec3();
-    if !inside && !frustum.intersects(min, min + Vec3::splat(16.0)) {
+    let (bmin, bmax) = match bounds {
+        Some([bmin, bmax]) => (min + bmin, min + bmax),
+        None => (min, min + Vec3::splat(16.0)),
+    };
+    if !inside && !frustum.intersects(bmin, bmax) {
         return None;
     }
     Some(((origin + DVec3::splat(8.0)).length_squared(), min))
@@ -236,7 +252,8 @@ impl<T> Resident<T> {
                 if near && !reachable(key) {
                     continue;
                 }
-                if let Some((d, o)) = in_frustum(key, self.min_y, camera, frustum, inside) {
+                let bounds = self.bounds[slot as usize];
+                if let Some((d, o)) = in_frustum(key, self.min_y, camera, frustum, inside, bounds) {
                     out.push(Visible {
                         distance: d.to_bits(),
                         key,
@@ -294,7 +311,7 @@ mod tests {
                         if near {
                             in_view(k, camera, radius, &frustum).filter(|_| reachable(k))
                         } else if beyond(k.0, k.2) {
-                            in_frustum(k, crate::chunk::MIN_Y, camera, &frustum, false)
+                            in_frustum(k, crate::chunk::MIN_Y, camera, &frustum, false, None)
                         } else {
                             None
                         }
@@ -461,6 +478,40 @@ mod tests {
             "{} resident, {} visible: old walk {old:?}, column walk {new:?} (checksum {sum})",
             r.len(),
             list.len()
+        );
+    }
+
+    #[test]
+    fn tight_mesh_bounds_culls_section_outside_frustum() {
+        let mut r = Resident::default();
+        let key = (0, 0, 0);
+        // Section geometry only occupies local Y in [0.0, 2.0]
+        let tight = Some([Vec3::new(0.0, 0.0, 0.0), Vec3::new(16.0, 2.0, 16.0)]);
+        r.insert_with_bounds(key, (), tight);
+
+        let camera = DVec3::new(8.0, f64::from(crate::chunk::MIN_Y + 15), -2.0);
+        let projection = super::super::world_projection(70.0, 16.0 / 9.0, 512.0);
+        let view = crate::camera::view_matrix(0.0, -60.0);
+        let frustum = Frustum {
+            planes: super::super::frustum(projection * view),
+        };
+
+        // Tight bounds culls the section whose geometry is entirely outside the frustum
+        let mut out = Vec::new();
+        r.visible(camera, 4, &frustum, |_| true, |_, _| false, &mut out);
+        assert!(
+            out.is_empty(),
+            "tight bounds should cull section whose geometry is below frustum"
+        );
+
+        // With fallback 16x16x16 bounds, the section intersects the frustum and is visible
+        r.insert_with_bounds(key, (), None);
+        out.clear();
+        r.visible(camera, 4, &frustum, |_| true, |_, _| false, &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "full 16x16x16 bounds intersect frustum and are accepted"
         );
     }
 }

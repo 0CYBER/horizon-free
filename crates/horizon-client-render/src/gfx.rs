@@ -3031,7 +3031,7 @@ impl Renderer {
             section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()),
         );
         if let Some(section) = section {
-            self.sections.insert(key, section);
+            self.sections.insert_with_bounds(key, section, mesh.bounds);
         }
     }
     fn upload_mesh(&mut self, mesh: &SectionMesh) -> Option<SectionGpu> {
