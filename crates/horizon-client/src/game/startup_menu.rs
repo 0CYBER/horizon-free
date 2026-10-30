@@ -661,11 +661,12 @@ impl Loading {
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
         let Some(gui) = &self.gui else { return };
         if self.menu.pending.is_some() {
-            horizon_client::level_loading::draw_progress(
+            horizon_client::level_loading::draw_loading_overlay(
                 batch,
                 &gui.atlas,
                 self.progress.line(),
                 self.progress.fraction(),
+                self.settings.file.bool("darkMojangStudiosBackground"),
             );
         } else if let Some((win, frame)) = &mut self.menu.win {
             let now = Instant::now();
