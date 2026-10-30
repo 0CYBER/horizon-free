@@ -68,17 +68,8 @@ pub(super) struct Creatures {
     pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
     pub cat_tick: i32,
-    /// Particles from a guest's turn, waiting for it to end
-    /// (`lan_send_particles`: options, centre, spread, speed, count).
-    pub lan_particles: Vec<(
-        &'static str,
-        horizon_client::particles::ParticleOptions,
-        Option<horizon_world::registry::BlockStateId>,
-        [f64; 3],
-        [f64; 3],
-        f64,
-        i32,
-    )>,
+    /// Particles from a guest's turn, waiting for it to end.
+    pub lan_particles: Vec<super::lan_particles::QueuedParticle>,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,

@@ -476,15 +476,15 @@ impl Game<'_> {
         self.particles
             .send_particles(&options, at, spread, speed, count);
         // The players a server serves are sent them too.
-        self.lan_send_particles(
-            self.dim.id(),
-            &options,
-            None,
+        self.lan_send_particles(super::lan_particles::QueuedParticle {
+            dimension: self.dim.id(),
+            options,
+            state: None,
             at,
             spread,
             speed,
-            count as i32,
-        );
+            count: count as i32,
+        });
     }
     /// `FishingHook.tick`.
     pub(super) fn tick_fishing(&mut self) {

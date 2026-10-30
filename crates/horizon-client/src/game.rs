@@ -783,15 +783,7 @@ struct GameLevel<'w> {
     client_side: bool,
     /// Only the integrated or dedicated server dispatches native observations.
     native_authoritative: bool,
-    native_particles: &'w mut Vec<(
-        &'static str,
-        horizon_client::particles::ParticleOptions,
-        Option<BlockStateId>,
-        [f64; 3],
-        [f64; 3],
-        f64,
-        i32,
-    )>,
+    native_particles: &'w mut Vec<lan_particles::QueuedParticle>,
 }
 struct PlayerCollision {
     y: f64,
@@ -9573,7 +9565,15 @@ impl Game<'_> {
         // the offset is the one from the player to the particle.
         let origin = from.unwrap_or(at);
         let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
-        self.lan_send_particles(self.dim.id(), &arc, None, at, spread, 0.0, 0);
+        self.lan_send_particles(lan_particles::QueuedParticle {
+            dimension: self.dim.id(),
+            options: arc,
+            state: None,
+            at,
+            spread,
+            speed: 0.0,
+            count: 0,
+        });
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
@@ -9802,15 +9802,15 @@ impl Game<'_> {
                     (actual * 0.5) as u32,
                 );
                 // The players a server serves are sent them too.
-                self.lan_send_particles(
-                    self.dim.id(),
-                    &indicator,
-                    None,
-                    [feet[0], feet[1] + height * 0.5, feet[2]],
-                    [0.1, 0.0, 0.1],
-                    0.2,
-                    (actual * 0.5) as u32 as i32,
-                );
+                self.lan_send_particles(lan_particles::QueuedParticle {
+                    dimension: self.dim.id(),
+                    options: indicator,
+                    state: None,
+                    at: [feet[0], feet[1] + height * 0.5, feet[2]],
+                    spread: [0.1, 0.0, 0.1],
+                    speed: 0.2,
+                    count: (actual * 0.5) as u32 as i32,
+                });
             }
             self.last_hurt_by_player
                 .insert(self.mobs[index].id, self.lan_acting);
