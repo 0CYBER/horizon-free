@@ -1014,6 +1014,8 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
         BlockEntity::StructureBlock(b) => Some(Tag::compound(b.save())),
         // JigsawBlockEntity.getUpdateTag: saveCustomOnly.
         BlockEntity::JigsawBlock(b) => Some(Tag::compound(b.save())),
+        // TestBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestBlock(b) => Some(Tag::compound(b.save())),
         BlockEntity::Shelf(s) => Some(Tag::compound([
             ("Items", crate::save::encode_items(&s.items)),
             (

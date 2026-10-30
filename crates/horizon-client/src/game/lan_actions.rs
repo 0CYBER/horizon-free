@@ -1547,6 +1547,7 @@ impl Game<'_> {
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
             S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
             S::SetStructureBlock(p) => self.lan_set_structure_block(host, conn, p),
+            S::SetTestBlock(p) => self.lan_set_test_block(host, conn, p),
             S::SetJigsawBlock(p) => self.lan_set_jigsaw_block(host, conn, p),
             S::JigsawGenerate(p) => self.lan_jigsaw_generate(host, conn, p),
             S::EditBook(p) => self.lan_edit_book(host, conn, p),
