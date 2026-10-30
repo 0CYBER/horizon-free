@@ -1350,6 +1350,30 @@ struct FallingBlock {
     /// The UUID and compound it was loaded with, kept while it moves.
     saved: Option<Box<([i32; 4], horizon_world::nbt::Tag)>>,
 }
+impl FallingBlock {
+    /// Where `FallingBlockRenderer` draws the block's model corner, `alpha`
+    /// into the tick: centred on the entity, then moved by `offset`, the
+    /// block's random model offset (`ModelBlockRenderer.tesselateBlock`:
+    /// `BlockState.getOffset` of `BlockPos.containing(x, maxY, z)`), so a
+    /// pointed dripstone keeps the place it hung at while it falls.
+    fn model_origin(
+        &self,
+        alpha: f64,
+        offset: impl Fn(BlockStateId, i32, i32) -> Option<[f64; 3]>,
+    ) -> glam::DVec3 {
+        let [dx, dy, dz] = offset(
+            self.state,
+            self.position.x.floor() as i32,
+            self.position.z.floor() as i32,
+        )
+        .unwrap_or([0.0; 3]);
+        glam::DVec3::new(
+            self.previous.x + (self.position.x - self.previous.x) * alpha - 0.5 + dx,
+            self.previous.y + (self.position.y - self.previous.y) * alpha + dy,
+            self.previous.z + (self.position.z - self.previous.z) * alpha - 0.5 + dz,
+        )
+    }
+}
 /// The data loaded once at startup and never changed: blocks, items,
 /// recipes, biomes, mobs, collision and motion. Read-only and `Send + Sync`,
 /// so the client and an integrated server thread can share one copy.
@@ -9134,11 +9158,8 @@ impl Game<'_> {
             let Some((_, tint)) = self.block_face_sprite(f.state) else {
                 continue;
             };
-            let p = glam::DVec3::new(
-                f.previous.x + (f.position.x - f.previous.x) * alpha - 0.5,
-                f.previous.y + (f.position.y - f.previous.y) * alpha,
-                f.previous.z + (f.position.z - f.previous.z) * alpha - 0.5,
-            ) - camera;
+            let tables = &self.pack.context.tables;
+            let p = f.model_origin(alpha, |state, x, z| tables.offset(state, x, z)) - camera;
             let o = p.as_vec3();
             let light = self.world.light(
                 f.position.x.floor() as i32,
@@ -17136,6 +17157,40 @@ mod tests {
         assert!(!equipment_modifier_applies("hand", "feet"));
     }
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
+
+    /// A falling block is drawn moved by its column's model offset, as
+    /// `ModelBlockRenderer.tesselateBlock` does with `BlockState.getOffset`
+    /// of `BlockPos.containing(x, maxY, z)`: a pointed dripstone that breaks
+    /// off stays where it hung instead of jumping to the block's centre (#4102).
+    #[test]
+    fn a_falling_block_keeps_its_model_offset() {
+        let at = Vec3::new(3.5, 70.25, -1.5);
+        let falling = FallingBlock {
+            id: 0,
+            state: BlockStateId(7),
+            start_pos: BlockPos::new(3, 72, -2),
+            position: at,
+            previous: Vec3::new(3.5, 71.0, -1.5),
+            velocity: Vec3::ZERO,
+            age: 5,
+            no_gravity: false,
+            drop_item: true,
+            fall_distance: 0.0,
+            stuck: Vec3::ZERO,
+            damage: horizon_client::falling_block::Damage::default(),
+            saved: None,
+        };
+        // OffsetType.XZ: one offset per column (Mth.getSeed(x, 0, z)).
+        let offset = |state: BlockStateId, x: i32, z: i32| {
+            assert_eq!(state, BlockStateId(7));
+            ((x, z) == (3, -2)).then_some([0.125, 0.0, -0.0625])
+        };
+        let origin = falling.model_origin(0.5, offset);
+        assert_eq!(origin, glam::DVec3::new(3.125, 70.625, -2.0625));
+        // Blocks without a random offset are drawn centred on the entity.
+        let origin = falling.model_origin(1.0, |_, _, _| None);
+        assert_eq!(origin, glam::DVec3::new(3.0, 70.25, -2.0));
+    }
 
     /// A key bound to key.attack keeps attacking while it is held: each
     /// repeat clicks like the press (#3243).
