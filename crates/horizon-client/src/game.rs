@@ -2274,6 +2274,9 @@ struct Game<'a> {
     /// the operators (`DedicatedServer.shouldInformAdmins`,
     /// `broadcast-console-to-ops`).
     console_broadcast: Option<bool>,
+    /// A dedicated server's operator, whitelist and ban lists, for `/op`,
+    /// `/ban` and friends (`DedicatedPlayerList`).
+    server_lists: Option<std::sync::Arc<std::sync::Mutex<dedicated::Lists>>>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
     ui: chat::UiState,
@@ -15409,6 +15412,7 @@ impl<'a> Game<'a> {
             chat_capture: None,
             admin_feedback: Vec::new(),
             console_broadcast: None,
+            server_lists: None,
             world_tables: None,
             cmds: Default::default(),
             ui: chat::UiState::new(),
