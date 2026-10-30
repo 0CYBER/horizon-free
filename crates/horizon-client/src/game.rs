@@ -13754,6 +13754,7 @@ impl ApplicationHandler for Game<'_> {
         {
             if event.state == ElementState::Pressed {
                 self.physical_keys.insert(key);
+                horizon_client::keybinds::learn_layout(event);
             } else {
                 self.physical_keys.remove(&key);
             }
