@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 24 adds scheduled block ticks a mod can handle (`native_tick_block`).
+//!
 //! API 23 adds random ticks a mod can handle (`native_random_tick`), and
 //! `native_set_block_property` on the level, which takes `Level.setBlock`'s
 //! `flags` as `Game::native_set_block_property_with` does.
@@ -128,7 +130,7 @@ pub(super) use horizon_world::level::flags;
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 23;
+pub(crate) const NATIVE_HOOKS_API: u32 = 24;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -206,6 +208,24 @@ impl GameLevel<'_> {
     /// runs either way.
     #[inline(always)]
     pub(super) fn native_random_tick(
+        &mut self,
+        ticks: &mut Ticks,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        handled: &mut bool,
+    ) {
+        let _ = (ticks, dimension, pos, state, handled);
+    }
+
+    /// An authoritative server's `ServerLevel.tickBlock` is about to run a
+    /// due scheduled tick of the block `state` at `pos` (`BlockState.tick`):
+    /// the block is still the one the tick was scheduled for. Change the
+    /// block with `native_set_block_property` and set `handled` to skip the
+    /// block's own tick; a block changed without `handled` takes its own
+    /// tick as it is now, if it is still the tick's block.
+    #[inline(always)]
+    pub(super) fn native_tick_block(
         &mut self,
         ticks: &mut Ticks,
         dimension: LevelDimension,
@@ -891,16 +911,16 @@ impl GameLevel<'_> {
         true
     }
     /// Sets property `key` of the block at `pos` to `value` with
-    /// `Level.setBlock(pos, state, flags)`, from a hook that gets the
-    /// level's `ticks` (`native_random_tick`). A crop's random tick grows it
-    /// with `flags::UPDATE_CLIENTS`: neighbours' shapes update, but no
-    /// neighbour gets `neighborChanged` and comparators aren't told;
+    /// `Level.setBlock(pos, state, flags)`, from a hook that gets the level's
+    /// `ticks` (`native_random_tick`, `native_tick_block`). A crop's random
+    /// tick grows it with `flags::UPDATE_CLIENTS`: neighbours' shapes update,
+    /// but no neighbour gets `neighborChanged` and comparators aren't told;
     /// `flags::UPDATE_ALL` does both. Horizon sends every write to players
     /// whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE` and
-    /// `UPDATE_IMMEDIATE` change nothing yet. Any loaded position, not only
-    /// the hook's; false off an authoritative server, when the block has no
-    /// such property or value, or `pos` is not loaded; true without a write
-    /// when the property already has `value`. Elsewhere,
+    /// `UPDATE_IMMEDIATE` change nothing yet. Any loaded position, not only the
+    /// hook's; false off an authoritative server, when the block has no such
+    /// property or value, or `pos` is not loaded; true without a write when the
+    /// property already has `value`. Elsewhere,
     /// `Game::native_set_block_property_with` does the same. API 23.
     pub(super) fn native_set_block_property(
         &mut self,

@@ -121,15 +121,24 @@ draw that lands on one: it runs often, so keep it short. Bone meal's random tick
 `native_set_block_property(ticks, pos, key, value, flags)` and set `handled` to skip the block's own random tick, so a
 mod crop grows its own way. Without `handled`, the block then takes its own random tick as it is now (if it still
 ticks randomly), and lava's fluid random tick runs either way. The helper takes `ticks`, so only `native_random_tick`
-can call it. It is API 18's `Game::native_set_block_property` with `Level.setBlock`'s flags (`native_hooks::flags`): a
-vanilla crop grows with `flags::UPDATE_CLIENTS` (neighbours' shapes update, so an observer fires, but no neighbour
-gets `neighborChanged` and comparators aren't told), a furnace sets its `lit` with `flags::UPDATE_ALL` (both). Horizon
-sends every write to players whatever the flags: `UPDATE_CLIENTS` (2), `UPDATE_INVISIBLE` (4) and `UPDATE_IMMEDIATE`
-(8) change nothing yet. It writes at any loaded position, returns false off an authoritative server, for a property or
-value the block doesn't have or a position that isn't loaded, and true without writing when the property already has
-the value. Elsewhere, `Game::native_set_block_property_with(pos, key, value, flags)` does the same, as a brewing
-stand's tick sets its bottles with `flags::UPDATE_CLIENTS`. The deprecated in-frame path fires none. Bundles that use
-them need `"hooks": 23`.
+and API 24's `native_tick_block` can call it. It is API 18's `Game::native_set_block_property` with `Level.setBlock`'s
+flags (`native_hooks::flags`): a vanilla crop grows with `flags::UPDATE_CLIENTS` (neighbours' shapes update, so an
+observer fires, but no neighbour gets `neighborChanged` and comparators aren't told), a furnace sets its `lit` with
+`flags::UPDATE_ALL` (both). Horizon sends every write to players whatever the flags: `UPDATE_CLIENTS` (2),
+`UPDATE_INVISIBLE` (4) and `UPDATE_IMMEDIATE` (8) change nothing yet. It writes at any loaded position, returns false
+off an authoritative server, for a property or value the block doesn't have or a position that isn't loaded, and true
+without writing when the property already has the value. Elsewhere,
+`Game::native_set_block_property_with(pos, key, value, flags)` does the same, as a brewing stand's tick sets its
+bottles with `flags::UPDATE_CLIENTS`. The deprecated in-frame path fires none. Bundles that use them need
+`"hooks": 23`.
+
+API 24 adds scheduled block ticks a mod can handle through `native_tick_block`: on an authoritative server, each due
+scheduled tick of a block that is still there (`ServerLevel.tickBlock` → `BlockState.tick`), with its dimension,
+position and state, before the block handles it. The hook may change the block with the level's
+`native_set_block_property` and the flags the block's own tick would write with (as in API 23: an observer's tick
+uses `flags::UPDATE_CLIENTS`) and set `handled` to skip the block's own tick. Without `handled`, the block then takes
+its own tick as it is now, if it is still the tick's block. The deprecated in-frame path fires none. Bundles that use
+it need `"hooks": 24`.
 
 ## What the launcher does
 

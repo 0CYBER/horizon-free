@@ -1048,6 +1048,22 @@ impl LevelAccess for GameLevel<'_> {
             }
         }
     }
+    fn before_tick_block(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: &mut BlockStateId,
+        handled: &mut bool,
+    ) {
+        if self.native_authoritative {
+            // Any block the hook writes moves the world's revision on.
+            let revision = self.world.revision;
+            self.native_tick_block(ticks, self.dimension, pos, *state, handled);
+            if !*handled && self.world.revision != revision {
+                *state = self.block_state(pos);
+            }
+        }
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
