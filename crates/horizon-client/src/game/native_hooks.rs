@@ -6,8 +6,14 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 22 adds redstone from a mod's block (`native_block_signal`,
+//! API 23 adds redstone from a mod's block (`native_block_signal`,
 //! `native_is_signal_source`, and the helper `native_update_signal_neighbors`).
+//!
+//! API 22 adds what a mod needs to keep the world from changing blocks
+//! it guards: fluid and fire spreading (`native_block_spread`), pistons
+//! (`native_piston_move`), explosions (`native_explosion_detonate`),
+//! buckets (`native_fill_bucket`) and a player's attack on an entity
+//! (`native_attack_entity`).
 //!
 //! API 21 adds right clicking a block (`native_right_click_block`), and in
 //! `native_server.rs` the acting player (`native_acting_player`), a player's
@@ -114,7 +120,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 22;
+pub(crate) const NATIVE_HOOKS_API: u32 = 23;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -144,6 +150,40 @@ impl GameLevel<'_> {
         let _ = (dimension, pos, state, changed, moved);
     }
 
+    /// On an authoritative server, a fluid flows or fire spreads from `from`
+    /// into `to` (`kind` is `fluid` or `fire`): `FlowingFluid.spreadTo`, and
+    /// `FireBlock.tick` setting fire to `to` or burning it (`checkBurnOut`).
+    /// Set `canceled` to leave the block at `to` as it is. Fluids ask on
+    /// every flow: answer fast. API 22.
+    #[inline(always)]
+    pub(super) fn native_block_spread(
+        &self,
+        dimension: LevelDimension,
+        kind: &str,
+        from: BlockPos,
+        to: BlockPos,
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, kind, from, to, canceled);
+    }
+
+    /// On an authoritative server, the piston at `piston` is about to push
+    /// the blocks at `push` one step `direction` (`[0, 1, 0]` is up; pulling
+    /// when it retracts) and destroy those at `destroy`:
+    /// `PistonBaseBlock.moveBlocks`, once its structure resolved. Set
+    /// `canceled` and nothing moves, as when the structure can't. API 22.
+    #[inline(always)]
+    pub(super) fn native_piston_move(
+        &self,
+        dimension: LevelDimension,
+        piston: BlockPos,
+        direction: [i32; 3],
+        push: &[BlockPos],
+        destroy: &[BlockPos],
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, piston, direction, push, destroy, canceled);
+    }
     /// The redstone signal the block `state` at `pos` gives on its `face`, the
     /// side that touches the block reading it: `BlockState.getDirectSignal`
     /// when `direct` (what passes through a block it touches, as a lever's
@@ -152,7 +192,7 @@ impl GameLevel<'_> {
     /// from inside the level's update, so answer from your own state: check the
     /// block first, and don't read or change the world here. When the answer
     /// changes, call `native_update_signal_neighbors`. Authoritative servers
-    /// only. API 22.
+    /// only. API 23.
     #[inline(always)]
     pub(super) fn native_block_signal(
         &self,
@@ -168,7 +208,7 @@ impl GameLevel<'_> {
 
     /// `BlockState.isSignalSource`: set `source` for a block of yours that
     /// gives a signal, so redstone wire beside it connects to it. Authoritative
-    /// servers only. API 22.
+    /// servers only. API 23.
     #[inline(always)]
     pub(super) fn native_is_signal_source(&self, state: BlockStateId, source: &mut bool) {
         let _ = (state, source);
@@ -754,6 +794,47 @@ impl Game<'_> {
     ) {
         let _ = (pos, face, canceled);
     }
+    /// An explosion at `center` in `dimension` (`minecraft:overworld`) is
+    /// about to break `blocks`: `ServerExplosion.explode` with its `toBlow`,
+    /// before any block is hit. Take out the positions to spare; they keep
+    /// their block and get no fire. Entities are hurt as before. Server-side.
+    /// API 22.
+    pub(super) fn native_explosion_detonate(
+        &mut self,
+        dimension: &str,
+        center: [f64; 3],
+        blocks: &mut Vec<[i32; 3]>,
+    ) {
+        let _ = (dimension, center, blocks);
+    }
+    /// A player fills (`stack` an empty bucket) or empties a bucket at `pos`:
+    /// `BucketItem.use`, where it asks `Level.mayInteract`. Set `canceled`
+    /// and the bucket does nothing. Server-side, for every player of the
+    /// world (`native_acting_player` says who). API 22.
+    pub(super) fn native_fill_bucket(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (stack, pos, canceled);
+    }
+    /// A player attacks the entity `entity` (`Entity.getId`) of type `kind`
+    /// (`minecraft:item_frame`, `minecraft:cow`, `minecraft:player`) standing
+    /// at `pos`: `ServerGamePacketListenerImpl.handleInteract`'s attack, once
+    /// in reach, where `Player.attack` starts. Set `canceled` and the blow
+    /// does nothing (no damage, no knockback, the frame keeps its item).
+    /// Server-side, for every player of the world (`native_acting_player`
+    /// says who). API 22.
+    pub(super) fn native_attack_entity(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        pos: [f64; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (entity, kind, pos, canceled);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -847,7 +928,7 @@ impl Game<'_> {
     }
     /// The block at `pos` changed the signal it gives: its neighbours, and
     /// theirs (a block it powers passes the signal on), read it again, as
-    /// around a lever (`Level.updateNeighborsAt`). API 22.
+    /// around a lever (`Level.updateNeighborsAt`). API 23.
     pub(super) fn native_update_signal_neighbors(&mut self, pos: [i32; 3]) {
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         let state = self.world.block(pos[0], pos[1], pos[2]);

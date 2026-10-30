@@ -565,6 +565,13 @@ impl ChunkEncoder {
             .filter(|t| **t >= 0)
             .map(|t| i32::from(*t))
     }
+    /// Whether the state holds a fluid (water, lava, or a waterlogged block).
+    pub fn has_fluid(&self, state: u32) -> bool {
+        self.coder
+            .flags
+            .get(state as usize)
+            .is_some_and(|f| f & FLUID != 0)
+    }
     pub fn is_air(&self, state: u32) -> bool {
         self.coder
             .flags
@@ -1012,6 +1019,12 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
         }
         // StructureBlockEntity.getUpdateTag: saveCustomOnly.
         BlockEntity::StructureBlock(b) => Some(Tag::compound(b.save())),
+        // JigsawBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::JigsawBlock(b) => Some(Tag::compound(b.save())),
+        // TestBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestBlock(b) => Some(Tag::compound(b.save())),
+        // TestInstanceBlockEntity.getUpdateTag: saveCustomOnly.
+        BlockEntity::TestInstanceBlock(b) => Some(Tag::compound(b.save())),
         BlockEntity::Shelf(s) => Some(Tag::compound([
             ("Items", crate::save::encode_items(&s.items)),
             (

@@ -73,6 +73,7 @@ mod code_of_conduct;
 mod combat;
 mod command_blocks;
 mod command_harness;
+mod command_minecarts;
 mod commands;
 mod composter;
 mod consume;
@@ -121,6 +122,8 @@ mod integrated;
 mod interactions;
 mod item_draw;
 mod item_particles;
+mod jigsaw_blocks;
+mod jigsaw_edit;
 mod jukebox;
 mod lan;
 mod lan_actions;
@@ -239,11 +242,16 @@ mod structure_edit;
 mod structures;
 mod subtitle_hud;
 mod sulfur_cubes;
+mod test_block_edit;
+mod test_blocks;
+mod test_instance_edit;
+mod test_instances;
 mod text_displays;
 mod titles;
 mod tnt;
 mod totem;
 mod trading;
+mod transient_blocks;
 mod trial_spawner;
 mod trial_visuals;
 mod trident;
@@ -892,8 +900,7 @@ impl GameLevel<'_> {
             )
     }
     /// `DetectorRailBlock.getAnalogOutputSignal`: a powered rail reads the
-    /// minecart on it, a command block cart first (its success count, which
-    /// is 0 here), else the first container cart's fullness.
+    /// minecart on it, a command block cart first (its success count), else the first container cart's fullness.
     fn detector_rail_signal(&self, pos: BlockPos, powered: bool) -> i32 {
         if !powered {
             return 0;
@@ -913,7 +920,7 @@ impl GameLevel<'_> {
                 continue;
             }
             match cart.kind {
-                minecarts::CartKind::CommandBlock => return 0,
+                minecarts::CartKind::CommandBlock => return cart.command.success_count,
                 minecarts::CartKind::Chest | minecarts::CartKind::Hopper => {
                     // Counted here, for the cart a comparator reads, not for
                     // every cart on every block tick.
@@ -991,6 +998,36 @@ impl LevelAccess for GameLevel<'_> {
         if self.native_authoritative {
             self.native_neighbor_changed(self.dimension, pos, state, changed, moved);
         }
+    }
+    fn allow_spread(
+        &self,
+        kind: horizon_world::level::Spread,
+        from: BlockPos,
+        to: BlockPos,
+    ) -> bool {
+        let mut canceled = false;
+        if self.native_authoritative {
+            let kind = match kind {
+                horizon_world::level::Spread::Fluid => "fluid",
+                horizon_world::level::Spread::Fire => "fire",
+            };
+            self.native_block_spread(self.dimension, kind, from, to, &mut canceled);
+        }
+        !canceled
+    }
+    fn allow_piston_move(
+        &self,
+        piston: BlockPos,
+        direction: horizon_core::geometry::Direction,
+        push: &[BlockPos],
+        destroy: &[BlockPos],
+    ) -> bool {
+        let mut canceled = false;
+        if self.native_authoritative {
+            let step = direction.normal();
+            self.native_piston_move(self.dimension, piston, step, push, destroy, &mut canceled);
+        }
+        !canceled
     }
     fn adjust_signal_source(&self, state: BlockStateId, vanilla: bool) -> bool {
         let mut source = vanilla;
@@ -1740,6 +1777,8 @@ struct Game<'a> {
     spawn: Option<Vec3>,
     clock: FixedStep,
     previous_position: Vec3,
+    /// `yRotO` / `xRotO` of the local player: the view at the start of the tick.
+    rope_rot_old: (f32, f32),
     eye: f32,
     previous_eye: f32,
     yaw: f32,
@@ -1878,7 +1917,7 @@ struct Game<'a> {
     /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
     riding_cart_sounds: Option<u32>,
     /// The happy ghast its riding sound was started for (`LocalPlayer.startRiding`).
-    riding_ghast_sound: Option<u32>,
+    riding_sound: Option<u32>,
     /// `LocalPlayer.wasFallFlying` for the elytra's flying sound.
     was_fall_flying: bool,
     /// Bees whose buzz is playing, and whether it is the aggressive one.
@@ -2049,6 +2088,8 @@ struct Game<'a> {
     random_tick_sections: horizon_client::random_tick_sections::RandomTickSections,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
+    /// Blocks the server shows for a moment (`ClientboundAddTransientBlockPacket`).
+    transient_blocks: transient_blocks::TransientBlocks,
     paintings: Vec<horizon_client::entities::Painting>,
     painting_variants: paintings::PaintingVariants,
     item_frames: Vec<horizon_client::entities::ItemFrame>,
@@ -2142,6 +2183,7 @@ struct Game<'a> {
     spawn_scratch: natural_spawning::SpawnScratch,
     trident_model: Option<horizon_client::mobs::Part>,
     arrow_model: Option<horizon_client::mobs::Part>,
+    bee_stinger_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     /// The screen of a mod block's menu open on this client (`native_screen`).
@@ -2213,6 +2255,8 @@ struct Game<'a> {
     /// `StructureTemplateManager.structureRepository`: the templates in memory
     /// by id, a miss included (game/structure_blocks.rs).
     structure_templates: HashMap<String, Option<structure_blocks::TemplateEntry>>,
+    /// The game tests read so far, by id (the test instance registry).
+    test_defs: std::cell::RefCell<HashMap<String, Option<test_instances::TestDef>>>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
@@ -4309,7 +4353,13 @@ impl Game<'_> {
         }
         // The game master blocks' screens open on the player's own client
         // (`BlockEntity.usedBy`); the server has nothing to open.
-        if &*name == "minecraft:structure_block" {
+        if matches!(
+            &*name,
+            "minecraft:structure_block"
+                | "minecraft:jigsaw"
+                | "minecraft:test_block"
+                | "minecraft:test_instance_block"
+        ) {
             return;
         }
         // SignBlock.useWithoutItem: the text editor, not a container.
@@ -5299,6 +5349,8 @@ impl Game<'_> {
                     self.command_block_placed(key, !data);
                 }
                 Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
+                Some(BlockEntity::JigsawBlock(_)) => self.jigsaw_block_placed(key),
+                Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
                 Some(BlockEntity::Sign(sign)) if !sign.waxed => self.open_sign_editor(key, true),
                 _ => {}
             }
@@ -6028,6 +6080,7 @@ impl Game<'_> {
             analog: None,
         }
         .with_stick(stick.filter(|_| playing));
+        self.rope_rot_old = (self.yaw, self.pitch);
         if !riding {
             self.previous_position = player.position;
         }
@@ -7256,7 +7309,10 @@ impl Game<'_> {
                 | BlockEntity::Shelf(_)
                 | BlockEntity::Mod(_)
                 | BlockEntity::PotentSulfur(_)
-                | BlockEntity::StructureBlock(_),
+                | BlockEntity::StructureBlock(_)
+                | BlockEntity::JigsawBlock(_)
+                | BlockEntity::TestBlock(_)
+                | BlockEntity::TestInstanceBlock(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -7551,7 +7607,10 @@ impl Game<'_> {
                     | BlockEntity::Shelf(_)
                     | BlockEntity::Mod(_)
                     | BlockEntity::PotentSulfur(_)
-                    | BlockEntity::StructureBlock(_),
+                    | BlockEntity::StructureBlock(_)
+                    | BlockEntity::JigsawBlock(_)
+                    | BlockEntity::TestBlock(_)
+                    | BlockEntity::TestInstanceBlock(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -8933,6 +8992,8 @@ impl Game<'_> {
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
         self.entity_spans.borrow_mut().clear();
+        // LevelExtractor.extract: the transient blocks queued since the last frame.
+        self.drain_transient_block_queue();
         self.prepare_entity_culling(camera);
         self.prepare_trims();
         self.mark_entity(out.len(), "minecraft:entity_flame");
@@ -9296,6 +9357,8 @@ impl Game<'_> {
         }
         self.mark_entity(out.len(), "");
         self.moving_piston_geometry(camera, alpha, &mut out);
+        // LevelRenderer.submitTransientBlocks.
+        self.transient_block_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:tnt");
         self.tnt_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:painting");
@@ -10013,6 +10076,14 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        // openWorldLoadLevelData: an existing world whose level data does not read opens
+        // RecoverWorldDataScreen instead.
+        if create.is_none()
+            && let Some(title) = self.title.as_mut()
+            && title.open_recover(folder)
+        {
+            return Ok(());
+        }
         world_loading::world_data_used();
         if self.defer_world_entry(PendingWorldEntry::Local {
             folder: folder.to_owned(),
@@ -10321,6 +10392,7 @@ impl Game<'_> {
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
         self.falling.clear();
+        self.transient_blocks.clear();
         self.tnts.clear();
         self.mobs.clear();
         self.creatures.projectiles.clear();
@@ -10571,6 +10643,7 @@ impl Game<'_> {
         self.orbs.clear();
         self.creatures.projectiles.clear();
         self.falling.clear();
+        self.transient_blocks.clear();
         self.tnts.clear();
         self.boats.clear();
         self.carts.clear();
@@ -11138,6 +11211,11 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
+            let mut canceled = false;
+            self.native_fill_bucket(stack, hit.pos, &mut canceled);
+            if canceled {
+                return Ok(UseResult::Fail);
+            }
             if self.is_powder_snow(hit.pos) {
                 self.pick_up_powder_snow(hit.pos)?;
                 return Ok(UseResult::Success { swing: true });
@@ -11185,6 +11263,11 @@ impl Game<'_> {
                 return Ok(UseResult::Fail);
             }
             let target = self.bucket_target(content, &hit);
+            let mut canceled = false;
+            self.native_fill_bucket(stack, target, &mut canceled);
+            if canceled {
+                return Ok(UseResult::Fail);
+            }
             let pos = BlockPos::new(target[0], target[1], target[2]);
             // `Player.isShiftKeyDown`: only air takes a fluid under Shift.
             let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
@@ -13475,7 +13558,7 @@ impl Game<'_> {
                 Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
                 Screen::BlockEditor => self.close_block_editor(),
-                Screen::Chat => self.close_chat(),
+                Screen::Chat => self.close_chat(chat::ChatExit::Intentional),
                 Screen::Win => self.close_win_screen()?,
             },
             KeyCode::Digit1
@@ -13903,7 +13986,6 @@ impl Game<'_> {
                 let meshes = horizon_client::spans::time("lod_update", || {
                     lod.update(
                         [player.position.x, player.position.y, player.position.z],
-                        self.yaw,
                         self.streaming.radius,
                         lod_distance,
                         covered,
@@ -14198,6 +14280,9 @@ impl ApplicationHandler for Game<'_> {
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
                         if self.dialog_open() {
                             self.dialog_drag();
+                        }
+                        if self.screen == Screen::BlockEditor {
+                            self.block_editor_drag();
                         }
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
@@ -14535,6 +14620,9 @@ impl ApplicationHandler for Game<'_> {
                         }
                         Screen::BlockEditor if pressed && button == MouseButton::Left => {
                             self.block_editor_click()
+                        }
+                        Screen::BlockEditor if button == MouseButton::Left => {
+                            self.block_editor_release()
                         }
                         Screen::Dead if pressed && button == MouseButton::Left => {
                             self.death_click()?
@@ -15197,6 +15285,7 @@ impl<'a> Game<'a> {
             spawn: None,
             clock: FixedStep::default(),
             previous_position: Vec3::ZERO,
+            rope_rot_old: (0.0, 10.0),
             eye: 1.62,
             previous_eye: 1.62,
             yaw: look.map_or(level.rotation[0], |l| l.0),
@@ -15291,7 +15380,7 @@ impl<'a> Game<'a> {
             sound_paused: false,
             cart_sounds: HashSet::new(),
             riding_cart_sounds: None,
-            riding_ghast_sound: None,
+            riding_sound: None,
             was_fall_flying: false,
             bee_sounds: HashMap::new(),
             guardian_sounds: HashSet::new(),
@@ -15388,6 +15477,7 @@ impl<'a> Game<'a> {
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
             falling: Vec::new(),
+            transient_blocks: Default::default(),
             paintings: Vec::new(),
             painting_variants: prepared.painting_variants,
             item_frames: Vec::new(),
@@ -15450,6 +15540,7 @@ impl<'a> Game<'a> {
             spawn_scratch: Default::default(),
             trident_model: prepared.trident_model,
             arrow_model: prepared.arrow_model,
+            bee_stinger_model: prepared.bee_stinger_model,
             tnts: Vec::new(),
             hoppers: HashMap::new(),
             mod_screen: None,
@@ -15489,6 +15580,7 @@ impl<'a> Game<'a> {
             command_block_screen: None,
             block_editor: None,
             structure_templates: HashMap::new(),
+            test_defs: std::cell::RefCell::new(HashMap::new()),
             friends: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
@@ -15577,6 +15669,7 @@ struct GameCpuResources {
     cushion_model: Option<horizon_client::mobs::Part>,
     dragon_model: Option<horizon_client::mobs::Part>,
     arrow_model: Option<horizon_client::mobs::Part>,
+    bee_stinger_model: Option<horizon_client::mobs::Part>,
     trident_model: Option<horizon_client::mobs::Part>,
     creative_screen: Creative,
 }
@@ -15598,6 +15691,7 @@ impl GameCpuResources {
             cushion_model: model("minecraft:cushion#main"),
             dragon_model: model("minecraft:ender_dragon#main"),
             arrow_model: model("minecraft:arrow#main"),
+            bee_stinger_model: model("minecraft:bee_stinger#main"),
             trident_model: model("minecraft:trident#main"),
             creative_screen: Creative::load(root)?,
         })

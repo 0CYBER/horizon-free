@@ -83,6 +83,20 @@ pub struct ChatDraft {
     pub text: String,
     pub command: bool,
 }
+/// `ChatScreen.ExitReason`: why the chat screen went away.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ChatExit {
+    /// Another screen replaced it (death, a container, a disconnect).
+    Interrupted,
+    /// The player closed it (Escape).
+    Intentional,
+    /// A message was sent.
+    Done,
+}
+/// `ChatScreen.shouldDiscardDraft`.
+fn should_discard_draft(reason: ChatExit, save_chat_drafts: bool) -> bool {
+    reason != ChatExit::Interrupted && (reason != ChatExit::Intentional || !save_chat_drafts)
+}
 /// UI and command state that lives beside the game.
 #[derive(Default)]
 pub struct UiState {
@@ -560,7 +574,7 @@ impl Game<'_> {
         self.right = false;
         self.capture(false);
     }
-    pub(super) fn close_chat(&mut self) {
+    pub(super) fn close_chat(&mut self, reason: ChatExit) {
         // InBedChatScreen.onClose: leaving the screen means getting up; the
         // screen goes once the player has woken (`tick_in_bed_chat`).
         if self.ui.in_bed_chat && self.sleeping.is_some() {
@@ -572,7 +586,7 @@ impl Game<'_> {
             .chat_screen
             .as_ref()
             .map_or_else(String::new, |s| s.value().to_owned());
-        self.keep_chat_draft(&text);
+        self.keep_chat_draft(&text, reason);
         self.ui.chat_draft_shown = false;
         self.ui.chat_screen = None;
         self.ui.chat.reset_scroll();
@@ -581,13 +595,16 @@ impl Game<'_> {
             self.capture(true);
         }
     }
-    /// `ChatScreen.removed`: the text left in the box becomes the draft when
-    /// Save Chat Drafts is on, else (and when blank) the draft is discarded. A
-    /// draft still shown unchanged stays as it is.
-    fn keep_chat_draft(&mut self, text: &str) {
+    /// `ChatScreen.removed`: the text left in the box becomes the draft unless
+    /// `shouldDiscardDraft` (closed on purpose without Save Chat Drafts, or
+    /// sent); blank text discards the draft. A draft still shown unchanged
+    /// stays as it is.
+    fn keep_chat_draft(&mut self, text: &str, reason: ChatExit) {
         let unchanged =
             self.ui.chat_draft_shown && self.ui.chat_draft.as_ref().is_some_and(|d| d.text == text);
-        if !self.settings.file.bool("saveChatDrafts") || text.trim().is_empty() {
+        if should_discard_draft(reason, self.settings.file.bool("saveChatDrafts"))
+            || text.trim().is_empty()
+        {
             self.ui.chat_draft = None;
         } else if !unchanged {
             self.ui.chat_draft = Some(ChatDraft {
@@ -600,6 +617,19 @@ impl Game<'_> {
     /// woken (`onPlayerWokeUp`) it closes, or turns into the plain chat
     /// screen if something was typed.
     pub(super) fn tick_in_bed_chat(&mut self) {
+        // Another screen took over the open chat (death, a container the
+        // server opened): `ChatScreen.removed` runs with the INTERRUPTED reason.
+        if self.screen != Screen::Chat && self.ui.chat_screen.is_some() {
+            let text = self
+                .ui
+                .chat_screen
+                .as_ref()
+                .map_or_else(String::new, |s| s.value().to_owned());
+            self.keep_chat_draft(&text, ChatExit::Interrupted);
+            self.ui.chat_draft_shown = false;
+            self.ui.chat_screen = None;
+            self.ui.chat.reset_scroll();
+        }
         if self.screen != Screen::Chat {
             self.ui.in_bed_chat = false;
         }
@@ -611,7 +641,7 @@ impl Game<'_> {
                     .chat_screen
                     .as_ref()
                     .map_or_else(String::new, |s| s.value().to_owned());
-                self.close_chat();
+                self.close_chat(ChatExit::Interrupted);
                 if !text.is_empty() {
                     self.open_chat(&text);
                 }
@@ -734,7 +764,7 @@ impl Game<'_> {
             ChatAction::Close => {
                 // Escape: the box still holds its text, which close_chat keeps as the draft.
                 self.ui.chat_screen = Some(screen);
-                self.close_chat();
+                self.close_chat(ChatExit::Intentional);
             }
             ChatAction::Submit(message) => {
                 // InBedChatScreen sends without closing (`closeOnSubmit` is
@@ -746,7 +776,7 @@ impl Game<'_> {
                 } else {
                     // The screen is taken here, so close_chat sees no text: a sent
                     // message discards the draft (DONE).
-                    self.close_chat();
+                    self.close_chat(ChatExit::Done);
                 }
                 if !message.is_empty() {
                     self.handle_chat_input(&message);
@@ -1415,6 +1445,16 @@ const LINK_COPY: usize = 1;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ChatScreen.shouldDiscardDraft`.
+    #[test]
+    fn draft_discard_follows_the_exit_reason() {
+        assert!(!should_discard_draft(ChatExit::Interrupted, false));
+        assert!(!should_discard_draft(ChatExit::Interrupted, true));
+        assert!(should_discard_draft(ChatExit::Intentional, false));
+        assert!(!should_discard_draft(ChatExit::Intentional, true));
+        assert!(should_discard_draft(ChatExit::Done, true));
+    }
 
     #[test]
     fn resource_ids_are_listed_once_per_root() {

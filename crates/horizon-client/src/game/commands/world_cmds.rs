@@ -240,27 +240,43 @@ impl Game<'_> {
             return Ok(0);
         };
         let current = self.target_rotation(t);
+        let mut look_at_target = None;
         let rot = if let Some(Arg::Coords(c)) = ctx.get("rotation") {
             // Relative parts are offsets from the entity's own rotation.
             c.rotation(current)
         } else {
+            let mut faced_entity = None;
             let to = if ctx.has("entity") {
                 let faced = self.entities(ctx, "facingEntity", false)?;
                 let Some(f) = faced.first().copied() else {
                     return Ok(0);
                 };
                 let mut p = self.target_position(f).unwrap_or(pos);
-                if matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true))) {
+                let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
+                if eyes {
                     p[1] += self.target_eye_height(f);
                 }
+                faced_entity = Some((f, eyes));
                 p
             } else {
                 self.position_arg(ctx, "facingLocation").unwrap_or(pos)
             };
-            let from = [pos[0], pos[1] + self.target_eye_height(t), pos[2]];
+            // LookAt.perform: Entity.lookAt from the source's anchor (the
+            // feet, unless `anchored eyes`).
+            let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+            let eye = if anchored_eyes {
+                self.target_eye_height(t)
+            } else {
+                0.0
+            };
+            let from = [pos[0], pos[1] + eye, pos[2]];
+            look_at_target = Some((anchored_eyes, to, faced_entity));
             look_at(from, to)
         };
         self.teleport_to(t, pos, Some(rot));
+        if let Some((eyes, to, entity)) = look_at_target {
+            self.send_player_look_at(t, eyes, to, entity);
+        }
         if t == Target::Player {
             self.pitch = rot[1].clamp(-90.0, 90.0);
         }

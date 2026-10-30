@@ -603,6 +603,9 @@ impl Game<'_> {
             Mode::BackupBeforeUpgrade { world, .. } => {
                 json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
             }
+            Mode::LowDiskSpace { world } => {
+                json!({ "mode": "low-disk-space", "folder": world.folder, "name": world.name })
+            }
             Mode::Recover { world, issues } => {
                 let issue = |i: &Option<horizon_client::save::DatIssue>| match i {
                     None => json!(null),

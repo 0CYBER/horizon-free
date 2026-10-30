@@ -49,6 +49,24 @@ pub(super) enum Item {
         label: Text,
         active: bool,
     },
+    /// A multi-line message (`FittingMultiLineTextWidget`), wrapped to `w`
+    /// and cut to what fits `h`.
+    Info {
+        text: Text,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
+    /// An `AbstractSliderButton`: `value` is 0..1.
+    Slider {
+        id: u8,
+        x: f32,
+        y: f32,
+        w: f32,
+        label: Text,
+        value: f32,
+    },
 }
 
 /// What a press on a button does to the screen.
@@ -56,6 +74,8 @@ pub(super) enum Outcome {
     Stay,
     /// Send the packet and close.
     Send(S),
+    /// Send the packets in order and close.
+    SendAll(Vec<S>),
     /// Close, after the editor reverted what it changed.
     Cancel,
 }
@@ -75,12 +95,28 @@ pub(super) trait Editor {
         shift: bool,
         alt: bool,
     ) -> Outcome;
+    /// The screen opened: packets it sends first (`init`).
+    fn opened(&mut self, _entity: &BlockEntity, _pos: Pos) -> Vec<S> {
+        Vec::new()
+    }
+    /// The text of box `edit` changed (`EditBox.setResponder`): packets to send.
+    fn edited(&mut self, _edit: usize, _pos: Pos) -> Vec<S> {
+        Vec::new()
+    }
+    /// A status from the server (`ClientboundTestInstanceBlockStatus`).
+    fn status(&mut self, _entity: &BlockEntity, _status: Text, _size: Option<[i32; 3]>) {}
+    /// A slider moved to `value` (0..1).
+    fn slide(&mut self, _id: u8, _value: f32) {}
     /// Done: the packet that carries the screen's values.
     fn done(&mut self, entity: &mut BlockEntity, pos: Pos) -> Outcome;
     /// Cancel: put the block entity back.
     fn cancel(&mut self, entity: &mut BlockEntity);
     /// Whether the box takes the typed character (`EditBox.charTyped`).
     fn accepts(&self, _edit: usize, _current: &str, _cursor: usize, _c: char) -> bool {
+        true
+    }
+    /// Whether Enter is Done (a screen with its own `keyPressed`).
+    fn enter_confirms(&self) -> bool {
         true
     }
     /// The box that has the focus when the screen opens.
@@ -95,12 +131,22 @@ pub(super) struct BlockEditScreen {
     pub(super) editor: Box<dyn Editor>,
     /// The text box with the focus, and which of them show.
     focus: Option<usize>,
+    /// The text of each box when the screen last looked, to see what changed.
+    values: Vec<String>,
+    /// The slider being dragged: its id and the x and width it is drawn at.
+    dragging: Option<(u8, f32, f32)>,
 }
 
 impl BlockEditScreen {
     pub(super) fn new(pos: Pos, editor: Box<dyn Editor>) -> Self {
         let focus = Some(editor.initial_focus());
-        Self { pos, editor, focus }
+        Self {
+            pos,
+            editor,
+            focus,
+            values: Vec::new(),
+            dragging: None,
+        }
     }
 }
 
@@ -108,9 +154,25 @@ impl Game<'_> {
     /// `LocalPlayer.open*Block`: the edit screen for the block entity at
     /// `pos`.
     pub(super) fn open_block_editor(&mut self, pos: Pos, editor: Box<dyn Editor>) {
-        self.block_editor = Some(BlockEditScreen::new(pos, editor));
+        let mut screen = BlockEditScreen::new(pos, editor);
+        let opening = self
+            .world
+            .block_entities
+            .get(&pos)
+            .map(|entity| screen.editor.opened(entity, pos))
+            .unwrap_or_default();
+        screen.values = screen
+            .editor
+            .edits()
+            .iter()
+            .map(|e| e.value.clone())
+            .collect();
+        self.block_editor = Some(screen);
         self.screen = Screen::BlockEditor;
         self.capture(false);
+        for packet in opening {
+            self.send(packet);
+        }
     }
 
     /// A use of a game master block on a server's client, which opens the
@@ -120,8 +182,12 @@ impl Game<'_> {
         if !self.can_use_game_master_blocks() {
             return;
         }
-        if let Some(BlockEntity::StructureBlock(_)) = self.world.block_entities.get(&pos) {
-            self.open_structure_block(pos);
+        match self.world.block_entities.get(&pos) {
+            Some(BlockEntity::StructureBlock(_)) => self.open_structure_block(pos),
+            Some(BlockEntity::JigsawBlock(_)) => self.open_jigsaw_block(pos),
+            Some(BlockEntity::TestBlock(_)) => self.open_test_block(pos),
+            Some(BlockEntity::TestInstanceBlock(_)) => self.open_test_instance_block(pos),
+            _ => {}
         }
     }
 
@@ -157,6 +223,12 @@ impl Game<'_> {
             Outcome::Stay => {}
             Outcome::Send(packet) => {
                 self.send(packet);
+                self.close_block_editor();
+            }
+            Outcome::SendAll(packets) => {
+                for packet in packets {
+                    self.send(packet);
+                }
                 self.close_block_editor();
             }
             Outcome::Cancel => self.close_block_editor(),
@@ -229,6 +301,32 @@ impl Game<'_> {
                     }
                 }
                 Item::Button { .. } => {}
+                Item::Info {
+                    text,
+                    x,
+                    y,
+                    w: iw,
+                    h: ih,
+                } => {
+                    let lines = atlas.font.wrap_components(text, *iw as i32);
+                    for (i, line) in lines.iter().take((*ih / 9.0) as usize).enumerate() {
+                        batch.text_styled(atlas, line, *x, *y + i as f32 * 9.0, u32::MAX, true);
+                    }
+                }
+                Item::Slider {
+                    id,
+                    x,
+                    y,
+                    w: sw,
+                    label,
+                    value,
+                } => {
+                    let hover = ui::hovered(cursor, *x, *y, *sw, 20.0);
+                    let dragging = screen.dragging.is_some_and(|(d, _, _)| d == *id);
+                    ui::slider(
+                        batch, atlas, *x, *y, *sw, label, *value, hover, true, dragging,
+                    );
+                }
             }
         }
         self.block_editor = Some(screen);
@@ -271,6 +369,16 @@ impl Game<'_> {
                     }
                     return;
                 }
+                Item::Slider { id, x, y, w, .. } if ui::hovered(cursor, *x, *y, *w, 20.0) => {
+                    let (id, x, w) = (*id, *x, *w);
+                    let value = ui::slider_value(x, w, cursor.0);
+                    if let Some(mut screen) = self.block_editor.take() {
+                        screen.dragging = Some((id, x, w));
+                        screen.editor.slide(id, value);
+                        self.block_editor = Some(screen);
+                    }
+                    return;
+                }
                 Item::Edit { index, x, y, w } if ui::hovered(cursor, *x, *y, *w, 20.0) => {
                     let index = *index;
                     if let Some(mut screen) = self.block_editor.take() {
@@ -285,6 +393,23 @@ impl Game<'_> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// The cursor moved with a slider held (`AbstractSliderButton.onDrag`).
+    pub(super) fn block_editor_drag(&mut self) {
+        let x = self.cursor.0;
+        if let Some(screen) = self.block_editor.as_mut()
+            && let Some((id, sx, sw)) = screen.dragging
+        {
+            screen.editor.slide(id, ui::slider_value(sx, sw, x));
+        }
+    }
+
+    /// The left button released: a held slider lets go.
+    pub(super) fn block_editor_release(&mut self) {
+        if let Some(screen) = self.block_editor.as_mut() {
+            screen.dragging = None;
         }
     }
 
@@ -326,6 +451,13 @@ impl Game<'_> {
                 self.block_editor_outcome(outcome);
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
+                let confirms = self
+                    .block_editor
+                    .as_ref()
+                    .is_some_and(|s| s.editor.enter_confirms());
+                if !confirms {
+                    return;
+                }
                 if let Some(outcome) = self.with_block_editor(|s, e| {
                     let pos = s.pos;
                     s.editor.done(e, pos)
@@ -373,8 +505,52 @@ impl Game<'_> {
                     }
                 }
                 self.block_editor = Some(screen);
+                self.block_editor_after_input();
             }
         }
+    }
+
+    /// What typing changed: the boxes whose text differs from before tell
+    /// the editor, which may have packets to send.
+    fn block_editor_after_input(&mut self) {
+        let Some(mut screen) = self.block_editor.take() else {
+            return;
+        };
+        let pos = screen.pos;
+        let now: Vec<String> = screen
+            .editor
+            .edits()
+            .iter()
+            .map(|e| e.value.clone())
+            .collect();
+        let mut packets = Vec::new();
+        for (i, value) in now.iter().enumerate() {
+            if screen.values.get(i) != Some(value) {
+                packets.extend(screen.editor.edited(i, pos));
+            }
+        }
+        screen.values = now;
+        self.block_editor = Some(screen);
+        for packet in packets {
+            self.send(packet);
+        }
+    }
+
+    /// A status for the open screen.
+    pub(super) fn block_editor_status(&mut self, status: Text, size: Option<[i32; 3]>) {
+        let Some(mut screen) = self.block_editor.take() else {
+            return;
+        };
+        if let Some(entity) = self.world.block_entities.get(&screen.pos) {
+            screen.editor.status(entity, status, size);
+        }
+        screen.values = screen
+            .editor
+            .edits()
+            .iter()
+            .map(|e| e.value.clone())
+            .collect();
+        self.block_editor = Some(screen);
     }
 
     fn block_editor_type_into(&mut self, screen: &mut BlockEditScreen, focus: usize, c: char) {
@@ -405,6 +581,7 @@ impl Game<'_> {
             }
         }
         self.block_editor = Some(screen);
+        self.block_editor_after_input();
     }
 }
 

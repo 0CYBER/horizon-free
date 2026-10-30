@@ -1404,6 +1404,20 @@ impl Game<'_> {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
                 // doHurtTarget: the effect only when hurtServer took damage.
+                // Bee.doHurtTarget: a sting that hurt leaves the stinger in the
+                // body, then the poison.
+                MobEvent::StingPlayer {
+                    amount,
+                    from,
+                    poison_ticks,
+                } => {
+                    if self.mob_hits_player(amount, from, "minecraft:mob_attack") {
+                        self.combat.stuck.add_stinger();
+                        if poison_ticks > 0 {
+                            self.give_player_effect("minecraft:poison", poison_ticks, 0);
+                        }
+                    }
+                }
                 MobEvent::AttackPlayerWithEffect {
                     amount,
                     from,
@@ -3425,7 +3439,12 @@ impl Game<'_> {
                 // it, else turned back (a perched dragon sets it alight first).
                 let mut arrow = p.clone();
                 let amount = self.shot_damage(&mut arrow, None);
-                let outcome = match self.hit_special(id, amount, by_player, true) {
+                let outcome = match self.hit_special(
+                    id,
+                    amount,
+                    by_player,
+                    horizon_client::mobs::DamageKind::Arrow,
+                ) {
                     super::dragon::Hurt::Landed { .. } => EntityHit::Hurt,
                     super::dragon::Hurt::Refused => EntityHit::Refused,
                     super::dragon::Hurt::Shrugged => {
@@ -3442,7 +3461,13 @@ impl Game<'_> {
                 ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => 6.0,
                 _ => 0.0,
             };
-            self.hit_special(id, amount, by_player, false);
+            let kind = match p.kind {
+                ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => {
+                    horizon_client::mobs::DamageKind::Fireball
+                }
+                _ => horizon_client::mobs::DamageKind::Thrown,
+            };
+            self.hit_special(id, amount, by_player, kind);
             // ThrowableProjectile.onHit goes on after onHitEntity: a pearl
             // still takes its owner to where it broke (into the crystal's
             // blast), an egg still hatches, a snowball still breaks.
@@ -3531,11 +3556,19 @@ impl Game<'_> {
                     }])?;
                 }
                 let hurt = match who {
-                    Who::Player => self.mob_hits_player(
-                        amount,
-                        [p.previous.x, p.previous.y, p.previous.z],
-                        "minecraft:arrow",
-                    ),
+                    Who::Player => {
+                        let hurt = self.mob_hits_player(
+                            amount,
+                            [p.previous.x, p.previous.y, p.previous.z],
+                            "minecraft:arrow",
+                        );
+                        // AbstractArrow.onHitEntity: a hit that hurt leaves a
+                        // non-piercing arrow stuck in the body.
+                        if hurt && p.arrow.as_ref().is_some_and(|a| a.pierce == 0) {
+                            self.combat.stuck.add_arrow();
+                        }
+                        hurt
+                    }
                     Who::Mob(id) => {
                         let hurt = self
                             .mobs
@@ -5206,6 +5239,7 @@ impl Game<'_> {
                 }
                 self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+                self.stuck_in_body_geometry(mob, mob.id as i32, camera, alpha as f32, packed, out);
             }
             // CustomHeadLayer (a pumpkin, skull or head item) included.
             self.mob_block_geometry(mob, camera, alpha, packed, out);

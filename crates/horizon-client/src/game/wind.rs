@@ -127,7 +127,12 @@ impl Game<'_> {
             // not hit (`AbstractWindCharge.canHitEntity`).
             Who::Mob(id) if id >= super::dragon::SPECIAL => {
                 if id < super::dragon::SPECIAL + 8 {
-                    self.hit_special(id, 1.0, p.owner == Some(Who::Player), false);
+                    self.hit_special(
+                        id,
+                        1.0,
+                        p.owner == Some(Who::Player),
+                        horizon_client::mobs::DamageKind::WindCharge,
+                    );
                 }
             }
             Who::Mob(id) => {
