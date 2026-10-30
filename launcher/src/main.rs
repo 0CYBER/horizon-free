@@ -17,6 +17,7 @@ mod dev_options;
 mod export_page;
 mod game_tools;
 mod home;
+mod home_tabs;
 mod import_page;
 mod instances_page;
 mod internet;
@@ -87,7 +88,7 @@ impl Page {
     /// `settings`) opens on that page, for screenshots; Home otherwise (`getting-ready`: Home
     /// preparing, `home::getting_ready_preview`; `sign-in`: the owner gate's sheet with a
     /// made-up code, `owner_page::sign_in_preview`; `new-instance`: Home with the New instance
-    /// dialog open on Modded).
+    /// dialog open on Modded; `worlds`, `packs`...: Home on that tab, `HomeTab::from_env`).
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,
@@ -273,6 +274,8 @@ struct Launcher {
     prepare_started: Option<Instant>,
     /// The download under way as first seen (when, files done), for the time left.
     download_seen: Option<(Instant, usize)>,
+    /// The tab open under Home's hero (`home_tabs.rs`).
+    home_tab: home_tabs::HomeTab,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -476,6 +479,7 @@ impl Launcher {
             install_started: None,
             prepare_started: None,
             download_seen: None,
+            home_tab: home_tabs::HomeTab::from_env(),
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
@@ -2527,18 +2531,9 @@ impl Launcher {
                     .into_any_element()
             },
         );
-        // "Ready to play" only when Play would start the game now: not while it needs preparing,
-        // prepares, waits for an account that owns it, or runs.
-        let running = self.client.is_some() || self.starting_client.is_some();
-        let ready = play_press(
-            prepared || java.is_some(),
-            self.owner,
-            self.preparing || running,
-        ) == PlayPress::Play;
         let mut rows = div()
             .flex()
             .flex_col()
-            .children(ready.then(|| section_title("Ready to play", "check", &t).mb(px(12.))))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
             .children(self.launch_panel(cx));
@@ -2687,22 +2682,7 @@ impl Launcher {
         if let Some(e) = self.prepare_error.clone() {
             page = page.child(notice(e, &t));
         }
-        page = page.child(rows);
-        if let Some(console) = self.console_section(cx) {
-            page = page.child(console);
-        }
-        if let Some(worlds) = self.worlds_section(cx) {
-            page = page.child(worlds);
-        }
-        if let Some(servers) = self.multiplayer_section(cx) {
-            page = page.child(servers);
-        }
-        if let Some(packs) = self.packs_section(cx) {
-            page = page.child(packs);
-        }
-        if let Some(shots) = self.screenshots_section(cx) {
-            page = page.child(shots);
-        }
+        page = page.child(self.home_tabs(rows, cx));
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }

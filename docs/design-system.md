@@ -261,6 +261,12 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   bar, what is happening with the time left, and the steps (game files, Java, sounds, prepare,
   play), the current one lit, those done ticked: steps, never the log
   (`HORIZON_LAUNCHER_PAGE=getting-ready` shows it for screenshots, nothing runs).
+- **The instance's tabs** (`launcher/src/home_tabs.rs`): under Home's hero, one tab at a time
+  instead of one long page: Overview (what Play needs: the instance, the game or its resources,
+  the account), Worlds, Multiplayer, Packs, then Screenshots and Console once they have something.
+  A tab names how many it holds ("Worlds 3"); its own buttons (Add server, Open folder) sit at the
+  strip's end, where a list's header would put them (`HORIZON_LAUNCHER_PAGE=worlds`, `packs`...
+  opens one for screenshots).
 - **The sign-in sheet** (`launcher/src/owner_page.rs`, the owner gate): an opaque plate over the
   dimmed launcher, never instead of it. It says why (the account that owns Java Edition, no install
   needed), the code in mono on a raised box with Copy, and Open link as the main action; the window
