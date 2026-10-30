@@ -1173,7 +1173,10 @@ fn read_loop(
                 return Ended::PackDeclined(r.id);
             }
             Ok(p) => {
-                if events.send(NetEvent::Packet(conn, Box::new(p))).is_err() {
+                if events
+                    .send(NetEvent::Packet(conn, Box::new(p), payload.len()))
+                    .is_err()
+                {
                     return Ended::Closed("server closed".to_owned());
                 }
             }
