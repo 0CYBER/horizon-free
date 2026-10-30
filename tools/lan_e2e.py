@@ -3616,7 +3616,8 @@ def check_rocket_ceilings(host, guest, out):
     assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
         f'a rocket outlived its lifetime: {result}')
     assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the ceiling: {result}'
-    assert result['star']['span'] is not None and result['star']['span'] < 14, (
+    # It rises about 8 ticks first: gone at once would be a burst at launch.
+    assert result['star']['span'] is not None and 3 <= result['star']['span'] < 14, (
         f'star rocket did not explode on the ceiling: {result}')
     return result
 
