@@ -687,7 +687,14 @@ impl Game<'_> {
                 .iter()
                 // The kinds /data can write (entity_nbt).
                 .filter(|p| {
-                    p.is_arrow() || matches!(p.kind, K::LargeFireball { .. } | K::SmallFireball)
+                    p.is_arrow()
+                        || matches!(
+                            p.kind,
+                            K::LargeFireball { .. }
+                                | K::SmallFireball
+                                | K::WindCharge
+                                | K::BreezeWindCharge
+                        )
                 })
                 .map(|p| Target::Projectile(p.id)),
         );
@@ -716,6 +723,27 @@ impl Game<'_> {
             Dim::End => 2,
         });
         dims
+    }
+    /// `Level.getEntity`: the entity of the level in place with a network
+    /// id, players aside.
+    pub(in crate::game) fn level_entity(&self, id: i32) -> Option<Target> {
+        let id = u32::try_from(id).ok()?;
+        [
+            Target::Mob(id),
+            Target::Item(id),
+            Target::Orb(id),
+            Target::Projectile(id),
+            Target::Stand(id),
+            Target::Frame(id),
+            Target::Painting(id),
+            Target::Boat(id),
+            Target::Cart(id),
+            Target::Other(id),
+            Target::Crystal(id),
+            Target::Dragon(id),
+        ]
+        .into_iter()
+        .find(|t| self.level_holds(*t))
     }
     /// Whether the level in place holds the entity a target names.
     fn level_holds(&self, t: Target) -> bool {
@@ -1032,6 +1060,11 @@ impl Game<'_> {
         let custom = s.data().and_then(|data| data.custom_name.as_ref());
         let hover = if let Some(c) = custom {
             horizon_client::component::name_text(c)
+        } else if let Some(name) = s.data().and_then(|d| d.other("minecraft:item_name")) {
+            // `ItemStack.getItemName`: the `item_name` component wins over the
+            // item's own name (`Item.getName`), so a datapack's or a server's
+            // renaming shows here as it does on the tooltip's first line.
+            horizon_client::component::name_text(name)
         } else if let Some(title) = s
             .data()
             .and_then(|d| d.written.as_ref())

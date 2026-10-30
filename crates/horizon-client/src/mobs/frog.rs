@@ -145,6 +145,16 @@ pub fn tick(m: &mut Mob) {
 }
 
 /// `Frog.canEat`: a slime or magma cube of size 1.
+/// `Frog.updateWalkAnimation`: the frog's short steps walk the legs 25 times
+/// the distance (the base is 4), and not at all while the jump plays.
+pub fn walk_target(m: &Mob, distance: f32) -> f32 {
+    if m.anim.states[JUMP].started.is_some() {
+        0.0
+    } else {
+        (distance * 25.0).min(1.0)
+    }
+}
+
 fn can_eat(species: Species, size: i32) -> bool {
     matches!(species, Species::Slime | Species::MagmaCube) && size == 1
 }
@@ -728,6 +738,31 @@ mod tests {
         k.id = "minecraft:frog".into();
         k.species = Species::Frog;
         Mob::new(1, kind, Vec3::new(0.5, 0.0, 0.5), 0.0)
+    }
+
+    /// `Frog.updateWalkAnimation`: target `min(distance * 25, 1)`, 0 while
+    /// the jump animation is started, eased by 0.4 (`WalkAnimationState.update`).
+    #[test]
+    fn a_frog_walks_its_legs_at_the_vanilla_rate() {
+        let mut m = frog();
+        m.previous = m.position;
+        m.position.x += 0.02;
+        m.update_walk_animation();
+        assert!((m.limb_speed - 0.5 * 0.4).abs() < 1e-6, "{}", m.limb_speed);
+        assert!((m.limb_position - m.limb_speed).abs() < 1e-6);
+
+        let mut m = frog();
+        m.previous = m.position;
+        m.position.x += 0.1;
+        m.update_walk_animation();
+        assert!((m.limb_speed - 0.4).abs() < 1e-6, "{}", m.limb_speed);
+
+        let mut m = frog();
+        m.anim.states[JUMP].start(0.0);
+        m.previous = m.position;
+        m.position.x += 0.02;
+        m.update_walk_animation();
+        assert_eq!(m.limb_speed, 0.0);
     }
 
     /// `LongJumpToRandomPos.start`: the 9 x 5 x 9 box without the frog's own

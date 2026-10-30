@@ -1129,3 +1129,125 @@ fn world_list_names_every_game_mode_and_hardcore_in_red() {
     assert_eq!(creative.plain(), "Creative Mode, Commands, Version: 26.3");
     assert!(creative.spans.iter().all(|s| s.style.color.is_none()));
 }
+
+#[test]
+fn world_with_unreadable_level_dat_stays_in_the_world_list() {
+    let f = Fixture::new();
+    f.world("Broken", "My World");
+    f.world("Broken", "My World");
+    fs::write(f.title.saves.join("Broken/level.dat"), b"truncated").unwrap();
+    // A folder with only level.dat_old is a world too (findLevelCandidates).
+    f.world("Old only", "Old only");
+    f.world("Old only", "Old only");
+    fs::remove_file(f.title.saves.join("Old only/level.dat")).unwrap();
+    let mut listed: Vec<String> = list_worlds(&f.title.saves)
+        .into_iter()
+        .map(|w| w.folder)
+        .collect();
+    listed.sort();
+    assert_eq!(listed, ["Broken", "Old only"]);
+}
+
+#[test]
+fn world_with_unreadable_level_dat_is_listed_and_recovers_from_level_dat_old() {
+    let mut f = Fixture::new();
+    // A second save keeps the first level.dat as level.dat_old; then level.dat
+    // is cut short, as a crash in the middle of a save leaves it.
+    f.world("Broken", "My World");
+    f.world("Broken", "My World");
+    let dir = f.title.saves.join("Broken");
+    fs::write(dir.join("level.dat"), b"truncated").unwrap();
+
+    // LevelStorageSource.readLevelSummary: a CorruptedLevelSummary, still listed.
+    let worlds = list_worlds(&f.title.saves);
+    let broken = worlds
+        .iter()
+        .find(|w| w.folder == "Broken")
+        .expect("a world whose level.dat does not read stays in the list");
+    assert!(broken.corrupted);
+    assert_eq!(broken.name, "Broken");
+    let info = world_info(broken);
+    assert_eq!(info.plain(), "Failed to load world summary");
+    assert_eq!(info.spans[0].style.color, Some(0xFF0000));
+
+    f.select();
+    let buttons = f.title.buttons(480.0, 262.0);
+    let enabled = |label: &str| buttons.iter().find(|b| b.label == label).unwrap().enabled;
+    assert!(enabled("Attempt to Recover"));
+    assert!(!enabled("Edit") && !enabled("Re-Create") && enabled("Delete"));
+
+    // Its primary action opens RecoverWorldDataScreen, not the world.
+    assert_eq!(f.click("Attempt to Recover"), Action::None);
+    let Mode::Recover { issues, .. } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert!(matches!(
+        issues[0],
+        Some(crate::save::DatIssue::Unreadable(_))
+    ));
+    assert_eq!(issues[1], None);
+    assert_eq!(fs::read(dir.join("level.dat")).unwrap(), b"truncated");
+
+    // restoreLevelDataFromOld: level.dat_old back in place, the broken file kept aside.
+    f.click("Attempt to Restore");
+    assert!(matches!(
+        f.title.mode,
+        Mode::Recovered { success: true, .. }
+    ));
+    assert_eq!(Level::read_summary(&dir).unwrap().name, "My World");
+    assert!(!dir.join("level.dat_old").exists());
+    let kept: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("level.dat_corrupted_")
+        })
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(fs::read(kept[0].path()).unwrap(), b"truncated");
+    assert_eq!(
+        f.click("Continue"),
+        Action::Play {
+            folder: "Broken".into()
+        }
+    );
+    assert!(!list_worlds(&f.title.saves)[0].corrupted);
+}
+
+#[test]
+fn world_with_nothing_to_recover_from_is_listed_but_never_opened() {
+    let mut f = Fixture::new();
+    let dir = f.title.saves.join("Lost");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("level.dat"), b"garbage").unwrap();
+    // A folder without level.dat or level.dat_old is no world (findLevelCandidates).
+    fs::create_dir_all(f.title.saves.join("Not a world")).unwrap();
+    let worlds = list_worlds(&f.title.saves);
+    assert_eq!(worlds.len(), 1);
+    assert!(worlds[0].corrupted);
+
+    f.select();
+    f.click("Attempt to Recover");
+    let Mode::Recover { issues, .. } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert_eq!(issues[1], Some(crate::save::DatIssue::Missing));
+    let restore = f
+        .title
+        .buttons(480.0, 262.0)
+        .into_iter()
+        .find(|b| b.label == "Attempt to Restore")
+        .unwrap();
+    assert!(!restore.enabled);
+    // Pressed anyway, attemptRestore fails without touching the files.
+    f.title.attempt_restore(worlds[0].clone());
+    assert!(matches!(
+        f.title.mode,
+        Mode::Recovered { success: false, .. }
+    ));
+    assert_eq!(fs::read(dir.join("level.dat")).unwrap(), b"garbage");
+    f.click("Back");
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
+}
