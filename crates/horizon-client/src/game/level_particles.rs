@@ -249,10 +249,7 @@ impl Game<'_> {
         let mut root = None;
         for step in 1..11 {
             let y = pos.y + step;
-            if !(horizon_client::chunk::MIN_Y
-                ..horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT)
-                .contains(&y)
-            {
+            if !(self.world.bottom_y()..self.world.top_y()).contains(&y) {
                 break;
             }
             let state = self.world.block(pos.x, y, pos.z);

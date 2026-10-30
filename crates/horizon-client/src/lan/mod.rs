@@ -5,6 +5,7 @@
 //! ever exchanges decoded packets with these threads through channels, so a
 //! world that is not open to the network pays nothing.
 mod advancements;
+pub mod anticheat;
 pub mod attributes;
 pub mod border;
 pub mod chunks;
@@ -51,7 +52,8 @@ pub const MAX_PLAYERS: usize = 8;
 pub enum NetEvent {
     /// A client finished configuration and enters the play state.
     Joined(Box<Joined>),
-    Packet(u32, Box<play::Serverbound>),
+    /// A packet and the bytes of its body on the wire.
+    Packet(u32, Box<play::Serverbound>, usize),
     /// The connection ended (reason for the log).
     Left(u32, String),
     /// PlayerList.disconnectAllPlayersWithProfile: a new login of this
@@ -97,6 +99,29 @@ pub struct OnlineMode {
     pub prevent_proxy: bool,
 }
 
+impl OnlineMode {
+    /// MinecraftServer.initializeKeyPair.
+    pub fn generate(prevent_proxy: bool) -> Result<Self, String> {
+        let key = horizon_protocol::rsa::RsaPrivateKey::generate(1024)
+            .map_err(|e| format!("Failed to generate key pair: {e}"))?;
+        Ok(Self {
+            public_der: key.public_der(),
+            key,
+            prevent_proxy,
+        })
+    }
+    /// IntegratedServer.initServer (`setUsesAuthentication(true)`): a LAN or
+    /// friends world authenticates its guests when the host is signed in;
+    /// an offline name hosts in offline mode.
+    pub fn lan() -> Option<Arc<Self>> {
+        crate::auth::current()?;
+        Self::generate(false)
+            .map_err(|e| log::warn!("LAN stays in offline mode: {e}"))
+            .ok()
+            .map(Arc::new)
+    }
+}
+
 /// The dedicated server's log for the login phase: (thread, level, line)
 /// written as vanilla's Log4j would, and the language that turns a
 /// disconnect reason into its text (Component.getString).
@@ -107,6 +132,12 @@ pub struct NetLog {
     /// log-ips: addresses in the log, or "<ip address withheld>".
     pub log_ips: bool,
 }
+
+/// The server.properties key that lets only the Horizon client join (off unless "true").
+pub const HORIZON_CLIENTS_ONLY: &str = "horizon-clients-only";
+/// What another client is told.
+pub const HORIZON_CLIENTS_ONLY_REASON: &str =
+    "This server is for the Horizon client: playhorizon.dev";
 
 /// How the server side of the network behaves: an integrated server's LAN
 /// uses the defaults, a dedicated server takes them from server.properties.
@@ -139,7 +170,7 @@ pub struct NetConfig {
     /// Ops bypass a full server (ServerOpList.canBypassPlayerLimit).
     pub bypasses_limit: Option<Arc<dyn Fn(u128) -> bool + Send + Sync>>,
     pub gate: Option<LoginGate>,
-    /// Online mode: players are authenticated (none on a LAN world).
+    /// Online mode: players are authenticated (a LAN world's when its host is signed in).
     pub online: Option<Arc<OnlineMode>>,
     pub log: Option<NetLog>,
     /// server.properties `resource-pack`: offered to every player during
@@ -149,6 +180,16 @@ pub struct NetConfig {
     /// sent in configuration when non-empty
     /// (ServerConfigurationPacketListenerImpl.startConfiguration).
     pub server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
+    /// An integrated server's owner profile: the properties the window's own
+    /// (memory) connection logs in with.
+    pub owner_profile: Option<Arc<OwnerProfile>>,
+    /// `horizon-clients-only` (Horizon's own server.properties key, off): a
+    /// client whose `minecraft:brand` isn't Horizon's is turned away during
+    /// configuration. A brand can be spoofed: a gate, not security.
+    pub horizon_clients_only: bool,
+    /// The shapes of the world's levels: their dimension types go to
+    /// clients when the world's data packs changed them.
+    pub levels: crate::chunk::LevelShapes,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -177,6 +218,53 @@ impl NetConfig {
             log: None,
             resource_pack: None,
             server_links: Vec::new(),
+            horizon_clients_only: false,
+            levels: crate::chunk::LevelShapes::VANILLA,
+            owner_profile: None,
+        }
+    }
+}
+
+/// `IntegratedServer.getSingleplayerProfile` (`Minecraft.getGameProfile`):
+/// the signed-in account's profile properties, its signed `textures` among
+/// them, which the player list gives the owner so that LAN guests see the
+/// owner's skin. Fetched in the background from the world's start; nothing
+/// waits for it: until it answers (or when it fails) the owner is listed
+/// without properties, as before.
+pub struct OwnerProfile {
+    properties: std::sync::OnceLock<Vec<horizon_protocol::packets::login::Property>>,
+    fetch: Mutex<Receiver<Vec<horizon_protocol::packets::login::Property>>>,
+}
+
+impl OwnerProfile {
+    pub fn new(
+        fetch: impl FnOnce() -> Vec<horizon_protocol::packets::login::Property> + Send + 'static,
+    ) -> Self {
+        let (send, receive) = channel();
+        let _ = std::thread::Builder::new()
+            .name("Profile fetcher".into())
+            .spawn(move || {
+                let _ = send.send(fetch());
+            });
+        Self {
+            properties: std::sync::OnceLock::new(),
+            fetch: Mutex::new(receive),
+        }
+    }
+    /// The owner's properties once fetched; empty while the fetch is out
+    /// or when it failed. Never blocks.
+    pub fn properties(&self) -> &[horizon_protocol::packets::login::Property] {
+        if let Some(properties) = self.properties.get() {
+            return properties;
+        }
+        let received = self.fetch.lock().ok().and_then(|r| match r.try_recv() {
+            Ok(properties) => Some(properties),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Vec::new()),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        });
+        match received {
+            Some(properties) => self.properties.get_or_init(|| properties),
+            None => &[],
         }
     }
 }

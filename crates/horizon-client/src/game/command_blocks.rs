@@ -241,6 +241,40 @@ impl Game<'_> {
         let at = BlockPos::new(pos.0, pos.1, pos.2);
         self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
     }
+    /// `ClientPacketListener.handleBlockEntityData` then
+    /// `CommandBlockEditScreen.updateGui`: new data for the command block the
+    /// edit screen shows refreshes its fields. The mode and conditional live in
+    /// the block state here (vanilla's `CommandBlockEntity.Mode`).
+    pub(super) fn command_block_data_arrived(&mut self, pos: Pos) {
+        if self.command_block_screen.as_ref().map(|s| s.pos) != Some(pos) {
+            return;
+        }
+        let state = self.block_state_at(pos).map(|s| {
+            (
+                Mode::of_block(&s.name).unwrap_or(Mode::Redstone),
+                conditional(s),
+            )
+        });
+        let block = self.command_block(pos).cloned();
+        let m = Measure(&self.gui.atlas.font);
+        let c = Commands {
+            dispatcher: super::chat::chat_tree(&self.remote),
+            registries: &self.ui.registries,
+        };
+        let Some(screen) = self.command_block_screen.as_mut() else {
+            return;
+        };
+        if let Some((mode, conditional)) = state {
+            screen.mode = mode;
+            screen.conditional = conditional;
+        }
+        if let Some(block) = block {
+            screen.command.suggest_command(&m, &c, &block.command);
+            screen.track_output = block.track_output;
+            screen.auto = block.auto;
+            screen.show_previous(&block);
+        }
+    }
 
     /// `CommandBlock.setPlacedBy`: unless the item carried block entity data
     /// (`defaults` false), output tracking follows `send_command_feedback` and
@@ -791,18 +825,6 @@ impl Game<'_> {
                 tag,
             }),
         );
-    }
-    /// `ClientPacketListener.handleBlockEntityData`: new data for the command
-    /// block the edit screen shows refills it (`CommandBlockEditScreen.updateGui`).
-    pub(super) fn command_block_data_arrived(&mut self, pos: Pos) {
-        let open = self.screen == Screen::CommandBlock
-            && self
-                .command_block_screen
-                .as_ref()
-                .is_some_and(|s| s.pos == pos);
-        if open {
-            self.open_command_block(pos);
-        }
     }
     /// What `handleSetCommandBlock` does once the player may edit the block.
     fn apply_command_block(&mut self, s: &CommandBlockEdit) {

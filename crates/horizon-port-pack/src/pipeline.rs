@@ -102,7 +102,10 @@ pub fn carry(
     let records: Vec<inventory::Record> = read_json(&work.join("inventory.json"))?;
     let facts_path = work.join("oracle/facts.json");
     let facts = if facts_path.exists() {
-        let f = oracle::Facts::read(&facts_path)?;
+        let mut f = oracle::Facts::read(&facts_path)?;
+        if let Some(r) = resources {
+            f.vanilla_items = read_json(&r.join("items.json"))?;
+        }
         log(format!(
             "oracle facts: {} blocks, {} items",
             f.blocks.len(),

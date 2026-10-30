@@ -118,7 +118,7 @@ AbstractSelectionList.narrationPriority	skip:other		screen-reader priority; Hori
 AbstractSelectionList.removeEntry	skip:other		rows are rebuilt from the model when they change (update_list, server list), so there is no single-row removal
 AbstractSelectionList.narrateListElementPosition	skip:other		narration only
 AbstractSelectionList.TrackedList.set	skip:java		delegate list wrapper
-AbstractSliderButton.getSprite	inline	crates/horizon-client-render/src/ui.rs::slider	gap: minor: track highlight follows hover only; keyboard focus does not highlight
+AbstractSliderButton.getSprite	inline	crates/horizon-client-render/src/ui.rs::slider	gap: minor: the track outline is drawn while dragged only; keyboard focus does not highlight it; hover highlights only the handle
 AbstractSliderButton.getHandleSprite	inline	crates/horizon-client-render/src/ui.rs::slider	gap: minor: handle highlight follows hover only
 AbstractSliderButton.updateWidgetNarration	skip:other		narration only
 AbstractSliderButton.extractWidgetRenderState	port	crates/horizon-client-render/src/ui.rs::slider	gap: minor: the label is clipped rather than scrolled

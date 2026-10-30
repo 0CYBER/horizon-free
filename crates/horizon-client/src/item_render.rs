@@ -96,6 +96,36 @@ impl Glint {
         ]
     }
 }
+/// The glint inputs of one frame, read once: `GameRenderer.extract` snapshots
+/// `glintSpeed` and `glintStrength` into `OptionsRenderState`
+/// (`extractOptions`), and `TextureTransform.setupGlintTexturing` reads
+/// `Util.getMillis()` once per glint render-type batch, not per item.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlintFrame {
+    /// `Util.getMillis()` this frame.
+    pub millis: f32,
+    /// `OptionsRenderState.glintSpeed`.
+    pub speed: f32,
+    /// `OptionsRenderState.glintStrength`.
+    pub alpha: f32,
+    /// The atlas has `misc/enchanted_glint_item`.
+    pub sprite: bool,
+}
+impl GlintFrame {
+    /// The glint at a texturing scale, if the atlas has its sprite.
+    pub fn glint(&self, scale: f32) -> Option<Glint> {
+        self.sprite.then_some(Glint {
+            speed: self.speed,
+            alpha: self.alpha,
+            millis: self.millis,
+            scale,
+        })
+    }
+    /// [`Glint::scroll_ticks`] for this frame.
+    pub fn scroll_ticks(&self) -> f32 {
+        Glint::scroll_ticks(self.millis, self.speed)
+    }
+}
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Foil {
@@ -453,30 +483,40 @@ pub struct ItemRenderer {
     item_ids: HashMap<String, i32>,
 }
 
-/// Every `items/*.json` client item definition, by identifier.
+/// Every `items/**/*.json` client item definition, by identifier.
 fn load_definitions(root: &Path) -> BTreeMap<String, ClientItem> {
+    fn walk(dir: &Path, rel: &str, namespace: &str, out: &mut BTreeMap<String, ClientItem>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            let rel = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            if path.is_dir() {
+                walk(&path, &rel, namespace, out);
+            } else if let Some(id) = rel.strip_suffix(".json")
+                && let Some(item) = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|t| ClientItem::from_json(&t).ok())
+            {
+                out.insert(format!("{namespace}:{id}"), item);
+            }
+        }
+    }
     let mut out = BTreeMap::new();
     let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
         return out;
     };
     for ns in namespaces.flatten() {
         let namespace = ns.file_name().to_string_lossy().into_owned();
-        let Ok(files) = fs::read_dir(ns.path().join("items")) else {
-            continue;
-        };
-        for f in files.flatten() {
-            let path = f.path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let name = path.file_stem().unwrap_or_default().to_string_lossy();
-            if let Some(item) = fs::read_to_string(&path)
-                .ok()
-                .and_then(|t| ClientItem::from_json(&t).ok())
-            {
-                out.insert(format!("{namespace}:{name}"), item);
-            }
-        }
+        walk(&ns.path().join("items"), "", &namespace, &mut out);
     }
     out
 }
@@ -853,6 +893,39 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 mod tests {
     use super::*;
 
+    /// One frame's glint is read once and shared: every item drawn from the
+    /// same `GlintFrame` scrolls by the same phase, and without the atlas
+    /// sprite no item gets a glint (`TextureTransform.setupGlintTexturing`
+    /// once per batch, `GameRenderer.extractOptions` once per frame).
+    #[test]
+    fn a_frame_glint_is_shared_by_every_item() {
+        let frame = GlintFrame {
+            millis: 123_456.0,
+            speed: 0.5,
+            alpha: 0.75,
+            sprite: true,
+        };
+        let world = frame.glint(0.5).expect("the atlas has the glint sprite");
+        assert_eq!(
+            (world.speed, world.alpha, world.millis),
+            (0.5, 0.75, 123_456.0)
+        );
+        assert_eq!(world.scale, 0.5);
+        let uvs: Vec<_> = (0..1000)
+            .map(|_| frame.glint(0.5).unwrap().uv([0.25, 0.75]))
+            .collect();
+        assert!(uvs.iter().all(|uv| *uv == uvs[0]));
+        assert_eq!(frame.scroll_ticks(), Glint::scroll_ticks(123_456.0, 0.5));
+        // 123456 ms * 0.5 * 8 = 493824 ticks, modulo 330000.
+        assert_eq!(frame.scroll_ticks(), 163_824.0);
+        let missing = GlintFrame {
+            sprite: false,
+            ..frame
+        };
+        assert!(missing.glint(0.5).is_none());
+        assert_eq!(missing.scroll_ticks(), frame.scroll_ticks());
+    }
+
     /// A bad item model surfaces only once items.json has loaded, so a broken
     /// items.json still reports itself first.
     #[test]
@@ -877,6 +950,26 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         assert!(!broken_items.starts_with("item models:"));
         assert!(bad_model.starts_with("item models:"));
+        Ok(())
+    }
+
+    /// Definitions live at any depth (`items/<dir>/<name>.json`), as
+    /// ModelEngine's `modelengine:postman/head` does.
+    #[test]
+    fn item_definitions_load_from_nested_folders() -> crate::Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-item-definitions-nested-{}",
+            std::process::id()
+        ));
+        let definitions = root.join("assets/horizon/items");
+        fs::create_dir_all(definitions.join("postman"))?;
+        let empty = r#"{"model":{"type":"minecraft:empty"}}"#;
+        fs::write(definitions.join("top.json"), empty)?;
+        fs::write(definitions.join("postman/head.json"), empty)?;
+        let loaded = load_definitions(&root);
+        let _ = fs::remove_dir_all(&root);
+        assert!(loaded.contains_key("horizon:top"));
+        assert!(loaded.contains_key("horizon:postman/head"));
         Ok(())
     }
 

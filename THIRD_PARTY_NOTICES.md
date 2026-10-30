@@ -19,3 +19,14 @@ by The Pixelify Sans Project Authors, licensed under the SIL Open Font License 1
 [Pixelarticons](https://github.com/halfmage/pixelarticons) by Gerrit Halfmann, under the MIT
 license (`crates/horizon-theme/icons/pixel/LICENSE-pixelarticons.txt`). `star.svg` is Horizon's own, drawn on
 the same grid.
+
+## AMD FidelityFX SDK (FSR 3.1 frame generation)
+
+`crates/horizon-client-render/src/gfx/frame_gen/optical_flow.wgsl` is a port to WGSL of the
+optical flow shaders of the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)
+1.1.4 (`sdk/include/FidelityFX/gpu/opticalflow`, at commit
+[c6efa6bf7f20](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/c6efa6bf7f2027b3ec94f28578bb5965eabb9e55)),
+and `optical_flow.rs` follows the SDK's `sdk/src/components/opticalflow/ffx_opticalflow.cpp`
+(its passes, their order and their dispatch sizes). Copyright (C) 2024 Advanced Micro Devices,
+Inc., under the MIT license, whose text heads both files. AMD and FidelityFX are AMD's
+trademarks; Horizon is not affiliated with AMD.
