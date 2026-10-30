@@ -4346,6 +4346,7 @@ impl Game<'_> {
             self.close_sign_editor();
         }
         self.track_experience_display();
+        self.tick_enchanting_book();
         // Leaving a slot clears its bundle's selection here and on the server.
         self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option

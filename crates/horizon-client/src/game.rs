@@ -5887,6 +5887,7 @@ impl Game<'_> {
         };
         self.ticks += 1;
         self.track_experience_display();
+        self.tick_enchanting_book();
         // `/tick freeze` stops the world but not the player.
         let running = match self.level_pass.running {
             Some(running) => running,
