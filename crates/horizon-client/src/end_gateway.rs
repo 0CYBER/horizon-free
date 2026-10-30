@@ -187,7 +187,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: horizon_core::geometry::Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(crate::mobs::Who, horizon_core::geometry::Aabb)] {
