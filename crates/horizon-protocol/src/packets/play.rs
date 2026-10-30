@@ -2275,6 +2275,11 @@ packet!(
     }
 );
 packet!(
+    /// ServerboundSetTestBlockPacket: the test block's edit screen; `mode` is
+    /// a `TestBlockMode` id.
+    SetTestBlock { pos: [i32; 3] => Pos, mode: i32 => VarInt, message: String => Str }
+);
+packet!(
     /// ServerboundJigsawGeneratePacket: the jigsaw block's Generate button.
     JigsawGenerate { pos: [i32; 3] => Pos, levels: i32 => VarInt, keep_jigsaws: bool => Bool }
 );
@@ -2560,6 +2565,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetCommandBlock(SetCommandBlock) = SET_COMMAND_BLOCK,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     SetJigsawBlock(SetJigsawBlock) = SET_JIGSAW_BLOCK,
+    SetTestBlock(SetTestBlock) = SET_TEST_BLOCK,
     SetStructureBlock(SetStructureBlock) = SET_STRUCTURE_BLOCK,
     SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
@@ -3710,6 +3716,19 @@ mod tests {
         assert_eq!(read.offset, [-48, 48, 0]);
         assert_eq!(read.size, [0, 48, 7]);
         assert_eq!(read.integrity, 1.0);
+    }
+
+    #[test]
+    fn set_test_block_round_trips() {
+        round_trip(
+            Serverbound::SetTestBlock(SetTestBlock {
+                pos: [1, 2, 3],
+                mode: 3,
+                message: "passed".into(),
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
     }
 
     #[test]

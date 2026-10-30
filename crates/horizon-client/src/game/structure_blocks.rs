@@ -443,15 +443,19 @@ impl Game<'_> {
         if let Some(b) = self.structure_block_mut(pos) {
             b.mode = mode;
         }
+        self.set_mode_property(pos, "minecraft:structure_block", mode.serialized_name());
+    }
+
+    /// The `mode` of the block state at `pos` (if it is `block`), set with
+    /// `UPDATE_CLIENTS` and the block entity kept.
+    pub(super) fn set_mode_property(&mut self, pos: Pos, block: &str, mode: &str) {
         let registry = self.pack.assets.registry;
         let current = registry.state(self.world.block(pos.0, pos.1, pos.2));
-        let Some(current) = current.filter(|s| s.name == "minecraft:structure_block") else {
+        let Some(current) = current.filter(|s| s.name == block) else {
             return;
         };
         let mut wanted = current.clone();
-        wanted
-            .properties
-            .insert("mode".into(), mode.serialized_name().to_owned());
+        wanted.properties.insert("mode".into(), mode.to_owned());
         if wanted == *current {
             return;
         }

@@ -96,6 +96,10 @@ pub(super) trait Editor {
     fn accepts(&self, _edit: usize, _current: &str, _cursor: usize, _c: char) -> bool {
         true
     }
+    /// Whether Enter is Done (a screen with its own `keyPressed`).
+    fn enter_confirms(&self) -> bool {
+        true
+    }
     /// The box that has the focus when the screen opens.
     fn initial_focus(&self) -> usize {
         0
@@ -143,6 +147,7 @@ impl Game<'_> {
         match self.world.block_entities.get(&pos) {
             Some(BlockEntity::StructureBlock(_)) => self.open_structure_block(pos),
             Some(BlockEntity::JigsawBlock(_)) => self.open_jigsaw_block(pos),
+            Some(BlockEntity::TestBlock(_)) => self.open_test_block(pos),
             _ => {}
         }
     }
@@ -395,6 +400,13 @@ impl Game<'_> {
                 self.block_editor_outcome(outcome);
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
+                let confirms = self
+                    .block_editor
+                    .as_ref()
+                    .is_some_and(|s| s.editor.enter_confirms());
+                if !confirms {
+                    return;
+                }
                 if let Some(outcome) = self.with_block_editor(|s, e| {
                     let pos = s.pos;
                     s.editor.done(e, pos)

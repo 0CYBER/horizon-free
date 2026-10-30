@@ -241,6 +241,8 @@ mod structure_edit;
 mod structures;
 mod subtitle_hud;
 mod sulfur_cubes;
+mod test_block_edit;
+mod test_blocks;
 mod text_displays;
 mod titles;
 mod tnt;
@@ -4286,7 +4288,10 @@ impl Game<'_> {
         }
         // The game master blocks' screens open on the player's own client
         // (`BlockEntity.usedBy`); the server has nothing to open.
-        if matches!(&*name, "minecraft:structure_block" | "minecraft:jigsaw") {
+        if matches!(
+            &*name,
+            "minecraft:structure_block" | "minecraft:jigsaw" | "minecraft:test_block"
+        ) {
             return;
         }
         // SignBlock.useWithoutItem: the text editor, not a container.
@@ -5268,6 +5273,7 @@ impl Game<'_> {
                 }
                 Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
                 Some(BlockEntity::JigsawBlock(_)) => self.jigsaw_block_placed(key),
+                Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
                 Some(BlockEntity::Sign(sign)) if !sign.waxed => self.open_sign_editor(key, true),
                 _ => {}
             }
@@ -7215,7 +7221,8 @@ impl Game<'_> {
                 | BlockEntity::Mod(_)
                 | BlockEntity::PotentSulfur(_)
                 | BlockEntity::StructureBlock(_)
-                | BlockEntity::JigsawBlock(_),
+                | BlockEntity::JigsawBlock(_)
+                | BlockEntity::TestBlock(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -7511,7 +7518,8 @@ impl Game<'_> {
                     | BlockEntity::Mod(_)
                     | BlockEntity::PotentSulfur(_)
                     | BlockEntity::StructureBlock(_)
-                    | BlockEntity::JigsawBlock(_),
+                    | BlockEntity::JigsawBlock(_)
+                    | BlockEntity::TestBlock(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
