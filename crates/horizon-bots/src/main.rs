@@ -48,7 +48,9 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          One abusive client, to test a server's limits (run it beside a normal crowd):
                          flood-move (--flood moves a tick, each 64 to 256 blocks away, ignoring chunks),
                          flood-acks (--flood chunk batch acks asking for 64 chunks a tick, while exploring),
-                         flood-packets (--flood rotations a tick)
+                         flood-packets (--flood rotations a tick),
+                         flood-chunks (one move a tick, 9.9 blocks straight ahead: as fast as the
+                         moved-too-quickly check allows, never waiting for chunks)
   --flood N              packets a tick for the flood behaviours; default 100
   --join-every SECONDS   default 1
   --seconds N            how long to run after the first bot joins; default 60
@@ -67,6 +69,7 @@ enum Behaviour {
     FloodMove,
     FloodAcks,
     FloodPackets,
+    FloodChunks,
 }
 
 impl Behaviour {
@@ -78,6 +81,7 @@ impl Behaviour {
             Self::FloodMove => "flood-move",
             Self::FloodAcks => "flood-acks",
             Self::FloodPackets => "flood-packets",
+            Self::FloodChunks => "flood-chunks",
         }
     }
 }
@@ -141,7 +145,7 @@ fn options() -> Result<Options, String> {
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
-    const BEHAVIOURS: [&str; 7] = [
+    const BEHAVIOURS: [&str; 8] = [
         "idle",
         "walk",
         "explore",
@@ -149,10 +153,11 @@ fn options() -> Result<Options, String> {
         "flood-move",
         "flood-acks",
         "flood-packets",
+        "flood-chunks",
     ];
     if !BEHAVIOURS.contains(&o.behaviour.as_str()) {
         return Err(format!(
-            "--behaviour {}: use idle, walk, explore, mixed, flood-move, flood-acks or flood-packets",
+            "--behaviour {}: use idle, walk, explore, mixed, flood-move, flood-acks, flood-packets or flood-chunks",
             o.behaviour
         ));
     }
@@ -549,6 +554,11 @@ fn run_bot(
             let angle = random.unit() * std::f64::consts::TAU;
             pos[0] += angle.cos() * 128.0;
             pos[2] += angle.sin() * 128.0;
+        } else if behaviour == Behaviour::FloodChunks {
+            // Just under the server's 10 blocks a tick: every tick asks for new chunks.
+            pos[1] = cruise;
+            pos[0] += heading.cos() * 9.9;
+            pos[2] += heading.sin() * 9.9;
         } else if !lock(&bot.held).contains(&here) {
             bot.waited.fetch_add(1, Ordering::Relaxed);
         } else if pos[1] < cruise {
@@ -574,7 +584,7 @@ fn run_bot(
                         pos[2] += dz / distance * step;
                     }
                 }
-                Behaviour::FloodMove => {}
+                Behaviour::FloodMove | Behaviour::FloodChunks => {}
                 Behaviour::FloodPackets => {
                     for i in 0..o.flood {
                         send(
@@ -640,6 +650,7 @@ fn behaviour_of(mode: &str, index: usize) -> Behaviour {
         "flood-move" => Behaviour::FloodMove,
         "flood-acks" => Behaviour::FloodAcks,
         "flood-packets" => Behaviour::FloodPackets,
+        "flood-chunks" => Behaviour::FloodChunks,
         // mixed: of every five bots, three walk, one explores, one stands.
         _ => match index % 5 {
             0 | 2 | 4 => Behaviour::Walk,
