@@ -12,12 +12,25 @@ mod API grows, and a server owner who wants their own SMP, shop or claims mod ca
 
 Status: design (this page); built in phases below.
 
+## Players install nothing
+
+Everything works with a stock Horizon client: no mod, no resource pack, nothing on the player's side. The SMP speaks
+only what vanilla's protocol already carries and the Horizon client already renders:
+
+- chat commands with completions (the server's command tree), and chat lines;
+- menus the server opens with vanilla menu types (a 6-row chest, `generic_9x6`) and fills with ordinary items as
+  buttons and displays; the server rules every click, the client only shows them;
+- vanilla sounds, titles, the action bar, boss bars and the scoreboard sidebar for what a player should notice.
+
+Only the Horizon client may join the official server; that gate is anticheat-1's work, not the SMP's. The SMP may rely
+on what the stock client renders, never on a client mod.
+
 ## Architecture
 
 | Part | Where | What |
 |---|---|---|
 | Server hook points | this repository, `crates/horizon-client/src/game/native_hooks.rs` ([native-mods.md](native-mods.md)) | stable, versioned (`NATIVE_HOOKS_API`), empty when no mod hooks them |
-| The `smp` mod | [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods), `native/smp/` | a horizon-mixins bundle: `runtime.rs` holds the rules and data (its own crate and tests, no game types), small helpers hook the points |
+| The `smp` mod | [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods), `native/smp/` | a horizon-mixins bundle: `smp_store.rs`, `smp_economy.rs`, `smp_market.rs`... hold the rules and data (also the mod's own crate, with its tests, no game types), `glue.rs` and small helpers hook the points |
 | The official server's engine | built from a Horizon release's commit with the bundle applied | `horizon-server`'s `[engine] path` points at it; the rest of the server is unchanged |
 
 Why a native mod: it is the mod system Horizon has now (WebAssembly code mods were removed), it runs on the server
@@ -34,10 +47,11 @@ Each is added in its own pull request, raising `NATIVE_HOOKS_API`, documented in
 and free when no mod hooks it (an empty function). Where a contributor's pull request already adds one (block
 breaking and placing, item use: #4483, #4302), the SMP uses theirs.
 
-| Phase | Hook points and helpers |
-|---|---|
-| 1. Economy | `native_register_commands` (commands every player's chat box completes), `native_perform_command` (a player's command on the server, with that player's state as the acting player); helpers: the online players, a line to one player or to all, the acting player's items (count, take, give), the world's folder |
-| 2. Trading | a menu the server opens for a player, whose slots and clicks the mod rules; a player left or died |
+| Phase | API | Hook points and helpers |
+|---|---|---|
+| 1. Economy | 8 | `native_register_commands` (commands every player's chat box completes), `native_perform_command` (a player's command on the server, with that player's state as the acting player); helpers: the online players and their game mode, a line to one player or to all, the world's folder |
+| 1. Market | 9 | the acting player's items: held, count, carried, take, room, give (plain stacks only, nothing dropped) |
+| 2. Trading | 10 | a vanilla chest menu the server opens and fills for a player, display only: its clicks and its closing go to the mod; an atomic exchange of two players' items; a player left or died |
 | 3. Gambling | nothing new |
 | 4. Organisation | teleport a player (across dimensions), damage taken, a player's interaction with a block or entity that a mod can refuse (with #4302 and #4483), the player's time played |
 
@@ -54,10 +68,10 @@ Player commands work for every player; operator commands need the permission lev
 | Command | Does |
 |---|---|
 | `/balance [player]`, `/bal` | your balance, or another player's |
-| `/pay <player> <amount>` | gives money to an online player |
+| `/pay <player> <amount>` | gives money to a player who has an account |
 | `/baltop [page]` | the richest players |
 | `/eco give\|take\|set <player> <amount>` (level 3) | operator corrections, logged |
-| `/sell hand\|all`, `/buy <item> [count]`, `/worth [item]` | the server market, at the configured prices |
+| `/sell hand [count]\|all\|<item> [count]`, `/buy <item> [count]`, `/worth [item]` | the server market, at the configured prices; plain items only, in survival and adventure |
 | `/trade <player>`, `/trade accept\|deny\|cancel`, `/trade money <amount>` | a two-sided trade window |
 | `/coinflip <amount>`, `/coinflip accept\|deny <player>` | a 50/50 bet between two players, the money held until it is decided |
 | `/lottery [buy <tickets>]` | tickets for the next draw; the pot goes to one ticket drawn at random |
@@ -71,12 +85,15 @@ Player commands work for every player; operator commands need the permission lev
 Teleports wait `teleport.warmup_seconds` and are cancelled when the player moves more than half a block or takes
 damage.
 
-**Trades.** `/trade Alex` asks Alex; once accepted, both see a 6-row window: their own 16 offer slots on the left, the
-other's on the right (shown, never takeable), the money each offers, and a confirm button. Any change to either offer
-clears both confirmations; when both have confirmed, the items and the money are swapped in one step of the server's
-tick. An item is always in exactly one place (the inventory, the cursor, the player's own offer slots), and every way
-out returns it to the player who put it in (closing the window, `/trade cancel`, disconnecting, dying, the other
-player leaving): to their inventory, what doesn't fit dropped at their feet. Tests cover each way out.
+**Trades.** `/trade Alex` asks Alex; once accepted, both see a 6-row chest menu: their own offer on the left, the
+other's on the right, the money each offers, and confirm and cancel buttons (ordinary items such as lime and red
+stained glass panes). The menu is display only: a player adds a stack to their offer by clicking it in their own
+inventory, below the menu, and takes it back by clicking it in the offer. **Nothing moves until the swap**: the
+offered stacks stay in their owners' inventories, the menu shows copies. Any change to either offer clears both
+confirmations; when both have confirmed, the server checks that each player still holds exactly what they offer and
+has room for what they get, then swaps the items and the money in one step of its tick, or swaps nothing. Closing the
+menu, `/trade cancel`, disconnecting, dying or the other player leaving ends the trade with nothing moved, so there is
+no item to return and nothing to duplicate. Tests cover each way out.
 
 **Claims.** A rectangle of columns in one dimension, owned by a player who trusts others by name. In a claim, players
 who are neither the owner, trusted nor an operator can't break or place blocks, open containers, or use doors,
@@ -93,7 +110,7 @@ that folder is untouched: the mod creates it the first time it runs.
 
 | File | Holds |
 |---|---|
-| `config.toml` | the settings below, written with their defaults on first run |
+| `config.json` | the settings below, written with their defaults on first run; a section added by a later version is added to the file |
 | `economy.json` | balances by player UUID, and names last seen |
 | `homes.json`, `warps.json`, `spawn.json` | positions with their dimension |
 | `claims.json` | claims: id, owner, dimension, corners, trusted UUIDs |
@@ -104,42 +121,19 @@ Each `.json` file is written whole to a temporary file, flushed and renamed over
 tick that changed it (at most once a tick) and when the world closes: a crash leaves the old file or the new one,
 never half of one. `audit.log` is appended before the balances change.
 
-```toml
-currency = "coins"
-starting_balance = 0
-
-[market]
-# What the server pays (sell) and asks (buy) for one item; 0 closes that side.
-items = { "minecraft:diamond" = { buy = 400, sell = 100 }, "minecraft:wheat" = { buy = 0, sell = 1 } }
-
-[teleport]
-warmup_seconds = 3
-cooldown_seconds = 30
-request_seconds = 60
-
-[homes]
-max = 3
-
-[claims]
-tool = "minecraft:golden_shovel"
-initial_blocks = 1024
-blocks_per_hour = 100
-max_blocks = 100000
-
-[spawn]
-protection_radius = 16
-
-[gambling]
-enabled = false
-max_bet = 1000
-cooldown_seconds = 30
-lottery_minutes = 60
-ticket_price = 10
-max_tickets = 100
-
-[rules]
-lines = ["Be kind.", "No griefing: claim your builds with a golden shovel."]
+```json
+{
+  "currency": "coins",
+  "starting_balance": 0,
+  "market": {
+    "enabled": true,
+    "items": { "minecraft:diamond": { "buy": 400, "sell": 100 }, "minecraft:wheat": { "buy": 0, "sell": 1 } }
+  }
+}
 ```
+
+In the market, `sell` is what the server pays for one item and `buy` what it asks; 0 closes that side. The later
+phases add their sections (`teleport`, `homes`, `claims`, `spawn`, `gambling` with `enabled: false`, `rules`).
 
 ## Building the official server's engine
 
