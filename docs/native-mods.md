@@ -46,6 +46,10 @@ API 4 adds authoritative server tick events through `native_server_tick`: start 
 server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
 use these events need `"hooks": 4`.
 
+API 8 adds server commands and players: `native_register_commands` (the commands a mod adds to every player's
+command tree) and `native_perform_command` (a player's command on the server), with helpers to answer
+([Server commands and players](#server-commands-and-players)). Bundles that use them need `"hooks": 8`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -170,3 +174,25 @@ A native server tick hook can call `native_server_block` with its context, a dim
 ### Server block changes (draft)
 
 `native_block_changed` observes a committed authoritative server `Level.setBlock` change before block side effects and neighbour updates. It supplies the dimension, position and old and new state IDs. It does not observe chunk loading or direct storage writes that bypass `Level.setBlock`.
+
+### Server commands and players
+
+For mods that run where the world is simulated: a dedicated server, a LAN host, single player's server thread
+(`crates/horizon-client/src/game/native_server.rs`). The SMP mod of the official server is built on them
+([smp.md](smp.md)).
+
+- **`native_register_commands(commands)`**: push a `NativeCommand` per usage, asked once when a world opens to
+  players. A usage is words, then arguments `<name:kind>`, optional ones last in brackets:
+  `NativeCommand::new("pay <player:player> <amount:integer>")`, `NativeCommand::op("eco set <player:player>
+  <amount:integer>", 3)` for operators of level 3. Kinds: `word`, `text` (the rest of the line, last), `integer`,
+  `number`, `boolean`, `player`, `item`, `block_pos`. The usages of one command merge into one tree, which every
+  player receives after vanilla's (filtered by their level, as vanilla's is), so their chat box completes and colours
+  it. A name vanilla has, or a usage that doesn't parse, is left out with a warning in the log.
+- **`native_perform_command(player, command, ran)`**: a player typed a registered command (without its slash) and
+  their level allows it, whether the world allows commands or not. The mod parses the line and sets `ran`. The
+  player's state is swapped in for the call, as for their other actions, so `native_player` reads them; a
+  registered command no mod takes answers as vanilla's unknown command.
+- Helpers: `native_server_players()` (uuid, name, level, dimension, position of each player on);
+  `native_tell(uuid, text)`, a system line to one player; `native_broadcast(text)`, to every player and the server's
+  log; `native_feedback(text)`, the command's answer to the player whose command it is; `native_world_dir()`, the
+  open world's folder, where a server mod keeps its data in a folder of its own so the world's backups carry it.
