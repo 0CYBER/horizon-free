@@ -234,7 +234,7 @@ pub fn register(m: &mut Mob) {
         Family::Generic if m.species() == Species::Armadillo => super::armadillo::register(m),
         Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic if m.species() == Species::Fox => super::fox::register(m),
-        Family::Generic if m.species() == Species::Parrot => super::tame::register_parrot(m),
+        Family::Generic if m.species() == Species::Parrot => super::parrot::register(m),
         Family::Generic if m.species() == Species::Rabbit => super::rabbit::register(m),
         Family::Generic if m.species() == Species::Ocelot => super::tame::register_ocelot(m),
         Family::Generic => {
@@ -551,6 +551,7 @@ pub fn tick(
     if m.species() == Species::Panda {
         super::panda::tick(m, w, events);
     }
+    aquatic::school_tick(m, w, level_random);
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
@@ -898,6 +899,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::finalize::variant_sound(m, "stray_ambient").unwrap_or("entity.cat.stray_ambient")
         }
         Species::PolarBear if m.is_baby() => "entity.polar_bear.ambient_baby",
+        // Turtle.getAmbientSound: only an adult on land makes a sound.
+        Species::Turtle if turtle_ambient_silent(m) => return,
         Species::Dolphin if !m.fluids.in_water => "entity.dolphin.ambient",
         Species::Guardian if !m.fluids.in_water => "entity.guardian.ambient_land",
         Species::ElderGuardian if !m.fluids.in_water => "entity.elder_guardian.ambient_land",
@@ -943,6 +946,11 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !sound.is_empty() {
         m.voice(sound, events);
     }
+}
+/// `Turtle.getAmbientSound`: `entity.turtle.ambient_land` only when the turtle
+/// is out of water, on the ground and not a baby; otherwise `null` (silent).
+fn turtle_ambient_silent(m: &Mob) -> bool {
+    m.fluids.in_water || !m.on_ground || m.is_baby()
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
 fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
@@ -1404,6 +1412,7 @@ fn species_ai_step(
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Parrot => super::parrot::calculate_flapping(m),
         Species::Armadillo => super::armadillo::tick(m),
         Species::Frog => super::frog::tick(m),
         Species::Goat => super::goat::tick(m),
@@ -2359,6 +2368,34 @@ mod poison_effect_tests {
             zombie.health, initial_zombie_health,
             "undead mobs are immune to poison"
         );
+    }
+}
+
+#[cfg(test)]
+mod turtle_ambient_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn turtle() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:turtle".into();
+        k.species = Species::Turtle;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// `Turtle.getAmbientSound`: land ambient only for an adult on the ground
+    /// and out of water.
+    #[test]
+    fn a_turtle_is_silent_in_water_in_the_air_and_as_a_baby() {
+        let mut m = turtle();
+        m.on_ground = true;
+        assert!(!turtle_ambient_silent(&m));
+        m.on_ground = false;
+        assert!(turtle_ambient_silent(&m));
+        m.on_ground = true;
+        m.fluids.in_water = true;
+        assert!(turtle_ambient_silent(&m));
     }
 }
 
