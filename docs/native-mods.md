@@ -78,6 +78,9 @@ block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may can
 drops; `native_place_block` hears a block placed from an item (`BlockItem.place`). To stop a placement, a mod claims
 `native_use_item_on`, which runs before it. Bundles that use them need `"hooks": 14`.
 
+API 15 adds block entities for a mod's blocks (`native_block_entity`, `native_block_entity_ticks`,
+`native_block_entity_tick`): made when the block is placed, ticked on the server and saved with the chunk. Bundles that use them need `"hooks": 15`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

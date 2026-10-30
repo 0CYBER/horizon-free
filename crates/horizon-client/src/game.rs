@@ -5165,7 +5165,8 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         let state = self.apply_item_block_state(target, state, &stack)?;
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
+        let name = self.res.facts().get(state).name.clone();
+        if let Some(entity) = self.new_block_entity(&name) {
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
             let game_master = self.can_use_game_master_blocks();
@@ -7087,6 +7088,7 @@ impl Game<'_> {
                 | BlockEntity::ChiseledBookshelf(_)
                 | BlockEntity::Brushable(_)
                 | BlockEntity::Shelf(_)
+                | BlockEntity::Mod(_)
                 | BlockEntity::PotentSulfur(_),
             ) => {}
             None => {
@@ -7374,6 +7376,7 @@ impl Game<'_> {
                     | BlockEntity::ChiseledBookshelf(_)
                     | BlockEntity::Brushable(_)
                     | BlockEntity::Shelf(_)
+                    | BlockEntity::Mod(_)
                     | BlockEntity::PotentSulfur(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),

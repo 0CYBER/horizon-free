@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 15 adds block entities for a mod's blocks (`native_block_entity`,
+//! `native_block_entity_ticks`, `native_block_entity_tick`): made when the
+//! block is placed, ticked on the server and saved with the chunk.
+//!
 //! API 14 adds breaking and placing a block (`native_destroy_block`,
 //! `native_place_block`).
 //!
@@ -56,7 +60,9 @@ use super::{
     native_server::{NativeCommand, NativeServerPlayer},
 };
 use horizon_client::{
+    block_entities::Pos,
     chat::ChatSource,
+    containers::{BlockEntity, ModBlockEntity},
     extras::Corner,
     extras_hud::Corners,
     hud::{HudBatch, rgba},
@@ -67,6 +73,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::position::BlockPos;
+use horizon_world::nbt::Compound;
 use horizon_world::{level::BlockId, registry::BlockStateId};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -74,7 +81,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 14;
+pub(crate) const NATIVE_HOOKS_API: u32 = 15;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -411,6 +418,33 @@ impl Game<'_> {
     /// act on it when it is yours. API 2.
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
+    }
+    /// Block `block` (`mymod:machine`) gets a block entity
+    /// (`EntityBlock.newBlockEntity`): set `entity` to its id and saved
+    /// compound when the block is yours and `entity` is none yet. The block's
+    /// template must have a block entity (a chest, a furnace...), so that
+    /// breaking the block removes it. API 15.
+    pub(super) fn native_block_entity(
+        &mut self,
+        block: &str,
+        entity: &mut Option<(String, Compound)>,
+    ) {
+        let _ = (block, entity);
+    }
+    /// Whether block `block`'s block entity ticks (`EntityBlock.getTicker`):
+    /// set `ticks` when it is yours. Asked for each of the block's states
+    /// when a world opens. API 15.
+    pub(super) fn native_block_entity_ticks(&self, block: &str, ticks: &mut bool) {
+        let _ = (block, ticks);
+    }
+    /// A server tick of block entity `id` at `pos`, in vanilla's order among
+    /// the others (`Level.tickBlockEntities`): read and change its saved
+    /// compound `nbt`. It is out of the world during the call (the block
+    /// entity at `pos` reads as a `Mod` with an empty id, and a save leaves
+    /// it out); if the call removes or replaces it, `nbt` is dropped. Clients,
+    /// the window's own in single player included, don't get it yet. API 15.
+    pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], id: &str, nbt: &mut Compound) {
+        let _ = (pos, id, nbt);
     }
     /// The commands native mods add to the server's command tree: push
     /// yours. Asked once when a world opens to players (a dedicated
@@ -749,6 +783,39 @@ impl Game<'_> {
 
 /// Where the game calls the hook points.
 impl Game<'_> {
+    /// `EntityBlock.newBlockEntity` of block `name`: Horizon's own, else a
+    /// native mod's.
+    pub(super) fn new_block_entity(&mut self, name: &str) -> Option<BlockEntity> {
+        if let Some(entity) = BlockEntity::for_block(name) {
+            return Some(entity);
+        }
+        let mut entity = None;
+        self.native_block_entity(name, &mut entity);
+        let (id, nbt) = entity?;
+        Some(BlockEntity::Mod(Box::new(ModBlockEntity { id, nbt })))
+    }
+    /// Whether a native mod's block `name` has a ticking block entity.
+    pub(super) fn native_ticks(&self, name: &str) -> bool {
+        let mut ticks = false;
+        self.native_block_entity_ticks(name, &mut ticks);
+        ticks
+    }
+    /// The tick of the mod block entity at `pos`.
+    pub(super) fn tick_mod_block_entity(&mut self, pos: Pos) {
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) else {
+            return;
+        };
+        // An empty id marks its place while the mod has it.
+        let mut taken = std::mem::take(&mut **m);
+        self.native_block_entity_tick([pos.0, pos.1, pos.2], &taken.id, &mut taken.nbt);
+        if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
+            && m.id.is_empty()
+        {
+            **m = taken;
+            // BlockEntity.setChanged: the next save writes its chunk.
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+        }
+    }
     /// Options > Mods' rows for the native mods, after the others.
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
