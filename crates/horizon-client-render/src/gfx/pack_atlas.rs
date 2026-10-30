@@ -176,7 +176,7 @@ impl PackAtlas {
              hz_cell = vec2(float(hz_layer % {columns}u), float(hz_layer / {columns}u));\n    \
              hz_scale = vec2({:?}, {:?});\n    \
              hz_Vertex = vec4(hz_v_pos + hz_origin.xyz, 1.0);\n    \
-             hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * hz_origin.w, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
+             hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * fract(abs(hz_origin.w)), 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
              hz_MultiTexCoord1 = vec4(float(hz_v_light.y), float(hz_v_light.x), 0.0, 1.0);\n    \
              hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
              hz_Color = vec4(hz_v_color.rgb, 1.0);\n    \

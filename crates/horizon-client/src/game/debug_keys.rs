@@ -67,6 +67,9 @@ impl Game<'_> {
     /// own handling. Returns true when it is used up (a debug combination,
     /// F3 itself, F3+Escape).
     pub(super) fn debug_key(&mut self, key: KeyCode, action: KeyAction) -> bool {
+        if self.title.is_some() {
+            return false;
+        }
         let Some(name) = keybinds::key_name(key) else {
             return false;
         };
@@ -90,7 +93,11 @@ impl Game<'_> {
         // releases still reach KeyboardHandler.
         let typing = matches!(
             self.screen,
-            Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
+            Screen::Chat
+                | Screen::Options
+                | Screen::WorldOptions
+                | Screen::CommandBlock
+                | Screen::BlockEditor
         ) || self.sign_edit.is_some()
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
@@ -275,8 +282,8 @@ impl Game<'_> {
     /// entries, over everything the frame drew (menus too), at the debug GUI
     /// scale. F1 hides it unless a screen is open.
     pub(super) fn draw_debug_overlay(&self, batch: &mut HudBatch, size: [u32; 2]) {
-        let screen_open = self.title.is_some() || self.screen != Screen::Playing;
-        if !self.debug || (self.ui.hide_gui && !screen_open) {
+        let screen_open = self.screen != Screen::Playing;
+        if self.title.is_some() || !self.debug || (self.ui.hide_gui && !screen_open) {
             return;
         }
         let framebuffer = size.map(|v| v as i32);
@@ -849,8 +856,9 @@ impl Game<'_> {
         self.clipboard.set(text);
     }
     /// The debug renderers' gizmos for a frame (`DebugRenderer.emitGizmos`).
-    pub(super) fn debug_gizmos(&self, alpha: f32) -> Gizmos {
+    pub(super) fn debug_gizmos(&self, alpha: f32, camera: [f64; 3]) -> Gizmos {
         let mut g = Gizmos::default();
+        self.bounding_box_gizmos(camera, &mut g);
         if self.show_chunk_borders
             && let Some(p) = &self.player
         {

@@ -192,6 +192,16 @@ pub fn store(guest: &Guest, level: &mut Level, vehicle: Option<[i32; 4]>) {
             map.insert("Air".into(), short(body.air));
         }
     }
+    // LivingEntity.addAdditionalSaveData: the live body's AttributeMap.pack,
+    // or the list the file had while the player has no body yet.
+    if let Some(m) = guest.motion.as_deref() {
+        let extra = level
+            .player_extra
+            .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
+        if let horizon_world::nbt::Tag::Compound(map) = extra {
+            map.insert("attributes".into(), m.saved_attributes());
+        }
+    }
     level.recipe_book = guest.recipe_book.clone();
     level.ender_items = guest.ender_items.clone();
     level.inventory.clear();

@@ -42,9 +42,13 @@ impl Game<'_> {
     /// the point an interact packet's location is measured from (the
     /// client's `remote_object_hit` uses the same points).
     pub(super) fn object_target(&self, id: i32) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
-        let id = u32::try_from(id).ok()?;
         let at = |v: Vec3| [v.x, v.y, v.z];
         let centre = |p: [i32; 3]| p.map(|v| f64::from(v) + 0.5);
+        if let Some(i) = self.interactions.get(&id) {
+            let (lo, hi) = corners(i.bounds());
+            return Some((lo, hi, at(i.position)));
+        }
+        let id = u32::try_from(id).ok()?;
         if let Some(b) = self.boats.iter().find(|b| b.id == id) {
             let (lo, hi) = corners(b.bounds());
             return Some((lo, hi, at(b.position)));
@@ -128,6 +132,19 @@ impl Game<'_> {
             let b = &mut self.boats[i];
             b.hurt_time = (b.hurt_time - 1).max(0);
             b.damage = (b.damage - 1.0).max(0.0);
+        }
+        // ServerGamePacketListenerImpl.tick: the vehicle's last good position
+        // is where it is now, so a move the server made (a piston, a push)
+        // is not held against the rider's next move, which would fail, be
+        // sent back, and fail again on every answer.
+        let at = boat.map(|i| self.boats[i].position).or_else(|| {
+            self.mobs
+                .iter()
+                .find(|m| m.id == vehicle && equine::moved_by_client(m))
+                .map(|m| m.position)
+        });
+        if let Some(p) = at {
+            host.hub.guests[gi].vehicle_good = Some([p.x, p.y, p.z]);
         }
         // Getting out goes through leave_guest, which tells the client and
         // teleports it (ServerPlayer.dismountTo).

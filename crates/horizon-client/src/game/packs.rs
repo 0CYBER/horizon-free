@@ -156,9 +156,31 @@ impl Game<'_> {
             self.selection_reload_failed(&format!("could not start the pack reload: {e}"));
         }
     }
-    /// `reloadResourcePacks`' failure: the pack screen again, with the error.
+    /// `reloadResourcePacks`' failure (`Minecraft.rollbackResourcePacks`): with
+    /// a pack selected, all selected packs are dropped and the reload runs
+    /// again, with the load-failure toast; with none left to drop, the pack
+    /// screen again, with the error.
     fn selection_reload_failed(&mut self, error: &str) {
         log::warn!("Horizon: resource reload failed: {error}");
+        let all = packs::discover(&self.vanilla_root(), &packs_dir());
+        if packs::able_to_clear_any_pack(&all, &self.settings.resource_packs) {
+            // clearResourcePacksOnError.
+            log::info!("Caught error loading resourcepacks, removing all selected resourcepacks");
+            self.settings.resource_packs.clear();
+            self.settings.save(&Self::options_path());
+            if self.spawn_pack_reload(ReloadKind::Selection).is_ok() {
+                // addResourcePackLoadFailToast(null), SystemToast.addOrUpdate.
+                let title = lang::tr("resourcePack.load_fail", &[]);
+                match &mut self.server_packs.load_fail {
+                    Some(toast) => toast.reset(title, None),
+                    None => {
+                        self.server_packs.load_fail =
+                            Some(horizon_client::toasts::SystemToast::new(title, None));
+                    }
+                }
+                return;
+            }
+        }
         if self.screen != super::Screen::Options {
             self.open_options_at(
                 self.title.is_some(),
