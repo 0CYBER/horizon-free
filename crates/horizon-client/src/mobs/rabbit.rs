@@ -24,8 +24,7 @@ const CLIENT_JUMP_DURATION: usize = 5;
 /// The killer bunny's variant id (`Rabbit.Variant.EVIL`).
 const EVIL: u8 = 99;
 
-/// Rabbit.registerGoals. Not ported yet: ClimbOnTopOfPowderSnowGoal (1) and
-/// RaidGardenGoal (5).
+/// Rabbit.registerGoals. Not ported yet: RaidGardenGoal (5).
 pub fn register(m: &mut Mob) {
     let food = m.kind.food.clone();
     let monsters = super::species::ALL

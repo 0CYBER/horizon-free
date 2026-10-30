@@ -166,7 +166,15 @@ impl SessionLock {
             Ok(file) => file,
             Err(e) => return e.kind() == std::io::ErrorKind::PermissionDenied,
         };
-        matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock))
+        match file.try_lock() {
+            Err(fs::TryLockError::WouldBlock) => true,
+            Err(_) => false,
+            // Take the probe's own lock back at once, as `SessionLock` does on drop.
+            Ok(()) => {
+                let _ = file.unlock();
+                false
+            }
+        }
     }
 }
 /// Bring a world last saved by an older game version to the current format, as
