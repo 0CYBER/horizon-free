@@ -48,7 +48,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 4;
+pub(crate) const NATIVE_HOOKS_API: u32 = 6;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -368,7 +368,7 @@ impl Game<'_> {
     /// numbers past the count are left out. Its `menu`, one of
     /// `containers::MOD_MENUS` with as many slots, opens when the block is
     /// used (its template must open a menu, as a chest or a furnace does);
-    /// another is left out. API 4.
+    /// another is left out. API 6.
     pub(super) fn native_block_entity_container(
         &self,
         block: &str,
@@ -384,7 +384,7 @@ impl Game<'_> {
     /// call (the block entity at `pos` reads as a `Mod` with an empty id, and
     /// a save leaves it out); if the call removes or replaces it, `entity` is
     /// dropped. Clients, the window's own in single player included, don't
-    /// get it yet. API 4.
+    /// get it yet. API 6.
     pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], entity: &mut ModBlockEntity) {
         let _ = (pos, entity);
     }
