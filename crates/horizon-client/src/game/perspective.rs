@@ -374,6 +374,7 @@ impl Game<'_> {
         let (yaw, pitch) = (self.yaw, self.pitch);
         let main = self.inventory[self.selected].clone();
         let off = self.offhand.as_ref().map(|s| s.item.clone());
+        let armor = self.armor.clone();
         let riding = self.riding.is_some();
         let hurt = p.health.hurt_animation_time;
         let avatar = self.avatar;
@@ -434,7 +435,8 @@ impl Game<'_> {
         m.extra.chest = self.armor[1].as_ref().map(|s| s.item.clone());
         m.extra.legs = self.armor[2].as_ref().map(|s| s.item.clone());
         m.extra.feet = self.armor[3].as_ref().map(|s| s.item.clone());
-        m.extra.armor = self.armor.clone();
+        // The worn stacks, for the elytra's glint (`WingsLayer`).
+        m.extra.armor = armor;
         m.extra.crouching = crouching;
         m.extra.passenger = riding;
         m.velocity = velocity;
@@ -680,8 +682,25 @@ impl Game<'_> {
             m.extra.elytra.angles(partial),
             m.extra.crouching,
             light,
+            self.wings_overlay(
+                m.extra.armor[1]
+                    .as_ref()
+                    .filter(|s| chest == Some(&*s.item)),
+            ),
             out,
         );
+    }
+    /// `WingsLayer` draws through `EquipmentLayerRenderer.renderLayers`: the
+    /// armour glint when the worn elytra `hasFoil()`.
+    pub(super) fn wings_overlay(&self, stack: Option<&horizon_client::items::ItemStack>) -> u32 {
+        let item_glint = |item: &str| {
+            let props = &self.res.items().enchantments.props;
+            props.get(item).is_some_and(|p| p.glint)
+        };
+        match stack {
+            Some(s) if s.has_foil(item_glint(&s.item)) => horizon_client::mobs::render::ARMOR_GLINT,
+            _ => 0,
+        }
     }
     /// `WingsLayer.submit` for any wearer: the wings of `chest`'s equipment
     /// asset on `base` (the wearer's model transform), `baby` for the baby
@@ -697,6 +716,7 @@ impl Game<'_> {
         angles: [f32; 3],
         crouching: bool,
         light: u32,
+        overlay: u32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
         let Some(asset) = chest
@@ -736,7 +756,7 @@ impl Game<'_> {
             },
             [rect.u0, rect.v0, rect.u1, rect.v1],
             light,
-            0,
+            overlay,
             out,
         );
     }
@@ -1025,7 +1045,7 @@ mod preview_tests {
             return;
         };
         let m = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
-        let armour = [(&*kind.model, [0.5, 0.5, 0.75, 0.75], u32::MAX)];
+        let armour = [(&*kind.model, [0.5, 0.5, 0.75, 0.75], u32::MAX, 0)];
         let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
         let data = horizon_client::mobs::MobData {
             states: Vec::new(),

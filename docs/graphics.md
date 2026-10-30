@@ -50,7 +50,7 @@ Coverage and detail improve progressively; a large selected radius does not mean
 
 Ordinary Overworld atmospheric fog extends with the selected LOD distance. Fog Off disables distance haze at large ranges too; fluid, darkness and boss fog retain their limits.
 
-The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. The official Far View mod (`mods/official/far-view`, [mods.md](mods.md)) turns the same distant terrain on from the mod browser, with its own distance and detail; the setting, when on, wins. Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
+The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. Far Detail (Full or Reduced) sets how finely the distant terrain is drawn (Reduced draws about a quarter of the far quads). Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
 
 Anti-aliasing cycles Off, FXAA and TAA (`fxaa` and `taa` in `horizon-graphics.txt`). TAA jitters the world's projection by a sub-pixel offset each frame (Halton 2, 3 over 8 frames) and blends the frame into a history reprojected through the depth buffer, clamped to the frame's 3×3 neighbourhood. Its motion vectors come from the camera alone, so mobs and other moving things rely on the clamp and can trail slightly. It runs at the resolution scale, before the hand and HUD, and is off under a shader pack, which does its own.
 

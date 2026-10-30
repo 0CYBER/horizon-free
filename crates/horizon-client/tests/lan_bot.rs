@@ -457,6 +457,57 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
     );
 }
 
+/// The first login packet a client named `name` gets after its hello.
+fn first_login_packet(mut c: Connection, port: u16, name: &str) -> login::Clientbound {
+    c.send(
+        &handshake::Serverbound::Intention(handshake::Intention {
+            protocol: PROTOCOL_VERSION,
+            host: "127.0.0.1".into(),
+            port,
+            intent: handshake::LOGIN,
+        })
+        .encode(),
+    )
+    .unwrap();
+    c.send(
+        &login::Serverbound::Hello(login::ServerHello {
+            name: name.into(),
+            uuid: offline_uuid(name),
+        })
+        .encode(),
+    )
+    .unwrap();
+    let (id, payload) = c.recv().unwrap();
+    login::Clientbound::decode(id, &payload).unwrap()
+}
+
+#[test]
+fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
+    use horizon_client::lan::{NetConfig, OnlineMode};
+    let Some(resources) = resources() else {
+        return;
+    };
+    let sync = Arc::new(
+        SyncData::load(&resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+    );
+    let net = NetConfig {
+        online: Some(Arc::new(OnlineMode::generate(false).unwrap())),
+        announce: false,
+        ..NetConfig::lan(0, "Test - World".into(), 8)
+    };
+    let lan = Lan::start_with(sync, net).unwrap();
+    let guest = Connection::connect("127.0.0.1", lan.port, Duration::from_secs(5)).unwrap();
+    match first_login_packet(guest, lan.port, "Guest") {
+        login::Clientbound::Hello(h) => assert!(h.should_authenticate),
+        other => panic!("expected an encryption request, got {other:?}"),
+    }
+    let owner = Connection::local(lan.connect_local().unwrap());
+    match first_login_packet(owner, 0, "Host") {
+        login::Clientbound::LoginFinished(p) => assert_eq!(p.profile.uuid, offline_uuid("Host")),
+        other => panic!("expected the owner's login, got {other:?}"),
+    }
+}
+
 #[test]
 fn status_and_join() {
     let Some(resources) = resources() else {

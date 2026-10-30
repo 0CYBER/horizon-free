@@ -388,6 +388,7 @@ impl Game<'_> {
             // No network until it is opened to the LAN; the memory connection
             // is not compressed (`Connection.isMemoryConnection`).
             listen: false,
+            online: horizon_client::lan::OnlineMode::lan(),
             gate: Some(Arc::new(move |_, uuid, _| {
                 (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
