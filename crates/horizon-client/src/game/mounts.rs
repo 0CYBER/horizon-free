@@ -7,7 +7,7 @@ use horizon_client::{
     blocks::Fluid,
     hud::HudBatch,
     items::ItemStack,
-    mobs::{MobEvent, Species, equine},
+    mobs::{MobEvent, Species, Who, equine},
     motion::PlayerMotion,
     pose::{Dimensions, Pose},
     sprint::Keys,
@@ -72,7 +72,9 @@ impl Game<'_> {
                 .insert((at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4));
             return true;
         }
-        if !m.extra.saddled || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        // Pig.mobInteract: held food goes to Animal.mobInteract, not a ride.
+        let food = m.kind.food.iter().any(|f| f.as_str() == item);
+        if !m.extra.saddled || food || self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
             return false;
         }
         self.riding = Some(m.id);
@@ -402,6 +404,9 @@ impl Game<'_> {
             steer,
             sprint: keys.sprint || self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
             jumping: keys.jump,
+            // A server's player (a LAN guest, single player's window) drives
+            // a horse from its own client (`handleMoveVehicle`).
+            client: self.lan_acting.is_some(),
         });
         true
     }
@@ -542,6 +547,11 @@ impl Game<'_> {
                 // RunAroundLikeCrazyGoal.tick: entity event 6, smoke.
                 self.mob_event_particles(mob, 6);
             }
+            // `LivingEntity.stabAttack`: `target.stopRiding()`.
+            MobEvent::StabDismount { target } => match target {
+                Who::Player => self.stop_riding(),
+                Who::Mob(id) => self.dismount_mob(id),
+            },
             _ => {}
         }
     }

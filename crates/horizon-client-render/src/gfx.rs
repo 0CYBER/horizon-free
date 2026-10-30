@@ -106,8 +106,6 @@ mod view;
 mod wgsl_prefix;
 mod world_post;
 
-/// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
-const COMPLETE_COLUMN: SectionMask = SectionMask::below(crate::chunk::SECTIONS);
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
@@ -557,6 +555,9 @@ pub struct Renderer {
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
+    /// The column `occlusion`, `sections` and `detail_columns` count in: the
+    /// level's (`clear_sections`).
+    layout: crate::chunk::ColumnLayout,
     /// Resolution scale, FXAA and TAA (Horizon settings).
     world_post: world_post::Post,
     /// HDR output (Horizon setting): `Some` while the swapchain is HDR.
@@ -589,6 +590,10 @@ pub struct Renderer {
     readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
+    /// Consecutive frames whose surface acquisition failed validation. The
+    /// first gets the swapchain a fresh configuration; later ones reattach
+    /// the window, as a lost surface does.
+    acquire_validation_failures: u32,
     pub drawn_sections: usize,
     /// Last frame's section draws (face ranges and translucent sections),
     /// and the draw calls the backend issued for them.
@@ -791,9 +796,14 @@ fn mip_chain(
 /// pass is also what passes each draw's first instance to shaders reading
 /// `instance_index`, and DirectX 12 is the fallback, where working matters
 /// more than CPU time.
+/// `allow_nonconformant` offers the adapters wgpu hides for reporting no Vulkan
+/// conformance version: Mesa's hasvk, which drives Ivy Bridge and Haswell,
+/// reports 0.0.0.0 while it works. `open_device` asks for them only on a second
+/// try at a backend that had no adapter at all.
 fn instance_descriptor(
     backends: wgpu::Backends,
     window: Option<&Arc<Window>>,
+    allow_nonconformant: bool,
 ) -> wgpu::InstanceDescriptor {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     if let Some(window) = window {
@@ -806,7 +816,13 @@ fn instance_descriptor(
             .flags
             .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     }
-    descriptor.with_env()
+    let mut descriptor = descriptor.with_env();
+    if allow_nonconformant {
+        descriptor
+            .flags
+            .insert(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER);
+    }
+    descriptor
 }
 /// The window's display connection, so the OpenGL backend creates its EGL
 /// display from the X11 or Wayland connection the window lives on. Without
@@ -945,95 +961,146 @@ async fn open_device(
         if attempt > 0 {
             log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));
         }
-        let instance = wgpu::Instance::new(instance_descriptor(backends, Some(window)));
-        let surface = if offscreen {
-            None
-        } else {
-            match instance.create_surface(window.clone()) {
-                Ok(surface) => Some(surface),
-                Err(e) => {
-                    failures.push(format!("{name} surface: {e}"));
-                    continue;
-                }
-            }
-        };
-        let adapter = match instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: surface.as_ref(),
-                force_fallback_adapter: false,
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(adapter) => adapter,
-            Err(e) => {
-                failures.push(format!("{name}: {e}"));
-                continue;
-            }
-        };
-        describe_adapter(&adapter);
-        let info = adapter.get_info();
-        let limits = adapter.limits();
-        if let Err(e) = check_layers(&limits, layers) {
-            failures.push(format!("{name}: {e}"));
-            continue;
-        }
-        // Mappable primary buffers: section pages that no longer fit in
-        // video memory go to system memory. Shader packs' 16-bit normalized buffers (render
-        // targets with the adapter's own format features) and R11F_G11F_B10F: a float
-        // stand-in neither clamps nor drops NaN.
-        let features = timing::GpuTimer::features(&adapter)
-            | cull::Cull::features(&adapter)
-            | (adapter.features()
-                & (wgpu::Features::INDIRECT_FIRST_INSTANCE
-                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
-                    | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-                    | wgpu::Features::RG11B10UFLOAT_RENDERABLE));
-        let driver = format!("{} {}", info.driver, info.driver_info);
-        startup_step(format_args!(
-            "requesting the device (driver {}) with features [{features}] and the adapter's \
-             limits (buffers up to {} bytes, storage bindings up to {} bytes, {} texture layers)",
-            match driver.trim() {
-                "" => "unnamed",
-                driver => driver,
-            },
-            limits.max_buffer_size,
-            limits.max_storage_buffer_binding_size,
-            limits.max_texture_array_layers,
-        ));
-        let desc = wgpu::DeviceDescriptor {
-            label: Some("Horizon device"),
-            required_features: features,
-            required_limits: limits,
-            ..Default::default()
-        };
-        #[cfg(not(target_os = "macos"))]
-        let opened = match info.backend {
-            wgpu::Backend::Vulkan => horizon_hdr::open_vulkan_device(&adapter, &desc),
-            _ => None,
-        };
-        #[cfg(target_os = "macos")]
-        let opened = None;
-        let opened = match opened {
-            Some(opened) => opened,
-            None => adapter.request_device(&desc).await,
-        };
-        match opened {
-            Ok((device, queue)) => {
-                return Ok(Opened {
-                    instance,
-                    surface,
-                    adapter,
-                    device,
-                    queue,
-                });
-            }
-            Err(e) => failures.push(format!("{name} device: {e}")),
+        match open_with_retry(backends, window, offscreen, layers).await {
+            Ok(opened) => return Ok(opened),
+            Err(e) => failures.push(e),
         }
     }
     Err(format!("{NO_GPU_DRIVER} ({})", failures.join("; ")).into())
+}
+/// Why a backend gave no device: no adapter at all, which a second try with the
+/// adapters wgpu hides can still find, or a failure after an adapter.
+enum NoDevice {
+    NoAdapter(String),
+    Failed(String),
+}
+/// Opens a device on one backend, and on a backend whose adapters wgpu all hid
+/// for reporting no Vulkan conformance version tries it again with them shown:
+/// Mesa's hasvk drives Ivy Bridge and Haswell, works, and reports 0.0.0.0, so
+/// without this the player is told they have no graphics driver while Vulkan
+/// runs (a `gl not compatible with provided surface` fallback, or nothing, is
+/// all they get). Returns why the backend gave no device.
+async fn open_with_retry(
+    backends: wgpu::Backends,
+    window: &Arc<Window>,
+    offscreen: bool,
+    layers: u32,
+) -> std::result::Result<Opened, String> {
+    match open_backend(backends, window, offscreen, false, layers).await {
+        Err(NoDevice::NoAdapter(hidden)) => {
+            log::warn!(
+                "Horizon renderer: {} has no conformant adapter ({hidden}); asking again for the \
+                 ones wgpu hides as non-conformant",
+                backends_name(backends)
+            );
+            match open_backend(backends, window, offscreen, true, layers).await {
+                Ok(opened) => {
+                    log::warn!(
+                        "Horizon renderer: using {} although its driver reports no Vulkan \
+                         conformance version",
+                        opened.adapter.get_info().name
+                    );
+                    Ok(opened)
+                }
+                Err(NoDevice::NoAdapter(e)) | Err(NoDevice::Failed(e)) => Err(e),
+            }
+        }
+        Err(NoDevice::Failed(e)) => Err(e),
+        Ok(opened) => Ok(opened),
+    }
+}
+/// Opens a device on `backends` alone: its surface, adapter and device, or what
+/// stopped it. `allow_nonconformant` is `open_with_retry`'s second try.
+async fn open_backend(
+    backends: wgpu::Backends,
+    window: &Arc<Window>,
+    offscreen: bool,
+    allow_nonconformant: bool,
+    layers: u32,
+) -> std::result::Result<Opened, NoDevice> {
+    let name = backends_name(backends);
+    let instance = wgpu::Instance::new(instance_descriptor(
+        backends,
+        Some(window),
+        allow_nonconformant,
+    ));
+    let surface = if offscreen {
+        None
+    } else {
+        match instance.create_surface(window.clone()) {
+            Ok(surface) => Some(surface),
+            Err(e) => return Err(NoDevice::Failed(format!("{name} surface: {e}"))),
+        }
+    };
+    let adapter = match instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: surface.as_ref(),
+            force_fallback_adapter: false,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(adapter) => adapter,
+        Err(e) => return Err(NoDevice::NoAdapter(format!("{name}: {e}"))),
+    };
+    describe_adapter(&adapter);
+    let info = adapter.get_info();
+    let limits = adapter.limits();
+    if let Err(e) = check_layers(&limits, layers) {
+        return Err(NoDevice::Failed(format!("{name}: {e}")));
+    }
+    // Mappable primary buffers: section pages that no longer fit in
+    // video memory go to system memory. Shader packs' 16-bit normalized buffers (render
+    // targets with the adapter's own format features) and R11F_G11F_B10F: a float
+    // stand-in neither clamps nor drops NaN.
+    let features = timing::GpuTimer::features(&adapter)
+        | cull::Cull::features(&adapter)
+        | (adapter.features()
+            & (wgpu::Features::INDIRECT_FIRST_INSTANCE
+                | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
+                | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                | wgpu::Features::RG11B10UFLOAT_RENDERABLE));
+    let driver = format!("{} {}", info.driver, info.driver_info);
+    startup_step(format_args!(
+        "requesting the device (driver {}) with features [{features}] and the adapter's \
+         limits (buffers up to {} bytes, storage bindings up to {} bytes, {} texture layers)",
+        match driver.trim() {
+            "" => "unnamed",
+            driver => driver,
+        },
+        limits.max_buffer_size,
+        limits.max_storage_buffer_binding_size,
+        limits.max_texture_array_layers,
+    ));
+    let desc = wgpu::DeviceDescriptor {
+        label: Some("Horizon device"),
+        required_features: features,
+        required_limits: limits,
+        ..Default::default()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let opened = match info.backend {
+        wgpu::Backend::Vulkan => horizon_hdr::open_vulkan_device(&adapter, &desc),
+        _ => None,
+    };
+    #[cfg(target_os = "macos")]
+    let opened = None;
+    let opened = match opened {
+        Some(opened) => opened,
+        None => adapter.request_device(&desc).await,
+    };
+    match opened {
+        Ok((device, queue)) => Ok(Opened {
+            instance,
+            surface,
+            adapter,
+            device,
+            queue,
+        }),
+        Err(e) => Err(NoDevice::Failed(format!("{name} device: {e}"))),
+    }
 }
 /// What to tell a player whose system offers no usable graphics adapter.
 /// Vulkan is loaded at run time (the game links no graphics library), so a
@@ -2529,10 +2596,19 @@ impl Renderer {
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &TERRAIN_ATTRIBUTES,
             })];
+            let info = adapter.get_info();
+            let min_sections = if flat::is_broken_intel_vulkan(&info)
+                || std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1")
+            {
+                0
+            } else {
+                flat::MIN_SECTIONS
+            };
             flat::Flat::new(
                 &device,
                 &bindings,
                 arena.page_vertices(),
+                min_sections,
                 |layout, label, fragment, blend| {
                     pipeline_in(
                         layout,
@@ -2745,6 +2821,7 @@ impl Renderer {
             block_entities: Default::default(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
+            layout: crate::chunk::ColumnLayout::VANILLA,
             world_post,
             hdr: None,
             hdr_output,
@@ -2762,6 +2839,7 @@ impl Renderer {
             readback: readback::Readback::default(),
             info,
             suspended: !drawable_size(size.width, size.height, max_side),
+            acquire_validation_failures: 0,
             drawn_sections: 0,
             section_draws: 0,
             section_draw_calls: 0,
@@ -3181,7 +3259,8 @@ impl Renderer {
     pub fn block_entity_revision(&self) -> u64 {
         self.block_entity_revision
     }
-    pub fn clear_sections(&mut self) {
+    /// Drops every section, for a level whose chunks hold `layout`.
+    pub fn clear_sections(&mut self, layout: crate::chunk::ColumnLayout) {
         self.block_entities.clear();
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
@@ -3197,12 +3276,23 @@ impl Renderer {
         }
         self.sorted_indices.clear();
         self.translucency_cursor = 0;
-        self.occlusion.clear();
+        if layout == self.layout {
+            self.occlusion.clear();
+        } else {
+            self.layout = layout;
+            self.occlusion = occlusion::Occlusion::new(layout.min_y(), layout.sections() as i32);
+            self.sections.set_min_y(layout.min_y());
+        }
+    }
+    /// A column whose every section has its mesh (`lod_detail_columns`).
+    fn complete_column(&self) -> SectionMask {
+        SectionMask::below(self.layout.sections())
     }
     pub fn lod_detail_columns(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let complete = self.complete_column();
         self.detail_columns
             .iter()
-            .filter_map(move |(&column, &mask)| (mask == COMPLETE_COLUMN).then_some(column))
+            .filter_map(move |(&column, &mask)| (mask == complete).then_some(column))
     }
     /// Changes whenever `lod_detail_columns` does.
     pub fn lod_detail_revision(&self) -> u64 {
@@ -3222,7 +3312,8 @@ impl Renderer {
         } else {
             next.remove(key.1 as usize);
         }
-        if (mask == COMPLETE_COLUMN) != (next == COMPLETE_COLUMN) {
+        let complete = self.complete_column();
+        if (mask == complete) != (next == complete) {
             self.detail_revision += 1;
         }
         if next.is_empty() {
@@ -3238,12 +3329,12 @@ impl Renderer {
         let mut released = Vec::new();
         let mut block_entities = false;
         for (x, z) in columns {
-            if self.detail_columns.remove(&(x, z)) == Some(COMPLETE_COLUMN) {
+            if self.detail_columns.remove(&(x, z)) == Some(self.complete_column()) {
                 self.detail_revision += 1;
             }
             self.occlusion.remove_column(x, z);
             let retiring = !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(x, z));
-            for sy in 0..crate::chunk::SECTIONS as i32 {
+            for sy in 0..self.layout.sections() as i32 {
                 let key = (x, sy, z);
                 block_entities |= self.block_entities.remove(&key).is_some();
                 if retiring {
@@ -3750,9 +3841,32 @@ impl Renderer {
                 return Ok(false);
             }
             Some(wgpu::CurrentSurfaceTexture::Validation) => {
-                return Err("surface acquisition failed validation".into());
+                // Acquire caught a validation error: the swapchain cannot be
+                // used as configured (wgpu reports a configuration raced with
+                // a submission this way). Give it a fresh configuration like
+                // an Outdated one, and once that has not helped, reattach the
+                // window like a Lost one — a fullscreen loading screen then
+                // skips frames instead of failing every one of them.
+                if self.acquire_validation_failures == 0 {
+                    if let Some(surface) = &self.surface {
+                        Self::configure(
+                            &self.device,
+                            surface,
+                            &self.surface_config(),
+                            self.hdr.as_ref(),
+                        );
+                    }
+                } else {
+                    self.recreate_surface()?;
+                }
+                self.acquire_validation_failures =
+                    self.acquire_validation_failures.saturating_add(1);
+                return Ok(false);
             }
         };
+        if surface_frame.is_some() {
+            self.acquire_validation_failures = 0;
+        }
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
             (Some(_), Some(hdr)) => hdr.frame(&self.device, size),
@@ -3933,7 +4047,7 @@ impl Renderer {
             planes: frustum(cull_proj),
         };
         let camera = frame.camera;
-        let camera_section = camera_section(camera);
+        let camera_section = camera_section(camera, self.layout.min_y());
         // Solid quads facing away from the eye are left out: the bob moves
         // the eye off `camera`, so it is found from the projection.
         let eye = projection_center(cull_proj).filter(|_| self.sides_on);
@@ -4147,7 +4261,7 @@ impl Renderer {
                 let scheduled = (i + count - self.translucency_cursor) % count < budget;
                 let origin = [
                     v.key.0 * 16,
-                    crate::chunk::MIN_Y + v.key.1 * 16,
+                    self.layout.min_y() + v.key.1 * 16,
                     v.key.2 * 16,
                 ];
                 if (!s.sort.is_sorted() || nearby || scheduled)
@@ -4250,7 +4364,7 @@ impl Renderer {
                 {
                     let origin = [
                         v.key.0 * 16,
-                        crate::chunk::MIN_Y + v.key.1 * 16,
+                        self.layout.min_y() + v.key.1 * 16,
                         v.key.2 * 16,
                     ];
                     if let Some(indices) =
@@ -5751,10 +5865,10 @@ impl Frustum {
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
 /// fire_side's 0.01 pixel in front of its block, from z-fighting.
 /// The section the camera is in.
-fn camera_section(camera: DVec3) -> SectionKey {
+fn camera_section(camera: DVec3, min_y: i32) -> SectionKey {
     (
         (camera.x.floor() as i32) >> 4,
-        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.y.floor() as i32 - min_y) >> 4,
         (camera.z.floor() as i32) >> 4,
     )
 }
@@ -5932,6 +6046,23 @@ mod tests {
             assert_eq!(order(api, "macos"), [Backends::default()]);
         }
     }
+    /// The second try at a backend shows the adapters wgpu hides for reporting
+    /// no Vulkan conformance version (Mesa's hasvk, which drives Ivy Bridge and
+    /// Haswell, reports 0.0.0.0 and works).
+    #[test]
+    fn the_second_try_at_a_backend_shows_nonconformant_adapters() {
+        let shown = |allow| {
+            super::instance_descriptor(wgpu::Backends::VULKAN, None, allow)
+                .flags
+                .contains(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER)
+        };
+        assert!(shown(true));
+        // The first try keeps wgpu's own filtering, unless `with_env` turns the
+        // flag on from the environment (WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER).
+        if std::env::var_os("WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER").is_none() {
+            assert!(!shown(false));
+        }
+    }
     /// Every WGSL shader file translates to HLSL as wgpu's DirectX 12 backend
     /// writes it for FXC (shader model 5.1), entry point by entry point.
     #[test]
@@ -6087,7 +6218,7 @@ mod tests {
     #[test]
     fn indirect_draws_are_validated_only_in_debug_builds_and_on_directx_12() {
         let validated = |backends| {
-            super::instance_descriptor(backends, None)
+            super::instance_descriptor(backends, None, false)
                 .flags
                 .contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL)
         };

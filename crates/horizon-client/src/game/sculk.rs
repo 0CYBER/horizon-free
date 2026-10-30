@@ -8,7 +8,7 @@ use horizon_client::{
     containers::BlockEntity,
     effects::{EffectInstance, PlayerEffects},
     fast_hash::{FxHashMap, FxHashSet},
-    mobs::{Mob, Species, Who, warden},
+    mobs::{Mob, Species, Who, allay, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
@@ -411,13 +411,12 @@ impl Game<'_> {
         }
     }
     fn sculk_scan_chunk(&mut self, key: (i32, i32)) {
-        use horizon_client::chunk::MIN_Y;
         let Some(chunk) = self.world.chunks.get(&key).cloned() else {
             return;
         };
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
-            let y0 = MIN_Y + s as i32 * 16;
+            let y0 = self.world.bottom_y() + s as i32 * 16;
             // Without a sculk state in its palette, no block of the section
             // is one: most sections are passed over without reading a block.
             if !section.blocks.maybe_has(|v| self.kind_of_state(v) != 0) {
@@ -543,6 +542,9 @@ impl Game<'_> {
         for i in 0..self.mobs.len() {
             if self.mobs[i].species() == Species::Warden && self.mobs[i].alive() {
                 self.warden_listen(i, event, pos, &ctx);
+            }
+            if self.mobs[i].species() == Species::Allay && self.mobs[i].alive() {
+                self.allay_listen(i, event, pos, &ctx);
             }
         }
     }
@@ -723,6 +725,28 @@ impl Game<'_> {
         if avoided {
             self.trigger_player("minecraft:avoid_vibration");
         }
+    }
+
+    /// `VibrationSystem.Listener.handleGameEvent` for the allay at `index`
+    /// (`Allay.VibrationUser`).
+    fn allay_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
+        let now = self.world.game_time;
+        let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
+        let dimension = self.dim.id();
+        allay::listen(
+            &mut self.mobs[index],
+            now,
+            event,
+            pos,
+            ctx,
+            dimension,
+            |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let state = world.block(p.x, p.y, p.z);
+                    occludes.get(state.0 as usize).copied().unwrap_or(false)
+                })
+            },
+        );
     }
 
     // ---- ticking ----
@@ -1530,7 +1554,7 @@ impl Game<'_> {
             .map(|i| [i.position.x, i.position.y, i.position.z])
             .collect();
         for at in items {
-            self.step_on_redstone_ore(at, false);
+            self.step_on_redstone_ore(at, false, false);
         }
     }
 
@@ -1548,7 +1572,7 @@ impl Game<'_> {
         if let Some((at, on_ground, health, flying)) = player {
             let crouch = self.keys.contains(&KeyCode::ShiftLeft);
             if on_ground && !self.spectator() {
-                self.step_on_redstone_ore(at, crouch);
+                self.step_on_redstone_ore(at, crouch, true);
             }
             self.mount_events(Who::Player, self.riding, true);
             let in_water = self.in_water_at(at);
@@ -1569,9 +1593,57 @@ impl Game<'_> {
         }
     }
 
+    /// `RedStoneOreBlock.spawnParticles`: a red dust puff for each face of the
+    /// ore that is not against a solid block. Non-axis coordinates draw from
+    /// the client level random, x then y then z. It is `level.addParticle`, so
+    /// only the local player's own click or step draws it, not a guest's turn.
+    pub(super) fn redstone_ore_particles(&mut self, pos: [i32; 3]) {
+        if self.lan_acting.is_some()
+            || !matches!(
+                &*self.block_name(pos),
+                "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+            )
+        {
+            return;
+        }
+        // Direction.values(): down, up, north, south, west, east.
+        const FACES: [[i32; 3]; 6] = [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+            [-1, 0, 0],
+            [1, 0, 0],
+        ];
+        for step in FACES {
+            let next = [pos[0] + step[0], pos[1] + step[1], pos[2] + step[2]];
+            let state = self.world.block(next[0], next[1], next[2]);
+            if self.res.facts().get(state).solid_render {
+                continue;
+            }
+            let mut at = [0.0f64; 3];
+            for axis in 0..3 {
+                at[axis] = if step[axis] != 0 {
+                    0.5 + 0.5625 * f64::from(step[axis])
+                } else {
+                    f64::from(self.particles.level_random().next_float())
+                };
+            }
+            self.particles.add(
+                &horizon_client::particles::ParticleOptions::dust([1.0, 0.0, 0.0], 1.0),
+                [
+                    f64::from(pos[0]) + at[0],
+                    f64::from(pos[1]) + at[1],
+                    f64::from(pos[2]) + at[2],
+                ],
+                [0.0; 3],
+            );
+        }
+    }
+
     /// `RedStoneOreBlock.stepOn`: standing on the ore lights it, unless the
     /// entity is stepping carefully (`attack_block` only lights an unlit ore).
-    fn step_on_redstone_ore(&mut self, at: [f64; 3], carefully: bool) {
+    fn step_on_redstone_ore(&mut self, at: [f64; 3], carefully: bool, burst: bool) {
         if carefully {
             return;
         }
@@ -1585,6 +1657,10 @@ impl Game<'_> {
             &*self.block_name(pos),
             "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
         ) {
+            // The dust is the local player's client effect, not a mob's or an item's.
+            if burst {
+                self.redstone_ore_particles(pos);
+            }
             let _ = self.attack_block(pos);
         }
     }
@@ -1603,6 +1679,7 @@ impl Game<'_> {
         ) {
             return Ok(false);
         }
+        self.redstone_ore_particles(pos);
         self.attack_block(pos)?;
         let block_item = held.is_some_and(|s| {
             self.res
@@ -1642,7 +1719,7 @@ impl Game<'_> {
             .collect();
         for (id, at, on_ground, in_water, species, damaged, vehicle, age) in snapshot {
             if on_ground {
-                self.step_on_redstone_ore(at, false);
+                self.step_on_redstone_ore(at, false, false);
             }
             // A mob first seen already riding raised its event when it spawned.
             let seen = self.sculk.steps.contains_key(&Who::Mob(id));

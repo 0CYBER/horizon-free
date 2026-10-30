@@ -2,7 +2,11 @@
 //! throwing their load to the player or note block, dancing to jukeboxes,
 //! and the hand-over interaction (`Allay.mobInteract`).
 use super::Game;
-use horizon_client::{containers::BlockEntity, items::ItemStack, mobs::Species};
+use horizon_client::{
+    containers::BlockEntity,
+    items::ItemStack,
+    mobs::{Species, allay},
+};
 use horizon_core::random::RandomSource;
 
 impl Game<'_> {
@@ -131,14 +135,20 @@ impl Game<'_> {
         if m.extra.ints[1] <= 0 {
             return;
         }
+        // AllayAi.getItemDepositPosition: the liked note block, else the player.
+        let dimension = self.dim.id();
+        let noteblock = allay::noteblock_deposit(&mut self.mobs[i], dimension, |p| {
+            &*self
+                .res
+                .facts()
+                .get(self.world.block(p[0], p[1], p[2]))
+                .name
+                == "minecraft:note_block"
+        });
         let player = self.allay_liked_player(i);
         let m = &self.mobs[i];
-        let target = match m.extra.home.filter(|_| m.extra.ints[2] > 0) {
-            Some(h) => horizon_core::geometry::Vec3::new(
-                f64::from(h[0]) + 0.5,
-                f64::from(h[1]) + 1.0,
-                f64::from(h[2]) + 0.5,
-            ),
+        let target = match noteblock {
+            Some(p) => horizon_core::geometry::Vec3::new(p[0], p[1], p[2]),
             None => match player.filter(|_| m.extra.tame) {
                 Some(p) => p,
                 None => return,

@@ -358,7 +358,7 @@ impl Hub {
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
         let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
+        encoder.set_dimension(level_shape(&d));
         Self {
             lan,
             config,
@@ -1171,9 +1171,28 @@ impl Hub {
                         events.push(HostEvent::Left(Box::new(g)));
                     }
                 }
-                NetEvent::Packet(conn, packet) => {
-                    if let Some(g) = self.guest_mut(conn) {
-                        g.inbox.push_back(*packet);
+                NetEvent::Packet(conn, packet, bytes) => {
+                    let Some(g) = self.guest_mut(conn) else {
+                        continue;
+                    };
+                    // A kicked player's packets wait for nothing.
+                    if !g.left_reason.is_empty() {
+                        continue;
+                    }
+                    g.inbox.push_back((*packet, bytes));
+                    g.inbox_bytes += bytes;
+                    // A client sending faster than its budget is handled
+                    // would grow the inbox until the server runs out of memory.
+                    if g.inbox.len() > INBOX_LIMIT || g.inbox_bytes > INBOX_BYTES {
+                        events.push(HostEvent::Warn(format!(
+                            "{} sent more packets than the server handles ({} waiting, {} kB)",
+                            g.name,
+                            g.inbox.len(),
+                            g.inbox_bytes >> 10
+                        )));
+                        g.inbox = Default::default();
+                        g.inbox_bytes = 0;
+                        self.kick(conn, translatable("disconnect.exceeded_packet_rate", &[]));
                     }
                 }
                 NetEvent::Duplicate(uuid) => {
@@ -1190,6 +1209,26 @@ impl Hub {
                         );
                     }
                 }
+            }
+        }
+        // keepConnectionAlive's timeout, checked once a second here, not on
+        // the writer thread: a client that stops reading blocks that thread
+        // and would hold its slot forever. Kicked, it gets the reason; still
+        // here a second later, its connection is closed under the writer.
+        if self.ticks.is_multiple_of(20) {
+            for g in &self.guests {
+                if !g.left_reason.is_empty() && g.sender.timed_out() {
+                    g.sender.close();
+                }
+            }
+            let silent: Vec<u32> = self
+                .guests
+                .iter()
+                .filter(|g| g.left_reason.is_empty() && g.sender.timed_out())
+                .map(|g| g.conn)
+                .collect();
+            for conn in silent {
+                self.kick(conn, translatable("disconnect.timeout", &[]));
             }
         }
         events
@@ -1749,6 +1788,7 @@ impl Hub {
             precise: false,
             needs_sync: false,
             leash: None,
+            spectator: false,
         }
     }
 
@@ -1785,7 +1825,7 @@ impl Hub {
                 let e = &h.equipment;
                 self.equipment_of(&e[0], &e[1], [&e[5], &e[4], &e[3], &e[2]])
             };
-            all.push(self.player_state(
+            let mut state = self.player_state(
                 h.entity_id,
                 h.uuid,
                 h.position,
@@ -1800,7 +1840,9 @@ impl Hub {
                 equipment,
                 h.attributes.clone(),
                 &[],
-            ));
+            );
+            state.spectator = h.game_mode == 3;
+            all.push(state);
         }
         let placed: Vec<usize> = (0..self.guests.len())
             .filter(|&i| self.here(&self.guests[i]))
@@ -1819,7 +1861,7 @@ impl Hub {
                 let equipment =
                     self.equipment_of(&main, &off, [&armor[0], &armor[1], &armor[2], &armor[3]]);
                 let g = &self.guests[i];
-                self.player_state(
+                let mut state = self.player_state(
                     g.entity_id,
                     g.uuid,
                     g.position,
@@ -1837,7 +1879,9 @@ impl Hub {
                         .map(|m| super::attributes::syncable(&m.attributes))
                         .unwrap_or_default(),
                     &g.effects.list,
-                )
+                );
+                state.spectator = g.spectator();
+                state
             })
             .collect();
         all.extend(guest_states);
@@ -1858,6 +1902,7 @@ impl Hub {
             .zip(outs.iter_mut())
             .map(|(g, out)| Viewer {
                 entity_id: g.entity_id,
+                spectator: g.spectator(),
                 moved: std::mem::take(&mut g.moved),
                 position: g.position,
                 view_distance: g.view_distance,
@@ -2118,7 +2163,7 @@ impl Hub {
         self.guests[i]
             .inbox
             .iter()
-            .any(|p| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
+            .any(|(p, _)| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
     }
 
     fn process_inbox(&mut self, i: usize, ctx: &mut TickCtx, events: &mut Vec<HostEvent>) {
@@ -2127,11 +2172,12 @@ impl Hub {
         let g = &mut self.guests[i];
         g.first_good = g.position;
         g.known_moves = g.received_moves;
-        let mut budget = 400;
+        let mut budget = PACKETS_PER_TICK;
         while budget > 0 {
-            let Some(packet) = self.guests[i].inbox.pop_front() else {
+            let Some((packet, bytes)) = self.guests[i].inbox.pop_front() else {
                 break;
             };
+            self.guests[i].inbox_bytes -= bytes;
             budget -= 1;
             let conn = self.guests[i].conn;
             // ServerPlayer.resetLastActionTime: every handler of a player's
@@ -2712,8 +2758,7 @@ impl Hub {
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
         let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder
-            .set_dimension(d.min_y, d.height, d.has_skylight);
+        self.encoder.set_dimension(level_shape(&d));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2834,6 +2879,15 @@ fn wrap_degrees(degrees: f32) -> f32 {
     wrapped
 }
 
+/// The packets of one player handled in a tick; the rest wait for the next.
+const PACKETS_PER_TICK: usize = 400;
+/// The packets a player may have waiting (a second of its budget) before it is
+/// disconnected, as vanilla's rate-limit does: no real client gets near it.
+const INBOX_LIMIT: usize = 20 * PACKETS_PER_TICK;
+/// The same in bytes on the wire: 8000 full books would hold gigabytes. A
+/// real client's largest packets (a 100-page book) are a few hundred kB.
+const INBOX_BYTES: usize = 16 << 20;
+
 fn invalid_movement() -> Tag {
     translatable("multiplayer.disconnect.invalid_player_movement", &[])
 }
@@ -2892,6 +2946,16 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
         shared |= -128;
     }
     shared
+}
+
+/// The shape a level of the dimension type `d` has.
+fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
+    crate::chunk::LevelShape {
+        sky_light: d.has_skylight,
+        min_y: d.min_y,
+        height: d.height,
+        logical_height: d.height,
+    }
 }
 
 #[cfg(test)]
