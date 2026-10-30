@@ -687,7 +687,14 @@ impl Game<'_> {
                 .iter()
                 // The kinds /data can write (entity_nbt).
                 .filter(|p| {
-                    p.is_arrow() || matches!(p.kind, K::LargeFireball { .. } | K::SmallFireball)
+                    p.is_arrow()
+                        || matches!(
+                            p.kind,
+                            K::LargeFireball { .. }
+                                | K::SmallFireball
+                                | K::WindCharge
+                                | K::BreezeWindCharge
+                        )
                 })
                 .map(|p| Target::Projectile(p.id)),
         );

@@ -128,21 +128,35 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
 
 /// `AbstractWindCharge` is pickable, so a thrown pearl's
 /// `ProjectileUtil.getEntityHitResult` can strike it (`ThrownEnderpearl.onHit`).
-const WIND_CHARGE_HIT: u32 = super::dragon::SPECIAL - 1;
+/// `WIND_CHARGE_IDS + j` is `projectiles[j]` during `tick_projectiles`, below
+/// the dragon's reserved ids.
+const WIND_CHARGE_IDS: u32 = super::dragon::SPECIAL - 0x10000;
 
-fn wind_charge_hitboxes(projectiles: &[Projectile], skip: usize) -> Vec<(Who, Aabb)> {
+/// The index of the wind charge a `wind_charge_hitboxes` id stands for.
+fn wind_charge_hit(id: u32) -> Option<usize> {
+    (WIND_CHARGE_IDS..super::dragon::SPECIAL)
+        .contains(&id)
+        .then(|| (id - WIND_CHARGE_IDS) as usize)
+}
+
+fn wind_charge_hitboxes(
+    projectiles: &[Projectile],
+    alive: &[bool],
+    skip: usize,
+) -> Vec<(Who, Aabb)> {
     projectiles
         .iter()
         .enumerate()
         .filter(|(j, q)| {
             *j != skip
+                && alive[*j]
                 && !q.stuck
                 && matches!(
                     q.kind,
                     ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
                 )
         })
-        .map(|(_, q)| (Who::Mob(WIND_CHARGE_HIT), q.aabb()))
+        .map(|(j, q)| (Who::Mob(WIND_CHARGE_IDS + j as u32), q.aabb()))
         .collect()
 }
 
@@ -2737,7 +2751,7 @@ impl Game<'_> {
             let mut keep_flags = vec![true; projectiles.len()];
             for i in 0..projectiles.len() {
                 let winds = if matches!(projectiles[i].kind, ProjectileKind::EnderPearl) {
-                    wind_charge_hitboxes(&projectiles, i)
+                    wind_charge_hitboxes(&projectiles, &keep_flags, i)
                 } else {
                     Vec::new()
                 };
@@ -2846,6 +2860,16 @@ impl Game<'_> {
                     hits.push((p.clone(), hit));
                 }
                 keep_flags[i] = keep;
+                // Projectile.onHit: the wind charge it hit turns before its own tick.
+                if let Hit::Entity {
+                    who: Who::Mob(id), ..
+                } = hit
+                    && let Some(j) = wind_charge_hit(id)
+                {
+                    let (owner, guest) = (p.owner, p.guest);
+                    let look = self.owner_look(owner, guest);
+                    super::deflect::aim_deflect(&mut projectiles[j], look, owner, guest);
+                }
             }
             let mut idx = 0;
             projectiles.retain(|_| {
