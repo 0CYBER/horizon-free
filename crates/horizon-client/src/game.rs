@@ -1733,6 +1733,8 @@ struct Game<'a> {
     /// the attack strength tickers the hand reads.
     clicks: horizon_client::first_person::Clicks,
     attack_clicks: u32,
+    /// Use clicks since the last tick; `handleKeybinds` consumes them after the attack clicks.
+    use_clicks: u32,
     hand_strength: horizon_client::attack_strength::AttackStrength,
     settings: Settings,
     tutorial: tutorial::Tutorial,
@@ -12921,10 +12923,10 @@ impl Game<'_> {
                     .button(3, pressed, false, self.settings.toggle_use);
                 self.right = self.toggles.is_down(3);
                 // handleKeybinds consumes use clicks without acting while an
-                // item is in use.
+                // item is in use. Minecraft.tick runs them after the attack
+                // clicks, so a place and a break in one tick replace the block.
                 if pressed && self.using.is_none() {
-                    self.use_with_hand()?;
-                    self.use_delay = 4;
+                    self.use_clicks += 1;
                 }
             }
             MouseButton::Middle if pressed => {
@@ -14552,6 +14554,7 @@ impl<'a> Game<'a> {
             visible_hands: [(0, None), (0, None)],
             clicks: Default::default(),
             attack_clicks: 0,
+            use_clicks: 0,
             hand_strength: Default::default(),
             settings,
             tutorial,
