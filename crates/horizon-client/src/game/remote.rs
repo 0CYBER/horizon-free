@@ -2754,6 +2754,12 @@ impl Game<'_> {
                 {
                     std::mem::swap(&mut m.extra.main_hand, &mut m.extra.off_hand);
                 }
+                // LivingEntity.handleEntityEvent 47 to 52, 65 and 68: an
+                // equipped item broke (onEquippedItemBroken).
+                if let Some(slot) = horizon_client::mobs::item_break::equipment_break_slot(p.event)
+                {
+                    self.remote_equipment_break(p.id, slot);
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
