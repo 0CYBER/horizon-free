@@ -179,7 +179,6 @@ pub fn increased_repair_cost(cost: u32) -> u32 {
 pub fn hover_name(names: &dyn Fn(&str) -> String, stack: &ItemStack) -> String {
     stack
         .custom_name()
-        .map(str::to_owned)
         .or_else(|| stack.item_name())
         .unwrap_or_else(|| names(&stack.item))
 }
@@ -288,7 +287,7 @@ pub fn anvil_result(
             if n != hover_name {
                 naming_cost = 1;
                 price += 1;
-                result.data_mut().custom_name = Some(n.to_owned());
+                result.data_mut().custom_name = Some(horizon_world::nbt::Tag::String(n.into()));
             }
         }
         _ => {
@@ -481,26 +480,7 @@ pub struct StationRecipes {
     pub trim_materials: Vec<(String, String)>,
 }
 fn ingredient(v: &Value, items: &Items) -> Ingredient {
-    let mut list: Vec<String> = Vec::new();
-    for s in match v {
-        Value::String(s) => vec![s.clone()],
-        Value::Array(a) => a
-            .iter()
-            .filter_map(|x| x.as_str().map(str::to_owned))
-            .collect(),
-        _ => vec![],
-    } {
-        let more = match s.strip_prefix('#') {
-            Some(tag) => items.item_tag_order.get(tag).cloned().unwrap_or_default(),
-            None => vec![s],
-        };
-        for i in more {
-            if !list.contains(&i) {
-                list.push(i);
-            }
-        }
-    }
-    Ingredient::of(list)
+    Ingredient::parse(v, items).unwrap_or_else(|| Ingredient::of(Vec::new()))
 }
 impl StationRecipes {
     pub fn load(root: &Path, items: &Items) -> Self {
@@ -548,14 +528,19 @@ impl StationRecipes {
                     addition: ingredient(&v["addition"], items),
                     pattern: v["pattern"].as_str().unwrap_or("").to_owned(),
                 }),
-                "minecraft:stonecutting" => stonecutting.push(Stonecutting {
-                    id,
-                    input: ingredient(&v["ingredient"], items),
-                    result: ItemStack::new(
-                        v["result"]["id"].as_str().unwrap_or("minecraft:air"),
-                        v["result"]["count"].as_u64().unwrap_or(1) as u32,
-                    ),
-                }),
+                "minecraft:stonecutting" => {
+                    // A result count outside 1..=99 fails vanilla's codec: no recipe.
+                    if let Some(count) = crate::crafting::template_count(&v["result"]) {
+                        stonecutting.push(Stonecutting {
+                            id,
+                            input: ingredient(&v["ingredient"], items),
+                            result: ItemStack::new(
+                                v["result"]["id"].as_str().unwrap_or("minecraft:air"),
+                                count,
+                            ),
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -628,22 +613,34 @@ impl StationRecipes {
         base: Option<&ItemStack>,
         addition: Option<&ItemStack>,
     ) -> Option<ItemStack> {
+        self.smithing_recipe(e, template, base, addition)
+            .map(|(_, result)| result)
+    }
+    /// `SmithingMenu.createResult` with the id of the recipe that made the result.
+    pub fn smithing_recipe(
+        &self,
+        e: &Enchantments,
+        template: Option<&ItemStack>,
+        base: Option<&ItemStack>,
+        addition: Option<&ItemStack>,
+    ) -> Option<(&str, ItemStack)> {
         let (template, base, addition) = (template?, base?, addition?);
         for r in &self.smithing {
             match r {
                 Smithing::Transform {
+                    id,
                     template: t,
                     base: b,
                     addition: a,
                     result,
-                    ..
                 } => {
                     if t.test(template) && b.test(base) && a.test(addition) {
                         // SmithingTransformRecipe: transmute the base keeping its components.
-                        return Some(base.transmute(result, 1));
+                        return Some((id.as_str(), base.transmute(result, 1)));
                     }
                 }
                 Smithing::Trim {
+                    id,
                     template: t,
                     base: b,
                     addition: a,
@@ -651,7 +648,7 @@ impl StationRecipes {
                     ..
                 } => {
                     if t.test(template) && b.test(base) && a.test(addition) {
-                        return apply_trim(e, base, addition, pattern);
+                        return apply_trim(e, base, addition, pattern).map(|r| (id.as_str(), r));
                     }
                 }
             }
@@ -842,7 +839,7 @@ mod tests {
         assert_eq!(r.cost, 8);
         assert!(r.only_renaming);
         let out = r.result.unwrap();
-        assert_eq!(out.custom_name(), Some("Excalibur"));
+        assert_eq!(out.custom_name().as_deref(), Some("Excalibur"));
         // Renaming alone does not raise the penalty.
         assert_eq!(out.repair_cost(), 7);
         // Same name: nothing to do.
@@ -1001,5 +998,19 @@ mod tests {
         // min cost of Sharpness III = 23; ceil(23/2)=12 -> 12..23.
         let xp = grindstone_experience(&e, &mut r, Some(&s), None);
         assert!((12..24).contains(&xp));
+    }
+    #[test]
+    fn smithing_ingredient_parses_holders() {
+        let items = sample_items();
+        let a = ingredient(&serde_json::json!("minecraft:diamond_sword"), &items);
+        assert_eq!(a.1, vec!["minecraft:diamond_sword"]);
+        let b = ingredient(
+            &serde_json::json!(["minecraft:diamond_sword", "minecraft:diamond_axe"]),
+            &items,
+        );
+        assert_eq!(
+            b.1,
+            vec!["minecraft:diamond_sword", "minecraft:diamond_axe"]
+        );
     }
 }

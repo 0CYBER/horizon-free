@@ -2,7 +2,7 @@
 //! chunk-generation spawning (`NaturalSpawner`), mob events (attacks,
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
-use super::{Dim, Game, view_vector};
+use super::{Dim, Game, dispenser, view_vector};
 use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
     Result,
@@ -13,7 +13,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobWorld, PlayerView, Seen, SpawnSetup, Species, Who,
-        ai::{eating_sound, feed_animal},
+        ai::{eating_sound, feed_animal, takes_food},
         farm::Climate,
         spawning::{self, BiomeFacts},
     },
@@ -807,6 +807,7 @@ impl Game<'_> {
             self.set_bed_occupied(bed, false);
         }
         let killer = self.last_hurt_by_player.remove(&m.id);
+        self.love_cause.remove(&m.id);
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
@@ -857,7 +858,7 @@ impl Game<'_> {
         }
         self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
-        self.villager_murdered(m, by_player);
+        self.villager_murdered(m, by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
         self.create_wither_rose(m);
@@ -1019,7 +1020,13 @@ impl Game<'_> {
                     } else {
                         from_loot(&stack)
                     };
-                    self.spawn_item(item, pos, [0.0, 0.2, 0.0], 10);
+                    // Every death drop is its own ItemEntity, and the drop
+                    // entity's own random (not the level's) gives it the
+                    // constructor's horizontal push (its motion otherwise
+                    // stays [0, 0.2, 0] and the drops land stacked at the
+                    // mob's centre, without disturbing the level random that
+                    // the orbs' merge ids and block ticks read next).
+                    self.spawn_item(item, pos, dispenser::new_item_motion(), 10);
                 }
                 drops::Drop::Orb(value) if !consumed => self.spawn_orbs(pos, value as u32),
                 drops::Drop::Orb(_) => {}
@@ -1125,7 +1132,9 @@ impl Game<'_> {
                 .loot_table(table, false, None, &mut self.world.random),
         };
         for d in stacks {
-            self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
+            // The ItemEntity constructor's motion, from the entity's own
+            // random (not the level's).
+            self.spawn_item(d, at, dispenser::new_item_motion(), 10);
         }
     }
     /// Adds a projectile, giving it an id from the entity counter
@@ -1301,6 +1310,7 @@ impl Game<'_> {
                         self.note_attacker("minecraft:explosion", id);
                     }
                     self.combat.explosion_source = source_mob;
+                    self.combat.explosion_source_named = noted;
                     // Only a creeper or a wither empties the hives it blows up.
                     // The creeper is already gone from the list, so the event
                     // carries its kind.
@@ -1310,6 +1320,7 @@ impl Game<'_> {
                         self.explode(at, radius)
                     };
                     self.combat.explosion_source = None;
+                    self.combat.explosion_source_named = false;
                     result?
                 }
                 MobEvent::AttackMob {
@@ -1467,7 +1478,11 @@ impl Game<'_> {
                         extra: None,
                     },
                     at,
-                    [0.0, 0.2, 0.0],
+                    // The ItemEntity constructor's motion, from the entity's
+                    // own random (not the level's), so spawnAtLocation drops
+                    // (a fox's berries, a panda's held food, a goat's horn)
+                    // land apart.
+                    dispenser::new_item_motion(),
                     10,
                 ),
                 MobEvent::DropGift { table, at } => {
@@ -1476,14 +1491,9 @@ impl Game<'_> {
                             .items()
                             .loot_table(table, false, None, &mut self.world.random);
                     for stack in stacks {
-                        // The ItemEntity constructor's random motion.
-                        let r = &mut self.world.random;
-                        let v = [
-                            r.next_double() * 0.2 - 0.1,
-                            0.2,
-                            r.next_double() * 0.2 - 0.1,
-                        ];
-                        self.spawn_item(stack, at, v, 10);
+                        // The ItemEntity constructor's motion, from the
+                        // entity's own random (not the level's).
+                        self.spawn_item(stack, at, dispenser::new_item_motion(), 10);
                     }
                 }
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
@@ -1609,7 +1619,13 @@ impl Game<'_> {
                             self.pop_resource(pos, d);
                         }
                     }
-                    self.world.set(pos[0], pos[1], pos[2], self.world.air)?;
+                    // Level.destroyBlock: setBlock(fluidState.createLegacyBlock(), 3),
+                    // so water stays water and a waterlogged block leaves its water.
+                    let b = self.res.behaviours();
+                    let left = b.legacy_block(b.fluid(old));
+                    if left != old {
+                        self.level_set(pos, left)?;
+                    }
                 }
                 MobEvent::Particles { kind, at, count } => {
                     // Mob particle bursts (hearts, smoke, splashes) around a point.
@@ -1743,6 +1759,8 @@ impl Game<'_> {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
                     }
                 }
+                // Applied after the fish's tick (`apply_brain_events`).
+                MobEvent::StartFollowing { .. } | MobEvent::SchoolSize { .. } => {}
                 MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)
@@ -1906,9 +1924,9 @@ impl Game<'_> {
         let Some(p) = self.mobs.iter().find(|m| m.id == parent).cloned() else {
             return;
         };
-        // Animal.finalizeSpawnChildFromBreeding: the player who fed them.
-        if p.extra.love_player {
-            self.stats.custom("animals_bred", 1);
+        // Animal.finalizeSpawnChildFromBreeding: the player who fed the parent,
+        // or else the one who fed the partner.
+        if let Some(cause) = breeding_credit(&mut self.love_cause, parent, partner) {
             let parent = self.mob_entity(&p);
             let partner_view = self
                 .mobs
@@ -1932,7 +1950,14 @@ impl Game<'_> {
             ) {
                 child.kind = "minecraft:mule".into();
             }
-            self.trigger_bred(&parent, &partner_view, (!turtle).then_some(&child));
+            let who = cause.map_or(
+                super::commands::Target::Player,
+                super::commands::Target::Guest,
+            );
+            self.for_player(who, |g| {
+                g.stats.custom("animals_bred", 1);
+                g.trigger_bred(&parent, &partner_view, (!turtle).then_some(&child));
+            });
         }
         if let Some(q) = self.mobs.iter_mut().find(|m| m.id == partner) {
             q.extra.age = 6000;
@@ -2123,8 +2148,10 @@ impl Game<'_> {
         if d.x * d.x + d.y * d.y + d.z * d.z >= 2500.0 || p.health.dead_or_dying() {
             return false;
         }
-        let active = self.potions.effects.get("minecraft:mining_fatigue");
-        if active.is_some_and(|e| e.amplifier >= 2 && e.duration >= 1200) {
+        // The player's effects are kept by their bare name. A curse as strong
+        // that won't end within the next minute stays (endsWithin(1199)).
+        let active = self.potions.effects.get("mining_fatigue");
+        if active.is_some_and(|e| e.amplifier >= 2 && !e.ends_within(1199)) {
             return false;
         }
         let at = [p.position.x, p.position.y, p.position.z];
@@ -2949,7 +2976,15 @@ impl Game<'_> {
                 _ => 0.0,
             };
             self.hit_special(id, amount, by_player, false);
-            return Ok(());
+            // ThrowableProjectile.onHit goes on after onHitEntity: a pearl
+            // still takes its owner to where it broke (into the crystal's
+            // blast), an egg still hatches, a snowball still breaks.
+            if !matches!(
+                p.kind,
+                ProjectileKind::EnderPearl | ProjectileKind::Egg | ProjectileKind::Snowball
+            ) {
+                return Ok(());
+            }
         }
         if p.arrow.is_some()
             && let Hit::Entity {
@@ -3020,6 +3055,7 @@ impl Game<'_> {
                 let mut arrow = p.clone();
                 let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
                 let player_fire = self.player.as_ref().map(|pl| pl.fire_ticks);
+                let mut dodged = false;
                 // AbstractArrow.onHitEntity: a burning arrow sets its target alight.
                 if p.arrow.as_ref().is_some_and(|a| a.on_fire()) {
                     self.handle_mob_events(vec![MobEvent::Ignite {
@@ -3045,6 +3081,11 @@ impl Game<'_> {
                             .iter_mut()
                             .find(|m| m.id == id)
                             .is_some_and(|m| m.damage(amount, source));
+                        dodged = !hurt
+                            && self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
+                                m.species() == Species::Enderman
+                                    && horizon_client::mobs::enderman::dodges(m, &source)
+                            });
                         if p.owner == Some(Who::Player) {
                             self.last_hurt_by_player.insert(id, self.lan_acting);
                             if hurt && let Some(m) = self.mobs.iter().find(|m| m.id == id) {
@@ -3162,7 +3203,11 @@ impl Game<'_> {
                         }
                         self.finish_arrow_hit(arrow, EntityHit::Refused);
                     }
-                    // Mobs' refusals don't follow hurtServer yet: the arrow is gone.
+                    // EnderMan.hurtServer teleported away: the arrow flies on.
+                    (false, Who::Mob(_)) if dodged => {
+                        self.finish_arrow_hit(arrow, EntityHit::Dodged);
+                    }
+                    // Mobs' other refusals don't follow hurtServer yet: the arrow is gone.
                     (false, Who::Mob(_)) => {}
                 }
             }
@@ -3252,22 +3297,34 @@ impl Game<'_> {
                 Hit::Entity { who, .. } => match who {
                     Who::Player => {
                         if !self.creative {
+                            // SmallFireball.onHitEntity: remember the fire, ignite,
+                            // and restore it when the hurt is refused (a raised shield).
+                            let remaining = self.player.as_ref().map(|p| p.fire_ticks);
                             if let Some(p) = self.player.as_mut() {
                                 p.ignite_for_ticks(100)?;
                             }
-                            self.mob_hits_player(
+                            let hurt = self.mob_hits_player(
                                 5.0,
                                 [p.previous.x, p.previous.y, p.previous.z],
                                 "minecraft:fireball",
                             );
+                            if !hurt
+                                && let Some(remaining) = remaining
+                                && let Some(pl) = self.player.as_mut()
+                            {
+                                pl.set_remaining_fire_ticks(remaining);
+                            }
                         }
                     }
                     Who::Mob(id) => {
                         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            let remaining = m.fire_ticks;
                             if !m.kind.flags.fire_immune {
                                 m.ignite_for_ticks(100);
                             }
-                            m.damage(5.0, source);
+                            if !m.damage(5.0, source) {
+                                m.fire_ticks = remaining;
+                            }
                         }
                     }
                 },
@@ -3829,10 +3886,11 @@ impl Game<'_> {
                 }
                 consume = true;
             }
+            // Wolf.mobInteract: Animal.mobInteract first breeds an adult or
+            // grows a baby with the food; only when it did not does the owner
+            // make the pet sit or stand.
             Species::Wolf
-                if m.extra.tame
-                    && m.extra.owner == Some(acting)
-                    && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+                if m.extra.tame && m.extra.owner == Some(acting) && !(is_food && takes_food(m)) =>
             {
                 m.extra.sitting = !m.extra.sitting;
                 m.ai.jumping = false;
@@ -3913,10 +3971,11 @@ impl Game<'_> {
                 consume = true;
                 eat = eating_sound(m, &mut self.world.random);
             }
+            // Cat.mobInteract: Animal.mobInteract first breeds an adult or
+            // grows a baby with the food; only when it did not does the owner
+            // make the pet sit or stand.
             Species::Cat
-                if m.extra.tame
-                    && m.extra.owner == Some(acting)
-                    && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+                if m.extra.tame && m.extra.owner == Some(acting) && !(is_food && takes_food(m)) =>
             {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
@@ -4083,6 +4142,7 @@ impl Game<'_> {
                         // Animal.setInLove: entity event 18 (a baby that
                         // only grew is not in love).
                         if self.mobs[index].extra.in_love > 0 {
+                            self.love_cause.insert(self.mobs[index].id, self.lan_acting);
                             self.mob_event_particles(self.mobs[index].id, 18);
                         }
                     }
@@ -4236,14 +4296,7 @@ impl Game<'_> {
                 .get(&stack.item)
                 .map_or(0, |i| i.max_damage);
             if max > 0 {
-                let loss = self.wear(&stack, 16);
-                let slot = self.held_slot();
-                if let Some(held) = self.stack_in_mut(slot).as_mut() {
-                    held.damage += loss;
-                    if held.damage >= max {
-                        *self.stack_in_mut(slot) = None;
-                    }
-                }
+                self.damage_held(16);
             }
         }
         true
@@ -4362,8 +4415,12 @@ impl Game<'_> {
         {
             return Ok(true);
         }
-        // SpawnEggItem.useOn on a spawner sets its mob.
-        if let Some(done) = self.use_spawn_egg_on_spawner(hit.pos, &id) {
+        // SpawnEggItem.useOn on a spawner sets its mob (and an op's egg data).
+        let (spawner_id, data) = horizon_client::block_entity_item::spawn_egg_on_spawner(
+            stack,
+            self.acting_player_is_op(),
+        );
+        if let Some(done) = self.use_spawn_egg_on_spawner(hit.pos, &spawner_id, data.as_ref()) {
             if done {
                 self.swing_arm();
                 self.stats.add("used", &stack.item, 1);
@@ -4552,17 +4609,13 @@ impl Game<'_> {
                 out,
             );
             if &*mob.kind.id == "minecraft:player" {
-                // PlayerRenderer's WingsLayer and SpinAttackEffectLayer.
-                self.player_elytra_geometry(
-                    mob,
-                    mob.extra.chest.as_deref(),
-                    camera,
-                    alpha as f32,
-                    packed,
-                    out,
-                );
+                // PlayerRenderer's CapeLayer, WingsLayer and SpinAttackEffectLayer.
+                let chest = mob.extra.chest.as_deref();
+                self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
+                self.player_elytra_geometry(mob, chest, camera, alpha as f32, packed, out);
                 self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
             }
+            // CustomHeadLayer (a pumpkin, skull or head item) included.
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
                 self.mark_outline(&out[entity_start..], rgb);
@@ -4602,14 +4655,7 @@ impl Game<'_> {
         self.elder_apparition_geometry(alpha, out);
         self.spawner_geometry(camera, alpha, out);
         // Projectiles: the baked vanilla arrow model, the rest as item billboards.
-        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(
-            -yaw.sin() * pitch.cos(),
-            -pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        );
-        let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
+        let (right, up) = thrown_item_axes(self.camera_type, self.yaw, self.pitch);
         let live = self.creatures.projectiles.iter().map(|a| {
             let at = [
                 a.previous.x + (a.position.x - a.previous.x) * alpha,
@@ -4647,7 +4693,15 @@ impl Game<'_> {
                 let Some(model) = self.arrow_model.as_ref() else {
                     continue;
                 };
-                let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
+                // SpectralArrowRenderer, and TippableArrowRenderer's `getColor() > 0`.
+                let texture = if a.is_spectral_arrow() {
+                    "entity/projectiles/arrow_spectral"
+                } else if a.arrow.as_ref().is_some_and(|s| s.effect_color > 0) {
+                    "entity/projectiles/arrow_tipped"
+                } else {
+                    "entity/projectiles/arrow"
+                };
+                let Some(r) = atlas.sprites.get(texture).copied() else {
                     continue;
                 };
                 let m = glam::Mat4::from_translation(c)
@@ -4827,6 +4881,18 @@ impl Game<'_> {
         }
     }
 }
+/// `ThrownItemRenderer.submit` turns the item by `CameraRenderState.orientation`
+/// (`Camera.setRotation`): the billboard's right and up axes are the camera's.
+/// They stay continuous at pitch ±90, and in third-person front view they are
+/// the turned-round camera's, not the player's.
+fn thrown_item_axes(
+    camera_type: super::perspective::CameraType,
+    yaw: f32,
+    pitch: f32,
+) -> (glam::Vec3, glam::Vec3) {
+    let orientation = super::camera_rotation(camera_type, yaw, pitch);
+    (orientation * glam::Vec3::X, orientation * glam::Vec3::Y)
+}
 /// `Bucketable.getBucketItemStack` and `getPickupSound` of a mob that a water
 /// bucket picks up.
 fn bucketable(species: Species) -> Option<(&'static str, &'static str)> {
@@ -4880,6 +4946,17 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
         K::Cramming => "minecraft:cramming",
+        K::FallingAnvil => "minecraft:falling_anvil",
+        K::Fireworks => "minecraft:fireworks",
+        K::GenericKill => "minecraft:generic_kill",
+        K::LightningBolt => "minecraft:lightning_bolt",
+        K::OutsideBorder => "minecraft:outside_border",
+        K::Spit => "minecraft:spit",
+        K::Stalagmite => "minecraft:stalagmite",
+        K::Starve => "minecraft:starve",
+        K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
+        K::WindCharge => "minecraft:wind_charge",
+        K::Wither => "minecraft:wither",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).
@@ -4969,5 +5046,69 @@ impl Game<'_> {
         if let Some(id) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
             self.set_portal_cooldown(id);
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::super::perspective::CameraType;
+    use super::thrown_item_axes;
+
+    #[test]
+    fn thrown_item_billboard_does_not_flip_at_straight_up_or_down() {
+        for yaw in [0.0f32, 37.5, 90.0, 180.0, -135.0] {
+            for (edge, near) in [(-90.0f32, -89.9f32), (90.0, 89.9)] {
+                let (right_edge, up_edge) = thrown_item_axes(CameraType::FirstPerson, yaw, edge);
+                let (right_near, up_near) = thrown_item_axes(CameraType::FirstPerson, yaw, near);
+                assert!(
+                    right_edge.dot(right_near) > 0.99 && up_edge.dot(up_near) > 0.99,
+                    "yaw {yaw}, pitch {edge}: {right_edge}/{up_edge} vs {right_near}/{up_near} at {near}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn thrown_item_billboard_faces_the_front_camera() {
+        // Camera.setup turns the front camera round (yaw + 180, -pitch): its
+        // right is the player's left.
+        let (right, up) = thrown_item_axes(CameraType::FirstPerson, 0.0, 0.0);
+        assert!(right.abs_diff_eq(glam::Vec3::NEG_X, 1e-5), "{right}");
+        assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-5), "{up}");
+        let (right, up) = thrown_item_axes(CameraType::ThirdPersonFront, 0.0, 0.0);
+        assert!(right.abs_diff_eq(glam::Vec3::X, 1e-5), "{right}");
+        assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-5), "{up}");
+        let (right, _) = thrown_item_axes(CameraType::ThirdPersonBack, 0.0, 0.0);
+        assert!(right.abs_diff_eq(glam::Vec3::NEG_X, 1e-5), "{right}");
+    }
+}
+
+/// `Animal.finalizeSpawnChildFromBreeding`'s player: the one who fed the
+/// parent, or else the one who fed the partner (`getLoveCause`). `Some(None)`
+/// is the host, `Some(Some(conn))` a guest. Both animals are spent.
+fn breeding_credit(
+    love_cause: &mut std::collections::HashMap<u32, Option<u32>>,
+    parent: u32,
+    partner: u32,
+) -> Option<Option<u32>> {
+    let from_parent = love_cause.remove(&parent);
+    let from_partner = love_cause.remove(&partner);
+    from_parent.or(from_partner)
+}
+
+#[cfg(test)]
+mod breeding_tests {
+    use super::*;
+
+    #[test]
+    fn the_player_who_fed_either_animal_is_credited() {
+        let mut love = std::collections::HashMap::from([(1, Some(7)), (2, Some(9))]);
+        // The parent's feeder first, and both animals are spent.
+        assert_eq!(breeding_credit(&mut love, 1, 2), Some(Some(7)));
+        assert!(love.is_empty());
+        // Only the partner was fed: still credited.
+        let mut love = std::collections::HashMap::from([(2, None)]);
+        assert_eq!(breeding_credit(&mut love, 1, 2), Some(None));
+        // Neither was fed by a player (a bred pair loaded from a save).
+        assert_eq!(breeding_credit(&mut love, 1, 2), None);
     }
 }

@@ -35,6 +35,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // fire down: the flag goes off when the server's fire is out.
             (0, Value::Byte(flags)) => {
                 m.fire_ticks = i32::from(flags & 1);
+                // Entity.isSprinting: a dashing cat's or ocelot's model.
+                m.extra.sprinting = flags & 8 != 0;
                 // Drowned.setSwimming: the shared flag of swimming.
                 if species == Species::Drowned {
                     m.extra.flag = flags & 16 != 0;
@@ -131,6 +133,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Cat.IS_LYING and RELAX_STATE_ONE.
             (Species::Cat, 21, Value::Bool(lying)) => m.extra.flag = *lying,
             (Species::Cat, 22, Value::Bool(relaxing)) => m.extra.relax_one = *relaxing,
+            // Wolf.DATA_INTERESTED_ID: begging, which tilts the head.
+            (Species::Wolf, 20, Value::Bool(begging)) => m.extra.flag = *begging,
             // Wolf.DATA_COLLAR_COLOR and Cat's.
             (Species::Wolf, 21, Value::Int(c)) | (Species::Cat, 23, Value::Int(c)) => {
                 m.extra.color = (*c & 15) as u8;
@@ -244,6 +248,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Zombie.DATA_DROWNED_CONVERSION_ID (after DATA_BABY_ID and
             // DATA_SPECIAL_TYPE_ID): the conversion's shaking.
             (Species::Zombie | Species::Husk, 18, Value::Bool(converting)) => {
+                m.extra.counter2 = i32::from(*converting);
+            }
+            // Skeleton.DATA_STRAY_CONVERSION_ID (the first entry after Mob's):
+            // the freezing conversion's shaking.
+            (Species::Skeleton, 16, Value::Bool(converting)) => {
                 m.extra.counter2 = i32::from(*converting);
             }
             // ZombieVillager.DATA_CONVERTING_ID (before its villager data).
@@ -610,6 +619,35 @@ mod tests {
         );
         assert!(m.extra.tame && m.extra.sitting);
         assert_eq!(m.extra.color, 11);
+    }
+
+    /// Wolf.DATA_INTERESTED_ID: the begging flag reaches the client, whose
+    /// own `Wolf.tick` eases `interestedAngle` toward it (0.4 of the way a
+    /// tick), and `getHeadRollAngle` tilts the head by it.
+    #[test]
+    fn a_wolf_tilts_its_head_while_the_server_says_it_begs() {
+        use horizon_client::mobs::sync::client_tick;
+        let Some(mut m) = mob("minecraft:wolf") else {
+            return;
+        };
+        apply(&mut m, &[(20, s::BOOLEAN, Value::Bool(true))]);
+        client_tick(&mut m, 0);
+        assert!((m.anim.v[tame::INTEREST] - 0.4).abs() < 1e-6);
+        assert_eq!(m.anim.vo[tame::INTEREST], 0.0);
+        client_tick(&mut m, 0);
+        assert!((m.anim.v[tame::INTEREST] - 0.64).abs() < 1e-6);
+        assert!((m.anim.lerp(tame::INTEREST, 0.5) - 0.52).abs() < 1e-6);
+        for _ in 0..30 {
+            client_tick(&mut m, 0);
+        }
+        assert!(m.anim.v[tame::INTEREST] > 0.999);
+        apply(&mut m, &[(20, s::BOOLEAN, Value::Bool(false))]);
+        client_tick(&mut m, 0);
+        assert!(m.anim.v[tame::INTEREST] < 0.61);
+        for _ in 0..30 {
+            client_tick(&mut m, 0);
+        }
+        assert!(m.anim.v[tame::INTEREST] < 0.001);
     }
 
     #[test]
