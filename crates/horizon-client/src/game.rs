@@ -16031,13 +16031,10 @@ pub fn run() -> Result<()> {
         horizon_threads::favour_current();
     }
     // Someone is playing: the anonymous ping behind the launcher's "N playing now", and the
-    // official server in their list. Not for a server, a benchmark or a run that quits by itself.
-    if options.execution_role.is_client()
-        && options.benchmark.is_none()
-        && !options.offscreen
-        && options.frames.is_none()
-        && options.world_frames.is_none()
-    {
+    // official server in their list (servers.dat in the game folder, the working directory). Not
+    // for a server, a benchmark, a run that quits by itself, a harness's fixture or a run that
+    // horizon-ctl drives: those start in a source checkout and wrote the list there.
+    if !options.offscreen && !synchronous_startup(&options) {
         horizon_client::heartbeat::start();
         if let Err(e) = horizon_client::multiplayer::add_official_server(&std::env::current_dir()?)
         {
