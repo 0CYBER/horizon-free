@@ -2188,6 +2188,7 @@ impl Game<'_> {
             C::SetCamera(p) => self.remote_set_camera(p.camera_id),
             C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
+            C::ChunksBiomes(p) => self.remote_chunks_biomes(&p),
             C::ForgetLevelChunk(p) => {
                 let [x, z] = p.pos;
                 self.streaming.forget(&mut self.world, x, z);
