@@ -8,7 +8,10 @@ use crate::{
 use horizon_world::{
     heightmap::HeightmapState,
     registry::BlockStateId,
-    worldgen::{decoration_order::vanilla_order, generator::GeneratorError},
+    worldgen::{
+        decoration_order::vanilla_order,
+        generator::{GenBlockStates, GeneratorError},
+    },
 };
 use std::{
     collections::VecDeque,
@@ -263,14 +266,15 @@ fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Colum
     let (min, height) = (chunk.terrain.min_y(), chunk.terrain.height());
     let max = min + height;
     let bottom = crate::chunk::ColumnLayout::of_level(min, height).min_y();
+    let water = registry.default_state("minecraft:water");
     Arc::new(std::array::from_fn(|index| {
         let x = (index & 15) as i32;
         let z = (index >> 4) as i32;
         let mut column = Column::default();
         for y in min..max {
-            let state = chunk.block(x, y, z);
+            let mut state = chunk.block(x, y, z);
             let properties = states.get(state);
-            let name = registry.state(state).map_or("", |s| s.name.as_str());
+            let mut name = registry.state(state).map_or("", |s| s.name.as_str());
             if properties.is_air()
                 || (!properties.blocks_motion_in_heightmap()
                     && !properties.has_fluid()
@@ -278,13 +282,26 @@ fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Colum
             {
                 continue;
             }
+            // Kelp and seagrass hold water: far off they are the water around
+            // them, as saved chunks' far columns have them. As spans of their
+            // own they hid the seabed with no top face of theirs, a hole
+            // where the sky showed through (white dots across the sea).
+            if !properties.blocks_motion_in_heightmap()
+                && properties.has_fluid()
+                && !matches!(name, "minecraft:water" | "minecraft:lava")
+                && let Some(water) = water
+            {
+                state = water;
+                name = "minecraft:water";
+            }
             let fluid = matches!(name, "minecraft:water" | "minecraft:lava");
             let biome = biome_map
                 .get(chunk.biome_id_at(x, y, z).0 as usize)
                 .copied()
                 .unwrap_or(0);
-            // shortcut: no propagated far lighting, use the normal lighting
+            // shortcut: no propagated far block light, use the normal lighting
             // engine if accurate distant block-light propagation is required.
+            // Skylight is `shade_sky`'s, once the column is complete.
             let light = if dimension == "minecraft:the_nether" {
                 0
             } else {
@@ -318,8 +335,48 @@ fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Colum
                 });
             }
         }
+        if dimension != "minecraft:the_nether" {
+            shade_sky(&mut column, states);
+        }
         column
     }))
+}
+/// Skylight as it reaches the top of each span straight down from the sky:
+/// fluids and leaves take a level per block, as vanilla's dampening does.
+/// Full skylight everywhere lit seabeds and the ground under canopies as if
+/// they stood in the open.
+// ponytail: straight down only. Solid blocks take none, though vanilla's
+// stop it: the faces under them that far terrain shows are cliffs and
+// overhangs, which vanilla lights sideways from the open air, and they went
+// black. The lighting engine for exact light.
+fn shade_sky(column: &mut Column, states: &GenBlockStates) {
+    // Dimming blocks get a span a level, as a real chunk's light has them,
+    // down to the dark: one lit span for a whole sea lit its bed, where
+    // `Column::reduced` merges water and sand, as brightly as its surface.
+    let mut sky = 15u32;
+    let mut shaded = Vec::with_capacity(column.spans.len());
+    for span in column.spans.iter().rev() {
+        let lit = |min, max, sky: u32| Span {
+            min,
+            max,
+            light: (span.light & !0xf0) | (sky << 4) as u16,
+            ..*span
+        };
+        let state = states.get(span.state);
+        if state.motion && state.no_leaves {
+            shaded.push(lit(span.min, span.max, sky));
+            continue;
+        }
+        let mut top = span.max;
+        while top > span.min {
+            let bottom = if sky == 0 { span.min } else { top - 1 };
+            shaded.push(lit(bottom, top, sky));
+            sky = sky.saturating_sub((top - bottom) as u32);
+            top = bottom;
+        }
+    }
+    shaded.reverse();
+    column.spans = shaded;
 }
 
 pub(super) struct VanillaLodSampler {
@@ -502,13 +559,13 @@ impl VanillaLodSampler {
                 },
             });
         }
-        let light = if self.generator.dimension == "minecraft:the_nether" {
-            0
-        } else {
-            240
-        };
+        let nether = self.generator.dimension == "minecraft:the_nether";
+        let light = if nether { 0 } else { 240 };
         self.vegetation.apply(&mut column, x, z, width, light);
         self.islands.apply(&mut column, x, z, width, light);
+        if !nether {
+            shade_sky(&mut column, self.generator.generator.data().block_states());
+        }
         column
     }
 }
@@ -685,6 +742,21 @@ mod tests {
         };
         assert!(count("_leaves") > 0, "unexplored forest has a real canopy");
         assert!(count("_log") > 0, "canopy retains its trunks");
+        let sky = |span: &Span| (span.light >> 4) & 15;
+        assert!(
+            generated
+                .iter()
+                .filter_map(|column| column.spans.last())
+                .all(|top| sky(top) == 15),
+            "the top of every column is in the open"
+        );
+        assert!(
+            generated
+                .iter()
+                .flat_map(|column| &column.spans)
+                .any(|span| (1..15).contains(&sky(span))),
+            "ground under the canopy is shaded, not black"
+        );
         assert!(generated.iter().all(|column| {
             column
                 .spans

@@ -4047,6 +4047,7 @@ fn decode_lod_surfaces(
     let Tag::List(sections) = root.tag.get("sections")? else {
         return None;
     };
+    let water_state = assets.registry.default_state("minecraft:water");
     let mut sections: Vec<_> = sections
         .iter()
         .filter_map(|section| {
@@ -4093,11 +4094,15 @@ fn decode_lod_surfaces(
                             descriptor.name.as_str(),
                             "minecraft:chorus_plant" | "minecraft:chorus_flower"
                         );
-                        (
-                            state,
-                            fluid,
-                            fluid || properties.blocks_motion_in_heightmap() || chorus,
-                        )
+                        let solid = properties.blocks_motion_in_heightmap();
+                        // Kelp and seagrass: the water they hold. Left out, the
+                        // water stopped short where they reach the surface.
+                        match water_state {
+                            Some(water) if !fluid && !solid && properties.has_fluid() => {
+                                (water, true, true)
+                            }
+                            _ => (state, fluid, fluid || solid || chorus),
+                        }
                     }))
                 })
                 .collect::<Option<_>>()?;
