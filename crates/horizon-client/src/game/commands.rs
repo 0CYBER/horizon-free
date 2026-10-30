@@ -1540,7 +1540,7 @@ impl Game<'_> {
     /// unless the entity moves first.
     /// `Entity.getId` as the players' clients know it: a player's is the one the
     /// hub gave it, any other entity's is its own id.
-    fn network_entity_id(&self, t: Target) -> Option<i32> {
+    pub(super) fn network_entity_id(&self, t: Target) -> Option<i32> {
         let host = self.lan.as_ref();
         match t {
             Target::Player => match self.lan_acting {

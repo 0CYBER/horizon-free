@@ -115,6 +115,12 @@ mod fetchprofile_tests {
 pub(in crate::game) struct CommandExtras {
     /// ServerPlayer.camera: the entity `/spectate` attached the view to.
     pub camera: Option<Target>,
+    /// The cameras of the guests of a server, by connection
+    /// (game/lan_camera.rs).
+    pub guest_cameras: HashMap<u32, super::super::lan_camera::GuestCamera>,
+    /// `/spectate` for a guest: connection and the camera's network id
+    /// (None to stop), taken in the guests' tick.
+    pub camera_requests: Vec<(u32, Option<i32>)>,
     /// ServerPlayer.postEffects, in insertion order.
     pub post_effects: Vec<String>,
     /// MinecraftServer's tick profiler (`/debug start`): when it started and
@@ -225,7 +231,19 @@ impl Game<'_> {
                 &[self.target_name(t)],
             ));
         }
-        self.set_camera(target);
+        // A guest's camera is the hub's: the view moves in the guests' tick.
+        let guest = match player {
+            Target::Player => self.lan_acting,
+            Target::Guest(conn) => Some(conn),
+            _ => None,
+        };
+        match guest {
+            Some(conn) => {
+                let camera = target.and_then(|t| self.network_entity_id(t));
+                self.cmds.camera_requests.push((conn, camera));
+            }
+            None => self.set_camera(target),
+        }
         match target {
             Some(t) => {
                 let name = self.target_name(t);
