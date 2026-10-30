@@ -22,7 +22,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
     "license": "MIT", "source": "https://github.com/...", "icon": "https://...png", "key": "RWT...", "downloads": 1234,
     "versions": [{
       "version": "0.1.0", "published": "2026-10-24", "changelog": "",
-      "api": "0.1", "side": "client", "capabilities": ["game-read", "hud", "chat"], "api_level": 0, "game": "26.3",
+      "api": "0.1", "side": "client", "capabilities": ["registries"], "game": "26.3",
       "file": { "name": "coords_hud-0.1.0.hmod", "url": "https://github.com/horizon-rust/horizon-mods/releases/download/...",
                 "size": 438, "sha256": "e113...", "signature": "untrusted comment: ...\n...\ntrusted comment: ...\n...\n" }
     }]
@@ -45,13 +45,11 @@ Level: preview ([stability.md](stability.md)). Schema 1.
 | `downloads` | How many times its files were downloaded, every version together: GitHub's count of each release asset, summed by the publish job, which runs every hour. Absent until a file is downloaded. Read-only: never in an entry. |
 | `api` | A mod's API line (its manifest's `api`); a native mod's pinned revisions (`native-1/<horizon>/<mixins>`); a modpack's manifest format (`1`). |
 | `side`, `capabilities` | A mod's, read from its manifest by CI, never typed by hand. |
-| `api_level` | For a WebAssembly mod published before they were removed: the mod API level its code needs, read from the file by CI. Absent for content mods and native mods. The launcher doesn't install such a mod alone (it "needs a native port"); it stays in the index for the modpacks that require it. |
+| `api_level` | A legacy field in old entries; the launcher ignores it. |
 | `game` | The Minecraft version it is for. |
 | `requires` | A modpack's mods: `{ id, version, sha256 }`, each a version in this index with that hash. |
 | `file` | A plain name with the kind's extension (`.hmod`, `.hnmod`, `.hpack`, `.zip`, `.hshader`), an `https://` URL, the size (at most 64 MiB), the lowercase hex SHA-256, and the `.minisig` text when the project has a key. |
 | `revoked` | Files taken down: one file by `sha256`, or every version of `id` without it. The launcher refuses to install them and turns installed copies off with the reason. |
-
-The sample's `coords_hud` is a WebAssembly mod from before they were removed, which is why it has an `api_level`.
 
 Readers ignore fields they don't know, so an optional field can be added to schema 1. Renaming or removing a field, or
 changing what one means, makes schema 2.
@@ -141,7 +139,7 @@ Unknown keys are refused. Its CI runs `cargo-horizon-mod` (`crates/cargo-horizon
 
 | Command | What it does |
 | --- | --- |
-| `cargo horizon-mod check <file> [--json]` | A submission's checks: its kind's (above) and its signature with `--key` and `--signature`. It refuses an `.hmod` with WebAssembly code, and runs no mod's code: a native mod's source is read by the reviewers. |
+| `cargo horizon-mod check <file> [--json]` | A submission's checks: its kind's (above) and its signature with `--key` and `--signature`. It runs no mod's code: a native mod's source is read by the reviewers. |
 | `cargo horizon-mod registry check <base> <head> --files <dir>` | `check` on each file `head` lists and `base` doesn't: a pull request's new files. |
 | `cargo horizon-mod registry list <checkout>` | `<sha256> <id> <version> <file>` per version: the files to download. |
 | `cargo horizon-mod registry build <checkout> --files <dir> --out index.json` | Reads every entry and its file (`<dir>/<sha256>`), lists every problem, and writes the index with URLs `<release><id>-<version>/<file>` (`--release`, ending in `/`, defaults to the repository's releases). |
@@ -154,7 +152,7 @@ How the repository runs (its workflows are in `.github/workflows/`):
   `cargo-horizon-mod` from Horizon at the commit in the repository variable `HORIZON_REV`. The form's pull requests
   are opened with the token of the account in the variable `REGISTRY_BOT`; for those, the author is the login in the
   body's `<!-- submitted-by: … -->` line.
-- **Merging** needs the `check` run and a CODEOWNER's review. `publish.yml` then makes each new version a release
+- **Merging** needs the `check` run and a CODEOWNER's review, except for an owner update: the form signs it (an HMAC trailer in the pull request's body, label `owner-update`) and horizon-mods' `owner-update` workflow verifies it, waits for the checks and merges it ([the service's README](../../crates/horizon-mod-registry/README.md#owner-updates)). `publish.yml` then makes each new version a release
   `<id>-<version>` and deploys `index.json` and `icons/` to GitHub Pages:
   `https://horizon-rust.github.io/horizon-mods/index.json`, served with `Access-Control-Allow-Origin: *`.
 - **Weekly**, `cleanup.yml` deletes staged copies of published files after 7 days and of files no open pull request

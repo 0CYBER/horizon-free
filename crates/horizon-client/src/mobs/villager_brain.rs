@@ -925,7 +925,7 @@ fn chunk_pois(
         return;
     };
     let kind = |state: u32| poi_of_state(w, horizon_world::registry::BlockStateId(state));
-    let min = crate::chunk::MIN_Y;
+    let min = w.world.bottom_y();
     for s in (y0 - min) >> 4..=(y1 - min) >> 4 {
         let section = &chunk.sections[s as usize];
         for &(i, poi) in w.world.pois.get((qx, s, qz), section, kind).iter() {
@@ -954,8 +954,8 @@ fn pois_in_range(
     let r2 = i64::from(radius) * i64::from(radius);
     let (cx, cz) = (c[0] >> 4, c[2] >> 4);
     let chunks = radius.div_euclid(16) + 1;
-    let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
-    let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
+    let y0 = (c[1] - radius).max(w.world.bottom_y());
+    let y1 = (c[1] + radius).min(w.world.top_y() - 1);
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
             chunk_pois(w, (qx, qz), y0, y1, |poi, p| {
@@ -990,8 +990,8 @@ pub(super) fn occupied_pois_in_range(
     let r2 = i64::from(radius) * i64::from(radius);
     let (cx, cz) = (center[0] >> 4, center[2] >> 4);
     let chunks = radius.div_euclid(16) + 1;
-    let y0 = (center[1] - radius).max(crate::chunk::MIN_Y);
-    let y1 = (center[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
+    let y0 = (center[1] - radius).max(w.world.bottom_y());
+    let y1 = (center[1] + radius).min(w.world.top_y() - 1);
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
             chunk_pois(w, (qx, qz), y0, y1, |_, p| {
@@ -1568,7 +1568,7 @@ impl B {
                     t.begin(cx.lr, cx.now);
                     // start
                     mem(m).path.set_opt(path.clone());
-                    m.nav_move_to_path(path.clone(), f64::from(*speed));
+                    m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     return true;
                 }
                 let mm = mem(m);
@@ -2886,7 +2886,7 @@ impl B {
                     if d > 4 && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                         *last_target = Some(now_target);
                         mem(m).path.set_opt(path.clone());
-                        m.nav_move_to_path(path.clone(), f64::from(*speed));
+                        m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     }
                 }
             }
@@ -3595,8 +3595,8 @@ fn homes_in_range(m: &Mob, w: &MobWorld, radius: i32) -> Vec<[i32; 3]> {
     let c = block_of(m.position);
     let r2 = i64::from(radius) * i64::from(radius);
     let mut out = Vec::new();
-    let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
-    let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
+    let y0 = (c[1] - radius).max(w.world.bottom_y());
+    let y1 = (c[1] + radius).min(w.world.top_y() - 1);
     for qz in (c[2] - radius) >> 4..=(c[2] + radius) >> 4 {
         for qx in (c[0] - radius) >> 4..=(c[0] + radius) >> 4 {
             chunk_pois(w, (qx, qz), y0, y1, |poi, p| {

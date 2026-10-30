@@ -849,6 +849,10 @@ impl Goal for PiglinSpear {
 /// weapon (`canUseNonMeleeWeapon`) never melees; its spear behaviours attack.
 #[derive(Clone, Debug)]
 pub struct NoMeleeWithSpear<G>(pub G);
+/// A kinetic weapon or a crossbow in the main hand: the melee goal stays off.
+pub(super) fn holds_non_melee_weapon(m: &Mob) -> bool {
+    main_hand_kinetic(m).is_some() || m.extra.main_hand.as_deref() == Some("minecraft:crossbow")
+}
 impl<G: Goal + Clone + 'static> Goal for NoMeleeWithSpear<G> {
     goal_clone!();
     fn flags(&self) -> u8 {
@@ -858,10 +862,10 @@ impl<G: Goal + Clone + 'static> Goal for NoMeleeWithSpear<G> {
         self.0.name()
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        main_hand_kinetic(m).is_none() && self.0.can_use(m, cx)
+        !holds_non_melee_weapon(m) && self.0.can_use(m, cx)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        main_hand_kinetic(m).is_none() && self.0.can_continue(m, cx)
+        !holds_non_melee_weapon(m) && self.0.can_continue(m, cx)
     }
     fn interruptable(&self) -> bool {
         self.0.interruptable()

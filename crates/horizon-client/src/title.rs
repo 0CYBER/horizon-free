@@ -34,6 +34,54 @@ fn edit_top(h: f32) -> f32 {
 pub(crate) fn confirm_top(h: f32, lines: usize) -> f32 {
     ((h.ceil() - 61.0 - lines as f32 * 9.0) / 2.0).floor()
 }
+/// RecoverWorldDataScreen's column (title, message, issues, the restore row
+/// and Back, 8 apart, centred on the screen) with `lines` lines of message
+/// and issues: where the restore row starts.
+fn recover_buttons_top(h: f32, lines: usize) -> f32 {
+    let text = lines as f32 * 9.0;
+    let top = ((h.ceil() - (9.0 + 8.0 + text + 8.0 + 8.0 + 20.0 + 8.0 + 20.0)) / 2.0).trunc();
+    top + 9.0 + 8.0 + text + 8.0 + 8.0
+}
+/// `RecoverWorldDataScreen.buildInfo`: "State from <date>: " and the file's
+/// issue; nothing for a level.dat_old that is just missing.
+fn recover_info(dir: &Path, old: bool, issue: Option<&crate::save::DatIssue>) -> Option<Text> {
+    use crate::save::DatIssue;
+    if old && issue == Some(&DatIssue::Missing) {
+        return None;
+    }
+    let file = dir.join(if old { "level.dat_old" } else { "level.dat" });
+    let date = match std::fs::metadata(file).and_then(|m| m.modified()) {
+        Ok(time) => {
+            let date: chrono::DateTime<chrono::Local> = time.into();
+            date.format("%d/%m/%Y, %H:%M").to_string()
+        }
+        Err(_) => lang::get_or("recover_world.state_entry.unknown", "unknown"),
+    };
+    let state = format_translation(
+        &lang::get_or("recover_world.state_entry", "State from %s: "),
+        &[Text::colored(date, GRAY)],
+    );
+    let issue = match issue {
+        None => Text::colored(lang::get_or("recover_world.issue.none", "No issues"), GREEN),
+        Some(DatIssue::Missing) => Text::colored(
+            lang::get_or("recover_world.issue.missing_file", "Missing file"),
+            RED,
+        ),
+        Some(DatIssue::Unreadable(why)) => Text::colored(why.clone(), RED),
+    };
+    Some(Text::empty().append(state).append(issue))
+}
+/// ChatFormatting GRAY, GREEN and RED.
+const GRAY: u32 = 0xAAAAAA;
+const GREEN: u32 = 0x55FF55;
+const RED: u32 = 0xFF5555;
+/// `RecoverWorldDataScreen.collectIssue` for level.dat and level.dat_old.
+fn recover_issues(dir: &Path) -> [Option<crate::save::DatIssue>; 2] {
+    [
+        crate::save::level_dat_issue(dir, false),
+        crate::save::level_dat_issue(dir, true),
+    ]
+}
 /// The SafetyScreen's column (WarningScreen: title, 12 px around the message
 /// box of its lines and 4 px padding, the checkbox, then the buttons, 8 px
 /// apart): the title's top.
@@ -91,6 +139,27 @@ pub struct WorldEntry {
     pub modified: std::time::SystemTime,
     pub commands: bool,
     pub version: String,
+    /// `LevelSummary.isLocked`: another running copy has the world open.
+    pub locked: bool,
+    /// `LevelSummary.CorruptedLevelSummary`: level.dat did not read, so the row
+    /// only knows its folder and offers recovery instead of play.
+    pub corrupted: bool,
+}
+impl WorldEntry {
+    /// `CorruptedLevelSummary`: named after its folder, nothing else known.
+    fn corrupted(folder: String, modified: std::time::SystemTime) -> Self {
+        Self {
+            name: folder.clone(),
+            folder,
+            game_mode: 0,
+            hardcore: false,
+            modified,
+            commands: false,
+            version: String::new(),
+            locked: false,
+            corrupted: true,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub enum Mode {
@@ -122,6 +191,20 @@ pub enum Mode {
     },
     Delete {
         world: WorldEntry,
+    },
+    /// RecoverWorldDataScreen: opening a world whose level.dat does not read
+    /// (WorldOpenFlows.openWorldLoadLevelData) lists what is wrong with
+    /// level.dat and level.dat_old and offers to go back to the old one.
+    Recover {
+        world: WorldEntry,
+        /// `collectIssue` for level.dat, then level.dat_old.
+        issues: [Option<crate::save::DatIssue>; 2],
+    },
+    /// Where `attemptRestore` ends: the "Recovery done" ConfirmScreen
+    /// (Continue opens the world), or its AlertScreen when it failed.
+    Recovered {
+        world: WorldEntry,
+        success: bool,
     },
     Error {
         message: String,
@@ -235,18 +318,26 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
         .flatten()
         .filter_map(|e| {
             let path = e.path();
-            let level = Level::read(&path)?;
-            let modified = std::fs::metadata(path.join("level.dat"))
-                .and_then(|m| m.modified())
-                .ok()?;
-            let data = crate::save::read_dat(&path.join("level.dat"))?;
-            let data = data.get("Data")?;
+            // findLevelCandidates: a folder with a level.dat or a level.dat_old.
+            let file = |name: &str| std::fs::metadata(path.join(name)).ok().filter(|m| m.is_file());
+            // getFileModificationTime: level.dat's, else level.dat_old's.
+            let file = file("level.dat").or_else(|| file("level.dat_old"))?;
+            let modified = file.modified().unwrap_or(std::time::UNIX_EPOCH);
+            let folder = e.file_name().to_string_lossy().into_owned();
+            // readLevelSummary reads level.dat alone; when it fails the world is
+            // still listed, as a CorruptedLevelSummary named after its folder.
+            let level = Level::read_summary(&path);
+            let root = crate::save::read_dat(&path.join("level.dat"));
+            let (Some(level), Some(root)) = (level, root) else {
+                return Some(WorldEntry::corrupted(folder, modified));
+            };
+            let data = root.get("Data")?;
             let modified = match data.get("LastPlayed") {
                 Some(horizon_world::nbt::Tag::Long(millis)) if *millis >= 0 => std::time::UNIX_EPOCH + std::time::Duration::from_millis(*millis as u64),
                 _ => modified,
             };
             Some(WorldEntry {
-                folder: e.file_name().to_string_lossy().into_owned(),
+                folder,
                 name: level.name,
                 game_mode: level.game_mode,
                 hardcore: level.hardcore,
@@ -255,6 +346,8 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
                 version: data.get("Version").and_then(|v| v.get("Name"))
                     .and_then(|v| match v { horizon_world::nbt::Tag::String(s) => Some(s.to_string_lossy()), _ => None })
                     .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
+                locked: crate::save::SessionLock::is_locked(&path),
+                corrupted: false,
             })
         })
         .collect();
@@ -264,6 +357,23 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
 /// LevelSummary.createInfo: a hardcore world's mode in red (CommonColors.RED),
 /// else `gameMode.` + its GameType name, then commands and the version.
 fn world_info(world: &WorldEntry) -> crate::text::Text {
+    // LevelSummary.createInfo: a locked world says so in red (ChatFormatting.RED).
+    if world.locked {
+        return crate::text::Text::colored(
+            lang::get_or(
+                "selectWorld.locked",
+                "Locked by another running instance of Minecraft.",
+            ),
+            0xFF5555,
+        );
+    }
+    // CorruptedLevelSummary.INFO: recover_world.warning in red (-65536).
+    if world.corrupted {
+        return crate::text::Text::colored(
+            lang::get_or("recover_world.warning", "Failed to load world summary"),
+            0xFF0000,
+        );
+    }
     let mode = if world.hardcore {
         crate::text::Text::colored(lang::get_or("gameMode.hardcore", "Hardcore Mode"), 0xFF0000)
     } else {
@@ -651,11 +761,22 @@ impl Title {
     /// another series is an alert, one whose file fixes are due or that a newer version
     /// saved asks for a backup first; any other opens at once.
     fn play(&mut self, world: WorldEntry) -> Action {
+        // LevelSummary.primaryActionActive: a world another copy has open cannot be joined.
+        if world.locked {
+            return Action::None;
+        }
         if crate::save::SessionLock::acquire(&self.saves.join(&world.folder)).is_err() {
             self.toast = Some((
                 crate::toasts::Slide::default(),
                 WorldToast::AccessFailure(world.folder),
             ));
+            return Action::None;
+        }
+        // openWorldLoadLevelData: a level.dat that does not read opens
+        // RecoverWorldDataScreen instead of the world.
+        let issues = recover_issues(&self.saves.join(&world.folder));
+        if issues[0].is_some() {
+            self.mode = Mode::Recover { world, issues };
             return Action::None;
         }
         // openWorldCheckVersionCompatibility: a world from another series is an AlertScreen.
@@ -699,6 +820,25 @@ impl Title {
         Action::Play {
             folder: world.folder,
         }
+    }
+    /// `RecoverWorldDataScreen.attemptRestore`: with level.dat still broken and
+    /// level.dat_old readable, level.dat_old takes level.dat's place
+    /// (`restoreLevelDataFromOld`); anything else is a failure.
+    fn attempt_restore(&mut self, world: WorldEntry) {
+        let dir = self.saves.join(&world.folder);
+        let issues = recover_issues(&dir);
+        let success = issues[0].is_some()
+            && issues[1].is_none()
+            && crate::save::restore_level_data_from_old(&dir);
+        if !success {
+            log::error!(
+                "Failed to recover world, files not as expected. level.dat: {:?}, level.dat_old: {:?}",
+                issues[0],
+                issues[1]
+            );
+        }
+        *self.recent.borrow_mut() = None;
+        self.mode = Mode::Recovered { world, success };
     }
     fn start_backup(&mut self, world: WorldEntry) {
         let (send, receive) = mpsc::channel();
@@ -910,56 +1050,67 @@ impl Title {
                 }
                 buttons
             }
-            Mode::Select { selected, .. } => vec![
-                b(
-                    (w / 2.0).floor() - 154.0,
-                    h - 52.0,
-                    150.0,
-                    &lang::get_or("selectWorld.select", "Play Selected World"),
-                    selected.is_some(),
-                    10,
-                ),
-                b(
-                    (w / 2.0).floor() + 4.0,
-                    h - 52.0,
-                    150.0,
-                    &lang::get_or("selectWorld.create", "Create New World"),
-                    true,
-                    11,
-                ),
-                b(
-                    (w / 2.0).floor() - 154.0,
-                    h - 28.0,
-                    71.0,
-                    &lang::get_or("selectWorld.edit", "Edit"),
-                    selected.is_some(),
-                    13,
-                ),
-                b(
-                    (w / 2.0).floor() - 75.0,
-                    h - 28.0,
-                    71.0,
-                    &lang::get_or("selectWorld.delete", "Delete"),
-                    selected.is_some(),
-                    14,
-                ),
-                b(
-                    (w / 2.0).floor() + 4.0,
-                    h - 28.0,
-                    71.0,
-                    &lang::get_or("selectWorld.recreate", "Re-Create"),
-                    selected.is_some(),
-                    15,
-                ),
-                b(
-                    (w / 2.0).floor() + 83.0,
-                    h - 28.0,
-                    71.0,
-                    &lang::get_or("gui.back", "Back"),
-                    true,
-                    12,
-                ),
-            ],
+            Mode::Select { worlds, selected } => {
+                let world = selected.and_then(|i| worlds.get(i));
+                // SelectWorldScreen.updateButtonStatus: primaryActionMessage, canEdit, canRecreate.
+                let corrupted = world.is_some_and(|w| w.corrupted);
+                let editable = world.is_some() && !corrupted;
+                let play = if corrupted {
+                    lang::get_or("recover_world.button", "Attempt to Recover")
+                } else {
+                    lang::get_or("selectWorld.select", "Play Selected World")
+                };
+                vec![
+                    b(
+                        (w / 2.0).floor() - 154.0,
+                        h - 52.0,
+                        150.0,
+                        &play,
+                        selected.is_some(),
+                        10,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 4.0,
+                        h - 52.0,
+                        150.0,
+                        &lang::get_or("selectWorld.create", "Create New World"),
+                        true,
+                        11,
+                    ),
+                    b(
+                        (w / 2.0).floor() - 154.0,
+                        h - 28.0,
+                        71.0,
+                        &lang::get_or("selectWorld.edit", "Edit"),
+                        editable,
+                        13,
+                    ),
+                    b(
+                        (w / 2.0).floor() - 75.0,
+                        h - 28.0,
+                        71.0,
+                        &lang::get_or("selectWorld.delete", "Delete"),
+                        selected.is_some(),
+                        14,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 4.0,
+                        h - 28.0,
+                        71.0,
+                        &lang::get_or("selectWorld.recreate", "Re-Create"),
+                        editable,
+                        15,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 83.0,
+                        h - 28.0,
+                        71.0,
+                        &lang::get_or("gui.back", "Back"),
+                        true,
+                        12,
+                    ),
+                ]
+            }
             Mode::Create {
                 creative, options, ..
             } => create_world::buttons(w, h, *creative, options),
@@ -1048,6 +1199,66 @@ impl Title {
                         38,
                     ),
                 ]
+            }
+            Mode::Recover { issues, .. } => {
+                let y = recover_buttons_top(h, self.message_lines.get());
+                // The restore button is active only when level.dat is the broken one
+                // and level.dat_old reads.
+                vec![
+                    b(
+                        (w / 2.0).floor() - 60.0,
+                        y,
+                        120.0,
+                        &lang::get_or("recover_world.restore", "Attempt to Restore"),
+                        issues[0].is_some() && issues[1].is_none(),
+                        90,
+                    ),
+                    b(
+                        (w / 2.0).floor() - 60.0,
+                        y + 28.0,
+                        120.0,
+                        &lang::get_or("gui.back", "Back"),
+                        true,
+                        91,
+                    ),
+                ]
+            }
+            Mode::Recovered { success: true, .. } => {
+                let y = confirm_top(h, self.message_lines.get())
+                    + 41.0
+                    + self.message_lines.get() as f32 * 9.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 152.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.continue", "Continue"),
+                        true,
+                        92,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 2.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.back", "Back"),
+                        true,
+                        93,
+                    ),
+                ]
+            }
+            Mode::Recovered { success: false, .. } => {
+                // AlertScreen.init: the button follows the text, kept inside the screen.
+                let y = (90.0 + self.message_lines.get() as f32 * 9.0 + 12.0)
+                    .max(h / 6.0 + 96.0)
+                    .min(h - 24.0);
+                vec![b(
+                    (w / 2.0).floor() - 75.0,
+                    y,
+                    150.0,
+                    &lang::get_or("gui.back", "Back"),
+                    true,
+                    93,
+                )]
             }
             Mode::Error { incompatible, .. } => {
                 let lines = self.message_lines.get();
@@ -1391,6 +1602,79 @@ impl Title {
                 );
                 for (i, line) in lines.iter().enumerate() {
                     centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
+            Mode::Recover { world, issues } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let dir = self.saves.join(&world.folder);
+                let title =
+                    Text::literal(lang::get_or("recover_world.title", "Failed to load world"))
+                        .bold();
+                let message = format_translation(
+                    &lang::get_or(
+                        "recover_world.message",
+                        "The following issues occurred while trying to read world folder \"%s\".\nIt might be possible to restore the world from an older state or you can report this issue on the bug tracker.",
+                    ),
+                    &[Text::colored(world.folder.clone(), GRAY)],
+                );
+                let message: Vec<Text> = atlas
+                    .font
+                    .split_lines(&message, w - 50.0)
+                    .into_iter()
+                    .map(|(line, _)| line)
+                    .collect();
+                let issues: Vec<Text> = [false, true]
+                    .into_iter()
+                    .zip(issues)
+                    .filter_map(|(old, issue)| recover_info(&dir, old, issue.as_ref()))
+                    .flat_map(|info| atlas.font.split_lines(&info, w - 50.0))
+                    .map(|(line, _)| line)
+                    .collect();
+                self.message_lines.set(message.len() + issues.len());
+                let row = recover_buttons_top(h, message.len() + issues.len());
+                let top = row - 8.0 - 8.0 - (message.len() + issues.len()) as f32 * 9.0 - 8.0 - 9.0;
+                let center =
+                    |text: &Text| (w / 2.0).floor() - (atlas.font.width_text(text) / 2.0).floor();
+                batch.text_styled(atlas, &title, center(&title), top, u32::MAX, true);
+                let mut y = top + 17.0;
+                for line in &message {
+                    batch.text_styled(atlas, line, center(line), y, u32::MAX, true);
+                    y += 9.0;
+                }
+                // The issues widget is left aligned, the widget centred.
+                let width = issues
+                    .iter()
+                    .map(|l| atlas.font.width_text(l))
+                    .fold(0.0, f32::max);
+                let x = (w / 2.0).floor() - (width / 2.0).floor();
+                for line in &issues {
+                    batch.text_styled(atlas, line, x, y + 8.0, u32::MAX, true);
+                    y += 9.0;
+                }
+            }
+            Mode::Recovered { success, .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                let title = lang::get_or("recover_world.done.title", "Recovery done");
+                let message = if *success {
+                    lang::get_or("recover_world.done.success", "Recovery was successful!")
+                } else {
+                    lang::get_or(
+                        "recover_world.done.failed",
+                        "Failed to recover from previous state.",
+                    )
+                };
+                let lines = wrapped(atlas, &message, w - 50.0);
+                self.message_lines.set(lines.len());
+                // ConfirmScreen centres its column; AlertScreen puts the title at 70, the text at 90.
+                let (top, text_top) = if *success {
+                    let top = confirm_top(h, lines.len());
+                    (top, top + 17.0)
+                } else {
+                    (70.0, 90.0)
+                };
+                centered(atlas, batch, &title, top, u32::MAX);
+                for (i, line) in lines.iter().enumerate() {
+                    centered(atlas, batch, line, text_top + i as f32 * 9.0, u32::MAX);
                 }
             }
             Mode::BackupBeforeUpgrade { downgrade, .. } => {
@@ -1870,6 +2154,19 @@ impl Title {
                 self.escape();
                 Action::None
             }
+            (Mode::Recover { world, .. }, Some(90)) => {
+                let world = world.clone();
+                self.attempt_restore(world);
+                Action::None
+            }
+            (Mode::Recovered { world, .. }, Some(92)) => {
+                let world = world.clone();
+                self.play(world)
+            }
+            (Mode::Recover { .. } | Mode::Recovered { .. }, Some(91 | 93)) => {
+                self.escape();
+                Action::None
+            }
             (Mode::Error { return_to, .. }, Some(39)) => {
                 self.mode = *return_to.clone();
                 Action::None
@@ -2204,6 +2501,8 @@ impl Title {
             Mode::Backup { .. } => {}
             Mode::Edit { world, .. }
             | Mode::Delete { world }
+            | Mode::Recover { world, .. }
+            | Mode::Recovered { world, .. }
             | Mode::BackupBeforeUpgrade { world, .. } => {
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
