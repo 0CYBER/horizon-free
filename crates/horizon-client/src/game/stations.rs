@@ -2189,6 +2189,11 @@ impl Game<'_> {
                 ));
             }
         }
+        // Native mods last, as Fabric's `ItemTooltipCallback` follows
+        // `getTooltipLines`; a tooltip the stack hides stays hidden.
+        if !nested && !lines.is_empty() {
+            self.native_tooltip(stack, &mut lines);
+        }
         lines
     }
     /// Menu state for the control socket.

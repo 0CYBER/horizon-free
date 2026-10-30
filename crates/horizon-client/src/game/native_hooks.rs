@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 4 adds item tooltips (`native_tooltip`).
+//!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
@@ -28,6 +30,7 @@ use horizon_client::{
     extras::Corner,
     extras_hud::Corners,
     hud::{HudBatch, rgba},
+    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
     text::Text,
@@ -38,7 +41,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 3;
+pub(crate) const NATIVE_HOOKS_API: u32 = 4;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -333,6 +336,16 @@ impl Game<'_> {
     /// act on it when it is yours. API 2.
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
+    }
+    /// An item's tooltip, wherever the game shows one (slots, the creative
+    /// tabs, the recipe book, chat's hover): the stack, with its components
+    /// (`stack.data()`: a shulker box's contents...), and its lines, the name
+    /// first, each with a colour as `rgba` packs it (`u32::MAX` keeps the
+    /// text's own). Add, change or take out lines; `Text::legacy` reads `§`
+    /// codes. Asked each frame the tooltip shows, never for one the stack
+    /// hides. API 4.
+    pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
+        let _ = (stack, lines);
     }
 }
 

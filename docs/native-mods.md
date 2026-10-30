@@ -42,6 +42,10 @@ mod shows one.
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
+API 4 adds item tooltips through `native_tooltip`: the hovered stack, with its components, and its tooltip's
+lines, which a mod can add to, change or take out of, wherever the game shows an item's tooltip. Bundles that use it
+need `"hooks": 4`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

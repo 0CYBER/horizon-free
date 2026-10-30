@@ -64,6 +64,11 @@
       "name": "panel_event",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
+    },
+    {
+      "name": "tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
     }
   ]
 }
