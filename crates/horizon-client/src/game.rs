@@ -5837,6 +5837,14 @@ impl Game<'_> {
         self.tick_tutorial();
         if self.screen == Screen::Creative {
             self.refresh_creative_tabs();
+            // CreativeModeInventoryScreen.containerTick: a player without
+            // infinite materials gets the survival inventory instead.
+            if !self.creative {
+                if let Some(c) = self.carried.take() {
+                    let _ = self.give(c);
+                }
+                self.screen = Screen::Inventory;
+            }
         }
         if self.remote.is_some() {
             return self.tick_remote();
