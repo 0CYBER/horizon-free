@@ -394,6 +394,46 @@ fn an_owner_plays_with_a_session() {
     assert!(accounts.selected().unwrap().skin.is_some());
 }
 
+/// A keychain that reads but refuses to keep anything new (#3249).
+struct Refusing(MemoryStore);
+impl SecretStore for Refusing {
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        self.0.get(key)
+    }
+    fn set(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("the keyring is locked".into())
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        self.0.delete(key)
+    }
+    fn persistent(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_renewed_sign_in_the_keychain_refuses_still_plays_and_says_so() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let stale = Secrets {
+        minecraft_expires_at: now() + 60,
+        ..secrets("old-token", true)
+    };
+    let mut accounts = signed_in(&store, &stale);
+    let refusing = Refusing(store);
+    let pass = launch(&ep, Some("test-client"), &refusing, &mut accounts).unwrap();
+    assert_eq!(pass.session.unwrap().1.minecraft_token, "mc-token");
+    let said = "Notch's renewed sign-in couldn't be saved in the keychain (the keyring is \
+                locked): you may have to sign in again next time.";
+    assert_eq!(pass.unsaved.as_deref(), Some(said));
+    assert_eq!(take_unsaved().as_deref(), Some(said));
+    assert_eq!(take_unsaved(), None, "said once");
+    // Nothing to save, nothing to say.
+    let mut accounts = signed_in(&refusing.0, &secrets("mc-token", true));
+    let pass = launch(&ep, Some("test-client"), &refusing, &mut accounts).unwrap();
+    assert!(pass.unsaved.is_none());
+}
+
 #[test]
 fn a_no_from_the_services_blocks_at_once() {
     let (_, ep) = mock(|m| m.owns_game = false);
@@ -632,7 +672,6 @@ fn system_keychain_keeps_long_secrets() {
     assert_eq!(SystemStore.get(key).unwrap(), None);
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn long_secrets_split_into_keychain_sized_pieces() {
     // Mixed 1-, 2- and 4-byte characters, so the cuts land inside some of them.
@@ -645,6 +684,72 @@ fn long_secrets_split_into_keychain_sized_pieces() {
         assert!(piece.encode_utf16().count() * 2 <= 2560);
     }
     assert_eq!(split_secret("short"), vec!["short"]);
+}
+
+/// Keychain items in memory; writes fail once `room` items are kept, as a full Credential Manager
+/// refuses new items while it still overwrites the ones it has.
+struct FullItems {
+    items: Mutex<HashMap<String, String>>,
+    room: usize,
+}
+impl Items for FullItems {
+    fn read(&self, key: &str) -> Result<Option<String>, String> {
+        Ok(self.items.lock().unwrap().get(key).cloned())
+    }
+    fn write(&self, key: &str, piece: &str) -> Result<(), String> {
+        let mut items = self.items.lock().unwrap();
+        if !items.contains_key(key) && items.len() >= self.room {
+            return Err(credential_manager_says(8).unwrap().into());
+        }
+        items.insert(key.into(), piece.into());
+        Ok(())
+    }
+    fn remove(&self, key: &str) -> Result<bool, String> {
+        Ok(self.items.lock().unwrap().remove(key).is_some())
+    }
+}
+
+#[test]
+fn a_secret_the_keychain_cant_finish_keeps_the_old_one() {
+    let items = FullItems {
+        items: Mutex::default(),
+        room: 2,
+    };
+    let old = "o".repeat(PIECE + 1);
+    set_pieces(&items, UUID, &old).unwrap();
+    assert_eq!(get_pieces(&items, UUID).unwrap(), Some(old.clone()));
+    // A renewal three pieces long: the first two overwrite, the third finds the store full.
+    let new = "n".repeat(2 * PIECE + 1);
+    let said = set_pieces(&items, UUID, &new).unwrap_err();
+    assert_eq!(said, CREDENTIAL_MANAGER_FULL);
+    assert_eq!(get_pieces(&items, UUID).unwrap(), Some(old));
+    // A sign-in into a full store keeps nothing, and says why.
+    let full = FullItems {
+        items: Mutex::default(),
+        room: 0,
+    };
+    assert_eq!(
+        set_pieces(&full, UUID, "s").unwrap_err(),
+        CREDENTIAL_MANAGER_FULL
+    );
+    assert_eq!(get_pieces(&full, UUID).unwrap(), None);
+    // Room again: the longer secret replaces the old one whole.
+    let items = FullItems { room: 3, ..items };
+    set_pieces(&items, UUID, &new).unwrap();
+    assert_eq!(get_pieces(&items, UUID).unwrap(), Some(new));
+    set_pieces(&items, UUID, "short").unwrap();
+    assert_eq!(get_pieces(&items, UUID).unwrap(), Some("short".into()));
+    assert_eq!(items.items.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn credential_manager_error_8_says_the_store_is_full() {
+    let said = credential_manager_says(8).unwrap();
+    assert!(said.contains("Credential Manager is full"));
+    assert!(said.contains("Windows Credentials"));
+    // Other codes keep the keyring crate's own words.
+    assert_eq!(credential_manager_says(5), None);
+    assert_eq!(credential_manager_says(1312), None);
 }
 
 #[test]

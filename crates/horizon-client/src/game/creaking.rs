@@ -342,7 +342,7 @@ impl Game<'_> {
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
                     let pos = (
                         key.0 * 16 + lx,
-                        horizon_client::chunk::MIN_Y + si as i32 * 16 + ly,
+                        self.world.bottom_y() + si as i32 * 16 + ly,
                         key.1 * 16 + lz,
                     );
                     self.world

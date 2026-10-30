@@ -20,7 +20,9 @@ pub mod brain;
 pub mod breeze;
 pub mod camel;
 pub mod caravan;
+pub mod combat;
 pub mod control;
+pub mod conversion;
 pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
@@ -44,6 +46,7 @@ pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
 pub mod illusioner;
+pub mod item_break;
 pub mod keyframes;
 pub mod leash;
 pub mod living;
@@ -70,6 +73,7 @@ pub mod spawn_rules;
 pub mod spawn_selection;
 pub mod spawner;
 pub mod spawning;
+pub mod spear_use;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
@@ -325,6 +329,7 @@ pub struct Flags {
     pub water_sensitive: bool,
     pub animal: bool,
 }
+
 #[derive(Clone, Debug)]
 pub struct MobType {
     pub id: String,
@@ -409,7 +414,9 @@ impl MobTypes {
         let types: Value = serde_json::from_slice(&bytes)?;
         let exact = exact_attributes(&bytes);
         let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
-        let item_tags = crate::items::load_tags(root, "item").unwrap_or_default();
+        let item_tags =
+            crate::items::load_tags(root, "item", &horizon_world::loot::PackOverlay::NONE)
+                .unwrap_or_default();
         sulfur_cube::load_archetype_items(&item_tags);
         let tag = |name: &str| -> Arc<[String]> {
             let mut v: Vec<String> = item_tags
@@ -522,11 +529,16 @@ pub enum DamageKind {
     FallingStalactite,
     OnFire,
     InFire,
+    /// `campfire`: standing in a lit campfire (`CampfireBlock.entityInside`).
+    Campfire,
     Lava,
     Drown,
     /// `dry_out`: an axolotl out of water for too long.
     DryOut,
     Magic,
+    /// `indirect_magic`: a thrown potion's hit (`DamageSources.indirectMagic`),
+    /// which, unlike `magic`, knocks back.
+    IndirectMagic,
     Sting,
     Cactus,
     /// `sweet_berry_bush`.
@@ -539,8 +551,38 @@ pub enum DamageKind {
     Freeze,
     /// `fell_out_of_world`: below the world's floor.
     OutOfWorld,
-    /// `cramming`: too many entities in one place (`maxEntityCramming`).
+    /// `cramming`: crushed by the mobs around it.
     Cramming,
+    /// `falling_anvil`: an anvil landing on it (it damages a helmet).
+    FallingAnvil,
+    /// `fireworks`: a firework rocket's burst (an explosion for Blast Protection).
+    Fireworks,
+    /// `generic_kill`: a kill that bypasses invulnerability.
+    GenericKill,
+    /// `lightning_bolt`.
+    LightningBolt,
+    /// `outside_border`: past the world border.
+    OutsideBorder,
+    /// `spit`: a llama's spit.
+    Spit,
+    /// `stalagmite`: a fall onto a stalagmite (a fall for Feather Falling).
+    Stalagmite,
+    /// `starve`: no food left.
+    Starve,
+    /// `hot_floor`: stepping on a magma block.
+    HotFloor,
+    /// `sulfur_cube_hot`: a sulfur cube's hot floor (a fire).
+    SulfurCubeHot,
+    /// `wind_charge`: a wind charge's burst (a projectile).
+    WindCharge,
+    /// `wither`: the wither effect.
+    Wither,
+}
+impl DamageKind {
+    /// DamageTypeTags.BYPASSES_INVULNERABILITY
+    pub fn bypasses_invulnerability(self) -> bool {
+        matches!(self, DamageKind::OutOfWorld | DamageKind::GenericKill)
+    }
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -587,6 +629,16 @@ impl Damage {
             from: Some(from),
         }
     }
+    /// `DamageSources.indirectMagic(potion, owner)`: `attacker` is the owner
+    /// (none for a dispenser's potion), `from` the potion's position, which
+    /// the knockback pushes away from.
+    pub fn indirect_magic(attacker: Option<Who>, from: [f64; 3]) -> Self {
+        Self {
+            kind: DamageKind::IndirectMagic,
+            attacker,
+            from: Some(from),
+        }
+    }
     pub fn mob(id: u32, from: [f64; 3]) -> Self {
         Self {
             kind: DamageKind::MobAttack,
@@ -604,6 +656,16 @@ impl Damage {
                 | DamageKind::Generic
                 | DamageKind::InWall
                 | DamageKind::SweetBerryBush
+                | DamageKind::OutOfWorld
+                | DamageKind::FallingBlock
+                | DamageKind::FallingAnvil
+                | DamageKind::Cramming
+                | DamageKind::GenericKill
+                | DamageKind::OutsideBorder
+                | DamageKind::Spit
+                | DamageKind::Stalagmite
+                | DamageKind::Starve
+                | DamageKind::Campfire
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -614,18 +676,30 @@ impl Damage {
                 | DamageKind::OnFire
                 | DamageKind::Drown
                 | DamageKind::Magic
+                | DamageKind::IndirectMagic
                 | DamageKind::InWall
                 | DamageKind::Generic
                 | DamageKind::SonicBoom
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
                 | DamageKind::Cramming
+                | DamageKind::GenericKill
+                | DamageKind::OutsideBorder
+                | DamageKind::Stalagmite
+                | DamageKind::Starve
+                | DamageKind::Wither
         )
     }
     pub fn is_fire(&self) -> bool {
         matches!(
             self.kind,
-            DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
+            DamageKind::OnFire
+                | DamageKind::InFire
+                | DamageKind::Campfire
+                | DamageKind::HotFloor
+                | DamageKind::Lava
+                | DamageKind::Fireball
+                | DamageKind::SulfurCubeHot
         )
     }
     /// DamageTypeTags.NO_KNOCKBACK
@@ -636,6 +710,8 @@ impl Damage {
                 | DamageKind::Fall
                 | DamageKind::OnFire
                 | DamageKind::InFire
+                | DamageKind::Campfire
+                | DamageKind::HotFloor
                 | DamageKind::Lava
                 | DamageKind::Drown
                 | DamageKind::DryOut
@@ -646,13 +722,20 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::Freeze
                 | DamageKind::OutOfWorld
+                | DamageKind::LightningBolt
                 | DamageKind::Cramming
+                | DamageKind::GenericKill
+                | DamageKind::OutsideBorder
+                | DamageKind::Stalagmite
+                | DamageKind::Starve
+                | DamageKind::SulfurCubeHot
+                | DamageKind::Wither
         )
     }
     pub fn is_projectile(&self) -> bool {
         matches!(
             self.kind,
-            DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball
+            DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball | DamageKind::WindCharge
         )
     }
 }
@@ -681,18 +764,28 @@ pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
+    /// A player's or mannequin's `minecraft:scale`, which scales the whole model
+    /// (`LivingEntityRenderState.scale`): the local player's own, and on a
+    /// server the others' from their attribute updates; 0 is the default, 1.
+    pub model_scale: f32,
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
     /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
     /// sets its box (`Avatar.POSES`).
     pub avatar_pose: crate::pose::Pose,
-    /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
+    /// `Entity.isSprinting` (`Entity.DATA_SHARED_FLAGS_ID`'s flag 3): the dust a
+    /// player raises; a cat or ocelot dashing (`Cat/Ocelot.customServerAiStep`),
+    /// which `LivingEntity.setSprinting`'s speed modifier makes faster.
     pub sprinting: bool,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
     pub age: i32,
     /// `AgeLocked` (tadpoles fed a slime ball... and ageable mobs).
     pub age_locked: bool,
+    /// `AgeableMob.ageLockParticleTimer` (a tadpole's too): the ticks of
+    /// growth particles left after a golden dandelion, and the cooldown
+    /// before the next one can be used. Not saved.
+    pub age_lock_particle_timer: i32,
     /// AgeableMob.forcedAge: the age fed food added, restored as the age
     /// when it reaches 0 (`ForcedAge`).
     pub forced_age: i32,
@@ -750,6 +843,8 @@ pub struct Extra {
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
     pub main_hand: Option<Arc<str>>,
+    /// Components of the current held stack; setters clear these on replacement.
+    main_hand_stack: Option<crate::items::ItemStack>,
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     /// Worn armour below the head (humanoid mobs).
@@ -761,6 +856,10 @@ pub struct Extra {
     pub armor: [Option<crate::items::ItemStack>; 4],
     pub using_item: i32,
     pub using_off_hand: bool,
+    /// `LivingEntity.recentKineticEnemies`: when the entities this mob's
+    /// spear stabbed in the current use were stabbed (game time). It exists
+    /// only while a kinetic weapon is in use.
+    pub stabbed: Option<Vec<(Who, i64)>>,
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
@@ -779,8 +878,14 @@ pub struct Extra {
     /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
     /// for the right arm.
     pub swing_right_arm: Option<bool>,
+    /// The current swing is a STAB (`SwingAnimationType` 2): a spear's jab.
+    pub swing_stab: bool,
     pub flag: bool,
     pub flag2: bool,
+    /// `AbstractHorse.allowStandSliding`: the rider's jump sets it, and a
+    /// horse still rearing then goes on with the rider's keys until the rear
+    /// ends (`tick` clears it).
+    pub stand_sliding: bool,
     /// Species scratch values (the wither's head targets and clocks).
     pub ints: [i32; 6],
     pub counter: i32,
@@ -821,6 +926,8 @@ pub struct Extra {
     pub positions: Vec<[i32; 3]>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
+    /// An allay's vibration listener and liked note block.
+    pub allay: Option<Box<allay::State>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
@@ -863,11 +970,15 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// Whether a camel sits (`egg_time` is then the age it sat down at).
+    pub camel_sitting: bool,
     /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
     pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
+    /// The fish that follow this one (`AbstractSchoolingFish.schoolSize` - 1).
+    pub followers: i32,
     /// A breeze's or creaking's brain (`monster_brain`).
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
@@ -878,7 +989,30 @@ pub struct Extra {
     pub frog: frog::State,
     /// A panda's flags, counters and amounts.
     pub panda: Option<Box<panda::State>>,
+    /// What a piglin's or hoglin's brain remembers: its avoid target, the
+    /// adults its sensor sees and the activity it is in.
+    pub piglin: piglin::Memories,
 }
+impl Extra {
+    pub fn set_main_hand(&mut self, item: Option<Arc<str>>) {
+        self.main_hand = item;
+        self.main_hand_stack = None;
+    }
+    pub fn set_main_hand_stack(&mut self, stack: Option<crate::items::ItemStack>) {
+        self.main_hand = stack.as_ref().map(|s| s.item.clone());
+        self.main_hand_stack = stack;
+    }
+    pub fn main_hand_stack(&self) -> Option<&crate::items::ItemStack> {
+        self.main_hand_stack
+            .as_ref()
+            .filter(|s| self.main_hand.as_ref() == Some(&s.item))
+    }
+    pub fn take_main_hand(&mut self) -> Option<Arc<str>> {
+        self.main_hand_stack = None;
+        self.main_hand.take()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Mob {
     pub id: u32,
@@ -953,6 +1087,8 @@ pub struct Mob {
     pub air: i32,
     pub last_hurt: f32,
     pub last_damage: Option<(Damage, i64)>,
+    /// `LivingEntity.combatTracker`: the hits taken lately.
+    pub combat: combat::Tracker,
     /// Set by `remove`: the mob disappears without dying (conversion, despawn, pickup).
     pub removed: bool,
     /// Client-side animation clocks (attack swing, eating, shaking...).
@@ -1074,6 +1210,17 @@ pub enum MobEvent {
         mob: u32,
         partner: u32,
     },
+    /// `AbstractSchoolingFish.startFollowing` on a fish a leader recruits:
+    /// it follows the leader, whose school grows by one.
+    StartFollowing {
+        fish: u32,
+        leader: u32,
+    },
+    /// `addFollower` / `removeFollower`: a leader's school grows or shrinks.
+    SchoolSize {
+        leader: u32,
+        by: i32,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
     /// `Level.playLocalSound`: a sound the client plays for itself, never
@@ -1169,6 +1316,20 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `AbstractCubeMob.dealDamage` on a mob (an iron golem it touches): the
+    /// hit, then, only when `hurtServer` let it land, the cube's
+    /// `entity.slime.attack` with its pitch drawn from the cube's random.
+    CubeHurtMob {
+        cube: u32,
+        target: u32,
+        amount: f32,
+        source: Damage,
+    },
+    /// `LivingEntity.stabAttack`'s `target.stopRiding()`: a spear knocks the
+    /// target off its mount.
+    StabDismount {
+        target: Who,
+    },
     /// `LivingEntity.knockback(power, x, z)`: pushed away from the direction.
     Knockback {
         target: Who,
@@ -1188,6 +1349,20 @@ pub enum MobEvent {
         target: u32,
         ticks: i32,
     },
+    /// `HoglinAi.broadcastRetreat` and `PiglinAi.broadcastRetreat` for one
+    /// adult that sees the broadcaster: it retreats from `from`, standing at
+    /// `at`, or from what it already avoids or attacks if that is nearer.
+    Retreat {
+        mob: u32,
+        from: Who,
+        at: [f64; 3],
+    },
+    /// `Entity.startRiding` from a mob's brain (`Mount.create`): `rider` boards
+    /// `vehicle` if `Piglin.startRiding` and `canRide` allow it.
+    StartRiding {
+        rider: u32,
+        vehicle: u32,
+    },
     Projectile(crate::projectiles::Projectile),
     /// Spawn a new mob (breeding, slime splitting, chicken eggs...).
     Spawn(Box<Mob>),
@@ -1196,6 +1371,14 @@ pub enum MobEvent {
         kind: String,
         at: [f64; 3],
         setup: SpawnSetup,
+    },
+    /// `Mob.convertTo` with `ConversionType.SINGLE` ([`conversion::single`]):
+    /// a new mob of `kind` takes the place of `from` (already removed) and
+    /// keeps its gear, name and flags.
+    Convert {
+        from: Box<Mob>,
+        kind: &'static str,
+        params: conversion::Params,
     },
     DropItem {
         item: Arc<str>,
@@ -1249,7 +1432,8 @@ pub enum MobEvent {
         infested: bool,
         poof: Option<u32>,
     },
-    /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
+    /// `Level.destroyBlock(pos, drop)`: the block gives way to its fluid's
+    /// block (air when it has none). Sheep eating grass becomes dirt via SetBlock.
     BreakBlock {
         pos: [i32; 3],
         drop: bool,
@@ -1457,6 +1641,13 @@ pub enum MobEvent {
     PandaSneezed {
         mob: u32,
     },
+    /// `Entity.propagateFallToPassengers`: the mob landed and what rides it
+    /// (a player or a mob) takes `causeFallDamage` of the same fall.
+    FallToPassengers {
+        mob: u32,
+        distance: f64,
+        modifier: f32,
+    },
 }
 /// How a spawned-by-kind mob should be set up.
 #[derive(Clone, Debug, Default)]
@@ -1505,10 +1696,14 @@ pub struct Seen {
     pub bed: Option<[i32; 3]>,
     pub yaw: f32,
     pub velocity: Vec3,
+    /// `Entity.getKnownSpeed`: what it moved in its last tick.
+    pub known_speed: Vec3,
     /// Who holds this mob's lead.
     pub leash: Option<leash::Holder>,
     /// A llama's caravan head (its id plus one, 0 when not in a caravan).
     pub caravan: u32,
+    /// A schooling fish's leader and how many fish follow it.
+    pub school: (Option<u32>, i32),
     /// A wandering trader's despawn delay.
     pub delay: i32,
     /// `getLastHurtByMob` and its timestamp.
@@ -1519,6 +1714,8 @@ pub struct Seen {
     pub opened_chest: Option<[i32; 3]>,
     /// `isPassenger`.
     pub passenger: bool,
+    /// The vehicle it rides (`getVehicle`): a mob's or a boat's id.
+    pub vehicle: Option<u32>,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
@@ -1553,6 +1750,8 @@ pub struct Seen {
     pub effects: Vec<&'static str>,
     /// A piglin's `HUNTED_RECENTLY` memory.
     pub hunted_recently: bool,
+    /// A piglin's `HURT_BY` memory.
+    pub hurt_recently: bool,
 }
 impl Seen {
     /// `LivingEntity.hasEffect`, by id without namespace.
@@ -1579,6 +1778,23 @@ impl Mob {
             .fire_ticks
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
         self.ticks_frozen = 0;
+    }
+    /// `Entity.extinguishFire`: a burning mob first plays the extinguish sound
+    /// (`playEntityOnFireExtinguishedSound`: volume 0.7, pitch from two draws
+    /// of its random, at its feet), then `clearFire` keeps only the
+    /// fire-immune countdown.
+    pub fn extinguish_fire(&mut self) {
+        if self.is_on_fire() {
+            let pitch = 1.6 + (self.random.next_float() - self.random.next_float()) * 0.4;
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox.push(MobEvent::Sound(
+                "entity.generic.extinguish_fire",
+                at,
+                0.7,
+                pitch,
+            ));
+        }
+        self.fire_ticks = self.fire_ticks.min(0);
     }
     /// `Entity.isFullyFrozen`.
     pub fn is_fully_frozen(&self) -> bool {
@@ -1619,13 +1835,16 @@ impl Mob {
             bed: villager.then_some(m.extra.bed).flatten(),
             yaw: m.yaw,
             velocity: m.velocity,
+            known_speed: m.position.subtract(m.previous),
             leash: m.extra.leash,
             caravan: caravan::head_of(m),
+            school: (m.extra.leader, m.extra.followers),
             delay: m.extra.ints[5],
             hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
             active_raid: raider::has_active_raid(m),
             opened_chest: m.extra.opened_chest,
             passenger: m.extra.mount.is_some(),
+            vehicle: m.extra.mount,
             player_rep: match (villager, player) {
                 (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
                 _ => 0,
@@ -1655,6 +1874,7 @@ impl Mob {
                 .map(|e| e.0.trim_start_matches("minecraft:"))
                 .collect(),
             hunted_recently: m.species() == Species::Piglin && m.extra.ints[0] > 0,
+            hurt_recently: m.species() == Species::Piglin && m.extra.piglin.hurt,
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1755,6 +1975,26 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
                     villager_brain::lock_gaze_half(m, Who::Mob(partner));
+                }
+                events.remove(i);
+            }
+            MobEvent::Retreat { mob, from, at } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    piglin::receive_retreat(m, from, at);
+                }
+                events.remove(i);
+            }
+            MobEvent::StartRiding { rider, vehicle } => {
+                riders::start_riding(mobs, rider, vehicle);
+                events.remove(i);
+            }
+            MobEvent::StartFollowing { fish, leader } => {
+                aquatic::start_following(mobs, fish, leader);
+                events.remove(i);
+            }
+            MobEvent::SchoolSize { leader, by } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == leader) {
+                    m.extra.followers += by;
                 }
                 events.remove(i);
             }
@@ -1966,6 +2206,7 @@ impl Mob {
             air: 300,
             last_hurt: 0.0,
             last_damage: None,
+            combat: combat::Tracker::default(),
             removed: false,
             custom_name: None,
             custom_name_text: None,
@@ -2034,6 +2275,17 @@ impl Mob {
             ),
         )
     }
+    /// `CombatTracker.recordDamage`: a hit that took `damage` health, with
+    /// the fall it ends.
+    pub fn record_damage(&mut self, source: Damage, damage: f32) {
+        let entry = combat::Entry {
+            source,
+            damage,
+            in_water: self.fluids.in_water,
+            fall_distance: self.fall_distance as f32,
+        };
+        self.combat.record(entry, self.age);
+    }
     pub fn alive(&self) -> bool {
         self.health > 0.0
     }
@@ -2098,7 +2350,11 @@ impl Mob {
     ) -> bool {
         axolotl::before_damage(self, amount, &source);
         raider::note_hurt(self);
-        if !self.alive() || self.removed || self.invulnerable_flag {
+        // LivingEntity.isInvulnerableTo: only #bypasses_invulnerability gets past it.
+        if !self.alive()
+            || self.removed
+            || (self.invulnerable_flag && !source.kind.bypasses_invulnerability())
+        {
             return false;
         }
         // Ghast.isReflectedFireball: a fireball a player turned back is
@@ -2112,13 +2368,16 @@ impl Mob {
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
+        // IronGolem.hurtServer: the crack level before the damage, compared after.
+        let crackiness = (self.species() == Species::IronGolem).then(|| golem::crackiness(self));
         let mut amount = if reflected { 1000.0 } else { amount };
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
+        // #damages_helmet: falling anvils, blocks and stalactites.
         if matches!(
             source.kind,
-            DamageKind::FallingBlock | DamageKind::FallingStalactite
+            DamageKind::FallingBlock | DamageKind::FallingAnvil | DamageKind::FallingStalactite
         ) && !species::body_slot(self.species())
             && self.extra.head.is_some()
         {
@@ -2163,7 +2422,10 @@ impl Mob {
                 amount = 0.0;
             } else if matches!(
                 source.kind,
-                DamageKind::Magic | DamageKind::SonicBoom | DamageKind::Thorns
+                DamageKind::Magic
+                    | DamageKind::IndirectMagic
+                    | DamageKind::SonicBoom
+                    | DamageKind::Thorns
             ) {
                 amount *= 0.15;
             }
@@ -2171,7 +2433,7 @@ impl Mob {
         // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
         let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
-        if self.invulnerable as f32 > 10.0 {
+        let dealt = if self.invulnerable as f32 > 10.0 {
             if amount <= self.last_hurt {
                 return false;
             }
@@ -2183,6 +2445,7 @@ impl Mob {
             }
             self.last_hurt = amount;
             knock = false;
+            dealt
         } else {
             self.last_hurt = amount;
             self.invulnerable = 20;
@@ -2192,6 +2455,13 @@ impl Mob {
                 self.health -= amount;
             }
             self.hurt_time = 10;
+            amount
+        };
+        // LivingEntity.actuallyHurt: a hit that reaches the health is
+        // recorded (`CombatTracker.recordDamage`), with the fall it ends;
+        // Wolf.actuallyHurt keeps a hit its armor takes out of it.
+        if !absorbed && dealt != 0.0 {
+            self.record_damage(source, dealt);
         }
         // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
         if drops::is_animal(self.species()) {
@@ -2239,6 +2509,15 @@ impl Mob {
                 }
             }
         }
+        // IronGolem.hurtServer: a new crack level plays the damage sound.
+        if let Some(before) = crackiness
+            && before != golem::crackiness(self)
+            && !self.silent
+        {
+            let at = [self.position.x, self.position.y, self.position.z];
+            self.outbox
+                .push(MobEvent::Sound("entity.iron_golem.damage", at, 1.0, 1.0));
+        }
         if self.has_effect("minecraft:infested") {
             self.outbox.push(MobEvent::Infested { mob: self.id });
         }
@@ -2247,6 +2526,13 @@ impl Mob {
             && self.ai.last_hurt_by.is_some()
         {
             aquatic::spawn_ink(self);
+        }
+        // AbstractHorse.hurtServer: the rear roll after the hurt.
+        if equine::is_equine(self.species()) {
+            equine::after_hurt_server(self);
+        }
+        if self.species() == Species::GlowSquid {
+            aquatic::hurt_server(self);
         }
         true
     }
@@ -2269,11 +2555,16 @@ impl Mob {
                 source.kind,
                 DamageKind::Drown
                     | DamageKind::Magic
+                    | DamageKind::IndirectMagic
                     | DamageKind::InWall
                     | DamageKind::Thorns
                     | DamageKind::OutOfWorld
                     | DamageKind::Cramming
                     | DamageKind::Generic
+                    | DamageKind::GenericKill
+                    | DamageKind::OutsideBorder
+                    | DamageKind::Starve
+                    | DamageKind::Wither
             )
     }
     /// `Wolf.actuallyHurt`: the armor loses `ceil(damage)` durability, cracks
@@ -2301,7 +2592,11 @@ impl Mob {
         }
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
+    /// `Creaking.knockback`: a creaking that cannot move is not shoved.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
+        if creaking::is_creaking(self) && !creaking::can_move(self) {
+            return;
+        }
         let power = power * (1.0 - self.attrs.knockback_resistance);
         if power <= 0.0 {
             return;
@@ -2330,6 +2625,9 @@ impl Mob {
         level_random: &mut LegacyRandom,
         events: &mut Vec<MobEvent>,
     ) -> bool {
+        // LivingEntity.tick: CombatTracker.recheckStatus.
+        let alive = self.alive();
+        self.combat.recheck(alive, self.age);
         ai::tick(self, w, level_random, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {
@@ -2352,6 +2650,10 @@ impl Mob {
             self,
             witch::speed(self, self.attrs.speed) + enderman::attacking_speed(self),
         ) * self.speed_bonus();
+        // LivingEntity.SPEED_MODIFIER_SPRINTING: 0.3F, ADD_MULTIPLIED_TOTAL.
+        if self.extra.sprinting {
+            v *= 1.0 + f64::from(0.3f32);
+        }
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
@@ -2375,6 +2677,7 @@ impl Mob {
         self.invisible || self.has_effect("minecraft:invisibility")
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
+        let effect = horizon_client_core::potions::namespaced(effect);
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
             // MobEffectInstance.update: a stronger effect replaces with its
             // own duration, an equal one only extends it; a weaker one is
@@ -2537,7 +2840,12 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
-                    glint_uv: [0.0, 0.0],
+                    // The armour glint scrolls the model UV in the shader.
+                    glint_uv: if overlay == render::ARMOR_GLINT {
+                        [v[3], v[4]]
+                    } else {
+                        [0.0, 0.0]
+                    },
                 });
             }
         }
@@ -2688,6 +2996,12 @@ pub struct ElytraAnimation {
     pub angles: [f32; 3],
 }
 impl ElytraAnimation {
+    /// The angles `ElytraAnimationState` eases to when not gliding or crouching.
+    pub const RESTING: [f32; 3] = [
+        std::f32::consts::PI / 12.0,
+        0.0,
+        -std::f32::consts::PI / 12.0,
+    ];
     pub fn tick(&mut self, flying: bool, crouching: bool, velocity: horizon_core::geometry::Vec3) {
         use std::f32::consts::PI;
         self.old = self.angles;
@@ -2708,7 +3022,7 @@ impl ElytraAnimation {
         } else if crouching {
             [PI * 2.0 / 9.0, 0.08726646, -PI / 4.0]
         } else {
-            [PI / 12.0, 0.0, -PI / 12.0]
+            Self::RESTING
         };
         for (angle, target) in self.angles.iter_mut().zip(target) {
             *angle += (target - *angle) * 0.3;
@@ -2798,6 +3112,18 @@ mod elytra_tests {
             wings.tick(false, true, Vec3::ZERO);
         }
         assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
+    }
+    /// An armour stand never glides or crouches: its wings stay at the angles
+    /// a standing wearer eases to.
+    #[test]
+    fn resting_wings_are_the_standing_target() {
+        let mut wings = ElytraAnimation::default();
+        for _ in 0..80 {
+            wings.tick(false, false, Vec3::ZERO);
+        }
+        for (angle, resting) in wings.angles.iter().zip(ElytraAnimation::RESTING) {
+            assert!((angle - resting).abs() < 0.00001);
+        }
     }
 }
 #[cfg(test)]
@@ -3252,5 +3578,28 @@ mod push_tests {
             let after = t.elapsed().as_secs_f64() * 1e3;
             println!("{n} mobs pushing each other: {before:.3} ms -> {after:.3} ms");
         }
+    }
+}
+
+#[cfg(test)]
+mod held_stack_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_even_the_same_item_clears_its_old_components() {
+        let mut extra = Extra::default();
+        let mut named = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
+        named.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
+        extra.set_main_hand_stack(Some(named.clone()));
+        assert_eq!(
+            extra.main_hand_stack().unwrap().custom_name().as_deref(),
+            Some("Old Sword")
+        );
+        extra.set_main_hand(Some(named.item.clone()));
+        assert!(extra.main_hand_stack().is_none());
+        extra.set_main_hand_stack(Some(named));
+        extra.take_main_hand();
+        assert!(extra.main_hand.is_none());
+        assert!(extra.main_hand_stack().is_none());
     }
 }

@@ -286,8 +286,9 @@ pub struct Menu {
     /// Sounds the player makes (a bundle's insert and remove), for the
     /// caller to play at the player as `Entity.playSound`.
     pub player_sounds: Vec<&'static str>,
-    /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
-    pub crafted: Vec<String>,
+    /// Recipes whose result was taken (`awardUsedRecipes`) and the stacks that
+    /// went into each, for the caller.
+    pub crafted: Vec<(String, Vec<Option<ItemStack>>)>,
     /// Potions taken from a brewing stand's bottle slots
     /// (`PotionSlot.onTake`), for the caller.
     pub brewed: Vec<ItemStack>,
@@ -1072,7 +1073,8 @@ impl Menu {
             return false;
         }
         if let Some(result) = self.containers[RESULT][0].as_mut() {
-            result.data_mut().custom_name = (!name.trim().is_empty()).then(|| name.clone());
+            result.data_mut().custom_name = (!name.trim().is_empty())
+                .then(|| horizon_world::nbt::Tag::String(name.as_str().into()));
             result.tidy();
         }
         self.anvil.name = Some(name);
@@ -1333,6 +1335,61 @@ impl Menu {
         }
     }
 
+    /// A result slot (`FurnaceResultSlot`, `ResultSlot`): nothing goes in, and
+    /// what's taken from it can't be put back.
+    pub fn is_result(&self, s: usize) -> bool {
+        matches!(self.slots[s].role, Role::Output | Role::CraftResult)
+    }
+
+    /// Slot `s` takes one more item of `stack` (`Slot.mayPlace`, and room).
+    pub fn takes_one(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
+        self.may_place(env, s, stack)
+            && self.slot(s).is_none_or(|have| {
+                have.same_item_same_components(stack) && have.count < self.slot_max(env, s, have)
+            })
+    }
+
+    /// The slots `quickMoveStack` would put slot `index`'s items in: one item
+    /// of a plain slot, the whole of a result slot, partial stacks first. Empty
+    /// when they don't all fit. This runs the move, so call it on a menu that
+    /// is thrown away afterwards.
+    pub fn quick_move_landing(&mut self, env: &Env, index: usize) -> Vec<usize> {
+        let Some(mut stack) = self.slot(index).cloned() else {
+            return Vec::new();
+        };
+        if !self.is_result(index) {
+            stack.count = 1;
+            let slot = self.slots[index];
+            self.containers[slot.container][slot.index] = Some(stack.clone());
+        }
+        let before: Vec<Option<ItemStack>> = (0..self.slots.len())
+            .map(|i| self.slot(i).cloned())
+            .collect();
+        self.quick_move(env, index);
+        let (mut partial, mut empty) = (Vec::new(), Vec::new());
+        let mut moved = 0;
+        for i in (0..self.slots.len()).filter(|&i| i != index && !self.is_result(i)) {
+            let had = before[i].as_ref().map_or(0, |b| b.count);
+            let got = self
+                .slot(i)
+                .filter(|now| now.same_item_same_components(&stack))
+                .map_or(0, |now| now.count.saturating_sub(had));
+            if got > 0 {
+                moved += got;
+                if had > 0 {
+                    partial.push(i);
+                } else {
+                    empty.push(i);
+                }
+            }
+        }
+        if moved < stack.count {
+            return Vec::new();
+        }
+        partial.extend(empty);
+        partial
+    }
+
     /// `Slot.getMaxStackSize(stack)`.
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
@@ -1527,8 +1584,10 @@ impl Menu {
             // StonecutterMenu's result onTake: awardUsedRecipes, one input
             // used up, the result again for the selected recipe.
             if let Some(r) = self.stone.used {
-                self.crafted
-                    .push(env.station_recipes.stonecutting[r].id.clone());
+                self.crafted.push((
+                    env.station_recipes.stonecutting[r].id.clone(),
+                    vec![self.containers[MAIN][0].clone()],
+                ));
             }
             if self.remove(env, 0, 1).is_some() {
                 self.stone_setup_result(env, self.data[0]);
@@ -1554,6 +1613,17 @@ impl Menu {
         }
         if self.slots[s].role == Role::CombineResult {
             // SmithingMenu.onTake: awardUsedRecipes, then one of each input.
+            if self.kind == Kind::Smithing {
+                let inputs = [0, 1, 2].map(|i| self.containers[MAIN][i].clone());
+                if let Some((id, _)) = env.station_recipes.smithing_recipe(
+                    env.enchantments,
+                    inputs[0].as_ref(),
+                    inputs[1].as_ref(),
+                    inputs[2].as_ref(),
+                ) {
+                    self.crafted.push((id.to_owned(), inputs.to_vec()));
+                }
+            }
             for i in 0..3 {
                 if let Some(mut stack) = self.containers[MAIN][i].clone() {
                     stack.count -= 1;
@@ -1595,7 +1665,7 @@ impl Menu {
         let n = self.grid_size;
         let grid = self.containers[GRID].clone();
         if let Some((id, _)) = env.recipes.find(&grid, n) {
-            self.crafted.push(format!("minecraft:{id}"));
+            self.crafted.push((format!("minecraft:{id}"), grid.clone()));
         }
         let remaining = env
             .recipes
@@ -3008,6 +3078,7 @@ impl Menu {
 pub(crate) mod tests {
     use super::*;
     use crate::{banner::Banners, brewing::Brewing, crafting::Recipes};
+    use horizon_world::loot::PackOverlay;
 
     fn stack(item: &str, count: u32) -> Option<ItemStack> {
         Some(ItemStack {
@@ -3037,11 +3108,12 @@ pub(crate) mod tests {
         if !root.join("items.json").exists() {
             return;
         }
-        let items = Items::catalog(&root).unwrap();
-        let recipes = Recipes::load(&root, &items).unwrap();
-        let brewing = Brewing::load(&root, &items);
+        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
         let banners = Banners::load(&root);
-        let station_recipes = crate::stations::StationRecipes::load(&root, &items);
+        let station_recipes =
+            crate::stations::StationRecipes::load(&root, &items, &PackOverlay::NONE);
         let enchantments = crate::enchant::Enchantments::default();
         let names = crate::creative::Names::default();
         let env = Env {
@@ -3058,6 +3130,118 @@ pub(crate) mod tests {
         let mut menu = Menu::new(kind);
         menu.creative = true;
         test(&env, &mut menu);
+    }
+
+    /// The Mouse Tweaks wheel's targets: vanilla's routing of one item.
+    #[test]
+    fn quick_move_landing_routes_a_furnace_like_vanilla() {
+        with_menu(Kind::Furnace("smelting"), |env, menu| {
+            menu.creative = false;
+            // 0 input, 1 fuel, 2 output, 3..30 inventory, 30..39 hotbar.
+            let mut landing = |item, count, from| {
+                menu.set_slot(env, from, stack(item, count));
+                let to = menu.quick_move_landing(env, from);
+                menu.set_slot(env, from, None);
+                for &t in &to {
+                    menu.set_slot(env, t, None);
+                }
+                to
+            };
+            assert_eq!(landing("raw_iron", 5, 30), [0]);
+            assert_eq!(landing("coal", 5, 30), [1]);
+            // Neither: between the hotbar and the inventory, as a shift-click.
+            assert_eq!(landing("dirt", 5, 30), [3]);
+            assert_eq!(landing("dirt", 5, 3), [30]);
+            // Out of the fuel slot: moveItemStackTo(3, 39, false).
+            assert_eq!(landing("coal", 5, 1), [3]);
+        });
+    }
+
+    #[test]
+    fn quick_move_landing_never_fills_a_result() {
+        with_menu(Kind::Furnace("smelting"), |env, menu| {
+            menu.creative = false;
+            menu.set_slot(env, 2, stack("iron_ingot", 5));
+            menu.set_slot(env, 30, stack("iron_ingot", 5));
+            // An ingot with room in the output still goes elsewhere.
+            assert_eq!(menu.quick_move_landing(env, 30), [3]);
+            assert_eq!(menu.slot(2).map(|s| s.count), Some(5));
+        });
+        with_menu(Kind::Furnace("smelting"), |env, menu| {
+            menu.creative = false;
+            // The whole output moves: into the partial stack, then an empty slot.
+            menu.set_slot(env, 2, stack("iron_ingot", 5));
+            menu.set_slot(env, 20, stack("iron_ingot", 62));
+            assert_eq!(menu.quick_move_landing(env, 2), [20, 38]);
+        });
+        with_menu(Kind::Furnace("smelting"), |env, menu| {
+            menu.creative = false;
+            // A full inventory: the output stays, nothing to land on.
+            menu.set_slot(env, 2, stack("iron_ingot", 5));
+            for i in 3..39 {
+                menu.set_slot(env, i, stack("stone", 64));
+            }
+            assert!(menu.quick_move_landing(env, 2).is_empty());
+        });
+    }
+
+    #[test]
+    fn quick_move_landing_routes_a_crafting_table_like_vanilla() {
+        with_menu(Kind::Crafting, |env, menu| {
+            menu.creative = false;
+            // 0 result, 1..10 grid, 10..37 inventory, 37..46 hotbar.
+            menu.set_slot(env, 37, stack("oak_log", 2));
+            assert_eq!(menu.quick_move_landing(env, 37), [1]);
+        });
+        with_menu(Kind::Crafting, |env, menu| {
+            menu.creative = false;
+            menu.set_slot(env, 1, stack("oak_log", 1));
+            menu.settle(env);
+            assert_eq!(menu.slot(0).map(|s| s.count), Some(4));
+            assert_eq!(menu.quick_move_landing(env, 0), [45]);
+        });
+    }
+
+    #[test]
+    fn quick_move_landing_routes_plain_containers() {
+        for (kind, size) in [
+            (Kind::Hopper, 5),
+            (Kind::Dispenser, 9),
+            (Kind::Chest(3), 27),
+        ] {
+            with_menu(kind, |env, menu| {
+                menu.creative = false;
+                let hotbar = size + 27;
+                menu.set_slot(env, hotbar, stack("stone", 3));
+                assert_eq!(menu.quick_move_landing(env, hotbar), [0]);
+            });
+            with_menu(kind, |env, menu| {
+                menu.creative = false;
+                menu.set_slot(env, 0, stack("stone", 3));
+                assert_eq!(menu.quick_move_landing(env, 0), [size + 35]);
+            });
+        }
+    }
+
+    #[test]
+    fn takes_one_follows_the_slots_rules() {
+        with_menu(Kind::Furnace("smelting"), |env, menu| {
+            menu.creative = false;
+            let (coal, cobble) = (stack("coal", 1).unwrap(), stack("cobblestone", 1).unwrap());
+            let bucket = stack("bucket", 1).unwrap();
+            assert!(menu.takes_one(env, 0, &cobble), "the input takes anything");
+            assert!(menu.takes_one(env, 1, &coal));
+            assert!(!menu.takes_one(env, 1, &cobble), "not fuel");
+            assert!(!menu.takes_one(env, 2, &coal), "the output");
+            menu.set_slot(env, 1, Some(bucket.clone()));
+            assert!(
+                !menu.takes_one(env, 1, &bucket),
+                "one bucket in the fuel slot"
+            );
+            menu.set_slot(env, 1, stack("coal", 1));
+            assert!(!menu.takes_one(env, 1, &bucket), "another item");
+            assert!(menu.takes_one(env, 1, &coal));
+        });
     }
 
     /// `HorseInventoryMenu`: a shift-click wears horse armour, then saddles,

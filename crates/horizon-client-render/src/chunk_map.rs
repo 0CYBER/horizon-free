@@ -82,6 +82,9 @@ impl crate::light::LightWorld for ChunkMap {
     fn set_section_light(&mut self, cx: i32, s: usize, cz: i32, light: crate::chunk::Light) {
         self.columns.set_section_light(cx, s, cz, light);
     }
+    fn layout(&self) -> crate::chunk::ColumnLayout {
+        self.columns.layout()
+    }
 }
 
 #[cfg(test)]

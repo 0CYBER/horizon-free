@@ -19,6 +19,7 @@ use horizon_client::{
 };
 use horizon_core::{geometry::Axis, random::LegacyRandom};
 use horizon_world::chunk::BlockState;
+use horizon_world::loot::PackOverlay;
 use serde_json::{Map, Value, json};
 use std::{collections::BTreeMap, fs, path::Path};
 
@@ -78,9 +79,9 @@ fn main() -> Result<()> {
     let assets = Assets::load(&root).map_err(step("assets"))?;
     let registry = assets.registry;
     let facts = BlockFacts::load(&root, registry).map_err(step("block facts"))?;
-    let items = Items::load(&root, registry, &facts).map_err(step("items"))?;
-    let recipes = Recipes::load(&root, &items).map_err(step("recipes"))?;
-    let stations = StationRecipes::load(&root, &items);
+    let items = Items::load(&root, registry, &facts, &PackOverlay::NONE).map_err(step("items"))?;
+    let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).map_err(step("recipes"))?;
+    let stations = StationRecipes::load(&root, &items, &PackOverlay::NONE);
     let enchantments = Enchantments::load(&root);
     let collisions =
         horizon_client::collisions::load(&root, registry).map_err(step("collisions"))?;

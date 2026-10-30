@@ -82,6 +82,139 @@ fn tags_merge_without_repeats() {
     );
 }
 
+/// Registry IDs and state IDs must not depend on package discovery order.
+#[test]
+fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-order-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join("facts.json"),
+        r#"{"states": [["minecraft:iron_block"], ["minecraft:iron_block"], ["minecraft:stone"]],
+            "defaults": {"minecraft:iron_block": 0, "minecraft:stone": 2}}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("gameplay-facts.json"),
+        r#"{"states": [{"item":"minecraft:iron_block"}, {"item":"minecraft:iron_block"},
+            {"item":"minecraft:stone"}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("items.json"),
+        r#"{"minecraft:stone": {}, "minecraft:iron_block": {}}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("registries.json"),
+        r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
+            "minecraft:iron_block":{"protocol_id":9}}},
+            "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
+            "minecraft:iron_block":{"protocol_id":11}}}}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(base.join("assets/minecraft/blockstates")).unwrap();
+    fs::write(
+        base.join("assets/minecraft/blockstates/iron_block.json"),
+        "{}",
+    )
+    .unwrap();
+    fs::write(base.join("assets/minecraft/blockstates/stone.json"), "{}").unwrap();
+    let ruby = folder_mod(
+        &scratch.join("ruby"),
+        &[
+            ("horizon-mod.toml", &manifest("ruby", "")),
+            (
+                "data/ruby/horizon/block/zblock.json",
+                r#"{"template":"minecraft:stone"}"#,
+            ),
+            (
+                "data/ruby/horizon/item/aitem.json",
+                r#"{"template":"minecraft:stone"}"#,
+            ),
+        ],
+    );
+    let alpha = folder_mod(
+        &scratch.join("alpha"),
+        &[
+            ("horizon-mod.toml", &manifest("alpha", "")),
+            (
+                "data/alpha/horizon/block/zblock.json",
+                r#"{"template":"minecraft:iron_block"}"#,
+            ),
+            (
+                "data/alpha/horizon/item/aitem.json",
+                r#"{"template":"minecraft:stone"}"#,
+            ),
+        ],
+    );
+    let mut mods = vec![ruby, alpha];
+    for index in 0..2 {
+        let plan = Plan::new(&base, &mods).unwrap();
+        let blocks: Vec<_> = plan
+            .blocks
+            .iter()
+            .map(|block| {
+                (
+                    block.decl.id.as_str(),
+                    block.rename.first,
+                    block.rename.states.len(),
+                )
+            })
+            .collect();
+        assert_eq!(blocks, [("alpha:zblock", 3, 2), ("ruby:zblock", 5, 1)]);
+        let items: Vec<_> = plan
+            .items
+            .iter()
+            .map(|item| item.rename.to.as_str())
+            .collect();
+        assert_eq!(
+            items,
+            ["alpha:aitem", "alpha:zblock", "ruby:aitem", "ruby:zblock"]
+        );
+
+        // Exercise the same registry rewrite the game and server read.
+        let mut registry: J = serde_json::from_str(
+            r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
+                "minecraft:iron_block":{"protocol_id":9}}},
+                "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
+                "minecraft:iron_block":{"protocol_id":11}}}}"#,
+        )
+        .unwrap();
+        plan.json("registries.json", &mut registry).unwrap();
+        let registry: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&registry).unwrap()).unwrap();
+        let id = |kind: &str, name: &str| {
+            registry[kind]["entries"][name]["protocol_id"]
+                .as_u64()
+                .unwrap()
+        };
+        assert_eq!(id("minecraft:item", "minecraft:stone"), 4);
+        assert_eq!(id("minecraft:item", "minecraft:iron_block"), 9);
+        assert_eq!(id("minecraft:item", "alpha:aitem"), 10);
+        assert_eq!(id("minecraft:item", "alpha:zblock"), 11);
+        assert_eq!(id("minecraft:item", "ruby:aitem"), 12);
+        assert_eq!(id("minecraft:item", "ruby:zblock"), 13);
+        assert_eq!(id("minecraft:block", "minecraft:stone"), 7);
+        assert_eq!(id("minecraft:block", "minecraft:iron_block"), 11);
+        assert_eq!(id("minecraft:block", "alpha:zblock"), 12);
+        assert_eq!(id("minecraft:block", "ruby:zblock"), 13);
+        drop(plan);
+
+        let output = scratch.join(format!("output-{index}"));
+        build(&base, &mods, &output).unwrap();
+        let built: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("registries.json")).unwrap()).unwrap();
+        assert_eq!(
+            built, registry,
+            "the built root must use the tested allocation"
+        );
+        mods.reverse();
+    }
+    fs::remove_dir_all(scratch).unwrap();
+}
+
 fn prepared() -> Option<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     [
@@ -289,7 +422,7 @@ fn content_root_loads_with_every_table() {
     assert_eq!(facts.get(iron).hardness, a.hardness);
     assert_eq!(&*facts.get(iron).name, "minecraft:iron_block");
 
-    let items = Items::load(&root, new, &facts).unwrap();
+    let items = Items::load(&root, new, &facts, &PackOverlay::NONE).unwrap();
     let ruby_block = &items.items["ruby:ruby_block"];
     assert_eq!(ruby_block.block, Some(ruby));
     let gem = &items.items["ruby:ruby"];
@@ -398,6 +531,7 @@ fn no_content_keeps_the_base_root() {
     );
 }
 
+use horizon_world::loot::PackOverlay;
 use horizon_world::registry::BlockStateId;
 
 #[test]
@@ -725,6 +859,24 @@ fn content_root_carries_a_structure_mod() {
         assert_eq!(entries(&ours[id]), expected, "{id}");
         assert!(!ours.keys().any(|k| k.starts_with("huts:added/")), "{name}");
         assert!(!ours.contains_key("othermod:houses"));
+    }
+
+    // The commands suggest the mod's structure, set and pool.
+    let registries: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("command-registries.json")).unwrap()).unwrap();
+    for (registry, id) in [
+        ("minecraft:worldgen/structure", "huts:hut"),
+        ("minecraft:worldgen/structure_set", "huts:huts"),
+        ("minecraft:worldgen/template_pool", "huts:hut/start"),
+    ] {
+        let ids = registries["by_registry"][registry]["ids"]
+            .as_array()
+            .unwrap();
+        assert!(ids.iter().any(|v| v == id), "{registry} lacks {id}");
+        assert!(
+            ids.iter()
+                .any(|v| v.as_str().unwrap().starts_with("minecraft:"))
+        );
     }
 
     let assets = Assets::load(&root).unwrap();

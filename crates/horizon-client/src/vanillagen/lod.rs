@@ -235,8 +235,11 @@ fn decorated_region(
 fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Column; 256]> {
     let states = chunk.data().block_states();
     let registry = chunk.data().registry();
-    let min = chunk.terrain.min_y().max(MIN_Y);
-    let max = (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT);
+    // The level's range, all of it inside its column; the column's bottom
+    // stands for "no surface".
+    let (min, height) = (chunk.terrain.min_y(), chunk.terrain.height());
+    let max = min + height;
+    let bottom = crate::chunk::ColumnLayout::of_level(min, height).min_y();
     Arc::new(std::array::from_fn(|index| {
         let x = (index & 15) as i32;
         let z = (index >> 4) as i32;
@@ -277,7 +280,7 @@ fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Colum
             });
             if fluid {
                 let surface = column.surface.get_or_insert(Surface {
-                    height: MIN_Y,
+                    height: bottom,
                     state: BlockStateId(0),
                     water: None,
                     biome,
@@ -305,6 +308,8 @@ pub(super) struct VanillaLodSampler {
     cache: FxHashMap<(i32, i32), Arc<[Column; 256]>>,
     order: VecDeque<(i32, i32)>,
     details: Vec<LodDetail>,
+    /// Reduced far detail: `lod_grid` approximates wide cells.
+    approximate: bool,
 }
 impl VanillaLodSampler {
     pub(super) fn new(generator: Arc<VanillaTerrain>) -> Self {
@@ -325,6 +330,7 @@ impl VanillaLodSampler {
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
+            approximate: false,
         }
     }
 }
@@ -339,7 +345,11 @@ impl LodSampler for VanillaLodSampler {
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
+            approximate: self.approximate,
         }))
+    }
+    fn set_approximate(&mut self, approximate: bool) {
+        self.approximate = approximate;
     }
     fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
         let mut missing = Vec::new();
@@ -399,16 +409,17 @@ impl LodSampler for VanillaLodSampler {
         self.grid(x, z, width, 1).pop().unwrap_or_default()
     }
     fn grid(&mut self, x: i32, z: i32, width: i32, side: usize) -> Vec<Column> {
-        let samples = match self
-            .worker
-            .lod_grid(x + width / 2, z + width / 2, width, side)
-        {
-            Ok(samples) => samples,
-            Err(error) => {
-                log::warn!("Horizon: direct far sampling failed: {error}");
-                return vec![Column::default(); side * side];
-            }
-        };
+        let samples =
+            match self
+                .worker
+                .lod_grid(x + width / 2, z + width / 2, width, side, self.approximate)
+            {
+                Ok(samples) => samples,
+                Err(error) => {
+                    log::warn!("Horizon: direct far sampling failed: {error}");
+                    return vec![Column::default(); side * side];
+                }
+            };
         samples
             .into_iter()
             .enumerate()
