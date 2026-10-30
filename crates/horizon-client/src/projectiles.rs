@@ -178,6 +178,15 @@ fn axis_of(d: u8) -> u8 {
 impl Projectile {
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
+        // `AbstractWindCharge`'s constructors set it to 0.
+        let acceleration = if matches!(
+            kind,
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+        ) {
+            0.0
+        } else {
+            0.1
+        };
         Self {
             id: 0,
             kind,
@@ -192,7 +201,7 @@ impl Projectile {
             stuck: false,
             left_owner: false,
             bonus: Default::default(),
-            acceleration: 0.1,
+            acceleration,
             needs_sync: false,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
@@ -649,6 +658,8 @@ impl Projectile {
         // WitherSkull.getInertia: 0.73 for dangerous skulls.
         let inertia = match self.kind {
             ProjectileKind::WitherSkull { dangerous: true } => 0.73,
+            // AbstractWindCharge.getInertia and getLiquidInertia.
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => 1.0,
             _ if water => 0.8,
             _ => 0.95,
         };
@@ -672,12 +683,13 @@ impl Projectile {
         match self.kind {
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
-            | ProjectileKind::WitherSkull { .. } => {
+            | ProjectileKind::WitherSkull { .. }
+            | ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge => {
                 self.apply_hurting_inertia(water);
             }
             // Arrows and tridents tick with `arrows::tick`.
             ProjectileKind::Arrow { .. } | ProjectileKind::Trident => {}
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
             ProjectileKind::LlamaSpit => {
                 if water {
@@ -912,6 +924,18 @@ mod tests {
         p.tick(&Empty(vec![]));
         assert!((p.velocity.x - 0.285).abs() < 1e-9);
         assert!((p.position.x - 0.285).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_wind_charge_holds_its_speed_until_a_deflection_gives_it_power() {
+        let mut p = Projectile::new(ProjectileKind::WindCharge, Vec3::ZERO, None);
+        p.velocity = Vec3::new(0.0, 1.5, 0.0);
+        p.apply_hurting_inertia(false);
+        assert_eq!(p.velocity, Vec3::new(0.0, 1.5, 0.0));
+        // Inertia 1 in water too, and the power adds along the movement.
+        p.acceleration = 0.1;
+        p.apply_hurting_inertia(true);
+        assert!((p.velocity.y - 1.6).abs() < 1e-12, "{p:?}");
     }
 
     #[test]
