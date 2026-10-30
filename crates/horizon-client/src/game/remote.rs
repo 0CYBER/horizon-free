@@ -1301,6 +1301,10 @@ impl Game<'_> {
     }
     /// Switch to a (possibly new) dimension: a fresh client level.
     fn enter_remote_dimension(&mut self, spawn: &play::SpawnInfo, keep_world: bool) {
+        // The replacement player starts with its inventory menu, even if the
+        // server switched levels without closing the previous container.
+        self.remote_close_local();
+        self.screen = Screen::Playing;
         let Some(r) = self.remote.as_mut() else {
             return;
         };
