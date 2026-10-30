@@ -722,7 +722,12 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
     } else {
         items.clear();
     }
-    Some(crate::containers::ModBlockEntity { id, nbt, items })
+    Some(crate::containers::ModBlockEntity {
+        id,
+        nbt,
+        items,
+        data: Vec::new(),
+    })
 }
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;

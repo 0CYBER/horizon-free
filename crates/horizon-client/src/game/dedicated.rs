@@ -781,6 +781,7 @@ impl Game<'_> {
                 );
                 Vec::new()
             },
+            owner_profile: None,
         };
         let config = HubConfig {
             allow_flight: props.allow_flight,

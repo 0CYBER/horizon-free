@@ -557,6 +557,39 @@ pub fn offline_cape() -> Option<&'static [u8]> {
     .as_deref()
 }
 
+/// The skin the launcher gives an offline name (`HORIZON_OFFLINE_SKIN`, a
+/// PNG's path, and `HORIZON_OFFLINE_SKIN_MODEL`, `classic` or `slim`;
+/// launcher/src/skins.rs): its 64x64 RGBA as `process_legacy_skin` lays it
+/// out, and whether it is slim. Read once.
+pub fn offline_skin() -> Option<&'static (Vec<u8>, bool)> {
+    static SKIN: std::sync::OnceLock<Option<(Vec<u8>, bool)>> = std::sync::OnceLock::new();
+    SKIN.get_or_init(|| {
+        let path = std::env::var_os("HORIZON_OFFLINE_SKIN").filter(|p| !p.is_empty())?;
+        let model = std::env::var("HORIZON_OFFLINE_SKIN_MODEL").unwrap_or_default();
+        read_offline_skin(std::path::Path::new(&path), &model)
+            .inspect_err(|e| eprintln!("Horizon: no offline skin ({}): {e}", path.display()))
+            .ok()
+    })
+    .as_ref()
+}
+fn read_offline_skin(path: &std::path::Path, model: &str) -> Result<(Vec<u8>, bool), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let (w, h, rgba) = crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())?;
+    let skin = process_legacy_skin(w, h, &rgba).ok_or("not a 64x64 or 64x32 skin")?;
+    Ok((skin, model == "slim"))
+}
+
+/// The signed-in account's own profile properties (`Minecraft.profileFuture`:
+/// `fetchProfile(id, true)`, so its `textures` property is signed), or empty
+/// without an answer. Blocks on the network.
+pub fn fetch_own_properties(id: u128) -> Vec<(String, String, Option<String>)> {
+    crate::auth::discovery()
+        .ok()
+        .and_then(|doc| resolve_profile(&NameOrId::Id(id), &doc))
+        .map(|p| p.properties)
+        .unwrap_or_default()
+}
+
 /// Where a texture download stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Download {
@@ -956,6 +989,43 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    /// The launcher's offline skin: a 64x64 or legacy 64x32 PNG laid out as
+    /// a downloaded skin, slim only for the `slim` model; anything else is
+    /// refused and the player keeps their default skin.
+    #[test]
+    fn offline_skins_read_like_downloaded_ones() {
+        let png = |w: u32, h: u32| {
+            let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i % 251) as u8).collect();
+            let mut out = Vec::new();
+            let mut encoder = png::Encoder::new(&mut out, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&rgba)
+                .unwrap();
+            (out, rgba)
+        };
+        let dir = std::env::temp_dir().join(format!("horizon-offline-skin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("steve.png");
+        for (h, model, slim) in [(64, "slim", true), (32, "classic", false), (64, "", false)] {
+            let (bytes, rgba) = png(64, h);
+            std::fs::write(&file, bytes).unwrap();
+            let (skin, is_slim) = super::read_offline_skin(&file, model).unwrap();
+            assert_eq!(skin, super::process_legacy_skin(64, h, &rgba).unwrap());
+            assert_eq!(skin.len(), 64 * 64 * 4);
+            assert_eq!(is_slim, slim);
+        }
+        std::fs::write(&file, png(32, 32).0).unwrap();
+        assert!(super::read_offline_skin(&file, "slim").is_err());
+        std::fs::write(&file, b"not a png").unwrap();
+        assert!(super::read_offline_skin(&file, "slim").is_err());
+        assert!(super::read_offline_skin(&dir.join("missing.png"), "").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `MinecraftProfileTexture.getMetadata("model")`: `slim` marks a slim
     /// skin; no metadata is the wide (classic) model.
     #[test]

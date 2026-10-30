@@ -3,8 +3,8 @@
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
 pub use crate::chunk::block_entity::{
     Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
-    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, ModBlockEntity, ModContainer, PotentSulfur,
-    Shelf, Skull, SkullSkin,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, MOD_MENUS, ModBlockEntity, ModContainer,
+    PotentSulfur, Shelf, Skull, SkullSkin,
 };
 use crate::items::ItemStack;
 use std::collections::HashMap;

@@ -84,6 +84,9 @@ API 15 adds block entities for a mod's blocks (`native_block_entity`, `native_bl
 API 16 adds item slots for those block entities (`native_block_entity_container`): hoppers, comparators and breaking the
 block use them as they use vanilla's containers, and `native_block_entity_tick` also gets the slots. Bundles that use them need `"hooks": 16`.
 
+API 17 adds menus for mod containers: the container names one of vanilla's slot-grid or furnace menus, which opens when the block is used,
+and `native_block_entity_tick` takes the whole block entity, with the data slots the menu shows. Bundles that use them need `"hooks": 17`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
