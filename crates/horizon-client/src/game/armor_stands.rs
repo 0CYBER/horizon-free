@@ -546,6 +546,10 @@ impl Game<'_> {
         }
         // The stand's box and id, before the hit may remove it.
         let (area, id) = (self.armor_stands[i].bounds(), self.armor_stands[i].id);
+        let (center, on_ground) = (
+            self.armor_stands[i].position,
+            self.armor_stands[i].on_ground,
+        );
         let (_, _, _, magic) = self.melee_damage("minecraft:armor_stand", true);
         let hurt = self.punch_armor_stand(i);
         if hurt {
@@ -555,6 +559,8 @@ impl Game<'_> {
                 super::mace::Spared::Stand(id),
                 magic.then_some(id as i32),
             );
+            // Player.itemAttackInteraction: the stand is a living target.
+            self.weapon_hit_stand(id, center, on_ground);
             self.swing_arm();
         }
         hurt
