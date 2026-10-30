@@ -11,6 +11,11 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_tick"
     },
     {
+      "name": "world_lifecycle",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle"
+    },
+    {
       "name": "hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"

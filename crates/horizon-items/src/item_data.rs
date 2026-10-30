@@ -168,6 +168,29 @@ impl StackData {
             self.other.sort_by(|a, b| a.0.cmp(&b.0));
         }
     }
+    /// `DebugStickState.properties().get(block)`: the property selected for
+    /// `block` in `minecraft:debug_stick_state`.
+    pub fn debug_stick_property(&self, block: &str) -> Option<String> {
+        let Tag::Compound(map) = self.other("minecraft:debug_stick_state")? else {
+            return None;
+        };
+        match map.get(&JavaString::from(block))? {
+            Tag::String(property) => Some(property.to_string_lossy()),
+            _ => None,
+        }
+    }
+    /// `DebugStickState.withProperty(block, property)`.
+    pub fn set_debug_stick_property(&mut self, block: &str, property: &str) {
+        let mut map = match self.other("minecraft:debug_stick_state") {
+            Some(Tag::Compound(map)) => map.clone(),
+            _ => Default::default(),
+        };
+        map.insert(
+            JavaString::from(block),
+            Tag::String(JavaString::from(property)),
+        );
+        self.set_other("minecraft:debug_stick_state", Some(Tag::Compound(map)));
+    }
 }
 /// `Raid.getBannerComponentPatch`: the ominous banner's pattern layers.
 pub const OMINOUS_LAYERS: [(&str, &str); 8] = [
@@ -1119,6 +1142,30 @@ mod tests {
     }
 
     #[test]
+    fn loot_name_preserves_plain_and_styled_components() {
+        let mut stack = ItemStack::new("minecraft:stone", 1);
+        stack
+            .data_mut()
+            .set_loot_name("minecraft:custom_name", &serde_json::json!("Rock"));
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&Tag::String("Rock".into()))
+        );
+        let styled = serde_json::json!({"text": "Rock", "color": "red"});
+        stack
+            .data_mut()
+            .set_loot_name("minecraft:custom_name", &styled);
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&horizon_client_core::scoreboard::json_to_tag(&styled))
+        );
+    }
+
+    #[test]
     fn loot_component_keeps_a_styled_custom_name() {
         let name = serde_json::json!({"text":"Prize","color":"#ff8800"});
         let mut stack = ItemStack::new("minecraft:stick", 1);
@@ -1251,5 +1298,32 @@ mod tests {
         );
         assert_eq!(explosions[0].colors, vec![0xFF0000]);
         assert!(explosions[0].twinkle && !explosions[0].trail);
+    }
+
+    #[test]
+    fn debug_stick_state_round_trips() {
+        let mut stack = ItemStack::new("minecraft:debug_stick", 1);
+        stack
+            .data_mut()
+            .set_debug_stick_property("minecraft:oak_stairs", "facing");
+        stack
+            .data_mut()
+            .set_debug_stick_property("minecraft:oak_stairs", "half");
+        stack
+            .data_mut()
+            .set_debug_stick_property("minecraft:stone", "axis");
+
+        let tag = encode_components(&stack).expect("debug stick components");
+        let (_, extra) = decode_components(Some(&tag));
+        let data = extra.expect("debug stick state");
+        assert_eq!(
+            data.debug_stick_property("minecraft:oak_stairs").as_deref(),
+            Some("half")
+        );
+        assert_eq!(
+            data.debug_stick_property("minecraft:stone").as_deref(),
+            Some("axis")
+        );
+        assert_eq!(data.debug_stick_property("minecraft:dirt"), None);
     }
 }

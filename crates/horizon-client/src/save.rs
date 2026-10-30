@@ -198,6 +198,41 @@ pub fn needs_file_fixes(world: &Path) -> bool {
     let version = number(data.get("DataVersion")).unwrap_or(-1);
     i32::try_from(version).is_ok_and(horizon_world::datafix::files::requires_file_fixing)
 }
+/// `LevelVersion.parse`: the saved game version's name, this build's when the `Version`
+/// compound has no `Name`, and empty without a `Version` (`getWorldVersionName` then
+/// shows `selectWorld.versionUnknown`).
+fn saved_version_name(version: Option<&Tag>) -> String {
+    match version {
+        Some(v) => text(v.get("Name")).unwrap_or_else(|| VERSION_NAME.to_string()),
+        None => String::new(),
+    }
+}
+/// `LevelSummary.isCompatible` (`DataVersion.isCompatible`: the saved series must be
+/// the current `main` one). None when the world opens; otherwise the saved game
+/// version's name, empty when it has none (`getWorldVersionName`).
+pub fn incompatible_version(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let version = root.get("Data")?.get("Version");
+    let series = text(version.and_then(|v| v.get("Series"))).unwrap_or_else(|| "main".into());
+    if series == "main" {
+        return None;
+    }
+    Some(saved_version_name(version))
+}
+/// `LevelSummary.backupStatus` DOWNGRADE: the saved game version's name (empty when it
+/// has none) when the world's `Version.Id` is newer than this build's `DataVersion`
+/// (`LevelVersion.parse`: no `Version` reads as 0, no `Id` as the current one).
+pub fn downgraded_from(world: &Path) -> Option<String> {
+    let root = read_dat(&world.join("level.dat"))?;
+    let version = root.get("Data")?.get("Version");
+    let id = version.map_or(0, |v| {
+        number(v.get("Id")).unwrap_or_else(|| i64::from(DATA_VERSION))
+    });
+    if id <= i64::from(DATA_VERSION) {
+        return None;
+    }
+    Some(saved_version_name(version))
+}
 /// Move a world saved by an older Horizon build (pre-26.3 layout with a
 /// DataVersion that keeps vanilla from upgrading it) into the 26.3 layout.
 pub fn migrate_legacy(world: &Path) -> Result<()> {
@@ -577,6 +612,10 @@ pub fn encode_block_entity(
         }
         // Encoded above.
         BlockEntity::DaylightDetector | BlockEntity::Mod(_) => {}
+        // PotentSulfurBlockEntity.saveAdditional.
+        BlockEntity::PotentSulfur(sulfur) => {
+            entries.push(("countdown", Tag::Int(sulfur.waiting_countdown)))
+        }
     }
     Tag::compound(entries)
 }
@@ -642,7 +681,8 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
 }
 /// A mod's block entity: its compound without `id` and the position, and
 /// its `Items` as slots (`ContainerHelper.loadAllItems`; the game sizes them
-/// to the block's container when it uses them).
+/// to the block's container when it uses them). `Items` that are not an item
+/// list saved exactly so stay the mod's own.
 fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::ModBlockEntity> {
     let Tag::Compound(map) = tag else {
         return None;
@@ -652,9 +692,14 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
         nbt.remove(&key.into());
     }
     // `Slot` is a byte: 256 slots at most.
-    let mut items = decode_items(nbt.remove(&"Items".into()).as_ref(), 256);
-    while items.last().is_some_and(Option::is_none) {
-        items.pop();
+    let mut items = decode_items(nbt.get(&"Items".into()), 256);
+    if nbt.get(&"Items".into()) == Some(&encode_items(&items)) {
+        nbt.remove(&"Items".into());
+        while items.last().is_some_and(Option::is_none) {
+            items.pop();
+        }
+    } else {
+        items.clear();
     }
     Some(crate::containers::ModBlockEntity {
         id,
@@ -834,6 +879,12 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             c.state_triggered = None;
             c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
         }
+        // PotentSulfurBlockEntity.loadAdditional.
+        BlockEntity::PotentSulfur(sulfur) => {
+            if let Some(countdown) = int("countdown") {
+                sulfur.waiting_countdown = countdown;
+            }
+        }
         BlockEntity::Jukebox(_)
         | BlockEntity::Beacon(_)
         | BlockEntity::Lectern(_)
@@ -949,52 +1000,7 @@ fn poi_root(sections: Compound) -> NamedTag {
     }
 }
 
-/// What a dimension's saved chunks depend on: skylight and the build height
-/// (`DimensionType.minY` and `height`). `Chunk` always holds the Overworld's
-/// sections; a level saves only the ones inside its own height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LevelShape {
-    pub sky_light: bool,
-    pub min_y: i32,
-    pub height: i32,
-}
-impl LevelShape {
-    pub const OVERWORLD: Self = Self {
-        sky_light: true,
-        min_y: MIN_Y,
-        height: SECTIONS as i32 * 16,
-    };
-    pub const NETHER: Self = Self {
-        sky_light: false,
-        min_y: 0,
-        height: 256,
-    };
-    pub const END: Self = Self {
-        sky_light: true,
-        min_y: 0,
-        height: 256,
-    };
-    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
-    /// old `DIM-1` and `DIM1`).
-    pub fn for_dir(root: &Path) -> Self {
-        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
-            Self::NETHER
-        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
-            Self::END
-        } else {
-            Self::OVERWORLD
-        }
-    }
-    fn min_section(self) -> i32 {
-        self.min_y >> 4
-    }
-    fn section_count(self) -> usize {
-        (self.height >> 4) as usize
-    }
-    fn has_section(self, y: i32) -> bool {
-        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
-    }
-}
+pub use crate::chunk::LevelShape;
 
 /// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
@@ -4112,6 +4118,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn prepare_loaded(&self, worker: &mut G::Worker, chunk: &Chunk) {
         self.inner.prepare_loaded(worker, chunk);
     }
+    fn idle(&self, worker: &mut G::Worker) {
+        self.inner.idle(worker);
+    }
     fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
         let mut proto = self.inner.proto(worker, x, z);
         if let Some(saved) = self
@@ -4987,6 +4996,29 @@ mod tests {
         assert_eq!(m.items.len(), 1);
         assert_eq!(m.items[0].as_ref().map(|s| s.count), Some(3));
         assert_eq!(encode_block_entity(pos, &back, "gtmod:macerator"), saved);
+        // `Items` that are not an item list stay the mod's, as saved.
+        for items in [
+            r#"Items:{energy:5}"#,
+            r#"Items:[1,2,3]"#,
+            r#"Items:[{Slot:0b,id:"minecraft:air",count:1}]"#,
+            r#"Items:[{Slot:0b,id:"minecraft:stone",count:1,note:"mine"}]"#,
+        ] {
+            let saved = horizon_world::nbt::parse_snbt(&format!(
+                r#"{{id:"gtmod:cable",x:0,y:0,z:0,{items}}}"#
+            ))
+            .unwrap()
+            .0;
+            let (pos, back) = decode_block_entity(&saved).expect("mod block entity");
+            let crate::containers::BlockEntity::Mod(m) = &back else {
+                panic!("not a mod's");
+            };
+            assert!(m.items.is_empty(), "{items}");
+            assert_eq!(
+                encode_block_entity(pos, &back, "gtmod:cable"),
+                saved,
+                "{items}"
+            );
+        }
         // Vanilla's types are never a mod's, modelled or not.
         let ender = horizon_world::nbt::parse_snbt(r#"{id:"minecraft:ender_chest",x:0,y:0,z:0}"#)
             .unwrap()
