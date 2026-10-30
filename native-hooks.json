@@ -101,6 +101,16 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"
     },
     {
+      "name": "screen",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen"
+    },
+    {
+      "name": "screen_draw",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_draw"
+    },
+    {
       "name": "register_commands",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands"

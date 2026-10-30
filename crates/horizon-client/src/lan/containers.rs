@@ -241,8 +241,22 @@ impl Hub {
             sent: Vec::new(),
             drag: None,
             sent_data: Vec::new(),
+            hidden: Vec::new(),
         });
         self.send_menu_content(i, items);
+    }
+
+    /// The open menu of `conn` has no `hidden` container slots: a mod's screen
+    /// does not show them, so a click or a shift-click never reaches them.
+    pub fn hide_menu_slots(&mut self, conn: u32, hidden: Vec<usize>) {
+        if let Some(m) = self
+            .guests
+            .iter_mut()
+            .find(|g| g.conn == conn)
+            .and_then(|g| g.menu.as_mut())
+        {
+            m.hidden = hidden;
+        }
     }
 
     /// Opens a native mod's menu of `rows` rows (1 to 6, a chest's
@@ -285,6 +299,7 @@ impl Hub {
             sent: Vec::new(),
             drag: None,
             sent_data: Vec::new(),
+            hidden: Vec::new(),
         });
         self.send_menu_content(i, items);
         Some(window)
@@ -507,6 +522,11 @@ impl Hub {
         } else {
             self.guests[i].drag.take()
         };
+        let hidden = self.guests[i]
+            .menu
+            .as_ref()
+            .filter(|_| in_menu)
+            .map_or_else(Vec::new, |m| m.hidden.clone());
         let guest = &mut self.guests[i];
         let mut items = source.and_then(|s| s.read(world, guest));
         if in_menu && items.is_none() {
@@ -516,6 +536,7 @@ impl Hub {
             guest,
             container: items.as_deref_mut(),
             shulker,
+            hidden: &hidden,
         };
         let (drops, changed) = menu::click(
             &mut view,

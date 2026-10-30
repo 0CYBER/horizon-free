@@ -91,6 +91,10 @@ API 18 adds what a machine's tick reaches: `native_with_mod_block_entity` (chang
 and tells comparators when its items changed) and `native_set_block_property` (a property of the block's own state, through the level's
 normal update path). Bundles that use them need `"hooks": 18`.
 
+API 19 adds screens a mod draws for its blocks' menus: `native_screen` lays one out (its height, where each container slot is,
+where the inventory starts; a slot it leaves out is not in the menu, so shift-clicks skip it) and `native_screen_draw` draws it with the mod's
+own GUI textures (`assets/<namespace>/textures/gui`, drawn with `native_sprite`). Bundles that use them need `"hooks": 19`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
