@@ -7,11 +7,11 @@
 //! into its `IntegratedServer`.
 //!
 //! On by default. `--in-frame` (or `--no-server-thread`, or
-//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead, the
-//! escape hatch. LAN guests and dedicated servers use the same code either
-//! way.
+//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead. That path
+//! is DEPRECATED: never use it, it gets no fixes and will be removed soon.
+//! LAN guests and dedicated servers use the same code either way.
 use super::{
-    Game, Options, PackResources, Resources, UiResources,
+    Game, Options, PackResources, Resources, UiResources, WorldIcon,
     execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
     world_loading::WorldRequest,
@@ -19,7 +19,6 @@ use super::{
 use horizon_client::{
     Result,
     audio::Audio,
-    hud::HudAtlas,
     lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
     settings::Settings,
     title::WorldOptions,
@@ -52,6 +51,9 @@ struct Flags {
     /// server follows while it runs (IntegratedServer.tickServer).
     render_distance: AtomicI32,
     simulation_distance: AtomicI32,
+    /// `options.entityDistanceScaling` (an `f32`'s bits), which
+    /// `IntegratedServer.getScaledTrackingDistance` reads on every call.
+    entity_distance: AtomicU32,
     /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
     saving: AtomicBool,
 }
@@ -79,12 +81,16 @@ impl Integrated {
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
     }
-    /// The window's render and simulation distances, for the server to follow.
-    pub fn set_distances(&self, render: i32, simulation: i32) {
+    /// The window's render and simulation distances and its Entity Distance
+    /// option, for the server to follow.
+    pub fn set_distances(&self, render: i32, simulation: i32, entity: f32) {
         self.flags.render_distance.store(render, Ordering::Relaxed);
         self.flags
             .simulation_distance
             .store(simulation, Ordering::Relaxed);
+        self.flags
+            .entity_distance
+            .store(entity.to_bits(), Ordering::Relaxed);
     }
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
@@ -177,6 +183,8 @@ pub(super) struct Starting {
     handle: Integrated,
     ready: Receiver<Ready>,
     player: String,
+    /// The save's folder in `saves/`, for the world icon once joined.
+    folder: String,
 }
 
 /// The world to open and the player who owns it.
@@ -253,6 +261,9 @@ impl Game<'_> {
         flags
             .simulation_distance
             .store(settings.simulation_distance, Ordering::Relaxed);
+        flags
+            .entity_distance
+            .store(settings.entity_distance.to_bits(), Ordering::Relaxed);
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
@@ -287,6 +298,7 @@ impl Game<'_> {
             handle,
             ready,
             player,
+            folder: folder.to_owned(),
         });
         // Harnesses, control scripts and runs without a window go on with the world open.
         if self.window.is_none() || super::synchronous_startup(&self.options) {
@@ -318,13 +330,26 @@ impl Game<'_> {
             }
         };
         let Some(Starting {
-            mut handle, player, ..
+            mut handle,
+            player,
+            folder,
+            ..
         }) = self.integrated_starting.take()
         else {
             return Ok(());
         };
         handle.world_name = world_name;
+        self.server_packs_world_pack(&folder);
         self.connect_local(pipe, &player)?;
+        // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
+        // the Select World list shows, and needs the save folder for it.
+        self.world_icon = Some(WorldIcon {
+            path: std::env::current_dir()?
+                .join("saves")
+                .join(&folder)
+                .join("icon.png"),
+            last_attempt: None,
+        });
         self.integrated = Some(handle);
         Ok(())
     }
@@ -374,6 +399,7 @@ impl Game<'_> {
             // No network until it is opened to the LAN; the memory connection
             // is not compressed (`Connection.isMemoryConnection`).
             listen: false,
+            online: horizon_client::lan::OnlineMode::lan(),
             gate: Some(Arc::new(move |_, uuid, _| {
                 (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
                     .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
@@ -427,6 +453,7 @@ impl Game<'_> {
             return result.and(stopped);
         }
         let mut next = Instant::now();
+        let mut was_paused = false;
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
             if self.agent.hold_server {
@@ -436,6 +463,14 @@ impl Game<'_> {
                 continue;
             }
             let paused = flags.paused.load(Ordering::Relaxed);
+            if paused && !was_paused {
+                // IntegratedServer.tickServer: the tick the game pauses saves
+                // everything (saveEverything, without flushing), as an
+                // autosave does.
+                log::info!("Saving and pausing game...");
+                self.save_game_with(false)?;
+            }
+            was_paused = paused;
             if paused {
                 // Only the connections run.
                 self.tick_server_timed(true)?;
@@ -480,6 +515,8 @@ impl Game<'_> {
             self.lan = Some(host);
         }
         std::thread::sleep(Duration::from_millis(100));
+        // ServerPlayer.disconnect: nobody is left in a bed.
+        self.free_player_beds()?;
         self.save_game()?;
         self.lan_close(false);
         self.save.flush()?;
@@ -638,6 +675,9 @@ impl Game<'_> {
     /// IntegratedServer.tickServer: the server follows the window's render
     /// and simulation distances when they change.
     fn follow_distances(&mut self, flags: &Flags) {
+        // IntegratedServer.getScaledTrackingDistance reads the option each time.
+        self.settings.entity_distance =
+            f32::from_bits(flags.entity_distance.load(Ordering::Relaxed));
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -811,15 +851,7 @@ fn server_game(
     options: Options,
     settings: Settings,
 ) -> Result<Game<'_>> {
-    // It draws nothing: only the font, which books and chat measure with.
-    let atlas = HudAtlas::fonts(&options.resources)?;
-    let gui = UiResources {
-        atlas,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-            size: 1,
-            pixels: [0u8; 4].repeat(6),
-        }),
-    };
+    let gui = UiResources::server(&options.resources)?;
     let audio = Audio::silent(&options.resources);
     Game::new(res, pack, gui, options, settings, audio, None)
 }
