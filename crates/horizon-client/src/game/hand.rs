@@ -10,12 +10,14 @@ use horizon_client::{
     first_person::{Hand, HandWorld, Hit, SwingAnimation, UseResult, swing_duration},
     items::ItemStack,
 };
+use horizon_core::geometry::{Aabb, Vec3};
 
 /// The off hand's place in `visible_hands` (the main hand uses its hotbar slot).
 const OFFHAND: usize = usize::MAX;
 
-/// `AttackRange.isInRange`: float bounds, then inclusive double comparison.
-fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: bool) -> bool {
+/// `AttackRange.effectiveMinRange`, `effectiveMaxRange` (for a player) and
+/// `hitboxMargin` of an `attack_range` component.
+fn attack_reach(range: &serde_json::Value, creative: bool) -> (f32, f32, f32) {
     let value = |key: &str, default: f32| range[key].as_f64().map_or(default, |v| v as f32);
     let (min, max) = if creative {
         (
@@ -25,13 +27,91 @@ fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: boo
     } else {
         (value("min_reach", 0.0), value("max_reach", 3.0))
     };
-    let margin = value("hitbox_margin", 0.3);
+    (min, max, value("hitbox_margin", 0.3))
+}
+
+fn v3(v: [f64; 3]) -> Vec3 {
+    Vec3::new(v[0], v[1], v[2])
+}
+
+/// `LocalPlayer.raycastHitResult` with an item that has an attack range
+/// (`AttackRange.getClosesetHit`): the distance from the eye to the nearest
+/// box hit along the item's own `reach`, which goes past the plain pick's
+/// 3 blocks (a spear's 4.5). A miss falls back to the plain pick (`None`).
+fn reach_pick(
+    boxes: &[(usize, Aabb)],
+    eye: Vec3,
+    look: Vec3,
+    movement: Vec3,
+    reach: (f32, f32, f32),
+    clip: impl Fn(Vec3, Vec3) -> Option<Vec3>,
+) -> Option<f64> {
+    super::spear::hits_in_reach(boxes, eye, look, movement, reach, clip)
+        .into_iter()
+        .map(|(_, at)| eye.distance_squared(at).sqrt())
+        .reduce(f64::min)
+}
+
+/// `AttackRange.isInRange`: float bounds, then inclusive double comparison.
+fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: bool) -> bool {
+    let (min, max, margin) = attack_reach(range, creative);
     distance >= f64::from(min - margin) && distance <= f64::from(max + margin)
 }
 
+/// `FirstPersonHandsAndItems.shouldInstantlyReplaceVisibleItem`'s
+/// `ItemStack.matchesIgnoringComponents(visible, held,
+/// DataComponentType::ignoreSwapAnimation)` for one hand (every item plays
+/// the swap animation, `ItemModelResolver.shouldPlaySwapAnimation`): the same
+/// stack object, or an equal one, whose damage (the one component built
+/// with `ignoreSwapAnimation`) may differ.
+///
+/// A stack that stays in its slot with the same item is the same object,
+/// whatever its count or damage (vanilla shrinks, grows and damages it in
+/// place), unless the slot was `replaced` by one the hand doesn't show yet:
+/// swapping the hands (`setItemInHand`, and the server's slot updates that
+/// answer it) puts another object in both (#2866).
+fn shows_held_stack(
+    visible: &(usize, Option<ItemStack>),
+    held: &(usize, Option<ItemStack>),
+    replaced: bool,
+) -> bool {
+    let same_object = visible.0 == held.0 && !replaced;
+    match (&visible.1, &held.1) {
+        (Some(a), Some(b)) if same_object => a.item == b.item,
+        (a, b) => matches_for_swap(a.as_ref(), b.as_ref()),
+    }
+}
+
+/// `ItemStack.matchesIgnoringComponents(a, b,
+/// DataComponentType::ignoreSwapAnimation)`: the same count, item and
+/// components but damage.
+pub(super) fn matches_for_swap(a: Option<&ItemStack>, b: Option<&ItemStack>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.count == b.count && a.item == b.item && a.extra == b.extra,
+        _ => false,
+    }
+}
+
 impl Game<'_> {
+    /// A slot of the inventory (`OFFHAND_SLOT` for the off hand) was set to
+    /// a new stack: the hand holding it compares it as another `ItemStack`
+    /// (`shows_held_stack`) until the hand shows the held stack again.
+    pub(super) fn hand_stack_replaced(&mut self, slot: usize) {
+        if slot == self.selected {
+            self.hands_replaced[0] = true;
+        }
+        if slot == super::shield::OFFHAND_SLOT {
+            self.hands_replaced[1] = true;
+        }
+    }
     /// Opening a screen stops breaking before the next game tick (which may pause).
     pub(super) fn stop_mining(&mut self) {
+        if self.clicks.destroying.active {
+            let pos = self.clicks.destroying.pos;
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            self.tutorial_destroy(state, -1.0);
+        }
         let mut destroying = std::mem::take(&mut self.clicks.destroying);
         destroying.stop(&mut GameHands {
             game: self,
@@ -112,18 +192,26 @@ impl Game<'_> {
             progress: d.progress,
             ticks: d.ticks as u32,
         });
+        if let Some(mining) = &self.mining {
+            let pos = mining.pos;
+            let progress = mining.progress;
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            self.tutorial_destroy(state, progress);
+        }
         Ok(())
     }
     /// `BlockBehaviour.getDestroyProgress` with `Player.getDestroySpeed`.
-    pub(super) fn destroy_progress(&self, pos: [i32; 3]) -> f32 {
+    pub(super) fn destroy_progress(&mut self, pos: [i32; 3]) -> f32 {
+        let block_break_speed = self.block_break_speed();
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts().get(state);
         if facts.hardness == -1.0 {
             return 0.0;
         }
         let held = self.held();
-        let mut speed = self.res.items().mining_speed(held, &facts.name);
+        let mut speed = self.items().mining_speed(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
+        speed *= block_break_speed;
         if let Some(eye) = self.eye_position()
             && self
                 .res
@@ -141,7 +229,7 @@ impl Game<'_> {
         if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
             speed /= 5.0;
         }
-        let harvest = !facts.requires_tool || self.res.items().correct_for_drops(held, &facts.name);
+        let harvest = !facts.requires_tool || self.items().correct_for_drops(held, &facts.name);
         speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
     }
     /// A key for the main-hand stack (`destroyingItem`): its item and components.
@@ -226,22 +314,13 @@ impl Game<'_> {
         }
         self.attack_item = main.as_ref().map(|s| s.item.clone());
         let next = [(self.selected, main), (OFFHAND, self.offhand.clone())];
-        // shouldInstantlyReplaceVisibleItem: the same stack, or an equal one
-        // (matchesIgnoringComponents; every item plays the swap animation).
-        // A stack that stays in its slot with the same item is the same
-        // stack, whatever its count (vanilla shrinks and grows it in place).
         let mut changed = [false; 2];
         for h in 0..2 {
-            let same = match (&self.visible_hands[h], &next[h]) {
-                ((_, None), (_, None)) => true,
-                ((slot, Some(a)), (next_slot, Some(b))) => {
-                    a.item == b.item
-                        && (slot == next_slot || (a.count == b.count && a.extra == b.extra))
-                }
-                _ => false,
-            };
+            let replaced = self.hands_replaced[h];
+            let same = shows_held_stack(&self.visible_hands[h], &next[h], replaced);
             if same {
                 self.visible_hands[h] = next[h].clone();
+                self.hands_replaced[h] = false;
             }
             changed[h] = !same;
         }
@@ -254,6 +333,7 @@ impl Game<'_> {
         for h in 0..2 {
             if replace[h] {
                 self.visible_hands[h] = next[h].clone();
+                self.hands_replaced[h] = false;
             }
         }
     }
@@ -261,10 +341,6 @@ impl Game<'_> {
     /// it is alive (the nearest entity under the crosshair, before any block).
     pub(super) fn crosshair_living(&self) -> Option<bool> {
         let nearest = |hits: &[Option<f64>]| hits.iter().flatten().copied().reduce(f64::min);
-        let living = nearest(&[
-            self.mob_hit().map(|h| h.1),
-            self.armor_stand_hit().map(|h| h.1),
-        ])?;
         let other = nearest(&[
             self.painting_hit().map(|h| h.1),
             self.frame_hit().map(|h| h.1),
@@ -272,24 +348,49 @@ impl Game<'_> {
             self.cart_hit().map(|h| h.1),
             self.dragon_hit().map(|h| h.1),
         ]);
-        if !self.before_block(living) || other.is_some_and(|o| o <= living) {
-            return None;
-        }
         let active = self
             .using
             .and_then(|(slot, _)| self.inventory.get(slot).and_then(Option::as_ref))
             .or_else(|| self.held());
-        if let Some(stack) = active {
-            let components = self
-                .pack
+        let range = active.and_then(|stack| {
+            self.pack
                 .item_renderer
                 .models
-                .components(&horizon_client::item_render::stack_view(stack));
-            if let Some(range) = components.get("minecraft:attack_range")
-                && !attack_range_contains(range, living, self.creative)
-            {
-                return None;
-            }
+                .components(&horizon_client::item_render::stack_view(stack))
+                .get("minecraft:attack_range")
+                .cloned()
+        });
+        let spear = range.as_ref().and_then(|r| {
+            let eye = self.eye_position()?;
+            let look = super::view_vector(self.yaw, self.pitch);
+            let reach = attack_reach(r, self.creative);
+            let boxes = self.hittable_mob_boxes();
+            let clip = |from: Vec3, to: Vec3| {
+                let length = from.distance_squared(to).sqrt();
+                let d = to.subtract(from).scale(1.0 / length);
+                (length > 0.0)
+                    .then(|| self.clip_ray([from.x, from.y, from.z], [d.x, d.y, d.z], length))
+                    .flatten()
+                    .map(|hit| Vec3::new(hit.point[0], hit.point[1], hit.point[2]))
+            };
+            let movement = self.known_player_movement();
+            reach_pick(&boxes, v3(eye), v3(look), movement, reach, clip)
+        });
+        let living = match spear {
+            Some(distance) => distance,
+            None => nearest(&[
+                self.mob_hit().map(|h| h.1),
+                self.armor_stand_hit().map(|h| h.1),
+            ])?,
+        };
+        if (spear.is_none() && !self.before_block(living)) || other.is_some_and(|o| o <= living) {
+            return None;
+        }
+        // Hud.extractCrosshair: with an attack range, the hit must be in it.
+        if let Some(range) = &range
+            && !attack_range_contains(range, living, self.creative)
+        {
+            return None;
         }
         // Only alive mobs are hit, so a picked living entity is alive.
         Some(true)
@@ -357,7 +458,21 @@ impl Game<'_> {
     /// Haste and Mining Fatigue modifiers (`ADD_MULTIPLIED_TOTAL`), clamped to
     /// the attribute's range.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
-        let value = horizon_client::attack_strength::BASE_ATTACK_SPEED
+        // The base comes from the player's attribute map so `/attribute ... base set` applies.
+        let base = self
+            .player
+            .as_ref()
+            .and_then(|player| {
+                let key = player.attributes.key("minecraft:attack_speed")?;
+                let handle = player.attributes.lookup(Some(&key))?;
+                player
+                    .attributes
+                    .instance(&handle)
+                    .ok()
+                    .map(|value| value.base_value())
+            })
+            .unwrap_or(horizon_client::attack_strength::BASE_ATTACK_SPEED);
+        let value = base
             + self
                 .attack_item_info()
                 .map_or(0.0, |i| f64::from(i.attack_speed));
@@ -371,7 +486,7 @@ impl Game<'_> {
     }
     /// The item whose attack damage and speed modifiers the player has (`attack_item`).
     pub(super) fn attack_item_info(&self) -> Option<&horizon_client::items::ItemInfo> {
-        self.res.items().get(self.attack_item.as_deref()?)
+        self.items().get(self.attack_item.as_deref()?)
     }
     /// `evaluateWhichHandsToRender`: which of the main and off hand show.
     pub(super) fn hands_to_render(&self) -> [bool; 2] {
@@ -501,13 +616,15 @@ impl HandWorld for GameHands<'_, '_> {
     fn attack_entity(&mut self) -> bool {
         self.game.attack()
     }
-    fn block_action_restricted(&mut self, _: [i32; 3]) -> bool {
-        !self.game.may_build()
+    fn block_action_restricted(&mut self, pos: [i32; 3]) -> bool {
+        self.game.block_action_restricted(pos)
     }
     fn within_border(&mut self, _: [i32; 3]) -> bool {
         true
     }
     fn attack_block(&mut self, pos: [i32; 3]) {
+        // RedStoneOreBlock.interact: the dust comes whether or not the ore was lit.
+        self.game.redstone_ore_particles(pos);
         let result = self.game.attack_block(pos);
         self.keep(result);
     }
@@ -528,6 +645,8 @@ impl HandWorld for GameHands<'_, '_> {
         {
             return false;
         }
+        let state = self.game.world.block(pos[0], pos[1], pos[2]);
+        self.game.tutorial_destroy(state, 1.0);
         let r = self.game.break_block(pos);
         self.keep(r);
         true
@@ -563,6 +682,86 @@ impl HandWorld for GameHands<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A zombie-sized box whose near face is `distance` blocks ahead of an
+    /// eye at the origin looking along +z.
+    fn mob_ahead(distance: f64) -> Vec<(usize, Aabb)> {
+        let min = Vec3::new(-0.3, -1.0, distance);
+        vec![(0, Aabb::new(min, min.add_vector(Vec3::new(0.6, 1.95, 0.6))))]
+    }
+
+    #[test]
+    fn a_spear_picks_a_mob_past_the_plain_reach() {
+        // #3209: a mob 4 blocks ahead is out of the plain pick's 3 blocks but
+        // within a spear's attack range (min 2, max 4.5, margin 0.125), so the
+        // crosshair picks it and the attack indicator shows.
+        let spear = serde_json::json!({
+            "min_reach": 2.0, "max_reach": 4.5,
+            "min_creative_reach": 2.0, "max_creative_reach": 6.5,
+            "hitbox_margin": 0.125,
+        });
+        let (eye, look) = (Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
+        let boxes = mob_ahead(4.0);
+        let reach = attack_reach(&spear, false);
+        let pick = reach_pick(&boxes, eye, look, Vec3::ZERO, reach, |_, _| None);
+        assert_eq!(pick, Some(4.0));
+        assert!(attack_range_contains(&spear, 4.0, false));
+        // Past the maximum plus the margin: no pick.
+        let far = mob_ahead(4.7);
+        assert_eq!(
+            reach_pick(&far, eye, look, Vec3::ZERO, reach, |_, _| None),
+            None
+        );
+        // A block nearer than the minimum reach takes the pick.
+        let wall = |from: Vec3, _: Vec3| Some(from.add_vector(Vec3::new(0.0, 0.0, 1.0)));
+        assert_eq!(reach_pick(&boxes, eye, look, Vec3::ZERO, reach, wall), None);
+    }
+
+    fn stack(item: &str, count: u32, damage: u32) -> Option<ItemStack> {
+        Some(ItemStack {
+            item: item.into(),
+            count,
+            damage,
+            extra: None,
+        })
+    }
+
+    #[test]
+    fn a_swapped_in_stack_of_the_same_item_re_equips() {
+        // #2866: F swaps 64 torches into the off hand that held 32. The off
+        // hand's slot stays, but the server's slot update puts another stack
+        // object there; a different count fails matchesIgnoringComponents,
+        // so the hand plays the swap animation.
+        let visible = (OFFHAND, stack("minecraft:torch", 32, 0));
+        let held = (OFFHAND, stack("minecraft:torch", 64, 0));
+        assert!(!shows_held_stack(&visible, &held, true));
+        // The same stack shrunk in place (a torch placed): no animation.
+        assert!(shows_held_stack(&visible, &held, false));
+        // An equal stack replaced it: shown at once.
+        assert!(shows_held_stack(&visible, &visible.clone(), true));
+        // DataComponents.DAMAGE ignores the swap animation: a sword with
+        // other damage swapped in shows at once.
+        let sword = (OFFHAND, stack("minecraft:iron_sword", 1, 3));
+        let worn = (OFFHAND, stack("minecraft:iron_sword", 1, 40));
+        assert!(shows_held_stack(&sword, &worn, true));
+        // Another component (an anvil's repair cost) differs.
+        let mut named = worn.clone();
+        named.1.as_mut().unwrap().extra = Some(Box::new(horizon_client::item_data::StackData {
+            repair_cost: 1,
+            ..Default::default()
+        }));
+        assert!(!shows_held_stack(&sword, &named, true));
+        // The main hand changing hotbar slot to an equal stack: instant; to
+        // a different count: animation.
+        let (a, b) = (
+            (0, stack("minecraft:torch", 32, 0)),
+            (1, stack("minecraft:torch", 32, 0)),
+        );
+        assert!(shows_held_stack(&a, &b, false));
+        let c = (1, stack("minecraft:torch", 5, 0));
+        assert!(!shows_held_stack(&a, &c, false));
+        assert!(shows_held_stack(&(0, None), &(OFFHAND, None), true));
+    }
 
     #[test]
     fn attack_range_uses_inclusive_float_bounds() {

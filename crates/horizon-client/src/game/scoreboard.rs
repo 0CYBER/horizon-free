@@ -85,27 +85,31 @@ impl Game<'_> {
         }
         self.score.storage.save(&self.world_root);
         self.score.stopwatches.save(&self.world_root);
-        if self.border != horizon_client::worldborder::WorldBorder::default() {
-            let _ = save::write_dat(
+        if self.border != horizon_client::worldborder::WorldBorder::default()
+            && let Err(e) = save::write_dat(
                 &self.border_path(),
                 Tag::compound([
                     ("data", self.border.pack()),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                 ]),
-            );
+            )
+        {
+            log::warn!("the world border was not written: {e}");
         }
         let path = self.scoreboard_path();
         let board = &self.score.board;
         if board == &Scoreboard::default() && !path.exists() {
             return;
         }
-        let _ = save::write_dat(
+        if let Err(e) = save::write_dat(
             &path,
             Tag::compound([
                 ("data", board.pack()),
                 ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
             ]),
-        );
+        ) {
+            log::warn!("the scoreboard was not written: {e}");
+        }
     }
     /// The names commands complete: objectives, teams and tracked holders.
     pub(super) fn sync_score_registries(&mut self) {
@@ -670,14 +674,19 @@ impl Game<'_> {
     /// objective.
     pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
         use horizon_client::tab_list::{self, TabInputs};
-        // Player heads and the player list both draw from the same skin slots.
-        let ready: Vec<_> = self.skin_downloads.borrow_mut().take_ready();
+        // Player heads and the player list both draw from the same skin
+        // slots: a new frame, with what the last one drew.
+        let (ready, drawn) = {
+            let mut downloads = self.skin_downloads.borrow_mut();
+            (downloads.take_ready(), downloads.take_drawn())
+        };
+        self.skin_slots.next_frame(drawn);
         for (location, rgba) in ready {
             self.store_skin(location, rgba);
         }
         let key = self.screen == super::Screen::Playing
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
-        let (players, online_mode, upside_down) = match self.remote_tab_players() {
+        let (mut players, online_mode, upside_down) = match self.remote_tab_players() {
             Some(remote) => remote,
             None => {
                 // The integrated server: the local player, online mode, no ping.
@@ -698,18 +707,28 @@ impl Game<'_> {
                 (players, true, upside_down)
             }
         };
-        let board = &self.score.board;
-        let objective = board.display_objective(sb::SLOT_LIST);
+        let has_objective = self.score.board.display_objective(sb::SLOT_LIST).is_some();
         let shown = tab_list::visible(
             key,
             self.has_singleplayer_server(),
             players.len(),
-            objective.is_some(),
+            has_objective,
         );
         self.tab_list.set_visible(shown);
         if !shown {
             return;
         }
+        // The faces of the players the list shows.
+        let faces: std::collections::HashSet<u128> =
+            tab_list::sorted_players(&players, &self.score.board)
+                .iter()
+                .map(|p| p.uuid)
+                .collect();
+        for p in players.iter_mut().filter(|p| faces.contains(&p.uuid)) {
+            p.skin = self.face_skin(p.uuid, &p.skin);
+        }
+        let board = &self.score.board;
+        let objective = board.display_objective(sb::SLOT_LIST);
         let up = |id: u128| upside_down.contains(&id);
         let inputs = TabInputs {
             players: &players,

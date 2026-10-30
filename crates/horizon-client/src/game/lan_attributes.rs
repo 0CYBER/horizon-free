@@ -8,7 +8,7 @@ use horizon_client::{
     effects,
     lan::attributes::{add_modifier, generic_syncable, instance, operation_named},
     mobs::{
-        Mob,
+        Mob, Species,
         finalize::{self, Attr, Op},
     },
 };
@@ -38,7 +38,7 @@ impl Game<'_> {
         ];
         let mut extra = Vec::new();
         for (slot, item) in slots {
-            let Some(info) = item.as_ref().and_then(|i| self.res.items().get(i)) else {
+            let Some(info) = item.as_ref().and_then(|i| self.items().get(i)) else {
                 continue;
             };
             for (attribute, _, amount, op, group) in &info.modifiers {
@@ -84,7 +84,7 @@ impl Game<'_> {
         out: &mut Vec<AttributeSnapshot>,
     ) {
         for (slot, item) in slots {
-            let Some(info) = item.and_then(|i| self.res.items().get(i)) else {
+            let Some(info) = item.and_then(|i| self.items().get(i)) else {
                 continue;
             };
             for (attribute, id, amount, op, group) in &info.modifiers {
@@ -147,6 +147,25 @@ impl Game<'_> {
                 }
             }
         }
+        // AbstractHorse.randomizeAttributes rolls a horse's jump strength as
+        // its base (kept in `vector[0]`), so the instance is synced: its
+        // rider's client jumps it (`getCustomJump`).
+        let rolled = matches!(
+            m.species(),
+            Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
+        );
+        let jump_base = m
+            .extra
+            .attributes
+            .as_deref()
+            .is_some_and(|s| s.bases.iter().any(|(a, _)| *a == Attr::JumpStrength));
+        if rolled
+            && !jump_base
+            && m.extra.vector[0] > 0.0
+            && let Some(a) = self.synced_attribute(kind, "minecraft:jump_strength")
+        {
+            instance(out, a, m.extra.vector[0]).base = m.extra.vector[0];
+        }
         if let (Some(a), Some((amount, Op::AddMultipliedBase))) = (
             self.synced_attribute(kind, "minecraft:movement_speed"),
             finalize::transient(m, Attr::MovementSpeed),
@@ -159,6 +178,22 @@ impl Game<'_> {
                     id: "minecraft:baby".into(),
                     amount,
                     operation: 1,
+                },
+            );
+        }
+        // LivingEntity.setSprinting: SPEED_MODIFIER_SPRINTING (a dashing cat or ocelot).
+        if let (true, Some(a)) = (
+            m.extra.sprinting,
+            self.synced_attribute(kind, "minecraft:movement_speed"),
+        ) {
+            add_modifier(
+                out,
+                a,
+                finalize::base_value(m, Attr::MovementSpeed),
+                AttributeModifier {
+                    id: "minecraft:sprinting".into(),
+                    amount: f64::from(0.3f32),
+                    operation: 2,
                 },
             );
         }

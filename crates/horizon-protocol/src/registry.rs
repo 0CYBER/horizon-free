@@ -3,7 +3,10 @@
 //! registries report. Data-driven registries (dimension types, biomes, chat
 //! types, damage types ...) are numbered in the order the server sends them
 //! during configuration.
-use crate::{Error, Result, packets::configuration::RegistryData};
+use crate::{
+    Error, Result,
+    packets::configuration::{RegistryData, UpdateTags},
+};
 use horizon_world::nbt::{JavaString, Tag};
 use std::{collections::HashMap, path::Path};
 
@@ -89,8 +92,24 @@ impl Builtin {
 #[derive(Clone, Debug, Default)]
 pub struct Dynamic {
     pub registries: HashMap<String, Vec<(String, Option<Tag>)>>,
+    /// The `minecraft:dialog` tags the server sent: each tag's entries by id.
+    pub dialog_tags: HashMap<String, Vec<i32>>,
 }
 impl Dynamic {
+    /// The dialog tags of a `ClientboundUpdateTagsPacket`.
+    pub fn add_tags(&mut self, packet: &UpdateTags) {
+        for r in packet
+            .registries
+            .iter()
+            .filter(|r| r.registry == "minecraft:dialog")
+        {
+            self.dialog_tags = r
+                .tags
+                .iter()
+                .map(|t| (t.name.clone(), t.ids.clone()))
+                .collect();
+        }
+    }
     pub fn add(&mut self, packet: RegistryData) {
         let entries = packet.entries.into_iter().map(|e| (e.id, e.data)).collect();
         self.registries.insert(packet.registry, entries);
@@ -136,6 +155,9 @@ impl Dynamic {
             if let Some(v) = int("height") {
                 d.height = v;
             }
+            if let Some(v) = int("logical_height") {
+                d.logical_height = v;
+            }
             if let Some(Tag::Byte(v)) = map.get(&JavaString::from("has_skylight")) {
                 d.has_skylight = *v != 0;
             }
@@ -149,19 +171,21 @@ pub struct DimensionType {
     pub name: String,
     pub min_y: i32,
     pub height: i32,
+    pub logical_height: i32,
     pub has_skylight: bool,
 }
 impl DimensionType {
     pub fn vanilla(name: &str) -> Self {
-        let (min_y, height, has_skylight) = match name {
-            "minecraft:the_nether" => (0, 256, false),
-            "minecraft:the_end" => (0, 256, false),
-            _ => (-64, 384, true),
+        let (min_y, height, logical_height, has_skylight) = match name {
+            "minecraft:the_nether" => (0, 256, 128, false),
+            "minecraft:the_end" => (0, 256, 256, true),
+            _ => (-64, 384, 384, true),
         };
         Self {
             name: name.to_owned(),
             min_y,
             height,
+            logical_height,
             has_skylight,
         }
     }
