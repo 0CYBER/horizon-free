@@ -2448,6 +2448,7 @@ impl Goal for EatBlock {
                     pos: [x, y - 1, z],
                     name: "minecraft:dirt",
                     effect: true,
+                    flags: horizon_world::level::flags::UPDATE_CLIENTS,
                 });
                 super::ai::ate(m);
             }

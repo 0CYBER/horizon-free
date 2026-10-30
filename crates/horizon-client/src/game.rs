@@ -3360,13 +3360,22 @@ impl Game<'_> {
     }
     /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
     fn level_set(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
+        self.level_set_with_flags(pos, state, level_flags::UPDATE_ALL)
+    }
+    /// Level.setBlock with the caller's update flags.
+    fn level_set_with_flags(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> Result<()> {
         self.with_level(|b, level, ticks| {
             b.set_block(
                 level,
                 ticks,
                 BlockPos::new(pos[0], pos[1], pos[2]),
                 state,
-                level_flags::UPDATE_ALL,
+                flags,
             );
         });
         self.process_level_events()
@@ -10329,15 +10338,20 @@ impl Game<'_> {
                     .properties
                     .insert("axis".into(), if x_axis { "x" } else { "z" }.into());
                 let id = registry.resolve(&portal).unwrap_or(default);
-                for h in 0..height {
-                    for w in 0..width {
-                        self.world.set(
-                            origin[0] + d[0] * w,
-                            origin[1] + h,
-                            origin[2] + d[2] * w,
-                            id,
-                        )?;
-                    }
+                // PortalShape.createPortalBlocks uses BlockPos.betweenClosed:
+                // X varies fastest, then Y, then Z.
+                let first = BlockPos::new(origin[0], origin[1], origin[2]);
+                let last = BlockPos::new(
+                    origin[0] + d[0] * (width - 1),
+                    origin[1] + height - 1,
+                    origin[2] + d[2] * (width - 1),
+                );
+                for pos in BlockPos::between_closed(first, last).expect("portal size is bounded") {
+                    self.level_set_with_flags(
+                        [pos.x, pos.y, pos.z],
+                        id,
+                        level_flags::UPDATE_CLIENTS | level_flags::UPDATE_KNOWN_SHAPE,
+                    )?;
                 }
                 return Ok(true);
             }
