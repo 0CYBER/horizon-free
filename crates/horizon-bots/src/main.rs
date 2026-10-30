@@ -555,10 +555,14 @@ fn run_bot(
             pos[0] += angle.cos() * 128.0;
             pos[2] += angle.sin() * 128.0;
         } else if behaviour == Behaviour::FloodChunks {
-            // Just under the server's 10 blocks a tick: every tick asks for new chunks.
-            pos[1] = cruise;
-            pos[0] += heading.cos() * 9.9;
-            pos[2] += heading.sin() * 9.9;
+            // Up to cruising height first, then just under the server's 10 blocks a tick:
+            // every tick asks for new chunks.
+            if pos[1] < cruise {
+                pos[1] = (pos[1] + 0.5).min(cruise);
+            } else {
+                pos[0] += heading.cos() * 9.9;
+                pos[2] += heading.sin() * 9.9;
+            }
         } else if !lock(&bot.held).contains(&here) {
             bot.waited.fetch_add(1, Ordering::Relaxed);
         } else if pos[1] < cruise {
