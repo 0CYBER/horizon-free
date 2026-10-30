@@ -50,6 +50,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     m.invisible = invisible;
                 }
             }
+            // Entity.DATA_SILENT: Entity.isSilent, which keeps the sounds
+            // a client plays itself quiet (LivingEntity.breakItem's).
+            (4, Value::Bool(silent)) => m.silent = *silent,
             // Entity.DATA_POSE: the pose the species animates by.
             (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
@@ -148,7 +151,7 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.color = (*c & 15) as u8;
             }
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
-            (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
+            (Species::Slime | Species::MagmaCube | Species::SulfurCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
             // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
@@ -587,6 +590,21 @@ mod tests {
         assert!(calf.is_baby());
         apply(&mut calf, &[(16, s::BOOLEAN, Value::Bool(false))]);
         assert!(!calf.is_baby());
+    }
+
+    #[test]
+    fn cube_mobs_receive_size_from_metadata() {
+        for kind in ["slime", "magma_cube", "sulfur_cube"] {
+            let Some(mut m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert_eq!(m.extra.size, 1);
+            apply(&mut m, &[(18, s::INT, Value::Int(2))]);
+            assert_eq!(m.extra.size, 2);
+            if kind == "sulfur_cube" {
+                assert!(!m.is_baby());
+            }
+        }
     }
 
     #[test]

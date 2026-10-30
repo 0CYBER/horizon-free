@@ -2754,6 +2754,12 @@ impl Game<'_> {
                 {
                     std::mem::swap(&mut m.extra.main_hand, &mut m.extra.off_hand);
                 }
+                // LivingEntity.handleEntityEvent 47 to 52, 65 and 68: an
+                // equipped item broke (onEquippedItemBroken).
+                if let Some(slot) = horizon_client::mobs::item_break::equipment_break_slot(p.event)
+                {
+                    self.remote_equipment_break(p.id, slot);
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
@@ -5163,6 +5169,9 @@ impl Game<'_> {
                 sequence: seq,
             }));
             self.tutorial_destroy(state, 0.0);
+            // startDestroyBlock: BlockState.attack on the client, so a redstone
+            // ore's dust (RedStoneOreBlock.attack) comes before the break.
+            self.redstone_ore_particles(hit.pos);
             if progress >= 1.0 {
                 // startDestroyBlock: instant survival breaks have no destroy delay.
                 if !debug_stick {
@@ -5416,6 +5425,24 @@ impl Game<'_> {
                 (result, changes)
             };
             let reacts = result.consumes_action();
+            // useItemOn on this client, unless a sneak with something in hand
+            // skips it: RedStoneOreBlock's dust, and the wick smoke of a lit
+            // candle an empty hand snuffs (CandleBlock.useItemOn).
+            if hand == Hand::Main && !spectator {
+                let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+                let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
+                if !(sneaking && hands_full) {
+                    self.redstone_ore_particles(hit.pos);
+                    let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+                    let lit_candle = self.block_name(hit.pos).ends_with("candle")
+                        && self.pack.assets.registry.state(state).is_some_and(|s| {
+                            s.properties.get("lit").map(String::as_str) == Some("true")
+                        });
+                    if held.is_none() && self.may_build() && lit_candle {
+                        self.candle_smoke(hit.pos, state);
+                    }
+                }
+            }
             // ArmorStandItem.useOn runs in startPrediction before the packet
             // goes out (the server may spawn the stand at once).
             let stand_fits = held
@@ -5454,6 +5481,10 @@ impl Game<'_> {
             }
             if reacts {
                 self.predict_use(&changes, seq);
+                // LeverBlock.useWithoutItem on the client: the predicted pull puffs.
+                if &*self.block_name(hit.pos) == "minecraft:lever" {
+                    self.lever_puff(hit.pos);
+                }
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
                 // MultiPlayerGameMode.useItemOn: SUCCESS SwingSource.CLIENT
                 // (a chest, barrel, furnace, …). CONSUME does not swing.
