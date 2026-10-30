@@ -366,8 +366,18 @@ impl Game<'_> {
             }
         }
         self.level_pass = Pass::default();
+        if result.is_err() {
+            self.native_lifecycle.cancel_server_tick();
+        }
         result?;
-        self.close_idle_levels()
+        if let Err(error) = self.close_idle_levels() {
+            self.native_lifecycle.cancel_server_tick();
+            return Err(error);
+        }
+        // `ServerTickEnd`: an errored tick or an idle-close failure (at
+        // the `?` above) never reaches this site.
+        self.native_lifecycle_server_tick_end(paused);
+        Ok(())
     }
 
     /// `tick_server` as a server thread runs it. With `HORIZON_SPIKES=MS`, a
