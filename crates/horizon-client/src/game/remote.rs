@@ -3967,6 +3967,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_remote_spawners();
         self.client_tick_beacons();
+        self.tick_remote_potent_sulfur();
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
         });
@@ -4573,7 +4574,7 @@ impl Game<'_> {
                 m.body_rotation_tick();
             }
             // Squid.aiStep follows LivingEntity's interpolation and head turn.
-            horizon_client::mobs::aquatic::squid_client_step(m);
+            horizon_client::mobs::aquatic::squid_client_step(m, &mut mob_fx);
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
