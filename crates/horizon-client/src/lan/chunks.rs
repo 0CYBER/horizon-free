@@ -1067,13 +1067,15 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             Some(Tag::compound(entries))
         }
         // TheEndGatewayBlockEntity.getUpdateTag: saveCustomOnly, so the age the
-        // client's beam counts from, the exit and ExactTeleport (always put).
+        // client's beam counts from, the exit and ExactTeleport when set.
         BlockEntity::EndGateway(g) => {
             let mut entries = vec![("Age", Tag::Long(g.age))];
             if let Some(exit) = g.exit_portal {
                 entries.push(("exit_portal", Tag::IntArray(exit.to_vec())));
             }
-            entries.push(("ExactTeleport", Tag::Byte(i8::from(g.exact_teleport))));
+            if g.exact_teleport {
+                entries.push(("ExactTeleport", Tag::Byte(1)));
+            }
             Some(Tag::compound(entries))
         }
         // CreakingHeartBlockEntity.getUpdateTag: saveCustomOnly, the protector.
@@ -1680,7 +1682,7 @@ mod tests {
             exact_teleport: false,
         };
         let tag = entity_tag(&BlockEntity::EndGateway(gateway.clone())).unwrap();
-        assert_eq!(tag.get("ExactTeleport"), Some(&Tag::Byte(0)));
+        assert_eq!(tag.get("ExactTeleport"), None);
         let BlockEntity::EndGateway(g) = load(
             "minecraft:end_gateway",
             BlockEntity::EndGateway(gateway.clone()),
@@ -1688,6 +1690,19 @@ mod tests {
             panic!("not a gateway");
         };
         assert_eq!(g, gateway);
+        let exact = EndGateway {
+            exact_teleport: true,
+            ..gateway
+        };
+        let tag = entity_tag(&BlockEntity::EndGateway(exact.clone())).unwrap();
+        assert_eq!(tag.get("ExactTeleport"), Some(&Tag::Byte(1)));
+        let BlockEntity::EndGateway(g) = load(
+            "minecraft:end_gateway",
+            BlockEntity::EndGateway(exact.clone()),
+        ) else {
+            panic!("not a gateway");
+        };
+        assert_eq!(g, exact);
         let heart = CreakingHeart {
             creaking: Some((Some(7), [1, 2, 3, 4])),
             ..Default::default()
