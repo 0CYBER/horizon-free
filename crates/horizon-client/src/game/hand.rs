@@ -367,6 +367,7 @@ impl Game<'_> {
             rest: format!("{} {} {:?}", s.count, s.damage, s.extra),
         })) {
             self.attack_ticks = 0;
+            self.apply_equipment();
         }
         self.attack_item = main.as_ref().map(|s| s.item.clone());
         let next = [(self.selected, main), (OFFHAND, self.offhand.clone())];
