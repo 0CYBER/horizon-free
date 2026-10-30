@@ -3,7 +3,8 @@
 //! from the data-driven `context_int_provider`/`context_float_provider` files.
 pub use crate::chunk::block_entity::{
     Banner, Beacon, BlockEntity, Brushable, Campfire, ChiseledBookshelf, Crafter, CreakingHeart,
-    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, PotentSulfur, Shelf, Skull, SkullSkin,
+    EndGateway, Furnace, FurnaceKind, Jukebox, Lectern, MOD_MENUS, ModBlockEntity, ModContainer,
+    PotentSulfur, Shelf, Skull, SkullSkin,
 };
 use crate::items::ItemStack;
 use std::collections::HashMap;
@@ -319,7 +320,7 @@ impl BlockEntity {
         };
         Some(Self::Chest(vec![None; size]))
     }
-    pub fn id(&self) -> &'static str {
+    pub fn id(&self) -> &str {
         match self {
             Self::Chest(items) => match items.len() {
                 HOPPER_SLOTS => "minecraft:hopper",
@@ -352,6 +353,7 @@ impl BlockEntity {
             Self::Campfire(_) => "minecraft:campfire",
             Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
             Self::Shelf(_) => "minecraft:shelf",
+            Self::Mod(m) => &m.id,
             Self::PotentSulfur(_) => "minecraft:potent_sulfur",
         }
     }
@@ -374,6 +376,7 @@ impl BlockEntity {
             | Self::PotentSulfur(_)
             | Self::DaylightDetector
             | Self::Brushable(_) => Vec::new(),
+            Self::Mod(m) => m.items.iter().flatten().cloned().collect(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
@@ -402,6 +405,7 @@ impl BlockEntity {
             Self::Crafter(c) => &c.items,
             Self::ChiseledBookshelf(b) => &b.items,
             Self::Shelf(b) => &b.items,
+            Self::Mod(m) => &m.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -431,6 +435,7 @@ impl BlockEntity {
             Self::Crafter(c) => &mut c.items,
             Self::ChiseledBookshelf(b) => &mut b.items,
             Self::Shelf(b) => &mut b.items,
+            Self::Mod(m) => &mut m.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)

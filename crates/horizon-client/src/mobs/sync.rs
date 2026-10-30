@@ -128,6 +128,7 @@ pub fn entity_event(m: &mut Mob, event: u8) {
         Species::Hoglin | Species::Zoglin => piglin::client_event(m, event),
         Species::IronGolem => golem::client_event(m, event),
         Species::Creaking => creaking::entity_event(m, event),
+        Species::Wolf => tame::entity_event(m, event),
         // Sheep.handleEntityEvent 10: the head goes down to eat grass.
         Species::Sheep if event == 10 => m.extra.anim_ticks = 40,
         _ => {}

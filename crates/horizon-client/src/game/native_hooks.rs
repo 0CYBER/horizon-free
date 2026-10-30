@@ -6,6 +6,49 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 18 adds what a machine's tick reaches: a neighbouring mod block entity
+//! (`native_with_mod_block_entity`) and its own block's state
+//! (`native_set_block_property`).
+//!
+//! API 17 adds menus for mod containers (the `menu` of a `ModContainer`: vanilla
+//! slot grids and furnaces) and has `native_block_entity_tick` take the whole
+//! `ModBlockEntity`, with the menu's data slots.
+//!
+//! API 16 adds item slots for those block entities
+//! (`native_block_entity_container`), which hoppers, comparators and
+//! breaking the block use as they use vanilla's containers.
+//!
+//! API 15 adds block entities for a mod's blocks (`native_block_entity`,
+//! `native_block_entity_ticks`, `native_block_entity_tick`): made when the
+//! block is placed, ticked on the server and saved with the chunk.
+//!
+//! API 14 adds breaking and placing a block (`native_destroy_block`,
+//! `native_place_block`).
+//!
+//! API 13 adds using an item (`native_use_item_on`, `native_use_item`).
+//!
+//! API 12 adds item tooltips (`native_tooltip`).
+//!
+//! API 11 adds server particle emission (`native_send_particles`).
+//!
+//! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
+//! and `native_open_menu`, `native_exchange_items`... in `native_server.rs`).
+//!
+//! API 9 adds the acting player's plain items (`native_held`,
+//! `native_count_items`, `native_take_items`, `native_give_items`... in
+//! `native_server.rs`).
+//!
+//! API 8 adds server commands and players (`native_register_commands`,
+//! `native_perform_command`, and the helpers in `native_server.rs`).
+//!
+//! API 7 adds block-change observations (`native_block_changed`).
+//!
+//! API 6 adds neighbour-change observations (`native_neighbor_changed`).
+//!
+//! API 5 adds read-only server block queries (`native_server_block`).
+//!
+//! API 4 adds authoritative server tick hooks (`native_server_tick`).
+//!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
@@ -21,16 +64,32 @@
 //! that would break such a bundle is not made.
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
-use super::native_lifecycle::{NativeLifecycleContext, WorldPhase};
-use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use super::native_lifecycle::{NativeLifecycleContext, ServerTickPhase, WorldPhase};
+use super::{
+    Game, GameLevel, LevelDimension, Screen,
+    execution_role::ExecutionRole,
+    native_panel_recipes::RecipePage,
+    native_server::{NativeCommand, NativeServerPlayer},
+};
 use horizon_client::{
+    block_entities::Pos,
     chat::ChatSource,
+    containers::{BlockEntity, MOD_MENUS, ModBlockEntity, ModContainer},
     extras::Corner,
     extras_hud::Corners,
+    fast_hash::FxHashMap,
     hud::{HudBatch, rgba},
+    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
+    particles::{ParticleOptions, ParticleType},
     text::Text,
+};
+use horizon_core::position::BlockPos;
+use horizon_world::{
+    level::{BlockId, flags},
+    nbt::Compound,
+    registry::BlockStateId,
 };
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -38,7 +97,36 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 3;
+pub(crate) const NATIVE_HOOKS_API: u32 = 18;
+
+impl GameLevel<'_> {
+    /// An authoritative server committed a changed state through `Level.setBlock`.
+    /// The world contains `new`; block side effects and neighbour updates follow.
+    #[inline(always)]
+    pub(super) fn native_block_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (dimension, pos, old, new);
+    }
+
+    /// An authoritative server is about to deliver `neighborChanged`.
+    /// State and block IDs are valid in this level's registries for this call.
+    #[inline(always)]
+    pub(super) fn native_neighbor_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+        moved: bool,
+    ) {
+        let _ = (dimension, pos, state, changed, moved);
+    }
+}
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -284,6 +372,19 @@ impl Game<'_> {
     ) {
         let _ = (context, phase, error_text);
     }
+    /// The authoritative server tick's phases: `ServerTickStart` before any
+    /// level is ticked (NeoForge's `ServerTickEvent.Pre`), `ServerTickEnd`
+    /// after the last (`.Post`). Read blocks with `native_server_block`, by
+    /// dimension: which level `self.world` holds here is not defined. A paused
+    /// pass fires nothing; a frozen world carries `world_running` false except
+    /// during a requested step.
+    pub(super) fn native_server_tick(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: ServerTickPhase,
+    ) {
+        let _ = (context, phase);
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -334,9 +435,207 @@ impl Game<'_> {
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
     }
+    /// Block `block` (`mymod:machine`) gets a block entity
+    /// (`EntityBlock.newBlockEntity`): set `entity` to its id and saved
+    /// compound when the block is yours and `entity` is none yet. The block's
+    /// template must have a block entity (a chest, a furnace...), so that
+    /// breaking the block removes it. API 15.
+    pub(super) fn native_block_entity(
+        &mut self,
+        block: &str,
+        entity: &mut Option<(String, Compound)>,
+    ) {
+        let _ = (block, entity);
+    }
+    /// Whether block `block`'s block entity ticks (`EntityBlock.getTicker`):
+    /// set `ticks` when it is yours. Asked for each of the block's states
+    /// when a world opens. API 15.
+    pub(super) fn native_block_entity_ticks(&self, block: &str, ticks: &mut bool) {
+        let _ = (block, ticks);
+    }
+    /// Block `block`'s block entity has item slots (a `WorldlyContainer`):
+    /// set `container` when the block is yours. Asked once for each mod
+    /// block when the ticking table is built; at most 256 slots, and slot
+    /// numbers past the count are left out. Its `menu`, one of
+    /// `containers::MOD_MENUS` with as many slots, opens when the block is
+    /// used (its template must open a menu, as a chest or a furnace does);
+    /// another is left out. API 17.
+    pub(super) fn native_block_entity_container(
+        &self,
+        block: &str,
+        container: &mut Option<ModContainer>,
+    ) {
+        let _ = (block, container);
+    }
+    /// A server tick of the block entity at `pos`, in vanilla's order among
+    /// the others (`Level.tickBlockEntities`), when its `id` is yours: read
+    /// and change its saved compound `nbt`, its item slots `items` (keep
+    /// their count: as many as its container has, none without one) and the
+    /// data slots its menu shows (`data`). It is out of the world during the
+    /// call (the block entity at `pos` reads as a `Mod` with an empty id, and
+    /// a save leaves it out); if the call removes or replaces it, `entity` is
+    /// dropped. Clients, the window's own in single player included, don't
+    /// get it yet. API 17.
+    pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], entity: &mut ModBlockEntity) {
+        let _ = (pos, entity);
+    }
+    /// The commands native mods add to the server's command tree: push
+    /// yours. Asked once when a world opens to players (a dedicated
+    /// server, a LAN host, single player's server thread); every player's
+    /// chat box then completes them as vanilla's, within their level. A
+    /// name vanilla has is left out. API 8.
+    pub(super) fn native_register_commands(&mut self, commands: &mut Vec<NativeCommand>) {
+        let _ = commands;
+    }
+    /// A player's command on the server (`Commands.performCommand`),
+    /// without its slash, for a command a mod registered and the player's
+    /// level allows: set `ran` when it is yours. The player's state is
+    /// swapped in for the call, so `native_player` and the other helpers
+    /// read that player; `native_feedback` answers them. API 8.
+    pub(super) fn native_perform_command(
+        &mut self,
+        player: &NativeServerPlayer,
+        command: &str,
+        ran: &mut bool,
+    ) {
+        let _ = (player, command, ran);
+    }
+    /// A click in a menu a mod opened (`native_open_menu`), which moved
+    /// nothing: the menu's `slot` (its own first, then the player's
+    /// inventory, `native_menu_inventory_slot`; -999 outside), the `button`
+    /// and the click's `mode` (`ClickType`'s id) of the player `uuid`.
+    /// No player's state is swapped in: the menu helpers take the player's
+    /// UUID. API 10.
+    pub(super) fn native_menu_clicked(
+        &mut self,
+        uuid: u128,
+        window: i32,
+        slot: i32,
+        button: i32,
+        mode: i32,
+    ) {
+        let _ = (uuid, window, slot, button, mode);
+    }
+    /// A menu a mod opened closed: the player closed it, the server or a mod
+    /// opened another, or the player left. API 10.
+    pub(super) fn native_menu_closed(&mut self, uuid: u128, window: i32) {
+        let _ = (uuid, window);
+    }
+    /// An item's tooltip, wherever the game shows one (slots, the creative
+    /// tabs, the recipe book, chat's hover): the stack, with its components
+    /// (`stack.data()`: a shulker box's contents...), and its lines, the name
+    /// first, each with a colour as `rgba` packs it (`u32::MAX` keeps the
+    /// text's own). Add, change or take out lines; `Text::legacy` reads `§`
+    /// codes. Asked each frame the tooltip shows, never for one the stack
+    /// hides. API 12.
+    pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
+        let _ = (stack, lines);
+    }
+    /// A player uses `stack` (right click) with `self.hand` on the block at
+    /// `pos`, `face` the face clicked (`[0, 1, 0]` is the top), once the
+    /// block itself let the click through (a chest still opens): where
+    /// `ItemStack.useOn` starts. Set `claimed` to take the use: the hand
+    /// swings and neither the item's `useOn` nor its `use` runs.
+    /// Server-side, for every player of the world (the helpers read the
+    /// acting one); an item on cooldown is never used. API 13.
+    pub(super) fn native_use_item_on(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        face: [i32; 3],
+        claimed: &mut bool,
+    ) {
+        let _ = (stack, pos, face, claimed);
+    }
+    /// A player uses `stack` (right click) with `self.hand`: in the air, or
+    /// on a block once `native_use_item_on` let it through, where `Item.use`
+    /// starts. Each click reaches it once. Set `claimed` to take the use: the
+    /// hand swings and the item's own use doesn't run. Server-side, for every
+    /// player of the world; an item on cooldown is never used. API 13.
+    pub(super) fn native_use_item(&mut self, stack: &ItemStack, claimed: &mut bool) {
+        let _ = (stack, claimed);
+    }
+    /// A player breaks the block `state` at `pos`, once the game allowed it
+    /// (the held item can break blocks, the debug stick didn't take the
+    /// click): where `ServerPlayerGameMode.destroyBlock` starts. Set
+    /// `canceled` to keep the block: nothing is destroyed or dropped, and a
+    /// guest sees it back. Server-side, for every player of the world (the
+    /// helpers read the acting one). API 14.
+    pub(super) fn native_destroy_block(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, state, canceled);
+    }
+    /// A player placed `stack` as the block `state` at `pos`: where
+    /// `BlockItem.place` set it, before the stack shrinks. It only hears; a
+    /// mod stops a placement by claiming `native_use_item_on`, which runs
+    /// before it. Server-side, for every player of the world. API 14.
+    pub(super) fn native_place_block(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        state: BlockStateId,
+    ) {
+        let _ = (stack, pos, state);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
+/// Server-level helpers for native mods.
+#[allow(dead_code)]
+impl GameLevel<'_> {
+    /// Queue particles in this authoritative level. A zero count sends one
+    /// directional particle. The return value means accepted, not delivered.
+    /// Block particle types require their block state; item, trail and
+    /// vibration particles are not supported by the current network dispatch.
+    pub(super) fn native_send_particles(
+        &mut self,
+        options: &ParticleOptions,
+        state: Option<BlockStateId>,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: i32,
+    ) -> bool {
+        use ParticleType as T;
+        let supported = match options.ty {
+            T::Block | T::BlockMarker | T::FallingDust | T::DustPillar | T::BlockCrumble => {
+                state.is_some_and(|id| self.registry.state(id).is_some())
+            }
+            T::Item | T::Trail | T::Vibration => false,
+            T::Geyser | T::GeyserPlume | T::GeyserBase | T::GeyserPoof => options
+                .geyser
+                .is_some_and(|(_, impulse)| impulse.is_finite()),
+            _ => true,
+        };
+        if !self.native_authoritative
+            || !supported
+            || !at.into_iter().all(f64::is_finite)
+            || !spread
+                .into_iter()
+                .all(|v| v.is_finite() && v.abs() <= f32::MAX as f64)
+            || !speed.is_finite()
+            || speed.abs() > f32::MAX as f64
+            || !options.color.into_iter().all(f32::is_finite)
+            || !options.to_color.into_iter().all(f32::is_finite)
+            || !options.scale.is_finite()
+        {
+            return false;
+        }
+        let dimension = match self.dimension {
+            LevelDimension::Overworld => "minecraft:overworld",
+            LevelDimension::Nether => "minecraft:the_nether",
+            LevelDimension::End => "minecraft:the_end",
+        };
+        self.native_particles
+            .push((dimension, options.clone(), state, at, spread, speed, count));
+        true
+    }
+}
+
 // Native mods use these; nothing in Horizon does.
 #[allow(dead_code)]
 impl Game<'_> {
@@ -345,6 +644,59 @@ impl Game<'_> {
     /// launcher's next build leaves it out.
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
+    }
+    /// Sets property `key` of the block at `pos` to `value`, as a furnace's
+    /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
+    /// and clients are told); false when the block has no such property or
+    /// value. The block entity stays. API 18.
+    pub(super) fn native_set_block_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+    ) -> bool {
+        let registry = self.pack.assets.registry;
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(mut s) = registry.state(state).cloned() else {
+            return false;
+        };
+        match s.properties.get(key) {
+            Some(v) if v == value => return true,
+            Some(_) => {}
+            None => return false,
+        }
+        s.properties.insert(key.into(), value.into());
+        let Ok(id) = registry.resolve(&s) else {
+            return false;
+        };
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags::UPDATE_ALL))
+    }
+    /// Runs `change` on the mod block entity at `pos` (a generator charging
+    /// the machine beside it) and returns what it returns; none for any
+    /// other block entity, and for the one ticking now, which is out of the
+    /// world. Afterwards, as its `setChanged` would, its chunk is saved next
+    /// time and, when its items changed, comparators read it again. API 18.
+    pub(super) fn native_with_mod_block_entity<R>(
+        &mut self,
+        pos: [i32; 3],
+        change: impl FnOnce(&mut ModBlockEntity) -> R,
+    ) -> Option<R> {
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
+            return None;
+        };
+        if m.id.is_empty() {
+            return None;
+        }
+        let items = m.items.clone();
+        let out = change(m);
+        let moved = m.items != items;
+        self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+        if moved {
+            self.container_changed(key);
+        }
+        Some(out)
     }
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(super) fn native_playing(&self) -> bool {
@@ -517,6 +869,134 @@ impl Game<'_> {
 
 /// Where the game calls the hook points.
 impl Game<'_> {
+    /// `EntityBlock.newBlockEntity` of block `name`: Horizon's own, else a
+    /// native mod's.
+    pub(super) fn new_block_entity(&mut self, name: &str) -> Option<BlockEntity> {
+        if let Some(entity) = BlockEntity::for_block(name) {
+            return Some(entity);
+        }
+        let mut entity = None;
+        self.native_block_entity(name, &mut entity);
+        let (id, nbt) = entity?;
+        Some(BlockEntity::Mod(Box::new(ModBlockEntity {
+            id,
+            nbt,
+            ..ModBlockEntity::default()
+        })))
+    }
+    /// The containers of the mod blocks' block entities, by block state
+    /// (`native_block_entity_container`), checked.
+    pub(super) fn native_containers(&self) -> FxHashMap<u32, Arc<ModContainer>> {
+        let registry = self.pack.assets.registry;
+        let mut by_block: FxHashMap<String, Option<Arc<ModContainer>>> = FxHashMap::default();
+        let mut out = FxHashMap::default();
+        for i in 0..registry.len() as u32 {
+            let Some(state) = registry.state(horizon_world::registry::BlockStateId(i)) else {
+                continue;
+            };
+            if state.name.starts_with("minecraft:") {
+                continue;
+            }
+            let container = by_block.entry(state.name.clone()).or_insert_with(|| {
+                let mut container = None;
+                self.native_block_entity_container(&state.name, &mut container);
+                container.map(|mut c| {
+                    c.slots = c.slots.min(256);
+                    let n = c.slots;
+                    for list in c.faces.iter_mut().chain([&mut c.inputs, &mut c.outputs]) {
+                        list.retain(|&s| s < n);
+                    }
+                    c.menu = c
+                        .menu
+                        .filter(|m| mod_menu(m).is_some_and(|(_, size)| size == n));
+                    Arc::new(c)
+                })
+            });
+            if let Some(c) = container {
+                out.insert(i, Arc::clone(c));
+            }
+        }
+        out
+    }
+    /// Whether a native mod's block `name` has a ticking block entity.
+    pub(super) fn native_ticks(&self, name: &str) -> bool {
+        let mut ticks = false;
+        self.native_block_entity_ticks(name, &mut ticks);
+        ticks
+    }
+    /// A mod block's container at `key` opens its menu: its slots grown to
+    /// the menu's. False for any other block.
+    pub(super) fn open_mod_menu(&mut self, key: Pos) -> bool {
+        let state = self.world.block(key.0, key.1, key.2).0;
+        let Some(c) = self.world.block_entities.mod_container(state) else {
+            return false;
+        };
+        let slots = c.slots;
+        if c.menu.is_none() {
+            return false;
+        }
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
+            return false;
+        };
+        if m.items.len() < slots {
+            m.items.resize(slots, None);
+        }
+        true
+    }
+    /// The menu type of the mod container at `key`, if it has one.
+    pub(super) fn mod_menu_at(&self, key: Pos) -> Option<&'static str> {
+        let state = self.world.block(key.0, key.1, key.2).0;
+        let c = self.world.block_entities.mod_container(state)?;
+        mod_menu(c.menu.as_deref()?).map(|(menu, _)| menu)
+    }
+    /// The tick of the mod block entity at `pos`.
+    pub(super) fn tick_mod_block_entity(&mut self, pos: Pos) {
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) else {
+            return;
+        };
+        // An empty id marks its place while the mod has it.
+        let mut taken = std::mem::take(&mut **m);
+        let items = taken.items.clone();
+        let state = self.world.block(pos.0, pos.1, pos.2).0;
+        let slots = self
+            .world
+            .block_entities
+            .mod_container(state)
+            .map_or(0, |c| c.slots);
+        // Grown only: items a container no longer has room for stay saved.
+        if taken.items.len() < slots {
+            taken.items.resize(slots, None);
+        }
+        // Without a container, an `Items` item list is the mod's own field.
+        if slots == 0 && !taken.items.is_empty() {
+            let items = horizon_client::save::encode_items(&std::mem::take(&mut taken.items));
+            taken.nbt.insert("Items".into(), items);
+        }
+        self.native_block_entity_tick([pos.0, pos.1, pos.2], &mut taken);
+        if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
+            && m.id.is_empty()
+        {
+            let moved = taken.items != items;
+            **m = taken;
+            // BlockEntity.setChanged: the next save writes its chunk, and
+            // comparators read a container whose items changed.
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+            if moved {
+                self.container_changed(pos);
+            }
+        } else if taken.items.iter().any(Option::is_some) {
+            // The mod removed or replaced its own block during the call. Vanilla
+            // ticks it in the world and drops a container's contents on removal.
+            let lost = std::mem::take(&mut taken.items);
+            let at = BlockPos {
+                x: pos.0,
+                y: pos.1,
+                z: pos.2,
+            };
+            self.with_level(|_, level, _| level.drop_lost_contents(at, lost));
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+        }
+    }
     /// Options > Mods' rows for the native mods, after the others.
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
@@ -641,6 +1121,11 @@ fn debug_takes(corner: Corner, debug: bool, charts: [bool; 2]) -> bool {
         }
 }
 
+/// A menu of `MOD_MENUS`, by its name.
+fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
+    MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
+}
+
 /// `v` within `lo..=hi`; `lo` when it is not a number.
 fn finite(v: f32, lo: f32, hi: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { lo }
@@ -692,8 +1177,25 @@ mod tests {
             .split("/// Helpers for native mods")
             .next()
             .unwrap();
+        let level_section = source
+            .split("impl GameLevel<'_> {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        let level_hooks: BTreeSet<_> = level_section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
         let declared: BTreeSet<_> = section
             .lines()
+            .chain(level_section.lines())
             .filter_map(|line| {
                 line.trim()
                     .strip_prefix("pub(super) fn native_")?
@@ -711,12 +1213,29 @@ mod tests {
                 "invalid or duplicate hook: {name} v{version}"
             );
             names.insert(name);
+            let owner = if level_hooks.contains(name) {
+                "GameLevel"
+            } else {
+                "Game"
+            };
             assert_eq!(
                 hook["target"].as_str().unwrap(),
-                format!("horizon_client::game::native_hooks::Game<'_>::native_{name}")
+                format!("horizon_client::game::native_hooks::{owner}<'_>::native_{name}")
             );
         }
         assert_eq!(names, declared);
+    }
+
+    /// A mod container opens a slot grid or a furnace's menu, by its slot
+    /// count; no menu with rules of its own (a brewing stand's, a crafter's).
+    #[test]
+    fn mod_menus_are_slot_grids_and_furnaces() {
+        use super::mod_menu;
+        assert_eq!(mod_menu("minecraft:hopper"), Some(("minecraft:hopper", 5)));
+        assert_eq!(mod_menu("minecraft:generic_9x3").map(|m| m.1), Some(27));
+        assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
+        assert_eq!(mod_menu("minecraft:brewing_stand"), None);
+        assert_eq!(mod_menu("hopper"), None);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

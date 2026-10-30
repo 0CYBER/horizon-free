@@ -58,7 +58,7 @@ impl Game<'_> {
     /// Whether the chunk mesh doesn't show the blocks at `p` yet (edited,
     /// meshing, or waiting for its upload).
     pub(super) fn section_mesh_pending(&self, p: [i32; 3]) -> bool {
-        let Some(y) = p[1].checked_sub(horizon_client::chunk::MIN_Y) else {
+        let Some(y) = p[1].checked_sub(self.world.layout().min_y()) else {
             return false;
         };
         let section = (p[0] >> 4, y.div_euclid(16), p[2] >> 4);

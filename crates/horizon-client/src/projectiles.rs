@@ -129,6 +129,10 @@ pub struct Projectile {
     /// `Entity.needsSync`: a server tells its clients about the change this
     /// tick instead of at the next update interval.
     pub needs_sync: bool,
+    /// `Entity.wasTouchingWater`: what the last tick's
+    /// `updateFluidInteraction` found around the box after the move, read by
+    /// the next tick's inertia (false until the first tick has moved it).
+    pub touching_water: bool,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -148,7 +152,9 @@ pub enum Hit {
 /// the boxes of entities it could hit.
 pub trait ProjectileWorld {
     fn clip(&self, from: Vec3, to: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])>;
-    fn in_water(&self, at: Vec3) -> bool;
+    /// `Entity.isInWater` as `updateFluidInteraction` sets it: some water
+    /// block's surface reaches the bottom of the box (deflated by 0.001).
+    fn in_water(&self, bounds: Aabb) -> bool;
     fn targets(&self) -> &[(Who, Aabb)];
     /// `Level.isEmptyBlock`.
     fn empty(&self, _p: [i32; 3]) -> bool {
@@ -176,8 +182,26 @@ fn axis_of(d: u8) -> u8 {
     }
 }
 impl Projectile {
+    /// `Entity.getBoundingBox`: its type's square box standing on its position.
+    pub fn bounds(&self) -> Aabb {
+        let (p, half) = (self.position, self.kind.size() / 2.0);
+        let height = self.kind.size();
+        Aabb::new(
+            Vec3::new(p.x - half, p.y, p.z - half),
+            Vec3::new(p.x + half, p.y + height, p.z + half),
+        )
+    }
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
+        // `AbstractWindCharge`'s constructors set it to 0.
+        let acceleration = if matches!(
+            kind,
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
+        ) {
+            0.0
+        } else {
+            0.1
+        };
         Self {
             id: 0,
             kind,
@@ -192,8 +216,9 @@ impl Projectile {
             stuck: false,
             left_owner: false,
             bonus: Default::default(),
-            acceleration: 0.1,
+            acceleration,
             needs_sync: false,
+            touching_water: false,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
                 Box::new(crate::arrows::ArrowState::new(
@@ -649,6 +674,8 @@ impl Projectile {
         // WitherSkull.getInertia: 0.73 for dangerous skulls.
         let inertia = match self.kind {
             ProjectileKind::WitherSkull { dangerous: true } => 0.73,
+            // AbstractWindCharge.getInertia and getLiquidInertia.
+            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => 1.0,
             _ if water => 0.8,
             _ => 0.95,
         };
@@ -668,16 +695,24 @@ impl Projectile {
         if matches!(self.kind, ProjectileKind::ShulkerBullet { .. }) {
             return self.tick_bullet(w);
         }
-        let water = w.in_water(self.position);
+        // ThrowableProjectile and AbstractHurtingProjectile.applyInertia read
+        // `isInWater` before their move and `Projectile.tick`'s base tick;
+        // LlamaSpit.tick runs that base tick first, at the spit's box here.
+        let water = if self.kind == ProjectileKind::LlamaSpit {
+            w.in_water(self.bounds())
+        } else {
+            self.touching_water
+        };
         match self.kind {
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
-            | ProjectileKind::WitherSkull { .. } => {
+            | ProjectileKind::WitherSkull { .. }
+            | ProjectileKind::WindCharge
+            | ProjectileKind::BreezeWindCharge => {
                 self.apply_hurting_inertia(water);
             }
             // Arrows and tridents tick with `arrows::tick`.
             ProjectileKind::Arrow { .. } | ProjectileKind::Trident => {}
-            ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
             ProjectileKind::LlamaSpit => {
                 if water {
@@ -765,6 +800,8 @@ impl Projectile {
         if !self.is_fireball() {
             self.update_rotation();
         }
+        // Entity.baseTick's updateFluidInteraction, after the move.
+        self.touching_water = w.in_water(self.bounds());
         let alive =
             self.position.y > -128.0 && self.age < if self.is_fireball() { 1200 } else { 6000 };
         (alive, Hit::None)
@@ -841,7 +878,7 @@ mod tests {
         fn clip(&self, _: Vec3, _: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
             None
         }
-        fn in_water(&self, _: Vec3) -> bool {
+        fn in_water(&self, _: Aabb) -> bool {
             false
         }
         fn targets(&self) -> &[(Who, Aabb)] {
@@ -912,6 +949,18 @@ mod tests {
         p.tick(&Empty(vec![]));
         assert!((p.velocity.x - 0.285).abs() < 1e-9);
         assert!((p.position.x - 0.285).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_wind_charge_holds_its_speed_until_a_deflection_gives_it_power() {
+        let mut p = Projectile::new(ProjectileKind::WindCharge, Vec3::ZERO, None);
+        p.velocity = Vec3::new(0.0, 1.5, 0.0);
+        p.apply_hurting_inertia(false);
+        assert_eq!(p.velocity, Vec3::new(0.0, 1.5, 0.0));
+        // Inertia 1 in water too, and the power adds along the movement.
+        p.acceleration = 0.1;
+        p.apply_hurting_inertia(true);
+        assert!((p.velocity.y - 1.6).abs() < 1e-12, "{p:?}");
     }
 
     #[test]

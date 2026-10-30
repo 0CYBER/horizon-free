@@ -56,6 +56,9 @@ pub struct HubConfig {
     pub view_distance: i32,
     pub simulation_distance: i32,
     pub dimension: String,
+    /// `MinecraftServer.allowFlight`: true except on a dedicated server whose
+    /// `allow-flight` is off.
+    pub allow_flight: bool,
     pub seed: i64,
     pub max_players: usize,
     /// A dedicated server: operators from `ops`, the dedicated-only commands.
@@ -64,6 +67,8 @@ pub struct HubConfig {
     /// the owner's level from `ops`, the others' from Allow Commands and
     /// the guests' command access, and the integrated-only commands.
     pub integrated: bool,
+    /// The shapes of the world's levels (their dimension types).
+    pub levels: crate::chunk::LevelShapes,
 }
 
 /// The host player as the other players see them.
@@ -137,6 +142,10 @@ pub struct TickCtx<'a> {
     pub collision: Option<&'a BlockCollisionRegistry<'a>>,
     /// The level's world border (PlayerList.sendLevelInfo sends it).
     pub border: &'a crate::worldborder::WorldBorder,
+    /// The level's columns still being generated: a column is sent once
+    /// each neighbour is loaded or a decorated proto chunk (#4294). None:
+    /// every column there is is loaded.
+    pub streaming: Option<&'a crate::streaming::Streaming>,
 }
 
 /// What the gameplay code has to do for a guest.
@@ -164,6 +173,8 @@ pub enum HostEvent {
 }
 
 pub struct Hub {
+    /// Clicks on and closings of native mods' menus, for the game.
+    pub native_menu_events: Vec<super::menu::NativeMenuEvent>,
     pub lan: Lan,
     pub config: HubConfig,
     pub encoder: ChunkEncoder,
@@ -173,6 +184,8 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// The anticheat, when `server.toml` turns it on (dedicated servers).
+    pub anticheat: Option<Box<super::anticheat::Anticheat>>,
     /// The `immediate_respawn` game rule, as the players were last told.
     immediate_respawn: bool,
     /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
@@ -357,8 +370,7 @@ impl Hub {
             .unwrap_or(0);
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
-        let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
+        encoder.set_dimension(config.levels.get(&config.dimension));
         Self {
             lan,
             config,
@@ -368,6 +380,7 @@ impl Hub {
             ticks: 0,
             immediate_respawn: false,
             movement_checks: (true, true),
+            anticheat: None,
             singleplayer_owner: None,
             flat_world: false,
             riding: Default::default(),
@@ -390,6 +403,7 @@ impl Hub {
             entities: Default::default(),
             entity_out: Vec::new(),
             mod_commands: (serde_json::Value::Null, None),
+            native_menu_events: Vec::new(),
             teams: Vec::new(),
         }
     }
@@ -512,6 +526,18 @@ impl Hub {
             g.sender.send(body.clone());
         }
     }
+    /// `ServerPlayer.sendSystemMessage` to the guest with `uuid`, in any
+    /// dimension.
+    pub fn system_message_to_player(&self, uuid: u128, content: Tag) {
+        let body = C::SystemChat(play::SystemChat {
+            content,
+            overlay: false,
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| g.placed && g.uuid == uuid) {
+            g.sender.send(body.clone());
+        }
+    }
     /// `ServerPlayer.sendOverlayMessage` to every guest (the action bar).
     pub fn overlay_message(&self, content: Tag) {
         self.broadcast(&C::SystemChat(play::SystemChat {
@@ -621,7 +647,15 @@ impl Hub {
         play::PlayerInfo {
             uuid,
             name: Some(name.to_owned()),
-            properties: guest.map(|g| g.properties.clone()).unwrap_or_default(),
+            properties: guest
+                .map(|g| {
+                    listed_properties(
+                        &g.properties,
+                        self.singleplayer_owner == Some(g.uuid),
+                        self.lan.shared.config.owner_profile.as_deref(),
+                    )
+                })
+                .unwrap_or_default(),
             chat_session: guest.and_then(|g| g.chain.session()).map(|s| s.data()),
             game_mode: Some(mode),
             listed: Some(true),
@@ -768,7 +802,7 @@ impl Hub {
             }),
         );
         self.guests[i].placed = true;
-        self.teleport(i, None);
+        self.resend_teleport(i, None);
         let g = &self.guests[i];
         g.send(&C::ServerData(play::ServerData {
             motd: literal(&self.lan.shared.motd()),
@@ -937,6 +971,11 @@ impl Hub {
         }
     }
 
+    /// Whether vanilla's command tree has a command of this name.
+    pub fn vanilla_command(&self, name: &str) -> bool {
+        self.sync.commands.as_ref().is_some_and(|t| t.has(name))
+    }
+
     /// The key [`Hub::set_mod_commands`] last had: the game compares it
     /// with its server mods' each tick.
     pub fn mod_commands_key(&self) -> Option<u64> {
@@ -987,12 +1026,21 @@ impl Hub {
 
     /// ServerGamePacketListenerImpl.teleport: move the client and wait for its confirmation.
     pub fn teleport(&mut self, i: usize, position: Option<[f64; 3]>) {
+        // ServerPlayer.teleportTo: resetFlyingTicks.
+        self.guests[i].above_ground_ticks = 0;
+        self.teleport_relative(i, position, 0);
+    }
+
+    /// `ServerGamePacketListenerImpl.teleport` alone (a refused or too fast
+    /// move, a teleport sent again): the flying ticks go on.
+    pub(super) fn resend_teleport(&mut self, i: usize, position: Option<[f64; 3]>) {
         self.teleport_relative(i, position, 0);
     }
 
     /// A teleport to `position` that keeps the player's motion and look
     /// (`Relative.DELTA` and `Relative.ROTATION`: an End gateway's).
     pub fn teleport_keeping_motion(&mut self, i: usize, position: [f64; 3]) {
+        self.guests[i].above_ground_ticks = 0;
         use play::relative::{DELTA_X, DELTA_Y, DELTA_Z, ROTATE_DELTA, X_ROT, Y_ROT};
         let relatives = Y_ROT | X_ROT | DELTA_X | DELTA_Y | DELTA_Z | ROTATE_DELTA;
         self.teleport_relative(i, Some(position), relatives);
@@ -1158,6 +1206,7 @@ impl Hub {
     /// packets queued for its own level's pass.
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
+        self.anticheat_tick(ctx.tick_rate);
         let mut events = Vec::new();
         for event in self.lan.poll() {
             match event {
@@ -1211,6 +1260,26 @@ impl Hub {
                 }
             }
         }
+        // keepConnectionAlive's timeout, checked once a second here, not on
+        // the writer thread: a client that stops reading blocks that thread
+        // and would hold its slot forever. Kicked, it gets the reason; still
+        // here a second later, its connection is closed under the writer.
+        if self.ticks.is_multiple_of(20) {
+            for g in &self.guests {
+                if !g.left_reason.is_empty() && g.sender.timed_out() {
+                    g.sender.close();
+                }
+            }
+            let silent: Vec<u32> = self
+                .guests
+                .iter()
+                .filter(|g| g.left_reason.is_empty() && g.sender.timed_out())
+                .map(|g| g.conn)
+                .collect();
+            for conn in silent {
+                self.kick(conn, translatable("disconnect.timeout", &[]));
+            }
+        }
         events
     }
 
@@ -1222,6 +1291,7 @@ impl Hub {
         for i in 0..self.guests.len() {
             if self.here(&self.guests[i]) {
                 self.process_inbox(i, ctx, &mut events);
+                self.tick_floating(i, &mut events);
             }
         }
         if !self.guests.iter().any(|g| self.here(g)) {
@@ -1299,6 +1369,17 @@ impl Hub {
 
     fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
         let mut g = self.guests.remove(i);
+        if let Some(m) = g
+            .menu
+            .as_ref()
+            .filter(|m| m.slots == super::menu::Slots::Native)
+        {
+            self.native_menu_events
+                .push(super::menu::NativeMenuEvent::Closed {
+                    uuid: g.uuid,
+                    window: m.window,
+                });
+        }
         if g.left_reason.is_empty() {
             g.left_reason = reason.to_owned();
         }
@@ -1406,7 +1487,7 @@ impl Hub {
         for i in 0..self.guests.len() {
             if self.here(&self.guests[i]) {
                 self.update_view(i);
-                if let Some(batch) = self.next_batch(i, world) {
+                if let Some(batch) = self.next_batch(i, world, ctx.streaming) {
                     batches.push((i, batch));
                 }
             }
@@ -1439,7 +1520,11 @@ impl Hub {
         self.encoder.warm(&columns);
         let mut bodies: Vec<Vec<u8>> = columns
             .iter()
-            .map(|c| self.encoder.body_in(c, world))
+            .map(|c| {
+                self.encoder.body_with(c, world, &|x, z| {
+                    ctx.streaming.and_then(|s| s.proto_sections(x, z))
+                })
+            })
             .collect();
         for (i, taken, batch) in batches {
             let g = &mut self.guests[i];
@@ -1498,7 +1583,12 @@ impl Hub {
     /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
     /// as many as the batch quota the client's acknowledgements pace allows,
     /// with their places in the queue.
-    fn next_batch<'w>(&mut self, i: usize, world: &'w World) -> Option<Vec<(usize, &'w Chunk)>> {
+    fn next_batch<'w>(
+        &mut self,
+        i: usize,
+        world: &'w World,
+        streaming: Option<&crate::streaming::Streaming>,
+    ) -> Option<Vec<(usize, &'w Chunk)>> {
         let g = &mut self.guests[i];
         if self.ticks <= g.placed_at + 1 || g.unacknowledged >= g.max_unacknowledged {
             return None;
@@ -1513,9 +1603,43 @@ impl Hub {
             .iter()
             .enumerate()
             .filter_map(|(idx, key)| Some((idx, &**world.chunks.get(key).filter(|c| c.lit)?)))
+            // ChunkStatus.LIGHT needs its neighbours at INITIALIZE_LIGHT: a
+            // column whose light layers would leave one out waits for it.
+            .filter(|(_, c)| {
+                let Some(streaming) = streaming else {
+                    return true;
+                };
+                (-1..=1).all(|dz| {
+                    (-1..=1).all(|dx| {
+                        let (x, z) = (c.x + dx, c.z + dz);
+                        world.chunks.contains_key(&(x, z))
+                            || streaming.proto_sections(x, z).is_some()
+                    })
+                })
+            })
             .take(budget)
             .collect();
         (!batch.is_empty()).then_some(batch)
+    }
+
+    /// `ChunkMap.resendBiomesForChunks`: each player in the level is sent,
+    /// in one packet, the biomes of those of `columns` it has been sent
+    /// (`getPlayers(pos, false)`), in the order given.
+    pub fn resend_biomes(&self, world: &World, columns: &[(i32, i32)]) {
+        let data: Vec<_> = columns
+            .iter()
+            .filter_map(|key| Some((*key, self.encoder.biome_data(world.chunks.get(key)?))))
+            .collect();
+        for g in self.guests.iter().filter(|g| self.here(g)) {
+            let chunks: Vec<_> = data
+                .iter()
+                .filter(|(key, _)| g.sent_chunks.contains(key))
+                .map(|(_, d)| d.clone())
+                .collect();
+            if !chunks.is_empty() {
+                g.send(&C::ChunksBiomes(play::ChunksBiomes { chunks }));
+            }
+        }
     }
 
     /// `ChunkHolder.broadcastChanges`' light part: the light sections that
@@ -1768,6 +1892,7 @@ impl Hub {
             precise: false,
             needs_sync: false,
             leash: None,
+            spectator: false,
         }
     }
 
@@ -1804,7 +1929,7 @@ impl Hub {
                 let e = &h.equipment;
                 self.equipment_of(&e[0], &e[1], [&e[5], &e[4], &e[3], &e[2]])
             };
-            all.push(self.player_state(
+            let mut state = self.player_state(
                 h.entity_id,
                 h.uuid,
                 h.position,
@@ -1819,7 +1944,9 @@ impl Hub {
                 equipment,
                 h.attributes.clone(),
                 &[],
-            ));
+            );
+            state.spectator = h.game_mode == 3;
+            all.push(state);
         }
         let placed: Vec<usize> = (0..self.guests.len())
             .filter(|&i| self.here(&self.guests[i]))
@@ -1838,7 +1965,7 @@ impl Hub {
                 let equipment =
                     self.equipment_of(&main, &off, [&armor[0], &armor[1], &armor[2], &armor[3]]);
                 let g = &self.guests[i];
-                self.player_state(
+                let mut state = self.player_state(
                     g.entity_id,
                     g.uuid,
                     g.position,
@@ -1856,7 +1983,9 @@ impl Hub {
                         .map(|m| super::attributes::syncable(&m.attributes))
                         .unwrap_or_default(),
                     &g.effects.list,
-                )
+                );
+                state.spectator = g.spectator();
+                state
             })
             .collect();
         all.extend(guest_states);
@@ -1877,6 +2006,7 @@ impl Hub {
             .zip(outs.iter_mut())
             .map(|(g, out)| Viewer {
                 entity_id: g.entity_id,
+                spectator: g.spectator(),
                 moved: std::mem::take(&mut g.moved),
                 position: g.position,
                 view_distance: g.view_distance,
@@ -2238,6 +2368,7 @@ impl Hub {
                         g.known_movement = [0.0; 3];
                     }
                     g.position_this_tick = false;
+                    self.anticheat_tick_end(i, events);
                 }
                 // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
                 S::RecipeBookChangeSettings(p) => {
@@ -2358,7 +2489,7 @@ impl Hub {
         // teleport, which is sent again after 20 ticks without an answer.
         if let Some((_, at)) = g.awaiting_teleport {
             if self.ticks - g.teleport_tick > 20 {
-                self.teleport(i, Some(at));
+                self.resend_teleport(i, Some(at));
             }
             return;
         }
@@ -2396,7 +2527,7 @@ impl Hub {
         if g.sleeping {
             if moved > 1.0 {
                 (g.yaw, g.pitch) = (yaw, pitch);
-                self.teleport(i, None);
+                self.resend_teleport(i, None);
             }
             return;
         }
@@ -2426,13 +2557,13 @@ impl Hub {
                         crate::java_text::double_to_string(d[1]),
                         crate::java_text::double_to_string(d[2])
                     )));
-                    self.teleport(i, None);
+                    self.resend_teleport(i, None);
                     return;
                 }
             }
         }
         let start = g.position;
-        let (wrongly, refused) = self.collide(i, to, ctx);
+        let (wrongly, refused, stands) = self.collide(i, to, ctx);
         if wrongly {
             let line = format!("{} moved wrongly!", self.guests[i].name);
             events.push(HostEvent::Warn(line));
@@ -2440,10 +2571,30 @@ impl Hub {
         if refused {
             let g = &mut self.guests[i];
             (g.yaw, g.pitch) = (yaw, pitch);
-            self.teleport(i, Some(start));
+            self.resend_teleport(i, Some(start));
             return;
         }
+        // clientIsFloating, from the move that is accepted: no upward-or-level
+        // step onto something, nothing but air around the body, and nothing
+        // that lets the player hover (the server's allow-flight, mayfly,
+        // levitation, gliding, riptide).
+        let floating = ctx.collision.is_some() && {
+            let g = &self.guests[i];
+            to[1] - g.position[1] >= -0.03125
+                && !stands
+                && !g.spectator()
+                && !self.config.allow_flight
+                && !g.creative()
+                && g.effects.get("levitation").is_none()
+                && !g.fall_flying
+                && !g
+                    .motion
+                    .as_ref()
+                    .is_some_and(|m| m.auto_spin_attack_ticks > 0)
+                && self.no_blocks_around(i, to, ctx.world)
+        };
         let g = &mut self.guests[i];
+        g.client_is_floating = floating;
         g.previous_position = g.position;
         g.position = to;
         // ServerChunkCache.move: its pairs are checked again.
@@ -2461,17 +2612,55 @@ impl Hub {
         g.ticks = g.ticks.max(1);
     }
 
+    /// `ServerGamePacketListenerImpl.noBlocksAround`: every block of the
+    /// player's box grown by 0.0625 and stretched 0.55 down is air.
+    fn no_blocks_around(&self, i: usize, at: [f64; 3], world: &World) -> bool {
+        let g = &self.guests[i];
+        let d = g.dimensions();
+        let half = f64::from(d.width) / 2.0 + 0.0625;
+        let lo = [at[0] - half, at[1] - 0.0625 - 0.55, at[2] - half];
+        let hi = [
+            at[0] + half,
+            at[1] + f64::from(d.height) + 0.0625,
+            at[2] + half,
+        ];
+        let cell = |v: f64| v.floor() as i32;
+        (cell(lo[0])..=cell(hi[0])).all(|x| {
+            (cell(lo[1])..=cell(hi[1]))
+                .all(|y| (cell(lo[2])..=cell(hi[2])).all(|z| world.is_air(world.block(x, y, z))))
+        })
+    }
+
+    /// `ServerGamePacketListenerImpl.tickPlayer`'s flying check: a player the
+    /// last move left hovering for more than `getMaximumFlyingTicks` ticks is
+    /// kicked.
+    fn tick_floating(&mut self, i: usize, events: &mut Vec<HostEvent>) {
+        let g = &mut self.guests[i];
+        if g.client_is_floating && !g.sleeping && g.vehicle.is_none() && !g.dead {
+            g.above_ground_ticks += 1;
+            if g.above_ground_ticks > maximum_flying_ticks(PLAYER_GRAVITY) {
+                let line = format!("{} was kicked for floating too long!", g.name);
+                let conn = g.conn;
+                events.push(HostEvent::Warn(line));
+                self.kick(conn, translatable("multiplayer.disconnect.flying", &[]));
+            }
+        } else {
+            g.client_is_floating = false;
+            g.above_ground_ticks = 0;
+        }
+    }
+
     /// The collision part of handlePlayerPositionChange: whether the move
     /// counts as moved wrongly (logged), and whether it is refused (the
     /// player is sent back where they were).
-    fn collide(&self, i: usize, to: [f64; 3], ctx: &TickCtx) -> (bool, bool) {
+    fn collide(&self, i: usize, to: [f64; 3], ctx: &TickCtx) -> (bool, bool, bool) {
         let g = &self.guests[i];
         // noPhysics (spectators) and sleepers move freely.
         let Some(binding) = ctx.collision else {
-            return (false, false);
+            return (false, false, false);
         };
         if g.spectator() || g.sleeping {
-            return (false, false);
+            return (false, false, false);
         }
         // getBoundingBox: the box of the body's pose (swimming and crawling
         // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
@@ -2496,28 +2685,29 @@ impl Hub {
             to[1] - g.position[1],
             to[2] - g.position[2],
         );
+        let done = scene.resolve(old, movement, 0.6, g.on_ground).ok();
         let fail = !g.creative()
-            && scene
-                .resolve(old, movement, 0.6, g.on_ground)
-                .is_ok_and(|done| {
-                    let (dx, dz) = (movement.x - done.x, movement.z - done.z);
-                    dx * dx + dz * dz > 0.0625
-                });
+            && done.is_some_and(|done| {
+                let (dx, dz) = (movement.x - done.x, movement.z - done.z);
+                dx * dx + dz * dz > 0.0625
+            });
+        // Entity.move: verticalCollisionBelow, the player "stands on something".
+        let stands = done.is_some_and(|done| movement.y < 0.0 && done.y != movement.y);
         if fail && scene.unobstructed(old).unwrap_or(true) {
-            return (true, true);
+            return (true, true, stands);
         }
         // isEntityCollidingWithAnythingNew: a block the old box did not
         // already touch.
         let shrink = f64::from(1.0E-5_f32);
         let shrink = Vec3::new(shrink, shrink, shrink);
         let Ok(old_shape) = VoxelShape::from_box(old.deflate(shrink)) else {
-            return (fail, false);
+            return (fail, false, stands);
         };
         let context = CollisionContext::position(g.position[1]);
         let Ok(scan) =
             BlockCollisionScan::new(&mut scene, context, new.deflate(shrink), false, 1 << 20)
         else {
-            return (fail, false);
+            return (fail, false, stands);
         };
         for hit in scan {
             let Ok(hit) = hit else { break };
@@ -2526,10 +2716,10 @@ impl Hub {
                 .join_is_not_empty(&old_shape, ShapeOp::AND)
                 .unwrap_or(true)
             {
-                return (fail, true);
+                return (fail, true, stands);
             }
         }
-        (fail, false)
+        (fail, false, stands)
     }
 
     /// Acknowledge a block interaction (ClientboundBlockChangedAckPacket).
@@ -2677,7 +2867,7 @@ impl Hub {
         g.sent_chunks.clear();
         g.chunk_queue.clear();
         g.tracker.clear();
-        self.teleport(i, None);
+        self.resend_teleport(i, None);
         let spawn = self.default_spawn(ctx.spawn);
         let g = &mut self.guests[i];
         g.send(&spawn);
@@ -2731,9 +2921,8 @@ impl Hub {
             .sync
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
-        let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
         self.encoder
-            .set_dimension(d.min_y, d.height, d.has_skylight);
+            .set_dimension(self.config.levels.get(dimension));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2787,7 +2976,7 @@ impl Hub {
             g.landing = true;
             g.awaiting_teleport = None;
         } else {
-            self.teleport(i, None);
+            self.resend_teleport(i, None);
         }
         let g = &mut self.guests[i];
         g.send(&C::PlayerAbilities(play::PlayerAbilities {
@@ -2863,6 +3052,21 @@ const INBOX_LIMIT: usize = 20 * PACKETS_PER_TICK;
 /// real client's largest packets (a 100-page book) are a few hundred kB.
 const INBOX_BYTES: usize = 16 << 20;
 
+/// The `minecraft:gravity` attribute of a player.
+const PLAYER_GRAVITY: f64 = 0.08;
+
+/// `ServerGamePacketListenerImpl.getMaximumFlyingTicks`: 80 ticks, more where
+/// gravity is weaker, none at all (never kicked) without gravity.
+fn maximum_flying_ticks(gravity: f64) -> i32 {
+    if gravity < f64::from(1.0E-5_f32) {
+        return i32::MAX;
+    }
+    let modifier = 0.08 / gravity;
+    // Mth.ceil is (int) with a floor correction; a double past int range
+    // saturates like the Java cast.
+    (80.0 * modifier.max(1.0)).ceil() as i32
+}
+
 fn invalid_movement() -> Tag {
     translatable("multiplayer.disconnect.invalid_player_movement", &[])
 }
@@ -2923,10 +3127,85 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
     shared
 }
 
+/// The profile properties the player list gives a player: those it logged
+/// in with, or for the integrated server's owner (who logs in with none) the
+/// signed-in account's, once fetched (`IntegratedServer.getSingleplayerProfile`).
+fn listed_properties(
+    logged_in: &[horizon_protocol::packets::login::Property],
+    owner: bool,
+    profile: Option<&super::OwnerProfile>,
+) -> Vec<horizon_protocol::packets::login::Property> {
+    match profile {
+        Some(profile) if owner && logged_in.is_empty() => profile.properties().to_vec(),
+        _ => logged_in.to_vec(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fast_hash::FxHashSet;
+
+    /// `getMaximumFlyingTicks`: 80 ticks at normal gravity, ceil(80 * 0.08 /
+    /// gravity) where it is weaker, and never a kick without gravity.
+    #[test]
+    fn maximum_flying_ticks_follow_gravity() {
+        assert_eq!(maximum_flying_ticks(0.08), 80);
+        assert_eq!(maximum_flying_ticks(0.16), 80);
+        assert_eq!(maximum_flying_ticks(0.04), 160);
+        assert_eq!(maximum_flying_ticks(0.03), 214);
+        assert_eq!(maximum_flying_ticks(0.0), i32::MAX);
+        assert_eq!(maximum_flying_ticks(1.0E-6), i32::MAX);
+    }
+
+    fn textures(value: &str) -> horizon_protocol::packets::login::Property {
+        horizon_protocol::packets::login::Property {
+            name: "textures".into(),
+            value: value.into(),
+            signature: Some("c2lnbmVk".into()),
+        }
+    }
+
+    /// The owner is listed with the account's skin once the fetch answered,
+    /// with none before (no wait) or when it failed; other players keep the
+    /// properties they logged in with, and none of the owner's.
+    #[test]
+    fn the_owner_is_listed_with_the_accounts_skin_once_fetched() {
+        let (answer, fetched) = std::sync::mpsc::channel();
+        let profile = super::super::OwnerProfile::new(move || fetched.recv().unwrap_or_default());
+        let start = std::time::Instant::now();
+        assert!(listed_properties(&[], true, Some(&profile)).is_empty());
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        answer.send(vec![textures("owner")]).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while listed_properties(&[], true, Some(&profile)).is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the fetch never landed"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            listed_properties(&[], true, Some(&profile)),
+            vec![textures("owner")]
+        );
+        // A guest: its own properties (online mode), or none (offline mode).
+        assert_eq!(
+            listed_properties(&[textures("guest")], false, Some(&profile)),
+            vec![textures("guest")]
+        );
+        assert!(listed_properties(&[], false, Some(&profile)).is_empty());
+        // No signed-in account (no fetch): as before.
+        assert!(listed_properties(&[], true, None).is_empty());
+        let failed = super::super::OwnerProfile::new(Vec::new);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while failed.properties.get().is_none() {
+            let _ = failed.properties();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(listed_properties(&[], true, Some(&failed)).is_empty());
+    }
 
     /// `requeue` as it was, scanning the queue for each chunk of the view.
     fn requeue_scan(
