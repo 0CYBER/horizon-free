@@ -184,6 +184,9 @@ pub struct GeneratorData {
     biome_carvers: Vec<Vec<Arc<WorldCarver>>>,
     carving_blocks: CarvingBlocks,
     pub(super) block_tags: BTreeMap<String, Vec<String>>,
+    /// `block_tags` bound to block states, once for the feature bindings of
+    /// decoration, structures and live features (`feature_block_bindings`).
+    bound_block_tags: std::sync::OnceLock<super::block_feature::BoundBlockTags>,
     pub(super) biome_tags: BTreeMap<String, Vec<String>>,
     pub(super) feature_resources: Option<FeatureResources>,
     /// Templates, processor lists and per-state template transforms.
@@ -557,6 +560,7 @@ impl GeneratorData {
             feature_resources,
             ring_cache: Mutex::new(Vec::new()),
             decorations: Mutex::new(Vec::new()),
+            bound_block_tags: std::sync::OnceLock::new(),
         }))
     }
     /// The concentric ring positions (strongholds) of the generator for
@@ -675,6 +679,21 @@ impl GeneratorData {
     }
     pub(super) fn integers(&self) -> &BTreeSet<(String, String)> {
         &self.integers
+    }
+    /// Feature block bindings over this data's blocks and block tags. The tags'
+    /// state sets are bound once and shared: each binding held 5 MB of them.
+    pub(super) fn feature_block_bindings(
+        &self,
+    ) -> Result<super::block_feature::FeatureBlockBindings<'static>, DecodeError> {
+        use super::block_feature::FeatureBlockBindings;
+        let bound = match self.bound_block_tags.get() {
+            Some(bound) => bound.clone(),
+            None => {
+                let bound = FeatureBlockBindings::bind_tags(self.registry, &self.block_tags)?;
+                self.bound_block_tags.get_or_init(|| bound).clone()
+            }
+        };
+        FeatureBlockBindings::with_bound_tags(self.registry, self.integers.clone(), bound)
     }
 }
 
@@ -3083,6 +3102,22 @@ impl GeneratorWorker {
     }
     pub fn set_structure_mobs(&mut self, mobs: Arc<dyn StructureMobs>) {
         self.state.structure_mobs = Some(mobs);
+    }
+    /// Give back the density scratch buffers and the lookup caches, which only
+    /// speed up the next chunks (a generating worker holds megabytes of them).
+    /// Results do not change: they are made again on demand.
+    pub fn release(&mut self) {
+        let state = &mut self.state;
+        for context in [
+            &mut state.terrain_context,
+            &mut state.biome_context,
+            &mut state.carver_context,
+        ] {
+            context.clear_scratch();
+        }
+        state.carver_biomes = HashMap::new();
+        state.structure_biomes = HashMap::new();
+        state.heights = HashMap::new();
     }
 }
 
