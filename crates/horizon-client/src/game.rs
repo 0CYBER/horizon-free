@@ -1865,6 +1865,8 @@ struct Game<'a> {
     arrow_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
+    /// The screen of a mod block's menu open on this client (`native_screen`).
+    mod_screen: Option<native_hooks::OpenNativeScreen>,
     /// Where item entities are, while the block entities tick (hoppers).
     item_columns: Option<machines::ItemColumns>,
     creative_screen: Creative,
@@ -6554,6 +6556,10 @@ impl Game<'_> {
             return v;
         }
         let mut v: Vec<usize> = (0..36).collect();
+        if let Some(shown) = self.native_screen_slots() {
+            v.extend(shown);
+            return v;
+        }
         match self.container_kind() {
             Some(BlockEntity::Chest(_)) => v.extend((0..self.container_size()).map(|i| 300 + i)),
             Some(BlockEntity::Furnace(_)) => v.extend(300..303),
@@ -6615,9 +6621,10 @@ impl Game<'_> {
         // ContainerScreen (3 rows) shifts the player inventory down by one pixel.
         // ChestMenu: the inventory sits `18 * (rows - 3) + 1` lower than the
         // 3-row layout of the other menus.
-        let shift = match self.chest_rows() {
-            Some(rows) => 1.0 + (rows as f32 - 3.0) * 18.0,
-            None => 0.0,
+        let shift = match (self.chest_rows(), self.native_screen_inventory_y()) {
+            (_, Some(y)) => y - 84.0,
+            (Some(rows), None) => 1.0 + (rows as f32 - 3.0) * 18.0,
+            (None, None) => 0.0,
         };
         match i {
             0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
@@ -6628,6 +6635,7 @@ impl Game<'_> {
             500..504 => (8.0, 8.0 + (i - 500) as f32 * 18.0),
             // InventoryMenu: the shield slot.
             504 => (77.0, 62.0),
+            300..500 if let Some(p) = self.native_screen_slot(i - 300) => p,
             300..500 => match self.container_kind() {
                 Some(BlockEntity::Furnace(_)) => {
                     [(56.0, 17.0), (56.0, 53.0), (116.0, 35.0)][(i - 300).min(2)]
@@ -6780,6 +6788,7 @@ impl Game<'_> {
                 .container
                 .and_then(|k| self.world.block_entities.get(&k))
             {
+                Some(_) if self.draw_native_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => self.draw_chest_screen(batch, ox, oy),
                 Some(BlockEntity::Furnace(f)) => {
@@ -14516,6 +14525,7 @@ impl<'a> Game<'a> {
             arrow_model: prepared.arrow_model,
             tnts: Vec::new(),
             hoppers: HashMap::new(),
+            mod_screen: None,
             item_columns: None,
             creative_screen: prepared.creative_screen,
             control: None,

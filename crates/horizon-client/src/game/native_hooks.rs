@@ -16,7 +16,9 @@
 //! `native_block_entity_ticks`, `native_block_entity_tick`): made when the
 //! block is placed, ticked on the server and saved with the chunk; and their
 //! item slots (`native_block_entity_container`), which hoppers, comparators
-//! and breaking the block use as they use vanilla's containers.
+//! and breaking the block use as they use vanilla's containers; and their
+//! screens on the client (`native_screen`, `native_screen_draw`), drawn with
+//! the mod's own GUI textures (`native_sprite`).
 //!
 //! Names, parameters and call sites are kept from release to release, and
 //! hook points are only ever added: each addition raises [`NATIVE_HOOKS_API`].
@@ -67,6 +69,27 @@ pub(crate) struct NativeMinimap {
     pub(crate) blocks_per_pixel: f32,
     pub(crate) rotate: bool,
     pub(crate) round: bool,
+}
+
+/// A mod block's screen over its menu (`native_screen`): its height (176
+/// wide, as vanilla's container screens), where each of the container's
+/// slots is (`Slot.x`, `Slot.y`; none hides the slot, and so do slots past
+/// the list), and the player inventory's first row (vanilla's is 84; the
+/// hotbar is 58 below it), from its top left.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NativeScreen {
+    pub height: f32,
+    pub slots: Vec<Option<[f32; 2]>>,
+    pub inventory_y: f32,
+}
+
+/// The mod screen open on this client: the block it is for, the key its
+/// slots are under, and the menu's data slots as the server sent them.
+pub(super) struct OpenNativeScreen {
+    key: Pos,
+    block: String,
+    screen: NativeScreen,
+    data: Vec<i32>,
 }
 
 /// The player as a native mod reads it.
@@ -373,6 +396,26 @@ impl Game<'_> {
     pub(super) fn native_block_entity_tick(&mut self, pos: [i32; 3], entity: &mut ModBlockEntity) {
         let _ = (pos, entity);
     }
+    /// A menu opens on this client for block `block`, a mod's: set `screen`
+    /// when the block is yours, to lay its screen out (`native_screen_draw`
+    /// draws it). The server's menu stays as it is. API 3.
+    pub(super) fn native_screen(&self, block: &str, screen: &mut Option<NativeScreen>) {
+        let _ = (block, screen);
+    }
+    /// Draw block `block`'s screen at `origin` (its top left, GUI pixels),
+    /// over a plain panel with its slots' frames and under the items and
+    /// labels, from the menu's data slots `data` (the block entity's `data`
+    /// on the server). Draw with `native_sprite`, `native_fill` and
+    /// `native_text`. API 3.
+    pub(super) fn native_screen_draw(
+        &self,
+        block: &str,
+        data: &[i32],
+        batch: &mut HudBatch,
+        origin: [f32; 2],
+    ) {
+        let _ = (block, data, batch, origin);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -433,6 +476,33 @@ impl Game<'_> {
         let [x, y, w, h] = rect;
         let [a, r, g, b] = argb.to_be_bytes();
         batch.fill(&self.gui.atlas, x, y, w, h, rgba(r, g, b, a));
+    }
+    /// Part `src` (`[x, y, w, h]` in the sprite's own pixels) of sprite
+    /// `name` (vanilla's `gui/...`, or a content mod's GUI texture
+    /// `mymod:gui/...`), drawn stretched into `dst` (`[x, y, w, h]` in GUI
+    /// pixels). False when there is no such sprite. API 3.
+    pub(super) fn native_sprite(
+        &self,
+        batch: &mut HudBatch,
+        name: &str,
+        src: [f32; 4],
+        dst: [f32; 4],
+    ) -> bool {
+        let Some(mut r) = self.gui.atlas.sprites.get(name).copied() else {
+            return false;
+        };
+        let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
+        r.u0 += src[0] * du;
+        r.v0 += src[1] * dv;
+        r.u1 = r.u0 + src[2] * du;
+        r.v1 = r.v0 + src[3] * dv;
+        batch.rect_uv(dst[0], dst[1], dst[2], dst[3], r, u32::MAX);
+        true
+    }
+    /// The size of sprite `name` in its own pixels, if there is one. API 3.
+    pub(super) fn native_sprite_size(&self, name: &str) -> Option<[f32; 2]> {
+        let r = self.gui.atlas.sprites.get(name)?;
+        Some([r.w as f32, r.h as f32])
     }
     /// A line of text at `(x, y)` in GUI pixels, opaque `rgb`.
     pub(super) fn native_text(
@@ -656,6 +726,136 @@ impl Game<'_> {
         let state = self.world.block(key.0, key.1, key.2).0;
         let c = self.world.block_entities.mod_container(state)?;
         mod_menu(c.menu.as_deref()?).map(|(menu, _)| menu)
+    }
+    /// A menu opened on this client with its slots under `key`, on block
+    /// `target`: a mod block's is laid out by its mod (`native_screen`).
+    pub(super) fn open_native_screen(&mut self, key: Pos, target: Option<Pos>) {
+        self.mod_screen = None;
+        let Some(t) = target else {
+            return;
+        };
+        let block = self
+            .res
+            .facts()
+            .get(self.world.block(t.0, t.1, t.2))
+            .name
+            .to_string();
+        if block.starts_with("minecraft:") {
+            return;
+        }
+        let mut screen = None;
+        self.native_screen(&block, &mut screen);
+        if let Some(screen) = screen {
+            self.mod_screen = Some(OpenNativeScreen {
+                key,
+                block,
+                screen,
+                data: Vec::new(),
+            });
+        }
+    }
+    /// The mod screen showing now, if any.
+    fn shown_native_screen(&self) -> Option<&OpenNativeScreen> {
+        self.mod_screen
+            .as_ref()
+            .filter(|s| self.screen == Screen::Inventory && self.container == Some(s.key))
+    }
+    /// A data slot of the open mod screen's menu (`ContainerSetData`); false
+    /// when none is showing.
+    pub(super) fn native_screen_data(&mut self, id: i16, value: i16) -> bool {
+        if self.shown_native_screen().is_none() {
+            return false;
+        }
+        let Some(s) = self.mod_screen.as_mut() else {
+            return false;
+        };
+        // A menu's data slot ids are small; a bad one is dropped.
+        if let Ok(i @ 0..256) = usize::try_from(id) {
+            if s.data.len() <= i {
+                s.data.resize(i + 1, 0);
+            }
+            s.data[i] = i32::from(value);
+        }
+        true
+    }
+    /// The open mod screen's height.
+    pub(super) fn native_screen_height(&self) -> Option<f32> {
+        self.shown_native_screen().map(|s| s.screen.height)
+    }
+    /// Where the open mod screen puts container slot `slot`.
+    pub(super) fn native_screen_slot(&self, slot: usize) -> Option<(f32, f32)> {
+        let s = self.shown_native_screen()?;
+        s.screen
+            .slots
+            .get(slot)
+            .copied()
+            .flatten()
+            .map(|p| (p[0], p[1]))
+    }
+    /// The container slots the open mod screen shows (300.. ids).
+    pub(super) fn native_screen_slots(&self) -> Option<Vec<usize>> {
+        let s = self.shown_native_screen()?;
+        let shown = s.screen.slots.iter().enumerate();
+        Some(
+            shown
+                .filter(|(_, p)| p.is_some())
+                .map(|(i, _)| 300 + i)
+                .collect(),
+        )
+    }
+    /// The first row of the player's inventory on the open mod screen.
+    pub(super) fn native_screen_inventory_y(&self) -> Option<f32> {
+        self.shown_native_screen().map(|s| s.screen.inventory_y)
+    }
+    /// The open mod screen: a plain panel with its slots' frames, the mod's
+    /// drawing over it, then the title and the inventory's label. False when
+    /// none is showing.
+    pub(super) fn draw_native_screen(&self, batch: &mut HudBatch, ox: f32, oy: f32) -> bool {
+        let Some(s) = self.shown_native_screen() else {
+            return false;
+        };
+        let atlas = &self.gui.atlas;
+        let (w, h) = (176.0, s.screen.height);
+        batch.fill(atlas, ox, oy, w, h, rgba(0, 0, 0, 255));
+        batch.fill(
+            atlas,
+            ox + 1.0,
+            oy + 1.0,
+            w - 2.0,
+            h - 2.0,
+            rgba(198, 198, 198, 255),
+        );
+        let container = self.native_screen_slots().unwrap_or_default();
+        for i in (0..36).chain(container) {
+            let (x, y) = self.slot_position(i);
+            let (x, y) = (ox + x - 1.0, oy + y - 1.0);
+            batch.fill(atlas, x, y, 18.0, 18.0, rgba(55, 55, 55, 255));
+            batch.fill(
+                atlas,
+                x + 1.0,
+                y + 1.0,
+                17.0,
+                17.0,
+                rgba(255, 255, 255, 255),
+            );
+            batch.fill(
+                atlas,
+                x + 1.0,
+                y + 1.0,
+                16.0,
+                16.0,
+                rgba(139, 139, 139, 255),
+            );
+        }
+        self.native_screen_draw(&s.block, &s.data, batch, [ox, oy]);
+        let grey = rgba(64, 64, 64, 255);
+        if let Some(title) = self.remote_menu_title() {
+            batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
+        }
+        let inventory = self.translate("container.inventory", "Inventory");
+        let label_y = oy + s.screen.inventory_y - 11.0;
+        batch.text(atlas, &inventory, ox + 8.0, label_y, grey, false);
+        true
     }
     /// The tick of the mod block entity at `pos`.
     pub(super) fn tick_mod_block_entity(&mut self, pos: Pos) {

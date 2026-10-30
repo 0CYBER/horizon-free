@@ -151,6 +151,20 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+/// A texture's sprite name: its path under vanilla's textures
+/// (`gui/container/furnace`), or a content mod's GUI texture under its
+/// namespace (`mymod:gui/container/machine`).
+fn sprite_name(textures: &Path, assets: &Path, path: &Path) -> Option<String> {
+    let plain = |p: &Path| p.with_extension("").to_string_lossy().replace('\\', "/");
+    if let Ok(rel) = path.strip_prefix(textures) {
+        return Some(plain(rel));
+    }
+    let rel = path.strip_prefix(assets).ok()?;
+    let mut parts = rel.components();
+    let ns = parts.next()?.as_os_str().to_str()?.to_owned();
+    let rest = parts.as_path().strip_prefix("textures").ok()?;
+    Some(format!("{ns}:{}", plain(rest)))
+}
 /// A packed atlas image: sprite name, size and RGBA pixels.
 type PackedImage = (String, u32, u32, Vec<u8>);
 /// A frame of an animated strip at `x, y`, nearest-resampled to the longer
@@ -413,18 +427,22 @@ impl HudAtlas {
         for folder in folders {
             walk(&textures.join(folder), &mut files);
         }
+        // Content mods' GUI textures, for their screens: `<namespace>:gui/...`.
+        let assets = root.join("assets");
+        if full && let Ok(namespaces) = fs::read_dir(&assets) {
+            for ns in namespaces.flatten() {
+                if ns.file_name() != "minecraft" {
+                    walk(&ns.path().join("textures/gui"), &mut files);
+                }
+            }
+        }
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
         type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>, bool);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
-            let name = path
-                .strip_prefix(&textures)
-                .ok()?
-                .with_extension("")
-                .to_string_lossy()
-                .replace('\\', "/");
+            let name = sprite_name(&textures, &assets, path)?;
             let (mut w, mut h, pixels) = decode(path).ok()?;
             let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
             let animation = mcmeta
@@ -1945,6 +1963,33 @@ mod tests {
             let r = atlas.sprites[name];
             assert_eq!(((r.w, r.h), r.texels(size)), (gui, texels), "{name}");
         }
+    }
+    /// A content mod's GUI textures join the atlas under its namespace;
+    /// its other textures and vanilla's names stay as they were.
+    #[test]
+    fn a_content_mods_gui_textures_are_sprites_under_its_namespace() {
+        let root = std::env::temp_dir().join(format!("horizon-mod-gui-{}", std::process::id()));
+        write_png(&root, "gui/container/furnace", 256, 256);
+        let png = |rel: &str, w: u32, h: u32| {
+            let path = root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut encoder = png::Encoder::new(fs::File::create(path).unwrap(), w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let pixels = vec![255; (w * h * 4) as usize];
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&pixels)
+                .unwrap();
+        };
+        png("assets/mymod/textures/gui/container/machine.png", 176, 166);
+        png("assets/mymod/textures/block/machine.png", 16, 16);
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(atlas.sprites["mymod:gui/container/machine"].w, 176);
+        assert!(atlas.sprites.contains_key("gui/container/furnace"));
+        assert!(!atlas.sprites.contains_key("mymod:block/machine"));
     }
     #[test]
     fn the_default_textures_keep_a_4096_wide_atlas() {

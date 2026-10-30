@@ -2843,6 +2843,7 @@ impl Game<'_> {
             C::ContainerSetData(p) if self.remote_station_open(p.container) => {
                 self.remote_station_data(usize::try_from(p.id).unwrap_or(usize::MAX), p.value);
             }
+            C::ContainerSetData(p) if self.native_screen_data(p.id, p.value) => {}
             C::ContainerSetData(p) => {
                 let v = i32::from(p.value);
                 match self
@@ -6301,6 +6302,7 @@ impl Game<'_> {
             let key = target.filter(holds).unwrap_or((i32::MIN, 0, 0));
             self.world.block_entities.insert(key, entity);
             self.container = Some(key);
+            self.open_native_screen(key, target);
         }
         self.screen = Screen::Inventory;
         self.capture(false);
