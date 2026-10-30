@@ -9204,19 +9204,23 @@ impl Game<'_> {
                         | "minecraft:test_instance_block"
                 )
             };
-            let visible = r.block_entities().filter(|(p, state)| {
-                if !self.res.block_entity_render().renders(*state) {
-                    return false;
-                }
-                off_screen(*state)
-                    || view.is_none_or(|v| {
-                        let o =
-                            (glam::DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
-                                - camera)
-                                .as_vec3();
-                        v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
-                    })
-            });
+            let visible =
+                r.visible_block_entities(self.settings.chunk_fade)
+                    .filter(|(p, state)| {
+                        if !self.res.block_entity_render().renders(*state) {
+                            return false;
+                        }
+                        off_screen(*state)
+                            || view.is_none_or(|v| {
+                                let o = (glam::DVec3::new(
+                                    f64::from(p[0]),
+                                    f64::from(p[1]),
+                                    f64::from(p[2]),
+                                ) - camera)
+                                    .as_vec3();
+                                v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
+                            })
+                    });
             if self.entity_culler.is_some() || self.pack_ids.is_some() {
                 for block in visible {
                     let start = out.len();
@@ -13365,6 +13369,7 @@ impl Game<'_> {
                 .boss_overlay
                 .darken_amount(self.clock.fraction() as f32),
             menu_blur: self.menu_blur(),
+            chunk_fade: self.settings.chunk_fade,
         };
         let result = match self.renderer.as_mut() {
             Some(renderer) => {
@@ -16538,6 +16543,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         night_vision: 0.0,
         block_flicker: 0.0,
         boss_darken: 0.0,
+        chunk_fade: 0.0,
         menu_blur: None,
     }
 }
