@@ -266,6 +266,11 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   needed), the code in mono on a raised box with Copy, and Open link as the main action; the window
   goes on by itself once Microsoft answers (`HORIZON_LAUNCHER_PAGE=sign-in` shows it with a made-up
   code for screenshots).
+- **New instance** (`launcher/src/new_instance.rs`): an opaque plate over the dimmed launcher,
+  tabs for the kind (Horizon, Vanilla, Modded). A Java kind lists Mojang's versions (search,
+  Snapshots, Old; the newest release chosen), Modded adds the loader (Fabric or Quilt, at its newest
+  stable version), and the name follows the choice ("Fabric 1.21.4") until the player types one.
+  Create is the main action.
 
 ## The mark
 
