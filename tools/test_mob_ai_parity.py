@@ -366,6 +366,12 @@ def scenarios():
     for species, seed in [('cod', 181), ('salmon', 182), ('tropical_fish', 183)]:
         add(f'{species}_random_swim', 120, [POOL, 'player 12.5 -60 0.5',
                                             f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # FollowFlockLeaderGoal: fish of one kind form a school and the followers swim after their leader.
+    for species, seed in [('cod', 210), ('salmon', 220), ('tropical_fish', 230)]:
+        # No player near: fleeing it is another goal's matter.
+        add(f'{species}_school', 400, [POOL]
+            + [f'mob minecraft:{species} {x} -62 {z} {90 * i} {seed + i} persistent'
+               for i, (x, z) in enumerate([(-3.5, -2.5), (-1.5, 2.5), (0.5, -0.5), (2.5, 3.5), (3.5, -3.5)])])
     # A jobless villager outside a stone box, its composter inside and the doorway on the far
     # side: the path around needs more than the 256 nodes of the follow range (16 * 16); the
     # villager's setRequiredPathLength(48) raises PathFinder.maxVisitedNodes to 768.

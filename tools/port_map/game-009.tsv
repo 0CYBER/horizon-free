@@ -71,7 +71,7 @@ DolphinJumpGoal.surfaceIsClear	inline	crates/horizon-client/src/mobs/dolphin.rs:
 DolphinJumpGoal.canContinueToUse	port	crates/horizon-client/src/mobs/dolphin.rs::Jump::can_continue	
 DoorInteractGoal.start	inline	crates/horizon-client/src/mobs/doors.rs::RaiderOpenDoor::start	passed and the door direction only feed canContinueToUse, which both subclasses override, so they are not kept
 DoorInteractGoal.tick	inline	crates/horizon-client/src/mobs/doors.rs::BreakDoor::tick	the passed-the-door dot test is not kept: BreakDoor and RaiderOpenDoor both override can_continue
-FollowFlockLeaderGoal	missing		player: cod, salmon and tropical fish spawn in groups but do not follow a leader, so schools do not swim together (leader id is stored, no goal uses it)
+FollowFlockLeaderGoal	port	crates/horizon-client/src/mobs/aquatic.rs::FollowFlockLeader	tick for tick with vanilla in mob_ai cod/salmon/tropical_fish_school; recruits in vanilla getEntitiesOfClass order (Mob.section)
 FollowMobGoal	missing		player: parrots do not fly after and hover near other mobs (priority 3 goal missing from register_parrot)
 FollowPlayerRiddenEntityGoal	missing		player: dolphins do not swim after a boat or nautilus a player is riding
 GoalSelector.removeAllGoals	port	crates/horizon-client/src/mobs/goals.rs::GoalSelector::clear	gap: minor: clear() takes no predicate and does not stop running goals

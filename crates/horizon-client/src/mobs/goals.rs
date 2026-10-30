@@ -23,6 +23,9 @@ pub struct Cx<'a, 'w> {
 }
 pub trait Goal: std::fmt::Debug {
     fn flags(&self) -> u8;
+    /// A goal that draws its first start delay in its constructor (a schooling fish's
+    /// `FollowFlockLeaderGoal`): the delay again, when the mob's random is seeded afterwards.
+    fn set_start_delay(&mut self, _ticks: i32) {}
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool;
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         self.can_use(m, cx)
@@ -86,6 +89,14 @@ impl GoalSelector {
             goal: Box::new(goal),
             running: false,
         });
+    }
+    /// `Goal::set_start_delay` of the goal of this name.
+    pub fn set_start_delay(&mut self, name: &str, ticks: i32) {
+        for g in &mut self.goals {
+            if g.goal.name() == name {
+                g.goal.set_start_delay(ticks);
+            }
+        }
     }
     pub fn clear(&mut self) {
         self.goals.clear();
