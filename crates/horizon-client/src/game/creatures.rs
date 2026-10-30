@@ -2996,6 +2996,15 @@ impl Game<'_> {
         self.flush_lan_explosions();
         self.flush_wind_bursts()
     }
+    /// `LivingEntity.hurtServer`'s `setLastHurtByPlayer` for a projectile a
+    /// player owns (a fireball they turned back): the kill is theirs, so a
+    /// guest's (the host on its server thread too) reaches their statistics
+    /// and `player_killed_entity`, as the arrow's hit does.
+    fn player_hurt_mob(&mut self, p: &Projectile, id: u32) {
+        if p.owner == Some(Who::Player) {
+            self.last_hurt_by_player.insert(id, self.lan_acting);
+        }
+    }
     /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
     /// as the host's when they have left.
     fn guest_projectile_hit(&mut self, conn: u32, p: &Projectile, hit: Hit) -> Result<()> {
@@ -3719,14 +3728,19 @@ impl Game<'_> {
                         }
                     }
                     Who::Mob(id) => {
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        let hurt = self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
                             let remaining = m.fire_ticks;
                             if !m.kind.flags.fire_immune {
                                 m.ignite_for_ticks(100);
                             }
-                            if !m.damage(5.0, source) {
+                            let hurt = m.damage(5.0, source);
+                            if !hurt {
                                 m.fire_ticks = remaining;
                             }
+                            hurt
+                        });
+                        if hurt {
+                            self.player_hurt_mob(p, id);
                         }
                     }
                 },
@@ -3761,8 +3775,13 @@ impl Game<'_> {
                             );
                         }
                         Who::Mob(id) => {
-                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                                m.damage(6.0, source);
+                            if self
+                                .mobs
+                                .iter_mut()
+                                .find(|m| m.id == id)
+                                .is_some_and(|m| m.damage(6.0, source))
+                            {
+                                self.player_hurt_mob(p, id);
                             }
                         }
                     }
