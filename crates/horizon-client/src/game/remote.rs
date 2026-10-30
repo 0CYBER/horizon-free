@@ -1824,6 +1824,14 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
+            // Interaction extends Entity and keeps its NO_OP interpolation
+            // handler: the server's position replaces its own at once.
+            if let Some(i) = self.interactions.get_mut(&id) {
+                if path.is_some() {
+                    i.position = Vec3::new(position[0], position[1], position[2]);
+                }
+                return;
+            }
             // Projectiles keep Entity's NO_OP InterpolationHandler too: the
             // server's position replaces theirs at once and their own tick
             // flies them on (`tick_remote_projectiles`). Eased towards it
@@ -2374,6 +2382,7 @@ impl Game<'_> {
                     );
                 }
                 self.move_remote_text_display(p.id, p.position, Some((rotation[0], rotation[1])));
+                self.move_remote_interaction(p.id, p.position);
             }
             C::RemoveEntities(p) => {
                 for id in p.ids {
@@ -5583,6 +5592,10 @@ impl Game<'_> {
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
+            // Interaction.interact answers SUCCESS when it responds and
+            // CONSUME otherwise: both end the click (nothing behind the box
+            // is used), but only SUCCESS swings; the packet carries the hand.
+            let response = self.interactions.get(&hit.id).map(|i| i.response);
             // A cart whose interact passes (a TNT minecart) leaves each hand's
             // turn to its item: a crossbow aimed at it shoots.
             let passes = self
@@ -5596,7 +5609,7 @@ impl Game<'_> {
                         .interact_passes(sneaking, ridden, self.can_use_game_master_blocks())
                 });
             // Otherwise the main hand's turn takes it; there is no off hand turn.
-            if hand == Hand::Off && !passes {
+            if response.is_none() && hand == Hand::Off && !passes {
                 return false;
             }
             self.send(S::Interact(play::Interact {
@@ -5608,7 +5621,9 @@ impl Game<'_> {
             if passes {
                 return false;
             }
-            self.swing_arm();
+            if response.unwrap_or(true) {
+                self.swing_arm();
+            }
             return true;
         }
         if let Some((i, distance)) = self.mob_hit()
