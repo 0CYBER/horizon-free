@@ -6864,6 +6864,14 @@ impl Game<'_> {
         }
         if let Some(title) = &mut self.title {
             title.poll_backup();
+            if std::mem::take(&mut title.onboarding_finished) {
+                // Options.onboardingAccessibilityFinished.
+                self.settings.file.set(
+                    "onboardAccessibility",
+                    horizon_client::options_file::V::Bool(false),
+                );
+                self.settings.save(&Self::options_path());
+            }
             if let Some(sound) = title.update_toast(self.settings.notification_display_time) {
                 self.audio.play(sound, None, 1.0, 1.0);
             }
@@ -9948,6 +9956,7 @@ impl Game<'_> {
             Action::Language => {
                 self.open_options_at(true, horizon_client::options_ui::Page::Language)
             }
+            Action::Sounds => self.open_options_at(true, horizon_client::options_ui::Page::Sound),
             Action::Credits => {
                 self.open_options_at(true, horizon_client::options_ui::Page::Credits)
             }
@@ -16566,6 +16575,10 @@ fn start_game<'a>(
             );
             title.last_server = game.settings.file.string("lastServer");
             title.skip_multiplayer_warning = game.settings.file.bool("skipMultiplayerWarning");
+            // Gui.addInitialScreens: the accessibility onboarding comes first.
+            if game.settings.file.bool("onboardAccessibility") {
+                title.start_onboarding();
+            }
             game.title = Some(title);
         }
     }

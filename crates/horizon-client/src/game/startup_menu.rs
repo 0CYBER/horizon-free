@@ -77,6 +77,10 @@ impl StartupMenu {
             );
             title.last_server = settings.file.string("lastServer");
             title.skip_multiplayer_warning = settings.file.bool("skipMultiplayerWarning");
+            // Gui.addInitialScreens: the accessibility onboarding comes first.
+            if settings.file.bool("onboardAccessibility") {
+                title.start_onboarding();
+            }
             self.title = Some(title);
         }
     }
@@ -465,6 +469,7 @@ impl Loading {
             Action::Options => self.open_menu_options(Page::Main),
             Action::Accessibility => self.open_menu_options(Page::Accessibility),
             Action::Language => self.open_menu_options(Page::Language),
+            Action::Sounds => self.open_menu_options(Page::Sound),
             Action::Credits => self.open_menu_options(Page::Credits),
             Action::DataPacks { dir, selected } => {
                 let resources = self.vanilla_root.clone();
@@ -693,6 +698,14 @@ impl Loading {
                 .draw(&self.settings, batch, &gui.atlas, self.menu.cursor);
         } else if let Some(title) = &mut self.menu.title {
             title.poll_backup();
+            if std::mem::take(&mut title.onboarding_finished) {
+                // Options.onboardingAccessibilityFinished.
+                self.settings.file.set(
+                    "onboardAccessibility",
+                    horizon_client::options_file::V::Bool(false),
+                );
+                self.settings.save(&Game::options_path());
+            }
             let _ = title.update_toast(self.settings.notification_display_time);
             title.draw(
                 &gui.atlas,
