@@ -5634,7 +5634,7 @@ mod breeding_tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod pearl_tests {
     use super::*;
 
     /// A pearl's water test is `Entity.isInWater`: `wasTouchingWater` from the
@@ -5657,7 +5657,13 @@ mod tests {
         let motion = horizon_client::motion::MotionResources::load(&root, &assets).unwrap();
         let data = horizon_client::mobs::MobData::load(&root, &facts);
         let biomes = horizon_client::biome::Biomes::load(&root).unwrap();
-        let items = horizon_client::items::Items::load(&root, registry, &facts).unwrap();
+        let items = horizon_client::items::Items::load(
+            &root,
+            registry,
+            &facts,
+            &horizon_world::loot::PackOverlay::NONE,
+        )
+        .unwrap();
         let collision = horizon_client::collisions::load(&root, registry).unwrap();
         let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
         // A pool of still water one block deep at y = 4, from x = 20 on (clear of the
