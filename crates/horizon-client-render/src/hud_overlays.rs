@@ -93,7 +93,7 @@ pub fn java_sort<T>(a: &mut [T], cmp: impl Fn(&T, &T) -> Ordering) {
 /// A `MobEffectInstance` as `extractEffects` sees it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectIcon {
-    /// The effect id without namespace (`speed`): the sprite is `mob_effect/<id>`.
+    /// The effect id: vanilla's without namespace (`speed`), a mod's `<ns>:<path>`.
     pub id: String,
     /// `MobEffect.isBeneficial`.
     pub beneficial: bool,

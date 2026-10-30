@@ -6,7 +6,8 @@ use horizon_client_core::potions;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInstance {
-    /// Effect id without namespace (`speed`, `poison`, ...).
+    /// Effect id: vanilla's without namespace (`speed`, `poison`, ...), a
+    /// content mod's `<ns>:<path>`.
     pub id: &'static str,
     /// Remaining ticks; -1 is infinite.
     pub duration: i32,
@@ -219,7 +220,7 @@ impl PlayerEffects {
             .iter()
             .map(|e| {
                 (
-                    format!("minecraft:{}", e.id),
+                    potions::namespaced(e.id).to_owned(),
                     e.duration,
                     e.amplifier,
                     e.ambient,
@@ -524,6 +525,30 @@ mod tests {
         assert!(fx.get("bad_omen").is_none());
         assert_eq!(fx.get("speed").unwrap().duration, 49);
         assert_eq!(fx.get("raid_omen").unwrap().amplifier, 1);
+    }
+    /// The only test here that registers mod effects (once per process).
+    #[test]
+    fn a_mod_effect_saves_under_its_namespace() {
+        potions::register_mod_effects([(
+            "ruby:glow".to_owned(),
+            0xFF0000,
+            potions::Category::Neutral,
+        )]);
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new(
+            potions::effect("ruby:glow").unwrap().id,
+            600,
+            1,
+        ));
+        let saved = fx.saved();
+        assert_eq!(saved, [("ruby:glow".to_owned(), 600, 1, false, true)]);
+        assert_eq!(PlayerEffects::from_saved(&saved).list, fx.list);
+        // Without its mod the saved effect is dropped, as an unknown id is.
+        assert!(
+            PlayerEffects::from_saved(&[("gone:glow".into(), 600, 1, false, true)])
+                .list
+                .is_empty()
+        );
     }
     #[test]
     fn raid_omen_acts_on_its_last_tick() {

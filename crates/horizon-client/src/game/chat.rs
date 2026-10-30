@@ -437,9 +437,8 @@ impl Game<'_> {
         };
         // The mob effect registry: every effect `/effect` and the
         // `mob_effect` resource arguments accept.
-        reg.effects = horizon_client::brewing::EFFECTS
-            .iter()
-            .map(|e| format!("minecraft:{}", e.id))
+        reg.effects = horizon_client::brewing::all_effects()
+            .map(|e| horizon_client::brewing::namespaced(e.id).to_owned())
             .collect();
         reg.effects.sort();
         reg.enchantments = list("data/minecraft/enchantment");

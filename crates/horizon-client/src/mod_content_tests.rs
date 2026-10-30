@@ -111,7 +111,9 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
         r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
             "minecraft:iron_block":{"protocol_id":9}}},
             "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
-            "minecraft:iron_block":{"protocol_id":11}}}}"#,
+            "minecraft:iron_block":{"protocol_id":11}}},
+            "minecraft:mob_effect":{"entries":{"minecraft:speed":{"protocol_id":0},
+            "minecraft:luck":{"protocol_id":25}}}}"#,
     )
     .unwrap();
     fs::create_dir_all(base.join("assets/minecraft/blockstates")).unwrap();
@@ -133,6 +135,10 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
                 "data/ruby/horizon/item/aitem.json",
                 r#"{"template":"minecraft:stone"}"#,
             ),
+            (
+                "data/ruby/horizon/mob_effect/glow.json",
+                r#"{"category":"beneficial","color":16711680}"#,
+            ),
         ],
     );
     let alpha = folder_mod(
@@ -146,6 +152,14 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
             (
                 "data/alpha/horizon/item/aitem.json",
                 r#"{"template":"minecraft:stone"}"#,
+            ),
+            (
+                "data/alpha/horizon/mob_effect/zap.json",
+                r#"{"category":"harmful","color":255}"#,
+            ),
+            (
+                "data/alpha/horizon/mob_effect/dull.json",
+                r#"{"category":"neutral","color":0}"#,
             ),
         ],
     );
@@ -179,7 +193,9 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
             r#"{"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":4},
                 "minecraft:iron_block":{"protocol_id":9}}},
                 "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
-                "minecraft:iron_block":{"protocol_id":11}}}}"#,
+                "minecraft:iron_block":{"protocol_id":11}}},
+                "minecraft:mob_effect":{"entries":{"minecraft:speed":{"protocol_id":0},
+                "minecraft:luck":{"protocol_id":25}}}}"#,
         )
         .unwrap();
         plan.json("registries.json", &mut registry).unwrap();
@@ -200,6 +216,10 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
         assert_eq!(id("minecraft:block", "minecraft:iron_block"), 11);
         assert_eq!(id("minecraft:block", "alpha:zblock"), 12);
         assert_eq!(id("minecraft:block", "ruby:zblock"), 13);
+        assert_eq!(id("minecraft:mob_effect", "minecraft:luck"), 25);
+        assert_eq!(id("minecraft:mob_effect", "alpha:dull"), 26);
+        assert_eq!(id("minecraft:mob_effect", "alpha:zap"), 27);
+        assert_eq!(id("minecraft:mob_effect", "ruby:glow"), 28);
         drop(plan);
 
         let output = scratch.join(format!("output-{index}"));
@@ -894,6 +914,50 @@ fn content_root_carries_a_structure_mod() {
     assert_eq!(name, "huts:hut");
     assert!(at[0].abs() < 1024 && at[2].abs() < 1024, "{at:?}");
     let _ = fs::remove_dir_all(&scratch);
+}
+
+/// A mod's mob effect gets the network id after vanilla's last, on the game
+/// and its server alike, and joins the ids `/effect` and its suggestions
+/// check.
+#[test]
+#[ignore = "full content root: CI and pr_ready run it"]
+fn content_root_registers_a_mod_mob_effect() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-effect-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let m = folder_mod(
+        &scratch.join("glow"),
+        &[
+            ("horizon-mod.toml", &manifest("glow", "")),
+            (
+                "data/glow/horizon/mob_effect/radiance.json",
+                r#"{"category": "beneficial", "color": 16773120}"#,
+            ),
+        ],
+    );
+    let root = resource_root(&base, std::slice::from_ref(&m), &scratch.join("cache")).unwrap();
+    let report = |root: &Path| {
+        horizon_protocol::registry::Builtin::load(&root.join("registries.json")).unwrap()
+    };
+    let (vanilla, ids) = (report(&base), report(&root));
+    let vanilla = vanilla.get("minecraft:mob_effect").unwrap();
+    let ids = ids.get("minecraft:mob_effect").unwrap();
+    let count = (0..).take_while(|&i| vanilla.name(i).is_some()).count() as i32;
+    assert_eq!(ids.id("glow:radiance"), Some(count));
+    assert_eq!(ids.id("minecraft:speed"), vanilla.id("minecraft:speed"));
+    let commands: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("command-registries.json")).unwrap()).unwrap();
+    for ids in [
+        &commands["effects"],
+        &commands["by_registry"]["minecraft:mob_effect"]["ids"],
+    ] {
+        let ids = ids.as_array().unwrap();
+        assert!(ids.contains(&"glow:radiance".into()) && ids.contains(&"minecraft:speed".into()));
+    }
+    assert!(root.join(crate::content_identity::MARKER).exists());
+    fs::remove_dir_all(&scratch).unwrap();
 }
 
 /// A content mod folder from `(path, text)` pairs, read as the game reads it.

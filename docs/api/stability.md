@@ -87,7 +87,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 
 | Part | Level | Version |
 | --- | --- | --- |
-| Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
+| Content mods (`registries`: data-driven blocks, items and mob effects) | preview | manifest `api = "0.2"` |
 | Native mods (horizon-mixins bundles, [native-mods.md](../native-mods.md)) | experimental | the pinned revisions |
 | `cargo horizon-mod` (`new`, `build`, `run`, `check`) | preview | none yet (unversioned) |
 | Shader API | not started | |
