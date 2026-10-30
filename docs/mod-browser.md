@@ -110,10 +110,17 @@ is coming soon; its source already maps the order and the game version.
 
 **Icons and gallery images** are the projects' own, fetched at run time from the source's image server
 (`browser::images`): HTTPS from `cdn.modrinth.com` (or CurseForge's `media.forgecdn.net` / `edge.forgecdn.net`) only,
-at most 8 MB each, decoded (PNG, JPEG, WebP, GIF, at most 8192 pixels a side), scaled (icons 128 px, gallery 960 px)
-and kept as PNGs in `mod-browser/images/` under the game folder, which is kept under 128 MB by dropping the oldest
-files. A plate with the project's initial stands in until the icon arrives. Nothing of a project's art is in the
-launcher or the repository.
+at most 8 MB each, decoded (PNG, JPEG, WebP, GIF, at most 8192 pixels a side), scaled (icons 128 px, list rows 80 px,
+gallery 960 px) and kept as PNGs in `mod-browser/images/` under the launcher's data folder, which is kept under 128 MB
+by dropping the oldest files. After a week an image is asked for again with its server's `ETag` and `Last-Modified`:
+an unchanged one costs a 304 and is kept; offline, the cached one stays. A plate with the project's initial stands in
+until the icon arrives. Nothing of a project's art is in the launcher or the repository.
+
+**Installed mods' icons** (Home's Mods tab, the Mods page's installed list): Modrinth's project icon for what the
+browser installed from it, the URLs asked for in one request (`GET /projects?ids=[…]`) and kept in
+`mod-browser/project-icons.json` so they show offline; else the icon a jar names for itself
+(`fabric.mod.json`/`quilt.mod.json` `icon`, `mods.toml` `logoFile`), read from the jar off the UI thread and scaled to
+the row; else a generic glyph. The tab builds only the rows near the view, so a pack of hundreds costs what a few do.
 
 **Vanilla Minecraft** is marked with a grass block drawn at run time from the player's own prepared game files
 (`assets/minecraft/textures/block/grass_block_*.png`, tinted with the plains grass colour): the game-version filter

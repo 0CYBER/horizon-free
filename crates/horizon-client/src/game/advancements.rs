@@ -813,10 +813,21 @@ impl Game<'_> {
     /// `KilledTrigger` (`player_killed_entity`): the entity killed and the
     /// killing blow's damage source (none: any `killing_blow` fails).
     pub(super) fn trigger_killed(&mut self, target: &EntityView, blow: Option<&adv::DamageView>) {
+        self.trigger_killed_as("minecraft:player_killed_entity", target, blow);
+    }
+    /// `KilledTrigger.trigger` for any of its three instances
+    /// (`player_killed_entity`, `entity_killed_player`,
+    /// `kill_mob_near_sculk_catalyst`).
+    pub(super) fn trigger_killed_as(
+        &mut self,
+        name: &str,
+        target: &EntityView,
+        blow: Option<&adv::DamageView>,
+    ) {
         let me = self.player_entity();
         let target = target.clone();
         let blow = blow.cloned();
-        self.trigger("minecraft:player_killed_entity", move |c, w| {
+        self.trigger(name, move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
                 origin: me.position,
@@ -1001,15 +1012,25 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && effects && source
         });
     }
-    /// `ItemDurabilityTrigger`: a player's item takes damage (`ItemStack.applyDamage`),
-    /// `stack` as it is before the damage. The durability and delta ranges are not
-    /// read: no advancement in the data uses them.
-    pub(super) fn trigger_item_durability(&mut self, stack: &ItemStack) {
+    /// `ItemDurabilityTrigger.trigger` and `TriggerInstance.matches`: a player's
+    /// item takes damage (`ItemStack.applyDamage`), `stack` as it is before the
+    /// damage and `new_damage` the unclamped damage value it is about to get.
+    /// `durability` tests `maxDamage - newDamage`, `delta` tests
+    /// `damageValue - newDamage`.
+    pub(super) fn trigger_item_durability(&mut self, stack: &ItemStack, new_damage: u32) {
         if self.remote.is_some() || self.no_player_here() {
             return;
         }
         let me = self.player_entity();
         let item = item_view(stack);
+        let max = self
+            .res
+            .items()
+            .get(&stack.item)
+            .map_or(0, |i| i.max_damage) as i64;
+        // ItemStack.getDamageValue clamps to 0..=getMaxDamage.
+        let damage = i64::from(stack.damage).clamp(0, max);
+        let new_damage = i64::from(new_damage);
         self.trigger("minecraft:item_durability_changed", move |c, w| {
             let pctx = adv::Entities {
                 this: Some(&me),
@@ -1019,6 +1040,8 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &pctx, w)
                 && (c["item"].is_null() || adv::item(&c["item"], &item, w))
+                && adv::range_i(&c["durability"], max - new_damage)
+                && adv::range_i(&c["delta"], damage - new_damage)
         });
     }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
