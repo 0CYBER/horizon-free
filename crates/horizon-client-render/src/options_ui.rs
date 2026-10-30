@@ -141,9 +141,7 @@ impl Opt {
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
                 | Opt::ChunkBuilder
-                // Saved, but the creative tabs and the mouse don't read them yet.
-                | Opt::OperatorItemsTab
-                | Opt::QuitShortcuts
+                // Saved, but the mouse doesn't read it yet.
                 | Opt::CtrlClickEmulatesRightClick
         )
     }
@@ -3442,6 +3440,7 @@ mod tests {
             Opt::QuitShortcuts.tooltip_key(&s),
             "options.quitShortcuts.tooltip"
         );
+    }
 
     #[test]
     fn operator_items_tab_option_can_be_switched() {
