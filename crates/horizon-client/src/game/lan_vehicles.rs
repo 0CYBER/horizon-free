@@ -133,6 +133,19 @@ impl Game<'_> {
             b.hurt_time = (b.hurt_time - 1).max(0);
             b.damage = (b.damage - 1.0).max(0.0);
         }
+        // ServerGamePacketListenerImpl.tick: the vehicle's last good position
+        // is where it is now, so a move the server made (a piston, a push)
+        // is not held against the rider's next move, which would fail, be
+        // sent back, and fail again on every answer.
+        let at = boat.map(|i| self.boats[i].position).or_else(|| {
+            self.mobs
+                .iter()
+                .find(|m| m.id == vehicle && equine::moved_by_client(m))
+                .map(|m| m.position)
+        });
+        if let Some(p) = at {
+            host.hub.guests[gi].vehicle_good = Some([p.x, p.y, p.z]);
+        }
         // Getting out goes through leave_guest, which tells the client and
         // teleports it (ServerPlayer.dismountTo).
         let seat = self.as_guest(host, conn, |game| {
