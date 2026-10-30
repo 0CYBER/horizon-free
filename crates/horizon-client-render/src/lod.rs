@@ -1085,6 +1085,16 @@ impl Lod {
             })
             .copied()
             .collect();
+        // Retiring fine columns are empty stand-ins, excluded from `active`
+        // while their normal meshes still cover the gap. Request their detail
+        // explicitly: neither the active-tile requests nor sampling an already
+        // ready stand-in can fill it, so its GPU sections would never retire.
+        keys.extend(retiring_detail(
+            &self.plan,
+            &self.retiring,
+            &self.saved,
+            &self.detail_masks,
+        ));
         keys.sort_unstable_by_key(|key| (key.distance(camera), *key));
         let mut chunks = FxHashSet::default();
         for key in keys {
@@ -1589,10 +1599,83 @@ impl Drop for Lod {
         }
     }
 }
+/// Fine retiring stand-ins need actual column detail before `Plan::replaces`
+/// can release their normal meshes. The caller keeps the usual 32-column
+/// request budget and waits for the replacement mesh before changing cutout.
+fn retiring_detail<'a>(
+    plan: &'a Plan,
+    retiring: &'a FxHashSet<(i32, i32)>,
+    saved: &'a Saved,
+    masks: &'a FxHashMap<TileKey, [u64; 4]>,
+) -> impl Iterator<Item = TileKey> + 'a {
+    retiring.iter().filter_map(move |&(x, z)| {
+        let key = TileKey { x, z, level: 0 };
+        (plan.nodes.contains(&key)
+            && !saved.contains_key(&(x, z))
+            && masks.get(&key) != Some(&[u64::MAX; 4]))
+        .then_some(key)
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
+    #[test]
+    fn retiring_fine_stand_ins_request_detail_before_their_gpu_meshes_can_retire() {
+        let column = (12, 0);
+        let fine = TileKey {
+            x: 12,
+            z: 0,
+            level: 0,
+        };
+        let mut plan = Plan::default();
+        plan.nodes.insert(fine);
+        let ready: FxHashMap<TileKey, ()> = [(fine, ())].into_iter().collect();
+        let retiring = [column].into_iter().collect();
+        let saved = Saved::default();
+        let mut masks = FxHashMap::default();
+        // A covered stand-in is ready, but empty: ordinary sampling skips it,
+        // and selection leaves it out of `active`. It cannot yet replace the
+        // old full-detail column, even though the near world has unloaded it.
+        assert!(!plan.replaces(column, &ready, |key| masks.get(&key)
+            == Some(&[u64::MAX; 4])));
+        assert_eq!(
+            retiring_detail(&plan, &retiring, &saved, &masks).collect::<Vec<_>>(),
+            [fine]
+        );
+        // The existing RequestDetail -> apply_fine path marks complete detail;
+        // only then may selection retire it and publish the new mesh cutout.
+        masks.insert(fine, [u64::MAX; 4]);
+        assert!(
+            retiring_detail(&plan, &retiring, &saved, &masks)
+                .next()
+                .is_none()
+        );
+        assert!(plan.replaces(column, &ready, |key| masks.get(&key)
+            == Some(&[u64::MAX; 4])));
+    }
+    #[test]
+    fn retiring_detail_requests_only_planned_columns_still_missing_detail() {
+        let fine = |x| TileKey { x, z: 0, level: 0 };
+        let mut plan = Plan::default();
+        plan.nodes.extend((0..4).map(fine));
+        plan.nodes.insert(fine(5));
+        let retiring = (0..5).map(|x| (x, 0)).collect();
+        let saved = [((1, 0), Arc::new(std::array::from_fn(|_| Column::default())))]
+            .into_iter()
+            .collect();
+        let masks = [
+            (fine(2), [u64::MAX; 4]),
+            (fine(3), [u64::MAX, u64::MAX, u64::MAX, u64::MAX - 1]),
+        ]
+        .into_iter()
+        .collect();
+        let mut requested: Vec<_> = retiring_detail(&plan, &retiring, &saved, &masks).collect();
+        requested.sort_unstable();
+        // Saved or complete detail needs no request; an unplanned retiree and
+        // a planned column that is not retiring must not consume the budget.
+        assert_eq!(requested, [fine(0), fine(3)]);
+    }
     #[test]
     fn reduced_far_detail_only_merges_tiles_away_from_the_near_terrain() {
         let leaves = |plan: &Plan| {
