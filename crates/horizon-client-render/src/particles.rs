@@ -1042,6 +1042,8 @@ pub struct ParticleEngine {
     level_random: LegacyRandom,
     /// `SpellParticle.RANDOM`.
     spell_random: LegacyRandom,
+    /// The local player's eye while it looks through a spyglass in first person.
+    scope_eye: Option<[f64; 3]>,
     /// Seeds for each particle's own random (`RandomSource.create()`).
     seeds: LegacyRandom,
     /// When set, particles ask the level for other particles here instead
@@ -1080,6 +1082,7 @@ impl ParticleEngine {
             random: LegacyRandom::new(0x7061_7274),
             level_random: LegacyRandom::new(0x6c65_7665),
             spell_random: LegacyRandom::new(0x7370_656c),
+            scope_eye: None,
             seeds: LegacyRandom::new(0x7365_6564),
             requested: None,
             names: Vec::new(),
@@ -1436,6 +1439,16 @@ impl ParticleEngine {
                 self.add(options, p, [xa, ya + 0.2, za]);
             }
         }
+    }
+    /// Set each frame to the local player's eye while it scopes in first person.
+    pub fn set_scope_eye(&mut self, eye: Option<[f64; 3]>) {
+        self.scope_eye = eye;
+    }
+    /// `SpellParticle.isCloseToScopingPlayer`: within 3 blocks of that eye.
+    fn close_to_scoping_player(&self, pos: [f64; 3]) -> bool {
+        self.scope_eye.is_some_and(|eye| {
+            (eye[0] - pos[0]).powi(2) + (eye[1] - pos[1]).powi(2) + (eye[2] - pos[2]).powi(2) <= 9.0
+        })
     }
     /// `ClientPacketListener.handleParticleEvent` for `ServerLevel.sendParticles`.
     pub fn send_particles(
@@ -2636,6 +2649,12 @@ impl ParticleEngine {
                 q.size *= 0.75;
                 q.lifetime = (8.0 / (f64::from(r.next_float()) * 0.8 + 0.2)) as i32;
                 q.has_physics = false;
+                // SpellParticle's constructor: setAlpha(0.0F), which also sets originalAlpha.
+                // MobEffectProvider sets the option's alpha after it, so an entity
+                // effect starts visible and the first tick hides it.
+                if self.close_to_scoping_player(q.position) {
+                    q.rgba[3] = 0.0;
+                }
                 match ty {
                     T::Witch => {
                         let b = self.random.next_float() * 0.5 + 0.35;
@@ -3743,7 +3762,12 @@ impl ParticleEngine {
             Behaviour::Spell { original_alpha } => {
                 p.base_tick(level);
                 self.sprite_from_age(p);
-                p.rgba[3] += (original_alpha - p.rgba[3]) * 0.05;
+                // SpellParticle.tick: alpha 0 while close, else eased back to originalAlpha.
+                if self.close_to_scoping_player(p.position) {
+                    p.rgba[3] = 0.0;
+                } else {
+                    p.rgba[3] += (original_alpha - p.rgba[3]) * 0.05;
+                }
             }
             Behaviour::Cloud => {
                 p.base_tick(level);

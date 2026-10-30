@@ -954,6 +954,8 @@ impl Game<'_> {
                 };
                 horizon_client::containers::display_name(custom(k), key)
             }
+            // Opened by a mod (`native_open_menu`), never here.
+            Slots::Native => return false,
         };
         let Some(items) = host
             .hub
@@ -1138,7 +1140,7 @@ impl Game<'_> {
                             let _ = g.break_block(pos);
                             return true;
                         }
-                        if g.may_build() {
+                        if !g.block_action_restricted(pos) {
                             let _ = g.attack_block(pos);
                             g.mining = Some(Mining {
                                 pos,
@@ -1255,12 +1257,29 @@ impl Game<'_> {
             }
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
-                // handleUseItemOn: within reach, and the hit point within the block.
+                // handleUseItemOn: within reach, then the hit point within
+                // a block of the block's centre (logged when it isn't).
+                if !host.hub.guests[gi].may_reach_block(p.pos) {
+                    return;
+                }
                 let inside = p
                     .cursor
                     .iter()
                     .all(|&c| (f64::from(c) - 0.5).abs() < 1.0000001);
-                if !(inside && host.hub.guests[gi].may_reach_block(p.pos)) {
+                if !inside {
+                    let d = horizon_client::java_text::double_to_string;
+                    let at = |k: usize| d(f64::from(p.pos[k]) + f64::from(p.cursor[k]));
+                    let line = format!(
+                        "Rejecting UseItemOnPacket from {}: Location ({}, {}, {}) too far away from hit block BlockPos{{x={}, y={}, z={}}}.",
+                        host.hub.guests[gi].name,
+                        at(0),
+                        at(1),
+                        at(2),
+                        p.pos[0],
+                        p.pos[1],
+                        p.pos[2]
+                    );
+                    self.lan_log_event(horizon_client::lan::hub::HostEvent::Warn(line));
                     return;
                 }
                 let face = direction(p.face);
@@ -1319,17 +1338,37 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let g = &mut host.hub.guests[gi];
                 (g.yaw, g.pitch) = (p.yaw, p.pitch);
-                let swung = self.as_guest(host, conn, |g| {
+                let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
+                let used = self.as_guest(host, conn, |g| {
+                    // A horn's sound, inline instruments included.
+                    let horn = g.with_hand(hand, |g| {
+                        let held = g.held()?;
+                        g.res.items().instrument(held).map(|i| i.sound)
+                    });
                     g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
                     g.guest_use = None;
-                    g.swings_started != swings
+                    (g.swings_started != swings, horn)
                 });
+                let (swung, horn) = match used {
+                    Some((swung, horn)) => (Some(swung), horn),
+                    None => (None, None),
+                };
                 self.lan_swing_back(host, conn, swung);
+                self.guest_instrument_sound(host, conn, heard, horn);
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
+                // handleInteract: within the entity interaction range plus 3
+                // of the target's box, or nothing happens.
+                if let Some(target) = self.guest_target_box(host, gi, p.id)
+                    && self.as_guest(host, conn, |g| {
+                        g.within_entity_interaction_range(&target, 3.0)
+                    }) != Some(true)
+                {
+                    return;
+                }
                 let before = host.hub.guests[gi].vehicle;
                 if self
                     .look_at_entity(host, gi, p.id, Some(p.location))
@@ -1583,6 +1622,33 @@ impl Game<'_> {
                     self.send_admin_feedback(host, Some(conn));
                 }
             }
+            // handleEntityTagQuery: a game master's F3+I on an entity of their
+            // level gets its Entity.saveWithoutId.
+            S::EntityTagQuery(p) if host.hub.guests[gi].permission >= 2 => {
+                if let Some(tag) = self.level_entity_tag(host, p.entity) {
+                    host.hub.send_to(
+                        conn,
+                        &C::TagQuery(play::TagQuery {
+                            transaction: p.transaction,
+                            tag,
+                        }),
+                    );
+                }
+            }
+            // handleBlockEntityTagQuery: BlockEntity.saveWithoutMetadata, or
+            // null where there is no block entity.
+            S::BlockEntityTagQuery(p) if host.hub.guests[gi].permission >= 2 => {
+                let tag = self
+                    .block_entity_tag(p.pos)
+                    .unwrap_or(horizon_world::nbt::Tag::End);
+                host.hub.send_to(
+                    conn,
+                    &C::TagQuery(play::TagQuery {
+                        transaction: p.transaction,
+                        tag,
+                    }),
+                );
+            }
             S::Unknown(id, payload)
                 if id == horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION =>
             {
@@ -1636,6 +1702,31 @@ impl Game<'_> {
             }
             _ => {}
         }
+    }
+
+    /// `ServerLevel.getEntity(id)`'s `Entity.saveWithoutId`: the player or
+    /// other entity of the level in place with that network id.
+    fn level_entity_tag(&mut self, host: &mut LanHost, id: i32) -> Option<horizon_world::nbt::Tag> {
+        use super::commands::Target;
+        let player = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && host.hub.here(g))
+            .map(|g| g.conn);
+        let mut tag = match player {
+            Some(player) => self
+                .as_guest(host, player, |g| g.entity_nbt(Target::Player))
+                .flatten()?,
+            None => {
+                let target = self.level_entity(id)?;
+                self.entity_nbt(target)?
+            }
+        };
+        if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
+            c.remove(&"id".into());
+        }
+        Some(tag)
     }
 
     /// `ServerGamePacketListenerImpl.tryPickItem` for the guest: a matching stack
@@ -1865,11 +1956,54 @@ impl Game<'_> {
         }
     }
 
+    /// `Level.getEntityOrPart(id).getBoundingBox()` for a guest's attack or
+    /// interaction: the host, another player, a mob, a vehicle or object, a
+    /// dragon part or crystal, a projectile. None for an id the level doesn't
+    /// have (the handlers then find nothing either).
+    fn guest_target_box(&self, host: &LanHost, gi: usize, id: i32) -> Option<Aabb> {
+        let conn = host.hub.guests[gi].conn;
+        if id == host.host_entity {
+            return self.player.as_ref().map(|p| p.bounds());
+        }
+        if let Some(g) = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g))
+        {
+            return Some(g.bounds());
+        }
+        if let Some(m) = self.mobs.iter().find(|m| m.id as i32 == id) {
+            return Some(m.bounds());
+        }
+        if let Some((lo, hi, _)) = self.object_target(id) {
+            return Some(Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            ));
+        }
+        if let Some(b) = self.tracked_special_box(id) {
+            return Some(b);
+        }
+        self.creatures
+            .projectiles
+            .iter()
+            .find(|p| p.id != 0 && p.id as i32 == id)
+            .map(|p| p.bounds())
+    }
+
     fn guest_attack(&mut self, host: &mut LanHost, conn: u32, id: i32) {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
         if host.hub.guests[gi].spectator() {
+            return;
+        }
+        // handleAttack: `isWithinAttackRange(mainHandItem, box, 3.0)` before
+        // anything else, players, mobs, objects and fireballs alike.
+        if let Some(target) = self.guest_target_box(host, gi, id)
+            && self.as_guest(host, conn, |g| g.within_attack_range(&target)) != Some(true)
+        {
             return;
         }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
@@ -1962,11 +2096,26 @@ impl Game<'_> {
             );
             return;
         }
+        // A native mod's command, for every player its level allows,
+        // whether the world allows commands or not (game/native_server.rs).
+        let integrated = host.hub.config.integrated;
+        if let Some(level) = Self::native_command_level(host, command.trim_start_matches('/'))
+            && let Some(permission) = host.hub.guest(conn).map(|g| g.permission)
+            && permission >= level
+        {
+            host.commands.push(GuestCommand {
+                conn,
+                command: command.trim_start_matches('/').to_owned(),
+                permission,
+                integrated,
+                quiet: false,
+            });
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
         // the ops list (the guest's permission level).
-        let integrated = host.hub.config.integrated;
         let allowed = self.options.dedicated.is_some() || self.allow_commands();
         if !integrated && (!host.settings.guest_commands || !allowed) {
             host.hub.send_to(
@@ -2020,7 +2169,9 @@ impl Game<'_> {
         self.lan = Some(host);
         self.chat_capture = Some(Vec::new());
         let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-        let ok = if c.quiet {
+        let ok = if self.perform_native_command(c.conn, c.permission, &c.command) {
+            true
+        } else if c.quiet {
             self.run_command_quietly(&c.command)
         } else {
             self.run_command(&c.command)
@@ -2232,6 +2383,7 @@ impl Game<'_> {
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
             border: &self.border,
+            streaming: Some(&self.streaming),
         };
         host.hub.respawn(i, spawn, &ctx);
         // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
@@ -2719,9 +2871,10 @@ impl Game<'_> {
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
-                    let sprinting = w.player.sprinting;
-                    w.player
-                        .cause_food_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                    // ServerGamePacketListenerImpl.handlePlayerPositionChange:
+                    // the server's copy jumps with the player, so the velocity
+                    // it sends them keeps the jump.
+                    let _ = w.jump_from_ground();
                 }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;
@@ -3441,6 +3594,30 @@ impl Game<'_> {
         for (name, at, volume, pitch) in sounds {
             let source = horizon_client::settings::sound_source(&name) as i32;
             host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+        }
+    }
+
+    /// `InstrumentItem.play`'s `level.playSound(player, ...)`: the others hear
+    /// a guest's horn now, the guest's own client played it as it used it.
+    fn guest_instrument_sound(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        heard: usize,
+        horn: Option<String>,
+    ) {
+        let (Some(horn), Some(capture)) = (horn, self.audio.capture.as_mut()) else {
+            return;
+        };
+        let mut i = heard.min(capture.len());
+        while i < capture.len() {
+            if capture[i].0 == horn {
+                let (name, at, volume, pitch) = capture.remove(i);
+                let source = horizon_client::settings::sound_source(&name) as i32;
+                host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+            } else {
+                i += 1;
+            }
         }
     }
 

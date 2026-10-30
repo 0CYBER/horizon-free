@@ -274,6 +274,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.velocity.z + force[2] * 0.8 + rel.z * 0.11,
             );
             check_fall_distance(m);
+            super::equine::on_elastic_leash_pull(m, w, events);
             true
         });
     if !pulled {
@@ -343,6 +344,9 @@ pub fn leash_offset(m: &Mob) -> [f64; 3] {
             f64::from(0.6_f32 * m.eye_height() as f32),
             f64::from(m.width() * 0.4),
         ]
+    } else if m.species() == super::Species::Allay {
+        // Allay.getLeashOffset.
+        [0.0, m.eye_height() * 0.6, f64::from(m.width()) * 0.1]
     } else if m.species() == super::Species::Bee {
         // Bee.getLeashOffset: half the eye height, a fifth of the width ahead.
         [0.0, 0.5 * m.eye_height(), f64::from(m.width() * 0.2)]

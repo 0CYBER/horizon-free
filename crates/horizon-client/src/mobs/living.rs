@@ -432,6 +432,10 @@ impl Mob {
         if long_jumping && k.species == super::Species::Goat {
             (w, h, e) = (w * 0.7_f32, h * 0.7_f32, e * 0.7_f32);
         }
+        // Camel.getDefaultDimensions: a sitting camel is lower.
+        if super::camel::is_camel(k.species) && super::camel::sitting(self) {
+            (w, h, e) = super::camel::sitting_dims(self.is_baby());
+        }
         // Warden.getDefaultDimensions: a metre tall while digging or emerging.
         if self.kind.species == super::Species::Warden && super::warden::digging_or_emerging(self) {
             h = 1.0;
@@ -881,22 +885,37 @@ impl Mob {
             self.position.z.floor() as i32,
         ]
     }
+    /// The landing of `check_fall_damage`: the whole fall, with no block
+    /// softening it.
     fn cause_fall_damage(&mut self, events: &mut Vec<MobEvent>) {
+        self.cause_fall_damage_from(self.fall_distance, 1.0, events);
+    }
+    /// `LivingEntity.causeFallDamage`: a fall of `distance` blocks at `modifier`
+    /// (its own landing, or a vehicle's passed on by `propagateFallToPassengers`)
+    /// brings the species' sounds and reactions, the damage, and the fall
+    /// handed to whoever rides it. `AbstractHorse.causeFallDamage` hurts the
+    /// horse first and passes the fall on only when it was hurt.
+    pub fn cause_fall_damage_from(
+        &mut self,
+        distance: f64,
+        modifier: f32,
+        events: &mut Vec<MobEvent>,
+    ) {
         // Breeze.causeFallDamage: a landing from higher than three blocks.
-        if self.species() == super::Species::Breeze && self.fall_distance > 3.0 {
+        if self.species() == super::Species::Breeze && distance > 3.0 {
             let at = [self.position.x, self.position.y, self.position.z];
             events.push(MobEvent::Sound("entity.breeze.land", at, 1.0, 1.0));
         }
         // Creeper.causeFallDamage: the fall swells the fuse, up to five ticks
         // short of exploding.
         if self.species() == super::Species::Creeper {
-            self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
+            self.swell = (self.swell + (distance * 1.5) as i32).min(30 - 5);
         }
         // AbstractHorse.causeFallDamage (llamas override it): a landing of more
         // than a block thuds, and the horse's fall makes no generic fall sound.
         let thud =
             super::equine::is_equine(self.species()) && !super::llama::is_llama(self.species());
-        if thud && self.fall_distance > 1.0 && !self.silent {
+        if thud && distance > 1.0 && !self.silent {
             let at = [self.position.x, self.position.y, self.position.z];
             let sound = if self.is_baby() {
                 "entity.baby_horse.land"
@@ -905,11 +924,16 @@ impl Mob {
             };
             events.push(MobEvent::Sound(sound, at, 0.4, 1.0));
         }
+        // AbstractHorse.causeFallDamage hurts the horse first and passes the fall
+        // on to its riders only when it was hurt.
+        let horse = super::equine::is_equine(self.species());
+        // Entity.causeFallDamage: nothing happens to a fall immune entity, nor
+        // to those on it.
         if self.kind.flags.fall_immune {
             return;
         }
-        let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
-        let mut damage = (power * self.kind.fall_damage_multiplier).floor();
+        let power = distance + 1.0e-6 - self.kind.safe_fall_distance;
+        let mut damage = (power * f64::from(modifier) * self.kind.fall_damage_multiplier).floor();
         // Frog.calculateFallDamage: five points less than the base damage;
         // Goat.calculateFallDamage: ten, so a long jump down a ledge is safe.
         match self.species() {
@@ -917,7 +941,16 @@ impl Mob {
             super::Species::Goat => damage -= 10.0,
             _ => {}
         }
+        // LivingEntity.causeFallDamage lets the riders fall first.
+        if !horse {
+            self.fall_to_passengers(distance, modifier, events);
+        }
         if damage > 0.0 {
+            // Llama.causeFallDamage: only a fall of six blocks or more hurts the
+            // llama and its riders.
+            if super::llama::is_llama(self.species()) && distance < 6.0 {
+                return;
+            }
             let at = [self.position.x, self.position.y, self.position.z];
             // Monster.getFallSounds: the hostile pair.
             let monster = super::ai::is_monster(self.species());
@@ -927,10 +960,26 @@ impl Mob {
                 (false, true) => "entity.generic.big_fall",
                 (false, false) => "entity.generic.small_fall",
             };
-            if !thud {
+            // Horses thud and llamas make no generic fall sound.
+            if !horse {
                 events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
             }
             self.damage(damage as f32, super::Damage::fall());
+            if horse {
+                self.fall_to_passengers(distance, modifier, events);
+            }
+        }
+    }
+    /// `Entity.propagateFallToPassengers`: the game gives the fall to each
+    /// passenger (`causeFallDamage`), a mob or a player, for this mob is
+    /// borrowed here.
+    fn fall_to_passengers(&self, distance: f64, modifier: f32, events: &mut Vec<MobEvent>) {
+        if self.rider.is_some() || self.extra.rider.is_some() {
+            events.push(MobEvent::FallToPassengers {
+                mob: self.id,
+                distance,
+                modifier,
+            });
         }
     }
     /// LivingEntity.getFrictionInfluencedSpeed.
@@ -1277,13 +1326,14 @@ impl Mob {
         let distance = (dx * dx + dy * dy + dz * dz).sqrt() as f32;
         self.previous_limb_speed = self.limb_speed;
         if self.alive() {
-            // Creaking.updateWalkAnimation walks the model faster.
-            let target = if self.species() == super::Species::Creaking {
-                (distance * 25.0).min(3.0)
-            } else {
-                (distance * 4.0).min(1.0)
+            let (target, factor) = match self.species() {
+                // Creaking.updateWalkAnimation walks the model faster.
+                super::Species::Creaking => ((distance * 25.0).min(3.0), 0.4),
+                super::Species::Frog => (super::frog::walk_target(self, distance), 0.4),
+                s if super::camel::is_camel(s) => super::camel::walk_target(self, distance),
+                _ => ((distance * 4.0).min(1.0), 0.4),
             };
-            self.limb_speed += (target - self.limb_speed) * 0.4;
+            self.limb_speed += (target - self.limb_speed) * factor;
             self.limb_position += self.limb_speed;
         } else {
             self.limb_speed = 0.0;

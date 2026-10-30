@@ -48,7 +48,7 @@ cargo horizon-mod check target/horizon-mod/my_mod.hmod   # the registry's checks
   at start, so rebuild and run again after an edit.
 - `check <file>` runs what the registry runs: the file's size and SHA-256, its manifest and content, and a signature
   with `--key <public key> --signature <file>.minisig`. It reads `.hmod`, `.hnmod`, `.hpack`, resource pack `.zip`
-  and `.hshader` files, and refuses an `.hmod` with WebAssembly code.
+  and `.hshader` files.
 - `registry build|review|check|list` is the registry repository's CI ([api/mod-index.md](api/mod-index.md)).
 
 ### The manifest
@@ -191,7 +191,7 @@ refreshed every hour) and its rating: players signed in with GitHub on its page 
 account, which they can change. Its owners can't rate it, and nobody sees who rated.
 
 An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
-has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
+has one. When nothing but the version is new (the page's text, key, owners and icon are as they were), the registry merges it by itself once its checks pass; anything else waits for a reviewer. A published file never changes. Without the form, open the pull request by hand (the repository's README
 says how). The formats: [api/mod-index.md](api/mod-index.md).
 
 ### Integrity and signing
@@ -215,24 +215,9 @@ Horizon's own mods are native. They live in
 | Keystrokes | `native/keystrokes` | Extras > Keystrokes |
 | Zoom | `native/zoom` | Extras > Zoom |
 | Minimap | `native/minimap` | Extras > Minimap |
-| Recipes | `native/recipes` | The Recipes WebAssembly mod (item panel and recipe pages, on hook points version 2) |
-| Coordinates HUD | `native/coords-hud` | The WebAssembly SDK's example mod (position and facing, `/where`, `/coords`) |
+| Recipes | `native/recipes` | The Recipes mod (item panel and recipe pages, on hook points version 2) |
+| Coordinates HUD | `native/coords-hud` | A small example mod (position and facing, `/where`, `/coords`) |
 
 The game keeps the parts that must be fast, such as drawing the minimap's map, and a native mod picks the options
 ([extras.md](extras.md)). Far View is not a mod any more: its distance and detail are Graphics > LOD Distance and Far
 Detail ([graphics.md](graphics.md)).
-
-## WebAssembly code mods (removed)
-
-Horizon used to run mods written in Rust and compiled to sandboxed WebAssembly (`.hmod` files with a `mod.wasm`).
-That runtime, its SDK, the `horizon:mods` interface and the example mods are gone.
-
-- **A player** who has such a mod sees it in Options > Mods as "Doesn't run any more: needs a native port", and reads
-  one notice in the chat. The mod's files are not deleted.
-- **The launcher** hides these mods from search and browse, and can't install one alone. A modpack that requires one
-  still installs, with the mod listed as not running and its code left out.
-- **An author** ports the mod to a native mod: copy
-  [horizon-native-mod-template](https://github.com/horizon-rust/horizon-native-mod-template), look at the official
-  ones in horizon-mods, and read [native-mods.md](native-mods.md). The registry keeps the old versions for the
-  modpacks that need them.
-- **A content mod is not affected.** Only an `.hmod` with a capability besides `registries` needs a port.

@@ -861,6 +861,21 @@ fn login_and_configure(
             _ => {}
         }
     };
+    // horizon-clients-only: the brand the client sent ("vanilla" when it sent
+    // none) must be Horizon's.
+    if shared.config.horizon_clients_only && brand != "horizon" {
+        let text = super::HORIZON_CLIENTS_ONLY_REASON;
+        let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(text));
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        if let Some(log) = &shared.config.log {
+            let line = format!(
+                "Disconnecting {name}: its client is \"{brand}\", not Horizon (horizon-clients-only)"
+            );
+            (log.write)("Server thread", "INFO", &line);
+        }
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
+        return Ok(None);
+    }
     // A Horizon client hears that this server runs its mods' quiet commands
     // (horizon_protocol::quiet); a vanilla one is told nothing.
     if brand == "horizon" {
@@ -910,7 +925,7 @@ fn login_and_configure(
             return Ok(None);
         }
     }
-    for packet in sync.registry_packets(known_pack) {
+    for packet in sync.registry_packets(known_pack, &shared.config.levels) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
@@ -1177,7 +1192,7 @@ fn read_loop(
             // The client closed the connection: Connection.channelInactive
             // without details, multiplayer.disconnect.generic.
             Err(e)
-                if e.0 == "Connection closed by the server"
+                if e.is_end_of_stream()
                     || e.0.contains("reset by peer")
                     || e.0.contains("aborted") =>
             {
