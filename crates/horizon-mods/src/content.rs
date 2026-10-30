@@ -81,6 +81,8 @@ struct BlockFile {
     template: String,
     #[serde(default)]
     properties: BlockProperties,
+    #[serde(default)]
+    default_state: BTreeMap<String, String>,
     #[serde(default = "yes")]
     item: bool,
 }
@@ -97,6 +99,8 @@ pub struct Block {
     /// The vanilla block it copies, `minecraft:<path>`.
     pub template: String,
     pub properties: BlockProperties,
+    /// State properties overlaid on the template default.
+    pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
 }
@@ -333,6 +337,7 @@ impl Content {
                 id: block,
                 template: file.template,
                 properties: file.properties,
+                default_state: file.default_state,
                 item: file.item,
             });
         }
@@ -499,6 +504,7 @@ capabilities = ["registries"]
             [Block {
                 id: "ruby:ruby_block".into(),
                 template: "minecraft:iron_block".into(),
+                default_state: BTreeMap::new(),
                 properties: BlockProperties {
                     hardness: Some(4.0),
                     light: Some(3),

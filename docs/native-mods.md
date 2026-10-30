@@ -47,7 +47,7 @@ particle. The return value says whether the call was accepted, not whether any p
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
-API 4 adds authoritative server tick events through `native_server_tick`: start and end of each non-paused
+API 4 adds authoritative server tick events through `native_server_tick`: start (before any level ticks, like NeoForge's `ServerTickEvent.Pre`) and end of each non-paused
 server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
 use these events need `"hooks": 4`.
 
