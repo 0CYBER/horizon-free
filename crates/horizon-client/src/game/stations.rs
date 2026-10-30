@@ -144,6 +144,10 @@ pub(super) struct Station {
     pub(super) stone: horizon_client::menu::Stonecutter,
     pub(super) selected: Option<usize>,
     start: usize,
+    /// Stonecutter: the screen's `scrollOffs` (0 to 1) and `scrolling`, the
+    /// scroller held by the mouse.
+    scroll: f32,
+    scrolling: bool,
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
     /// Anvil on a server: the name last sent (the client menu's `itemName`).
@@ -173,6 +177,8 @@ impl Station {
             stone: Default::default(),
             selected: None,
             start: 0,
+            scroll: 0.0,
+            scrolling: false,
             anvil_last: None,
             anvil_sent: None,
             last_sound: 0,
@@ -190,8 +196,33 @@ impl Station {
     pub(super) fn stonecutter_changed(&mut self) {
         if self.inputs[0].is_none() || self.stone.recipes.is_empty() {
             self.start = 0;
+            self.scroll = 0.0;
         }
     }
+    /// `StonecutterScreen.isScrollBarActive`.
+    fn stonecutter_scrolls(&self) -> bool {
+        self.inputs[0].is_some() && self.stone.recipes.len() > 12
+    }
+    /// Moves the stonecutter's scroller to `offs`, and its first shown
+    /// recipe (`startIndex`) with it.
+    fn stonecutter_scroll_to(&mut self, offs: f32) {
+        self.scroll = offs.clamp(0.0, 1.0);
+        self.start = stonecutter_start(self.stone.recipes.len(), self.scroll);
+    }
+}
+
+/// `StonecutterScreen.getOffscreenRows`: the recipe rows below the 4x3 grid.
+fn stonecutter_offscreen_rows(recipes: usize) -> i32 {
+    recipes.div_ceil(4) as i32 - 3
+}
+/// `startIndex` for a scroller position: the first recipe of the nearest row.
+fn stonecutter_start(recipes: usize, offs: f32) -> usize {
+    ((offs * stonecutter_offscreen_rows(recipes) as f32 + 0.5) as i32).max(0) as usize * 4
+}
+/// `StonecutterScreen.mouseDragged`: the scroller position under the cursor,
+/// `y` relative to the GUI origin (the 54-px track starts at 14).
+fn stonecutter_drag_offs(y: f32) -> f32 {
+    ((y - 14.0 - 7.5) / (54.0 - 15.0)).clamp(0.0, 1.0)
 }
 
 /// The 108x19 enchantment button `i` (relative to the GUI origin).
@@ -912,15 +943,27 @@ impl Game<'_> {
     /// `StonecutterScreen.mouseClicked` on its recipe grid: `clickMenuButton`
     /// with the cell's index (an empty cell's too), and the select sound when
     /// the menu took it.
+    /// Beside the grid, a press on the scroller's track holds it (`scrolling`).
     fn stonecutter_click(&mut self, local: (f32, f32)) -> bool {
-        let Some(start) = self
-            .station
-            .as_ref()
-            .filter(|s| s.inputs[0].is_some() && !s.stone.recipes.is_empty())
-            .map(|s| s.start)
-        else {
+        let Some(s) = self.station.as_mut() else {
             return false;
         };
+        s.scrolling = false;
+        if s.inputs[0].is_some() && !s.stone.recipes.is_empty() {
+            let start = s.start;
+            if self.stonecutter_recipe_click(local, start) {
+                return true;
+            }
+        }
+        if inside(local, 119.0, 9.0, 12.0, 54.0)
+            && let Some(s) = self.station.as_mut()
+        {
+            s.scrolling = true;
+            return true;
+        }
+        false
+    }
+    fn stonecutter_recipe_click(&mut self, local: (f32, f32), start: usize) -> bool {
         for index in start..start + 12 {
             let p = index - start;
             let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0);
@@ -942,18 +985,51 @@ impl Game<'_> {
         }
         false
     }
+    /// `StonecutterScreen.mouseScrolled`.
     pub(super) fn station_scroll(&mut self, d: f32) {
         self.merchant_scroll(d);
         self.loom_scroll(d);
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        if s.kind != Kind::Stonecutter || s.stone.recipes.len() <= 12 {
+        if s.kind != Kind::Stonecutter || !s.stonecutter_scrolls() {
             return;
         }
-        let rows = s.stone.recipes.len().div_ceil(4) - 3;
-        let first_row = (s.start / 4) as i32 - d.signum() as i32;
-        s.start = first_row.clamp(0, rows as i32) as usize * 4;
+        let rows = stonecutter_offscreen_rows(s.stone.recipes.len());
+        s.stonecutter_scroll_to(s.scroll - d / rows as f32);
+    }
+    /// The mouse moved with a button held on a station: the loom's,
+    /// stonecutter's and merchant's scrollers follow it.
+    pub(super) fn station_drag(&mut self) {
+        self.loom_drag();
+        self.merchant_drag();
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
+        let (_, oy) = self.inventory_origin(&HudBatch::new(size));
+        let y = self.cursor.1 - oy;
+        // `StonecutterScreen.mouseDragged`.
+        if let Some(s) = self.station.as_mut()
+            && s.kind == Kind::Stonecutter
+            && s.scrolling
+            && s.stonecutter_scrolls()
+        {
+            s.stonecutter_scroll_to(stonecutter_drag_offs(y));
+        }
+    }
+    /// A mouse button let go: no scroller is held any more.
+    pub(super) fn station_release(&mut self) {
+        self.loom_release();
+        if let Some(s) = self.station.as_mut() {
+            s.scrolling = false;
+            if let Some(m) = s.merchant.as_mut() {
+                m.dragging = false;
+            }
+        }
     }
     /// Whether keyboard text goes to the anvil rename box.
     pub(super) fn station_typing(&self) -> bool {
@@ -1567,12 +1643,7 @@ impl Game<'_> {
                 Kind::Stonecutter => {
                     let display = s.inputs[0].is_some() && !s.stone.recipes.is_empty();
                     let active = display && s.stone.recipes.len() > 12;
-                    let rows = s.stone.recipes.len().div_ceil(4).saturating_sub(3).max(1);
-                    let offs = if active {
-                        (s.start / 4) as f32 / rows as f32
-                    } else {
-                        0.0
-                    };
+                    let offs = if active { s.scroll } else { 0.0 };
                     let scroller = if active {
                         "scroller"
                     } else {
@@ -1696,7 +1767,7 @@ impl Game<'_> {
         &self,
         stack: &ItemStack,
     ) -> Vec<(horizon_client::text::Text, u32)> {
-        self.stack_tooltip_lines(stack, false)
+        self.stack_tooltip_lines(stack, false, false)
     }
     /// `ItemStack.getRarity`'s colour for the name line and a `[name]` link.
     fn rarity_color(&self, stack: &ItemStack) -> u32 {
@@ -1743,11 +1814,13 @@ impl Game<'_> {
     }
     /// `ItemStack.getTooltipLines`. A `nested` stack is a crossbow's
     /// projectile: `ChargedProjectiles.addProjectileTooltip` takes its details
-    /// without the name, the player and the advanced flag.
+    /// without the name, the player and the advanced flag. `creative` is
+    /// `TooltipFlag.isCreative`: a creative tab's own slot.
     fn stack_tooltip_lines(
         &self,
         stack: &ItemStack,
         nested: bool,
+        creative: bool,
     ) -> Vec<(horizon_client::text::Text, u32)> {
         let e: &Enchantments = &self.res.stations().enchantments;
         let color = self.rarity_color(stack);
@@ -1755,13 +1828,8 @@ impl Game<'_> {
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
         let mut lines = Vec::new();
         if !nested && display.name_visible(self.screen == Screen::Creative) {
-            // `getStyledHoverName`: a custom name is italic.
-            let name = self.stack_hover_name(stack);
-            let name = if stack.custom_name().is_some() {
-                horizon_client::text::Text::literal(name).italic()
-            } else {
-                horizon_client::text::Text::legacy(&name)
-            };
+            let name =
+                horizon_client::item_tooltip::styled_name(stack, || self.stack_hover_name(stack));
             lines.push((name, color));
         }
         let translate = |k: &str| self.pack.names.display_get(k);
@@ -1774,6 +1842,27 @@ impl Game<'_> {
         // before the components.
         for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
             push(&mut lines, text, c);
+        }
+        // HangingEntityItem.appendHoverText: a painting's variant, its title,
+        // author and size, or in a creative tab "Random variant".
+        if &*stack.item == "minecraft:painting" && display.shows("minecraft:painting/variant") {
+            use horizon_client::text::Text;
+            if let Some(v) = self.painting_variants.of_stack(stack) {
+                for part in [&v.title, &v.author].into_iter().flatten() {
+                    let text = horizon_client::component::to_text(part, &mut |_| Text::empty());
+                    lines.push((text, u32::MAX));
+                }
+                let size = [v.width, v.height].map(|n| Text::literal(n.to_string()));
+                lines.push((Text::translate("painting.dimensions", &size), u32::MAX));
+            } else if creative
+                && stack
+                    .data()
+                    .and_then(|d| d.other("minecraft:painting/variant"))
+                    .is_none()
+            {
+                let random = Text::translate("painting.random", &[]);
+                lines.push((random.with_color(horizon_client::text::GRAY), u32::MAX));
+            }
         }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
@@ -1788,7 +1877,6 @@ impl Game<'_> {
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map(str::to_owned)
                 .or_else(|| s.item_name())
                 .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
@@ -1848,7 +1936,7 @@ impl Game<'_> {
                     )
                 };
                 lines.push((line, u32::MAX));
-                for (text, c) in self.stack_tooltip_lines(projectile, true) {
+                for (text, c) in self.stack_tooltip_lines(projectile, true, false) {
                     // `literal("  ").append(line).withStyle(GRAY)`: the line's
                     // own colours win over the gray.
                     let rgb = if c == u32::MAX {
@@ -1998,6 +2086,16 @@ impl Game<'_> {
         if let Some((text, c)) =
             horizon_client::item_tooltip::ominous_bottle_line(stack, &display, &translate)
         {
+            push(&mut lines, text, c);
+        }
+        // SuspiciousStewEffects.addToTooltip: the creative flag, which vanilla
+        // sets for the creative screen's own slots, as `name_visible` above.
+        for (text, c) in horizon_client::item_tooltip::stew_lines(
+            stack,
+            !nested && self.screen == Screen::Creative,
+            &display,
+            &translate,
+        ) {
             push(&mut lines, text, c);
         }
         // BlockItemStateProperties.addToTooltip.
@@ -2248,19 +2346,21 @@ impl Game<'_> {
         x: f32,
         y: f32,
     ) {
-        self.draw_stack_tooltip_with(batch, stack, x, y, Vec::new());
+        self.draw_stack_tooltip_with(batch, stack, false, x, y, Vec::new());
     }
-    /// [`Self::draw_stack_tooltip`] with `after_name` inserted from line 1,
-    /// as the creative screen adds its tab names.
+    /// [`Self::draw_stack_tooltip`] with `TooltipFlag.isCreative` set when
+    /// `creative` (a creative tab's own slot), and `after_name` inserted from
+    /// line 1, as the creative screen adds its tab names.
     pub(super) fn draw_stack_tooltip_with(
         &mut self,
         batch: &mut HudBatch,
         stack: &ItemStack,
+        creative: bool,
         x: f32,
         y: f32,
         after_name: Vec<(horizon_client::text::Text, u32)>,
     ) {
-        let mut lines = self.stack_tooltip(stack);
+        let mut lines = self.stack_tooltip_lines(stack, false, creative);
         if lines.is_empty() {
             return;
         }
@@ -2462,4 +2562,42 @@ fn anvil_box() -> horizon_client::ui::EditBox {
     edit.text_color = u32::MAX;
     edit.focused = true;
     edit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stonecutter_scroller_rows() {
+        // 26 recipes = 7 rows, 4 below the grid.
+        assert_eq!(stonecutter_offscreen_rows(26), 4);
+        assert_eq!(stonecutter_start(26, 0.0), 0);
+        assert_eq!(stonecutter_start(26, 0.5), 8);
+        assert_eq!(stonecutter_start(26, 0.6), 8);
+        assert_eq!(stonecutter_start(26, 0.65), 12);
+        assert_eq!(stonecutter_start(26, 1.0), 16);
+    }
+    #[test]
+    fn stonecutter_drag_follows_the_cursor() {
+        // The scroller's middle sits under the cursor, within its track.
+        assert_eq!(stonecutter_drag_offs(0.0), 0.0);
+        assert_eq!(stonecutter_drag_offs(21.5), 0.0);
+        assert_eq!(stonecutter_drag_offs(21.5 + 39.0 / 2.0), 0.5);
+        assert_eq!(stonecutter_drag_offs(21.5 + 39.0), 1.0);
+        assert_eq!(stonecutter_drag_offs(200.0), 1.0);
+    }
+    #[test]
+    fn stonecutter_wheel_moves_one_row() {
+        let mut s = Station::new(Kind::Stonecutter, [0, 0, 0]);
+        s.inputs[0] = Some(ItemStack::new("minecraft:stone", 1));
+        s.stone.recipes = (0..26).collect();
+        assert!(s.stonecutter_scrolls());
+        s.stonecutter_scroll_to(s.scroll + 1.0 / 4.0);
+        assert_eq!(s.start, 4);
+        s.stonecutter_scroll_to(s.scroll + 5.0);
+        assert_eq!((s.scroll, s.start), (1.0, 16));
+        s.stone.recipes.truncate(12);
+        assert!(!s.stonecutter_scrolls());
+    }
 }

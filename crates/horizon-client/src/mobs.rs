@@ -325,6 +325,7 @@ pub struct Flags {
     pub water_sensitive: bool,
     pub animal: bool,
 }
+
 #[derive(Clone, Debug)]
 pub struct MobType {
     pub id: String,
@@ -734,8 +735,9 @@ pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
-    /// The local player's `minecraft:scale`, which scales the whole model
-    /// (`LivingEntityRenderState.scale`); 0 is the default, 1.
+    /// A player's or mannequin's `minecraft:scale`, which scales the whole model
+    /// (`LivingEntityRenderState.scale`): the local player's own, and on a
+    /// server the others' from their attribute updates; 0 is the default, 1.
     pub model_scale: f32,
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
@@ -808,6 +810,8 @@ pub struct Extra {
     pub charged: bool,
     /// Held item ids (main hand, off hand) and head item.
     pub main_hand: Option<Arc<str>>,
+    /// Components of the current held stack; setters clear these on replacement.
+    main_hand_stack: Option<crate::items::ItemStack>,
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     /// Worn armour below the head (humanoid mobs).
@@ -923,11 +927,15 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// Whether a camel sits (`egg_time` is then the age it sat down at).
+    pub camel_sitting: bool,
     /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
     pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
+    /// The fish that follow this one (`AbstractSchoolingFish.schoolSize` - 1).
+    pub followers: i32,
     /// A breeze's or creaking's brain (`monster_brain`).
     pub brain: Option<Box<monster_brain::Brain>>,
     /// A bee's nectar, anger, flower and hive state.
@@ -939,6 +947,26 @@ pub struct Extra {
     /// A panda's flags, counters and amounts.
     pub panda: Option<Box<panda::State>>,
 }
+impl Extra {
+    pub fn set_main_hand(&mut self, item: Option<Arc<str>>) {
+        self.main_hand = item;
+        self.main_hand_stack = None;
+    }
+    pub fn set_main_hand_stack(&mut self, stack: Option<crate::items::ItemStack>) {
+        self.main_hand = stack.as_ref().map(|s| s.item.clone());
+        self.main_hand_stack = stack;
+    }
+    pub fn main_hand_stack(&self) -> Option<&crate::items::ItemStack> {
+        self.main_hand_stack
+            .as_ref()
+            .filter(|s| self.main_hand.as_ref() == Some(&s.item))
+    }
+    pub fn take_main_hand(&mut self) -> Option<Arc<str>> {
+        self.main_hand_stack = None;
+        self.main_hand.take()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Mob {
     pub id: u32,
@@ -1134,6 +1162,17 @@ pub enum MobEvent {
         mob: u32,
         partner: u32,
     },
+    /// `AbstractSchoolingFish.startFollowing` on a fish a leader recruits:
+    /// it follows the leader, whose school grows by one.
+    StartFollowing {
+        fish: u32,
+        leader: u32,
+    },
+    /// `addFollower` / `removeFollower`: a leader's school grows or shrinks.
+    SchoolSize {
+        leader: u32,
+        by: i32,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
     /// `Level.playLocalSound`: a sound the client plays for itself, never
@@ -1309,7 +1348,8 @@ pub enum MobEvent {
         infested: bool,
         poof: Option<u32>,
     },
-    /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
+    /// `Level.destroyBlock(pos, drop)`: the block gives way to its fluid's
+    /// block (air when it has none). Sheep eating grass becomes dirt via SetBlock.
     BreakBlock {
         pos: [i32; 3],
         drop: bool,
@@ -1569,6 +1609,8 @@ pub struct Seen {
     pub leash: Option<leash::Holder>,
     /// A llama's caravan head (its id plus one, 0 when not in a caravan).
     pub caravan: u32,
+    /// A schooling fish's leader and how many fish follow it.
+    pub school: (Option<u32>, i32),
     /// A wandering trader's despawn delay.
     pub delay: i32,
     /// `getLastHurtByMob` and its timestamp.
@@ -1681,6 +1723,7 @@ impl Mob {
             velocity: m.velocity,
             leash: m.extra.leash,
             caravan: caravan::head_of(m),
+            school: (m.extra.leader, m.extra.followers),
             delay: m.extra.ints[5],
             hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
             active_raid: raider::has_active_raid(m),
@@ -1815,6 +1858,16 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
                     villager_brain::lock_gaze_half(m, Who::Mob(partner));
+                }
+                events.remove(i);
+            }
+            MobEvent::StartFollowing { fish, leader } => {
+                aquatic::start_following(mobs, fish, leader);
+                events.remove(i);
+            }
+            MobEvent::SchoolSize { leader, by } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == leader) {
+                    m.extra.followers += by;
                 }
                 events.remove(i);
             }
@@ -2615,7 +2668,12 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
-                    glint_uv: [0.0, 0.0],
+                    // The armour glint scrolls the model UV in the shader.
+                    glint_uv: if overlay == render::ARMOR_GLINT {
+                        [v[3], v[4]]
+                    } else {
+                        [0.0, 0.0]
+                    },
                 });
             }
         }
@@ -2766,6 +2824,12 @@ pub struct ElytraAnimation {
     pub angles: [f32; 3],
 }
 impl ElytraAnimation {
+    /// The angles `ElytraAnimationState` eases to when not gliding or crouching.
+    pub const RESTING: [f32; 3] = [
+        std::f32::consts::PI / 12.0,
+        0.0,
+        -std::f32::consts::PI / 12.0,
+    ];
     pub fn tick(&mut self, flying: bool, crouching: bool, velocity: horizon_core::geometry::Vec3) {
         use std::f32::consts::PI;
         self.old = self.angles;
@@ -2786,7 +2850,7 @@ impl ElytraAnimation {
         } else if crouching {
             [PI * 2.0 / 9.0, 0.08726646, -PI / 4.0]
         } else {
-            [PI / 12.0, 0.0, -PI / 12.0]
+            Self::RESTING
         };
         for (angle, target) in self.angles.iter_mut().zip(target) {
             *angle += (target - *angle) * 0.3;
@@ -2876,6 +2940,18 @@ mod elytra_tests {
             wings.tick(false, true, Vec3::ZERO);
         }
         assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
+    }
+    /// An armour stand never glides or crouches: its wings stay at the angles
+    /// a standing wearer eases to.
+    #[test]
+    fn resting_wings_are_the_standing_target() {
+        let mut wings = ElytraAnimation::default();
+        for _ in 0..80 {
+            wings.tick(false, false, Vec3::ZERO);
+        }
+        for (angle, resting) in wings.angles.iter().zip(ElytraAnimation::RESTING) {
+            assert!((angle - resting).abs() < 0.00001);
+        }
     }
 }
 #[cfg(test)]
@@ -3330,5 +3406,28 @@ mod push_tests {
             let after = t.elapsed().as_secs_f64() * 1e3;
             println!("{n} mobs pushing each other: {before:.3} ms -> {after:.3} ms");
         }
+    }
+}
+
+#[cfg(test)]
+mod held_stack_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_even_the_same_item_clears_its_old_components() {
+        let mut extra = Extra::default();
+        let mut named = crate::items::ItemStack::new("minecraft:diamond_sword", 1);
+        named.data_mut().custom_name = Some(horizon_world::nbt::Tag::String("Old Sword".into()));
+        extra.set_main_hand_stack(Some(named.clone()));
+        assert_eq!(
+            extra.main_hand_stack().unwrap().custom_name().as_deref(),
+            Some("Old Sword")
+        );
+        extra.set_main_hand(Some(named.item.clone()));
+        assert!(extra.main_hand_stack().is_none());
+        extra.set_main_hand_stack(Some(named));
+        extra.take_main_hand();
+        assert!(extra.main_hand.is_none());
+        assert!(extra.main_hand_stack().is_none());
     }
 }
