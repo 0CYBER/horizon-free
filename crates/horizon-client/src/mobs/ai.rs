@@ -660,6 +660,18 @@ fn effects_from_blocks(
     level_random: &mut LegacyRandom,
     events: &mut Vec<MobEvent>,
 ) {
+    // Block.stepOn for the block under a mob on the ground (`getOnPosLegacy`):
+    // MagmaBlock.stepOn's hot floor, 1 damage (a mob never sneaks).
+    if m.on_ground && m.alive() {
+        let (x, y, z) = (
+            m.position.x.floor() as i32,
+            (m.position.y - f64::from(0.2_f32)).floor() as i32,
+            m.position.z.floor() as i32,
+        );
+        if w.block_name(x, y, z) == "minecraft:magma_block" {
+            m.damage(1.0, Damage::of(DamageKind::HotFloor));
+        }
+    }
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);
     let longest = travel.x.abs().max(travel.y.abs()).max(travel.z.abs());

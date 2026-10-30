@@ -568,6 +568,8 @@ pub enum DamageKind {
     Stalagmite,
     /// `starve`: no food left.
     Starve,
+    /// `hot_floor`: stepping on a magma block.
+    HotFloor,
     /// `sulfur_cube_hot`: a sulfur cube's hot floor (a fire).
     SulfurCubeHot,
     /// `wind_charge`: a wind charge's burst (a projectile).
@@ -693,6 +695,7 @@ impl Damage {
             DamageKind::OnFire
                 | DamageKind::InFire
                 | DamageKind::Campfire
+                | DamageKind::HotFloor
                 | DamageKind::Lava
                 | DamageKind::Fireball
                 | DamageKind::SulfurCubeHot
@@ -707,6 +710,7 @@ impl Damage {
                 | DamageKind::OnFire
                 | DamageKind::InFire
                 | DamageKind::Campfire
+                | DamageKind::HotFloor
                 | DamageKind::Lava
                 | DamageKind::Drown
                 | DamageKind::DryOut
