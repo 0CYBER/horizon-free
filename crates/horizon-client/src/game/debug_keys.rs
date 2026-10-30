@@ -14,6 +14,8 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::geometry::{Axis, Vec3};
+use horizon_protocol::packets::play::{BlockEntityTagQuery, EntityTagQuery, Serverbound};
+use horizon_world::nbt::Tag;
 use winit::keyboard::KeyCode;
 
 /// `ChatFormatting.YELLOW` and `RED`.
@@ -217,7 +219,7 @@ impl Game<'_> {
             self.debug_charts.log_packets([sent, received]);
         }
         if shown {
-            use horizon_protocol::packets::{play::Serverbound, status::Ping};
+            use horizon_protocol::packets::status::Ping;
             let time = self.debug_millis();
             self.send(Serverbound::PingRequest(Ping { time }));
         }
@@ -682,7 +684,7 @@ impl Game<'_> {
     /// `GameModeCommand.setGameMode` with its feedback.
     pub(super) fn change_game_mode(&mut self, mode: GameMode) {
         if self.remote.is_some() {
-            use horizon_protocol::packets::play::{ChangeGameMode, Serverbound};
+            use horizon_protocol::packets::play::ChangeGameMode;
             let mode = match mode {
                 GameMode::Survival => 0,
                 GameMode::Creative => 1,
@@ -698,10 +700,11 @@ impl Game<'_> {
         }
     }
     /// `KeyboardHandler.copyRecreateCommand`: the targeted block or mob as a
-    /// `/setblock` or `/summon` command. In a single-player world the
-    /// server's data (no Shift) is the game's own.
+    /// `/setblock` or `/summon` command. The server's data (no Shift) comes
+    /// from the server the game is connected to, the integrated one included
+    /// (`DebugQueryHandler`); without one, the game's own data is the server's.
     fn copy_recreate_command(&mut self, add_nbt: bool, from_server: bool) {
-        use horizon_client::java_text::format_fixed2 as f2;
+        let query = add_nbt && from_server && self.remote.is_some();
         let side = if add_nbt && from_server {
             "server"
         } else {
@@ -710,45 +713,135 @@ impl Game<'_> {
         if self.entity_targeted()
             && let Some((index, _)) = self.mob_hit()
         {
-            let (id, pos, mob) = {
+            let (kind, position, id) = {
                 let m = &self.mobs[index];
                 (m.kind.id.clone(), m.position, m.id)
             };
-            let mut command = format!("/summon {id} {} {} {}", f2(pos.x), f2(pos.y), f2(pos.z));
-            if add_nbt && let Some(mut tag) = self.entity_nbt(super::commands::Target::Mob(mob)) {
-                if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
-                    for key in ["id", "UUID", "Pos"] {
-                        c.remove(&key.into());
-                    }
+            if query {
+                // DebugQueryHandler.queryEntityTag: the answer copies it.
+                let reply = QueryReply::Entity { id, kind, position };
+                if let Some(transaction) = self.remote.as_mut().map(|r| r.debug_query.start(reply))
+                {
+                    self.send(Serverbound::EntityTagQuery(EntityTagQuery {
+                        transaction,
+                        entity: id as i32,
+                    }));
                 }
-                command.push(' ');
-                command.push_str(&horizon_client::snbt::pretty(&tag).plain());
+                return;
             }
-            self.set_clipboard(&command);
+            // Entity.saveWithoutId.
+            let tag = if add_nbt {
+                self.entity_nbt(super::commands::Target::Mob(id))
+                    .map(|mut tag| {
+                        if let Tag::Compound(c) = &mut tag {
+                            c.remove(&"id".into());
+                        }
+                        tag
+                    })
+            } else {
+                None
+            };
+            self.copy_create_entity_command(&kind, position, tag);
             self.debug_translated(&format!("debug.inspect.{side}.entity"));
             return;
         }
         let Some(hit) = self.pick() else {
             return;
         };
-        let p = hit.pos;
-        let mut description = self.state_string(self.world.block(p[0], p[1], p[2]));
-        if add_nbt && let Some(e) = self.world.block_entities.get(&(p[0], p[1], p[2])) {
-            // BlockEntity.saveWithoutMetadata: no id or position.
-            let name = self.data_block_name(p);
-            let mut tag = horizon_client::save::encode_block_entity((p[0], p[1], p[2]), e, &name);
-            if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
-                for key in ["id", "x", "y", "z", "keepPacked"] {
-                    c.remove(&key.into());
-                }
+        let pos = hit.pos;
+        let state = self.state_string(self.world.block(pos[0], pos[1], pos[2]));
+        if query {
+            // DebugQueryHandler.queryBlockEntityTag: the answer copies it.
+            let reply = QueryReply::Block { pos, state };
+            if let Some(transaction) = self.remote.as_mut().map(|r| r.debug_query.start(reply)) {
+                self.send(Serverbound::BlockEntityTagQuery(BlockEntityTagQuery {
+                    transaction,
+                    pos,
+                }));
             }
-            description.push_str(&horizon_client::snbt::to_snbt(&tag));
+            return;
+        }
+        let tag = if add_nbt {
+            self.block_entity_tag(pos)
+        } else {
+            None
+        };
+        self.copy_create_block_command(pos, &state, tag.as_ref());
+        self.debug_translated(&format!("debug.inspect.{side}.block"));
+    }
+    /// `BlockEntity.saveWithoutMetadata` of the block entity at `pos`, if
+    /// there is one: its data without the id or the position.
+    pub(super) fn block_entity_tag(&self, pos: [i32; 3]) -> Option<Tag> {
+        let e = self.world.block_entities.get(&(pos[0], pos[1], pos[2]))?;
+        let name = self.data_block_name(pos);
+        let mut tag = horizon_client::save::encode_block_entity((pos[0], pos[1], pos[2]), e, &name);
+        if let Tag::Compound(c) = &mut tag {
+            for key in ["id", "x", "y", "z", "keepPacked"] {
+                c.remove(&key.into());
+            }
+        }
+        Some(tag)
+    }
+    /// `ClientPacketListener.handleTagQueryPacket`: the server's answer to
+    /// the last debug query (`DebugQueryHandler.handleResponse`) completes
+    /// it; an answer to an older query is ignored.
+    pub(super) fn answer_tag_query(&mut self, transaction: i32, tag: Tag) {
+        let Some(reply) = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.debug_query.answer(transaction))
+        else {
+            return;
+        };
+        // FriendlyByteBuf.readNbt: an End tag is no compound.
+        let tag = match tag {
+            Tag::End => None,
+            tag => Some(tag),
+        };
+        match reply {
+            QueryReply::Block { pos, state } => {
+                self.copy_create_block_command(pos, &state, tag.as_ref());
+                self.debug_translated("debug.inspect.server.block");
+            }
+            QueryReply::Entity { id, kind, position } => {
+                // Entity.position() when the answer comes: where it is now,
+                // else where it was last.
+                let position = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map_or(position, |m| m.position);
+                self.copy_create_entity_command(&kind, position, tag);
+                self.debug_translated("debug.inspect.server.entity");
+            }
+        }
+    }
+    /// `KeyboardHandler.copyCreateBlockCommand`.
+    fn copy_create_block_command(&mut self, pos: [i32; 3], state: &str, tag: Option<&Tag>) {
+        let mut description = state.to_owned();
+        if let Some(tag) = tag {
+            description.push_str(&horizon_client::snbt::to_snbt(tag));
         }
         self.set_clipboard(&format!(
             "/setblock {} {} {} {description}",
-            p[0], p[1], p[2]
+            pos[0], pos[1], pos[2]
         ));
-        self.debug_translated(&format!("debug.inspect.{side}.block"));
+    }
+    /// `KeyboardHandler.copyCreateEntityCommand`: the data without its UUID
+    /// or position.
+    fn copy_create_entity_command(&mut self, kind: &str, pos: Vec3, tag: Option<Tag>) {
+        use horizon_client::java_text::format_fixed2 as f2;
+        let mut command = format!("/summon {kind} {} {} {}", f2(pos.x), f2(pos.y), f2(pos.z));
+        if let Some(mut tag) = tag {
+            if let Tag::Compound(c) = &mut tag {
+                for key in ["UUID", "Pos"] {
+                    c.remove(&key.into());
+                }
+            }
+            command.push(' ');
+            command.push_str(&horizon_client::snbt::pretty(&tag).plain());
+        }
+        self.set_clipboard(&command);
     }
     /// `KeyboardHandler.setClipboard`.
     fn set_clipboard(&mut self, text: &str) {
@@ -1009,4 +1102,79 @@ fn step_view(step: [i32; 3]) -> (f32, f32) {
         (-y).asin().to_degrees() as f32,
         (-x.atan2(z)).to_degrees() as f32,
     )
+}
+
+/// `DebugQueryHandler`: the last debug NBT query (F3+I) sent to the server
+/// and what its answer completes. Only the newest query is answered.
+#[derive(Debug)]
+pub(super) struct DebugQuery {
+    transaction: i32,
+    pending: Option<QueryReply>,
+}
+impl Default for DebugQuery {
+    fn default() -> Self {
+        Self {
+            transaction: -1,
+            pending: None,
+        }
+    }
+}
+/// What a debug query's answer is copied into: the block command
+/// (`copyCreateBlockCommand`) or the entity's (`copyCreateEntityCommand`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum QueryReply {
+    Block {
+        pos: [i32; 3],
+        state: String,
+    },
+    Entity {
+        id: u32,
+        kind: String,
+        position: Vec3,
+    },
+}
+impl DebugQuery {
+    /// `DebugQueryHandler.startTransaction`: the next transaction id, which
+    /// replaces any query still waiting.
+    fn start(&mut self, reply: QueryReply) -> i32 {
+        self.pending = Some(reply);
+        self.transaction = self.transaction.wrapping_add(1);
+        self.transaction
+    }
+    /// `DebugQueryHandler.handleResponse`: what the answer to `transaction`
+    /// completes, once, when it answers the newest query.
+    fn answer(&mut self, transaction: i32) -> Option<QueryReply> {
+        if transaction == self.transaction {
+            self.pending.take()
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(x: i32) -> QueryReply {
+        QueryReply::Block {
+            pos: [x, 64, 0],
+            state: "minecraft:chest[facing=north,type=single,waterlogged=false]".into(),
+        }
+    }
+
+    #[test]
+    fn a_debug_query_is_answered_once_and_only_the_newest() {
+        let mut q = DebugQuery::default();
+        // The first transaction is 0 (the handler starts at -1).
+        assert_eq!(q.start(block(1)), 0);
+        assert_eq!(q.answer(0), Some(block(1)));
+        assert_eq!(q.answer(0), None);
+        // A second press before the first answer: the older answer is ignored
+        // and the newer one copies the newer target.
+        assert_eq!(q.start(block(2)), 1);
+        assert_eq!(q.start(block(3)), 2);
+        assert_eq!(q.answer(1), None);
+        assert_eq!(q.answer(2), Some(block(3)));
+    }
 }

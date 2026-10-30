@@ -838,6 +838,11 @@ packet!(Sound {
     seed: i64 => Long,
 });
 packet!(SystemChat { content: Tag => Nbt, overlay: bool => Bool });
+packet!(
+    /// ClientboundTagQueryPacket: the answer to a debug NBT query (F3+I), with
+    /// the transaction it answers; `Tag::End` when there was no block entity.
+    TagQuery { transaction: i32 => VarInt, tag: Tag => Nbt }
+);
 packet!(TakeItemEntity { item: i32 => VarInt, player: i32 => VarInt, amount: i32 => VarInt });
 packet!(TeleportEntity {
     id: i32 => VarInt,
@@ -1925,6 +1930,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
+    TagQuery(TagQuery) = TAG_QUERY,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
     TickingState(TickingState) = TICKING_STATE,
@@ -2163,6 +2169,16 @@ packet!(
 );
 packet!(SelectTrade { item: i32 => VarInt });
 packet!(
+    /// ServerboundBlockEntityTagQueryPacket: an operator's F3+I asks for the
+    /// block entity's data at a position.
+    BlockEntityTagQuery { transaction: i32 => VarInt, pos: [i32; 3] => Pos }
+);
+packet!(
+    /// ServerboundEntityTagQueryPacket: an operator's F3+I asks for an
+    /// entity's data, by its network id.
+    EntityTagQuery { transaction: i32 => VarInt, entity: i32 => VarInt }
+);
+packet!(
     /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
     /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
     ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
@@ -2310,6 +2326,8 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    BlockEntityTagQuery(BlockEntityTagQuery) = BLOCK_ENTITY_TAG_QUERY,
+    EntityTagQuery(EntityTagQuery) = ENTITY_TAG_QUERY,
     TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
@@ -3047,6 +3065,54 @@ mod tests {
         assert_eq!(body[0], crate::ids::play::clientbound::COOLDOWN as u8);
         assert_eq!(&body[1..3], [21, b'm']);
         assert_eq!(body[body.len() - 1], 0);
+    }
+
+    #[test]
+    fn debug_tag_queries_decode_as_their_packets() {
+        use crate::ids::play::{clientbound, serverbound};
+        // ServerboundBlockEntityTagQueryPacket: VarInt transaction, BlockPos.
+        let pos = [3, 64, -2];
+        let mut body = vec![7];
+        body.extend_from_slice(&crate::buf::pack_block_pos(pos).to_be_bytes());
+        let packet = Serverbound::decode(serverbound::BLOCK_ENTITY_TAG_QUERY, &body).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::BlockEntityTagQuery(BlockEntityTagQuery {
+                transaction: 7,
+                pos
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ServerboundEntityTagQueryPacket: VarInt transaction, VarInt entity id.
+        let packet = Serverbound::decode(serverbound::ENTITY_TAG_QUERY, &[0, 42]).unwrap();
+        assert_eq!(
+            packet,
+            Serverbound::EntityTagQuery(EntityTagQuery {
+                transaction: 0,
+                entity: 42
+            })
+        );
+        round_trip(packet, Serverbound::encode, Serverbound::decode);
+        // ClientboundTagQueryPacket: VarInt transaction, then the nullable
+        // compound of FriendlyByteBuf.writeNbt (a bare End tag for null).
+        let packet = Clientbound::decode(clientbound::TAG_QUERY, &[1, 0]).unwrap();
+        assert_eq!(
+            packet,
+            Clientbound::TagQuery(TagQuery {
+                transaction: 1,
+                tag: Tag::End
+            })
+        );
+        let mut items = horizon_world::nbt::Compound::new();
+        items.insert("Lock".into(), Tag::String("key".into()));
+        round_trip(
+            Clientbound::TagQuery(TagQuery {
+                transaction: 2,
+                tag: Tag::Compound(items),
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
     }
 
     #[test]
