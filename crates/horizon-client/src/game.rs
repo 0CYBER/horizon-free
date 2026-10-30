@@ -11109,7 +11109,7 @@ impl Game<'_> {
                 return Ok(UseResult::Fail);
             }
             let mut canceled = false;
-            self.native_fill_bucket(&stack, hit.pos, &mut canceled);
+            self.native_fill_bucket(stack, hit.pos, &mut canceled);
             if canceled {
                 return Ok(UseResult::Fail);
             }
@@ -11161,7 +11161,7 @@ impl Game<'_> {
             }
             let target = self.bucket_target(content, &hit);
             let mut canceled = false;
-            self.native_fill_bucket(&stack, target, &mut canceled);
+            self.native_fill_bucket(stack, target, &mut canceled);
             if canceled {
                 return Ok(UseResult::Fail);
             }
