@@ -27,16 +27,7 @@ fn zombie_kind(s: Species) -> bool {
 impl Game<'_> {
     /// `Entity.startRiding` for two mobs.
     pub(super) fn mount_mob(&mut self, rider: u32, vehicle: u32) {
-        if rider == vehicle {
-            return;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == rider) {
-            m.extra.mount = Some(vehicle);
-            m.extra.passenger = true;
-        }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == vehicle) {
-            m.extra.rider = Some(rider);
-        }
+        riders::link(&mut self.mobs, rider, vehicle);
     }
     /// Riders sit on their vehicles (`Entity.positionRider`), mobs or boats,
     /// and let go when the vehicle dies or is gone.
@@ -59,6 +50,8 @@ impl Game<'_> {
             let Some(v) = self.mobs[i].extra.mount else {
                 continue;
             };
+            // Only a mob or a boat: a server's display mounts come through
+            // `remote_set_passengers`, which seats them in `position_riders`.
             let valid = self.mobs[i].alive()
                 && !self.mobs[i].removed
                 && (boats.contains(&v)
@@ -90,12 +83,16 @@ impl Game<'_> {
             .map(|(i, m)| (m.id, i))
             .collect();
         // Riders of riders settle over a few passes.
-        for _ in 0..3 {
+        for pass in 0..3 {
             for i in 0..self.mobs.len() {
                 let Some(v) = self.mobs[i].extra.mount else {
                     continue;
                 };
                 let Some(&j) = index.get(&v) else {
+                    // The display doesn't move between passes.
+                    if pass > 0 {
+                        continue;
+                    }
                     // A mob on a text display: NPC plugins seat their sitting
                     // NPCs on one. The server's position for a passenger
                     // gives way to its seat, as `rideTick` places it.

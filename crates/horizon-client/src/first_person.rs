@@ -28,6 +28,12 @@ pub enum ItemPose {
     Bow {
         ticks_used: f32,
     },
+    /// A brush in use (`ItemUseAnimation.BRUSH`): the ticks left of the use
+    /// and the partial tick.
+    Brush {
+        remaining: f32,
+        partial: f32,
+    },
     /// A spear being charged (`ItemUseAnimation.SPEAR`): the time held and
     /// the ticks since its last hit's feedback.
     Spear {
@@ -77,6 +83,9 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     }
     if matches!(pose, ItemPose::Using) {
         return m;
+    }
+    if let ItemPose::Brush { remaining, partial } = pose {
+        return m * brush_transform(left, remaining, partial);
     }
     // The spear's own place in the hand, without the equip height.
     if let ItemPose::Spear {
@@ -174,6 +183,30 @@ impl MapHold {
         } else {
             Self::OneHanded
         }
+    }
+}
+
+/// `FirstPersonHandsAndItemsRenderer.applyBrushTransform`: the brush in use,
+/// swept back and forth by the ticks left of its use (`remaining`).
+fn brush_transform(left: bool, remaining: f32, partial: f32) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    use horizon_core::geometry::trig::Mth;
+    let ticks = remaining % 10.0;
+    let delta = ticks - partial + 1.0;
+    let scaled = 1.0 - delta / 10.0;
+    let swipe = -15.0 + 75.0 * (scaled * 2.0 * std::f32::consts::PI).mcos();
+    let sweep = Mat4::from_rotation_x(swipe.to_radians());
+    if left {
+        Mat4::from_translation(Vec3::new(0.1, 0.83, 0.35))
+            * Mat4::from_rotation_x((-80.0f32).to_radians())
+            * Mat4::from_rotation_y((-90.0f32).to_radians())
+            * sweep
+            * Mat4::from_translation(Vec3::new(-0.3, 0.22, 0.35))
+    } else {
+        Mat4::from_translation(Vec3::new(-0.25, 0.22, 0.35))
+            * Mat4::from_rotation_x((-80.0f32).to_radians())
+            * Mat4::from_rotation_y(90.0f32.to_radians())
+            * sweep
     }
 }
 

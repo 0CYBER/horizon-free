@@ -296,8 +296,9 @@ fn memory() -> String {
     }
 }
 
-/// The report's details: Horizon's and the machine's, then what the game set as it ran.
-pub fn system_details() -> Vec<(String, String)> {
+/// The report's details: Horizon's and the machine's, then what the game set as it ran. A dedicated
+/// server renders nothing: it leaves out the render settings it read from options.txt.
+pub fn system_details(side: &str) -> Vec<(String, String)> {
     let mut out = vec![
         ("Horizon Version".to_owned(), version()),
         (
@@ -308,17 +309,29 @@ pub fn system_details() -> Vec<(String, String)> {
         ("CPU".to_owned(), cpu()),
         ("Memory".to_owned(), memory()),
     ];
-    out.extend(details().into_iter().map(|(k, v)| (k.to_owned(), v)));
+    out.extend(
+        details()
+            .into_iter()
+            .filter(|(k, _)| side != "server" || *k != "Render Settings")
+            .map(|(k, v)| (k.to_owned(), v)),
+    );
     out
 }
 
-fn thread_name() -> String {
+/// The thread's name as vanilla's reports say it: the main thread is the client's "Render thread"
+/// and the dedicated server's "Server thread".
+fn thread_name(side: &str) -> String {
     let current = std::thread::current();
     match current.name() {
+        Some("main") | None if side == "server" => "Server thread".into(),
         Some("main") | None => "Render thread".into(),
         Some(name) => name.into(),
     }
 }
+
+/// What starts the stderr line naming a saved report, the path follows: the Launch API's
+/// promise to launchers (docs/api/launch.md), so it never changes within a line of that API.
+pub const SAVED_LINE: &str = "Horizon: crash report saved to ";
 
 /// Writes the report and tells where it is; the log gets the error too.
 fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
@@ -343,7 +356,7 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
     crate::telemetry::keep_crash(home, &report);
     match report.save(home) {
         Ok(path) => {
-            eprintln!("Horizon: crash report saved to {}", path.display());
+            eprintln!("{SAVED_LINE}{}", path.display());
             Some(path)
         }
         Err(e) => {
@@ -365,9 +378,9 @@ pub fn report_watchdog(home: &Path, side: &'static str, message: String) -> Opti
             description: "Watching Server".into(),
             error: format!("{message} (Watching Server)"),
             stack: String::new(),
-            thread: thread_name(),
+            thread: thread_name(side),
             side,
-            details: system_details(),
+            details: system_details(side),
             log: crate::logging::recent_lines(),
         },
     )
@@ -476,9 +489,9 @@ pub fn panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Rep
             &std::backtrace::Backtrace::force_capture().to_string(),
             true,
         ),
-        thread: thread_name(),
+        thread: thread_name(side),
         side,
-        details: system_details(),
+        details: system_details(side),
         log: crate::logging::recent_lines(),
     }
 }
@@ -499,7 +512,7 @@ pub fn install(home: PathBuf, side: &'static str) {
         } else {
             log::error!(
                 "Caught previously unhandled exception in thread {}: {}",
-                thread_name(),
+                thread_name(side),
                 panic_message(info)
             );
         }
@@ -548,9 +561,9 @@ pub fn report_error(
                 description: DebugCrash::MESSAGE.into(),
                 error: DebugCrash::MESSAGE.into(),
                 stack: debug.stack.clone(),
-                thread: thread_name(),
+                thread: thread_name(side),
                 side,
-                details: system_details(),
+                details: system_details(side),
                 log: crate::logging::recent_lines(),
             },
         );
@@ -568,9 +581,9 @@ pub fn report_error(
             description: "Fatal error".into(),
             error: message,
             stack: String::new(),
-            thread: thread_name(),
+            thread: thread_name(side),
             side,
-            details: system_details(),
+            details: system_details(side),
             log: crate::logging::recent_lines(),
         },
     )
@@ -666,6 +679,26 @@ mod tests {
         assert!(text.ends_with(
             "-- Last 1 log lines --\n[09:05:06] [Render thread/INFO]: load assets: 1.20s\n"
         ));
+    }
+
+    #[test]
+    fn a_dedicated_servers_report_names_its_server_thread_and_no_render_settings() {
+        let unnamed = |side: &'static str| {
+            std::thread::spawn(move || thread_name(side))
+                .join()
+                .unwrap()
+        };
+        assert_eq!(unnamed("server"), "Server thread");
+        assert_eq!(unnamed("client"), "Render thread");
+        set_detail("Render Settings", "render distance 12");
+        let has = |side| {
+            system_details(side)
+                .iter()
+                .any(|(k, _)| k == "Render Settings")
+        };
+        assert!(has("client"));
+        assert!(!has("server"));
+        clear_detail("Render Settings");
     }
 
     #[test]

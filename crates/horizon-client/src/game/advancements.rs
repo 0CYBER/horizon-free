@@ -115,7 +115,7 @@ pub(super) struct AdvState {
     pub(super) announced: Vec<Text>,
     /// The tree being read on another thread since the world opened
     /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
-    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
+    pub(super) pending_tree: Option<std::thread::JoinHandle<Arc<Tree>>>,
     /// `inventory_changed`'s criteria by item, built for `tree`.
     inventory_index: Option<(Arc<Tree>, Arc<adv::InventoryIndex>)>,
 }
@@ -271,10 +271,10 @@ impl Game<'_> {
                 Some(Ok(tree)) => tree,
                 _ => {
                     let overlay = self.pack_files();
-                    Tree::load_with(&self.options.resources.join("data"), &overlay)
+                    Tree::shared(&self.options.resources.join("data"), &overlay)
                 }
             };
-            self.adv.tree = Arc::new(tree);
+            self.adv.tree = tree;
             // With the tree, while the world loads: built on the first
             // inventory change it cost that tick ~10 ms.
             self.inventory_index();
@@ -316,9 +316,7 @@ impl Game<'_> {
         );
         self.adv.pending_tree = std::thread::Builder::new()
             .name("horizon-advancements".into())
-            .spawn(move || {
-                Tree::load_with(&data, &horizon_world::loot::PackOverlay { files: &files })
-            })
+            .spawn(move || Tree::shared(&data, &horizon_world::loot::PackOverlay { files: &files }))
             .ok();
     }
     pub(super) fn load_advancements(&mut self) {
