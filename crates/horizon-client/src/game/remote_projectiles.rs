@@ -3,6 +3,7 @@
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
+use horizon_client::items::ItemStack;
 use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
 use horizon_client::{
     collisions::SceneCollisions,
@@ -113,7 +114,8 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
 fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
     p.previous = p.position;
     p.age += 1;
-    // The shake timer runs down, and `inGroundTime` counts the ticks in a block.
+    // AbstractArrow.tick: the shake timer runs down, and `inGroundTime` counts
+    // the ticks in a block.
     if let Some(a) = p.arrow.as_mut() {
         a.shake = (a.shake - 1).max(0);
         a.in_ground_time = if p.stuck { a.in_ground_time + 1 } else { 0 };
@@ -165,6 +167,74 @@ pub(super) fn has_smoke_trail(kind: &ProjectileKind) -> bool {
 }
 
 impl Game<'_> {
+    /// `Arrow.tick` and `SpectralArrow.tick` on a client: a tipped arrow
+    /// sheds two entity-effect swirls in its colour while flying, one every
+    /// fifth tick in a block; a spectral arrow an effect sparkle at its
+    /// position while flying.
+    fn arrow_effect_particles(&mut self) {
+        let mut puffs: Vec<(Vec3, i32, u32)> = Vec::new();
+        for p in &self.creatures.projectiles {
+            let Some(a) = p.arrow.as_ref().filter(|_| p.is_arrow()) else {
+                continue;
+            };
+            let at = p.position;
+            if p.is_spectral_arrow() {
+                if !p.stuck {
+                    let options = ParticleOptions::simple(ParticleType::Effect);
+                    self.particles.add(&options, [at.x, at.y, at.z], [0.0; 3]);
+                }
+                continue;
+            }
+            let count = match (p.stuck, a.in_ground_time % 5) {
+                (true, 0) => 1,
+                (true, _) => 0,
+                (false, _) => 2,
+            };
+            puffs.push((at, a.effect_color, count));
+        }
+        for (at, color, count) in puffs {
+            self.arrow_makeparticle(at, color, count);
+        }
+    }
+
+    /// `Arrow.makeParticle`: `count` entity-effect swirls in `color` (an ARGB
+    /// int, -1 for none) inside the arrow's 0.5 x 0.5 box.
+    fn arrow_makeparticle(&mut self, at: Vec3, color: i32, count: u32) {
+        // `EntityType.ARROW` is 0.5 x 0.5.
+        const SIZE: f64 = 0.5;
+        if color == -1 {
+            return;
+        }
+        // ColorParticleOption.create(ENTITY_EFFECT, colour): ARGB as floats.
+        let channel = |shift: u32| (color as u32 >> shift & 255) as f32 / 255.0;
+        let options = ParticleOptions::colored(
+            ParticleType::EntityEffect,
+            [channel(16), channel(8), channel(0), channel(24)],
+        );
+        for _ in 0..count {
+            // getRandomX(0.5), getRandomY, getRandomZ(0.5).
+            let r = self.particles.random();
+            let x = at.x + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
+            let y = at.y + SIZE * r.next_double();
+            let z = at.z + SIZE * (2.0 * r.next_double() - 1.0) * 0.5;
+            self.particles.add(&options, [x, y, z], [0.0; 3]);
+        }
+    }
+
+    /// `Arrow.handleEntityEvent(0)`: a tipped arrow stuck for 600 ticks bursts
+    /// into twenty particles in its colour. The server turns it into a plain
+    /// arrow and does not send the colour again, so it stops here.
+    pub(super) fn remote_arrow_puff(&mut self, id: u32) {
+        let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) else {
+            return;
+        };
+        let Some(a) = p.arrow.as_mut() else {
+            return;
+        };
+        let (at, color) = (p.position, std::mem::replace(&mut a.effect_color, -1));
+        self.arrow_makeparticle(at, color, 20);
+    }
+
     /// `AbstractHurtingProjectile.createParticleTrail`: one smoke puff half a
     /// block above each position.
     pub(super) fn smoke_trails(&mut self, at: impl IntoIterator<Item = Vec3>) {
@@ -172,40 +242,6 @@ impl Game<'_> {
         for p in at {
             self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
         }
-    }
-
-    /// `Arrow.makeParticle`: `amount` entity-effect particles in the potion's
-    /// colour inside the arrow's 0.5 box (`getRandomX(0.5)`, `getRandomY()`,
-    /// `getRandomZ(0.5)`), placed by the client's random.
-    pub(super) fn arrow_effect_particles(&mut self, at: Vec3, color: u32, amount: u32) {
-        let c = |shift: u32| (color >> shift & 255) as f32 / 255.0;
-        let options =
-            ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0]);
-        for _ in 0..amount {
-            let r = self.particles.random();
-            let x = (2.0 * r.next_double() - 1.0) * 0.5;
-            let y = r.next_double();
-            let z = (2.0 * r.next_double() - 1.0) * 0.5;
-            self.particles.add(
-                &options,
-                [at.x + 0.5 * x, at.y + 0.5 * y, at.z + 0.5 * z],
-                [0.0; 3],
-            );
-        }
-    }
-
-    /// `Arrow.handleEntityEvent(0)`: a tipped arrow stuck for 600 ticks bursts
-    /// into twenty particles in its colour. The server turns it into a plain
-    /// arrow (and does not send the colour again), so it stops here.
-    pub(super) fn remote_arrow_puff(&mut self, id: u32) {
-        let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) else {
-            return;
-        };
-        let Some(color) = p.arrow.as_mut().and_then(|a| a.synced_color.take()) else {
-            return;
-        };
-        let at = p.position;
-        self.arrow_effect_particles(at, color, 20);
     }
 
     /// `handleAddEntity` for these types; false when `kind` isn't one.
@@ -280,7 +316,7 @@ impl Game<'_> {
                     .add_remote_eye(id, position, [velocity.x, velocity.y, velocity.z])
             }
             // FishingHook.recreateFromPacket: the owner's id is the data.
-            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, data),
+            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, velocity, data),
             "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
                 id,
                 position: at,
@@ -298,6 +334,12 @@ impl Game<'_> {
                         .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
                 }
                 let mut p = Projectile::new(k, at, None);
+                // SpectralArrow: its own type; its pickup item says so.
+                if kind == "minecraft:spectral_arrow"
+                    && let Some(a) = p.arrow.as_mut()
+                {
+                    a.pickup_item = ItemStack::new("minecraft:spectral_arrow", 1);
+                }
                 p.id = id;
                 p.velocity = velocity;
                 p.yaw = yaw;
@@ -425,10 +467,10 @@ impl Game<'_> {
                         }
                         p.stuck = *in_ground;
                     }
-                    // Arrow.ID_EFFECT_COLOR: -1 for a plain arrow.
+                    // Arrow.ID_EFFECT_COLOR.
                     (ProjectileKind::Arrow { .. }, 11, Value::Int(color)) => {
                         if let Some(a) = p.arrow.as_mut() {
-                            a.synced_color = (*color != -1).then_some(*color as u32);
+                            a.effect_color = *color;
                         }
                     }
                     // WitherSkull.DATA_DANGEROUS.
@@ -532,26 +574,7 @@ impl Game<'_> {
         }
         self.creatures.projectiles = projectiles;
         self.tridents = tridents;
-        // Arrow.tick on a client: a tipped arrow's particles, two per tick in
-        // flight and one every fifth tick in a block.
-        let puffs: Vec<(Vec3, u32, u32)> = self
-            .creatures
-            .projectiles
-            .iter()
-            .filter_map(|p| {
-                let a = p.arrow.as_deref()?;
-                let color = a.effect_color()?;
-                let amount = if p.stuck {
-                    u32::from(a.in_ground_time % 5 == 0)
-                } else {
-                    2
-                };
-                (amount > 0).then_some((p.position, color, amount))
-            })
-            .collect();
-        for (at, color, amount) in puffs {
-            self.arrow_effect_particles(at, color, amount);
-        }
+        self.arrow_effect_particles();
         let trails: Vec<Vec3> = self
             .creatures
             .projectiles
@@ -617,7 +640,7 @@ impl Game<'_> {
             c.position = step(c.id, c.position);
         }
         self.step_remote_thrown();
-        self.step_remote_hooks(&mut step);
+        self.tick_remote_hooks();
         self.end.step_remote_eyes();
         self.tick_remote_clouds();
         // The dragon's fireballs fly on between the tracker's updates, with

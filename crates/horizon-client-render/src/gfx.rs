@@ -428,6 +428,7 @@ pub struct Renderer {
     crosshair_group: wgpu::BindGroup,
     crosshair_globals: wgpu::Buffer,
     entity_pipeline: wgpu::RenderPipeline,
+    hdr_mark_pipeline: wgpu::RenderPipeline,
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
     shadow_blob_pipeline: wgpu::RenderPipeline,
@@ -2127,6 +2128,18 @@ impl Renderer {
             "fs_energy_swirl",
             wgpu::ColorWrites::ALL,
         );
+        // HDR output's mark on light-giving particles (entity.wgsl fs_hdr_mark).
+        let hdr_mark_pipeline = entity_pipeline_with(
+            "HDR particle mark",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            wgpu::BlendState::REPLACE,
+            false,
+            "fs_hdr_mark",
+            wgpu::ColorWrites::ALPHA,
+        );
         // Attribute 7: 6 is the entity vertex buffer's glint UV.
         let lightning_attributes = wgpu::vertex_attr_array![7=>Float32x3];
         let lightning_vertex = [
@@ -2640,6 +2653,7 @@ impl Renderer {
             crosshair_group,
             crosshair_globals,
             entity_pipeline,
+            hdr_mark_pipeline,
             weather,
             crumbling_pipeline,
             shadow_blob_pipeline,
@@ -4926,6 +4940,10 @@ impl Renderer {
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
+                if self.hdr.is_some() {
+                    pass.set_pipeline(&self.hdr_mark_pipeline);
+                    pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
+                }
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if text_quads > 0 {
@@ -5402,6 +5420,16 @@ impl Renderer {
         if let (Some(hdr), Some(f)) = (&self.hdr, &surface_frame) {
             hdr.present(&self.queue, &mut encoder, &f.texture, !frame.title);
         }
+        // With HDR on, a full-frame screenshot gets an HDR10 copy beside it.
+        let hdr_readback = readback
+            .as_ref()
+            .filter(|(request, _)| request.size.is_none())
+            .zip(self.hdr.as_ref())
+            .and_then(|(_, hdr)| {
+                let texture = hdr.capture(&self.device, &self.queue, &mut encoder, !frame.title)?;
+                let size = [self.config.width, self.config.height];
+                Some(copy_frame(&self.device, &mut encoder, &texture, size))
+            });
         let commands = crate::spans::time("encode", || encoder.finish());
         let first_frame = self.first_frame == FirstFrame::Submit;
         if first_frame {
@@ -5420,6 +5448,16 @@ impl Renderer {
             timer.submitted(&self.queue);
         }
         if let Some((request, buffer)) = readback {
+            if let Some(hdr_buffer) = hdr_readback {
+                let hdr_path = hdr_screenshot_path(&request.path);
+                match self.write_hdr_screenshot(&hdr_path, &hdr_buffer) {
+                    Ok(()) => log::info!("Saved HDR screenshot to {}", hdr_path.display()),
+                    Err(e) => log::warn!(
+                        "Horizon renderer: HDR screenshot {}: {e}",
+                        hdr_path.display()
+                    ),
+                }
+            }
             self.screenshot_result = Some(
                 self.write_screenshot(&request, &buffer)
                     .map_err(|e| e.to_string()),
@@ -5528,11 +5566,8 @@ impl Renderer {
             None
         }
     }
-    fn write_screenshot(
-        &self,
-        request: &ScreenshotRequest,
-        buffer: &wgpu::Buffer,
-    ) -> Result<[u32; 2]> {
+    /// The pixels `copy_frame` read back into `buffer`, 4 bytes each, row after row.
+    fn read_frame(&self, buffer: &wgpu::Buffer) -> Result<Vec<[u8; 4]>> {
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = sender.send(r);
@@ -5545,28 +5580,34 @@ impl Renderer {
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
         let (width, height, row) = (
-            self.config.width,
-            self.config.height,
+            self.config.width as usize,
+            self.config.height as usize,
             padded_row(self.config.width) as usize,
         );
+        let mut pixels = Vec::with_capacity(width * height);
+        {
+            let data = buffer.get_mapped_range(..).map_err(|e| e.to_string())?;
+            for y in 0..height {
+                pixels.extend_from_slice(data[y * row..y * row + width * 4].as_chunks::<4>().0);
+            }
+        }
+        buffer.unmap();
+        Ok(pixels)
+    }
+    fn write_screenshot(
+        &self,
+        request: &ScreenshotRequest,
+        buffer: &wgpu::Buffer,
+    ) -> Result<[u32; 2]> {
         let bgra = matches!(
             self.config.format.remove_srgb_suffix(),
             wgpu::TextureFormat::Bgra8Unorm
         );
-        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-        {
-            let data = buffer.get_mapped_range(..).map_err(|e| e.to_string())?;
-            for y in 0..height as usize {
-                for px in data[y * row..y * row + width as usize * 4]
-                    .as_chunks::<4>()
-                    .0
-                {
-                    let (r, b) = if bgra { (px[2], px[0]) } else { (px[0], px[2]) };
-                    pixels.extend_from_slice(&[r, px[1], b, 255]);
-                }
-            }
+        let mut pixels = Vec::with_capacity((self.config.width * self.config.height * 4) as usize);
+        for px in self.read_frame(buffer)? {
+            let (r, b) = if bgra { (px[2], px[0]) } else { (px[0], px[2]) };
+            pixels.extend_from_slice(&[r, px[1], b, 255]);
         }
-        buffer.unmap();
         // NativeImage.resizeSubRectTo on takeAutoScreenshot's grab: the icon
         // is the frame's centre square averaged down to its size.
         let (width, height, pixels) = match request.size {
@@ -5587,6 +5628,50 @@ impl Renderer {
         encoder.write_header()?.write_image_data(&pixels)?;
         Ok([width, height])
     }
+    /// The HDR10 copy (`Hdr::capture`) as a 16-bit PNG tagged BT.2020 with PQ (cICP, PNG's
+    /// third edition), with the peak and paper white as its content light levels (cLLI).
+    fn write_hdr_screenshot(&self, path: &std::path::Path, buffer: &wgpu::Buffer) -> Result<()> {
+        let Some(hdr) = &self.hdr else {
+            return Ok(());
+        };
+        let pixels = hdr10_to_rgb16(&self.read_frame(buffer)?);
+        let mut encoder = png::Encoder::new(
+            std::io::BufWriter::new(std::fs::File::create(path)?),
+            self.config.width,
+            self.config.height,
+        );
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Sixteen);
+        let mut writer = encoder.write_header()?;
+        // BT.2020 primaries, PQ, RGB, full range.
+        writer.write_chunk(png::chunk::cICP, &[9, 16, 0, 1])?;
+        let nits = |n: f32| ((n * 10_000.0) as u32).to_be_bytes();
+        let peak = hdr.peak.max(hdr.paper_white);
+        writer.write_chunk(
+            png::chunk::cLLI,
+            &[nits(peak), nits(hdr.paper_white.min(peak))].concat(),
+        )?;
+        writer.write_image_data(&pixels)?;
+        Ok(())
+    }
+}
+/// `screenshots/2026-10-28_12.00.00.png` -> `screenshots/2026-10-28_12.00.00-hdr.png`.
+fn hdr_screenshot_path(path: &std::path::Path) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!("{stem}-hdr.png"))
+}
+/// `Rgb10a2Unorm` pixels as 16-bit RGB, big-endian as PNG stores it: each 10-bit value
+/// with its top bits repeated below, so 0 stays 0 and 1023 becomes 65535.
+fn hdr10_to_rgb16(pixels: &[[u8; 4]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixels.len() * 6);
+    for &px in pixels {
+        let v = u32::from_le_bytes(px);
+        for shift in [0, 10, 20] {
+            let c = (v >> shift & 0x3ff) as u16;
+            out.extend_from_slice(&(c << 6 | c >> 4).to_be_bytes());
+        }
+    }
+    out
 }
 /// Centre-crop the frame to a square and average it down to `size`.
 pub(crate) fn square_downscale(pixels: &[u8], width: u32, height: u32, size: [u32; 2]) -> Vec<u8> {
@@ -5938,6 +6023,17 @@ mod tests {
         assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::Src);
         assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::One);
         assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::Zero);
+    }
+    #[test]
+    fn hdr_screenshots_keep_every_10_bit_step() {
+        // Rgb10a2Unorm: red in the low 10 bits, then green, then blue.
+        let px = |r: u32, g: u32, b: u32| (r | g << 10 | b << 20 | 3 << 30).to_le_bytes();
+        let out = super::hdr10_to_rgb16(&[px(0, 1023, 512)]);
+        assert_eq!(out, [0, 0, 0xff, 0xff, 0x80, 0x20]);
+        assert_eq!(
+            super::hdr_screenshot_path(std::path::Path::new("screenshots/2026-10-28_12.00.00.png")),
+            std::path::Path::new("screenshots/2026-10-28_12.00.00-hdr.png")
+        );
     }
     #[test]
     fn shader_globals_match_the_rust_layout() {

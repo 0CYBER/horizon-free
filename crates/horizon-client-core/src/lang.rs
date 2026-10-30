@@ -60,6 +60,9 @@ impl ResourceSource for Bundled {
             "assets/horizon/lang/ru_ru.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/ru_ru.json")
             }
+            "assets/horizon/lang/pl_pl.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/pl_pl.json")
+            }
             "assets/horizon/lang/uk_ua.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/uk_ua.json")
             }
@@ -276,6 +279,9 @@ mod tests {
         }
         assert_eq!(en.get("horizon.pages.mods"), Some("Mods"));
         assert_eq!(ru.get("horizon.pages.mods"), Some("Моды"));
+        let pl = Language::load(&[&empty], "pl_pl");
+        assert_eq!(pl.get("horizon.options.controller"), Some("Kontroler"));
+        assert_eq!(pl.get("horizon.options.vibration"), Some("Wibracje"));
         let uk = Language::load(&[&empty], "uk_ua");
         assert_eq!(
             uk.get("horizon.options.on_screen_keyboard"),

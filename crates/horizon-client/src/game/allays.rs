@@ -179,12 +179,12 @@ impl Game<'_> {
         let m = &mut self.mobs[i];
         m.extra.ints[1] -= 1;
         m.extra.ints[3] = 60;
-        // ItemEntity.setDefaultPickUpDelay; BehaviorUtils.throwItem sets the allay as the thrower.
+        // ItemEntity.setDefaultPickUpDelay.
         self.spawn_item(ItemStack::new(&item, 1), from, v, 10);
-        let id = self.mobs[i].id;
-        let thrower = self.mob_uuid(id);
-        if let Some(e) = self.dropped.last_mut() {
-            e.thrower = Some(thrower);
+        // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
+        let allay = self.mob_uuid(self.mobs[i].id);
+        if let Some(thrown) = self.dropped.last_mut() {
+            thrown.thrower = Some(allay);
         }
         if self.world.game_time % 7 == 0 && self.world.random.next_double() < 0.9 {
             const PITCHES: [f32; 16] = [

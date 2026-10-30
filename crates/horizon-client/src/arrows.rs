@@ -163,9 +163,6 @@ pub struct ArrowState {
     /// Ticks stuck (`life`): gone at 1200.
     pub life: i32,
     pub shake: i32,
-    /// `Arrow.ID_EFFECT_COLOR` as a client was sent it (a server's arrow
-    /// reads its potion instead), None for a plain arrow.
-    pub synced_color: Option<u32>,
     /// The block it stuck in (`lastState`).
     pub last_state: Option<BlockStateId>,
     pub pickup: Pickup,
@@ -174,6 +171,8 @@ pub struct ArrowState {
     /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
     pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
+    /// `Arrow.ID_EFFECT_COLOR` as a client has it from its server (-1: none).
+    pub effect_color: i32,
     /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
     /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
@@ -213,19 +212,18 @@ impl PartialEq for ArrowState {
     }
 }
 impl ArrowState {
-    /// `AbstractArrow`'s fields at spawn, with its own `Entity.random`.
     pub fn new(random: LegacyRandom) -> Self {
         Self {
             in_ground: false,
             in_ground_time: 0,
             life: 0,
             shake: 0,
-            synced_color: None,
             last_state: None,
             pickup: Pickup::Disallowed,
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
             fired_from_weapon: None,
             no_physics: false,
+            effect_color: -1,
             pierce: 0,
             pierced: Vec::new(),
             fire_ticks: 0,
@@ -241,13 +239,11 @@ impl ArrowState {
             events: Vec::new(),
         }
     }
-    /// `Arrow.getColor`: the potion's colour, None for a plain arrow
-    /// (`PotionContents.EMPTY`).
-    pub fn effect_color(&self) -> Option<u32> {
-        self.synced_color.or_else(|| {
-            let potion = self.pickup_item.potion()?;
-            Some(crate::brewing::potion_color(Some(potion)))
-        })
+    /// `Arrow.getColor` of the server's own arrow: the colour of the potion on
+    /// its pickup item, None for a plain arrow (`PotionContents.EMPTY`).
+    pub fn potion_color(&self) -> Option<u32> {
+        let potion = self.pickup_item.potion()?;
+        Some(crate::brewing::potion_color(Some(potion)))
     }
     /// The `AbstractArrow` constructor's `pickupItemStack`: the drawn ammo
     /// (one item). Ammo drawn without being used up (`INTANGIBLE_PROJECTILE`)
@@ -478,6 +474,10 @@ pub enum EntityHit {
     Refused,
     /// The entity turned it first (`Entity.deflection`: breezes).
     Deflected,
+    /// The target teleported away from it (`EnderMan.hurtServer` returns true,
+    /// `onHitEntity` returns before the hit sound and the discard): the arrow
+    /// flies on and falls to the ground.
+    Dodged,
 }
 /// The rest of the tick of an arrow that hit an entity: whether to keep it.
 pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: EntityHit) -> bool {
@@ -500,6 +500,7 @@ pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: Entity
             }
         }
         EntityHit::Refused => ticker.turn_back(),
+        EntityHit::Dodged => {}
         EntityHit::Deflected => {
             // The deflection comes before `onHitEntity` adds the entity to
             // `piercingIgnoreEntityIds`.
@@ -593,7 +594,7 @@ impl Ticker<'_, '_, '_, '_> {
             // `handleEntityEvent`) and turns into a plain arrow. The flight
             // and ground particles are the clients' own (`Level.isClientSide`).
             if self.st.in_ground_time >= 600
-                && let Some(color) = self.st.effect_color()
+                && let Some(color) = self.st.potion_color()
             {
                 self.st.events.push(ArrowEvent::PotionPuff {
                     id: self.p.id,
