@@ -551,6 +551,7 @@ pub fn tick(
     if m.species() == Species::Panda {
         super::panda::tick(m, w, events);
     }
+    aquatic::school_tick(m, w, level_random);
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
