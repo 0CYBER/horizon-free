@@ -7154,6 +7154,10 @@ impl Game<'_> {
             DisplayClick::Drop(stack) => self.player_drop(stack),
             _ => {}
         }
+        // handleCreativeModeItemAdd / broadcastChanges: a swapped-in hotbar slot goes out now.
+        if self.remote.is_some() {
+            self.send_creative_slots();
+        }
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
@@ -7172,7 +7176,7 @@ impl Game<'_> {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
         let ops = ops.to_vec();
-        self.menu_session(move |menu, env, to_menu| {
+        let done = self.menu_session(move |menu, env, to_menu| {
             let mut clicks = Vec::new();
             for &(slot, button, input) in &ops {
                 let menu_slot = match slot {
@@ -7196,7 +7200,12 @@ impl Game<'_> {
                 }
             }
             Some(true)
-        })
+        });
+        // CreativeModeInventoryScreen.slotClicked: the changed slots go out with the click.
+        if done && self.remote.is_some() && self.screen == Screen::Creative {
+            self.send_creative_slots();
+        }
+        done
     }
     /// A sound a menu click made the player play (a bundle's insert or
     /// remove): `Entity.playSound` at the player.
@@ -7860,6 +7869,9 @@ impl Game<'_> {
                         self.menu_session(|menu, env, to_menu| {
                             Some(menu.quick_move_all(env, to_menu(slot)?, &moved).is_ok())
                         });
+                        if self.remote.is_some() {
+                            self.send_creative_slots();
+                        }
                     }
                 }
                 self.last_inv_click = None;
