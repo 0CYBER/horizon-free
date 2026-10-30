@@ -223,6 +223,24 @@ impl Game<'_> {
             ((d.brightness as u32 >> 20 & 15) * 16) | (((d.brightness as u32 >> 4 & 15) * 16) << 8)
         }
     }
+    /// `Display.shouldRenderAtSqrDistance` and, when width and height are set,
+    /// `EntityRenderer.shouldRender` with `Display.getInterpolatedBoundingBox`
+    /// inflated by 0.5. Width or height 0 is `noCulling`: distance only.
+    fn display_in_view(
+        &self,
+        camera: glam::DVec3,
+        origin: glam::DVec3,
+        data: &TextDisplayData,
+        view_scale: f64,
+    ) -> bool {
+        let range = f64::from(data.view_range) * 64.0 * view_scale;
+        if text_display::no_culling(data.width, data.height) {
+            return (origin - camera).length_squared() < range * range;
+        }
+        let (lo, hi) = text_display::culling_box(origin, data.width, data.height);
+        self.entity_in_view(camera, origin, range, lo, hi)
+    }
+
     /// `DisplayRenderer.BlockDisplayRenderer` and `ItemDisplayRenderer`: the
     /// block model or the item under the display's transformation, lit like
     /// any entity and never tinted by a hurt overlay.
@@ -246,8 +264,7 @@ impl Game<'_> {
                 display.last_progress = display.progress(partial as f32);
                 let d = display.shown.blend(&display.from, display.last_progress);
                 let position = display.previous.lerp(display.position, partial);
-                let range = f64::from(d.view_range) * 64.0 * scale;
-                if position.distance_squared(camera) >= range * range {
+                if !self.display_in_view(camera, position, &d, scale) {
                     continue;
                 }
                 let rotation = std::array::from_fn(|i| {
@@ -295,18 +312,15 @@ impl Game<'_> {
     ) {
         self.text_display_vertices = 0;
         self.mark_translucent_entity(normal.len(), "minecraft:text_display");
-        let atlas = &self.gui.atlas;
         let angles = self.display_camera_angles();
         let scale = self.view_scale();
-        for display in self.text_displays.values_mut() {
-            if display.shows != Shows::Text {
-                continue;
-            }
+        let background = self.settings.text_background(0.25);
+        let mut displays = std::mem::take(&mut self.text_displays);
+        for display in displays.values_mut().filter(|d| d.shows == Shows::Text) {
             display.last_progress = display.progress(partial as f32);
             let d = display.shown.blend(&display.from, display.last_progress);
             let position = display.previous.lerp(display.position, partial);
-            let range = f64::from(d.view_range) * 64.0 * scale;
-            if position.distance_squared(camera) >= range * range || d.text.is_empty() {
+            if d.text.is_empty() || !self.display_in_view(camera, position, &d, scale) {
                 continue;
             }
             let rotation = std::array::from_fn(|i| {
@@ -315,7 +329,7 @@ impl Game<'_> {
             });
             let lines = display
                 .lines
-                .get_or_insert_with(|| Lines::split(&atlas.font, &d.text, d.line_width));
+                .get_or_insert_with(|| Lines::split(&self.gui.atlas.font, &d.text, d.line_width));
             let matrix = glam::Mat4::from_translation((position - camera).as_vec3())
                 * d.matrix(rotation, angles)
                 * lines.pose();
@@ -323,13 +337,7 @@ impl Game<'_> {
                 continue;
             }
             let mut batch = HudBatch::new([1, 1]);
-            text_display::draw(
-                &mut batch,
-                atlas,
-                &d,
-                lines,
-                self.settings.text_background(0.25),
-            );
+            text_display::draw(&mut batch, &self.gui.atlas, &d, lines, background);
             let light = Self::display_light(&self.world, &d, position);
             // Font.DisplayMode: SEE_THROUGH over everything, else POLYGON_OFFSET.
             let through = d.flags & 2 != 0;
@@ -358,6 +366,7 @@ impl Game<'_> {
             self.text_display_vertices += batch.vertices.len() / 6 * 4;
             self.map_patches.extend(batch.patches);
         }
+        self.text_displays = displays;
     }
 }
 
