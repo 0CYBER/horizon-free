@@ -144,4 +144,4 @@ TryFindLand.create	inline	crates/horizon-client/src/mobs/goals.rs::Stroll::can_u
 TryFindLand.canStandOn	missing		minor: no scan for the nearest solid land next to water; see TryFindLand.create
 TryFindLandNearLiquid.create	missing		minor: only runs in the frog's lay-spawn activity, which needs a pregnant frog (see TryLaySpawnOnFluidNearLand)
 TryFindLiquid.create	port	crates/horizon-client/src/mobs/animal_brain.rs::axolotl_action	FindLiquid arm: nearest water within 6, speed 0.15, re-run every 40 ticks
-TryLaySpawnOnFluidNearLand.create	missing		player: frogs cannot be bred (no slimeball feeding, no pregnancy), so no frogspawn is ever laid by a frog and no tadpoles follow
+TryLaySpawnOnFluidNearLand.create	inline	crates/horizon-client/src/mobs/frog.rs::LaySpawn	goal stand-in for the frog brain (no tick parity: the probe has no frog brain): feeding, pregnancy, walk to land beside water, frogspawn

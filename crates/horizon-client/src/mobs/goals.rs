@@ -2208,6 +2208,10 @@ impl Goal for Breed {
             if m.species() == Species::Turtle {
                 m.extra.flag = true;
             }
+            // Frog.spawnChildFromBreeding: IS_PREGNANT instead of a baby.
+            if m.species() == Species::Frog {
+                super::frog::set_pregnant(m, true);
+            }
             cx.events.push(MobEvent::Breed {
                 parent: m.id,
                 partner: p.id,
