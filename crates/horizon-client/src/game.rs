@@ -1796,6 +1796,11 @@ struct Game<'a> {
     session_lock: Option<horizon_client::save::SessionLock>,
     audio: Audio,
     music: horizon_client::music::MusicManager,
+    /// `ToastManager.nowPlayingToast`: there while Music Toast is not Never.
+    now_playing: Option<horizon_client::toasts::NowPlayingToast>,
+    /// The Music Toast option the toast was last set up for.
+    music_toast_state: u8,
+    music_notes: horizon_client::toasts::MusicNotes,
     ambience: horizon_client::ambience::Ambience,
     /// The sound engine was told the game paused (pauseAllExcept).
     sound_paused: bool,
@@ -6777,6 +6782,7 @@ impl Game<'_> {
                 self.cursor,
                 self.settings.file.bool("hideSplashTexts"),
             );
+            self.draw_music_toast(&mut batch, false);
             return batch;
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
@@ -6785,11 +6791,13 @@ impl Game<'_> {
         // download while the connection screen shows.
         if self.remote_overlay(&mut batch) {
             self.draw_pack_toasts(&mut batch, false);
+            self.draw_music_toast(&mut batch, false);
             return batch;
         }
         if let Some(reason) = self.loading_reason() {
             self.draw_level_loading(&mut batch, reason);
             self.draw_pack_toasts(&mut batch, false);
+            self.draw_music_toast(&mut batch, false);
             return batch;
         }
         // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
@@ -7041,6 +7049,7 @@ impl Game<'_> {
         self.draw_toasts(&mut batch, !show_hud);
         self.draw_tutorial_toasts(&mut batch, !show_hud);
         self.draw_pack_toasts(&mut batch, !show_hud);
+        self.draw_music_toast(&mut batch, !show_hud);
         if self.server_packs.prompt.is_none() {
             self.remote_hud(&mut batch);
             self.draw_sign_editor(&mut batch);
@@ -15010,6 +15019,10 @@ impl<'a> Game<'a> {
                 );
                 music
             },
+            // ToastManager.initializeMusicToast: Pause and Pause and Toast make the toast.
+            now_playing: (settings.file.int("musicToast").clamp(0, 2) != 0).then(Default::default),
+            music_toast_state: settings.file.int("musicToast").clamp(0, 2) as u8,
+            music_notes: Default::default(),
             ambience: Default::default(),
             sound_paused: false,
             cart_sounds: HashSet::new(),
