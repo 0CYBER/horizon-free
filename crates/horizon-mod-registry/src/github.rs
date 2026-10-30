@@ -288,14 +288,25 @@ impl GitHub {
         Ok(())
     }
 
-    /// Opens the pull request; its address.
-    pub fn pull(&self, title: &str, head: &str, body: &str) -> Result<String> {
+    /// Opens the pull request; its address and number.
+    pub fn pull(&self, title: &str, head: &str, body: &str) -> Result<(String, u64)> {
         let pr = self
             .call("POST", "/pulls")
             .send_json(json!({"title": title, "head": head, "base": "main", "body": body}))
             .map_err(failure)
             .and_then(read)?;
-        Ok(pr["html_url"].as_str().unwrap_or("").to_owned())
+        Ok((
+            pr["html_url"].as_str().unwrap_or("").to_owned(),
+            pr["number"].as_u64().unwrap_or(0),
+        ))
+    }
+
+    /// Adds `label` to pull request `number` (GitHub creates it when new).
+    pub fn label(&self, number: u64, label: &str) -> Result<()> {
+        self.call("POST", &format!("/issues/{number}/labels"))
+            .send_json(json!({"labels": [label]}))
+            .map_err(failure)?;
+        Ok(())
     }
 }
 
