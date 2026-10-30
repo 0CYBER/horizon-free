@@ -250,15 +250,11 @@ impl ItemEntity {
             self.velocity.y -= 0.04;
         }
         let horizontal = self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z;
-        // Vanilla skips move only when onGround with tiny horizontal speed, but a
-        // bubble column that already set deltaMovement.y must still run move or
-        // the item sits on the magma/soul sand and only hops every 4 ticks (#4558).
-        let vertical = self.velocity.y.abs() > 1.0e-5;
-        if !self.on_ground
-            || horizontal > 1.0e-5
-            || vertical
-            || (self.age + self.id).is_multiple_of(4)
-        {
+        // ItemEntity.tick: skip move 3 of 4 ticks while grounded with no
+        // horizontal speed. The idle branch still runs bubble-column push
+        // (`applyEffectsFromBlocksForLastMovements`), so lift builds up and
+        // the item moves on the next wake-up (#4558).
+        if !self.on_ground || horizontal > 1.0e-5 || (self.age + self.id).is_multiple_of(4) {
             let mut scene = SceneCollisions {
                 world,
                 binding: collision,
@@ -1413,34 +1409,99 @@ mod merge_tests {
 mod honey_slide_tests {
     use super::*;
 
-    /// #4558: a grounded item that a bubble column already accelerated must
-    /// move this tick, not wait for the every-4-ticks idle wake-up.
+    /// Gravity still stacks on idle ticks; waking every 4th tick zeroes Y on
+    /// the ground (`ItemEntity.tick` with `onGround`).
     #[test]
-    fn a_grounded_item_moves_when_a_bubble_column_has_lifted_it() {
-        let mut idle = falling_item(0.5, 1.0, 0.5, 0.0, 0.0, 0.0);
-        idle.on_ground = true;
-        idle.age = 1; // age+id not multiple of 4
-        idle.id = 1;
-        let horizontal = idle.velocity.x * idle.velocity.x + idle.velocity.z * idle.velocity.z;
-        assert!(idle.on_ground && horizontal <= 1.0e-5);
-        assert!(!(idle.age + idle.id).is_multiple_of(4));
-        // Without vertical motion the idle wake-up would skip move.
-        idle.velocity.y = 0.7; // handleOnInsideBubbleColumn lift
-        // Resolve against an empty world: any move changes position.y.
-        // We only assert the gate that decides whether move runs.
-        let vertical = idle.velocity.y.abs() > 1.0e-5;
+    fn a_resting_item_skips_move_three_of_four_ticks() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let fluids = crate::motion::FluidResources::new(&assets, &facts).unwrap();
+        let collision = crate::collisions::load(&root, assets.registry).unwrap();
+        let mut world = World::test_scene(&assets, &render, 3).unwrap();
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        for x in 19..=21 {
+            for z in 19..=21 {
+                world.set(x, 3, z, stone).unwrap();
+            }
+        }
+        let at = Vec3::new(20.5, 4.0, 20.5);
+        let mut item = falling_item(at.x, at.y, at.z, 0.0, 0.0, 0.0);
+        item.on_ground = true;
+        item.age = 0;
+        item.id = 1;
+        let mut ys = Vec::new();
+        for _ in 0..8 {
+            item.tick(&world, assets.registry, &facts, &collision, false, &fluids);
+            ys.push(item.velocity.y);
+        }
+        // Idle ticks keep gravity; the 4th tick's move hits the floor and
+        // clears Y (vanilla's sequence for a resting item).
+        assert_eq!(ys, vec![-0.04, -0.08, -0.12, 0.0, -0.04, -0.08, -0.12, 0.0]);
+        assert_eq!(item.position.y, at.y);
+    }
+
+    /// #4558: idle ticks still run `BubbleColumnBlock.entityInside`, so lift
+    /// builds and the next wake-up rises off the soul sand.
+    #[test]
+    fn a_grounded_item_in_a_soul_sand_column_rises() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let fluids = crate::motion::FluidResources::new(&assets, &facts).unwrap();
+        let collision = crate::collisions::load(&root, assets.registry).unwrap();
+        let mut world = World::test_scene(&assets, &render, 3).unwrap();
+        let soul = assets
+            .registry
+            .default_state("minecraft:soul_sand")
+            .unwrap();
+        let mut column = assets
+            .registry
+            .state(
+                assets
+                    .registry
+                    .default_state("minecraft:bubble_column")
+                    .unwrap(),
+            )
+            .unwrap()
+            .clone();
+        column.properties.insert("drag".into(), "false".into());
+        let column = assets.registry.resolve(&column).unwrap();
+        for x in 19..=21 {
+            for z in 19..=21 {
+                world.set(x, 3, z, soul).unwrap();
+                for y in 4..=8 {
+                    world.set(x, y, z, column).unwrap();
+                }
+            }
+        }
+        let at = Vec3::new(20.5, 4.0, 20.5);
+        let mut item = falling_item(at.x, at.y, at.z, 0.0, 0.0, 0.0);
+        item.on_ground = true;
+        item.age = 0;
+        item.id = 1;
+        let before = item.position.y;
+        for _ in 0..16 {
+            item.tick(&world, assets.registry, &facts, &collision, false, &fluids);
+        }
         assert!(
-            !idle.on_ground
-                || horizontal > 1.0e-5
-                || vertical
-                || (idle.age + idle.id).is_multiple_of(4)
+            item.position.y > before + 0.5,
+            "expected rise from soul-sand column, y={} (was {})",
+            item.position.y,
+            before
         );
-        let before = idle.position.y;
-        // Empty collision: resolve returns the wanted delta.
-        // Use a tiny stub by directly applying the move branch condition.
-        assert!(vertical);
-        idle.position.y += idle.velocity.y;
-        assert!(idle.position.y > before);
     }
 
     fn falling_item(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) -> ItemEntity {
