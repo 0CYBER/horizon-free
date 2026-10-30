@@ -221,7 +221,7 @@ pub fn configure_allocator() {
 /// native libraries still use: glibc keeps freed pages in the arena of the
 /// thread that allocated them, and macOS in its zones until memory runs short.
 pub fn release_free_memory() {
-    // SAFETY: frees only pages no allocation uses, in every thread's heap.
+    // SAFETY: frees only pages no allocation uses (this thread's heap, shared arenas).
     unsafe {
         libmimalloc_sys::mi_collect(true);
     }
