@@ -11,12 +11,13 @@ pub use horizon_client_render::{
     collisions, command_block, containers, crash, datapack, dynamic_light, effects, environment,
     extras, fast_hash, fog, font, gfx, graphics, graphics_style, graphics_ui, hud, hud_layout,
     hud_overlays, inventory_effects, java_text, jigsaw_block, level_loading, light, lod, logging,
-    menu_blur, mesher, minimap, mipmap, mod_list, model_library, models, options_file,
-    options_fixes, options_ui, overlay, pack_screen, packs, par, particles, poi_sections,
-    potent_sulfur, providers, screen_draw, screen_effects, sculk, section_mask, settings,
-    shader_pack_list, signs, skins, sound_engine, sound_events, sound_preview, spans, split_layout,
-    sprites, streaming, structure_block, tab_list, telemetry, test_block, test_instance_block,
-    testgen, title_edition, trims, ui, vault, weather, widgets, world, worldborder, zip,
+    menu_blur, mesher, minimap, mipmap, mod_list, model_library, models, multiline_edit,
+    options_file, options_fixes, options_ui, overlay, pack_screen, packs, par, particles,
+    poi_sections, potent_sulfur, providers, screen_draw, screen_effects, sculk, section_mask,
+    settings, shader_pack_list, signs, skins, sound_engine, sound_events, sound_preview, spans,
+    split_layout, sprites, streaming, structure_block, tab_list, telemetry, test_block,
+    test_instance_block, testgen, title_edition, trims, ui, vault, weather, widgets, world,
+    worldborder, zip,
 };
 pub mod attack_strength;
 pub mod attribute_updates;
@@ -29,6 +30,7 @@ pub mod block_pattern;
 pub mod block_transform;
 pub mod boss_overlay;
 pub mod cauldron;
+pub mod chunk_io;
 pub mod clock;
 pub mod command_storage;
 pub mod confirm_screen;

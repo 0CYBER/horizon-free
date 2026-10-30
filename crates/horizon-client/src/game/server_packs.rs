@@ -74,6 +74,7 @@ impl ServerPackState {
             .iter()
             .filter_map(|n| n.toast.as_ref())
             .chain(self.load_fail.as_ref())
+            .chain(self.chunk_io.iter().flatten())
             .filter_map(|t| t.slot)
     }
 }
@@ -95,6 +96,9 @@ pub(super) struct ServerPackState {
     notifiers: Vec<PackNotifier>,
     /// `SystemToastId.PACK_LOAD_FAILURE`: the toast `Minecraft.clearResourcePacksOnError` adds.
     pub(super) load_fail: Option<SystemToast>,
+    /// `SystemToastId.LOW_DISK_SPACE`, `CHUNK_LOAD_FAILURE` and `CHUNK_SAVE_FAILURE`:
+    /// the toasts the integrated server's chunk IO reports add (`chunk_io`).
+    pub(super) chunk_io: [Option<SystemToast>; 3],
 }
 /// `DownloadedPackSource.createDownloadNotifier`: one batch's progress in its
 /// own `SystemToast`.
@@ -462,10 +466,36 @@ impl Game<'_> {
             .layout(atlas, (w, h))
             .draw(batch, atlas, self.cursor, [&yes, &no]);
     }
+    /// `IntegratedServer.reportChunkLoadFailure` and the like: what the server
+    /// thread reported since the last frame, each in `SystemToast.addOrUpdate`
+    /// (a toast still shown is reset, else a new one).
+    fn add_chunk_io_toasts(&mut self) {
+        let pending = horizon_client::chunk_io::take();
+        let toasts = [
+            pending
+                .low_disk_space
+                .then(horizon_client::chunk_io::low_disk_space_toast),
+            pending
+                .load_failure
+                .map(|(x, z)| horizon_client::chunk_io::load_failure_toast(x, z)),
+            pending
+                .save_failure
+                .map(|(x, z)| horizon_client::chunk_io::save_failure_toast(x, z)),
+        ];
+        for (slot, new) in self.server_packs.chunk_io.iter_mut().zip(toasts) {
+            match (slot.as_mut(), new) {
+                (Some(shown), Some(new)) => shown.reset_from(new),
+                (None, Some(new)) => *slot = Some(new),
+                _ => {}
+            }
+        }
+    }
+
     /// The download notifiers' toasts, each in a free 32-pixel slot of the
     /// `ToastManager` (`hidden`, F1, keeps them timing out undrawn).
     pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = f64::from(self.settings.notification_display_time);
+        self.add_chunk_io_toasts();
         let mut used = self.toast_slots_used();
         let packs = &mut self.server_packs;
         for slot_toast in packs
@@ -473,6 +503,7 @@ impl Game<'_> {
             .iter_mut()
             .map(|n| &mut n.toast)
             .chain(std::iter::once(&mut packs.load_fail))
+            .chain(packs.chunk_io.iter_mut())
         {
             let Some(toast) = slot_toast else {
                 continue;
