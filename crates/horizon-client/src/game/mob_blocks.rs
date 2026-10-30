@@ -428,7 +428,13 @@ impl Game<'_> {
                 // A drinking witch's main hand holds the potion's type, drawn as a potion item.
                 ItemStack::new("minecraft:potion", 1).with_potion(item)
             } else {
-                ItemStack::new(item, 1)
+                // The stack the equipment packet (or the mob's own AI) left:
+                // its components are what the item model reads, a loaded
+                // crossbow's `charged_projectiles` included.
+                mob.extra
+                    .main_hand_stack()
+                    .cloned()
+                    .unwrap_or_else(|| ItemStack::new(item, 1))
             };
             if !local_player && horizon_client::mobs::gear::enchanted(mob, slot) {
                 // The gear's enchantments are not tracked, only that it has some.
