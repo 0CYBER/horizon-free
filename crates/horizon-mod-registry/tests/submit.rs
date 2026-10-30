@@ -86,6 +86,14 @@ async fn mock_github() -> (String, Shared) {
             ),
         )
         .route(
+            "/repos/alice/coords",
+            get(|| async { Json(json!({"private": false, "owner": {"login": "alice"}})) }),
+        )
+        .route(
+            "/repos/alice/secret",
+            get(|| async { Json(json!({"private": true, "owner": {"login": "alice"}})) }),
+        )
+        .route(
             "/repos/o/r/releases/tags/staging",
             get(|State(s): State<Shared>| async move {
                 let slow = s.lock().unwrap().slow;
@@ -235,13 +243,26 @@ impl Client {
     }
 
     async fn submit(&mut self, csrf: &str, form: &Value, file: &[u8]) -> (StatusCode, Value) {
+        self.submit_with(csrf, form, Some(file)).await
+    }
+
+    async fn submit_with(
+        &mut self,
+        csrf: &str,
+        form: &Value,
+        file: Option<&[u8]>,
+    ) -> (StatusCode, Value) {
         let boundary = "XhorizonX";
         let mut body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"entry\"\r\n\r\n{form}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"entry\"\r\n\r\n{form}\r\n"
         )
         .into_bytes();
-        body.extend_from_slice(file);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        if let Some(file) = file {
+            body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes());
+            body.extend_from_slice(file);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
         let request = Request::post("/api/mods/submit")
             .header(header::COOKIE, self.cookie_header())
             .header(header::ORIGIN, PUBLIC)
@@ -675,4 +696,67 @@ async fn a_refusal_waits_for_the_upload() {
     .unwrap();
     assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
     assert!(answer.contains("{\"error\":"), "{answer}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_is_listed_by_its_repository_and_never_updated_by_the_form() {
+    let (mut client, mock) = setup().await;
+    let csrf = client.sign_in().await;
+    let listing = json!({
+        "id": "coords_hud", "kind": "native-mod", "repo": "alice/coords", "name": "Coordinates HUD",
+        "summary": "Your coordinates in a corner.", "license": "MIT",
+    });
+    let (status, json) = client.submit_with(&csrf, &listing, None).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    {
+        let m = mock.lock().unwrap();
+        assert!(m.assets.is_empty(), "no file is uploaded");
+        let (text, _, blob) = &m.commits[&(
+            "list/coords_hud".to_owned(),
+            "mods/coords_hud.toml".to_owned(),
+        )];
+        assert!(blob.is_none());
+        let entry: Entry = toml::from_str(text).unwrap();
+        assert_eq!(entry.repo.as_deref(), Some("alice/coords"));
+        assert_eq!(entry.owners, ["alice"]);
+        assert!(entry.versions.is_empty());
+        let body = m.pulls[0]["body"].as_str().unwrap();
+        assert!(
+            body.contains("the submitter") && !body.contains("owner-update"),
+            "{body}"
+        );
+        assert!(m.labels.is_empty());
+    }
+    // A repository that is not found or private, a missing licence, a file beside a repository.
+    let mut other = listing.clone();
+    other["id"] = json!("other");
+    for (field, value) in [
+        ("repo", json!("alice/secret")),
+        ("repo", json!("alice/nothing")),
+        ("license", json!("")),
+    ] {
+        let mut bad = other.clone();
+        bad[field] = value;
+        let (status, json) = client.submit_with(&csrf, &bad, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    }
+    let (status, _) = client.submit_with(&csrf, &other, Some(b"x")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // An update of a project listed by its repository: publish a release instead.
+    let main = published("alice", false).replacen(
+        "kind = \"mod\"\n",
+        "kind = \"mod\"\nrepo = \"alice/coords\"\n",
+        1,
+    );
+    mock.lock()
+        .unwrap()
+        .main
+        .insert("mods/coords_hud.toml".into(), main);
+    let file = std::fs::read(fixtures().join("coords_hud-0.1.0.hmod")).unwrap();
+    let (status, json) = client.submit(&csrf, &form(), &file).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert!(
+        json["error"].as_str().unwrap().contains("GitHub release"),
+        "{json}"
+    );
 }
