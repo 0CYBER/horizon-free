@@ -53,7 +53,7 @@ use std::{
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// A text component the server sent, for the HUD.
-fn remote_text(tag: &Tag) -> horizon_client::text::Text {
+pub(super) fn remote_text(tag: &Tag) -> horizon_client::text::Text {
     use horizon_client::scoreboard::{comp_text, tag_to_json};
     comp_text(&tag_to_json(tag))
 }
@@ -3343,6 +3343,10 @@ impl Game<'_> {
                 } else {
                     self.cooldowns.add(group, p.duration);
                 }
+            }
+            // ClientPacketListener.handleTestInstanceBlockStatus.
+            C::TestInstanceBlockStatus(p) => {
+                self.block_editor_status(remote_text(&p.status), p.size);
             }
             C::SystemChat(p) => {
                 // The component as sent, translated in the client's own

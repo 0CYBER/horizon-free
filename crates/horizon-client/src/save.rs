@@ -624,6 +624,7 @@ pub fn encode_block_entity(
         BlockEntity::StructureBlock(b) => entries.extend(b.save()),
         BlockEntity::JigsawBlock(b) => entries.extend(b.save()),
         BlockEntity::TestBlock(b) => entries.extend(b.save()),
+        BlockEntity::TestInstanceBlock(b) => entries.extend(b.save()),
         BlockEntity::Brushable(b) => {
             if let Some(table) = &b.loot_table {
                 entries.push(("LootTable", table.clone()));
@@ -925,6 +926,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         BlockEntity::CommandBlock(c) => **c = crate::command_block::CommandBlock::load(tag),
         BlockEntity::StructureBlock(b) => **b = crate::structure_block::StructureBlock::load(tag),
         BlockEntity::TestBlock(b) => **b = crate::test_block::TestBlock::load(tag),
+        BlockEntity::TestInstanceBlock(b) => b.load(tag),
         // The state is not known here; a saved jigsaw always has its joint.
         BlockEntity::JigsawBlock(b) => {
             **b = crate::jigsaw_block::JigsawBlock::load(

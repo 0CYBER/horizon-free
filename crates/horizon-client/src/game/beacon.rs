@@ -14,6 +14,7 @@ use horizon_client::{
     items::ItemStack,
     mesher::Vertex,
     mobs::render::{DYE, DYE_NAMES},
+    test_instance_block::Status,
 };
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
@@ -84,6 +85,30 @@ fn average(a: u32, b: u32) -> u32 {
         .fold(0, |acc, &s| acc | ((ch(a, s) + ch(b, s)) / 2) << s)
 }
 impl Game<'_> {
+    /// `TestInstanceBlockEntity.getBeamSections`: grey while running, green
+    /// for a pass, red for a failed required test and orange for an optional
+    /// one; each section is one block tall and the last runs to the sky.
+    fn test_instance_beam(&self, e: &BlockEntity) -> Option<Vec<(u32, i32)>> {
+        let BlockEntity::TestInstanceBlock(b) = e else {
+            return None;
+        };
+        let color = match b.data.status {
+            Status::Cleared => return None,
+            Status::Running => 0x80_8080,
+            Status::Finished if b.data.error_message.is_none() => 0x00_FF00,
+            Status::Finished => {
+                let required = b
+                    .data
+                    .test
+                    .as_deref()
+                    .and_then(|key| self.test_def(key))
+                    .is_none_or(|t| t.required);
+                if required { 0xFF_0000 } else { 0xFF_8000 }
+            }
+        };
+        Some(vec![(color, 1)])
+    }
+
     /// The beam color of a `BeaconBeamBlock` (stained glass and panes, the beacon).
     fn beam_color(&self, name: &str) -> Option<u32> {
         if name == "minecraft:beacon" {
@@ -598,15 +623,26 @@ impl Game<'_> {
             self.far_beacons.retain(|&pos, _| {
                 let (x, _, z) = pos;
                 !world.chunks.contains_key(&(x >> 4, z >> 4))
-                    || world.block_entities.get(&pos).and_then(beam).is_some()
+                    || world
+                        .block_entities
+                        .get(&pos)
+                        .is_some_and(|e| beam(e).is_some() || is_test_instance_beam(e))
             });
         } else {
             self.far_beacons.clear();
         }
+        let test_beams: Vec<_> = world
+            .block_entities
+            .iter()
+            .filter_map(|(k, e)| Some((*k, self.test_instance_beam(e)?)))
+            .collect();
         for (k, e) in &world.block_entities {
             if let Some(sections) = beam(e) {
                 self.far_beacons.insert(*k, sections.to_vec());
             }
+        }
+        for (k, sections) in test_beams {
+            self.far_beacons.insert(k, sections);
         }
         for (k, sections) in &self.far_beacons {
             let base = glam::DVec3::new(f64::from(k.0) + 0.5, f64::from(k.1), f64::from(k.2) + 0.5);
@@ -627,6 +663,10 @@ impl Game<'_> {
             horizon_client::block_entity_render::beacon_beam(origin, sections, time, scale, s, out);
         }
     }
+}
+/// Whether a test instance block shows a beam (`getBeamSections` not empty).
+fn is_test_instance_beam(e: &BlockEntity) -> bool {
+    matches!(e, BlockEntity::TestInstanceBlock(b) if b.data.status != Status::Cleared)
 }
 /// The beam sections of an active beacon (`BeaconRenderer` draws no beam for
 /// a beacon without a pyramid or with all sections cleared).
