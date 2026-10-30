@@ -166,7 +166,7 @@ lists every method of vanilla 26.3 next to the Rust functions that port it, with
 
 ### Known issues
 
-Skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
+Skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; item tooltips lack attribute lines.
 
 ## Licence
 
