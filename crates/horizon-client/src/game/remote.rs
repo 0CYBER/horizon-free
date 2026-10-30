@@ -5452,37 +5452,46 @@ impl Game<'_> {
         // (`attack_ticks` only counts in the local world), and the attack
         // speed is the player's synced attribute, which a server may change.
         let speed = self
-            .player
-            .as_mut()
-            .and_then(|p| {
-                let key = p.attributes.key("minecraft:attack_speed")?;
-                p.attributes.lookup(Some(&key))?;
-                p.attributes
-                    .value(Some(key), horizon_world::attribute_map::ValueKind::Computed)
-                    .ok()
-            })
+            .own_attribute("minecraft:attack_speed")
             .unwrap_or_else(|| self.main_hand_attack_speed());
-        let scale = self.hand_strength.scale(0.5, speed);
-        // Player.attack's damage, in its order: the ATTACK_DAMAGE value (or a
-        // riptide spin's), the enchantment damage, then the knockback.
+        let strength = self.hand_strength.scale(0.5, speed);
+        // Player.attack's damage: a riptide spin's, or this client's own
+        // ATTACK_DAMAGE, which the held item and effects don't change here.
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
         let damage = if spin > 0.0 {
             spin
         } else {
-            1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage)
-                + self.effect_attack_bonus()
+            self.own_attribute("minecraft:attack_damage")
+                .map_or(1.0, |v| v as f32)
         };
-        let enchant = self.enchant_damage_bonus("minecraft:player");
-        let (knockback, _) = self.extra_knockback("minecraft:player", scale);
+        let knockback = self
+            .own_attribute("minecraft:attack_knockback")
+            .map_or(0.0, |v| v as f32);
+        let sprinting = self.player.as_ref().is_some_and(|p| p.sprinting);
         if !horizon_client::attack_strength::attacker_slows_after_hit(
-            damage, enchant, scale, knockback,
+            damage, knockback, strength, sprinting,
         ) {
             return;
         }
         if let Some(p) = self.player.as_mut() {
-            p.velocity = Vec3::new(p.velocity.x * 0.6, p.velocity.y, p.velocity.z * 0.6);
+            let slowdown = horizon_client::attack_strength::ATTACKER_SLOWDOWN;
+            p.velocity = Vec3::new(
+                p.velocity.x * slowdown,
+                p.velocity.y,
+                p.velocity.z * slowdown,
+            );
         }
         self.stop_sprint_after_extra_knockback();
+    }
+
+    /// An attribute's value on this client's player, if its map has the attribute.
+    fn own_attribute(&mut self, id: &str) -> Option<f64> {
+        let p = self.player.as_mut()?;
+        let key = p.attributes.key(id)?;
+        p.attributes.lookup(Some(&key))?;
+        p.attributes
+            .value(Some(key), horizon_world::attribute_map::ValueKind::Computed)
+            .ok()
     }
 
     fn remote_continue_attack(&mut self, down: bool) {

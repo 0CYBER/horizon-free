@@ -68,34 +68,40 @@ impl AttackStrength {
     }
 }
 
-/// `Player.attack`'s extra knockback from the weapon's knockback enchantment
-/// (`getKnockback`, halved) and a sprinting full-strength hit (0.5), and
-/// whether the hit is that sprinting knockback attack.
-pub fn extra_knockback(enchanted: f32, strength: f32, sprinting: bool) -> (f32, bool) {
+/// `Player.attack`'s extra knockback: `getKnockback` (`weapon`, halved: the
+/// ATTACK_KNOCKBACK value, plus on a server the weapon's knockback enchantment)
+/// and a sprinting full-strength hit (0.5), and whether the hit is that
+/// sprinting knockback attack.
+pub fn extra_knockback(weapon: f32, strength: f32, sprinting: bool) -> (f32, bool) {
     let knockback_attack = strength > 0.9 && sprinting;
     let bonus = if knockback_attack { 0.5 } else { 0.0 };
-    (enchanted / 2.0 + bonus, knockback_attack)
+    (weapon / 2.0 + bonus, knockback_attack)
 }
+
+/// `causeExtraKnockback`'s cut of the attacker's horizontal speed.
+pub const ATTACKER_SLOWDOWN: f64 = 0.6;
 
 /// What the attacking client's own `Player.attack` does to itself on a hit
 /// at another player, whose `RemotePlayer.hurtClient` lets the hit through:
-/// whether `causeExtraKnockback` cuts its horizontal speed to 0.6 and stops
-/// its sprint. `attack_damage` is the ATTACK_DAMAGE value before clamping
-/// (the hand and weapon plus strength and weakness, or a riptide spin's),
-/// `enchant_damage` the weapon's enchantment damage, `strength`
-/// `getAttackStrengthScale(0.5)` and `knockback` from [`extra_knockback`].
+/// whether `causeExtraKnockback` cuts its horizontal speed and stops its
+/// sprint. This runs on the client's player, not the server's: held items and
+/// effects only change attributes on a server and neither of these two is
+/// synced, so `attack_damage` and `knockback` are the client's own ATTACK_DAMAGE
+/// (or a riptide spin's damage) and ATTACK_KNOCKBACK, whatever the weapon or
+/// Weakness. Enchantments don't count either: only `ServerPlayer` overrides
+/// `getEnchantedDamage`, and `getKnockback` asks for a `ServerLevel`.
+/// `strength` is `getAttackStrengthScale(0.5)`.
 pub fn attacker_slows_after_hit(
     attack_damage: f32,
-    enchant_damage: f32,
-    strength: f32,
     knockback: f32,
+    strength: f32,
+    sprinting: bool,
 ) -> bool {
-    // The attribute's range is [0, 2048]: weakness can't make it negative.
-    let base = attack_damage.clamp(0.0, 2048.0) * (0.2 + strength * strength * 0.8);
-    let enchant = enchant_damage * strength;
-    // Player.attack stops before the hurt and the knockback when neither
-    // part of the damage is left.
-    (base > 0.0 || enchant > 0.0) && knockback > 0.0
+    let base = attack_damage * (0.2 + strength * strength * 0.8);
+    let (knockback, _) = extra_knockback(knockback, strength, sprinting);
+    // Player.attack stops before the hurt and the knockback when no damage is
+    // left (`magicBoost` is 0 here).
+    base > 0.0 && knockback > 0.0
 }
 
 #[cfg(test)]
@@ -137,42 +143,35 @@ mod tests {
         s.reset_attack();
         assert_eq!((s.ticker, s.swap_ticker), (0, 1));
     }
-    /// The attacker's side of a hit on another player, as the client sees it.
-    fn slows(damage: f32, enchant: f32, strength: f32, sprinting: bool, kb_enchant: f32) -> bool {
-        let (knockback, _) = extra_knockback(kb_enchant, strength, sprinting);
-        attacker_slows_after_hit(damage, enchant, strength, knockback)
-    }
+    /// A client's own ATTACK_DAMAGE: Player's base value, as no item or effect
+    /// changes it there.
+    const CLIENT_DAMAGE: f32 = 1.0;
     #[test]
     fn a_charged_sprint_hit_slows_the_attacker() {
-        // A diamond sword (1 + 6), full strength, sprinting.
-        assert!(slows(7.0, 0.0, 1.0, true, 0.0));
+        assert!(attacker_slows_after_hit(CLIENT_DAMAGE, 0.0, 1.0, true));
         assert_eq!(extra_knockback(0.0, 1.0, true), (0.5, true));
     }
     #[test]
     fn an_uncharged_sprint_hit_does_not() {
-        assert!(!slows(7.0, 0.0, 0.5, true, 0.0));
+        assert!(!attacker_slows_after_hit(CLIENT_DAMAGE, 0.0, 0.5, true));
         assert!(
-            !slows(7.0, 0.0, 0.9, true, 0.0),
+            !attacker_slows_after_hit(CLIENT_DAMAGE, 0.0, 0.9, true),
             "the bonus needs more than 0.9"
         );
     }
     #[test]
     fn a_hit_without_sprinting_or_knockback_does_not() {
-        assert!(!slows(7.0, 0.0, 1.0, false, 0.0));
+        assert!(!attacker_slows_after_hit(CLIENT_DAMAGE, 0.0, 1.0, false));
     }
     #[test]
-    fn a_knockback_weapon_slows_even_uncharged() {
-        // Knockback I: getKnockback 1, halved; no sprint needed.
-        assert!(slows(7.0, 0.0, 0.2, false, 1.0));
+    fn a_synced_knockback_attribute_slows_even_uncharged() {
+        assert!(attacker_slows_after_hit(CLIENT_DAMAGE, 1.0, 0.2, false));
     }
     #[test]
     fn a_hit_that_does_no_damage_stops_first() {
-        // An empty hand (1) under Weakness I (-4): the attribute clamps to 0,
-        // so Player.attack ends before causeExtraKnockback.
-        assert!(!slows(1.0 - 4.0, 0.0, 1.0, true, 0.0));
-        assert!(!slows(0.0, 0.0, 1.0, true, 1.0));
-        // Enchantment damage alone still lands the hit.
-        assert!(slows(0.0, 1.25, 1.0, true, 0.0));
+        // Only a server that sends ATTACK_DAMAGE can leave a client without any.
+        assert!(!attacker_slows_after_hit(0.0, 0.0, 1.0, true));
+        assert!(!attacker_slows_after_hit(0.0, 1.0, 1.0, true));
     }
     #[test]
     fn a_server_attack_speed_charges_at_once() {
@@ -181,8 +180,18 @@ mod tests {
         let mut s = AttackStrength::default();
         s.reset_attack();
         assert_eq!(s.scale(0.5, 1024.0), 1.0);
-        assert!(slows(7.0, 0.0, s.scale(0.5, 1024.0), true, 0.0));
+        assert!(attacker_slows_after_hit(
+            CLIENT_DAMAGE,
+            0.0,
+            s.scale(0.5, 1024.0),
+            true
+        ));
         // A sword's own 1.6 leaves it uncharged.
-        assert!(!slows(7.0, 0.0, s.scale(0.5, 1.6), true, 0.0));
+        assert!(!attacker_slows_after_hit(
+            CLIENT_DAMAGE,
+            0.0,
+            s.scale(0.5, 1.6),
+            true
+        ));
     }
 }
