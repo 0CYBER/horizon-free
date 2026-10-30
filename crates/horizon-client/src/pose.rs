@@ -187,6 +187,11 @@ impl MotionWorld<'_, '_, '_> {
     /// `fallFlyTicks`: a player who boards while gliding sits up instead of
     /// keeping the glide pose (#3093).
     pub fn passenger_pose_tick(&mut self) -> Result<()> {
+        // Player.tick: a passenger is never on the ground (setOnGround(false)
+        // clears the supporting block too), so its look packets say so.
+        self.player.ground.on_ground = false;
+        self.player.ground.on_ground_no_blocks = false;
+        self.player.ground.supporting_block = None;
         self.player.swimming = false;
         self.player.fall_flying = false;
         self.player.fall_fly_ticks = 0;
