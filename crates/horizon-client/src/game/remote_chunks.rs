@@ -4,7 +4,7 @@
 //! order only inserts the result (`ClientPacketListener.handleLevelChunkWithLight`).
 use super::Game;
 use horizon_client::{
-    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy},
     streaming::Streaming,
 };
 use horizon_core::paletted::{PalettedContainer, Strategy};
@@ -24,6 +24,8 @@ use std::sync::{
 /// with an older one is decoded again.
 #[derive(Default)]
 pub(super) struct ChunkFormat {
+    /// The column decoded chunks hold: the client's for the level.
+    column: ColumnLayout,
     min_y: i32,
     sections: usize,
     has_skylight: bool,
@@ -34,6 +36,7 @@ pub(super) struct ChunkFormat {
 impl ChunkFormat {
     pub(super) fn new(dimension: &DimensionType, biome_map: Vec<u16>, biome_bits: u8) -> Self {
         Self {
+            column: ColumnLayout::VANILLA,
             min_y: dimension.min_y,
             sections: dimension.sections(),
             has_skylight: dimension.has_skylight,
@@ -42,17 +45,21 @@ impl ChunkFormat {
         }
     }
     pub(super) fn with_dimension(&self, dimension: &DimensionType) -> Self {
-        Self::new(dimension, self.biome_map.clone(), self.biome_bits)
+        Self {
+            column: self.column,
+            ..Self::new(dimension, self.biome_map.clone(), self.biome_bits)
+        }
     }
 
-    /// LevelChunkSection data into the client's fixed -64..320 column.
+    /// LevelChunkSection data into the client's column.
     fn column(&self, p: &play::LevelChunkWithLight) -> Result<Chunk, String> {
         let sections = p
             .chunk
             .sections(self.sections, 16, self.biome_bits)
             .map_err(|e| e.to_string())?;
-        let mut chunk = Chunk::empty(p.x, p.z);
-        let offset = (self.min_y - MIN_Y).div_euclid(16);
+        let mut chunk = Chunk::with_layout(p.x, p.z, self.column);
+        let offset = (self.min_y - self.column.min_y()).div_euclid(16);
+        let column = self.column.sections() as i32;
         // Biome table index per quart cell of the dimension's own sections.
         let mut biome_cells: Vec<[u32; 64]> = Vec::with_capacity(sections.len());
         for (i, s) in sections.iter().enumerate() {
@@ -67,7 +74,7 @@ impl ChunkFormat {
                 );
             }
             biome_cells.push(cells);
-            if !(0..SECTIONS as i32).contains(&target) {
+            if !(0..column).contains(&target) {
                 continue;
             }
             // A global section is as wide as the server's registry: 16 bits
@@ -107,7 +114,7 @@ impl ChunkFormat {
         // (the column's top or bottom cell layer repeated).
         if !biome_cells.is_empty() {
             let last = biome_cells.len() - 1;
-            for si in 0..SECTIONS as i32 {
+            for si in 0..column {
                 let i = si - offset;
                 if (0..sections.len() as i32).contains(&i) {
                     continue;
@@ -133,16 +140,17 @@ impl ChunkFormat {
     /// above the column's top section (from the light section just above
     /// it, else open sky).
     pub(super) fn light(&self, light: &LightData) -> (Vec<SectionLight>, [u8; 256]) {
-        let mut layers: Vec<SectionLight> = vec![(None, None); SECTIONS];
+        let column = self.column.sections() as i32;
+        let mut layers: Vec<SectionLight> = vec![(None, None); self.column.sections()];
         let sky = self.has_skylight;
         let mut above = [if sky { 15 } else { 0 }; 256];
         // Light section b is the dimension's section b - 1.
-        let first = (self.min_y - MIN_Y).div_euclid(16) - 1;
+        let first = (self.min_y - self.column.min_y()).div_euclid(16) - 1;
         for (b, layer) in light.layers(self.sections + 2).into_iter().enumerate() {
             let si = first + b as i32;
-            if (0..SECTIONS as i32).contains(&si) {
+            if (0..column).contains(&si) {
                 layers[si as usize] = layer;
-            } else if si == SECTIONS as i32
+            } else if si == column
                 && sky
                 && let Some(l) = &layer.0
             {

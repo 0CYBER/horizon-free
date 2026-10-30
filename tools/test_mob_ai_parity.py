@@ -319,6 +319,8 @@ def scenarios():
                           ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
         add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
                                            f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
+    # A ghast floating near a player (RandomFloatAroundGoal, GhastMoveControl, GhastLookGoal) and shooting it.
+    add('ghast_player', 120, ['player 7.5 -56 0.5', 'mob minecraft:ghast 0.5 -56 0.5 0 273 persistent'])
     # AbstractHorse.hurtServer (#3432): every hurt draws nextInt(3), and a 0 rears the horse
     # (standIfPossible). A llama makes the draw too but never rears (canPerformRearing). A horse
     # scenario waits for #2720: a rearing horse is immobile (AbstractHorse.isImmobile).
@@ -332,6 +334,10 @@ def scenarios():
     for seed in (201, 202):
         add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
                                                f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
+    # A skeleton by day chases a player past the edge of a roof (GroundPathNavigation.trimPath with
+    # avoidSun: the path stops at the first node the sky sees).
+    add('skeleton_sun_path', 120, ['fill -5 -57 -5 5 -57 5 minecraft:stone', 'fill -5 -56 -5 5 -56 5 minecraft:air',
+                                   'player 12.5 -60 0.5', 'mob minecraft:skeleton 0.5 -60 0.5 0 211 persistent'], 'time=1000')
     # A zombified piglin runs Zombie.registerGoals too (the turtle egg goal draws its start delay).
     add('zombified_piglin_player', 120, ['player 7.5 -60 0.5', 'mob minecraft:zombified_piglin 0.5 -60 0.5 0 241 persistent'])
     add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])
@@ -592,7 +598,8 @@ def main():
         shutil.rmtree(world, ignore_errors=True)
         # Each scenario forces 9x9 chunks 512 blocks past the last one, so a run generates ~80 chunks per scenario;
         # 3g ran out of heap in PoiManager.tick on a busy runner (#2160's CI, 143 scenarios).
-        oracle_harness.run_logged(['java', '-Xmx4g', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
+        # 4g then ran out within ~3 minutes on a fresh run once the scenarios grew (2026-10-30); 8g passes.
+        oracle_harness.run_logged(['java', '-Xmx8g', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
                                    'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:

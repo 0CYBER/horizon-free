@@ -1186,8 +1186,9 @@ impl Game<'_> {
         let (content, sound, mob) =
             horizon_client::items::bucket_contents(&item).expect("filled bucket dispatcher");
         let target_pos = Self::pos_of(target);
-        let emptied = self
-            .with_level(|b, level, ticks| b.bucket_empty(level, ticks, target_pos, content, sound));
+        let emptied = self.with_level(|b, level, ticks| {
+            b.bucket_empty(level, ticks, target_pos, content, sound, false, false)
+        });
         self.process_level_events()?;
         if !emptied {
             return Ok((self.dispense_default(pos, facing, stack), CLICK));
@@ -1245,7 +1246,8 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = Self::pos_of(offset(pos, facing));
-        let picked = self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target));
+        let picked =
+            self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, target, false));
         self.process_level_events()?;
         match picked {
             Some(filled) => {
@@ -1422,7 +1424,7 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
         let free = self.res.facts().is_air(self.block_at(target))
-            && target.1 >= horizon_client::chunk::MIN_Y + 2
+            && target.1 >= self.world.bottom_y() + 2
             && self.ui.difficulty != 0
             && self.can_build_wither(target);
         if free {

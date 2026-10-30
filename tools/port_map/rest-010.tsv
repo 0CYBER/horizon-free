@@ -55,7 +55,7 @@ CompressionDecoder.decode	port	crates/horizon-protocol/src/frame.rs::decompress	
 CompressionDecoder.setupInflaterInput	skip:java		ByteBuffer plumbing for the inflater
 CompressionDecoder.inflate	inline	crates/horizon-protocol/src/frame.rs::decompress	zlib inflate with the declared-length check
 net/minecraft/network/Connection#channelActive	skip:other		Netty channel open; the blocking Connection is connected before use
-net/minecraft/network/Connection#exceptionCaught	inline	crates/horizon-client/src/net.rs::run	gap: player: a failed read or malformed packet shows Horizon's raw error text, not vanilla's Timed out or Internal Exception disconnect
+net/minecraft/network/Connection#exceptionCaught	port	crates/horizon-client/src/net.rs::connection_lost	Timed out for a read timeout (READ_TIMEOUT, ReadTimeoutHandler(30)), Internal Exception: ... for other failures
 net/minecraft/network/Connection#channelRead0	port	crates/horizon-client/src/net.rs::receive_play	play-phase dispatch; gap: minor: configuration packets dispatch in configure
 net/minecraft/network/Connection#validateListener	skip:other		the per-phase decode enums fix the listener's side and protocol
 net/minecraft/network/Connection#syncAfterConfigurationChange	skip:other		Netty future sync

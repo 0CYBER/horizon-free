@@ -51,6 +51,11 @@ pub(super) struct GuestPlay {
     pub(super) chat_spam: u32,
     /// `commandSpamThrottler`: 20 for each command, one less each tick.
     pub(super) command_spam: u32,
+    /// `ServerCommandSuggestionsProvider`: the latest suggestion request not answered yet (a
+    /// newer one replaces it, which then never gets an answer), and whether this tick's one
+    /// answer is still free.
+    suggestion: Option<Vec<u8>>,
+    suggestion_budget: bool,
     /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
     pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
@@ -616,6 +621,15 @@ impl Game<'_> {
                     event,
                 }),
             );
+        }
+        // Player.playSound: everyone near but the guest, in the players' source.
+        let players = horizon_client::settings::SOUND_SOURCES
+            .iter()
+            .position(|s| *s == "player")
+            .unwrap_or(0) as i32;
+        for (name, at, volume, pitch) in std::mem::take(&mut self.guest_player_sounds) {
+            host.hub
+                .sound(&name, at, volume, pitch, players, Some(conn));
         }
         // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
         for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
@@ -1569,10 +1583,39 @@ impl Game<'_> {
                     self.send_admin_feedback(host, Some(conn));
                 }
             }
+            // handleEntityTagQuery: a game master's F3+I on an entity of their
+            // level gets its Entity.saveWithoutId.
+            S::EntityTagQuery(p) if host.hub.guests[gi].permission >= 2 => {
+                if let Some(tag) = self.level_entity_tag(host, p.entity) {
+                    host.hub.send_to(
+                        conn,
+                        &C::TagQuery(play::TagQuery {
+                            transaction: p.transaction,
+                            tag,
+                        }),
+                    );
+                }
+            }
+            // handleBlockEntityTagQuery: BlockEntity.saveWithoutMetadata, or
+            // null where there is no block entity.
+            S::BlockEntityTagQuery(p) if host.hub.guests[gi].permission >= 2 => {
+                let tag = self
+                    .block_entity_tag(p.pos)
+                    .unwrap_or(horizon_world::nbt::Tag::End);
+                host.hub.send_to(
+                    conn,
+                    &C::TagQuery(play::TagQuery {
+                        transaction: p.transaction,
+                        tag,
+                    }),
+                );
+            }
             S::Unknown(id, payload)
                 if id == horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION =>
             {
-                self.guest_suggestions(host, conn, &payload);
+                // ServerCommandSuggestionsProvider.request, then trySchedule.
+                host.play.entry(conn).or_default().suggestion = Some(payload);
+                self.guest_try_suggestions(host, conn);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
             // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
@@ -1620,6 +1663,31 @@ impl Game<'_> {
             }
             _ => {}
         }
+    }
+
+    /// `ServerLevel.getEntity(id)`'s `Entity.saveWithoutId`: the player or
+    /// other entity of the level in place with that network id.
+    fn level_entity_tag(&mut self, host: &mut LanHost, id: i32) -> Option<horizon_world::nbt::Tag> {
+        use super::commands::Target;
+        let player = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && host.hub.here(g))
+            .map(|g| g.conn);
+        let mut tag = match player {
+            Some(player) => self
+                .as_guest(host, player, |g| g.entity_nbt(Target::Player))
+                .flatten()?,
+            None => {
+                let target = self.level_entity(id)?;
+                self.entity_nbt(target)?
+            }
+        };
+        if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
+            c.remove(&"id".into());
+        }
+        Some(tag)
     }
 
     /// `ServerGamePacketListenerImpl.tryPickItem` for the guest: a matching stack
@@ -2072,6 +2140,20 @@ impl Game<'_> {
     /// ServerGamePacketListenerImpl.handleCustomCommandSuggestions: the
     /// completions of the command typed so far (after an optional slash), for
     /// the nodes the tree marks `ask_server`.
+    /// ServerCommandSuggestionsProvider.tryProcessRequest: answer the latest request if this
+    /// tick's answer is free. One client asking a hundred times a tick costs one parse.
+    fn guest_try_suggestions(&mut self, host: &mut LanHost, conn: u32) {
+        let play = host.play.entry(conn).or_default();
+        if !play.suggestion_budget {
+            return;
+        }
+        let Some(payload) = play.suggestion.take() else {
+            return;
+        };
+        play.suggestion_budget = false;
+        self.guest_suggestions(host, conn, &payload);
+    }
+
     fn guest_suggestions(&mut self, host: &mut LanHost, conn: u32, payload: &[u8]) {
         let mut r = horizon_protocol::buf::Reader::new(payload);
         let (Ok(id), Ok(text)) = (r.varint(), r.string(32500)) else {
@@ -2272,6 +2354,9 @@ impl Game<'_> {
             let play = host.play.entry(conn).or_default();
             play.chat_spam = play.chat_spam.saturating_sub(1);
             play.command_spam = play.command_spam.saturating_sub(1);
+            // commandSuggestionsProvider.tick: one answer a tick, to the latest request.
+            play.suggestion_budget = true;
+            self.guest_try_suggestions(host, conn);
             self.guest_sleep_tick(host, gi);
             if host.hub.guests[gi].dead {
                 self.guest_tick_death(host, gi);
@@ -2417,7 +2502,7 @@ impl Game<'_> {
                 let me = self.player_text(&name, uuid);
                 let text = match cause {
                     Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                    None if at[1] < f64::from(self.world.bottom_y() - 64) => {
                         horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                     }
                     None => self.guest_death_message(conn, me),
@@ -2686,9 +2771,10 @@ impl Game<'_> {
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
-                    let sprinting = w.player.sprinting;
-                    w.player
-                        .cause_food_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                    // ServerGamePacketListenerImpl.handlePlayerPositionChange:
+                    // the server's copy jumps with the player, so the velocity
+                    // it sends them keeps the jump.
+                    let _ = w.jump_from_ground();
                 }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;
