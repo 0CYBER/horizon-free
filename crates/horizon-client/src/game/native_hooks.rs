@@ -49,7 +49,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 4;
+pub(crate) const NATIVE_HOOKS_API: u32 = 5;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -366,7 +366,7 @@ impl Game<'_> {
     /// Block `block`'s block entity has item slots (a `WorldlyContainer`):
     /// set `container` when the block is yours. Asked once for each mod
     /// block when the ticking table is built; at most 256 slots, and slot
-    /// numbers past the count are left out. API 4.
+    /// numbers past the count are left out. API 5.
     pub(super) fn native_block_entity_container(
         &self,
         block: &str,
@@ -379,7 +379,7 @@ impl Game<'_> {
     /// compound `nbt` and its item `slots` (none without a container). It is out of the world during the call (the block
     /// entity at `pos` reads as a `Mod` with an empty id, and a save leaves
     /// it out); if the call removes or replaces it, `nbt` is dropped. Clients,
-    /// the window's own in single player included, don't get it yet. API 4.
+    /// the window's own in single player included, don't get it yet. API 5.
     pub(super) fn native_block_entity_tick(
         &mut self,
         pos: [i32; 3],
