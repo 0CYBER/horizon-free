@@ -76,9 +76,10 @@ configuration and toolchain changes select the whole workspace; CI also keeps it
 
 ## Claim before you start
 
-Work is tracked in GitHub issues, and an issue that is assigned is taken: pick another, or ask its holder in the
-thread. Before you start, comment **`/claim`** on the issue; you are assigned at once, no role needed. No issue for
-your work yet? Open one (a line is enough), then claim it. `/unclaim` gives it back.
+Work is tracked in GitHub issues, and an issue that is assigned is taken (so is one with the `in progress` label:
+claimed on Discord with Kira's `/claim`): pick another, or ask its holder in the thread. Before you start, comment
+**`/claim`** on the issue; you are assigned at once, no role needed. No issue for your work yet? Open one (a line is
+enough), then claim it. `/unclaim` gives it back.
 
 A claim with no open pull request linking the issue (`Fixes #123` in the description, or a draft) is released after
 5 days, with a comment: open a draft early. You can hold 5 open issues at a time. Agents claim the same way.
