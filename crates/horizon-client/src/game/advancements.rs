@@ -465,6 +465,16 @@ impl Game<'_> {
             ..Default::default()
         }
     }
+    /// A dropped item as the predicates see it.
+    pub(super) fn item_entity_view(&self, e: &horizon_client::entities::ItemEntity) -> EntityView {
+        EntityView {
+            kind: "minecraft:item".into(),
+            position: [e.position.x, e.position.y, e.position.z],
+            on_ground: e.on_ground,
+            on_fire: e.fire_ticks > 0,
+            ..Default::default()
+        }
+    }
     pub(super) fn mob_entity(&self, m: &horizon_client::mobs::Mob) -> EntityView {
         // mainhand, offhand, head, chest, legs, feet.
         let slot = |i: &Option<std::sync::Arc<str>>| {

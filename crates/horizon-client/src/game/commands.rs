@@ -114,6 +114,25 @@ fn wrap_degrees(angle: f32) -> f32 {
     }
 }
 
+/// The network id of a target that is no player: its entity id.
+fn non_player_entity_id(t: Target) -> Option<i32> {
+    let (Target::Mob(id)
+    | Target::Item(id)
+    | Target::Orb(id)
+    | Target::Projectile(id)
+    | Target::Stand(id)
+    | Target::Frame(id)
+    | Target::Painting(id)
+    | Target::Boat(id)
+    | Target::Cart(id)
+    | Target::Other(id)
+    | Target::Crystal(id)
+    | Target::Dragon(id)) = t
+    else {
+        return None;
+    };
+    i32::try_from(id).ok()
+}
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
@@ -1502,10 +1521,24 @@ impl Game<'_> {
     /// `ServerPlayer.lookAt`: besides turning the player, tell their client
     /// with a `ClientboundPlayerLookAtPacket` (`from` anchor, the point, and
     /// the entity with its anchor when the target is one). Only a connected
-    /// player has a client to tell. The entity form is sent for mobs, whose
-    /// ids are their network ids; `LookAt.LookAtEntity.perform` falls back to
-    /// the point (`LookAt.LookAtPosition`) for any other kind of target,
-    /// which turns the client the same unless the entity moves first.
+    /// player has a client to tell. The entity form is sent whenever the
+    /// target is an entity with a network id (`LookAt.LookAtEntity.perform`);
+    /// a player whose id is not known here (a guest's turn, with the host
+    /// out of reach) falls back to the point, which a client takes the same
+    /// unless the entity moves first.
+    /// `Entity.getId` as the players' clients know it: a player's is the one the
+    /// hub gave it, any other entity's is its own id.
+    fn network_entity_id(&self, t: Target) -> Option<i32> {
+        let host = self.lan.as_ref();
+        match t {
+            Target::Player => match self.lan_acting {
+                Some(conn) => host?.hub.guest(conn).map(|g| g.entity_id),
+                None => host.map(|h| h.host_entity),
+            },
+            Target::Guest(conn) => host?.hub.guest(conn).map(|g| g.entity_id),
+            other => non_player_entity_id(other),
+        }
+    }
     pub(super) fn send_player_look_at(
         &mut self,
         t: Target,
@@ -1516,12 +1549,11 @@ impl Game<'_> {
         let packet = C::PlayerLookAt(play::PlayerLookAt {
             from: i32::from(from_eyes),
             target,
-            entity: entity.and_then(|(e, eyes)| match e {
-                Target::Mob(id) => Some(play::LookAtEntity {
-                    id: id as i32,
+            entity: entity.and_then(|(e, eyes)| {
+                Some(play::LookAtEntity {
+                    id: self.network_entity_id(e)?,
                     anchor: i32::from(eyes),
-                }),
-                _ => None,
+                })
             }),
         });
         match t {
@@ -3445,4 +3477,29 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     }
     out.push(&s[start..]);
     out
+}
+
+#[cfg(test)]
+mod look_at_tests {
+    use super::{Target, non_player_entity_id};
+
+    #[test]
+    fn look_at_entity_form_names_any_entity_by_its_id() {
+        for t in [
+            Target::Mob(7),
+            Target::Item(7),
+            Target::Orb(7),
+            Target::Projectile(7),
+            Target::Boat(7),
+            Target::Cart(7),
+            Target::Crystal(7),
+            Target::Dragon(7),
+        ] {
+            assert_eq!(non_player_entity_id(t), Some(7), "{t:?}");
+        }
+        // Players are the hub's to name; a dragon part's id is no entity id.
+        assert_eq!(non_player_entity_id(Target::Player), None);
+        assert_eq!(non_player_entity_id(Target::Guest(3)), None);
+        assert_eq!(non_player_entity_id(Target::Mob(u32::MAX - 4096)), None);
+    }
 }
