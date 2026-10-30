@@ -185,6 +185,8 @@ struct Launcher {
     native_confirm: Option<Result<Vec<native_mods::Bundle>, String>>,
     confirm_remove: Option<String>,
     picker_open: bool,
+    /// Settings > Language's dropdown (`language_page.rs`).
+    language_menu: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
     account_menu: bool,
     /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
@@ -414,6 +416,7 @@ impl Launcher {
             native_confirm: None,
             confirm_remove: None,
             picker_open: false,
+            language_menu: false,
             account_menu: false,
             skin: None,
             background_error: None,
@@ -539,6 +542,7 @@ impl Launcher {
             }
         }
         self.picker_open = false;
+        self.language_menu = false;
         self.account_menu = false;
     }
 
