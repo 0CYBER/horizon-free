@@ -72,6 +72,8 @@ pub(super) struct RecipeUi {
     ghost: Vec<Ghost>,
     last_placed: Option<String>,
     overlay: Option<Overlay>,
+    /// A press landed in the search box, so a drag selects text in it.
+    search_drag: bool,
     view: View,
     view_key: u64,
     /// Squeeze animations of new recipes: ticks left per button index and tab.
@@ -696,6 +698,7 @@ impl Game<'_> {
             search.y = yo + 13.0;
             let magnifier = inside(cursor, xo + 8.0, yo + 13.0, 17.0, 14.0);
             if magnifier || inside(cursor, search.x, search.y, search.width, search.height) {
+                self.recipe_ui.search_drag = true;
                 search.focused = true;
                 search.reset_blink();
                 if !magnifier {
@@ -730,6 +733,23 @@ impl Game<'_> {
             }
         }
         narrow
+    }
+    /// `RecipeBookComponent.mouseDragged`: while the search box is focused a
+    /// drag moves its selection end to the pointer (`EditBox.onDrag`).
+    pub(super) fn recipe_book_drag(&mut self) {
+        if !self.recipe_ui.search_drag || !self.active_book().is_some_and(|b| self.book_open(b)) {
+            return;
+        }
+        let x = self.cursor.0;
+        if let Some(search) = self.recipe_ui.search.as_mut()
+            && search.focused
+        {
+            search.drag_to(&self.gui.atlas, x);
+        }
+    }
+    /// A mouse button let go: a drag no longer selects in the search box.
+    pub(super) fn recipe_book_release(&mut self) {
+        self.recipe_ui.search_drag = false;
     }
     /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
     fn send_book_settings(&self, book_type: BookType) {
