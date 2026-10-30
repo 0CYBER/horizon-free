@@ -111,7 +111,7 @@ fn optional(
         Some(None)
     }
 }
-fn template_code(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
+pub(super) fn template_code(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
     let stack = <Template as Codec<Stack>>::read(r).ok()?;
     template(&stack, names)
 }
@@ -164,7 +164,7 @@ fn effect_details(rec: RecordHash, r: &mut Reader) -> Option<RecordHash> {
     })
 }
 /// `MobEffectInstance.CODEC`: the effect's identifier and its details.
-fn mob_effect(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
+pub(super) fn mob_effect(r: &mut Reader, names: &dyn Names) -> Option<HashCode> {
     let rec = RecordHash::new().field("id", registry_entry("minecraft:mob_effect", names, r)?);
     Some(effect_details(rec, r)?.build())
 }
@@ -363,7 +363,7 @@ pub(super) fn code(kind: i32, bytes: &[u8], names: &dyn Names) -> Option<HashCod
                 .field("has_glowing_text", HashOps::create_boolean(glow))
                 .build()
         }
-        _ => return None,
+        _ => super::gameplay::code(kind, r, names)?,
     };
     (r.remaining() == 0).then_some(code)
 }
@@ -390,6 +390,24 @@ mod tests {
                 ("minecraft:block_entity_type", 1) => "minecraft:chest",
                 ("minecraft:data_component_type", 3) => "minecraft:damage",
                 ("minecraft:villager_type", 0) => "minecraft:desert",
+                ("minecraft:attribute", 1) => "minecraft:armor",
+                ("minecraft:attribute", 3) => "minecraft:attack_damage",
+                ("minecraft:attribute", 23) => "minecraft:max_health",
+                ("minecraft:sound_event", 50) => "minecraft:block.anvil.land",
+                ("minecraft:sound_event", 70) => "minecraft:item.armor.equip_generic",
+                ("minecraft:sound_event", 71) => "minecraft:item.armor.equip_gold",
+                ("minecraft:sound_event", 702) => "minecraft:entity.generic.eat",
+                ("minecraft:sound_event", 1314) => "minecraft:entity.player.burp",
+                ("minecraft:sound_event", 1447) => "minecraft:item.shears.snip",
+                ("minecraft:sound_event", 1459) => "minecraft:item.shield.block",
+                ("minecraft:mob_effect", 18) => "minecraft:poison",
+                ("minecraft:block", 1) => "minecraft:stone",
+                ("minecraft:block", 9) => "minecraft:dirt",
+                ("minecraft:item", 1006) => "minecraft:bowl",
+                ("minecraft:item", 1018) => "minecraft:iron_ingot",
+                ("minecraft:entity_type", 32) => "minecraft:creeper",
+                ("minecraft:entity_type", 101) => "minecraft:pig",
+                ("minecraft:entity_type", 154) => "minecraft:zombie",
                 _ => return None,
             };
             Some(name.to_owned())
@@ -556,6 +574,132 @@ mod tests {
             ("horse/variant", 108, "06", -337512376),
             ("llama/variant", 110, "03", -727074367),
             ("axolotl/variant", 111, "04", 199633461),
+        ];
+        for (name, kind, hex, expected) in cases {
+            let bytes = unhex(hex);
+            let mut r = Reader::new(&bytes);
+            let c = Component::read(kind, &mut r).unwrap();
+            assert_eq!(r.remaining(), 0, "{name}");
+            assert_eq!(c.hash(kind, &Pinned), Some(expected), "{name} {hex}");
+        }
+    }
+
+    /// The same for the components that tune an item's behaviour.
+    #[test]
+    fn gameplay_components_hash_as_vanilla_does() {
+        let cases: [(&str, i32, &str, i32); 42] = [
+            ("use_effects", 5, "01013f000000", -1226654547),
+            ("use_effects", 5, "00013e4ccccd", -982207288),
+            (
+                "attribute_modifiers",
+                16,
+                "03030e6d696e6563726166743a746573744014000000000000000100170b6d696e6563726166743a78c004000000000000010001010b6d696e6563726166743a793ff00000000000000208020800024869",
+                694631198,
+            ),
+            ("food", 23, "044020000001", 1478675052),
+            ("food", 23, "010000000000", -72303299),
+            ("consumable", 24, "3fcccccd01bf050100", -982207288),
+            (
+                "consumable",
+                24,
+                "4040000002a30a00050001000064000101003f0000000102120203410000000104000d6d696e6563726166743a666f6f0140800000",
+                -1668265051,
+            ),
+            (
+                "consumable",
+                24,
+                "3fcccccd01000d6d696e6563726166743a626172000100",
+                1520278491,
+            ),
+            ("use_remainder", 25, "ee07010000", -1449413585),
+            (
+                "use_cooldown",
+                26,
+                "40000000010d6d696e6563726166743a677270",
+                -783582811,
+            ),
+            ("use_cooldown", 26, "3f00000000", -818046427),
+            (
+                "tool",
+                28,
+                "020301090141000000010102010000400000000200",
+                -1435046669,
+            ),
+            ("tool", 28, "003f8000000101", 937295970),
+            ("weapon", 29, "023fc00000", 896609515),
+            ("weapon", 29, "0100000000", -982207288),
+            (
+                "equippable",
+                32,
+                "0448010e6d696e6563726166743a676f6c64011a6d696e6563726166743a6d6973632f70756d706b696e626c757201029a010001010001a80b",
+                -1318691560,
+            ),
+            ("equippable", 32, "00470000000101010000a80b", -352294351),
+            (
+                "equippable",
+                32,
+                "0547000001031e650100000100a80b",
+                696858640,
+            ),
+            ("equippable", 32, "0747000000010101000033", -1214114539),
+            ("equippable", 32, "06470000000101010000a80b", 1294431019),
+            ("repairable", 33, "02fa07", -646002763),
+            ("repairable", 33, "03fa07ee07", 1894900226),
+            ("death_protection", 36, "0102", 1103435691),
+            ("death_protection", 36, "00", -982207288),
+            (
+                "blocks_attacks",
+                37,
+                "3f0000003f8000000142340000003f8000003f000000404000003f8000003e4ccccd0001b40b00",
+                -1535582378,
+            ),
+            (
+                "blocks_attacks",
+                37,
+                "000000003f8000000142b4000000000000003f8000003f800000000000003f800000000000",
+                -982207288,
+            ),
+            (
+                "blocks_attacks",
+                37,
+                "000000003f8000000142b4000000000000003f8000003f800000000000003f800000000000",
+                -982207288,
+            ),
+            (
+                "blocks_attacks",
+                37,
+                "000000003f800000003f800000000000003f800000000000",
+                354948751,
+            ),
+            ("piercing_weapon", 38, "010101bf0500", 1744160152),
+            ("piercing_weapon", 38, "01000000", -982207288),
+            (
+                "kinetic_weapon",
+                39,
+                "050001143f8000000000000000003f0000003f80000001bf0500",
+                775699335,
+            ),
+            (
+                "kinetic_weapon",
+                39,
+                "0a00000000000000003f8000000000",
+                -982207288,
+            ),
+            ("attack_animation", 40, "020a", -2140542379),
+            ("interact_animation", 41, "0106", -982207288),
+            ("interact_animation", 41, "0006", -178357229),
+            ("break_sound", 83, "bf05", 1901640159),
+            ("break_sound", 83, "000b6d696e6563726166743a7100", 924623336),
+            ("compostable", 84, "0100000003", -1585875247),
+            (
+                "compostable",
+                84,
+                "000e6d696e6563726166743a736f6d65",
+                190800813,
+            ),
+            ("cooking_fuel", 85, "01000000c8013fc00000", -1393125704),
+            ("brewing_fuel", 86, "01000000050140000000", -1389039553),
+            ("mob_visibility", 87, "02203f000000", 1234665895),
         ];
         for (name, kind, hex, expected) in cases {
             let bytes = unhex(hex);

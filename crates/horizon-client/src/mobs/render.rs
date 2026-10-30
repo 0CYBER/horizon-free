@@ -1928,6 +1928,17 @@ fn fox_item_transform(m: &Mob, alpha: f32, camera: glam::DVec3, data: &MobData) 
     }
     t
 }
+/// `CrossedArmsItemLayer.applyTranslation`: `translateToArms`, then the item's
+/// placement over the folded arms.
+fn crossed_arms_matrix(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat4> {
+    let arms = part_matrix(model, base, poses, "arms", 0.0)?;
+    Some(
+        arms * glam::Mat4::from_rotation_x(0.75)
+            * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
+            * glam::Mat4::from_rotation_x(std::f32::consts::PI),
+    )
+}
 /// The pose a mob's held item is submitted under (`ItemInHandLayer`:
 /// `translateToHand`, then the hand offset; the item model adds its own
 /// display transform), or `None` when the mob shows no held items.
@@ -1978,14 +1989,16 @@ pub fn held_item_transform(
                     * glam::Mat4::from_rotation_x(180.0f32.to_radians()),
             );
         }
-        // CrossedArmsItemLayer.applyTranslation: translateToArms, then this.
-        let arms = part_matrix(&model, base, &poses, "arms", 0.0)?;
-        return Some(
-            arms * glam::Mat4::from_rotation_x(0.75)
-                * glam::Mat4::from_scale(glam::Vec3::splat(1.07))
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.13, -0.34))
-                * glam::Mat4::from_rotation_x(std::f32::consts::PI),
-        );
+        return crossed_arms_matrix(&model, base, &poses);
+    }
+    // CrossedArmsItemLayer (villagers and wandering traders): the main hand's
+    // item over the folded arms.
+    if matches!(m.species(), Species::Villager | Species::WanderingTrader) {
+        m.extra.main_hand.as_deref()?;
+        if left != m.main_arm_left() {
+            return None;
+        }
+        return crossed_arms_matrix(&model, base, &poses);
     }
     let mut t = hand_base(m, &model, base, &poses, left)?;
     // ItemInHandLayer: a STAB swing of this arm thrusts its item out
@@ -2273,6 +2286,29 @@ mod tests {
         }
     }
 
+    /// `CrossedArmsItemLayer`: a villager and a wandering trader show their
+    /// main hand's item over the folded arms, and nothing in the off hand.
+    #[test]
+    fn villagers_and_traders_hold_items_in_crossed_arms() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let data = MobData::load(&root, &facts);
+        for id in ["minecraft:villager", "minecraft:wandering_trader"] {
+            let kind = std::sync::Arc::new(types.types[id].clone());
+            let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+            let main = mob.main_arm_left();
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, main).is_none());
+            mob.extra.set_main_hand(Some("minecraft:emerald".into()));
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, main).is_some());
+            assert!(held_item_transform(&mob, 1.0, glam::DVec3::ZERO, &data, !main).is_none());
+        }
+    }
     /// PhantomRenderer.scale moves the model down into its 0.5-high box:
     /// the model's origin ends 1.501 - 1.3125 blocks above the feet (times
     /// the size's scale), not 1.501 like other mobs (#3008).

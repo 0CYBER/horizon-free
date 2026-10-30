@@ -969,7 +969,7 @@ fn mob_equipment(
     // slot's item (6) in `head`.
     let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
-        (0u8, &e.main_hand, None),
+        (0u8, &e.main_hand, e.main_hand_stack()),
         (1, &e.off_hand, None),
         (2, &e.feet, e.armor[3].as_ref()),
         (3, &e.legs, e.armor[2].as_ref()),
@@ -1567,7 +1567,7 @@ impl Game<'_> {
                 .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
                 Holder::Player => player_entity,
-                Holder::Mob(id) => Some(id as i32),
+                Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
                 Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),
             });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());

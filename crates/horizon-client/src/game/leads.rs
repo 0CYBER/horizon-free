@@ -25,6 +25,10 @@ fn rot_y(v: glam::DVec3, angle: f64) -> glam::DVec3 {
     let (s, c) = (angle.sin(), angle.cos());
     glam::DVec3::new(v.x * c + v.z * s, v.y, v.z * c - v.x * s)
 }
+/// `Entity.getRopeHoldPosition` of a boat: 0.7 of its eye height (0.5625) up.
+fn boat_hold() -> glam::DVec3 {
+    glam::DVec3::new(0.0, f64::from(0.5625_f32) * 0.7, 0.0)
+}
 fn pack_light(light: u8) -> u32 {
     (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8)
 }
@@ -52,7 +56,7 @@ impl Game<'_> {
     /// `Leashable.canHaveALeashAttachedTo` for the mob at `index` and a
     /// holder whose box centre is `center`: within snapping range and
     /// leashable.
-    fn can_attach_lead(&self, index: usize, center: glam::DVec3) -> bool {
+    pub(super) fn can_attach_lead(&self, index: usize, center: glam::DVec3) -> bool {
         let m = &self.mobs[index];
         if !leash::can_be_leashed(m) || !m.alive() {
             return false;
@@ -66,6 +70,31 @@ impl Game<'_> {
         );
         mine.distance(center) <= leash::SNAP
     }
+    /// `Entity.gameEvent(event, player)` for a lead: the acting player is the source.
+    pub(super) fn lead_game_event(&mut self, event: &'static str, at: [f64; 3]) {
+        let ctx = self.player_context(None);
+        self.post_game_event(event, at, ctx);
+    }
+    /// `Entity.interact`'s sneak branch: the mobs and boats on the player's
+    /// lead within reach of `center` that `canHaveALeashAttachedTo` the
+    /// entity (`skip` is the entity itself) are re-tied to `to`. Whether any
+    /// was.
+    pub(super) fn tie_player_leads(
+        &mut self,
+        center: glam::DVec3,
+        to: Holder,
+        skip: Option<usize>,
+    ) -> bool {
+        let mut any = false;
+        for j in self.player_leashed(center) {
+            if Some(j) != skip && self.can_attach_lead(j, center) {
+                self.mobs[j].extra.leash = Some(to);
+                any = true;
+            }
+        }
+        // The boats on the player's lead too (game/boat_leads.rs).
+        any | self.tie_player_boats(center, to)
+    }
     pub(super) fn player_center(&self) -> glam::DVec3 {
         self.player.as_ref().map_or(glam::DVec3::ZERO, |p| {
             glam::DVec3::new(
@@ -76,7 +105,7 @@ impl Game<'_> {
         })
     }
     /// The mobs on the player's lead within 32 blocks of a point.
-    fn player_leashed(&self, around: glam::DVec3) -> Vec<usize> {
+    pub(super) fn player_leashed(&self, around: glam::DVec3) -> Vec<usize> {
         (0..self.mobs.len())
             .filter(|&i| {
                 let m = &self.mobs[i];
@@ -122,7 +151,10 @@ impl Game<'_> {
             let holder = match pending {
                 Pending::Knot(p) => Some(Holder::Knot(p)),
                 Pending::Uuid(u) if u == player_uuid => Some(Holder::Player),
-                Pending::Uuid(u) => self.mob_by_uuid(u).map(Holder::Mob),
+                Pending::Uuid(u) => self
+                    .mob_by_uuid(u)
+                    .map(Holder::Mob)
+                    .or_else(|| self.boat_by_uuid(u).map(Holder::Boat)),
             };
             let m = &mut self.mobs[i];
             if let Some(h) = holder {
@@ -147,7 +179,7 @@ impl Game<'_> {
         let pending = m.extra.leash_pending;
         let uuid = match (holder, pending) {
             (Some(Holder::Player), _) => Some(self.level.player_uuid.unwrap_or([0, 0, 0, 1])),
-            (Some(Holder::Mob(id)), _) => Some(self.mob_uuid(id)),
+            (Some(Holder::Mob(id) | Holder::Boat(id)), _) => Some(self.mob_uuid(id)),
             (_, Some(Pending::Uuid(u))) => Some(u),
             _ => None,
         };
@@ -178,17 +210,8 @@ impl Game<'_> {
                 (lo.y + hi.y) / 2.0,
                 (lo.z + hi.z) / 2.0,
             );
-            let held = self.player_leashed(center);
-            let mut any = false;
-            for j in held {
-                if j != index && self.can_attach_lead(j, center) {
-                    self.mobs[j].extra.leash = Some(Holder::Mob(id));
-                    any = true;
-                }
-            }
-            // The boats on the player's lead too (game/boat_leads.rs).
-            any |= self.tie_player_boats(center, Holder::Mob(id));
-            if any {
+            if self.tie_player_leads(center, Holder::Mob(id), Some(index)) {
+                self.lead_game_event("minecraft:entity_action", at);
                 self.lead_sound("tied", at);
                 return true;
             }
@@ -213,6 +236,7 @@ impl Game<'_> {
             dropped |= !boats.is_empty();
             self.drop_boat_leashes(&boats);
             if dropped {
+                self.lead_game_event("minecraft:shear", at);
                 self.audio
                     .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
                 self.damage_held_tool();
@@ -222,6 +246,7 @@ impl Game<'_> {
         if self.mobs[index].extra.leash == Some(Holder::Player) {
             let creative = self.creative;
             self.break_leash(id, !creative, false);
+            self.lead_game_event("minecraft:entity_interact", at);
             self.lead_sound("untied", at);
             return true;
         }
@@ -423,6 +448,12 @@ impl Game<'_> {
                         };
                         lerp3(o.previous, o.position)
                             + glam::DVec3::new(0.0, o.eye_height() * 0.7, 0.0)
+                    }
+                    Holder::Boat(id) => {
+                        let Some(o) = self.boats.iter().find(|o| o.id == id) else {
+                            continue;
+                        };
+                        lerp3(o.previous, o.position) + boat_hold()
                     }
                     Holder::Player => {
                         let Some(p) = self.player.as_ref() else {
