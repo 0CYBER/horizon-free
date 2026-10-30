@@ -1892,6 +1892,9 @@ struct Game<'a> {
     /// LocalPlayer (joining, respawning, changing dimension) starts at 0.
     sway: horizon_client::first_person::HandSway,
     visible_hands: [(usize, Option<ItemStack>); 2],
+    /// Whether the main and off hand's slots were set to a new stack that
+    /// the hand doesn't show yet (`Game::hand_stack_replaced`).
+    hands_replaced: [bool; 2],
     /// `Minecraft`'s attack handling, attack clicks since the last tick and
     /// the attack strength tickers the hand reads.
     clicks: horizon_client::first_person::Clicks,
@@ -13061,6 +13064,8 @@ impl Game<'_> {
                 // handlePlayerAction SWAP_ITEM_WITH_OFFHAND: setItemInHand for
                 // the off hand, then the main hand.
                 std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
+                self.hand_stack_replaced(self.selected);
+                self.hand_stack_replaced(shield::OFFHAND_SLOT);
                 let (offhand, main) = (self.offhand.clone(), self.inventory[self.selected].clone());
                 self.player_on_equip("offhand", main.as_ref(), offhand.as_ref());
                 self.player_on_equip("mainhand", offhand.as_ref(), main.as_ref());
@@ -14779,6 +14784,7 @@ impl<'a> Game<'a> {
             heights: Default::default(),
             sway: Default::default(),
             visible_hands: [(0, None), (0, None)],
+            hands_replaced: [false; 2],
             clicks: Default::default(),
             attack_clicks: 0,
             hand_strength: Default::default(),

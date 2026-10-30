@@ -231,6 +231,9 @@ pub(super) struct Remote {
     /// inventory): like the click queue, they wait for the tick's
     /// `handleKeybinds` phase rather than going out between window events.
     pub(super) pending_keys: Vec<KeyCode>,
+    /// Whether the main and off hand still wait for the server's answer to
+    /// a SWAP_ITEM_WITH_OFFHAND (`remote_hand_slot_set`).
+    swap_answer: [bool; 2],
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
     /// `CommonPlayerSpawnInfo.isFlat`: the level is a superflat one.
@@ -555,6 +558,7 @@ impl Game<'_> {
             destroy_delay: 0,
             input: Default::default(),
             pending_keys: Vec::new(),
+            swap_answer: [false; 2],
             stop_mining: false,
             placing: None,
             flat: false,
@@ -1978,7 +1982,14 @@ impl Game<'_> {
         if internal == 200 {
             return; // the result slot is recomputed from the grid
         }
-        *self.slot_mut(internal) = item;
+        let slot = self.slot_mut(internal);
+        let changed = !super::hand::matches_for_swap(slot.as_ref(), item.as_ref());
+        *slot = item;
+        if internal < 36 {
+            self.remote_hand_slot_set(internal, changed);
+        } else if internal == 504 {
+            self.remote_hand_slot_set(super::shield::OFFHAND_SLOT, changed);
+        }
         if internal >= super::stations::INPUT && self.station.is_some() {
             self.remote_station_slot_changed(internal);
         }
@@ -3070,6 +3081,15 @@ impl Game<'_> {
                 let stack = self.to_stack(&p.item);
                 self.tutorial_get_item(stack.as_ref());
                 let before = self.creative_stacks();
+                let held = match p.slot {
+                    0..=35 => self.inventory[p.slot as usize].as_ref(),
+                    40 => self.offhand.as_ref(),
+                    _ => None,
+                };
+                let changed = !super::hand::matches_for_swap(held, stack.as_ref());
+                if let Ok(slot) = usize::try_from(p.slot) {
+                    self.remote_hand_slot_set(slot, changed);
+                }
                 match p.slot {
                     0..=35 => self.inventory[p.slot as usize] = stack,
                     36..=39 => self.armor[3 - (p.slot - 36) as usize] = stack,
@@ -6439,6 +6459,35 @@ impl Game<'_> {
             direction: 0,
             sequence: 0,
         }));
+        // Equal stacks swap with no slot update to wait for.
+        let (main, off) = (self.stack_in(self.selected), self.offhand.as_ref());
+        let moves = !super::hand::matches_for_swap(main, off);
+        if let Some(r) = self.remote.as_mut() {
+            r.swap_answer = [moves; 2];
+        }
+    }
+    /// The server set inventory `slot` (`shield::OFFHAND_SLOT` for the off
+    /// hand), `changed` from the stack this client held there. The stack
+    /// that answers a swap (`setItemInHand`) is another object, which the
+    /// hand shows after the swap animation (`hand_stack_replaced`); other
+    /// updates of a hand's slot count as the held stack changing in place,
+    /// as this client doesn't predict every use the way vanilla's does
+    /// (a thrown snowball's stack shrinks only when the server says so).
+    fn remote_hand_slot_set(&mut self, slot: usize, changed: bool) {
+        let hand = if slot == super::shield::OFFHAND_SLOT {
+            1
+        } else if slot == self.selected {
+            0
+        } else {
+            return;
+        };
+        let answer = self
+            .remote
+            .as_mut()
+            .is_some_and(|r| std::mem::take(&mut r.swap_answer[hand]));
+        if answer && changed {
+            self.hand_stack_replaced(slot);
+        }
     }
     /// A container click: the server answers with the authoritative slots.
     pub(super) fn remote_click(&mut self, right: bool) {
