@@ -5794,6 +5794,7 @@ impl Game<'_> {
                     self.lever_puff(hit.pos);
                 }
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
+                self.open_block_editor_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
                 // MultiPlayerGameMode.useItemOn: SUCCESS SwingSource.CLIENT
                 // (a chest, barrel, furnace, …). CONSUME does not swing.
                 if result == InteractionResult::Success {
