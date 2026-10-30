@@ -91,9 +91,7 @@ mod tests {
         assert_eq!(block.name, "test:pillar");
         assert_eq!(block.properties["axis"], "x");
         assert_eq!(
-            read_block(&world, &registry, [-1, 65, 1])
-                .unwrap()
-                .name,
+            read_block(&world, &registry, [-1, 65, 1]).unwrap().name,
             "minecraft:air"
         );
         assert_eq!(
