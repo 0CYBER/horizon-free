@@ -396,7 +396,8 @@ template's components); other items keep `minecraft:stick`. Armour of the mod's 
 26.3 equipment asset (`assets/<ns>/equipment/<material>.json`) made from its 1.21.1 layers, their
 `textures/models/armor/<name>_layer_1.png` and `_layer_2.png` copied to
 `textures/entity/equipment/humanoid/` and `humanoid_leggings/`, and its `equippable` names that
-asset and the material's equip sound. Recipes get the convention tags they use
+asset and the material's equip sound. A material with no asset to name (layers elsewhere, another
+mod's) draws the template's armour, reported as a difference. Recipes get the convention tags they use
 (`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
 oracle, templates are guessed from the blockstate's properties: the template whose properties
 include them with the fewest left over (models often ignore `powered` or `waterlogged`), the
