@@ -467,17 +467,44 @@ impl Game<'_> {
         else {
             return false;
         };
+        // handleContainerClick: broadcastFullState only for a click on an old
+        // state, else only what the client got wrong. The whole menu after every
+        // click would undo the clicks it has predicted since.
+        let mut agreed = false;
         // A table that is no longer valid takes no clicks (handleContainerClick).
         if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
             && !host.hub.guests[gi].spectator()
             && self.lan_table_valid(&host.hub.guests[gi], pos)
         {
-            self.guest_menu_op(host, gi, &mut menu, |menu, env| {
+            let changed = self.guest_menu_op(host, gi, &mut menu, |menu, env| {
+                let before: Vec<_> = (0..menu.slot_count())
+                    .map(|s| menu.slot(s).cloned())
+                    .collect();
                 let _ = menu.click(env, i32::from(p.slot), i32::from(p.button), input(p.input));
+                (0..menu.slot_count())
+                    .filter(|&s| menu.slot(s) != before[s].as_ref())
+                    .collect::<Vec<_>>()
             });
+            agreed = p.state == state
+                && host.hub.click_agreed(
+                    gi,
+                    p,
+                    menu.slot_count(),
+                    &|s| menu.slot(s).cloned(),
+                    &changed,
+                );
+            if agreed {
+                // The inventory menu's sync isn't to send what the click settled.
+                let g = &mut host.hub.guests[gi];
+                for &s in changed.iter().filter(|&&s| s >= 10) {
+                    g.menu_sent[s - 1] = menu.slot(s).cloned();
+                }
+            }
         }
         host.play.entry(conn).or_default().crafting.table = Some((window, state, menu, pos));
-        self.lan_send_table_content(host, conn);
+        if !agreed {
+            self.lan_send_table_content(host, conn);
+        }
         true
     }
 
@@ -549,6 +576,7 @@ impl Game<'_> {
                 carried,
             }),
         );
+        host.hub.guests[gi].inventory_told();
     }
 
     /// `AbstractContainerMenu.removed` of a crafting menu: the closed window

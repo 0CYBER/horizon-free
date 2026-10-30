@@ -93,6 +93,9 @@ pub(super) struct LanHost {
     pub commands: Vec<super::lan_actions::GuestCommand>,
     /// Mods' quiet commands waiting to run a few a tick (game/lan_quiet.rs).
     pub quiet: std::collections::VecDeque<super::lan_quiet::QuietBatch>,
+    /// Native mods' commands and the level each needs, once asked
+    /// (game/native_server.rs).
+    pub native_commands: Option<HashMap<String, u8>>,
     /// The entities the guests track, described again every tick
     /// (`lan_entities`) over last tick's states.
     states: lan::entity::States,
@@ -183,7 +186,8 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
         | "minecraft:axolotl"
         | "minecraft:dolphin"
         | "minecraft:squid"
-        | "minecraft:glow_squid" => Some(16),
+        | "minecraft:glow_squid"
+        | "minecraft:sulfur_cube" => Some(16),
         _ => None,
     }
 }
@@ -627,10 +631,11 @@ fn mob_meta(
             }
         }
         // AbstractCubeMob.ID_SIZE.
-        "minecraft:slime" | "minecraft:magma_cube" => {
+        "minecraft:slime" | "minecraft:magma_cube" | "minecraft:sulfur_cube" => {
             if e.size > 1 {
                 meta.push((18, serializer::INT, Value::Int(e.size)));
             }
+            defaults.push((18, serializer::INT, Value::Int(1)));
         }
         // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED and DATA_IS_IGNITED: the
         // guest swells the creeper from them. The direction always goes in,
@@ -841,6 +846,14 @@ fn mob_meta(
         // the shaking of the freezing conversion.
         "minecraft:skeleton" => {
             if e.counter2 > 0 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Bogged.DATA_SHEARED (the first entry after Mob's): the mushrooms
+        // on its head are gone.
+        "minecraft:bogged" => {
+            if e.sheared {
                 meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
             }
             defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
@@ -1138,6 +1151,7 @@ impl Game<'_> {
             },
         );
         let config = HubConfig {
+            allow_flight: true,
             default_game_mode: self.level.mode(),
             guest_commands: settings.guest_commands,
             force_game_mode: settings.force_game_mode,
@@ -1145,12 +1159,14 @@ impl Game<'_> {
             view_distance: self.settings.render_distance.clamp(2, 32),
             simulation_distance: self.settings.render_distance.clamp(2, 32),
             dimension: self.dim.id().to_owned(),
+            levels: self.level_shapes,
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
             dedicated: false,
             integrated: false,
         };
         let net = NetConfig {
+            levels: self.level_shapes,
             online: horizon_client::lan::OnlineMode::lan(),
             ..NetConfig::lan(settings.port, motd, MAX_PLAYERS)
         };
@@ -1227,6 +1243,7 @@ impl Game<'_> {
             border_sent: None,
             commands: Vec::new(),
             quiet: std::collections::VecDeque::new(),
+            native_commands: None,
             states: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
@@ -1281,14 +1298,52 @@ impl Game<'_> {
     /// Save a guest when they leave or the world closes: an integrated
     /// server's owner with the world (`save_game`), anyone else in their file.
     pub(super) fn save_guest(&mut self, host: &LanHost, guest: &horizon_client::lan::guest::Guest) {
+        // The vehicle the guest rides, for the file that names it.
+        let vehicle = self.root_vehicle_uuid(guest.vehicle);
         if host.owner.as_ref().is_some_and(|o| o.uuid == guest.uuid) {
             if guest.placed {
-                playerdata::store(guest, &mut self.level);
+                playerdata::store(guest, &mut self.level, vehicle);
             }
         } else {
-            playerdata::save(guest, &self.world_root);
+            playerdata::save(guest, &self.world_root, vehicle);
         }
         self.save_guest_records(host, guest);
+    }
+    /// `ServerPlayer.loadAndSpawnParentVehicle`: a guest whose file names the
+    /// vehicle it rode rides it again, once the vehicle is in the world.
+    fn restore_guest_vehicles(&mut self, host: &mut LanHost) {
+        let waiting: Vec<(usize, [i32; 4])> = host
+            .hub
+            .guests
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| Some((i, g.saved_vehicle?)))
+            .filter(|(i, _)| {
+                let g = &host.hub.guests[*i];
+                let chunk = (
+                    (g.position[0].floor() as i32).div_euclid(16),
+                    (g.position[2].floor() as i32).div_euclid(16),
+                );
+                g.placed
+                    && g.vehicle.is_none()
+                    && g.dimension == self.dim.id()
+                    && g.sent_chunks.contains(&chunk)
+            })
+            .collect();
+        for (i, uuid) in waiting {
+            let raw = host.hub.guests[i].saved.clone();
+            let Some(id) = self.restore_saved_vehicle(uuid, raw.as_ref()) else {
+                continue;
+            };
+            let g = &mut host.hub.guests[i];
+            if let Some(horizon_world::nbt::Tag::Compound(p)) = &mut g.saved {
+                p.remove(&"RootVehicle".into());
+            }
+            g.vehicle = Some(id);
+            g.saved_vehicle = None;
+            // Pair the stationary restored entities before their passenger packet.
+            g.moved = true;
+        }
     }
     /// The file name of a player's advancements and statistics: an
     /// integrated server's owner keeps single player's.
@@ -1360,14 +1415,28 @@ impl Game<'_> {
     }
     /// The integrated server's owner into the world's player, for `Level::write`.
     pub(super) fn store_owner(&mut self) {
+        let Some(uuid) = self
+            .lan
+            .as_ref()
+            .and_then(|h| h.owner.as_ref())
+            .map(|o| o.uuid)
+        else {
+            return;
+        };
+        let riding = self.lan.as_ref().and_then(|h| {
+            h.hub
+                .guests
+                .iter()
+                .find(|g| g.uuid == uuid && g.placed)
+                .and_then(|g| g.vehicle)
+        });
+        // The vehicle the owner rides, by the UUID it is saved with.
+        let vehicle = self.root_vehicle_uuid(riding);
         let Some(host) = &self.lan else {
             return;
         };
-        let Some(uuid) = host.owner.as_ref().map(|o| o.uuid) else {
-            return;
-        };
         if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == uuid && g.placed) {
-            playerdata::store(g, &mut self.level);
+            playerdata::store(g, &mut self.level, vehicle);
             self.save_guest_records(host, g);
         }
     }
@@ -1395,6 +1464,25 @@ impl Game<'_> {
             host.settings.force_game_mode = force;
             host.hub.config.guest_commands = effective;
             host.hub.config.force_game_mode = force;
+            // MinecraftServer.enforceGameTypeForPlayers: the guests online
+            // take the default mode (`setGameMode` does nothing when it is
+            // already theirs). A world open to LAN is an IntegratedServer,
+            // whose `updateGameModeBasedOnPermission` leaves out the players
+            // who have game master permission; a dedicated server does not.
+            if force {
+                let mode = host.hub.config.default_game_mode;
+                let spares_operators = !host.hub.config.dedicated || host.hub.config.integrated;
+                let stale: Vec<u32> = host
+                    .hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.game_mode != mode && !(spares_operators && g.permission >= 2))
+                    .map(|g| g.conn)
+                    .collect();
+                for conn in stale {
+                    host.hub.set_game_mode(conn, mode);
+                }
+            }
             host.hub.resend_commands();
         }
     }
@@ -1532,6 +1620,7 @@ impl Game<'_> {
         };
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
+        self.register_native_commands(&mut host);
         // The host's own commands' (and command blocks') players moving
         // to another level, and their broadcastToAdmins lines.
         if !self.level_teleports.is_empty() {
@@ -1551,6 +1640,8 @@ impl Game<'_> {
                 m.rider = None;
             }
         }
+        // A guest whose file names the vehicle it rode rides it again.
+        self.restore_guest_vehicles(&mut host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();
@@ -1613,6 +1704,7 @@ impl Game<'_> {
                     tick_steps: self.clock.step_state(),
                     collision: Some(self.collision),
                     border: &self.border,
+                    streaming: Some(&self.streaming),
                 };
                 host.hub.movement_checks = (
                     self.ui.rules.bool("player_movement_check"),
@@ -1760,6 +1852,14 @@ impl Game<'_> {
                 .take()
                 .expect("the hub is back after the quiet commands");
         }
+        if !host.hub.native_menu_events.is_empty() {
+            self.lan = Some(host);
+            self.run_native_menu_events();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the menu events");
+        }
         self.lan_flush_effects(&mut host);
         if !paused {
             self.tick_guests(&mut host);
@@ -1869,6 +1969,7 @@ impl Game<'_> {
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
             border: &self.border,
+            streaming: Some(&self.streaming),
         };
         host.hub.place_new_player(conn, &mut ctx);
         if elsewhere && let Err(e) = self.enter_level(Some(host), back) {
@@ -1940,6 +2041,11 @@ impl Game<'_> {
         // client, and hears the guardian's hum too.
         if event == 21 && self.options.execution_role.is_client() {
             self.start_guardian_sound(id as u32);
+        }
+        // Event 53: a mob sliding down a honey block sheds honey particles
+        // (HoneyBlock.showSlideParticles), drawn by the client that runs the world.
+        if event == 53 && self.options.execution_role.is_client() {
+            self.honey_slide_particles(at);
         }
         // Event 2: a mob's spear hit felt; the same window hears its own mob's hit.
         if event == 2 && self.options.execution_role.is_client() {

@@ -87,7 +87,11 @@ import net.minecraft.world.phys.Vec3;
  * this player before the reply has been recorded), {@code respawn NAME} (the
  * death screen's button, ServerboundClientCommandPacket PERFORM_RESPAWN),
  * {@code use NAME PITCH} (the main hand's item used looking that way,
- * ServerboundUseItemPacket), {@code pickup NAME SLOT} (a left click on that
+ * ServerboundUseItemPacket), {@code stab NAME} (a jab, ServerboundPlayerActionPacket
+ * STAB), {@code arc NAME TICK} (a jump straight ahead, one position a tick as
+ * LocalPlayer sends them, with a STAB ahead of the position of TICK, or none
+ * when negative), {@code sprint NAME} (START_SPRINTING,
+ * ServerboundPlayerCommandPacket), {@code pickup NAME SLOT} (a left click on that
  * slot of the player's inventory menu, claiming nothing), {@code quit NAME},
  * {@code
  * players on|off} (whether each player also records the other players added
@@ -95,7 +99,7 @@ import net.minecraft.world.phys.Vec3;
  * {@code chat on|off} (whether the system chat each player receives is
  * recorded too, as component JSON), {@code state on|off} (whether each player
  * also records what the server changes about it: its game mode, teleports,
- * inventory slots, effects and death) and {@code end}, which writes each
+ * motion, inventory slots, effects and death) and {@code end}, which writes each
  * player's lines to OUT.
  */
 public final class LocatorBarClient {
@@ -138,6 +142,9 @@ public final class LocatorBarClient {
                     case "respawn" -> players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
                         net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
                     case "use" -> players.get(w[1]).use(Float.parseFloat(w[2]));
+                    case "stab" -> players.get(w[1]).stab();
+                    case "arc" -> players.get(w[1]).arc(Integer.parseInt(w[2]));
+                    case "sprint" -> players.get(w[1]).sprint();
                     case "pickup" -> players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundContainerClickPacket(
                         0, 0, Short.parseShort(w[2]), (byte) 0, net.minecraft.world.inventory.ContainerInput.PICKUP,
                         new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(), net.minecraft.network.HashedStack.EMPTY));
@@ -268,6 +275,44 @@ public final class LocatorBarClient {
                 net.minecraft.world.InteractionHand.MAIN_HAND, ++sequence, position.yRot(), pitch));
         }
 
+        void stab() throws Exception {
+            send(new net.minecraft.network.protocol.game.ServerboundPlayerActionPacket(
+                net.minecraft.network.protocol.game.ServerboundPlayerActionPacket.Action.STAB,
+                net.minecraft.core.BlockPos.ZERO, net.minecraft.core.Direction.DOWN));
+        }
+
+        /** The packet's constructor wants an entity, which this player doesn't have: read from its own bytes. */
+        void sprint() throws Exception {
+            FriendlyByteBuf bytes = new FriendlyByteBuf(Unpooled.buffer());
+            bytes.writeVarInt(id);
+            bytes.writeEnum(net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.START_SPRINTING);
+            bytes.writeVarInt(0);
+            send(net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.STREAM_CODEC.decode(bytes));
+        }
+
+        /** LivingEntity.jumpFromGround's 0.42, then gravity 0.08 and drag 0.98 a tick; the clicks come first in a tick. */
+        void arc(int stabTick) throws Exception {
+            PositionMoveRotation at = position;
+            Vec3 start = at.position();
+            double y = start.y;
+            double z = start.z;
+            double up = 0.42;
+            // A tick of its own, as in still: the join's position has none behind it.
+            send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
+            for (int tick = 0; tick < 13; tick++) {
+                if (tick == stabTick) stab();
+                y = Math.max(start.y, y + up);
+                up = (up - 0.08) * 0.98;
+                z += 0.3;
+                boolean landed = tick > 0 && y == start.y;
+                send(new ServerboundMovePlayerPacket.PosRot(new Vec3(start.x, y, z), at.yRot(), at.xRot(), landed, false));
+                send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
+                Thread.sleep(50);
+                if (landed) break;
+            }
+            position = new PositionMoveRotation(new Vec3(start.x, y, z), Vec3.ZERO, at.yRot(), at.xRot());
+        }
+
         void still() throws Exception {
             PositionMoveRotation at = position;
             // A tick of its own: the server takes one position per client tick (receivedPositionThisTick).
@@ -379,6 +424,11 @@ public final class LocatorBarClient {
                         synchronized (replyLock) {
                             replies++;
                             replyLock.notifyAll();
+                        }
+                    } else if (p instanceof net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket m && m.id() == id) {
+                        if (state) {
+                            Vec3 v = m.movement();
+                            record(String.format(java.util.Locale.ROOT, "motion %.4f %.4f %.4f", v.x, v.y, v.z));
                         }
                     } else if (p instanceof ClientboundKeepAlivePacket k) {
                         send(new ServerboundKeepAlivePacket(k.getId()));

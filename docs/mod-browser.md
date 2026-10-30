@@ -178,9 +178,8 @@ settings) are copied in on the first install only, so the player's changes survi
 down installs nothing. It is listed on the Modpacks tab with **Play** and **Remove**, and plays like an imported pack
 (`modpacks::apply_profile`). A shader pack goes to `shaderpacks/<file>` once `check_file` has run the game's own
 check on it (`horizon_shader_api::check`); a taken-down one is named, for the player to remove.
-A registry `.hmod` that has WebAssembly code (any capability besides `registries`) "needs a native port": Horizon doesn't
-run it any more. The browser neither lists nor installs it alone. A modpack that requires one still installs, and the
-launcher lists the mod as not running, with that reason, and leaves out its code.
+A registry `.hmod` with any capability besides `registries` is neither listed nor installed alone. A modpack that
+requires one still installs, and the launcher lists the mod as not running, with that reason, and leaves out its code.
 
 ```sh
 horizon-launcher mods search --source horizon --kind mod <words>   # with whether it is signed and what it may do
