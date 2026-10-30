@@ -217,6 +217,11 @@ properties and shapes the new block takes, and overrides what differs:
 }
 ```
 
+A declaration may also set `"default_state": {"facing": "north"}`. The map
+changes only those state properties on the template's default; omitted properties keep
+their template values. Names and values must identify exactly one template state, or
+the content root is rejected. Leave the map out to keep the template default.
+
 Most decoration and resource blocks are vanilla classes with other numbers: Macaw's doors are
 `DoorBlock`s, XTones are full cubes, ore sets are `DropExperienceBlock`s. So templates cover the
 data tier without code. Templates also give mod blocks every behaviour Horizon already
