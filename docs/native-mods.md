@@ -108,6 +108,39 @@ trusting native code is the player's decision, never an agent's.
    `horizon-mods/.horizon-mod-data/<id>/` folder and `key.<id>.` lines of `horizon-mods.txt`, where earlier versions of
    the mod kept them); nothing it already has is overwritten.
 
+## Install from GitHub
+
+An author can ship a native mod without a registry pull request per version: the player installs it from a
+GitHub link, on the Mods page ("Add from GitHub") or with `horizon-launcher mods add-github <url>
+[--mod ID | --all] [--instance NAME] --trust-native-code`. The link is `https://github.com/<owner>/<repo>`
+(its latest release), `.../releases/tag/<tag>`, `.../tree/<ref>` or `.../commit/<sha>`.
+
+- **Resolved to something exact.** GitHub's public API (no sign-in; a rate limit is said plainly, and
+  `HORIZON_GITHUB_TOKEN` raises it) turns the link into a release's `.hnmod` file or a **commit SHA**, never a
+  branch that moves. A release with a `.hnmod` asset installs that file (its SHA-256 is compared with the one GitHub
+  lists). With no release or no such asset, the launcher fetches
+  `codeload.github.com/<owner>/<repo>/tar.gz/<sha>` and looks in it for mods by the rules of
+  `native-build <folder>`: a folder with `horizon-mixin.toml`, or an unpacked `.hnmod` (`horizon-native.json`).
+  Several mods: they are listed, and the player picks one or installs all. A source folder must pin the Horizon commit
+  (`[compatibility] horizon_revision`); the launcher packs its Rust, TOML and `data/` files into a `.hnmod`.
+  A release that ships only a content mod (`.hmod`) says "not supported yet": installing `.hmod` files from a link
+  is not built.
+- **Checked like the registry's files.** The `.hnmod` is read as `horizon_mods::index::native::Bundle::read` reads a
+  registry file (only Rust, TOML and data under `mixins/<id>/`, size limits, nothing run) before it is installed.
+- **Said first.** Before anything is downloaded: "not reviewed by the Horizon registry; native mods run with full
+  access to this computer; read the source", with a link to the exact commit. The command needs
+  `--trust-native-code`, as `native-build` does. It is not an MCP tool: trusting native code is the player's
+  decision, never an agent's.
+- **Origin kept.** `horizon-native-mods/<id>.origin.json` beside the `.hnmod`: owner/repo, release tag (for a
+  release), commit, asset name and the SHA-256 of the installed file. `mods list` shows "from GitHub: owner/repo @
+  tag" (or the commit's first 7 digits).
+- **Updates.** `horizon-launcher mods update-github [ID] [--check]` compares a mod from a release with the
+  repository's latest release, and a mod from a commit with the head of the default branch; a newer one is
+  installed with the same warning and `--trust-native-code`. `mods remove <id>` removes it. A mod already
+  installed from the registry (or by hand) is never replaced.
+
+Installing turns Native mods on, as any native mod does; then build as usual.
+
 ## Cache and disk
 
 The key hashes the commit, the horizon-mixins commit, Rust's version, the profile and features, and every file of
