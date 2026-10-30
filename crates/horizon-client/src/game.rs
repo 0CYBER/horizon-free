@@ -136,6 +136,7 @@ mod lan_stations;
 mod lan_trading;
 mod lan_vehicles;
 mod lan_waypoints;
+mod launch_api;
 mod leads;
 mod level_particles;
 mod levels;
@@ -162,6 +163,7 @@ mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
 mod native_shaders;
+mod native_world_read;
 mod natural_spawning;
 mod nautili;
 mod net_harness;
@@ -373,6 +375,16 @@ struct Options {
     server_thread: bool,
     /// What this Game executes; independent of its current server connection.
     execution_role: execution_role::ExecutionRole,
+    /// `--fullscreen` (vanilla's): the window opens fullscreen whatever options.txt says,
+    /// as vanilla's DisplayData does, without saving it there.
+    fullscreen: bool,
+    /// `--game-dir DIR`: the folder `read` makes the working directory (saves, options.txt...).
+    game_dir: Option<PathBuf>,
+    /// `--quickPlaySingleplayer`, checked once the game folder is known.
+    quick_play: Option<String>,
+    session_file: Option<String>,
+    /// `--session-stdin`: the session file's JSON comes on standard input instead.
+    session_stdin: bool,
 }
 /// `--in-frame`, `--no-server-thread` and `HORIZON_SERVER_THREAD=0` are deprecated:
 /// the in-frame world is unmaintained, gets no fixes and will be removed soon.
@@ -393,7 +405,65 @@ impl Options {
             )
         })
     }
+    /// The command line, then what it asks of the process: the game folder, the account.
+    /// A bad command line is a [`launch_api::UsageError`] (exit code 2, no crash report).
     fn read() -> Result<Option<Self>> {
+        let Some(mut o) = Self::parse(std::env::args().skip(1))
+            .map_err(|e| launch_api::UsageError(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        // The launcher's account: online-mode servers need it. A bad file
+        // only leaves the game offline.
+        let session = if o.session_stdin {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .map_err(|e| e.to_string())
+                .and_then(|_| horizon_client::auth::AuthSession::parse(&text))
+                .map(Some)
+        } else {
+            o.session_file
+                .take()
+                .filter(|p| !p.is_empty())
+                .map(|path| horizon_client::auth::AuthSession::load(path.as_ref()))
+                .transpose()
+        };
+        match session {
+            Ok(Some(session)) => {
+                o.player_name = Some(session.name.clone());
+                horizon_client::auth::set_current(session);
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("Horizon: not signed in: {e}"),
+        }
+        if let Some(dir) = o.game_dir.take() {
+            // Paths given on the command line stay relative to where the game was started.
+            o.resources = std::path::absolute(&o.resources)?;
+            o.report = o.report.map(std::path::absolute).transpose()?;
+            o.control = o.control.map(std::path::absolute).transpose()?;
+            std::fs::create_dir_all(&dir)
+                .and_then(|()| std::env::set_current_dir(&dir))
+                .map_err(|e| format!("game folder {}: {e}", dir.display()))?;
+        }
+        // Vanilla's quick play (Main, QuickPlay.joinSingleplayerWorld): only a
+        // world that exists opens; else the title screen. --world also creates one.
+        if let Some(world) = o.quick_play.take() {
+            if std::env::current_dir()?
+                .join("saves")
+                .join(&world)
+                .join("level.dat")
+                .is_file()
+            {
+                o.world = Some(world);
+            } else {
+                eprintln!("Quick play: there is no world {world} in saves/");
+            }
+        }
+        Ok(Some(o))
+    }
+    /// The command line alone: no file is read and nothing changes. `None` for `--help` and
+    /// `--launch-api`, which print and end the run.
+    fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Self>> {
         let sibling = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
@@ -441,18 +511,27 @@ impl Options {
                 on
             }),
             execution_role: execution_role::ExecutionRole::Client,
+            fullscreen: false,
+            game_dir: None,
+            quick_play: None,
+            session_file: std::env::var("HORIZON_SESSION_FILE").ok(),
+            session_stdin: false,
         };
-        let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
-        let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --in-frame              DEPRECATED, do not use: unsupported, will be removed soon (also --no-server-thread)\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --session-stdin         The same account as JSON on standard input\n  --game-dir DIR          Game folder: saves, options.txt, packs, mods (default: the working directory)\n  --home DIR              Logs and crash reports (default $HORIZON_HOME, else the platform data folder)\n  --fullscreen            Open the window fullscreen\n  --launch-api            Print the Launch API version and options as JSON (docs/api/launch.md)\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --in-frame              DEPRECATED, do not use: unsupported, will be removed soon (also --no-server-thread)\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
                 }
+                "--launch-api" => {
+                    println!("{}", launch_api::reply(&horizon_client::crash::version()));
+                    return Ok(None);
+                }
+                "--fullscreen" => o.fullscreen = true,
+                "--session-stdin" => o.session_stdin = true,
                 "--dedicated" => {
                     o.execution_role = execution_role::ExecutionRole::DedicatedServer;
                     o.dedicated = Some(args.by_ref().collect());
@@ -474,90 +553,90 @@ impl Options {
                     let value = args
                         .next()
                         .ok_or_else(|| format!("missing value after {arg}"))?;
-                    match arg.as_str() {
-                        "--resources" => o.resources = value.into(),
-                        "--render-distance" | "--radius" => {
-                            o.distance = value.parse()?;
-                            o.distance_override = Some(o.distance);
-                            let max = horizon_client::options_file::MAX_RENDER_DISTANCE;
-                            if !(2..=max).contains(&o.distance) {
-                                return Err(format!("render distance must be 2..{max}").into());
+                    // A launcher shows the error to the player: it names the option.
+                    let read = || -> Result<()> {
+                        match arg.as_str() {
+                            "--resources" => o.resources = value.into(),
+                            "--render-distance" | "--radius" => {
+                                o.distance = value.parse()?;
+                                o.distance_override = Some(o.distance);
+                                let max = horizon_client::options_file::MAX_RENDER_DISTANCE;
+                                if !(2..=max).contains(&o.distance) {
+                                    return Err(format!("render distance must be 2..{max}").into());
+                                }
                             }
-                        }
-                        "--seed" => {
-                            o.seed = value.parse().unwrap_or_else(|_| {
-                                // Text seeds hash like String.hashCode.
-                                value
-                                    .encode_utf16()
-                                    .fold(0i32, |h, c| {
-                                        h.wrapping_mul(31).wrapping_add(i32::from(c))
-                                    })
-                                    .into()
-                            })
-                        }
-                        "--frames" => o.frames = Some(value.parse()?),
-                        "--world-frames" => {
-                            o.world_frames = Some(value.parse()?);
-                            // A frame-limited run in every other respect; --timeout-seconds still applies.
-                            o.frames.get_or_insert(u64::MAX);
-                        }
-                        "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
-                        "--smoke-report" => o.report = Some(value.into()),
-                        "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
-                        "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
-                        "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
-                        "--world" => o.world = Some(value),
-                        // Vanilla's quick play (Main, QuickPlay.joinSingleplayerWorld): only a
-                        // world that exists opens; else the title screen. --world also creates one.
-                        "--quickPlaySingleplayer" => {
-                            let folder = std::env::current_dir()?.join("saves").join(&value);
-                            if folder.join("level.dat").is_file() {
-                                o.world = Some(value);
-                            } else {
-                                eprintln!("Quick play: there is no world {value} in saves/");
+                            "--seed" => {
+                                o.seed = value.parse().unwrap_or_else(|_| {
+                                    // Text seeds hash like String.hashCode.
+                                    value
+                                        .encode_utf16()
+                                        .fold(0i32, |h, c| {
+                                            h.wrapping_mul(31).wrapping_add(i32::from(c))
+                                        })
+                                        .into()
+                                })
                             }
-                        }
-                        "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
-                        "--benchmark" => {
-                            if horizon_client::benchmark::scenes(&value).is_none() {
-                                return Err(format!(
+                            "--frames" => o.frames = Some(value.parse()?),
+                            "--world-frames" => {
+                                o.world_frames = Some(value.parse()?);
+                                // A frame-limited run in every other respect; --timeout-seconds still applies.
+                                o.frames.get_or_insert(u64::MAX);
+                            }
+                            "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
+                            "--smoke-report" => o.report = Some(value.into()),
+                            "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
+                            "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
+                            "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
+                            // Vanilla opens only a level id that is one folder of saves/. --world, for
+                            // harnesses, also takes a path (tools/bundle_tooltip_e2e.py).
+                            "--world" => o.world = Some(value),
+                            "--quickPlaySingleplayer" => {
+                                let mut parts = std::path::Path::new(&value).components();
+                                if !matches!(
+                                    (parts.next(), parts.next()),
+                                    (Some(std::path::Component::Normal(_)), None)
+                                ) {
+                                    return Err("not a folder name of saves/".into());
+                                }
+                                o.quick_play = Some(value);
+                            }
+                            "--game-dir" | "--gameDir" => o.game_dir = Some(value.into()),
+                            // main has made it the game home already (logging::set_game_home).
+                            "--home" => {}
+                            "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
+                            "--benchmark" => {
+                                if horizon_client::benchmark::scenes(&value).is_none() {
+                                    return Err(format!(
                                     "unknown benchmark {value}: standard, village, forest, ocean or mountain"
                                 )
                                 .into());
+                                }
+                                o.benchmark = Some(value);
                             }
-                            o.benchmark = Some(value);
+                            "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
+                            "--name" => o.player_name = Some(value),
+                            "--session-file" => o.session_file = Some(value),
+                            "--control-socket" => o.control = Some(value.into()),
+                            "--time" => o.time = Some(value.parse()?),
+                            "--weather" => o.weather = Some(value),
+                            "--dimension" => {
+                                o.dimension = Some(if value.contains(':') {
+                                    value
+                                } else {
+                                    format!("minecraft:{value}")
+                                })
+                            }
+                            "--look" => {
+                                let (y, p) =
+                                    value.split_once(',').ok_or("--look takes YAW,PITCH")?;
+                                o.look = Some((y.parse()?, p.parse()?));
+                            }
+                            _ => return Err("unknown option".into()),
                         }
-                        "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
-                        "--name" => o.player_name = Some(value),
-                        "--session-file" => session_file = Some(value),
-                        "--control-socket" => o.control = Some(value.into()),
-                        "--time" => o.time = Some(value.parse()?),
-                        "--weather" => o.weather = Some(value),
-                        "--dimension" => {
-                            o.dimension = Some(if value.contains(':') {
-                                value
-                            } else {
-                                format!("minecraft:{value}")
-                            })
-                        }
-                        "--look" => {
-                            let (y, p) = value.split_once(',').ok_or("--look takes YAW,PITCH")?;
-                            o.look = Some((y.parse()?, p.parse()?));
-                        }
-                        _ => return Err(format!("unknown option {arg}").into()),
-                    }
+                        Ok(())
+                    };
+                    read().map_err(|e| format!("{arg}: {e}"))?;
                 }
-            }
-        }
-        // The launcher's account: online-mode servers need it. A bad file
-        // only leaves the game offline.
-        if let Some(path) = session_file.filter(|p| !p.is_empty()) {
-            match horizon_client::auth::AuthSession::load(path.as_ref()) {
-                Ok(session) => {
-                    o.player_name = Some(session.name.clone());
-                    horizon_client::auth::set_current(session);
-                }
-                Err(e) => eprintln!("Horizon: not signed in: {e}"),
             }
         }
         Ok(Some(o))
@@ -684,6 +763,8 @@ struct GameLevel<'w> {
     /// `Level.isClientSide`: a client's copy of the level (a guest of a LAN
     /// world, a window on its server thread, a dedicated server's client).
     client_side: bool,
+    /// Only the integrated or dedicated server dispatches native observations.
+    native_authoritative: bool,
 }
 struct PlayerCollision {
     y: f64,
@@ -870,6 +951,22 @@ impl GameLevel<'_> {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+        if self.native_authoritative {
+            self.native_block_changed(self.dimension, pos, old, new);
+        }
+    }
+    fn observe_neighbor_changed(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: horizon_world::level::BlockId,
+        moved: bool,
+    ) {
+        if self.native_authoritative {
+            self.native_neighbor_changed(self.dimension, pos, state, changed, moved);
+        }
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
@@ -3167,6 +3264,7 @@ impl Game<'_> {
             random_tick_sections: &mut self.random_tick_sections,
             lid_openers: &self.lid_openers,
             client_side: self.remote.is_some(),
+            native_authoritative: self.serving.is_some() || self.options.dedicated.is_some(),
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
@@ -5458,6 +5556,9 @@ impl Game<'_> {
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
+        if self.serving.is_some() || self.options.dedicated.is_some() {
+            self.native_lifecycle_server_tick_start(running);
+        }
         // GameRenderer.tick: a wither's bar darkens the world, then fades;
         // the activated item counts down.
         self.boss_overlay.tick_darken(running);
@@ -13291,8 +13392,8 @@ impl ApplicationHandler for Game<'_> {
         if self.window.is_some() {
             return;
         }
-        // The Window constructor: created fullscreen when options.txt says so.
-        let fullscreen = self.settings.fullscreen;
+        // The Window constructor: created fullscreen when options.txt or --fullscreen says so.
+        let fullscreen = self.settings.fullscreen || self.options.fullscreen;
         let size = self.options.window_size.map(f64::from);
         self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
         let attributes = Window::default_attributes()
@@ -15946,8 +16047,9 @@ impl Loading {
         if self.window.is_some() {
             return;
         }
-        // The Window constructor: created fullscreen when options.txt says so.
-        let fullscreen = self.settings.fullscreen;
+        // The Window constructor: created fullscreen when options.txt or --fullscreen says so.
+        let fullscreen =
+            self.settings.fullscreen || self.options.as_ref().is_some_and(|o| o.fullscreen);
         let size = self
             .options
             .as_ref()
@@ -16315,6 +16417,8 @@ fn run_loading(
     }
     Ok(())
 }
+
+pub use launch_api::{UsageError, exit_code};
 
 pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {

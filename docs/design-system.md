@@ -247,6 +247,30 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
 - **Copy says what happens** ("Downloads 26.3 and Java 21, about 600 MB"), never praises.
 - The specimen (`HORIZON_LAUNCHER_PAGE=specimen horizon-launcher`) draws the type and colours in the
   launcher itself.
+- **The frame** (`launcher/src/shell.rs`): the sidebar is one plate from the window's top to its
+  bottom (the wordmark, instances by group, servers, the launcher's version); the top bar over the
+  pages has no plate, only a rule. A selected row or tab sits on `card_hi` cut in steps (two for
+  rows, one for tabs and icon buttons); a hovered one gets the same shape at half its opacity,
+  eased in. A row's second line is its state, after a small square in the state's colour.
+- **Home** (`launcher/src/home.rs`): the selected instance's name in the display cut over the bare
+  sky, a caption above it naming what it plays and its state (the same square), and when it was
+  played below. Play is the main action (`night::PLAY` tall, cut in one step); the version picker
+  is a raised control of the same height; Mods and Folder are quiet buttons. A Horizon instance
+  gets a plate on the right: a release's notes in one line (not a Nightly's) and Join a friend.
+  While it gets ready, Play names it ("Getting ready… 34%") beside Cancel, and below sit the
+  bar, what is happening with the time left, and the steps (game files, Java, sounds, prepare,
+  play), the current one lit, those done ticked: steps, never the log
+  (`HORIZON_LAUNCHER_PAGE=getting-ready` shows it for screenshots, nothing runs).
+- **The sign-in sheet** (`launcher/src/owner_page.rs`, the owner gate): an opaque plate over the
+  dimmed launcher, never instead of it. It says why (the account that owns Java Edition, no install
+  needed), the code in mono on a raised box with Copy, and Open link as the main action; the window
+  goes on by itself once Microsoft answers (`HORIZON_LAUNCHER_PAGE=sign-in` shows it with a made-up
+  code for screenshots).
+- **New instance** (`launcher/src/new_instance.rs`): an opaque plate over the dimmed launcher,
+  tabs for the kind (Horizon, Vanilla, Modded). A Java kind lists Mojang's versions (search,
+  Snapshots, Old; the newest release chosen), Modded adds the loader (Fabric or Quilt, at its newest
+  stable version), and the name follows the choice ("Fabric 1.21.4") until the player types one.
+  Create is the main action.
 
 ## The mark
 

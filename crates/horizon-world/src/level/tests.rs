@@ -204,6 +204,147 @@ macro_rules! world {
 }
 
 #[test]
+fn block_observation_follows_successful_commits_only() {
+    use std::cell::RefCell;
+
+    #[derive(Debug, PartialEq)]
+    enum Observation {
+        Block(BlockPos, BlockStateId, BlockStateId),
+        Neighbor,
+    }
+    struct Observer {
+        inner: TestLevel,
+        loaded: bool,
+        seen: RefCell<Vec<Observation>>,
+    }
+    impl LevelAccess for Observer {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, _pos: BlockPos) -> bool {
+            self.loaded
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+            assert_eq!(self.block_state(pos), new);
+            self.seen
+                .borrow_mut()
+                .push(Observation::Block(pos, old, new));
+        }
+        fn observe_neighbor_changed(&self, _: BlockPos, _: BlockStateId, _: BlockId, _: bool) {
+            self.seen.borrow_mut().push(Observation::Neighbor);
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let mut level = Observer {
+        inner: TestLevel::new(b),
+        loaded: true,
+        seen: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    let pos = BlockPos::new(0, 80, 0);
+    let stone = f.registry.default_state("minecraft:stone").unwrap();
+    assert!(b.set_block(&mut level, &mut ticks, pos, stone, flags::UPDATE_ALL));
+    let seen = level.seen.borrow();
+    assert_eq!(seen[0], Observation::Block(pos, b.air(), stone));
+    assert!(seen[1..].contains(&Observation::Neighbor));
+    drop(seen);
+    level.seen.borrow_mut().clear();
+    assert!(!b.set_block(&mut level, &mut ticks, pos, stone, flags::UPDATE_ALL));
+    level.loaded = false;
+    assert!(!b.set_block(&mut level, &mut ticks, pos, b.air(), flags::UPDATE_ALL));
+    level.loaded = true;
+    assert!(!b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(0, 320, 0),
+        stone,
+        flags::UPDATE_ALL
+    ));
+    assert!(level.seen.borrow().is_empty());
+    assert!(b.set_block(&mut level, &mut ticks, pos, b.air(), flags::UPDATE_ALL));
+    assert_eq!(
+        level.seen.borrow()[0],
+        Observation::Block(pos, stone, b.air())
+    );
+}
+
+#[test]
+fn neighbor_observation_follows_dispatch_order() {
+    use std::cell::RefCell;
+
+    struct Observer {
+        inner: TestLevel,
+        seen: RefCell<Vec<(BlockPos, BlockStateId, BlockId, bool)>>,
+    }
+    impl LevelAccess for Observer {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_neighbor_changed(
+            &self,
+            pos: BlockPos,
+            state: BlockStateId,
+            changed: BlockId,
+            moved: bool,
+        ) {
+            assert_eq!(self.block_state(pos), state);
+            self.seen.borrow_mut().push((pos, state, changed, moved));
+        }
+    }
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let mut level = Observer {
+        inner: TestLevel::new(b),
+        seen: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    let changed = b.table.block_by_name("minecraft:stone").unwrap();
+    b.update_neighbors_at(&mut level, &mut ticks, BlockPos::new(0, 0, 0), changed);
+    let expected = [
+        (-1, 0, 0),
+        (1, 0, 0),
+        (0, -1, 0),
+        (0, 1, 0),
+        (0, 0, -1),
+        (0, 0, 1),
+    ];
+    let actual = level.seen.borrow();
+    assert_eq!(actual.len(), expected.len());
+    for (event, (x, y, z)) in actual.iter().zip(expected) {
+        assert_eq!(*event, (BlockPos::new(x, y, z), b.air(), changed, false));
+    }
+    drop(actual);
+    b.sim(&mut level, &mut ticks)
+        .neighbor_changed(b.air(), BlockPos::new(3, 4, 5), changed, true);
+    assert_eq!(
+        level.seen.borrow().last(),
+        Some(&(BlockPos::new(3, 4, 5), b.air(), changed, true))
+    );
+}
+
+#[test]
 fn state_table_matches_registry() {
     let Some(f) = fixture() else {
         return;
