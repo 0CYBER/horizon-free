@@ -25,7 +25,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::LegacyRandom,
+    random::{LegacyRandom, RandomSource},
 };
 use horizon_world::loot::PackOverlay;
 use horizon_world::{chunk::BlockState, registry::BlockRegistry, registry::BlockStateId};
@@ -1118,7 +1118,7 @@ pub fn main() -> horizon_client::Result<()> {
             }
         });
         let mut scratch = LegacyRandom::new(0);
-        // The level's random for eating sounds: only goats and sniffers draw
+        // The level random for eating sounds: only goats and sniffers draw
         // from it, and the scenarios feed neither.
         let mut level_random = LegacyRandom::new(0);
         for (i, m) in mobs.iter().enumerate() {
@@ -1478,6 +1478,24 @@ pub fn main() -> horizon_client::Result<()> {
                 })
                 .collect();
             for (at, open) in doors {
+                // DoorBlock.setOpen: the sound (a wooden door's), its pitch from the level's
+                // random, when the door was not already so.
+                let was = registry
+                    .state(world.block(at[0], at[1], at[2]))
+                    .is_some_and(|s| s.properties.get("open").map(String::as_str) == Some("true"));
+                if was != open {
+                    let pitch = scratch.next_float() * 0.1 + 0.9;
+                    events.push(MobEvent::Sound(
+                        if open {
+                            "block.wooden_door.open"
+                        } else {
+                            "block.wooden_door.close"
+                        },
+                        [0.0; 3],
+                        1.0,
+                        pitch,
+                    ));
+                }
                 let Some(half) = registry
                     .state(world.block(at[0], at[1], at[2]))
                     .and_then(|s| s.properties.get("half").cloned())
