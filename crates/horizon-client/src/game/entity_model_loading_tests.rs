@@ -248,7 +248,7 @@ fn content_mods_equipment_loads_under_its_namespace() {
     let assets = ArmorStandAssets::load(&root.0, None);
     assert_eq!(
         assets.equipment["gems:ruby"]["humanoid_leggings"],
-        ("gems:entity/equipment/humanoid_leggings/ruby".into(), None)
+        vec![("gems:entity/equipment/humanoid_leggings/ruby".into(), None)]
     );
 }
 
