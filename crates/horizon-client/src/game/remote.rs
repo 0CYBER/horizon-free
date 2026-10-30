@@ -2433,6 +2433,17 @@ impl Game<'_> {
                                     let _ = pl.internal_set_absorption(*amount);
                                 }
                             }
+                            // LivingEntity.DATA_LIVING_ENTITY_FLAGS: the server
+                            // starts or stops this player's use, as an axe that
+                            // disables the raised shield does (Player.disableShield's
+                            // stopUsingItem). LocalPlayer.onSyncedDataUpdated.
+                            (8, Value::Byte(flags)) => {
+                                let selected = self.selected;
+                                let using = self.using;
+                                self.using = synced_local_use(using, *flags, selected, |slot| {
+                                    self.stack_in(slot).is_some()
+                                });
+                            }
                             _ => {}
                         }
                     }
@@ -7229,6 +7240,31 @@ fn client_view_distance(render_distance: i32) -> i8 {
     render_distance.clamp(2, i32::from(i8::MAX)) as i8
 }
 
+/// `LocalPlayer.onSyncedDataUpdated(DATA_LIVING_ENTITY_FLAGS)`: the server's
+/// flags (1 using, 2 the off hand) start a use the client is not running
+/// (`startUsingItem`, which needs an item in that hand), and stop one it is
+/// (`stopUsingItem`). `using` is the slot in use and its ticks.
+fn synced_local_use(
+    using: Option<(usize, u32)>,
+    flags: i8,
+    selected: usize,
+    has_item: impl Fn(usize) -> bool,
+) -> Option<(usize, u32)> {
+    let server_using = flags & 1 != 0;
+    match using {
+        None if server_using => {
+            let slot = if flags & 2 != 0 {
+                super::shield::OFFHAND_SLOT
+            } else {
+                selected
+            };
+            has_item(slot).then_some((slot, 0))
+        }
+        Some(_) if !server_using => None,
+        using => using,
+    }
+}
+
 struct RemoteInputWorld<'g, 'a>(&'g mut Game<'a>);
 
 struct RemoteUseWorld<'g, 'a>(&'g mut Game<'a>);
@@ -7380,6 +7416,32 @@ fn snapshot_value(s: &play::AttributeSnapshot) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::synced_local_use;
+
+    #[test]
+    fn the_server_stopping_the_use_lowers_the_shield() {
+        // Player.disableShield's stopUsingItem: flags 0 while the off-hand
+        // shield is raised (LocalPlayer.onSyncedDataUpdated → stopUsingItem).
+        let off = super::super::shield::OFFHAND_SLOT;
+        assert_eq!(synced_local_use(Some((off, 12)), 0, 3, |_| true), None);
+        assert_eq!(synced_local_use(Some((3, 5)), 0, 3, |_| true), None);
+    }
+
+    #[test]
+    fn the_server_starting_a_use_starts_it_in_that_hand() {
+        let off = super::super::shield::OFFHAND_SLOT;
+        assert_eq!(synced_local_use(None, 1, 4, |_| true), Some((4, 0)));
+        assert_eq!(synced_local_use(None, 3, 4, |_| true), Some((off, 0)));
+        // LivingEntity.startUsingItem needs an item in the hand.
+        assert_eq!(synced_local_use(None, 1, 4, |_| false), None);
+    }
+
+    #[test]
+    fn matching_flags_leave_a_running_use_alone() {
+        assert_eq!(synced_local_use(Some((2, 7)), 1, 2, |_| true), Some((2, 7)));
+        assert_eq!(synced_local_use(None, 0, 2, |_| true), None);
+    }
+
     /// An NPC plugin lists the NPC, spawns it, and takes the entry off the list:
     /// the entity keeps the skin it found; a player spawned before its entry
     /// arrives takes the entry once it comes.
