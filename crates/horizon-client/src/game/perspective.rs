@@ -439,6 +439,7 @@ impl Game<'_> {
         m.extra.armor = armor;
         m.extra.crouching = crouching;
         m.extra.passenger = riding;
+        m.extra.previous_velocity = m.velocity;
         m.velocity = velocity;
         m.extra.fall_flying = fall_flying;
         m.extra.fall_fly_ticks = fly_ticks;

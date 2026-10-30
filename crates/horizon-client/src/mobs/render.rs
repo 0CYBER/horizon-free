@@ -956,7 +956,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         }
         let yaw = m.previous_head_yaw + wrap(m.head_yaw - m.previous_head_yaw) * alpha;
         let (look_x, look_z) = (-(yaw.to_radians()).msin(), (yaw.to_radians()).mcos());
-        let v = m.velocity;
+        let v = m.extra.previous_velocity.lerp(m.velocity, f64::from(alpha));
         let view_scale = (pitch.to_radians()).mcos();
         let (look_x, look_z) = (look_x * view_scale, look_z * view_scale);
         let view_length = f64::from(look_x * look_x + look_z * look_z);
