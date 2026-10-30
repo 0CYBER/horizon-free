@@ -119,8 +119,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
             (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
-            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
-            (Species::Mooshroom, 17, Value::Int(variant)) => {
+            // MushroomCow.DATA_TYPE (after AgeableMob's DATA_BABY_ID and
+            // AGE_LOCKED): 0 red, 1 brown.
+            (Species::Mooshroom, 18, Value::Int(variant)) => {
                 m.extra.variant = (*variant == 1) as u8
             }
             // Piglin.DATA_IS_DANCING: the dance pose.
@@ -523,6 +524,21 @@ mod tests {
             assert_eq!(m.extra.counter2, 0);
             assert!(beam(&m, 0.0).is_none());
         }
+    }
+
+    #[test]
+    fn a_mooshroom_takes_its_type_after_the_age_lock() {
+        let Some(mut m) = mob("minecraft:mooshroom") else {
+            return;
+        };
+        // AgeableMob.AGE_LOCKED (17) is not the colour.
+        apply(&mut m, &[(17, s::BOOLEAN, Value::Bool(true))]);
+        assert_eq!(m.extra.variant, 0);
+        // MushroomCow.DATA_TYPE (18): what MushroomCow.thunderHit changes.
+        apply(&mut m, &[(18, s::INT, Value::Int(1))]);
+        assert_eq!(m.extra.variant, 1);
+        apply(&mut m, &[(18, s::INT, Value::Int(0))]);
+        assert_eq!(m.extra.variant, 0);
     }
 
     #[test]

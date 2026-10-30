@@ -8571,6 +8571,52 @@ CHECKS += ['dig_sounds']
 CHECK_FNS['dig_sounds'] = check_dig_sounds
 
 
+def mooshroom_types(game, centre):
+    """The colour (0 red, 1 brown) this side draws for each mooshroom around `centre`, by column."""
+    return {round(m['pos'][0] - centre[0]): m['variant'] for m in game.raw('mobs', 32).get('near', [])
+            if m['kind'] == 'minecraft:mooshroom' and abs(m['pos'][2] - centre[2] - 6) < 2}
+
+
+def check_mooshroom(host, guest, out):
+    """MushroomCow.DATA_TYPE, entry 18 after AgeableMob's DATA_BABY_ID and AGE_LOCKED, reaches both
+    clients (#3236): a mooshroom summoned brown is drawn brown, and a red one a bolt strikes
+    (MushroomCow.thunderHit) turns brown on the guest's screen too."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    centre = (x + 0.5, y, z + 0.5)
+    sides = {'host': host, 'guest': guest}
+    seen = {}
+    # 12 blocks apart, so one bolt (3 blocks of reach) strikes only the red one, on stone with
+    # nothing around (no fire).
+    host('command', command=f'fill {x - 8} {y - 1} {z + 3} {x + 8} {y - 1} {z + 9} minecraft:stone')
+    host('command', command=f'fill {x - 8} {y} {z + 3} {x + 8} {y + 4} {z + 9} minecraft:air')
+    try:
+        host('command', command=f'summon minecraft:mooshroom {x - 5.5} {y} {z + 6.5} {{NoAI:1b,Type:"brown"}}')
+        host('command', command=f'summon minecraft:mooshroom {x + 6.5} {y} {z + 6.5} {{NoAI:1b,Type:"red"}}')
+        host.wait(20)
+        for g in sides.values():
+            g.raw('look-at', centre[0], y + 1, z + 6.5)
+        seen['spawned'] = {name: mooshroom_types(g, centre) for name, g in sides.items()}
+        host('command', command=f'summon minecraft:lightning_bolt {x + 6.5} {y} {z + 6.5}')
+        guest.until(lambda: mooshroom_types(guest, centre), lambda t: t.get(6) == 1, ticks=40)
+        host.wait(5)
+        seen['struck'] = {name: mooshroom_types(g, centre) for name, g in sides.items()}
+        seen['server'] = host('command', command=f'data get entity @e[type=minecraft:mooshroom,x={x + 6.5},'
+                                                  f'y={y},z={z + 6.5},distance=..1,limit=1] Type')['chat'][-1]
+        guest.shot(out, 'mooshroom')
+    finally:
+        host('command', command=f'kill @e[type=minecraft:mooshroom,x={x - 8},y={y - 1},z={z + 3},dx=16,dy=6,dz=6]')
+        host('command', command=f'fill {x - 8} {y} {z + 3} {x + 8} {y + 4} {z + 9} minecraft:air')
+    for name in sides:
+        assert seen['spawned'][name] == {-6: 1, 6: 0}, f'{name}: brown and red at the summon: {seen}'
+        assert seen['struck'][name] == {-6: 1, 6: 1}, f'{name}: the struck one turned brown: {seen}'
+    assert '"brown"' in seen['server'], f'the server has the struck one brown: {seen}'
+    return seen
+
+
+CHECKS += ['mooshroom']
+CHECK_FNS['mooshroom'] = check_mooshroom
+
+
 def check_shulker_menu(host, guest, out):
     """A shulker box opens a ShulkerBoxMenu (ShulkerBoxBlockEntity.createMenu), whose ShulkerBoxSlots
     refuse shulker boxes. The server opened it as a 9x3 chest menu, which took them."""
