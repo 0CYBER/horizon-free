@@ -35,6 +35,10 @@ pub struct EntityMemory {
     /// the dragon): the UUID and compound they were loaded with, found again by
     /// type and position (an entity that has moved since loading is saved afresh).
     anon: HashMap<(String, [u64; 3]), (Vec3, Option<[i32; 4]>, Tag)>,
+    /// UUIDs of the vehicles `restore_saved_vehicle` brought in from the
+    /// player's file: their chunk copies must not spawn a second one. Cleared
+    /// with the rest when a world closes.
+    restored: HashSet<[i32; 4]>,
 }
 
 fn anon_key(kind: &str, p: Vec3) -> (String, [u64; 3]) {
@@ -249,7 +253,7 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
-                if uuid.is_some_and(|u| self.vehicle_by_uuid(u).is_some()) {
+                if uuid.is_some_and(|u| self.restored_vehicle(u).is_some()) {
                     continue;
                 }
                 if matches!(
@@ -475,7 +479,7 @@ impl Game<'_> {
     /// A saved mob and, under `Passengers`, the mobs riding it.
     pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
         let uuid = entity_nbt::uuid(&tag);
-        if let Some(id) = uuid.and_then(|u| self.vehicle_by_uuid(u)) {
+        if let Some(id) = uuid.and_then(|u| self.restored_vehicle(u)) {
             return Some(id);
         }
         self.next_entity += 1;
@@ -667,6 +671,14 @@ impl Game<'_> {
             || self.carts.iter().any(|c| c.id == id);
         there.then_some(id)
     }
+    /// A vehicle already in the world that was restored from the player's file
+    /// during this load (not any entity whose UUID is remembered).
+    fn restored_vehicle(&self, uuid: [i32; 4]) -> Option<u32> {
+        if !self.persist.restored.contains(&uuid) {
+            return None;
+        }
+        self.vehicle_by_uuid(uuid)
+    }
     /// Vanilla stores the root entity in the player's file, outside chunk entities.
     /// Keep the raw wrapper until attachment succeeds, including unsupported trees.
     pub(super) fn restore_saved_vehicle(
@@ -692,9 +704,11 @@ impl Game<'_> {
                 (at.x.floor() as i32).div_euclid(16),
                 (at.z.floor() as i32).div_euclid(16),
             );
+            self.persist.restored.insert(root_uuid);
             self.world.loaded_entities.push((key, vec![tag]));
             self.spawn_loaded_entities();
         }
+        self.persist.restored.insert(uuid);
         self.vehicle_by_uuid(uuid)
     }
     /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
