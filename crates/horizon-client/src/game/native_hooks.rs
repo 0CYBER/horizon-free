@@ -39,11 +39,12 @@ use horizon_client::{
     extras_hud::Corners,
     fast_hash::FxHashMap,
     hud::{HudBatch, rgba},
+    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
-use horizon_core::position::BlockPos;
+use horizon_core::{geometry::Direction, position::BlockPos};
 use horizon_world::{level::flags, nbt::Compound};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -51,7 +52,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 8;
+pub(crate) const NATIVE_HOOKS_API: u32 = 9;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -75,16 +76,23 @@ pub(crate) struct NativeMinimap {
     pub(crate) round: bool,
 }
 
-/// A mod block's screen over its menu (`native_screen`): its height (176
-/// wide, as vanilla's container screens), where each of the container's
-/// slots is (`Slot.x`, `Slot.y`; none hides the slot, and so do slots past
-/// the list), and the player inventory's first row (vanilla's is 84; the
-/// hotbar is 58 below it), from its top left.
+/// A mod block's screen over its menu (`native_screen`): its size, where
+/// each of the container's slots is (`Slot.x`, `Slot.y`; none hides the
+/// slot, and so do slots past the list), and the player inventory's first
+/// row (vanilla's is 84; the hotbar is 58 below it) and left column, from
+/// its top left.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativeScreen {
+    /// Vanilla's container screens are 176 wide.
+    pub width: f32,
     pub height: f32,
     pub slots: Vec<Option<[f32; 2]>>,
     pub inventory_y: f32,
+    /// The inventory's left column (vanilla's is 8).
+    pub inventory_x: f32,
+    /// The mod draws the title and the "Inventory" label itself
+    /// (`native_screen_draw`); Horizon leaves them out.
+    pub own_labels: bool,
 }
 
 /// The mod screen open on this client: the block it is for, the key its
@@ -452,6 +460,45 @@ impl Game<'_> {
     ) {
         let _ = (block, data, batch, origin);
     }
+    /// A left or right (`right`) press at `at` (GUI pixels from the screen's
+    /// top left, so outside it too) on block `block`'s screen, a mod's, over
+    /// no slot: set `button` to a menu button id when it is on one of yours.
+    /// Horizon sends it to the server (`ContainerButtonClick`,
+    /// `native_menu_button` there) and the press goes no further. API 9.
+    pub(super) fn native_screen_click(
+        &self,
+        block: &str,
+        data: &[i32],
+        at: [f32; 2],
+        right: bool,
+        button: &mut Option<i32>,
+    ) {
+        let _ = (block, data, at, right, button);
+    }
+    /// The tooltip at `at` (as in `native_screen_click`) on block `block`'s
+    /// screen, a mod's, over no item: push its lines when it is over
+    /// something of yours. Legacy colour codes (§) work. API 9.
+    pub(super) fn native_screen_tooltip(
+        &self,
+        block: &str,
+        data: &[i32],
+        at: [f32; 2],
+        lines: &mut Vec<String>,
+    ) {
+        let _ = (block, data, at, lines);
+    }
+    /// A player pressed menu button `id` on the menu of the mod block entity
+    /// at `pos` (`AbstractContainerMenu.clickMenuButton`), on the server:
+    /// change `entity` when its id is yours. It is out of the world during
+    /// the call, as in `native_block_entity_tick`. API 9.
+    pub(super) fn native_menu_button(
+        &mut self,
+        pos: [i32; 3],
+        entity: &mut ModBlockEntity,
+        id: i32,
+    ) {
+        let _ = (pos, entity, id);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -566,6 +613,56 @@ impl Game<'_> {
         r.v1 = r.v0 + src[3] * dv;
         batch.rect_uv(dst[0], dst[1], dst[2], dst[3], r, u32::MAX);
         true
+    }
+    /// Item `item`'s icon (`mymod:machine`) with its top left at `at`,
+    /// `size` GUI pixels square (16 in a slot); false for an unknown item.
+    /// API 9.
+    pub(super) fn native_item(
+        &self,
+        batch: &mut HudBatch,
+        item: &str,
+        at: [f32; 2],
+        size: f32,
+    ) -> bool {
+        if self.res.items().get(item).is_none() {
+            return false;
+        }
+        let start = batch.vertices.len();
+        self.draw_item_model(batch, &ItemStack::new(item, 1), at[0], at[1]);
+        batch.scale_since(start, at[0], at[1], size / 16.0, size / 16.0);
+        true
+    }
+    /// The open menu's title (the block's name, or the one it was given),
+    /// as plain text. API 9.
+    pub(super) fn native_screen_title(&self) -> Option<String> {
+        self.remote_menu_title().map(|t| t.plain())
+    }
+    /// Property `key` of the block at `pos` (a machine's `facing`), if it
+    /// has one. API 9.
+    pub(super) fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.pack
+            .assets
+            .registry
+            .state(state)?
+            .properties
+            .get(key)
+            .cloned()
+    }
+    /// Puts `stack` into the container at `pos` (a chest, a furnace, a mod
+    /// container) through its side `face`, as a hopper would, and returns
+    /// what did not fit: a machine's auto-output. API 9.
+    pub(super) fn native_insert_item(
+        &mut self,
+        pos: [i32; 3],
+        face: Direction,
+        stack: ItemStack,
+    ) -> Option<ItemStack> {
+        self.insert_into_container((pos[0], pos[1], pos[2]), stack, face)
+    }
+    /// Where the mouse is, in GUI pixels. API 9.
+    pub(super) fn native_cursor(&self) -> [f32; 2] {
+        [self.cursor.0, self.cursor.1]
     }
     /// The size of sprite `name` in its own pixels, if there is one. API 8.
     pub(super) fn native_sprite_size(&self, name: &str) -> Option<[f32; 2]> {
@@ -868,6 +965,14 @@ impl Game<'_> {
     pub(super) fn native_screen_inventory_y(&self) -> Option<f32> {
         self.shown_native_screen().map(|s| s.screen.inventory_y)
     }
+    /// The open mod screen's inventory's left column.
+    pub(super) fn native_screen_inventory_x(&self) -> Option<f32> {
+        self.shown_native_screen().map(|s| s.screen.inventory_x)
+    }
+    /// The open mod screen's width.
+    pub(super) fn native_screen_width(&self) -> Option<f32> {
+        self.shown_native_screen().map(|s| s.screen.width)
+    }
     /// The open mod screen: a plain panel with its slots' frames, the mod's
     /// drawing over it, then the title and the inventory's label. False when
     /// none is showing.
@@ -876,7 +981,7 @@ impl Game<'_> {
             return false;
         };
         let atlas = &self.gui.atlas;
-        let (w, h) = (176.0, s.screen.height);
+        let (w, h) = (s.screen.width, s.screen.height);
         batch.fill(atlas, ox, oy, w, h, rgba(0, 0, 0, 255));
         batch.fill(
             atlas,
@@ -909,6 +1014,9 @@ impl Game<'_> {
             );
         }
         self.native_screen_draw(&s.block, &s.data, batch, [ox, oy]);
+        if s.screen.own_labels {
+            return true;
+        }
         let grey = rgba(64, 64, 64, 255);
         if let Some(title) = self.remote_menu_title() {
             batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
@@ -942,6 +1050,16 @@ impl Game<'_> {
             taken.nbt.insert("Items".into(), items);
         }
         self.native_block_entity_tick([pos.0, pos.1, pos.2], &mut taken);
+        self.put_back_mod_block_entity(pos, taken, &items);
+    }
+    /// Puts back a mod block entity taken out for a call, unless the call
+    /// removed or replaced it, with what its `setChanged` does.
+    fn put_back_mod_block_entity(
+        &mut self,
+        pos: Pos,
+        taken: ModBlockEntity,
+        items: &[Option<ItemStack>],
+    ) {
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
             && m.id.is_empty()
         {
@@ -954,6 +1072,77 @@ impl Game<'_> {
                 self.container_changed(pos);
             }
         }
+    }
+    /// Menu button `id` on the mod container at `pos` (`clickMenuButton`).
+    pub(super) fn mod_menu_button(&mut self, pos: Pos, id: i32) {
+        if self.mod_menu_at(pos).is_none() {
+            return;
+        }
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) else {
+            return;
+        };
+        if m.id.is_empty() {
+            return;
+        }
+        let mut taken = std::mem::take(&mut **m);
+        let items = taken.items.clone();
+        self.native_menu_button([pos.0, pos.1, pos.2], &mut taken, id);
+        self.put_back_mod_block_entity(pos, taken, &items);
+    }
+    /// The cursor from the open mod screen's top left, with its block and
+    /// data, for its press and tooltip hooks.
+    fn native_screen_at(&self) -> Option<(String, Vec<i32>, [f32; 2])> {
+        let s = self.shown_native_screen()?;
+        let r = self.renderer.as_ref()?;
+        let batch = HudBatch::new([r.config.width, r.config.height]);
+        let (ox, oy) = self.inventory_origin(&batch);
+        let at = [self.cursor.0 - ox, self.cursor.1 - oy];
+        Some((s.block.clone(), s.data.clone(), at))
+    }
+    /// A press on the open mod screen's own button (`native_screen_click`)
+    /// goes to the server as a menu button click (true).
+    pub(super) fn native_screen_press(&mut self, right: bool) -> bool {
+        if self.inventory_target().0.is_some() {
+            return false;
+        }
+        let Some((block, data, at)) = self.native_screen_at() else {
+            return false;
+        };
+        let mut button = None;
+        self.native_screen_click(&block, &data, at, right, &mut button);
+        let Some(button) = button else {
+            return false;
+        };
+        let window = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.menu.as_ref())
+            .map(|(w, _)| *w);
+        if let Some(container) = window {
+            self.send(
+                horizon_protocol::packets::play::Serverbound::ContainerButtonClick(
+                    horizon_protocol::packets::play::ContainerButtonClick { container, button },
+                ),
+            );
+        }
+        self.audio.play_button_click();
+        true
+    }
+    /// The open mod screen's tooltip under the cursor (`native_screen_tooltip`).
+    pub(super) fn draw_native_screen_tooltip(&self, batch: &mut HudBatch) {
+        if self.carried.is_some() || self.slot_at(batch, self.cursor.0, self.cursor.1).is_some() {
+            return;
+        }
+        let Some((block, data, at)) = self.native_screen_at() else {
+            return;
+        };
+        let mut lines = Vec::new();
+        self.native_screen_tooltip(&block, &data, at, &mut lines);
+        let lines: Vec<(horizon_client::text::Text, u32)> = lines
+            .into_iter()
+            .map(|l| (horizon_client::text::Text::literal(l), u32::MAX))
+            .collect();
+        self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
     }
     /// Options > Mods' rows for the native mods, after the others.
     pub(super) fn list_native_mods(&mut self) {

@@ -6686,7 +6686,8 @@ impl Game<'_> {
         if self.screen == Screen::Creative {
             return Self::creative_origin(batch);
         }
-        let (x, y) = batch.centered_origin(176.0, self.screen_height());
+        let width = self.native_screen_width().unwrap_or(176.0);
+        let (x, y) = batch.centered_origin(width, self.screen_height());
         (x + self.recipe_book_shift(batch.width), y)
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
@@ -6777,10 +6778,11 @@ impl Game<'_> {
             (Some(rows), None) => 1.0 + (rows as f32 - 3.0) * 18.0,
             (None, None) => 0.0,
         };
+        let inventory_x = self.native_screen_inventory_x().unwrap_or(8.0);
         match i {
-            0..9 => (8.0 + i as f32 * 18.0, 142.0 + shift),
+            0..9 => (inventory_x + i as f32 * 18.0, 142.0 + shift),
             9..36 => (
-                8.0 + ((i - 9) % 9) as f32 * 18.0,
+                inventory_x + ((i - 9) % 9) as f32 * 18.0,
                 84.0 + shift + ((i - 9) / 9) as f32 * 18.0,
             ),
             500..504 => (8.0, 8.0 + (i - 500) as f32 * 18.0),
@@ -7066,6 +7068,7 @@ impl Game<'_> {
         }
         self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
+        self.draw_native_screen_tooltip(batch);
         if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
@@ -7817,6 +7820,10 @@ impl Game<'_> {
         if !right && self.sort_press() {
             return;
         }
+        if self.native_screen_press(right) {
+            self.inv_clicks.skip_release();
+            return;
+        }
         let (slot, outside) = self.inventory_target();
         let shift = self.has_shift_down();
         let target = Target::of(slot, outside);
@@ -8022,7 +8029,7 @@ impl Game<'_> {
             let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
                 Some(stations::Kind::Merchant) => (-50.0, 276),
                 Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
-                _ => (0.0, 176),
+                _ => (0.0, self.native_screen_width().map_or(176, |w| w as i32)),
             };
             (shift, width, self.screen_height() as i32)
         };

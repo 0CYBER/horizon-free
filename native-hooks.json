@@ -94,6 +94,21 @@
       "name": "screen_draw",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_draw"
+    },
+    {
+      "name": "screen_click",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_click"
+    },
+    {
+      "name": "screen_tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_tooltip"
+    },
+    {
+      "name": "menu_button",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_button"
     }
   ]
 }
