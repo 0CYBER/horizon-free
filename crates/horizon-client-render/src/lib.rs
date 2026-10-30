@@ -71,6 +71,7 @@ pub mod signs;
 pub mod skins;
 pub mod sound_engine;
 pub mod sound_events;
+pub mod sound_preview;
 pub mod spans;
 pub mod split_layout;
 mod sprite_cache;

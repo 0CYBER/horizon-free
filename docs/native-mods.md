@@ -39,12 +39,32 @@ the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
 
+API 11 adds `GameLevel::native_send_particles` on authoritative servers. It sends supported
+vanilla particles to nearby players. Block particles require a valid block state. Item, trail and
+vibration particles are not supported by the current dispatch. Count zero sends one directional
+particle. The return value says whether the call was accepted, not whether any player received it. Bundles that use it need `"hooks": 11`.
+
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
-API 4 adds item tooltips through `native_tooltip`: the hovered stack, with its components, and its tooltip's
+API 4 adds authoritative server tick events through `native_server_tick`: start (before any level ticks, like NeoForge's `ServerTickEvent.Pre`) and end of each non-paused
+server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
+use these events need `"hooks": 4`.
+
+API 8 adds server commands and players: `native_register_commands` (the commands a mod adds to every player's
+command tree) and `native_perform_command` (a player's command on the server), with helpers to answer
+([Server commands and players](#server-commands-and-players)). Bundles that use them need `"hooks": 8`.
+
+API 9 adds the acting player's plain items for server mods (count, take, give; [Server commands and
+players](#server-commands-and-players)). Bundles that use them need `"hooks": 9`.
+
+API 10 adds server menus: a vanilla chest menu a server mod opens and fills, whose clicks and closing reach the mod
+(`native_menu_clicked`, `native_menu_closed`), and `native_exchange_items`, two players' stacks swapped in one checked
+step ([Server menus](#server-menus)). Bundles that use them need `"hooks": 10`.
+
+API 12 adds item tooltips through `native_tooltip`: the hovered stack, with its components, and its tooltip's
 lines, which a mod can add to, change or take out of, wherever the game shows an item's tooltip. Bundles that use it
-need `"hooks": 4`.
+need `"hooks": 12`.
 
 ## What the launcher does
 
@@ -158,3 +178,65 @@ Keep an existing contract or add a new version when it changes incompatibly.
 The catalog does not cover helper methods or arbitrary private game code.
 Named injection resolution needs a matching horizon-mixins change; existing raw
 targets and the `hooks` metadata continue to work as before.
+
+### Reading server blocks (draft)
+
+A native server tick hook can call `native_server_block` with its context, a dimension id and a block position. It returns the block name and state properties from a loaded chunk. It does not load a chunk or open a dimension. Reads outside that hook, from a stale context, from unavailable dimensions or outside the world bounds return an error.
+
+### Neighbour observations (draft)
+
+`native_neighbor_changed` observes each authoritative server `neighborChanged` before the block handles it. It supplies the dimension, position, current state ID, changed block ID and moved flag. Resolve IDs with the level's registries during the hook; the hook does not load chunks or change the update queue.
+
+### Server block changes (draft)
+
+`native_block_changed` observes a committed authoritative server `Level.setBlock` change before block side effects and neighbour updates. It supplies the dimension, position and old and new state IDs. It does not observe chunk loading or direct storage writes that bypass `Level.setBlock`.
+
+### Server commands and players
+
+For mods that run where the world is simulated: a dedicated server, a LAN host, single player's server thread
+(`crates/horizon-client/src/game/native_server.rs`). The SMP mod of the official server is built on them
+([smp.md](smp.md)).
+
+- **`native_register_commands(commands)`**: push a `NativeCommand` per usage, asked once when a world opens to
+  players. A usage is words, then arguments `<name:kind>`, optional ones last in brackets:
+  `NativeCommand::new("pay <player:player> <amount:integer>")`, `NativeCommand::op("eco set <player:player>
+  <amount:integer>", 3)` for operators of level 3. Kinds: `word`, `text` (the rest of the line, last), `integer`,
+  `number`, `boolean`, `player`, `item`, `block_pos`. The usages of one command merge into one tree, which every
+  player receives after vanilla's (filtered by their level, as vanilla's is), so their chat box completes and colours
+  it. A name vanilla has, or a usage that doesn't parse, is left out with a warning in the log.
+- **`native_perform_command(player, command, ran)`**: a player typed a registered command (without its slash) and
+  their level allows it, whether the world allows commands or not. The mod parses the line and sets `ran`. The
+  player's state is swapped in for the call, as for their other actions, so `native_player` reads them; a
+  registered command no mod takes answers as vanilla's unknown command.
+- Helpers: `native_server_players()` (uuid, name, level, dimension, position and game mode of each player on);
+  `native_tell(uuid, text)`, a system line to one player; `native_broadcast(text)`, to every player and the server's
+  log; `native_feedback(text)`, the command's answer to the player whose command it is; `native_world_dir()`, the
+  open world's folder, where a server mod keeps its data in a folder of its own so the world's backups carry it.
+- Items (API 9), of the acting player (inside `native_perform_command`, whose player is swapped in): `native_held()`
+  (the main hand's item, count, and whether it is plain), `native_count_items(item)`, `native_carried_items()`,
+  `native_take_items(item, count)` (the main hand first, then as `Inventory.add` orders slots),
+  `native_room_for(item)` and `native_give_items(item, count)` (only where it fits: nothing is dropped). They look at
+  the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
+  component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
+  many it counted, took or gave; the player's screen follows as for any change to their inventory.
+
+### Server menus
+
+API 10, `crates/horizon-client/src/game/native_menus.rs`: menus a server mod builds from ordinary items, which a
+stock client shows as a chest (`generic_9x1` to `generic_9x6`); nothing is installed on the player's side.
+
+- `native_open_menu(uuid, rows, title, items)` opens one in place of the player's open menu (its window id);
+  `native_set_menu_items(uuid, items)` changes what it shows; `native_close_menu(uuid)` closes it.
+- **No click moves anything.** Each reaches `native_menu_clicked(uuid, window, slot, button, mode)`, and the client
+  is sent the menu, its inventory and its cursor as they were. `slot` counts the menu's own slots first, then the
+  player's inventory below it: `native_menu_inventory_slot(size, slot)` gives the inventory slot (0..9 the hotbar).
+- `native_menu_closed(uuid, window)`: the player closed it, another menu opened, or the player left.
+- `native_player_stacks(uuid)`: the player's 36 inventory slots, to show copies or offer them.
+- `native_exchange_items(a, a_offer, b, b_offer)`: each offer is inventory slots, each with the exact stack it must
+  still hold. Both offers leave their slots and go to the other player where they fit whole (onto matching stacks,
+  then empty slots), or nothing moves and the error says why (an offer that changed, no room, a player gone or
+  dead). A trade on these menus leaves the offered stacks in their owners' inventories until this one step, so
+  closing the menu, leaving or dying moves nothing.
+
+The menu hooks run with no player's state swapped in; `native_player_stacks` and `native_exchange_items` refuse a
+player whose state is (inside `native_perform_command`): call them from a menu hook or `native_server_tick`.

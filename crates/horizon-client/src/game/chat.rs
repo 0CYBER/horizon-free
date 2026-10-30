@@ -12,6 +12,7 @@ use horizon_client::{
     screen_draw::Measure,
     text::{ClickEvent, Style, Text},
 };
+use horizon_world::registry::{BlockRegistry, BlockStateId};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -162,6 +163,61 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
     ids
 }
 
+/// Every block's properties and their values, as `/setblock` completes them.
+type BlockProperties = BTreeMap<String, Vec<(String, Vec<String>)>>;
+static BLOCK_PROPERTIES: Mutex<Vec<(usize, Arc<BlockProperties>)>> = Mutex::new(Vec::new());
+
+/// `BlockProperties` of a block registry, listed once: a registry never
+/// changes once built, and walking its tens of thousands of states took
+/// about 30 ms of every world opening.
+fn block_properties(registry: &'static BlockRegistry) -> Arc<BlockProperties> {
+    let key = std::ptr::from_ref(registry) as usize;
+    let mut cache = BLOCK_PROPERTIES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, properties)) = cache.iter().find(|(cached, _)| *cached == key) {
+        return properties.clone();
+    }
+    let mut blocks: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    for id in 0..registry.len() {
+        let Some(state) = registry.state(BlockStateId(id as u32)) else {
+            continue;
+        };
+        let props = blocks.entry(state.name.clone()).or_default();
+        for (k, v) in &state.properties {
+            let values = props.entry(k.clone()).or_default();
+            if !values.contains(v) {
+                values.push(v.clone());
+            }
+        }
+    }
+    let properties: Arc<BlockProperties> = Arc::new(
+        blocks
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect(),
+    );
+    cache.push((key, properties.clone()));
+    properties
+}
+
+static COMMAND_EXPORTS: Mutex<Vec<(PathBuf, Option<Arc<serde_json::Value>>)>> =
+    Mutex::new(Vec::new());
+
+/// A folder's `command-registries.json` (vanilla's built-in registries),
+/// read once like the resource ids: parsing its 1.6 MB again took about
+/// 15 ms of every world opening.
+fn command_export(dir: &Path) -> Option<Arc<serde_json::Value>> {
+    let mut cache = COMMAND_EXPORTS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, export)) = cache.iter().find(|(cached, _)| cached == dir) {
+        return export.clone();
+    }
+    let export = std::fs::read(dir.join("command-registries.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .map(Arc::new);
+    cache.push((dir.to_owned(), export.clone()));
+    export
+}
+
 /// The `minecraft:` ids of the `extension` files under `root`, sorted.
 fn ids_under(root: &Path, extension: &str) -> Vec<String> {
     ids_in(root, extension, "minecraft")
@@ -306,25 +362,7 @@ impl Game<'_> {
             .map(|k| horizon_client::command::args::normalize(k))
             .collect();
         reg.block_tags.sort();
-        let registry = self.pack.assets.registry;
-        let mut blocks: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
-        for id in 0..registry.len() {
-            let Some(state) = registry.state(horizon_world::registry::BlockStateId(id as u32))
-            else {
-                continue;
-            };
-            let props = blocks.entry(state.name.clone()).or_default();
-            for (k, v) in &state.properties {
-                let values = props.entry(k.clone()).or_default();
-                if !values.contains(v) {
-                    values.push(v.clone());
-                }
-            }
-        }
-        reg.blocks = blocks
-            .into_iter()
-            .map(|(k, v)| (k, v.into_iter().collect()))
-            .collect();
+        reg.blocks = BlockProperties::clone(&block_properties(self.pack.assets.registry));
         let mut summonable: Vec<String> = self
             .res
             .mob_types()
@@ -438,10 +476,8 @@ impl Game<'_> {
         }
         // Vanilla's built-in registries (mob effects, components, dialogs...).
         for dir in [&self.options.resources, &self.ui.vanilla_root] {
-            if let Ok(bytes) = std::fs::read(dir.join("command-registries.json"))
-                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            {
-                self.ui.registries.fill_from_export(&v);
+            if let Some(export) = command_export(dir) {
+                self.ui.registries.fill_from_export(&export);
                 break;
             }
         }
@@ -474,6 +510,7 @@ impl Game<'_> {
         if let Some(names) = self.remote_online_names() {
             self.ui.registries.players = names;
         }
+        self.ui.registries.custom_completions = self.remote_custom_completions();
     }
     /// `ChatComponent.createScreen`: T or / opens the chat with the draft kept
     /// last time, when this method can restore it (a command draft only for
@@ -978,6 +1015,41 @@ impl Game<'_> {
             .chat
             .draw(batch, &self.gui.atlas, self.ticks, focused);
     }
+    /// `HoverEvent.EntityTooltipInfo.getTooltipLines`: the name when the
+    /// event has one, the entity type and the UUID.
+    fn entity_tooltip_lines(entity: &serde_json::Value) -> Vec<(Text, u32)> {
+        let mut lines = Vec::new();
+        if let Some(name) = entity.get("name") {
+            let name = horizon_client::component::to_text(name, &mut |s| Text::literal(s));
+            lines.push((name, u32::MAX));
+        }
+        let id = entity
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let kind = Text::translate(&format!("entity.{}", id.replace(':', ".")), &[]);
+        lines.push((
+            Text::translate("gui.entity_tooltip.type", &[kind]),
+            u32::MAX,
+        ));
+        if let Some(uuid) = entity.get("uuid").and_then(Self::entity_uuid) {
+            lines.push((Text::literal(uuid), u32::MAX));
+        }
+        lines
+    }
+    /// The UUID of a ShowEntity event: its string, or the int array
+    /// `UUIDUtil.CODEC` writes (most significant word first).
+    fn entity_uuid(v: &serde_json::Value) -> Option<String> {
+        if let Some(s) = v.as_str() {
+            return Some(s.to_owned());
+        }
+        let words = v.as_array().filter(|w| w.len() == 4)?;
+        let mut bits = 0u128;
+        for w in words {
+            bits = (bits << 32) | u128::from(w.as_i64()? as u32);
+        }
+        Some(horizon_protocol::crypto::uuid_string(bits))
+    }
     pub(super) fn draw_chat_screen(&mut self, batch: &mut HudBatch) {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
@@ -1028,6 +1100,13 @@ impl Game<'_> {
         let (cx, cy) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
         let wrap = (batch.width as i32 / 2).max(200);
         if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
+            // DrawingFocusedGraphicsAccess.handleMessage: the pointing hand over
+            // insertion text, which ChatScreen only asks for while Shift is held.
+            if style.insertion.is_some() && self.has_shift_down() {
+                horizon_client::widgets::request_cursor(
+                    horizon_client::widgets::Cursor::PointingHand,
+                );
+            }
             if let Some(hover) = style.hover {
                 let lines = self.wrapped_rows(&hover, wrap);
                 self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
@@ -1038,6 +1117,14 @@ impl Game<'_> {
                 .filter(|s| self.items().get(&s.item).is_some())
             {
                 self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            } else if let Some(entity) = style
+                .hover_entity
+                .as_deref()
+                .filter(|_| self.settings.file.bool("advancedItemTooltips"))
+            {
+                // ChatScreen: a ShowEntity tooltip only with advanced tooltips on.
+                let lines = Self::entity_tooltip_lines(entity);
+                self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
             }
         } else if self.ui.chat.indicator_at(height, cx, cy) {
             // GuiMessageTag.systemSinglePlayer's text, split at 210.
@@ -1204,7 +1291,7 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
-        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let below_world = p.position.y < f64::from(self.world.bottom_y() - 64);
         let name = self.player_display_text();
         let message = match cause {
             Some(key) => Text::translate(&key, &[name]),
@@ -1343,5 +1430,19 @@ mod tests {
         std::fs::write(recipe.join("c.json"), "{}").unwrap();
         assert!(Arc::ptr_eq(&first, &resource_ids(&root)));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The export is read once per folder; a folder without one stays without.
+    #[test]
+    fn command_exports_are_read_once_per_folder() {
+        let dir = std::env::temp_dir().join(format!("horizon-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("command-registries.json"), r#"{"effects":["a"]}"#).unwrap();
+        let first = command_export(&dir).unwrap();
+        assert_eq!(first["effects"][0], "a");
+        std::fs::write(dir.join("command-registries.json"), "{}").unwrap();
+        assert!(Arc::ptr_eq(&first, &command_export(&dir).unwrap()));
+        assert!(command_export(&dir.join("missing")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

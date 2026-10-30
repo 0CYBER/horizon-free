@@ -118,6 +118,27 @@ impl TextDisplayData {
         });
         out
     }
+}
+
+/// `Display.updateCulling`: either edge at 0 sets `noCulling`, so the renderer
+/// skips the frustum box (`DisplayRenderer.affectedByCulling`).
+pub fn no_culling(width: f32, height: f32) -> bool {
+    width == 0.0 || height == 0.0
+}
+
+/// `Display.updateCulling` / `getInterpolatedBoundingBox` at an interpolated
+/// origin: the AABB from `(x − width/2, y, z − width/2)` to
+/// `(x + width/2, y + height, z + width/2)`.
+pub fn culling_box(origin: glam::DVec3, width: f32, height: f32) -> (glam::DVec3, glam::DVec3) {
+    let half = f64::from(width) * 0.5;
+    let tall = f64::from(height);
+    (
+        glam::DVec3::new(origin.x - half, origin.y, origin.z - half),
+        glam::DVec3::new(origin.x + half, origin.y + tall, origin.z + half),
+    )
+}
+
+impl TextDisplayData {
     /// Omitted fields retain their previous values.
     pub fn apply(&mut self, values: &[(u8, i32, Value)]) {
         for (id, _, value) in values {
@@ -454,5 +475,22 @@ mod tests {
         assert_eq!(d.line_width, 80);
         assert_eq!(d.align(), Align::Left);
         assert_eq!(d.translation, [0.0; 3]);
+    }
+
+    /// `Display.updateCulling`: width or height 0 disables the frustum box.
+    #[test]
+    fn zero_width_or_height_disables_display_culling() {
+        assert!(no_culling(0.0, 1.0));
+        assert!(no_culling(2.0, 0.0));
+        assert!(no_culling(0.0, 0.0));
+        assert!(!no_culling(2.0, 1.0));
+    }
+
+    /// `Display.updateCulling`: the box is width-centred on XZ and rises by height.
+    #[test]
+    fn display_culling_box_is_centred_on_xz_and_stands_on_y() {
+        let (lo, hi) = culling_box(glam::DVec3::new(10.0, 64.0, -3.0), 2.0, 1.0);
+        assert_eq!(lo, glam::DVec3::new(9.0, 64.0, -4.0));
+        assert_eq!(hi, glam::DVec3::new(11.0, 65.0, -2.0));
     }
 }

@@ -3,7 +3,8 @@ use super::{
     Mob, MobEvent, MobWorld, Species,
     control::Operation,
     goals::{
-        Avoid, AvoidEntity, Breed, Cx, Float, Goal, LookAtPlayer, Panic, Stroll, Tempt, goal_clone,
+        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, LookAtPlayer, Panic,
+        Stroll, Tempt, goal_clone,
     },
 };
 use horizon_core::{
@@ -23,8 +24,7 @@ const CLIENT_JUMP_DURATION: usize = 5;
 /// The killer bunny's variant id (`Rabbit.Variant.EVIL`).
 const EVIL: u8 = 99;
 
-/// Rabbit.registerGoals. Not ported yet: ClimbOnTopOfPowderSnowGoal (1) and
-/// RaidGardenGoal (5).
+/// Rabbit.registerGoals. Not ported yet: RaidGardenGoal (5).
 pub fn register(m: &mut Mob) {
     let food = m.kind.food.clone();
     let monsters = super::species::ALL
@@ -34,6 +34,7 @@ pub fn register(m: &mut Mob) {
         .collect::<Vec<Species>>();
     let g = &mut m.ai.goals;
     g.add(1, Float);
+    g.add(1, ClimbOnTopOfPowderSnow);
     g.add(1, Panic::new(2.2));
     g.add(2, Breed::new(0.8));
     g.add(3, Tempt::new(1.0, food, false));

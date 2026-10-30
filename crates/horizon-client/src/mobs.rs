@@ -20,7 +20,9 @@ pub mod brain;
 pub mod breeze;
 pub mod camel;
 pub mod caravan;
+pub mod combat;
 pub mod control;
+pub mod conversion;
 pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
@@ -44,6 +46,7 @@ pub mod happy_ghast;
 pub mod hostile;
 pub mod illager;
 pub mod illusioner;
+pub mod item_break;
 pub mod keyframes;
 pub mod leash;
 pub mod living;
@@ -566,6 +569,8 @@ pub enum DamageKind {
     Stalagmite,
     /// `starve`: no food left.
     Starve,
+    /// `hot_floor`: stepping on a magma block.
+    HotFloor,
     /// `sulfur_cube_hot`: a sulfur cube's hot floor (a fire).
     SulfurCubeHot,
     /// `wind_charge`: a wind charge's burst (a projectile).
@@ -691,6 +696,7 @@ impl Damage {
             DamageKind::OnFire
                 | DamageKind::InFire
                 | DamageKind::Campfire
+                | DamageKind::HotFloor
                 | DamageKind::Lava
                 | DamageKind::Fireball
                 | DamageKind::SulfurCubeHot
@@ -705,6 +711,7 @@ impl Damage {
                 | DamageKind::OnFire
                 | DamageKind::InFire
                 | DamageKind::Campfire
+                | DamageKind::HotFloor
                 | DamageKind::Lava
                 | DamageKind::Drown
                 | DamageKind::DryOut
@@ -875,6 +882,10 @@ pub struct Extra {
     pub swing_stab: bool,
     pub flag: bool,
     pub flag2: bool,
+    /// `AbstractHorse.allowStandSliding`: the rider's jump sets it, and a
+    /// horse still rearing then goes on with the rider's keys until the rear
+    /// ends (`tick` clears it).
+    pub stand_sliding: bool,
     /// Species scratch values (the wither's head targets and clocks).
     pub ints: [i32; 6],
     pub counter: i32,
@@ -1076,6 +1087,8 @@ pub struct Mob {
     pub air: i32,
     pub last_hurt: f32,
     pub last_damage: Option<(Damage, i64)>,
+    /// `LivingEntity.combatTracker`: the hits taken lately.
+    pub combat: combat::Tracker,
     /// Set by `remove`: the mob disappears without dying (conversion, despawn, pickup).
     pub removed: bool,
     /// Client-side animation clocks (attack swing, eating, shaking...).
@@ -1303,6 +1316,15 @@ pub enum MobEvent {
         amount: f32,
         source: Damage,
     },
+    /// `AbstractCubeMob.dealDamage` on a mob (an iron golem it touches): the
+    /// hit, then, only when `hurtServer` let it land, the cube's
+    /// `entity.slime.attack` with its pitch drawn from the cube's random.
+    CubeHurtMob {
+        cube: u32,
+        target: u32,
+        amount: f32,
+        source: Damage,
+    },
     /// `LivingEntity.stabAttack`'s `target.stopRiding()`: a spear knocks the
     /// target off its mount.
     StabDismount {
@@ -1349,6 +1371,14 @@ pub enum MobEvent {
         kind: String,
         at: [f64; 3],
         setup: SpawnSetup,
+    },
+    /// `Mob.convertTo` with `ConversionType.SINGLE` ([`conversion::single`]):
+    /// a new mob of `kind` takes the place of `from` (already removed) and
+    /// keeps its gear, name and flags.
+    Convert {
+        from: Box<Mob>,
+        kind: &'static str,
+        params: conversion::Params,
     },
     DropItem {
         item: Arc<str>,
@@ -1610,6 +1640,13 @@ pub enum MobEvent {
     /// `Panda.afterSneeze`: the grown pandas within 10 blocks start.
     PandaSneezed {
         mob: u32,
+    },
+    /// `Entity.propagateFallToPassengers`: the mob landed and what rides it
+    /// (a player or a mob) takes `causeFallDamage` of the same fall.
+    FallToPassengers {
+        mob: u32,
+        distance: f64,
+        modifier: f32,
     },
 }
 /// How a spawned-by-kind mob should be set up.
@@ -2169,6 +2206,7 @@ impl Mob {
             air: 300,
             last_hurt: 0.0,
             last_damage: None,
+            combat: combat::Tracker::default(),
             removed: false,
             custom_name: None,
             custom_name_text: None,
@@ -2236,6 +2274,17 @@ impl Mob {
                 position.z + w,
             ),
         )
+    }
+    /// `CombatTracker.recordDamage`: a hit that took `damage` health, with
+    /// the fall it ends.
+    pub fn record_damage(&mut self, source: Damage, damage: f32) {
+        let entry = combat::Entry {
+            source,
+            damage,
+            in_water: self.fluids.in_water,
+            fall_distance: self.fall_distance as f32,
+        };
+        self.combat.record(entry, self.age);
     }
     pub fn alive(&self) -> bool {
         self.health > 0.0
@@ -2384,7 +2433,7 @@ impl Mob {
         // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
         let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
-        if self.invulnerable as f32 > 10.0 {
+        let dealt = if self.invulnerable as f32 > 10.0 {
             if amount <= self.last_hurt {
                 return false;
             }
@@ -2396,6 +2445,7 @@ impl Mob {
             }
             self.last_hurt = amount;
             knock = false;
+            dealt
         } else {
             self.last_hurt = amount;
             self.invulnerable = 20;
@@ -2405,6 +2455,13 @@ impl Mob {
                 self.health -= amount;
             }
             self.hurt_time = 10;
+            amount
+        };
+        // LivingEntity.actuallyHurt: a hit that reaches the health is
+        // recorded (`CombatTracker.recordDamage`), with the fall it ends;
+        // Wolf.actuallyHurt keeps a hit its armor takes out of it.
+        if !absorbed && dealt != 0.0 {
+            self.record_damage(source, dealt);
         }
         // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
         if drops::is_animal(self.species()) {
@@ -2568,6 +2625,9 @@ impl Mob {
         level_random: &mut LegacyRandom,
         events: &mut Vec<MobEvent>,
     ) -> bool {
+        // LivingEntity.tick: CombatTracker.recheckStatus.
+        let alive = self.alive();
+        self.combat.recheck(alive, self.age);
         ai::tick(self, w, level_random, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {

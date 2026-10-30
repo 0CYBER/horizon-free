@@ -154,7 +154,23 @@ pub fn register(m: &mut Mob) {
             g.add(5, LookAtPlayer::new(6.0));
             g.add(5, super::dolphin::Jump::new(10));
             g.add(6, MeleeAttack::new(1.2, true));
-            m.ai.targets.add(1, HurtByTarget::new().alert());
+            // `Dolphin.registerGoals`: AvoidEntityGoal(Guardian.class, 8, 1, 1).
+            g.add(
+                9,
+                AvoidEntity::new(
+                    Avoid::Species(vec![S::Guardian, S::ElderGuardian]),
+                    8.0,
+                    1.0,
+                    1.0,
+                ),
+            );
+            // `HurtByTargetGoal(this, Guardian.class)`: guardians' hits are ignored.
+            m.ai.targets.add(
+                1,
+                HurtByTarget::new()
+                    .alert()
+                    .ignoring(&[S::Guardian, S::ElderGuardian]),
+            );
             m.ai.mov.kind = MoveKind::SmoothSwimming {
                 max_turn_x: 85.0,
                 max_turn_y: 10.0,

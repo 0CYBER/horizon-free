@@ -34,6 +34,8 @@ struct Mock {
     pulls: Vec<Value>,
     /// The account the next sign-in gets.
     login: String,
+    /// GitHub takes this long to find the staging release.
+    slow: Option<std::time::Duration>,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -84,6 +86,10 @@ async fn mock_github() -> (String, Shared) {
         .route(
             "/repos/o/r/releases/tags/staging",
             get(|State(s): State<Shared>| async move {
+                let slow = s.lock().unwrap().slow;
+                if let Some(slow) = slow {
+                    tokio::time::sleep(slow).await;
+                }
                 let names: Vec<Value> = s.lock().unwrap().assets.iter().map(|(n, _)| json!({"name": n})).collect();
                 Json(json!({"id": 42, "assets": names}))
             }),
@@ -259,23 +265,29 @@ fn form() -> Value {
 }
 
 async fn setup() -> (Client, Shared) {
+    setup_with(|_| {}).await
+}
+
+async fn setup_with(change: impl FnOnce(&mut github::GitHub)) -> (Client, Shared) {
     let (base, mock) = mock_github().await;
     let scratch =
         std::env::temp_dir().join(format!("horizon-mod-registry-test-{}", std::process::id()));
+    let mut github = github::GitHub::new(
+        github::Endpoints {
+            web: base.clone(),
+            api: base.clone(),
+            uploads: base,
+        },
+        "o/r".into(),
+        "client".into(),
+        "secret".into(),
+        "bot".into(),
+    );
+    change(&mut github);
     let config = Config {
         public_url: PUBLIC.into(),
         session_key: b"a test key of at least thirty-two bytes".to_vec(),
-        github: github::GitHub::new(
-            github::Endpoints {
-                web: base.clone(),
-                api: base.clone(),
-                uploads: base,
-            },
-            "o/r".into(),
-            "client".into(),
-            "secret".into(),
-            "bot".into(),
-        ),
+        github,
         scratch,
         database: ":memory:".into(),
     };
@@ -383,6 +395,13 @@ async fn what_the_form_refuses() {
     );
     let (status, ..) = client.send(request).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    // Too big: past the file's own limit, and past the whole body's.
+    let max = horizon_mods::index::MAX_FILE as usize;
+    for size in [max + 1, max + (200 << 10)] {
+        let (status, json) = client.submit(&csrf, &form(), &vec![0; size]).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{size}: {json}");
+        refused(status, &json, "the file is over 64 MiB");
+    }
     let m = mock.lock().unwrap();
     assert!(
         m.assets.is_empty() && m.pulls.is_empty(),
@@ -480,4 +499,51 @@ async fn ratings() {
         (last, _) = client.rate(&csrf, "zoom", r#"{"stars": 3}"#).await;
     }
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_github_is_named() {
+    let (mut client, mock) =
+        setup_with(|gh| gh.call_timeout = std::time::Duration::from_millis(300)).await;
+    mock.lock().unwrap().slow = Some(std::time::Duration::from_secs(3));
+    let file = std::fs::read(fixtures().join("coords_hud-0.1.0.hmod")).unwrap();
+    let csrf = client.sign_in().await;
+    let (status, json) = client.submit(&csrf, &form(), &file).await;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{json}");
+    assert_eq!(
+        json["error"],
+        "GitHub is slow right now: try again in a few minutes"
+    );
+}
+
+/// Over a real connection: a submission refused before its body is read
+/// still gets its answer once the browser has sent the whole file, instead
+/// of a connection closed mid-upload (the form's "the service didn't answer").
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_waits_for_the_upload() {
+    use std::io::{Read, Write};
+    let (client, _mock) = setup().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, client.app).await.unwrap() });
+    let answer = tokio::task::spawn_blocking(move || {
+        let size = 16 << 20;
+        let mut stream = std::net::TcpStream::connect(at).unwrap();
+        write!(
+            stream,
+            "POST /api/mods/submit HTTP/1.1\r\nHost: x\r\nConnection: close\r\nOrigin: {PUBLIC}\r\nContent-Type: multipart/form-data; boundary=x\r\nContent-Length: {size}\r\n\r\n"
+        )
+        .unwrap();
+        let chunk = vec![0u8; 64 << 10];
+        for _ in 0..size / chunk.len() {
+            stream.write_all(&chunk).expect("the whole file is read");
+        }
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        answer
+    })
+    .await
+    .unwrap();
+    assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
+    assert!(answer.contains("{\"error\":"), "{answer}");
 }

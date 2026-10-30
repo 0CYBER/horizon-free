@@ -202,6 +202,7 @@ impl Server {
             tick_steps: (0, 0),
             collision: None,
             border: &horizon_client::worldborder::WorldBorder::default(),
+            streaming: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -256,6 +257,7 @@ fn server(resources: &Path) -> Server {
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
+            levels: Default::default(),
         },
     );
     Server {
@@ -328,7 +330,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 );
             }
             let mut saved = horizon_client::save::Level::default();
-            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved);
+            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved, None);
             let mut reopened = horizon_client::save::Level::default();
             reopened.read_player(&saved.player_tag());
             assert_eq!(reopened.recipe_book.open, settings.open);
@@ -735,6 +737,7 @@ fn guests_see_each_other_and_the_world_entities() {
         precise: false,
         needs_sync: false,
         leash: None,
+        spectator: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
@@ -923,4 +926,73 @@ fn a_spectators_container_click_is_taken_back() {
     );
     assert!(s.hub.guests[0].carried.is_none());
     run(&mut s, move || content(&mut bot));
+}
+
+/// `/fillbiome` on a server: `ChunkMap.resendBiomesForChunks` sends each
+/// player the new biomes of the columns it has been sent, and only those,
+/// in a `ClientboundChunksBiomesPacket` the client reads section by section.
+#[test]
+fn changed_biomes_reach_the_players_that_see_the_column() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let bot = run(&mut s, move || connect(port, "Gardener", true));
+    // The column at the spawn arrives, with the batch that holds it.
+    let mut bot = run(&mut s, move || {
+        let mut bot = bot;
+        let mut seen = false;
+        loop {
+            match bot.recv_play()? {
+                C::PlayerPosition(p) => {
+                    bot.send(S::AcceptTeleportation(play::AcceptTeleportation {
+                        id: p.teleport,
+                        x: p.position[0],
+                        y: p.position[1],
+                        z: p.position[2],
+                        yaw: 0.0,
+                        pitch: 0.0,
+                    }))
+                }
+                C::LevelChunkWithLight(l) if (l.x, l.z) == (0, 0) => seen = true,
+                C::ChunkBatchFinished(_) => {
+                    bot.send(S::ChunkBatchReceived(play::ChunkBatchReceived {
+                        chunks_per_tick: 20.0,
+                    }));
+                    if seen {
+                        return Ok(bot);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    assert!(s.hub.guests[0].sent_chunks.contains(&(0, 0)));
+    assert!(!s.hub.guests[0].sent_chunks.contains(&(4, 4)));
+    for key in [(0, 0), (4, 4)] {
+        let chunk = Arc::make_mut(s.world.chunks.get_mut(&key).unwrap());
+        // The quart cell at x 4..8, y 4..8, z 8..12 of the column.
+        chunk.set_biome_cell(1, 17, 2, 5);
+    }
+    s.hub.resend_biomes(&s.world, &[(0, 0), (4, 4)]);
+    let packet = run(&mut s, move || {
+        loop {
+            if let C::ChunksBiomes(p) = bot.recv_play()? {
+                return Ok(p);
+            }
+        }
+    });
+    assert_eq!(packet.chunks.len(), 1, "only the column the player sees");
+    assert_eq!(packet.chunks[0].pos, [0, 0]);
+    let sections = packet.chunks[0].biomes(24, 7).unwrap();
+    // Section 4 (y 0..16), cell (x 1, y 1, z 2).
+    assert_eq!(sections[4].get(1 << 4 | 2 << 2 | 1), 5);
+    assert_eq!(sections[4].get(0), 0);
+    assert!(
+        sections
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 4 || b.get(25) == 0)
+    );
 }
