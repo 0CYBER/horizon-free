@@ -300,6 +300,15 @@ def scenarios():
     add('bee_hive_rain', 300, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 162 persistent'], 'rain')
     add('bee_hive_morning', 1000, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 163 persistent'], 'time=22900 daycycle')
     add('bee_hive_honey', 2600, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 164 persistent nectar'])
+    # Parrots (#3091): FlyingMoveControl(10, false) and FlyingPathNavigation. ParrotWanderGoal flies
+    # to the top of a tree (an empty block over leaves or a log), and a parrot in the air glides
+    # down (calculateFlapping). On Peaceful: Parrot.getAmbient's 1-in-1000 imitation roll is the
+    # level's random there, which the probe doesn't share.
+    TREE = ['fill 4 -60 4 4 -56 4 minecraft:oak_log', 'fill 2 -55 2 6 -55 6 minecraft:oak_leaves[persistent=true]']
+    for i, seed in enumerate([181, 182]):
+        add(f'parrot_alone_{i}', 400, [f'mob minecraft:parrot 0.5 -60 0.5 {90 * i} {seed} persistent'], 'difficulty=0')
+    add('parrot_tree', 400, TREE + ['mob minecraft:parrot 0.5 -60 0.5 0 183 persistent'], 'difficulty=0')
+    add('parrot_falling', 100, ['mob minecraft:parrot 0.5 -50 0.5 0 184 persistent'], 'difficulty=0')
     # A wolf the player hits (#3185, #2820): any wolf with a target is angry (the angry texture):
     # NeutralMob.updatePersistentAnger in Wolf.aiStep restarts the 20-39 s timer, one random draw,
     # every tick it has one, not once when hurt.
@@ -317,6 +326,7 @@ def scenarios():
         + [f'hurt {t} 0' for t in range(10, 190, 25)])
     # A zombified piglin runs Zombie.registerGoals too (the turtle egg goal draws its start delay).
     add('zombified_piglin_player', 120, ['player 7.5 -60 0.5', 'mob minecraft:zombified_piglin 0.5 -60 0.5 0 241 persistent'])
+    add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])
     # Chickens fleeing a hit (PanicGoal) beside a pool.
     for seed in range(191, 193):
         add(f'chicken_panic_{seed}', 60, ['fill -3 -61 -6 3 -61 6 minecraft:water',
