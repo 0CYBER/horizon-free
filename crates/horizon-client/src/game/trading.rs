@@ -837,21 +837,14 @@ impl Game<'_> {
         // Slots, hover highlight, carried stack, tooltip.
         let slots: Vec<usize> = (0..36).chain([INPUT, INPUT + 1, RESULT]).collect();
         let drag = self.drag_view();
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in slots {
             let (sx, sy) = self.slot_position(i);
             let stack = self.slot_mut(i).clone();
             self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
             if self.carried.is_none() && tooltip.is_none() {
                 tooltip = self.slot_mut(slot).clone();
             }

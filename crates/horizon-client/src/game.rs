@@ -7204,6 +7204,39 @@ impl Game<'_> {
             x >= ox + sx && x < ox + sx + 16.0 && y >= oy + sy && y < oy + sy + 16.0
         })
     }
+    /// `AbstractContainerScreen.extractSlotHighlightBack` and `Front`: the
+    /// 24 x 24 `container/slot_highlight_back` sprite behind the slot at
+    /// `x`, `y` (its 16 x 16 item box), the `_front` one over its item.
+    fn draw_slot_highlight(&self, batch: &mut HudBatch, front: bool, x: f32, y: f32) {
+        let sprite = if front {
+            "gui/sprites/container/slot_highlight_front"
+        } else {
+            "gui/sprites/container/slot_highlight_back"
+        };
+        horizon_client::ui::blit_sprite(
+            batch,
+            &self.gui.atlas,
+            sprite,
+            x - 4.0,
+            y - 4.0,
+            24.0,
+            24.0,
+            u32::MAX,
+        );
+    }
+    /// The highlight of the slot under the cursor, for the screens whose
+    /// slots all sit in `slot_at`'s grid. `Slot.isHighlightable` is false
+    /// for the crafter's result (`NonInteractiveResultSlot`).
+    fn draw_hovered_slot_highlight(&self, batch: &mut HudBatch, front: bool, ox: f32, oy: f32) {
+        let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {
+            return;
+        };
+        if slot == 309 && matches!(self.container_kind(), Some(BlockEntity::Crafter(_))) {
+            return;
+        }
+        let (sx, sy) = self.slot_position(slot);
+        self.draw_slot_highlight(batch, front, ox + sx, oy + sy);
+    }
     fn slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
         if i >= mount_menu::SADDLE {
             return self.mount_slot_mut(i);
@@ -7431,20 +7464,11 @@ impl Game<'_> {
         if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         self.draw_inventory_slots(batch, ox, oy);
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
         self.draw_sort_buttons(batch, ox, oy);
         self.draw_recipe_book(batch);
-        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
-        }
         self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
         if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
@@ -12244,29 +12268,17 @@ impl Game<'_> {
                 20.0,
                 0.0625,
             );
+            let trash = Self::creative_trash_hovered(batch, self.cursor);
+            let (tx, ty) = Creative::TRASH_POSITION;
+            if trash {
+                self.draw_slot_highlight(batch, false, ox + tx, oy + ty);
+            }
+            self.draw_hovered_slot_highlight(batch, false, ox, oy);
             self.draw_inventory_slots(batch, ox, oy);
-            if Self::creative_trash_hovered(batch, self.cursor) {
-                let (x, y) = Creative::TRASH_POSITION;
-                batch.fill(
-                    &self.gui.atlas,
-                    ox + x,
-                    oy + y,
-                    16.0,
-                    16.0,
-                    rgba(255, 255, 255, 128),
-                );
+            if trash {
+                self.draw_slot_highlight(batch, true, ox + tx, oy + ty);
             }
-            if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-                let (x, y) = self.slot_position(slot);
-                batch.fill(
-                    &self.gui.atlas,
-                    ox + x,
-                    oy + y,
-                    16.0,
-                    16.0,
-                    rgba(255, 255, 255, 128),
-                );
-            }
+            self.draw_hovered_slot_highlight(batch, true, ox, oy);
         } else {
             let items = self.creative_screen.items(&self.pack.names);
             let first = self.creative_screen.first_row(&self.pack.names);
@@ -12276,13 +12288,16 @@ impl Game<'_> {
                         continue;
                     };
                     let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                    self.draw_item(batch, stack, x, y);
-                    if self.cursor.0 >= x
+                    let over = self.cursor.0 >= x
                         && self.cursor.0 < x + 16.0
                         && self.cursor.1 >= y
-                        && self.cursor.1 < y + 16.0
-                    {
-                        batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                        && self.cursor.1 < y + 16.0;
+                    if over {
+                        self.draw_slot_highlight(batch, false, x, y);
+                    }
+                    self.draw_item(batch, stack, x, y);
+                    if over {
+                        self.draw_slot_highlight(batch, true, x, y);
                         hovered = Some((stack.clone(), true));
                     }
                 }
@@ -12290,13 +12305,16 @@ impl Game<'_> {
             let drag = self.drag_view();
             for c in 0..9 {
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
-                self.draw_slot_item(batch, drag.as_ref(), c, &self.inventory[c], x, y);
-                if self.cursor.0 >= x
+                let over = self.cursor.0 >= x
                     && self.cursor.0 < x + 16.0
                     && self.cursor.1 >= y
-                    && self.cursor.1 < y + 16.0
-                {
-                    batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                    && self.cursor.1 < y + 16.0;
+                if over {
+                    self.draw_slot_highlight(batch, false, x, y);
+                }
+                self.draw_slot_item(batch, drag.as_ref(), c, &self.inventory[c], x, y);
+                if over {
+                    self.draw_slot_highlight(batch, true, x, y);
                     hovered = self.inventory[c].clone().map(|s| (s, false));
                 }
             }

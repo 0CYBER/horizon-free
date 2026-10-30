@@ -1708,6 +1708,7 @@ impl Game<'_> {
             self.draw_anvil_name(batch, ox, oy);
         }
         let drag = self.drag_view();
+        self.draw_hovered_slot_highlight(batch, false, ox, oy);
         for i in self.station_slots().unwrap_or_default() {
             let Some((sx, sy)) = self.slot_position_any(i) else {
                 continue;
@@ -1715,16 +1716,8 @@ impl Game<'_> {
             let stack = self.slot_mut(i).clone();
             self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
+        self.draw_hovered_slot_highlight(batch, true, ox, oy);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
             if self.carried.is_none()
                 && tooltip.is_none()
                 && tooltip_stack.is_none()
