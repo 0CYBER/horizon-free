@@ -3557,7 +3557,8 @@ def check_rocket_walls(host, guest, out):
 
     FireworkRocketEntity.onHitBlock: `hasExplosion()`; a plain one flies on to its lifetime (20-31 ticks). A
     dispenser shoots at an angle as a crossbow does, at a wall three blocks away (about 7 ticks of flight). The
-    host counts the rocket every tick in one ctl process, so how long it lived doesn't depend on the CLI's speed.
+    host samples its status in one ctl process; a rocket's span is the client ticks between the first and the
+    last sample that saw it, never more than it lived, and short of it by at most two gaps between samples.
     """
     x, y, z = (int(v // 1) for v in pos_of(host))
     y += 3
@@ -3573,13 +3574,17 @@ def check_rocket_walls(host, guest, out):
         host.wait(5)
         replies = host.script([f'command setblock {x} {y + 1} {z} minecraft:redstone_block']
                               + ['wait 1', 'status'] * 45, every=True)
-        counts = [r['rockets'] for r in replies if 'rockets' in r]
-        result[label] = {'ticks_seen': sum(1 for n in counts if n), 'last': counts[-1],
-                         'guest_last': guest('status')['rockets']}
+        samples = [(r['ticks'], r['rockets']) for r in replies if 'rockets' in r]
+        seen = [tick for tick, n in samples if n]
+        result[label] = {'span': seen[-1] - seen[0] if seen else None, 'samples': len(samples),
+                         'last': samples[-1][1], 'guest_last': guest('status')['rockets']}
     host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
-    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()),         f'a rocket outlived its lifetime: {result}'
-    assert result['plain']['ticks_seen'] >= 18, f'plain rocket went off on the wall: {result}'
-    assert 0 < result['star']['ticks_seen'] < 15, f'star rocket did not explode on the wall: {result}'
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
+        f'a rocket outlived its lifetime: {result}')
+    # A plain rocket lives 20-31 ticks; one with explosions is gone at the wall.
+    assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the wall: {result}'
+    assert result['star']['span'] is not None and result['star']['span'] < 14, (
+        f'star rocket did not explode on the wall: {result}')
     return result
 
 
