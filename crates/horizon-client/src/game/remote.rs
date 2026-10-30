@@ -1624,6 +1624,7 @@ impl Game<'_> {
         // copy in the mob list draws nothing: given the move, it kept the
         // dragon where it spawned (#2083).
         let dragon = self.dragon.as_ref().is_some_and(|d| d.id as i32 == id);
+        let driven = self.driven_mount().is_some_and(|m| m.id as i32 == id);
         let mob = self
             .mobs
             .iter_mut()
@@ -1646,6 +1647,13 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             if let Some(t) = r.entities.get_mut(&id) {
                 t.position = position;
+            }
+            if driven {
+                // handleMoveEntity, handleEntityPositionSync: the mount this
+                // client moves (isLocalInstanceAuthoritative) keeps its own
+                // position, and no steps pile up for after the ride.
+                r.stepped.remove(&id);
+                return;
             }
             if let Some(m) = mob {
                 // A living entity: LivingEntity.createInterpolationHandler's
@@ -2291,6 +2299,11 @@ impl Game<'_> {
                     p.on_ground,
                     false,
                 );
+                // handleTeleportEntity: the mount this client moves is put
+                // there at once.
+                if self.driven_mount().is_some_and(|m| m.id as i32 == p.id) {
+                    self.remote_move_vehicle(position, p.yaw);
+                }
             }
             C::SetPassengers(p) => self.remote_set_passengers(p.vehicle, &p.passengers),
             // ClientPacketListener.handleEntityLinkPacket: who holds a mob's
