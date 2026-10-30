@@ -20,6 +20,7 @@ pub mod brain;
 pub mod breeze;
 pub mod camel;
 pub mod caravan;
+pub mod combat;
 pub mod control;
 pub mod conversion;
 pub mod copper_golem;
@@ -1086,6 +1087,8 @@ pub struct Mob {
     pub air: i32,
     pub last_hurt: f32,
     pub last_damage: Option<(Damage, i64)>,
+    /// `LivingEntity.combatTracker`: the hits taken lately.
+    pub combat: combat::Tracker,
     /// Set by `remove`: the mob disappears without dying (conversion, despawn, pickup).
     pub removed: bool,
     /// Client-side animation clocks (attack swing, eating, shaking...).
@@ -2203,6 +2206,7 @@ impl Mob {
             air: 300,
             last_hurt: 0.0,
             last_damage: None,
+            combat: combat::Tracker::default(),
             removed: false,
             custom_name: None,
             custom_name_text: None,
@@ -2270,6 +2274,17 @@ impl Mob {
                 position.z + w,
             ),
         )
+    }
+    /// `CombatTracker.recordDamage`: a hit that took `damage` health, with
+    /// the fall it ends.
+    pub fn record_damage(&mut self, source: Damage, damage: f32) {
+        let entry = combat::Entry {
+            source,
+            damage,
+            in_water: self.fluids.in_water,
+            fall_distance: self.fall_distance as f32,
+        };
+        self.combat.record(entry, self.age);
     }
     pub fn alive(&self) -> bool {
         self.health > 0.0
@@ -2418,7 +2433,7 @@ impl Mob {
         // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
         let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
-        if self.invulnerable as f32 > 10.0 {
+        let dealt = if self.invulnerable as f32 > 10.0 {
             if amount <= self.last_hurt {
                 return false;
             }
@@ -2430,6 +2445,7 @@ impl Mob {
             }
             self.last_hurt = amount;
             knock = false;
+            dealt
         } else {
             self.last_hurt = amount;
             self.invulnerable = 20;
@@ -2439,6 +2455,13 @@ impl Mob {
                 self.health -= amount;
             }
             self.hurt_time = 10;
+            amount
+        };
+        // LivingEntity.actuallyHurt: a hit that reaches the health is
+        // recorded (`CombatTracker.recordDamage`), with the fall it ends;
+        // Wolf.actuallyHurt keeps a hit its armor takes out of it.
+        if !absorbed && dealt != 0.0 {
+            self.record_damage(source, dealt);
         }
         // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
         if drops::is_animal(self.species()) {
@@ -2602,6 +2625,9 @@ impl Mob {
         level_random: &mut LegacyRandom,
         events: &mut Vec<MobEvent>,
     ) -> bool {
+        // LivingEntity.tick: CombatTracker.recheckStatus.
+        let alive = self.alive();
+        self.combat.recheck(alive, self.age);
         ai::tick(self, w, level_random, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {

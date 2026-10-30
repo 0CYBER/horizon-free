@@ -301,6 +301,7 @@ Needs the prepared resources in .local/horizon-client. On Linux the games run on
 desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -9255,6 +9256,50 @@ def check_keys_released(host, guest, out):
 
 CHECKS += ['keys_released']
 CHECK_FNS['keys_released'] = check_keys_released
+
+
+def offline_uuid_ints(name):
+    """UUIDUtil.createOfflinePlayerUUID as the contents of an int-array UUID tag."""
+    digest = bytearray(hashlib.md5(f'OfflinePlayer:{name}'.encode()).digest())
+    digest[6] = digest[6] & 0x0f | 0x30
+    digest[8] = digest[8] & 0x3f | 0x80
+    return ','.join(str(int.from_bytes(digest[i:i + 4], 'big', signed=True)) for i in range(0, 16, 4))
+
+
+def check_pet_death(host, guest, out):
+    """TamableAnimal.die (#3514): with showDeathMessages, a tame pet's owner, and nobody else, hears how it
+    died (CombatTracker.getDeathMessage): the guest's wolf slain by a zombie, the host's cat killed."""
+    hx, hy, hz = pos_of(host)
+    tag = 'pet_death'
+    try:
+        host('command', command=f'summon minecraft:zombie {hx + 1.5:.2f} {hy:.2f} {hz - 2:.2f} '
+                                f'{{NoAI:1b,Silent:1b,Tags:["{tag}"]}}')
+        host('command', command=f'summon minecraft:wolf {hx - 1.5:.2f} {hy:.2f} {hz - 2:.2f} '
+                                f'{{CustomName:"Rex",NoAI:1b,Tags:["{tag}","rex"],'
+                                f'Owner:[I;{offline_uuid_ints(GUEST_NAME)}]}}')
+        host('command', command=f'summon minecraft:cat {hx:.2f} {hy:.2f} {hz - 3:.2f} '
+                                f'{{CustomName:"Tom",NoAI:1b,Tags:["{tag}","tom"],'
+                                f'Owner:[I;{offline_uuid_ints(host.player)}]}}')
+        host.wait(5)
+        host('command', command=f'damage @e[tag=rex,limit=1] 100 minecraft:mob_attack '
+                                f'by @e[type=minecraft:zombie,tag={tag},limit=1]')
+        host('command', command='kill @e[tag=tom]')
+        host.wait(20)
+        guest_chat = guest.raw('messages', 10)['chat']
+        host_chat = host.raw('messages', 10)['chat']
+        guest.shot(out, 'pet-death')
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+    seen = {'guest': guest_chat, 'host': host_chat}
+    assert 'Rex was slain by Zombie' in guest_chat, f"the wolf's owner was not told: {seen}"
+    assert 'Rex was slain by Zombie' not in host_chat, f"someone else's wolf was told to the host: {seen}"
+    assert 'Tom was killed' in host_chat, f"the cat's owner was not told: {seen}"
+    assert 'Tom was killed' not in guest_chat, f"someone else's cat was told to the guest: {seen}"
+    return seen
+
+
+CHECKS += ['pet_death']
+CHECK_FNS['pet_death'] = check_pet_death
 
 
 if __name__ == '__main__':
