@@ -164,6 +164,7 @@ mod names;
 mod native_hooks;
 mod native_lifecycle;
 mod native_menus;
+mod native_mobs;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;

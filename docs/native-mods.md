@@ -113,6 +113,9 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds [mobs](#mobs) for server mods: spawn one, read the mobs of the level in place, and move, hurt or remove one by its id.
+Bundles that use them need `"hooks": 23`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -323,6 +326,21 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`native_fill_bucket(stack, pos, canceled)`** and **`native_attack_entity(entity, kind, pos, canceled)`** (API 22):
   a player's bucket at a block, and their blow on an entity, with the acting player swapped in. Canceled, the bucket
   does nothing and the blow does no harm.
+
+### Mobs
+
+API 23, `crates/horizon-client/src/game/native_mobs.rs`: helpers for server mods, for the level in place, on a server only (on a
+client they do nothing).
+
+- `native_spawn_mob(kind, pos, &NativeSpawn)` spawns a mob and returns its id. `NativeSpawn` holds an optional name and health, and the
+  `no_ai`, `invisible`, `silent`, `invulnerable` and `no_gravity` flags; its default is a plain mob. The mob is finalized as a natural spawn
+  is, and kept when its chunk unloads.
+- `native_mob(id)` and `native_mobs()` read the living mobs: id, kind, position, yaw, health and maximum health.
+- `native_mob_teleport(id, pos)`, `native_mob_push(id, velocity)` and `native_mob_set_health(id, health)` change one, and answer false for
+  no such mob or a value that isn't finite. Health must be above 0.
+- `native_kill_mob(id)` kills as `/kill` does, with its loot; `native_remove_mob(id)` takes the mob away with no death and no loot.
+- While the game ticks its mobs they are out of the level: from a hook inside that tick, a spawned mob joins after the tick, and the others
+  read as gone.
 
 ### Server menus
 
