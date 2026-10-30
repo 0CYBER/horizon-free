@@ -1188,6 +1188,9 @@ pub struct OptionsUi {
     pub resource_error: Option<String>,
     /// When the pack screen's search box took the focus (its cursor blink).
     pack_focus: Instant,
+    /// The selection carried over from a pack screen made again over a changed pack list
+    /// (`update_pack_infos`) differs from the settings'.
+    pack_reselected: bool,
     pub in_world: bool,
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
@@ -1223,6 +1226,7 @@ impl Default for OptionsUi {
             data_pack_stamp: (Vec::new(), Instant::now()),
             resource_error: None,
             pack_focus: Instant::now(),
+            pack_reselected: false,
             in_world: false,
             center_language: false,
             graphics: Default::default(),
@@ -1307,6 +1311,23 @@ impl OptionsUi {
     fn settings_search_active(&self) -> bool {
         self.settings_search.focused
             && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
+    }
+    /// Whether the resource pack screen is open (not Create World's data packs on the same
+    /// page).
+    pub fn resource_packs_open(&self) -> bool {
+        self.page() == Page::Packs && self.data_pack_dir.is_none()
+    }
+    /// The packs in `resourcepacks/` changed while the pack screen is open
+    /// (`PackSelectionScreen`'s directory watcher): the screen is made again over
+    /// `infos`, keeping the selection made on it so far.
+    pub fn update_pack_infos(&mut self, infos: Vec<crate::pack_screen::PackInfo>) {
+        if let Some(p) = self.pack_screen.take()
+            && p.changed
+        {
+            self.pack_selection = p.commit();
+            self.pack_reselected = true;
+        }
+        self.pack_infos = infos;
     }
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
@@ -3036,7 +3057,7 @@ impl OptionsUi {
                 } else {
                     "resourcePack.title"
                 };
-                self.pack_screen = Some(crate::pack_screen::PackScreen::new(
+                let mut screen = crate::pack_screen::PackScreen::new(
                     &m,
                     crate::text::Text::translate(title, &[]),
                     w,
@@ -3044,7 +3065,9 @@ impl OptionsUi {
                     self.in_world,
                     self.pack_infos.clone(),
                     &self.pack_selection,
-                ));
+                );
+                screen.changed = std::mem::take(&mut self.pack_reselected);
+                self.pack_screen = Some(screen);
             }
         }
         self.pack_screen.as_mut().expect("made above")
