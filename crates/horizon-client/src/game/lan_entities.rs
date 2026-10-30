@@ -655,8 +655,12 @@ impl Game<'_> {
             if b.waiting() {
                 e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
             }
+            // The hub is out of `self.lan` while these states are built, so
+            // the particle must be encoded through the hub passed in: going
+            // through `network_particle` would drop it and leave the client
+            // on the default white particle.
             let particle = match &b.potion {
-                Some(p) => self.network_particle(&p.particle(), None),
+                Some(p) => Self::hub_particle(hub, &p.particle(), None),
                 None => breath.clone(),
             };
             if let Some(p) = &particle {
