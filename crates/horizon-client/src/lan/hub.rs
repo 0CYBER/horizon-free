@@ -181,6 +181,8 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// The anticheat, when `server.toml` turns it on (dedicated servers).
+    pub anticheat: Option<Box<super::anticheat::Anticheat>>,
     /// The `immediate_respawn` game rule, as the players were last told.
     immediate_respawn: bool,
     /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
@@ -375,6 +377,7 @@ impl Hub {
             ticks: 0,
             immediate_respawn: false,
             movement_checks: (true, true),
+            anticheat: None,
             singleplayer_owner: None,
             flat_world: false,
             riding: Default::default(),
@@ -1183,6 +1186,7 @@ impl Hub {
     /// packets queued for its own level's pass.
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
+        self.anticheat_tick(ctx.tick_rate);
         let mut events = Vec::new();
         for event in self.lan.poll() {
             match event {
@@ -2343,6 +2347,7 @@ impl Hub {
                         g.known_movement = [0.0; 3];
                     }
                     g.position_this_tick = false;
+                    self.anticheat_tick_end(i, events);
                 }
                 // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
                 S::RecipeBookChangeSettings(p) => {

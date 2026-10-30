@@ -146,6 +146,8 @@ pub struct Guest {
     /// A position move arrived since the client's last ClientTickEnd
     /// (receivedPositionThisTick): a second one is a protocol error.
     pub position_this_tick: bool,
+    /// Violation levels and the checks' state (the anticheat, when on).
+    pub anticheat: horizon_anticheat::Player,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -327,6 +329,7 @@ impl Guest {
             received_moves: 0,
             known_moves: 0,
             position_this_tick: false,
+            anticheat: Default::default(),
             moved: false,
             loaded: false,
             center: None,

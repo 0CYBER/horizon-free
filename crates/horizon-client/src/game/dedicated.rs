@@ -165,6 +165,29 @@ pub(super) fn player_joined(id: u128, name: &str) {
     }
 }
 
+/// `server.toml`'s `[anticheat]`, beside server.properties when horizon-server runs the game; off
+/// without the file or the section, or (with an error logged) when the section is wrong.
+fn load_anticheat() -> horizon_anticheat::Config {
+    let Ok(text) = std::fs::read_to_string("server.toml") else {
+        return Default::default();
+    };
+    match horizon_anticheat::Config::from_server_toml(&text) {
+        Ok(config) => {
+            if config.enabled {
+                log("INFO", "Anticheat on (server.toml [anticheat])");
+            }
+            config
+        }
+        Err(e) => {
+            log(
+                "ERROR",
+                &format!("server.toml: {e}; the anticheat stays off"),
+            );
+            Default::default()
+        }
+    }
+}
+
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
     log_from("Server thread", level, message);
@@ -785,7 +808,9 @@ impl Game<'_> {
             return Ok(());
         }
         self.sync_ops(&lists);
+        let anticheat = load_anticheat();
         if let Some(host) = self.lan.as_mut() {
+            host.hub.set_anticheat(anticheat);
             host.hub.spawn_protection = props.spawn_protection;
             host.hub.chat_spam_threshold = props.chat_spam_threshold_seconds.wrapping_mul(20);
             host.hub.command_spam_threshold = props.command_spam_threshold_seconds.wrapping_mul(20);
