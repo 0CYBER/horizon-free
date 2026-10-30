@@ -87,6 +87,10 @@ block use them as they use vanilla's containers, and `native_block_entity_tick` 
 API 17 adds menus for mod containers: the container names one of vanilla's slot-grid or furnace menus, which opens when the block is used,
 and `native_block_entity_tick` takes the whole block entity, with the data slots the menu shows. Bundles that use them need `"hooks": 17`.
 
+API 18 adds what a machine's tick reaches: `native_with_mod_block_entity` (change a neighbouring mod block entity, which marks its chunk
+and tells comparators when its items changed) and `native_set_block_property` (a property of the block's own state, through the level's
+normal update path). Bundles that use them need `"hooks": 18`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

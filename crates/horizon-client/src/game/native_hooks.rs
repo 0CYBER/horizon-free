@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 18 adds what a machine's tick reaches: a neighbouring mod block entity
+//! (`native_with_mod_block_entity`) and its own block's state
+//! (`native_set_block_property`).
+//!
 //! API 17 adds menus for mod containers (the `menu` of a `ModContainer`: vanilla
 //! slot grids and furnaces) and has `native_block_entity_tick` take the whole
 //! `ModBlockEntity`, with the menu's data slots.
@@ -82,15 +86,18 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::position::BlockPos;
-use horizon_world::nbt::Compound;
-use horizon_world::{level::BlockId, registry::BlockStateId};
+use horizon_world::{
+    level::{BlockId, flags},
+    nbt::Compound,
+    registry::BlockStateId,
+};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 17;
+pub(crate) const NATIVE_HOOKS_API: u32 = 18;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -638,6 +645,59 @@ impl Game<'_> {
     pub(super) fn native_on(&self, mod_id: &str) -> bool {
         !self.settings.mods.disabled.contains(mod_id)
     }
+    /// Sets property `key` of the block at `pos` to `value`, as a furnace's
+    /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
+    /// and clients are told); false when the block has no such property or
+    /// value. The block entity stays. API 18.
+    pub(super) fn native_set_block_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+    ) -> bool {
+        let registry = self.pack.assets.registry;
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let Some(mut s) = registry.state(state).cloned() else {
+            return false;
+        };
+        match s.properties.get(key) {
+            Some(v) if v == value => return true,
+            Some(_) => {}
+            None => return false,
+        }
+        s.properties.insert(key.into(), value.into());
+        let Ok(id) = registry.resolve(&s) else {
+            return false;
+        };
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags::UPDATE_ALL))
+    }
+    /// Runs `change` on the mod block entity at `pos` (a generator charging
+    /// the machine beside it) and returns what it returns; none for any
+    /// other block entity, and for the one ticking now, which is out of the
+    /// world. Afterwards, as its `setChanged` would, its chunk is saved next
+    /// time and, when its items changed, comparators read it again. API 18.
+    pub(super) fn native_with_mod_block_entity<R>(
+        &mut self,
+        pos: [i32; 3],
+        change: impl FnOnce(&mut ModBlockEntity) -> R,
+    ) -> Option<R> {
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
+            return None;
+        };
+        if m.id.is_empty() {
+            return None;
+        }
+        let items = m.items.clone();
+        let out = change(m);
+        let moved = m.items != items;
+        self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+        if moved {
+            self.container_changed(key);
+        }
+        Some(out)
+    }
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(super) fn native_playing(&self) -> bool {
         self.screen == Screen::Playing
@@ -896,6 +956,7 @@ impl Game<'_> {
         };
         // An empty id marks its place while the mod has it.
         let mut taken = std::mem::take(&mut **m);
+        let items = taken.items.clone();
         let state = self.world.block(pos.0, pos.1, pos.2).0;
         let slots = self
             .world
@@ -915,19 +976,24 @@ impl Game<'_> {
         if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos)
             && m.id.is_empty()
         {
+            let moved = taken.items != items;
             **m = taken;
-            // BlockEntity.setChanged: the next save writes its chunk.
+            // BlockEntity.setChanged: the next save writes its chunk, and
+            // comparators read a container whose items changed.
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+            if moved {
+                self.container_changed(pos);
+            }
         } else if taken.items.iter().any(Option::is_some) {
             // The mod removed or replaced its own block during the call. Vanilla
             // ticks it in the world and drops a container's contents on removal.
-            let items = std::mem::take(&mut taken.items);
+            let lost = std::mem::take(&mut taken.items);
             let at = BlockPos {
                 x: pos.0,
                 y: pos.1,
                 z: pos.2,
             };
-            self.with_level(|_, level, _| level.drop_lost_contents(at, items));
+            self.with_level(|_, level, _| level.drop_lost_contents(at, lost));
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
         }
     }
