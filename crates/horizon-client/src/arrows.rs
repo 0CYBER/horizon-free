@@ -664,7 +664,7 @@ impl Ticker<'_, '_, '_, '_> {
         if !self.st.first_tick && self.st.fluids.is_in_fluid(&Tags, LAVA) {
             self.st.fall_distance *= 0.5;
         }
-        if self.position().y < f64::from(crate::chunk::MIN_Y - 64) {
+        if self.position().y < f64::from(self.scene.world.bottom_y() - 64) {
             self.st.removed = true;
         }
         self.st.first_tick = false;
@@ -1159,10 +1159,10 @@ impl FluidInteractionWorld for Ticker<'_, '_, '_, '_> {
         Ok(self.scene.world.chunks.contains_key(&(x, z)).then_some(()))
     }
     fn chunk_sections(&mut self, _: ()) -> Result<FluidSections<'_>, Error> {
-        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        let layout = self.scene.world.layout();
         Ok(FluidSections {
-            minimum_section_y: crate::chunk::MIN_Y >> 4,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() >> 4,
+            has_fluid: crate::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {

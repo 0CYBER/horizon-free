@@ -362,7 +362,7 @@ impl Hub {
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
         let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
+        encoder.set_dimension(level_shape(&d));
         Self {
             lan,
             config,
@@ -1213,6 +1213,26 @@ impl Hub {
                         );
                     }
                 }
+            }
+        }
+        // keepConnectionAlive's timeout, checked once a second here, not on
+        // the writer thread: a client that stops reading blocks that thread
+        // and would hold its slot forever. Kicked, it gets the reason; still
+        // here a second later, its connection is closed under the writer.
+        if self.ticks.is_multiple_of(20) {
+            for g in &self.guests {
+                if !g.left_reason.is_empty() && g.sender.timed_out() {
+                    g.sender.close();
+                }
+            }
+            let silent: Vec<u32> = self
+                .guests
+                .iter()
+                .filter(|g| g.left_reason.is_empty() && g.sender.timed_out())
+                .map(|g| g.conn)
+                .collect();
+            for conn in silent {
+                self.kick(conn, translatable("disconnect.timeout", &[]));
             }
         }
         events
@@ -2759,8 +2779,7 @@ impl Hub {
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
         let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder
-            .set_dimension(d.min_y, d.height, d.has_skylight);
+        self.encoder.set_dimension(level_shape(&d));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
@@ -2948,6 +2967,16 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
         shared |= -128;
     }
     shared
+}
+
+/// The shape a level of the dimension type `d` has.
+fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
+    crate::chunk::LevelShape {
+        sky_light: d.has_skylight,
+        min_y: d.min_y,
+        height: d.height,
+        logical_height: d.height,
+    }
 }
 
 #[cfg(test)]

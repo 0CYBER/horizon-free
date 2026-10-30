@@ -255,7 +255,6 @@ use horizon_client::{
     audio::Audio,
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
-    chunk::{HEIGHT, MIN_Y},
     clock::FixedStep,
     collisions,
     containers::{BlockEntity, Providers},
@@ -297,8 +296,9 @@ use horizon_world::{
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     entity_obstruction::{EntityIdentity, EntityObstructionWorld, ObstructionEntity},
     level::{
-        Behaviours, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess, LevelEvent,
-        PlaceContext, PlaceOutcome, PlayerContext, PlayerEffect, Ticks, flags as level_flags,
+        Behaviours, BucketContent, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess,
+        LevelEvent, PlaceContext, PlaceOutcome, PlayerContext, PlayerEffect, Ticks,
+        flags as level_flags,
     },
     registry::BlockStateId,
 };
@@ -997,7 +997,10 @@ impl LevelAccess for GameLevel<'_> {
         self.world.block(pos.x, pos.y, pos.z)
     }
     fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
-        if !self.world.loaded(pos.x, pos.z) || pos.y < MIN_Y || pos.y >= MIN_Y + HEIGHT {
+        if !self.world.loaded(pos.x, pos.z)
+            || pos.y < self.world.bottom_y()
+            || pos.y >= self.world.top_y()
+        {
             return None;
         }
         let previous = self.world.block(pos.x, pos.y, pos.z);
@@ -1008,19 +1011,11 @@ impl LevelAccess for GameLevel<'_> {
         self.world.loaded(pos.x, pos.z)
     }
     fn min_y(&self) -> i32 {
-        if self.dimension != LevelDimension::Overworld {
-            0
-        } else {
-            MIN_Y
-        }
+        self.world.shape.min_y
     }
     fn max_y(&self) -> i32 {
         // Exclusive, as LevelAccess::max_y documents.
-        if self.dimension != LevelDimension::Overworld {
-            256
-        } else {
-            MIN_Y + HEIGHT
-        }
+        self.world.shape.max_y()
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.world.random
@@ -2169,25 +2164,15 @@ impl Dim {
     }
     /// `Level.getMinY`: the dimension type's minimum y.
     fn min_y(self) -> i32 {
-        match self {
-            Self::Overworld => MIN_Y,
-            Self::Nether | Self::End => 0,
-        }
+        self.shape().min_y
     }
     /// `DimensionType.logicalHeight`.
     fn logical_height(self) -> i32 {
-        match self {
-            Self::Overworld => HEIGHT,
-            Self::Nether => 128,
-            Self::End => 256,
-        }
+        self.shape().logical_height
     }
     /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
     fn max_y(self) -> i32 {
-        match self {
-            Self::Overworld => MIN_Y + HEIGHT - 1,
-            Self::Nether | Self::End => 255,
-        }
+        self.shape().max_y() - 1
     }
 }
 fn facing_offset(facing: &str) -> [i32; 3] {
@@ -4150,7 +4135,7 @@ impl Game<'_> {
         // FallingBlockEntity.tick: off the ground, it gives up after 600
         // ticks (100 outside the world) and drops itself as an item.
         let y = next.y.floor() as i32;
-        let outside = y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
+        let outside = y <= self.world.bottom_y() || y >= self.world.top_y();
         if !on_ground && (f.age > 100 && outside || f.age > 600) {
             return Ok(if f.drop_item && entity_drops {
                 FallStep::Dropped(next)
@@ -5294,8 +5279,8 @@ impl Game<'_> {
             }
             return None;
         }
-        let mut y = MIN_Y + HEIGHT - 1;
-        while y > MIN_Y {
+        let mut y = self.world.top_y() - 1;
+        while y > self.world.bottom_y() {
             let s = self.world.block(x, y, z);
             if !self.res.facts().is_air(s) {
                 let f = self.res.facts().get(s);
@@ -5790,7 +5775,7 @@ impl Game<'_> {
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
-        if player.position.y < f64::from(MIN_Y - 64) {
+        if player.position.y < f64::from(self.world.bottom_y() - 64) {
             // Out of the world.
             let _ = player.set_health(0.0, false);
         }
@@ -9730,6 +9715,7 @@ impl Game<'_> {
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
+        world.shape = target.shape();
         world.fast_lava = target == Dim::Nether;
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
@@ -10190,6 +10176,44 @@ impl Game<'_> {
         }
         None
     }
+    /// `getPlayerPOVHitResult(level, player, SOURCE_ONLY)` for an empty
+    /// bucket: the block outline or a source fluid, whichever is nearer. A
+    /// waterlogged block is a block hit (its outline is the block's, its
+    /// fluid a source); flowing fluid has no shape to pick.
+    pub(super) fn bucket_hit(&self) -> Option<Hit> {
+        let origin = self.aim().map_or([0.0; 3], |(origin, _)| origin);
+        let distance = |p: [f64; 3]| {
+            (p[0] - origin[0]).powi(2) + (p[1] - origin[1]).powi(2) + (p[2] - origin[2]).powi(2)
+        };
+        match (self.pick(), self.pick_fluid()) {
+            (Some(block), Some(fluid)) => Some(if distance(block.point) <= distance(fluid.point) {
+                block
+            } else {
+                fluid
+            }),
+            (block, fluid) => block.or(fluid),
+        }
+    }
+    /// `BucketItem.use`'s place position: a water bucket fills the clicked
+    /// block itself when that block is a liquid container (a waterloggable
+    /// stair, slab, fence, ...); every other bucket empties into the block the
+    /// clicked face leads to. `SolidBucketItem` places like a block item, into
+    /// a replaceable clicked block.
+    pub(super) fn bucket_target(&self, content: BucketContent, hit: &Hit) -> [i32; 3] {
+        let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+        if content == BucketContent::Powder {
+            if self.res.facts().get(clicked).replaceable {
+                return hit.pos;
+            }
+        } else if content.is_water() && self.res.behaviours().is_liquid_container(clicked) {
+            return hit.pos;
+        }
+        [
+            hit.pos[0] + hit.face[0],
+            hit.pos[1] + hit.face[1],
+            hit.pos[2] + hit.face[2],
+        ]
+    }
     /// `CauldronInteractions` for the held item aimed at a cauldron.
     fn use_on_cauldron(&mut self, pos: [i32; 3]) -> Result<bool> {
         use horizon_client::cauldron::{self, Outcome};
@@ -10519,61 +10543,45 @@ impl Game<'_> {
             return Ok(UseResult::Pass);
         }
         if item == "bucket" {
-            // getPlayerPOVHitResult(SOURCE_ONLY): powder snow's outline before
-            // a fluid source behind it.
-            if let Some(hit) = self.pick()
-                && self.is_powder_snow(hit.pos)
-            {
-                let eye = self.eye_position().unwrap_or(hit.point);
-                let d = |p: [f64; 3]| {
-                    (p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)
-                };
-                if self
-                    .pick_fluid()
-                    .is_none_or(|fluid| d(fluid.point) >= d(hit.point))
-                {
-                    self.pick_up_powder_snow(hit.pos)?;
-                    return Ok(UseResult::Success { swing: true });
-                }
-            }
-            let Some(hit) = self.pick_fluid() else {
+            let Some(hit) = self.bucket_hit() else {
                 return Ok(UseResult::Pass);
             };
-            let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            let f = self.res.facts().get(state).clone();
-            if f.fluid == Fluid::None || f.fluid_level != 8 || f.fluid_falling {
-                return Ok(UseResult::Pass);
+            // `BucketItem.use`: `level.mayInteract` and `mayUseItemAt`.
+            if !self.may_build() {
+                return Ok(UseResult::Fail);
             }
-            let sound = match f.fluid {
-                Fluid::Water => "minecraft:item.bucket.fill",
-                _ => "minecraft:item.bucket.fill_lava",
-            };
+            if self.is_powder_snow(hit.pos) {
+                self.pick_up_powder_snow(hit.pos)?;
+                return Ok(UseResult::Success { swing: true });
+            }
+            // `BucketPickup.pickupBlock`: a fluid source, a waterlogged block
+            // or powder snow. A block that gives nothing fails the click.
             let pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
+            let creative = self.creative;
             let Some(filled) =
-                self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, pos))
+                self.with_level(|b, level, ticks| b.bucket_pickup(level, ticks, pos, creative))
             else {
-                return Ok(UseResult::Pass);
+                return Ok(UseResult::Fail);
             };
             self.process_level_events()?;
+            // `player.awardStat(Stats.ITEM_USED.get(this))`,
+            // `getPickupSound` and `level.gameEvent(player, FLUID_PICKUP)`.
+            self.stats.add("used", "minecraft:bucket", 1);
+            let sound = if filled == "minecraft:lava_bucket" {
+                "minecraft:item.bucket.fill_lava"
+            } else {
+                "minecraft:item.bucket.fill"
+            };
             self.audio.play(sound, Some(at(hit.pos)), 1.0, 1.0);
-            self.trigger_item("minecraft:filled_bucket", &ItemStack::new(filled, 1));
-            if !self.creative {
-                self.consume_held();
-                let filled = ItemStack {
-                    item: Arc::from(filled),
-                    count: 1,
-                    damage: 0,
-                    extra: None,
-                };
-                if self.held().is_none() {
-                    *self.held_mut() = Some(filled);
-                } else if let Some(rest) = self.give(filled)
-                    && let Some(eye) = self.eye_position()
-                {
-                    // ItemUtils.createFilledResult: `player.drop(stack, false)`.
-                    self.throw_from_eyes(rest, eye, false);
-                }
-            }
+            self.post_block_game_event(
+                "minecraft:fluid_pickup",
+                hit.pos,
+                Some(horizon_client::mobs::Who::Player),
+                None,
+            );
+            let filled = ItemStack::new(filled, 1);
+            self.filled_result(filled.clone());
+            self.trigger_item("minecraft:filled_bucket", &filled);
             return Ok(UseResult::Success { swing: true });
         }
         // BucketItem.use has its own ray, even when the crosshair hits an entity.
@@ -10588,18 +10596,14 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
-            let target = if self.res.facts().get(clicked).replaceable {
-                hit.pos
-            } else {
-                [
-                    hit.pos[0] + hit.face[0],
-                    hit.pos[1] + hit.face[1],
-                    hit.pos[2] + hit.face[2],
-                ]
-            };
+            let target = self.bucket_target(content, &hit);
             let pos = BlockPos::new(target[0], target[1], target[2]);
-            let emptied = self
-                .with_level(|b, level, ticks| b.bucket_empty(level, ticks, pos, content, sound));
+            // `Player.isShiftKeyDown`: only air takes a fluid under Shift.
+            let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+            let creative = self.creative;
+            let emptied = self.with_level(|b, level, ticks| {
+                b.bucket_empty(level, ticks, pos, content, sound, sneaking, creative)
+            });
             self.process_level_events()?;
             if !emptied {
                 return Ok(UseResult::Fail);
@@ -11332,7 +11336,7 @@ impl Game<'_> {
     /// `LevelExtractor.allChanged`: every loaded section is rebuilt.
     fn all_sections_changed(&mut self) {
         for &(x, z) in self.world.chunks.keys() {
-            for sy in 0..horizon_client::chunk::HEIGHT / 16 {
+            for sy in 0..self.world.layout().height() / 16 {
                 self.world.dirty_sections.insert((x, sy, z));
             }
         }

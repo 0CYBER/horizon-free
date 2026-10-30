@@ -7,7 +7,6 @@ use horizon_client::{
     animate_tick::{AnimateContext, animate_tick, campfire_particles, marker_particle_target},
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
-    chunk::{HEIGHT, MIN_Y},
     containers::BlockEntity,
     particles::{ParticleLevel, ParticleOptions, ParticleType},
     world::World,
@@ -37,7 +36,7 @@ pub(super) fn motion_blocking_height(
 /// that is above the world's bottom and within 10 blocks of the camera.
 fn splash_height(world: &World, properties: &Properties, x: i32, y: i32, z: i32) -> Option<i32> {
     let top = motion_blocking_height(world, properties, x, z);
-    (top > MIN_Y && (y - 10..=y + 10).contains(&top)).then_some(top)
+    (top > world.bottom_y() && (y - 10..=y + 10).contains(&top)).then_some(top)
 }
 /// The first block at or below `from` that blocks motion (leaves only when
 /// `leaves`, as MOTION_BLOCKING_NO_LEAVES skips them) or holds a fluid, plus one.
@@ -49,8 +48,8 @@ fn motion_blocking_leaves(
     from: i32,
     leaves: bool,
 ) -> i32 {
-    let mut y = from.min(MIN_Y + HEIGHT - 1);
-    while y > MIN_Y {
+    let mut y = from.min(world.top_y() - 1);
+    while y > world.bottom_y() {
         let f = facts.get(world.block(x, y, z));
         // #minecraft:leaves block motion, but MOTION_BLOCKING_NO_LEAVES skips them
         // (their water still counts).
@@ -64,7 +63,7 @@ fn motion_blocking_leaves(
         }
         y -= 1;
     }
-    MIN_Y
+    world.bottom_y()
 }
 /// `Biome.getPrecipitationAt` is rain (not snow) at this position.
 fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {

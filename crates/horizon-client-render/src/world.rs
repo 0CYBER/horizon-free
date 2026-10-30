@@ -262,6 +262,14 @@ impl World {
     pub fn layout(&self) -> ColumnLayout {
         self.shape.column()
     }
+    /// The lowest block Y the level's chunks hold.
+    pub fn bottom_y(&self) -> i32 {
+        self.layout().min_y()
+    }
+    /// One above the highest block Y the level's chunks hold.
+    pub fn top_y(&self) -> i32 {
+        self.layout().max_y()
+    }
     /// Resident storage write; marks the touched sections (and neighbours on
     /// section borders) for remeshing and the surrounding chunks for relighting.
     /// Neighbour updates, drops and block entities belong to the gameplay layer.
