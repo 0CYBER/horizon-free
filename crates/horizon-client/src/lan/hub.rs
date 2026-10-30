@@ -137,6 +137,10 @@ pub struct TickCtx<'a> {
     pub collision: Option<&'a BlockCollisionRegistry<'a>>,
     /// The level's world border (PlayerList.sendLevelInfo sends it).
     pub border: &'a crate::worldborder::WorldBorder,
+    /// The level's columns still being generated: a column is sent once
+    /// each neighbour is loaded or a decorated proto chunk (#4294). None:
+    /// every column there is is loaded.
+    pub streaming: Option<&'a crate::streaming::Streaming>,
 }
 
 /// What the gameplay code has to do for a guest.
@@ -1426,7 +1430,7 @@ impl Hub {
         for i in 0..self.guests.len() {
             if self.here(&self.guests[i]) {
                 self.update_view(i);
-                if let Some(batch) = self.next_batch(i, world) {
+                if let Some(batch) = self.next_batch(i, world, ctx.streaming) {
                     batches.push((i, batch));
                 }
             }
@@ -1459,7 +1463,11 @@ impl Hub {
         self.encoder.warm(&columns);
         let mut bodies: Vec<Vec<u8>> = columns
             .iter()
-            .map(|c| self.encoder.body_in(c, world))
+            .map(|c| {
+                self.encoder.body_with(c, world, &|x, z| {
+                    ctx.streaming.and_then(|s| s.proto_sections(x, z))
+                })
+            })
             .collect();
         for (i, taken, batch) in batches {
             let g = &mut self.guests[i];
@@ -1518,7 +1526,12 @@ impl Hub {
     /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
     /// as many as the batch quota the client's acknowledgements pace allows,
     /// with their places in the queue.
-    fn next_batch<'w>(&mut self, i: usize, world: &'w World) -> Option<Vec<(usize, &'w Chunk)>> {
+    fn next_batch<'w>(
+        &mut self,
+        i: usize,
+        world: &'w World,
+        streaming: Option<&crate::streaming::Streaming>,
+    ) -> Option<Vec<(usize, &'w Chunk)>> {
         let g = &mut self.guests[i];
         if self.ticks <= g.placed_at + 1 || g.unacknowledged >= g.max_unacknowledged {
             return None;
@@ -1533,6 +1546,20 @@ impl Hub {
             .iter()
             .enumerate()
             .filter_map(|(idx, key)| Some((idx, &**world.chunks.get(key).filter(|c| c.lit)?)))
+            // ChunkStatus.LIGHT needs its neighbours at INITIALIZE_LIGHT: a
+            // column whose light layers would leave one out waits for it.
+            .filter(|(_, c)| {
+                let Some(streaming) = streaming else {
+                    return true;
+                };
+                (-1..=1).all(|dz| {
+                    (-1..=1).all(|dx| {
+                        let (x, z) = (c.x + dx, c.z + dz);
+                        world.chunks.contains_key(&(x, z))
+                            || streaming.proto_sections(x, z).is_some()
+                    })
+                })
+            })
             .take(budget)
             .collect();
         (!batch.is_empty()).then_some(batch)
