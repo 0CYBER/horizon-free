@@ -99,6 +99,11 @@
       "name": "menu_closed",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"
+    },
+    {
+      "name": "tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
     }
   ]
 }

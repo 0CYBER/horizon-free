@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 12 adds item tooltips (`native_tooltip`).
+//!
 //! API 11 adds server particle emission (`native_send_particles`).
 //!
 //! API 10 adds server menus (`native_menu_clicked`, `native_menu_closed`,
@@ -53,6 +55,7 @@ use horizon_client::{
     extras::Corner,
     extras_hud::Corners,
     hud::{HudBatch, rgba},
+    items::ItemStack,
     keybinds,
     mod_list::{self, Installed, NativePage},
     particles::{ParticleOptions, ParticleType},
@@ -66,7 +69,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 11;
+pub(crate) const NATIVE_HOOKS_API: u32 = 12;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -445,6 +448,16 @@ impl Game<'_> {
     /// opened another, or the player left. API 10.
     pub(super) fn native_menu_closed(&mut self, uuid: u128, window: i32) {
         let _ = (uuid, window);
+    }
+    /// An item's tooltip, wherever the game shows one (slots, the creative
+    /// tabs, the recipe book, chat's hover): the stack, with its components
+    /// (`stack.data()`: a shulker box's contents...), and its lines, the name
+    /// first, each with a colour as `rgba` packs it (`u32::MAX` keeps the
+    /// text's own). Add, change or take out lines; `Text::legacy` reads `§`
+    /// codes. Asked each frame the tooltip shows, never for one the stack
+    /// hides. API 12.
+    pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
+        let _ = (stack, lines);
     }
 }
 

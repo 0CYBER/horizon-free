@@ -2332,6 +2332,11 @@ impl Game<'_> {
                 ));
             }
         }
+        // Native mods last, once getTooltipLines has built every line; a
+        // tooltip the stack hides stays hidden.
+        if !nested && !lines.is_empty() {
+            self.native_tooltip(stack, &mut lines);
+        }
         lines
     }
     /// Menu state for the control socket.

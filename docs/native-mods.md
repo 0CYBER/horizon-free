@@ -64,6 +64,10 @@ API 10 adds server menus: a vanilla chest menu a server mod opens and fills, who
 (`native_menu_clicked`, `native_menu_closed`), and `native_exchange_items`, two players' stacks swapped in one checked
 step ([Server menus](#server-menus)). Bundles that use them need `"hooks": 10`.
 
+API 12 adds item tooltips through `native_tooltip`: the hovered stack, with its components, and its tooltip's
+lines, which a mod can add to, change or take out of, wherever the game shows an item's tooltip. Bundles that use it
+need `"hooks": 12`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
