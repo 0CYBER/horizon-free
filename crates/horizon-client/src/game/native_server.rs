@@ -3,11 +3,12 @@
 //! server's command tree (`native_register_commands`), a player's command
 //! reaching them (`native_perform_command`), and the helpers a server mod
 //! answers with: the players online, a line to one of them or to all, the
-//! command's feedback and the world's folder. They act on the server's own
+//! command's feedback and the world's folder; and (API 9) the acting
+//! player's plain items: count, take, give. They act on the server's own
 //! players (the hub's: a dedicated server's, a LAN host's, single player's
 //! server thread's), never on a client's.
 use super::{Game, lan::LanHost};
-use horizon_client::{lan::data::component_nbt, text::Text};
+use horizon_client::{items::ItemStack, lan::data::component_nbt, text::Text};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 use serde_json::{Map, Value, json};
 use std::{collections::HashMap, path::PathBuf};
@@ -295,6 +296,205 @@ impl Game<'_> {
     }
 }
 
+/// Plain stacks: no components beyond the count (no damage, name,
+/// enchantment...), the only ones the item helpers count, take or give, so
+/// a mod never prices a worn or enchanted item as a new one.
+fn plain(stack: &ItemStack) -> bool {
+    stack.damage == 0 && stack.extra.is_none()
+}
+
+/// The slots the item helpers look at, in `Inventory.add`'s order: the
+/// selected slot, the off hand, then the hotbar and the main inventory.
+fn order(selected: usize) -> impl Iterator<Item = usize> {
+    std::iter::once(selected)
+        .chain(std::iter::once(OFFHAND))
+        .chain((0..36).filter(move |&i| i != selected))
+}
+const OFFHAND: usize = 36;
+
+/// The 36 inventory slots and the off hand as one list ([`OFFHAND`] last).
+fn slots<'a>(
+    inventory: &'a mut [Option<ItemStack>],
+    offhand: &'a mut Option<ItemStack>,
+) -> Vec<&'a mut Option<ItemStack>> {
+    inventory
+        .iter_mut()
+        .take(36)
+        .chain(std::iter::once(offhand))
+        .collect()
+}
+
+/// How many of plain `item` the slots hold.
+fn count_in(slots: &[&mut Option<ItemStack>], item: &str) -> u32 {
+    slots
+        .iter()
+        .filter_map(|s| s.as_ref())
+        .filter(|s| &*s.item == item && plain(s))
+        .map(|s| s.count)
+        .sum()
+}
+
+/// Takes up to `count` plain `item`, selected slot first; what it took.
+fn take_from(
+    mut slots: Vec<&mut Option<ItemStack>>,
+    selected: usize,
+    item: &str,
+    count: u32,
+) -> u32 {
+    let mut taken = 0;
+    for i in order(selected) {
+        let slot = &mut *slots[i];
+        if let Some(s) = slot
+            && &*s.item == item
+            && plain(s)
+        {
+            let n = s.count.min(count - taken);
+            s.count -= n;
+            taken += n;
+            if s.count == 0 {
+                *slot = None;
+            }
+        }
+        if taken == count {
+            break;
+        }
+    }
+    taken
+}
+
+/// How many plain `item` (stacking to `max`) still fit.
+fn room_in(slots: &[&mut Option<ItemStack>], item: &str, max: u32) -> u32 {
+    slots
+        .iter()
+        .enumerate()
+        .map(|(i, s)| match s.as_ref() {
+            // getFreeSlot: never into an empty off hand.
+            None if i == OFFHAND => 0,
+            None => max,
+            Some(s) if &*s.item == item && plain(s) => max.saturating_sub(s.count),
+            Some(_) => 0,
+        })
+        .sum()
+}
+
+/// Adds up to `count` plain `item`, onto its stacks first
+/// (`getSlotWithRemainingSpace`: the off hand's too), then into empty slots
+/// of the inventory (`getFreeSlot`), in [`order`]; what it added. Nothing
+/// is dropped.
+fn add_to(
+    mut slots: Vec<&mut Option<ItemStack>>,
+    selected: usize,
+    item: &str,
+    max: u32,
+    count: u32,
+) -> u32 {
+    let mut added = 0;
+    for pass in 0..2 {
+        for i in order(selected) {
+            let slot = &mut *slots[i];
+            let n = match slot {
+                Some(s) if pass == 0 && &*s.item == item && plain(s) => {
+                    let n = max.saturating_sub(s.count).min(count - added);
+                    s.count += n;
+                    n
+                }
+                None if pass == 1 && i != OFFHAND => {
+                    let n = max.min(count - added);
+                    *slot = Some(ItemStack {
+                        item: item.into(),
+                        count: n,
+                        damage: 0,
+                        extra: None,
+                    });
+                    n
+                }
+                _ => 0,
+            };
+            added += n;
+            if added == count {
+                return added;
+            }
+        }
+    }
+    added
+}
+
+/// The acting player's items, for server mods (API 9): the player whose
+/// action or command a hook hears (`native_perform_command`), as their
+/// state is swapped in. Only plain stacks count; the inventory's 36 slots
+/// and the off hand, never the armour. Each change reaches the player's
+/// screen as any change to their inventory does.
+#[allow(dead_code)]
+impl Game<'_> {
+    /// The main hand's stack: its item, count, and whether it is plain.
+    pub(super) fn native_held(&self) -> Option<(String, u32, bool)> {
+        let s = self.inventory.get(self.selected)?.as_ref()?;
+        Some((s.item.to_string(), s.count, plain(s)))
+    }
+    /// How many of plain `item` (`minecraft:diamond`) the player carries.
+    pub(super) fn native_count_items(&mut self, item: &str) -> u32 {
+        count_in(&slots(&mut self.inventory, &mut self.offhand), item)
+    }
+    /// Every plain item the player carries, with how many, by id.
+    pub(super) fn native_carried_items(&self) -> Vec<(String, u32)> {
+        let mut out: Vec<(String, u32)> = Vec::new();
+        let held = self
+            .inventory
+            .iter()
+            .take(36)
+            .chain(std::iter::once(&self.offhand));
+        for s in held.flatten().filter(|s| plain(s)) {
+            match out.iter_mut().find(|(i, _)| *i == *s.item) {
+                Some((_, n)) => *n += s.count,
+                None => out.push((s.item.to_string(), s.count)),
+            }
+        }
+        out
+    }
+    /// Takes up to `count` plain `item`, the main hand first; what it took.
+    pub(super) fn native_take_items(&mut self, item: &str, count: u32) -> u32 {
+        if self.player.is_none() {
+            return 0;
+        }
+        let selected = self.selected;
+        take_from(
+            slots(&mut self.inventory, &mut self.offhand),
+            selected,
+            item,
+            count,
+        )
+    }
+    /// How many plain `item` still fit; 0 for an unknown item.
+    pub(super) fn native_room_for(&mut self, item: &str) -> u32 {
+        let Some(max) = self.res.items().get(item).map(|i| i.max_stack) else {
+            return 0;
+        };
+        room_in(
+            &slots(&mut self.inventory, &mut self.offhand),
+            item,
+            max.max(1),
+        )
+    }
+    /// Gives up to `count` plain `item` where they fit, as `Inventory.add`
+    /// places them; what it gave (nothing is dropped). 0 for an unknown item.
+    pub(super) fn native_give_items(&mut self, item: &str, count: u32) -> u32 {
+        let Some(max) = self.res.items().get(item).map(|i| i.max_stack) else {
+            return 0;
+        };
+        if self.player.is_none() {
+            return 0;
+        }
+        let selected = self.selected;
+        add_to(
+            slots(&mut self.inventory, &mut self.offhand),
+            selected,
+            item,
+            max.max(1),
+            count,
+        )
+    }
+}
+
 fn system_chat(line: &Text) -> C {
     C::SystemChat(play::SystemChat {
         content: component_nbt(&line.component()),
@@ -367,6 +567,68 @@ mod tests {
 
     fn tree(commands: &[NativeCommand]) -> (Value, HashMap<String, u8>, Vec<String>) {
         command_tree(commands, |name| name == "give")
+    }
+
+    fn stack(item: &str, count: u32) -> Option<ItemStack> {
+        Some(ItemStack {
+            item: item.into(),
+            count,
+            damage: 0,
+            extra: None,
+        })
+    }
+
+    #[test]
+    fn items_are_taken_from_the_hand_first_and_only_plain() {
+        let mut inv = vec![None; 36];
+        inv[0] = stack("minecraft:diamond", 10);
+        inv[4] = stack("minecraft:diamond", 5);
+        inv[8] = stack("minecraft:diamond", 7);
+        inv[8].as_mut().unwrap().damage = 3;
+        let mut off = stack("minecraft:diamond", 2);
+        assert_eq!(
+            count_in(&slots(&mut inv, &mut off), "minecraft:diamond"),
+            17
+        );
+        assert_eq!(
+            take_from(slots(&mut inv, &mut off), 4, "minecraft:diamond", 6),
+            6
+        );
+        assert!(inv[4].is_none(), "the selected slot first");
+        assert_eq!(off.as_ref().unwrap().count, 1, "then the off hand");
+        assert_eq!(
+            take_from(slots(&mut inv, &mut off), 4, "minecraft:diamond", 100),
+            11
+        );
+        assert_eq!(inv[8].as_ref().unwrap().count, 7, "a damaged stack stays");
+        assert!(inv[0].is_none() && off.is_none());
+    }
+
+    #[test]
+    fn items_are_given_only_where_they_fit() {
+        let mut inv = vec![stack("minecraft:dirt", 64); 36];
+        inv[3] = stack("minecraft:diamond", 60);
+        inv[9] = None;
+        let mut off = None;
+        assert_eq!(
+            room_in(&slots(&mut inv, &mut off), "minecraft:diamond", 64),
+            4 + 64
+        );
+        assert_eq!(
+            add_to(slots(&mut inv, &mut off), 0, "minecraft:diamond", 64, 200),
+            68
+        );
+        assert_eq!(inv[3].as_ref().unwrap().count, 64, "onto its stack first");
+        assert!(off.is_none(), "never into an empty off hand (getFreeSlot)");
+        assert_eq!(inv[9].as_ref().unwrap().count, 64);
+        assert_eq!(
+            room_in(&slots(&mut inv, &mut off), "minecraft:diamond", 64),
+            0
+        );
+        assert_eq!(
+            add_to(slots(&mut inv, &mut off), 0, "minecraft:diamond", 64, 1),
+            0
+        );
     }
 
     #[test]

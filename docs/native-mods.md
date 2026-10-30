@@ -50,6 +50,9 @@ API 8 adds server commands and players: `native_register_commands` (the commands
 command tree) and `native_perform_command` (a player's command on the server), with helpers to answer
 ([Server commands and players](#server-commands-and-players)). Bundles that use them need `"hooks": 8`.
 
+API 9 adds the acting player's plain items for server mods (count, take, give; [Server commands and
+players](#server-commands-and-players)). Bundles that use them need `"hooks": 9`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
@@ -196,3 +199,10 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   `native_tell(uuid, text)`, a system line to one player; `native_broadcast(text)`, to every player and the server's
   log; `native_feedback(text)`, the command's answer to the player whose command it is; `native_world_dir()`, the
   open world's folder, where a server mod keeps its data in a folder of its own so the world's backups carry it.
+- Items (API 9), of the acting player (inside `native_perform_command`, whose player is swapped in): `native_held()`
+  (the main hand's item, count, and whether it is plain), `native_count_items(item)`, `native_carried_items()`,
+  `native_take_items(item, count)` (the main hand first, then as `Inventory.add` orders slots),
+  `native_room_for(item)` and `native_give_items(item, count)` (only where it fits: nothing is dropped). They look at
+  the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
+  component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
+  many it counted, took or gave; the player's screen follows as for any change to their inventory.
