@@ -223,5 +223,16 @@
   "Multiplayer": "多人游戏",
   "Packs": "资源包",
   "Screenshots": "截图",
-  "Console": "控制台"
+  "Console": "控制台",
+  "Update all ({count})": "全部更新（{count}）",
+  "Add mods": "添加模组",
+  "{loader} mods": "{loader} 模组",
+  "Horizon mods": "Horizon 模组",
+  "Filter installed": "筛选已安装",
+  "Reading the mods…": "正在读取模组…",
+  "No mods yet: Add mods finds some for this instance.": "还没有模组：点击“添加模组”为此实例查找。",
+  "No mod matches.": "没有匹配的模组。",
+  "{source} · needed by another mod": "{source} · 其他模组需要",
+  "Local file · {file}": "本地文件 · {file}",
+  "Update {version}": "更新到 {version}"
 }

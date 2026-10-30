@@ -223,5 +223,16 @@
   "Multiplayer": "Мережева гра",
   "Packs": "Набори",
   "Screenshots": "Знімки екрана",
-  "Console": "Консоль"
+  "Console": "Консоль",
+  "Update all ({count})": "Оновити все ({count})",
+  "Add mods": "Додати моди",
+  "{loader} mods": "Моди {loader}",
+  "Horizon mods": "Моди Horizon",
+  "Filter installed": "Фільтр встановлених",
+  "Reading the mods…": "Читання модів…",
+  "No mods yet: Add mods finds some for this instance.": "Модів поки немає: «Додати моди» знайде їх для цієї збірки.",
+  "No mod matches.": "Немає відповідних модів.",
+  "{source} · needed by another mod": "{source} · потрібен іншому моду",
+  "Local file · {file}": "Локальний файл · {file}",
+  "Update {version}": "Оновити до {version}"
 }

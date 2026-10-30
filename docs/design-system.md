@@ -267,6 +267,12 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   A tab names how many it holds ("Worlds 3"); its own buttons (Add server, Open folder) sit at the
   strip's end, where a list's header would put them (`HORIZON_LAUNCHER_PAGE=worlds`, `packs`...
   opens one for screenshots).
+- **The Mods tab** (`launcher/src/instance_mods.rs`): the instance's mods on one nearly opaque
+  card, its loader in the header ("Fabric mods", "Horizon mods") beside a filter. A row is a
+  coloured square with the mod's initial, its name and version, where it comes from (Modrinth,
+  "needed by another mod", or a local file by name), an update as an amber pill when the browser
+  found one, and a switch (a Java jar turned off is renamed `.disabled`). Update all and Add mods
+  sit at the strip's end (`HORIZON_LAUNCHER_PAGE=instance-mods`).
 - **The sign-in sheet** (`launcher/src/owner_page.rs`, the owner gate): an opaque plate over the
   dimmed launcher, never instead of it. It says why (the account that owns Java Edition, no install
   needed), the code in mono on a raised box with Copy, and Open link as the main action; the window
