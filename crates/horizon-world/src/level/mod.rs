@@ -304,6 +304,18 @@ pub enum LevelEvent {
 
 /// The world as seen by block behaviour. Implemented by the game and tests.
 pub trait LevelAccess {
+    /// Observe a committed `Level.setBlock` state change, before its side effects.
+    fn observe_block_changed(&self, _pos: BlockPos, _old: BlockStateId, _new: BlockStateId) {}
+    /// Observe `BlockState.handleNeighborChanged` before the block handles it.
+    /// The default does nothing; implementations must not alter the update queue.
+    fn observe_neighbor_changed(
+        &self,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _changed: BlockId,
+        _moved: bool,
+    ) {
+    }
     /// `Level.isClientSide`: this level is a client's copy (false on a
     /// server, a host or the test harness).
     fn is_client_side(&self) -> bool {
@@ -412,6 +424,9 @@ pub trait LevelAccess {
     ) -> Option<(bool, bool)> {
         None
     }
+    /// `PotentSulfurBlockEntity.resetCountdown` for the potent sulfur block
+    /// entity at `pos` (`PotentSulfurBlock.validBlockState`).
+    fn reset_potent_sulfur_countdown(&mut self, _pos: BlockPos) {}
     /// Weak/strong signal of a block-entity-driven source (trapped chest
     /// openers); other sources are evaluated by the library.
     fn block_entity_signal(

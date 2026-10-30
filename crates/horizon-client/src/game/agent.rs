@@ -7,7 +7,6 @@ use super::{Game, Screen};
 use horizon_client::{
     Result,
     block_entity_anim::Ticker,
-    chunk::{MIN_Y, SECTIONS},
     items::ItemStack,
     mobs::{
         Species,
@@ -486,6 +485,8 @@ impl Game<'_> {
                 // LivingEntity.deathTime while dead (the camera's death roll).
                 "death_time": self.death_time(),
                 "air": p.air,
+                // LocalPlayer.portalEffectIntensity: the Nether portal overlay.
+                "portal_effect": self.screen_fx.portal,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
                 "shield_cooldown": self.shield_cooldown,
@@ -598,7 +599,7 @@ impl Game<'_> {
             Mode::Delete { world } => {
                 json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
             }
-            Mode::BackupBeforeUpgrade { world } => {
+            Mode::BackupBeforeUpgrade { world, .. } => {
                 json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
             }
             Mode::Error { message, .. } => {
@@ -1086,7 +1087,9 @@ impl Game<'_> {
                                 .world
                                 .chunks
                                 .get(&(x >> 4, z >> 4))
-                                .filter(|_| (MIN_Y..MIN_Y + SECTIONS as i32 * 16).contains(&y))
+                                .filter(|_| {
+                                    (self.world.bottom_y()..self.world.top_y()).contains(&y)
+                                })
                                 .map(|c| c.light(x & 15, y, z & 15));
                             let digit = |v: u8| char::from_digit(u32::from(v), 16).unwrap_or('.');
                             sky.push(packed.map_or('.', |v| digit(v >> 4)));

@@ -32,7 +32,7 @@ impl Game<'_> {
 
     /// Every recipe id of the recipe manager (what `/recipe` resolves and suggests).
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
-        self.res.stations().recipe_index.ids().cloned().collect()
+        self.stations().recipe_index.ids().cloned().collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = self.entities(ctx, "targets", true)?;
@@ -82,7 +82,7 @@ impl Game<'_> {
     /// many recipe book displays changed (a transmute recipe has one per
     /// material count).
     fn change_recipes(&mut self, give: bool, recipes: &[String]) -> i32 {
-        let index = &self.res.stations().recipe_index;
+        let index = &world_stations!(self).recipe_index;
         if give {
             let (count, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
             self.recipe_unlocked(&unlocked);
@@ -113,7 +113,8 @@ impl Game<'_> {
             "explosion" | "player_explosion" | "bad_respawn_point" => DamageKind::Explosion,
             "fall" | "ender_pearl" | "fly_into_wall" => DamageKind::Fall,
             "on_fire" => DamageKind::OnFire,
-            "in_fire" | "campfire" | "hot_floor" => DamageKind::InFire,
+            "in_fire" | "hot_floor" => DamageKind::InFire,
+            "campfire" => DamageKind::Campfire,
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
             "dry_out" => DamageKind::DryOut,
@@ -170,23 +171,25 @@ impl Game<'_> {
         let hurt = match target {
             // The causing mob is the one the hit is credited to and thorns
             // answer; the source position gives the knockback its direction.
-            Target::Player => {
+            Target::Player | Target::Guest(_) => {
                 // `DamageSource(type, cause, by)`: the death message names the
                 // causing entity, else the direct one. A mob is noted by
                 // `hurt_player_from`, a player here.
-                if let Some(t @ (Target::Player | Target::Guest(_))) = cause.or(by) {
-                    let name = self.target_name(t);
-                    self.note_direct_entity(&ty, name);
-                }
-                if self.spectator() {
-                    false
-                } else {
-                    let attacker = match cause.or(by) {
-                        Some(Target::Mob(i)) => Some(Some(i)),
-                        _ => Some(None),
-                    };
-                    self.hurt_player_from(amount, from, &ty, attacker)
-                }
+                let named = match cause.or(by) {
+                    Some(t @ (Target::Player | Target::Guest(_))) => Some(self.target_name(t)),
+                    _ => None,
+                };
+                let attacker = match cause.or(by) {
+                    Some(Target::Mob(i)) => Some(Some(i)),
+                    _ => Some(None),
+                };
+                self.for_player(target, |g| {
+                    if let Some(name) = named {
+                        g.note_direct_entity(&ty, name);
+                    }
+                    !g.spectator() && g.hurt_player_from(amount, from, &ty, attacker)
+                })
+                .unwrap_or(false)
             }
             Target::Mob(id) => {
                 let attacker = cause.or(by).and_then(|t| match t {
@@ -1275,12 +1278,12 @@ impl Game<'_> {
         let respect = matches!(ctx.get("respectTeams"), Some(Arg::Bool(true)));
         let max_y = match ctx.get("maxHeight") {
             Some(Arg::Int(h)) => *h,
-            _ => horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT,
+            _ => self.world.top_y(),
         };
-        if max_y < horizon_client::chunk::MIN_Y {
+        if max_y < self.world.bottom_y() {
             return Err(err(
                 "commands.spreadplayers.failed.invalid.height",
-                &[&max_y, &horizon_client::chunk::MIN_Y],
+                &[&max_y, &self.world.bottom_y()],
             ));
         }
         let targets = self.entities(ctx, "targets", false)?;
@@ -1481,7 +1484,7 @@ impl Game<'_> {
         let mut air2 = air(y);
         y -= 1;
         let mut air1 = air(y);
-        while y > horizon_client::chunk::MIN_Y {
+        while y > self.world.bottom_y() {
             y -= 1;
             let current = air(y);
             if !current && air1 && air2 {

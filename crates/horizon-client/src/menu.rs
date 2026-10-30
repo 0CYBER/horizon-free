@@ -3023,6 +3023,7 @@ impl Menu {
 pub(crate) mod tests {
     use super::*;
     use crate::{banner::Banners, brewing::Brewing, crafting::Recipes};
+    use horizon_world::loot::PackOverlay;
 
     fn stack(item: &str, count: u32) -> Option<ItemStack> {
         Some(ItemStack {
@@ -3052,11 +3053,12 @@ pub(crate) mod tests {
         if !root.join("items.json").exists() {
             return;
         }
-        let items = Items::catalog(&root).unwrap();
-        let recipes = Recipes::load(&root, &items).unwrap();
-        let brewing = Brewing::load(&root, &items);
+        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
         let banners = Banners::load(&root);
-        let station_recipes = crate::stations::StationRecipes::load(&root, &items);
+        let station_recipes =
+            crate::stations::StationRecipes::load(&root, &items, &PackOverlay::NONE);
         let enchantments = crate::enchant::Enchantments::default();
         let names = crate::creative::Names::default();
         let env = Env {

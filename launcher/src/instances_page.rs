@@ -192,15 +192,15 @@ impl Launcher {
             let (open, sub) = match i.kind {
                 InstanceKind::Default | InstanceKind::Own => (
                     self.page == Page::Play && selected.as_ref() == Some(&i.id),
-                    match (&tag, &i.version) {
-                        _ if i.java.is_some() => {
-                            format!("Minecraft {}", i.java.as_ref().map_or("", |j| &j.minecraft))
+                    match (&i.java, &tag, &i.version) {
+                        (Some(java), _, _) => java_line(java),
+                        (None, None, Some(own)) => {
+                            trf("{version} is not installed", &[("version", own)])
                         }
-                        (None, Some(own)) => trf("{version} is not installed", &[("version", own)]),
-                        (None, None) => tr("No version installed").into(),
-                        (Some(_), _) if !prepared => tr("Needs preparing").into(),
-                        (Some(tag), Some(_)) => format!("{} · {tag}", tr("Ready")),
-                        (Some(_), None) => tr("Ready").into(),
+                        (None, None, None) => tr("No version installed").into(),
+                        (None, Some(_), _) if !prepared => tr("Needs preparing").into(),
+                        (None, Some(tag), Some(_)) => format!("{} · {tag}", tr("Ready")),
+                        (None, Some(_), None) => tr("Ready").into(),
                     },
                 ),
                 InstanceKind::Port => {
@@ -213,40 +213,16 @@ impl Launcher {
                 }
                 InstanceKind::Pack => (false, tr("From Horizon's registry").into()),
             };
-            let dot = matches!(i.kind, InstanceKind::Default | InstanceKind::Own).then(|| {
-                div()
-                    .absolute()
-                    .left(px(42.))
-                    .top(px(42.))
-                    .size(px(10.))
-                    .bg(if prepared { t.success } else { t.warn })
-                    .border_2()
-                    .border_color(t.side)
-            });
-            let icon = self.instance_icon(&i, 44.);
+            // Java instances have nothing of Horizon's to prepare: no state square.
+            let state = (matches!(i.kind, InstanceKind::Default | InstanceKind::Own)
+                && i.java.is_none())
+            .then_some(if prepared { t.success } else { t.warn });
+            let icon = self.instance_icon(&i, 36.);
             let clicked = i.clone();
             out.push(
-                blocks::side_item(format!("side-instance-{}", i.id).into(), open, &t)
-                    .child(icon)
-                    .children(dot)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .child(
-                                blocks::pixel(15., FontWeight::MEDIUM)
-                                    .text_color(t.ink)
-                                    .truncate()
-                                    .child(i.name.clone()),
-                            )
-                            .child(
-                                text(theme::CAPTION)
-                                    .text_color(t.muted)
-                                    .truncate()
-                                    .child(sub),
-                            ),
-                    )
+                shell::row(format!("side-instance-{}", i.id), open, &t)
+                    .child(div().relative().child(icon))
+                    .child(shell::row_text(i.name.clone(), sub, state, &t))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         match clicked.kind {
                             InstanceKind::Default | InstanceKind::Own => {
@@ -755,6 +731,14 @@ fn played_line(instance: &Instance) -> String {
 }
 
 /// The first letter or digit of a name, for an icon without a picture.
+/// A Java instance's line in the sidebar: "Java 1.21.4", and its loader ("· Fabric 0.16.9").
+fn java_line(j: &instances::JavaGame) -> String {
+    match &j.loader {
+        Some(l) => format!("Java {} · {} {}", j.minecraft, l.kind.name(), l.version),
+        None => format!("Java {}", j.minecraft),
+    }
+}
+
 fn initial(name: &str) -> String {
     name.chars()
         .find(|c| c.is_alphanumeric())

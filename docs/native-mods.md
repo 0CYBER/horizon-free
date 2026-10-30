@@ -30,7 +30,7 @@ on any Horizon whose version is the one it needs or a later one. Its `horizon` i
 pin, else on the installed version's commit (the game the player plays), after checking that commit's
 `NATIVE_HOOKS_API` (read from GitHub) is at least the mod's; when it isn't and nothing pins, it builds on the commit the
 mod was tested on. In its own copy of the mod it sets `horizon_revision` to the commit it builds on. Horizon's
-official mods (Zoom, FPS counter, Keystrokes, Minimap, Recipes) are made this way, so any of them build together
+own native mods (Zoom, FPS counter, Keystrokes, Minimap; horizon-rust/horizon-mods, `native/<name>/`) are made this way, so any of them build together
 with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
 
 API 2 adds the item panel beside container screens and its recipe pages (`native_panel_items`,
@@ -38,6 +38,17 @@ API 2 adds the item panel beside container screens and its recipe pages (`native
 the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_place_recipe`, `native_give`): what a
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
+
+API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
+and final close. Bundles that use these events need `"hooks": 3`.
+
+API 4 adds authoritative server tick events through `native_server_tick`: start and end of each non-paused
+server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
+use these events need `"hooks": 4`.
+
+API 5 to 7 add server block reads and neighbour and block-change observations ("Named hook catalog" below).
+API 8 adds bundles' data files (`native_data!`, `native_built_data`; "Data files" below). Bundles that use them need
+`"hooks": 8`.
 
 ## A bundle
 
@@ -126,7 +137,7 @@ features that add something (new functions, new types), never ones that change e
 
 A bundle's `data/` folder (any files) is staged as `native-data/<mod>/` at the root of the workspace. A helper or
 module compiles a file in with `horizon_client::native_data!("<mod id>", "path/in/data")` (`&'static [u8; N]`,
-`crate::native_data!` inside the lib), since hook points API 3. A mod's crate keeps its own data in its folder and
+`crate::native_data!` inside the lib), since hook points API 8. A mod's crate keeps its own data in its folder and
 reads it with `include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/…"))`. The registry's `.hnmod` may carry
 both (`mixins/<id>/data/…`, `mixins/<id>/<crate>/data/…`).
 
@@ -301,10 +312,31 @@ each was built or last used): switching a mod off and on again plays the kept bu
 - **Single player and LAN host:** the mods run in the host's game and its integrated server, so a server-side
   hook applies to every player of the world.
 - **Joining a server:** only client-side hooks do anything; the protocol is unchanged.
-- **Dedicated servers:** not built yet; the same pipeline can build the server (`--no-default-features`).
+- **Dedicated servers:** native mods are not built yet. Lifecycle hook call sites are ready for when the pipeline builds them (`--no-default-features`).
 
 ## Left to do
 
 - Rebuild after the mods change, and offer **Update** when `update_for` finds a newer Horizon (asking first, as it
   compiles for minutes).
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
+
+## Named hook catalog (draft)
+
+`native-hooks.json` maps stable hook names and contract versions to the current
+source targets. A contract includes the signature, call timing and behavior.
+Keep an existing contract or add a new version when it changes incompatibly.
+The catalog does not cover helper methods or arbitrary private game code.
+Injections name them with `hook` and `hook_version` ("Named hook points" above); raw
+targets and the `hooks` metadata continue to work as before.
+
+### Reading server blocks (draft)
+
+A native server tick hook can call `native_server_block` with its context, a dimension id and a block position. It returns the block name and state properties from a loaded chunk. It does not load a chunk or open a dimension. Reads outside that hook, from a stale context, from unavailable dimensions or outside the world bounds return an error.
+
+### Neighbour observations (draft)
+
+`native_neighbor_changed` observes each authoritative server `neighborChanged` before the block handles it. It supplies the dimension, position, current state ID, changed block ID and moved flag. Resolve IDs with the level's registries during the hook; the hook does not load chunks or change the update queue.
+
+### Server block changes (draft)
+
+`native_block_changed` observes a committed authoritative server `Level.setBlock` change before block side effects and neighbour updates. It supplies the dimension, position and old and new state IDs. It does not observe chunk loading or direct storage writes that bypass `Level.setBlock`.

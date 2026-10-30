@@ -1,4 +1,4 @@
-//! Hook points for native mods (docs/native-mods.md, "Hook points"): empty
+//! Hook points for native mods (docs/native-mods.md, "Mods on the hook points"): empty
 //! functions the game calls at fixed places, for horizon-mixins bundles to
 //! hook with HEAD. Hooks that answer take an out parameter (`claimed`,
 //! `zoom`…) so several mods can hook the same point. A native mod keeps its
@@ -6,14 +6,24 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 8 adds bundles' data files: `horizon_client::native_data!` compiles a file of a
+//! bundle's `data/` folder in, and `native_built_data` is the folder its post-build step wrote.
+//!
+//! API 7 adds block-change observations (`native_block_changed`).
+//!
+//! API 6 adds neighbour-change observations (`native_neighbor_changed`).
+//!
+//! API 5 adds read-only server block queries (`native_server_block`).
+//!
+//! API 4 adds authoritative server tick hooks (`native_server_tick`).
+//!
+//! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
+//!
 //! API 2 adds the item panel beside container screens and its recipe pages
 //! (`native_panel_items`, `native_panel_recipes`, `native_panel_event`),
 //! and the game's items and recipes (`native_recipes`,
 //! `native_known_recipes`, `native_place_recipe`, `native_give`): what a
 //! recipe viewer needs.
-//!
-//! API 3 adds bundles' data files: `horizon_client::native_data!` compiles a file of a
-//! bundle's `data/` folder in, and `native_built_data` is the folder its post-build step wrote.
 //!
 //! Names, parameters and call sites are kept from release to release, and
 //! hook points are only ever added: each addition raises [`NATIVE_HOOKS_API`].
@@ -22,7 +32,11 @@
 //! that would break such a bundle is not made.
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
-use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use super::native_lifecycle::{NativeLifecycleContext, ServerTickPhase, WorldPhase};
+use super::{
+    Game, GameLevel, LevelDimension, Screen, execution_role::ExecutionRole,
+    native_panel_recipes::RecipePage,
+};
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -32,13 +46,44 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_core::position::BlockPos;
+use horizon_world::{level::BlockId, registry::BlockStateId};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 3;
+pub(crate) const NATIVE_HOOKS_API: u32 = 8;
+
+impl GameLevel<'_> {
+    /// An authoritative server committed a changed state through `Level.setBlock`.
+    /// The world contains `new`; block side effects and neighbour updates follow.
+    #[inline(always)]
+    pub(super) fn native_block_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (dimension, pos, old, new);
+    }
+
+    /// An authoritative server is about to deliver `neighborChanged`.
+    /// State and block IDs are valid in this level's registries for this call.
+    #[inline(always)]
+    pub(super) fn native_neighbor_changed(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        changed: BlockId,
+        moved: bool,
+    ) {
+        let _ = (dimension, pos, state, changed, moved);
+    }
+}
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -272,6 +317,28 @@ impl Game<'_> {
     /// and on servers), and the server's own (`native_window` is false
     /// there: the single player server thread, a dedicated server).
     pub(super) fn native_tick(&mut self) {}
+    /// The world's phases, read-only; `error_text` carries the engine's
+    /// own open-failure text, empty otherwise. Server-side; the deprecated
+    /// in-frame path delivers no lifecycle events. A server loop or final
+    /// save failure fires `WorldCloseFailed` with the error text.
+    pub(super) fn native_world_lifecycle(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: WorldPhase,
+        error_text: &str,
+    ) {
+        let _ = (context, phase, error_text);
+    }
+    /// The authoritative server tick's phases, read-only. A paused pass
+    /// fires nothing; a frozen world carries `world_running` false except
+    /// during a requested step.
+    pub(super) fn native_server_tick(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: ServerTickPhase,
+    ) {
+        let _ = (context, phase);
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -437,7 +504,7 @@ impl Game<'_> {
         mods.join(".horizon-mod-data").join(mod_id)
     }
     /// The folder mod `mod_id`'s post-build step wrote into when the launcher built the game
-    /// (`native-data/<id>/` in the build's version folder). API 3.
+    /// (`native-data/<id>/` in the build's version folder). API 8.
     pub(super) fn native_built_data(&self, mod_id: &str) -> PathBuf {
         horizon_client::native_data::built(mod_id)
     }
@@ -659,6 +726,18 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_source_stays_hookable() {
+        let source = include_str!("native_lifecycle.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+        for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!line.contains("cfg"), "a cfg in lifecycle source: {line}");
+            for mac in ["!(", "![", "! {", "!{"] {
+                assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
+            }
+        }
+    }
+
+    #[test]
     fn catalog_matches_hook_points() {
         use std::collections::BTreeSet;
 
@@ -673,8 +752,25 @@ mod tests {
             .split("/// Helpers for native mods")
             .next()
             .unwrap();
+        let level_section = source
+            .split("impl GameLevel<'_> {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        let level_hooks: BTreeSet<_> = level_section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
         let declared: BTreeSet<_> = section
             .lines()
+            .chain(level_section.lines())
             .filter_map(|line| {
                 line.trim()
                     .strip_prefix("pub(super) fn native_")?
@@ -692,9 +788,14 @@ mod tests {
                 "invalid or duplicate hook: {name} v{version}"
             );
             names.insert(name);
+            let owner = if level_hooks.contains(name) {
+                "GameLevel"
+            } else {
+                "Game"
+            };
             assert_eq!(
                 hook["target"].as_str().unwrap(),
-                format!("horizon_client::game::native_hooks::Game<'_>::native_{name}")
+                format!("horizon_client::game::native_hooks::{owner}<'_>::native_{name}")
             );
         }
         assert_eq!(names, declared);

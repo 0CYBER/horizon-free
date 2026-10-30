@@ -8,7 +8,7 @@ use std::path::PathBuf;
 /// (`&'static [u8; N]`): `horizon_client::native_data!("my_mod", "table.bin")` in a helper or
 /// support module of the game's crate, `crate::native_data!` in the lib's. A mod's own crate
 /// reads its files with `include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/…"))`.
-/// Hook points API 3.
+/// Hook points API 8.
 #[macro_export]
 macro_rules! native_data {
     ($id:literal, $file:literal $(,)?) => {

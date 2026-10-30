@@ -123,9 +123,25 @@ mod vertex_tests {
     fn emission_keeps_the_colour_and_the_free_bits() {
         let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
         assert_eq!(super::emitting(rgb, 0), rgb);
-        assert_eq!(super::emitting(rgb, 9), 0xF656_3412);
-        assert_eq!(super::emitting(rgb, 15), 0xF056_3412);
-        assert_eq!(super::emitting(rgb, 15) | super::EMISSION_BITS, rgb);
+        assert_eq!(super::emitting(rgb, super::INCANDESCENT), 0xFD56_3412);
+        assert_eq!(super::emitting(rgb, super::VERY_BRIGHT), 0xFB56_3412);
+        assert_eq!(
+            super::emitting(rgb, super::VERY_BRIGHT) | super::EMISSION_BITS,
+            rgb
+        );
+    }
+    #[test]
+    fn light_sources_shine_by_kind_not_light_level() {
+        use super::{BRIGHT, INCANDESCENT, LOW, hdr_tier};
+        assert_eq!(hdr_tier("glowstone", 15), BRIGHT);
+        // A candle's flame is a particle: the block keeps only its wick.
+        assert_eq!(hdr_tier("torch", 14), INCANDESCENT);
+        assert_eq!(hdr_tier("red_candle", 3), LOW);
+        assert_eq!(hdr_tier("glow_lichen", 7), 0);
+        assert_eq!(hdr_tier("stone", 0), 0);
+        // Unlisted ones by their light level.
+        assert_eq!(hdr_tier("ochre_froglight", 15), INCANDESCENT);
+        assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
     }
 }
 pub struct SectionMesh {
@@ -284,6 +300,8 @@ struct Info {
     /// `getShadeBrightness` (ambient occlusion contribution).
     shade: f32,
     emission: u8,
+    /// `hdr_tier`.
+    tier: u8,
     /// `emissiveRendering`: drawn and sampled at full brightness.
     emissive: bool,
     fluid: FluidState,
@@ -455,6 +473,7 @@ impl MeshTables {
                 permeable: !s.solid_render || s.dampening == 0,
                 shade,
                 emission: s.emission,
+                tier: hdr_tier(name, s.emission),
                 emissive,
                 fluid: FluidState::from_block(state)?,
                 model: s.render_shape == RenderShape::Model,
@@ -620,7 +639,7 @@ impl Padded {
     fn new(region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> Self {
         let mut blocks = vec![0u32; P * P * P];
         let mut light = vec![0u8; P * P * P];
-        let base_y = MIN_Y + sy * 16;
+        let base_y = region[1][1].map_or(MIN_Y, Chunk::min_y) + sy * 16;
         // The section itself is unpacked in one pass; the border cells of the
         // neighbouring sections are read one by one.
         let mut own = Box::new([0u32; 4096]);
@@ -654,13 +673,37 @@ impl Padded {
 }
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
-/// The bits of `TerrainVertex::color`'s alpha byte that hold the light its face emits, for
-/// HDR output's highlights (`gfx/hdr.rs`): 15 minus the level, so the usual 0xFF means none.
-/// The byte's other four bits stay set.
+/// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
+/// in HDR output (`gfx/hdr.rs`): 15 minus the tier, so the usual 0xFF means none. The
+/// byte's other four bits stay set.
 pub const EMISSION_BITS: u32 = 0x0F00_0000;
-/// `color` marked as emitting light `level` (0 to 15).
-pub fn emitting(color: u32, level: u8) -> u32 {
-    color & !EMISSION_BITS | u32::from(15 - level.min(15)) << 24
+/// HDR tiers, by the kind of light rather than its level: a candle's flame is as bright as
+/// a torch's, it only lights less around it. 0 stays as in SDR.
+pub const LOW: u8 = 1;
+pub const INCANDESCENT: u8 = 2;
+pub const BRIGHT: u8 = 3;
+/// The sun and lightning.
+pub const VERY_BRIGHT: u8 = 4;
+/// `color` marked as shining at `tier` (0 to `VERY_BRIGHT`).
+pub fn emitting(color: u32, tier: u8) -> u32 {
+    color & !EMISSION_BITS | u32::from(15 - tier.min(VERY_BRIGHT)) << 24
+}
+/// The HDR tier of block `name` (no namespace), which emits light `level`.
+pub fn hdr_tier(name: &str, level: u8) -> u8 {
+    match name {
+        _ if level == 0 => 0,
+        "glowstone" | "jack_o_lantern" | "campfire" | "soul_campfire" | "soul_lantern"
+        | "soul_torch" | "soul_wall_torch" | "soul_fire" => BRIGHT,
+        "torch" | "wall_torch" | "lantern" | "lava" | "crying_obsidian" | "fire"
+        | "sea_lantern" => INCANDESCENT,
+        "redstone_torch" | "redstone_wall_torch" | "magma_block" => LOW,
+        // Its flame is a particle.
+        _ if name.ends_with("candle") || name.ends_with("candle_cake") => LOW,
+        // A faint glow in the dark, as in SDR.
+        "glow_lichen" => 0,
+        _ if level >= 10 => INCANDESCENT,
+        _ => LOW,
+    }
 }
 const UNSET: u32 = u32::MAX;
 const NO_BIOME: u16 = u16::MAX;
@@ -805,7 +848,7 @@ impl Mesher<'_> {
         }
         let pad = Padded::new(region, sy);
         out.visibility = visibility(&pad, &self.tables.info);
-        let base_y = MIN_Y + sy * 16;
+        let base_y = center.min_y() + sy * 16;
         let mut tints = Tints::new(
             region,
             self.biomes,
@@ -936,6 +979,7 @@ impl Mesher<'_> {
         state: &Info,
     ) {
         let q = &face.quad;
+        let tier = state.tier.max(hdr_tier("", q.light_emission));
         let shade_face = q.shade_direction_override.unwrap_or(q.facing);
         let directional = lighting::cardinal(self.nether_shading, shade_face);
         // Grey level per vertex before tinting, and vanilla light coords.
@@ -975,7 +1019,7 @@ impl Mesher<'_> {
                 } else {
                     face.layer as u16
                 },
-                emitting(pack_rgb(rgb), state.emission.max(q.light_emission)),
+                emitting(pack_rgb(rgb), tier),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
         }

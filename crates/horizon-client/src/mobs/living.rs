@@ -19,12 +19,13 @@ use horizon_world::{
     registry::BlockStateId,
 };
 
-/// `Entity.moveDist`, `flyDist` and `nextStep`.
+/// `Entity.moveDist`, `flyDist`, `nextStep` and `Parrot.nextFlap`.
 #[derive(Clone, Copy, Debug)]
 pub struct Steps {
     pub move_dist: f32,
     pub fly_dist: f32,
     pub next_step: f32,
+    pub next_flap: f32,
     /// `AbstractHorse.gallopSoundCounter`.
     pub gallop: i32,
 }
@@ -34,6 +35,7 @@ impl Default for Steps {
             move_dist: 0.0,
             fly_dist: 0.0,
             next_step: 1.0,
+            next_flap: 1.0,
             gallop: 0,
         }
     }
@@ -394,6 +396,11 @@ impl Mob {
     /// `getDimensions(Pose.STANDING)`, whose eye height lays it in the bed
     /// (`LivingEntityRenderer.submit`).
     pub fn awake_dims(&self) -> (f64, f64, f64) {
+        self.awake_dims_in(self.extra.pose == super::sync::LONG_JUMPING)
+    }
+    /// `Entity.getDimensions(Pose)` of the standing pose, or of
+    /// `Pose.LONG_JUMPING` (what `LongJumpUtil` checks an arc with).
+    pub fn awake_dims_in(&self, long_jumping: bool) -> (f64, f64, f64) {
         let k = &self.kind;
         // Avatar.POSES: a player's or mannequin's box follows its pose.
         if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
@@ -420,6 +427,10 @@ impl Mob {
                 }
                 super::species::Baby::None => {}
             }
+        }
+        // Goat.getDefaultDimensions: a long jump scales the box by 0.7.
+        if long_jumping && k.species == super::Species::Goat {
+            (w, h, e) = (w * 0.7_f32, h * 0.7_f32, e * 0.7_f32);
         }
         // Warden.getDefaultDimensions: a metre tall while digging or emerging.
         if self.kind.species == super::Species::Warden && super::warden::digging_or_emerging(self) {
@@ -759,6 +770,22 @@ impl Mob {
                     ));
                 }
             }
+        } else if w.facts.is_air(state)
+            && self.species() == super::Species::Bee
+            && !self.on_ground
+            && self.age.is_multiple_of(2)
+        {
+            // Entity.processFlappingMovement: a flying bee beats its wings on
+            // every other tick (Bee.isFlapping, TICKS_PER_FLAP is 2).
+            events.push(MobEvent::GameEvent {
+                event: "minecraft:flap",
+                at: [self.position.x, self.position.y, self.position.z],
+                source: self.id,
+                state: horizon_world::registry::BlockStateId(0),
+            });
+        } else if w.facts.is_air(state) && self.species() == super::Species::Parrot {
+            // Entity.processFlappingMovement: a move ending in the air.
+            super::parrot::process_flapping(self, events);
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
@@ -865,14 +892,30 @@ impl Mob {
         if self.species() == super::Species::Creeper {
             self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
         }
+        // AbstractHorse.causeFallDamage (llamas override it): a landing of more
+        // than a block thuds, and the horse's fall makes no generic fall sound.
+        let thud =
+            super::equine::is_equine(self.species()) && !super::llama::is_llama(self.species());
+        if thud && self.fall_distance > 1.0 && !self.silent {
+            let at = [self.position.x, self.position.y, self.position.z];
+            let sound = if self.is_baby() {
+                "entity.baby_horse.land"
+            } else {
+                "entity.horse.land"
+            };
+            events.push(MobEvent::Sound(sound, at, 0.4, 1.0));
+        }
         if self.kind.flags.fall_immune {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
         let mut damage = (power * self.kind.fall_damage_multiplier).floor();
-        // Frog.calculateFallDamage: five points less than the base damage.
-        if self.species() == super::Species::Frog {
-            damage -= 5.0;
+        // Frog.calculateFallDamage: five points less than the base damage;
+        // Goat.calculateFallDamage: ten, so a long jump down a ledge is safe.
+        match self.species() {
+            super::Species::Frog => damage -= 5.0,
+            super::Species::Goat => damage -= 10.0,
+            _ => {}
         }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
@@ -884,7 +927,9 @@ impl Mob {
                 (false, true) => "entity.generic.big_fall",
                 (false, false) => "entity.generic.small_fall",
             };
-            events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            if !thud {
+                events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+            }
             self.damage(damage as f32, super::Damage::fall());
         }
     }
@@ -1045,8 +1090,12 @@ impl Mob {
         } else {
             y -= self.gravity();
         }
-        // LivingEntity.shouldDiscardFriction (a breeze's or a frog's long jump).
-        if super::breeze::discards_friction(self) || self.extra.frog.discard_friction {
+        // LivingEntity.shouldDiscardFriction (a breeze's, a frog's or a goat's
+        // long jump).
+        if super::breeze::discards_friction(self)
+            || self.extra.frog.discard_friction
+            || self.extra.goat.discard_friction
+        {
             self.velocity = Vec3::new(movement.x, y, movement.z);
             return;
         }

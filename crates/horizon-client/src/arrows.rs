@@ -164,6 +164,8 @@ pub struct ArrowState {
     /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
     pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
+    /// `Arrow.ID_EFFECT_COLOR` as a client has it from its server (-1: none).
+    pub effect_color: i32,
     /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
     /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
@@ -214,6 +216,7 @@ impl ArrowState {
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
             fired_from_weapon: None,
             no_physics: false,
+            effect_color: -1,
             pierce: 0,
             pierced: Vec::new(),
             fire_ticks: 0,
@@ -458,6 +461,10 @@ pub enum EntityHit {
     Refused,
     /// The entity turned it first (`Entity.deflection`: breezes).
     Deflected,
+    /// The target teleported away from it (`EnderMan.hurtServer` returns true,
+    /// `onHitEntity` returns before the hit sound and the discard): the arrow
+    /// flies on and falls to the ground.
+    Dodged,
 }
 /// The rest of the tick of an arrow that hit an entity: whether to keep it.
 pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: EntityHit) -> bool {
@@ -480,6 +487,7 @@ pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: Entity
             }
         }
         EntityHit::Refused => ticker.turn_back(),
+        EntityHit::Dodged => {}
         EntityHit::Deflected => {
             // The deflection comes before `onHitEntity` adds the entity to
             // `piercingIgnoreEntityIds`.
@@ -656,7 +664,7 @@ impl Ticker<'_, '_, '_, '_> {
         if !self.st.first_tick && self.st.fluids.is_in_fluid(&Tags, LAVA) {
             self.st.fall_distance *= 0.5;
         }
-        if self.position().y < f64::from(crate::chunk::MIN_Y - 64) {
+        if self.position().y < f64::from(self.scene.world.bottom_y() - 64) {
             self.st.removed = true;
         }
         self.st.first_tick = false;
@@ -1151,10 +1159,10 @@ impl FluidInteractionWorld for Ticker<'_, '_, '_, '_> {
         Ok(self.scene.world.chunks.contains_key(&(x, z)).then_some(()))
     }
     fn chunk_sections(&mut self, _: ()) -> Result<FluidSections<'_>, Error> {
-        static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
+        let layout = self.scene.world.layout();
         Ok(FluidSections {
-            minimum_section_y: crate::chunk::MIN_Y >> 4,
-            has_fluid: &SECTIONS,
+            minimum_section_y: layout.min_y() >> 4,
+            has_fluid: crate::chunk::every_section(layout),
         })
     }
     fn bounding_box_min_y(&self) -> f64 {
