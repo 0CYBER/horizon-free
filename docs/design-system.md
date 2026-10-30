@@ -261,6 +261,13 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   bar, what is happening with the time left, and the steps (game files, Java, sounds, prepare,
   play), the current one lit, those done ticked: steps, never the log
   (`HORIZON_LAUNCHER_PAGE=getting-ready` shows it for screenshots, nothing runs).
+- **Instance icons** (`launcher/src/instance_icons.rs`): the sidebar's rows, Home's hero (beside
+  the name) and the instance dialog show the same icon. Its own picture first (`icon.png` in its
+  game folder: one the player chose with Choose image…, scaled to 128 pixels, or its modpack's
+  icon from where it was installed), else the block or colour chosen in the dialog, else its
+  mark: the loader's logo (Fabric, Quilt, Forge, NeoForge), the grass block for plain Minecraft,
+  Horizon's for Horizon. The letter tile is the last resort. Pixel-art logos are scaled by whole
+  pixels; each is decoded once per size.
 - **The instance's tabs** (`launcher/src/home_tabs.rs`): under Home's hero, one tab at a time
   instead of one long page: Overview (what Play needs: the instance, the game or its resources,
   the account), Worlds, Multiplayer, Packs, then Screenshots and Console once they have something.
@@ -268,8 +275,8 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
   strip's end, where a list's header would put them (`HORIZON_LAUNCHER_PAGE=worlds`, `packs`...
   opens one for screenshots).
 - **The Mods tab** (`launcher/src/instance_mods.rs`): the instance's mods on one nearly opaque
-  card, its loader in the header ("Fabric mods", "Horizon mods") beside a filter. A row is a
-  coloured square with the mod's initial, its name and version, where it comes from (Modrinth,
+  card, its loader in the header ("Fabric mods", "Horizon mods") beside a filter. A row is the
+  mod's own icon (Modrinth's, else its jar's, else a glyph), its name and version, where it comes from (Modrinth,
   "needed by another mod", or a local file by name), an update as an amber pill when the browser
   found one, and a switch (a Java jar turned off is renamed `.disabled`). Update all and Add mods
   sit at the strip's end (`HORIZON_LAUNCHER_PAGE=instance-mods`).

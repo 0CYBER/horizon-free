@@ -205,8 +205,20 @@ impl Game<'_> {
             }
             // ConfirmLinkScreen over the screen the dialog leaves.
             Some(Click::OpenUrl(url)) => self.click_url(url),
-            // Screen.insertText: the screen after the dialog takes no text.
-            Some(Click::SuggestCommand(_)) => {}
+            // defaultHandleClickEvent: `activeScreen.insertText(command, true)`.
+            // Only the chat screen (opened under the dialog) takes text.
+            Some(Click::SuggestCommand(command)) => {
+                if !self.dialog_open() && self.ui.chat_screen.is_some() {
+                    let m = horizon_client::screen_draw::Measure(&self.gui.atlas.font);
+                    let c = horizon_client::chat::Commands {
+                        dispatcher: super::chat::chat_tree(&self.remote),
+                        registries: &self.ui.registries,
+                    };
+                    if let Some(screen) = self.ui.chat_screen.as_mut() {
+                        screen.suggest_command(&m, &c, &command);
+                    }
+                }
+            }
             Some(other) => log::error!("Don't know how to handle {other:?}"),
             None => {}
         }
