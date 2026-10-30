@@ -401,12 +401,18 @@ pub fn slider(
         // A controller's D-pad can focus it (Horizon's controller support).
         crate::widgets::target_as([x, y, w, 20.0], kind);
     }
-    let track = if hover && active {
-        "gui/sprites/widget/slider_highlighted"
-    } else {
-        "gui/sprites/widget/slider"
-    };
-    nine_slice(batch, atlas, track, x, y, w, 20.0, u32::MAX);
+    // Vanilla outlines the track (slider_highlighted) only for keyboard focus;
+    // hovering highlights just the handle.
+    nine_slice(
+        batch,
+        atlas,
+        "gui/sprites/widget/slider",
+        x,
+        y,
+        w,
+        20.0,
+        u32::MAX,
+    );
     let handle = if hover && active {
         "gui/sprites/widget/slider_handle_highlighted"
     } else {
