@@ -36,6 +36,7 @@ use horizon_protocol::{
         play::{self, Clientbound as C, Serverbound as S},
     },
     registry::{Builtin, DimensionType, Dynamic, ceil_log2},
+    secure_chat::Signature,
     text::{Language, plain},
 };
 use horizon_world::{
@@ -62,6 +63,13 @@ fn remote_text(tag: &Tag) -> horizon_client::text::Text {
 fn menu_title(tag: &Tag) -> horizon_client::text::Text {
     remote_text(tag).resolve_legacy()
 }
+
+/// A player message Chat Delay holds back, and its signature.
+type QueuedChat = (
+    horizon_client::text::Text,
+    horizon_client::chat::ChatSource,
+    Option<Signature>,
+);
 
 /// Streaming needs a generator; a server world never generates.
 struct NoTerrain;
@@ -183,8 +191,12 @@ pub(super) struct Remote {
     pub chat: Vec<(String, Instant)>,
     /// Lines received since joining, for the control socket's events.
     pub chat_received: u64,
-    /// `ChatListener.delayedMessageQueue`: player chat held back by Chat Delay.
-    chat_queue: VecDeque<(horizon_client::text::Text, horizon_client::chat::ChatSource)>,
+    /// `ChatListener.delayedMessageQueue`: player chat held back by Chat
+    /// Delay, with the signature a deletion names it by.
+    chat_queue: VecDeque<QueuedChat>,
+    /// `ClientPacketListener.messageSignatureCache`: the signatures packed
+    /// ones index, as the server's copy for this connection holds them.
+    signatures: horizon_protocol::secure_chat::SignatureCache,
     /// `ChatListener.previousMessageTime`: when a message last showed, if one has.
     chat_previous: Option<Instant>,
     /// The server's command tree (ClientboundCommandsPacket).
@@ -537,6 +549,7 @@ impl Game<'_> {
             chat: Vec::new(),
             chat_received: 0,
             chat_queue: VecDeque::new(),
+            signatures: Default::default(),
             chat_previous: None,
             commands: None,
             custom_completions: Default::default(),
@@ -794,22 +807,38 @@ impl Game<'_> {
         content: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
     ) -> bool {
+        self.signed_chat_line(content, source, None)
+    }
+    /// `chat_line` of a player message, keeping its signature for a
+    /// deletion (`GuiMessage.signature`).
+    fn signed_chat_line(
+        &mut self,
+        content: horizon_client::text::Text,
+        source: horizon_client::chat::ChatSource,
+        signature: Option<Signature>,
+    ) -> bool {
         if !self.ui.chat.shows(source) {
             return false;
         }
         let text = content.plain();
-        // addServerSystemMessage and addClientSystemMessage both carry
-        // GuiMessageTag.systemSinglePlayer: the grey bar at the line's left.
-        let indicator = (source != horizon_client::chat::ChatSource::Player)
-            .then_some(horizon_client::chat::SYSTEM_INDICATOR);
-        self.ui.chat.add(
-            &self.gui.atlas,
-            content,
-            indicator,
-            source,
-            self.ticks,
-            self.screen == Screen::Chat,
-        );
+        let focused = self.screen == Screen::Chat;
+        if source == horizon_client::chat::ChatSource::Player {
+            self.ui
+                .chat
+                .add_signed(&self.gui.atlas, content, signature, self.ticks, focused);
+        } else {
+            // addServerSystemMessage and addClientSystemMessage both carry
+            // GuiMessageTag.systemSinglePlayer: the grey bar at the line's left.
+            let indicator = Some(horizon_client::chat::SYSTEM_INDICATOR);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                content,
+                indicator,
+                source,
+                self.ticks,
+                focused,
+            );
+        }
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
             r.chat_received += 1;
@@ -822,15 +851,44 @@ impl Game<'_> {
 
     /// `ChatListener.handleMessage` for player and disguised chat: held in the
     /// queue while Chat Delay is set, shown at once otherwise.
-    pub(super) fn handle_player_chat(&mut self, line: horizon_client::text::Text) {
+    pub(super) fn handle_player_chat(
+        &mut self,
+        line: horizon_client::text::Text,
+        signature: Option<Signature>,
+    ) {
         let source = horizon_client::chat::ChatSource::Player;
         if self.chat_delay_ms() > 0 {
             if let Some(r) = self.remote.as_mut() {
-                r.chat_queue.push_back((line, source));
+                r.chat_queue.push_back((line, source, signature));
             }
         } else {
-            self.accept_chat(line, source);
+            self.accept_chat(line, source, signature);
         }
+    }
+
+    /// `ClientPacketListener.handleDeleteChat`: the packed signature names a
+    /// message; one still held back by Chat Delay never shows
+    /// (`ChatListener.removeFromDelayedMessageQueue`), a shown one is
+    /// replaced (`ChatComponent.deleteMessage`). A signature the cache
+    /// doesn't hold is an invalid packet.
+    fn handle_delete_chat(&mut self, packed: &(i32, Option<Vec<u8>>)) -> Result<()> {
+        let Some(r) = self.remote.as_mut() else {
+            return Ok(());
+        };
+        let Some(signature) = r.signatures.unpack(packed) else {
+            let reason =
+                horizon_client::text::Text::translate("multiplayer.disconnect.invalid_packet", &[]);
+            return self.leave_server(Some(reason.plain()));
+        };
+        let queued = r.chat_queue.len();
+        r.chat_queue
+            .retain(|(_, _, s)| s.as_ref() != Some(&signature));
+        if r.chat_queue.len() == queued {
+            self.ui
+                .chat
+                .delete_message(&self.gui.atlas, &signature, self.ticks);
+        }
+        Ok(())
     }
 
     /// A message's `accept`: shown, it starts the Chat Delay wait again.
@@ -838,8 +896,9 @@ impl Game<'_> {
         &mut self,
         line: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
+        signature: Option<Signature>,
     ) -> bool {
-        let shown = self.chat_line(line, source);
+        let shown = self.signed_chat_line(line, source, signature);
         if shown && let Some(r) = self.remote.as_mut() {
             r.chat_previous = Some(Instant::now());
         }
@@ -885,9 +944,10 @@ impl Game<'_> {
         }
         // A message the Chat option hides is dropped and the next one is tried,
         // until one shows.
-        while let Some((line, source)) = self.remote.as_mut().and_then(|r| r.chat_queue.pop_front())
+        while let Some((line, source, signature)) =
+            self.remote.as_mut().and_then(|r| r.chat_queue.pop_front())
         {
-            if self.accept_chat(line, source) {
+            if self.accept_chat(line, source, signature) {
                 break;
             }
         }
@@ -903,8 +963,8 @@ impl Game<'_> {
         else {
             return;
         };
-        for (line, source) in queue {
-            self.chat_line(line, source);
+        for (line, source, signature) in queue {
+            self.signed_chat_line(line, source, signature);
         }
         if let Some(r) = self.remote.as_mut() {
             r.chat_previous = None;
@@ -1091,6 +1151,7 @@ impl Game<'_> {
                         r.players.clear();
                         r.tab_players.clear();
                         r.listed.clear();
+                        r.signatures = Default::default();
                         r.custom_completions.clear();
                     }
                     self.ui.registries.custom_completions.clear();
@@ -3195,18 +3256,43 @@ impl Game<'_> {
             }
             C::PlayerChat(p) => {
                 use horizon_client::scoreboard::tag_to_json;
+                // SignedMessageBody.Packed.unpack: the last seen it names must
+                // be in the cache; then the message joins it
+                // (MessageSignatureCache.push).
+                let Some(r) = self.remote.as_mut() else {
+                    return Ok(());
+                };
+                let last_seen: Option<Vec<Signature>> =
+                    p.last_seen.iter().map(|s| r.signatures.unpack(s)).collect();
+                let Some(last_seen) = last_seen else {
+                    log::error!(
+                        "Message from player with ID {:032x} referenced unrecognized signature id",
+                        p.sender
+                    );
+                    let reason = horizon_client::text::Text::translate(
+                        "multiplayer.disconnect.invalid_packet",
+                        &[],
+                    );
+                    return self.leave_server(Some(reason.plain()));
+                };
+                let signature = p
+                    .signature
+                    .as_deref()
+                    .and_then(horizon_protocol::secure_chat::signature);
+                r.signatures.push(&last_seen, signature.as_ref());
                 let content = p
                     .unsigned_content
                     .as_ref()
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
-                self.handle_player_chat(line);
+                self.handle_player_chat(line, signature);
             }
             C::DisguisedChat(p) => {
                 let content = horizon_client::scoreboard::tag_to_json(&p.message);
                 let line = self.format_chat(&p.chat_type, content);
-                self.handle_player_chat(line);
+                self.handle_player_chat(line, None);
             }
+            C::DeleteChat(p) => self.handle_delete_chat(&p.signature)?,
             C::PlayerInfoUpdate(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     // handlePlayerInfoUpdate: new entries first, then every
@@ -4138,6 +4224,8 @@ impl Game<'_> {
 
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
+        // Hud.tick ends with ChatComponent.tick.
+        self.ui.chat.tick(&self.gui.atlas, self.ticks);
         // AbstractSignEditScreen.tick: the editor closes once its sign is removed.
         if let Some(edit) = &self.sign_edit
             && !matches!(
