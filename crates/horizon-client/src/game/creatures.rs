@@ -3886,7 +3886,7 @@ impl Game<'_> {
             self.swing_arm();
             return Ok(true);
         }
-        if self.interact_allay(index, &item) {
+        if self.interact_allay(index, held.as_ref()) {
             self.swing_arm();
             return Ok(true);
         }
