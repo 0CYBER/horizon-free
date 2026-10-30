@@ -6,9 +6,15 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 22 adds item behaviour: a held item's hit on a mob
+//! API 23 adds item behaviour: a held item's hit on a mob
 //! (`native_hurt_enemy`), a carried stack's tick (`native_inventory_tick`) and
 //! an equipment slot taking a different item (`native_on_equip`).
+//!
+//! API 22 adds what a mod needs to keep the world from changing blocks
+//! it guards: fluid and fire spreading (`native_block_spread`), pistons
+//! (`native_piston_move`), explosions (`native_explosion_detonate`),
+//! buckets (`native_fill_bucket`) and a player's attack on an entity
+//! (`native_attack_entity`).
 //!
 //! API 21 adds right clicking a block (`native_right_click_block`), and in
 //! `native_server.rs` the acting player (`native_acting_player`), a player's
@@ -115,7 +121,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 22;
+pub(crate) const NATIVE_HOOKS_API: u32 = 23;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -143,6 +149,41 @@ impl GameLevel<'_> {
         moved: bool,
     ) {
         let _ = (dimension, pos, state, changed, moved);
+    }
+
+    /// On an authoritative server, a fluid flows or fire spreads from `from`
+    /// into `to` (`kind` is `fluid` or `fire`): `FlowingFluid.spreadTo`, and
+    /// `FireBlock.tick` setting fire to `to` or burning it (`checkBurnOut`).
+    /// Set `canceled` to leave the block at `to` as it is. Fluids ask on
+    /// every flow: answer fast. API 22.
+    #[inline(always)]
+    pub(super) fn native_block_spread(
+        &self,
+        dimension: LevelDimension,
+        kind: &str,
+        from: BlockPos,
+        to: BlockPos,
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, kind, from, to, canceled);
+    }
+
+    /// On an authoritative server, the piston at `piston` is about to push
+    /// the blocks at `push` one step `direction` (`[0, 1, 0]` is up; pulling
+    /// when it retracts) and destroy those at `destroy`:
+    /// `PistonBaseBlock.moveBlocks`, once its structure resolved. Set
+    /// `canceled` and nothing moves, as when the structure can't. API 22.
+    #[inline(always)]
+    pub(super) fn native_piston_move(
+        &self,
+        dimension: LevelDimension,
+        piston: BlockPos,
+        direction: [i32; 3],
+        push: &[BlockPos],
+        destroy: &[BlockPos],
+        canceled: &mut bool,
+    ) {
+        let _ = (dimension, piston, direction, push, destroy, canceled);
     }
 }
 
@@ -725,11 +766,52 @@ impl Game<'_> {
     ) {
         let _ = (pos, face, canceled);
     }
+    /// An explosion at `center` in `dimension` (`minecraft:overworld`) is
+    /// about to break `blocks`: `ServerExplosion.explode` with its `toBlow`,
+    /// before any block is hit. Take out the positions to spare; they keep
+    /// their block and get no fire. Entities are hurt as before. Server-side.
+    /// API 22.
+    pub(super) fn native_explosion_detonate(
+        &mut self,
+        dimension: &str,
+        center: [f64; 3],
+        blocks: &mut Vec<[i32; 3]>,
+    ) {
+        let _ = (dimension, center, blocks);
+    }
+    /// A player fills (`stack` an empty bucket) or empties a bucket at `pos`:
+    /// `BucketItem.use`, where it asks `Level.mayInteract`. Set `canceled`
+    /// and the bucket does nothing. Server-side, for every player of the
+    /// world (`native_acting_player` says who). API 22.
+    pub(super) fn native_fill_bucket(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (stack, pos, canceled);
+    }
+    /// A player attacks the entity `entity` (`Entity.getId`) of type `kind`
+    /// (`minecraft:item_frame`, `minecraft:cow`, `minecraft:player`) standing
+    /// at `pos`: `ServerGamePacketListenerImpl.handleInteract`'s attack, once
+    /// in reach, where `Player.attack` starts. Set `canceled` and the blow
+    /// does nothing (no damage, no knockback, the frame keeps its item).
+    /// Server-side, for every player of the world (`native_acting_player`
+    /// says who). API 22.
+    pub(super) fn native_attack_entity(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        pos: [f64; 3],
+        canceled: &mut bool,
+    ) {
+        let _ = (entity, kind, pos, canceled);
+    }
     /// A player's hit landed on the mob `entity` of type `kind`
     /// (`minecraft:zombie`), holding `stack`: where `Item.hurtEnemy` is called,
     /// before the post-attack enchantments and the weapon's wear. It only
     /// hears. Another player as the target isn't told yet. Server-side, for
-    /// every player of the world (the helpers read the acting one). API 22.
+    /// every player of the world (the helpers read the acting one). API 23.
     pub(super) fn native_hurt_enemy(&mut self, stack: &ItemStack, entity: u32, kind: &str) {
         let _ = (stack, entity, kind);
     }
@@ -742,7 +824,7 @@ impl Game<'_> {
     /// slot, so the item helpers see it: a count of 0 empties the slot, and the
     /// player's client gets the change. This runs often, so check the item
     /// first. Server-side, for every living player of the world (the helpers
-    /// read the acting one). API 22.
+    /// read the acting one). API 23.
     pub(super) fn native_inventory_tick(&mut self, slot: i32, selected: bool) {
         let _ = (slot, selected);
     }
@@ -751,7 +833,7 @@ impl Game<'_> {
     /// item, `new` (none when it was emptied): `LivingEntity.onEquipItem`,
     /// before the equip sound. It only hears. Never for a spectator.
     /// Server-side, for every player of the world (the helpers read the
-    /// acting one). API 22.
+    /// acting one). API 23.
     pub(super) fn native_on_equip(&mut self, slot: &str, new: Option<&ItemStack>) {
         let _ = (slot, new);
     }
@@ -817,7 +899,7 @@ impl Game<'_> {
     /// `native_inventory_tick`'s numbers: none for an empty slot or another
     /// number. Change it as you like: a count of 0 empties the slot at the end
     /// of `native_inventory_tick`, and the player's client gets the change.
-    /// API 22.
+    /// API 23.
     pub(super) fn native_carried_stack(&mut self, slot: i32) -> Option<&mut ItemStack> {
         self.native_carried_slot(slot)?.as_mut()
     }

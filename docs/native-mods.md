@@ -107,10 +107,16 @@ output), so `execute in <dimension> run tp <player> <x> <y> <z>` moves a player 
 tells a player why, even inside their own hook; and the players
 `native_server_players` lists carry their health. Bundles that use them need `"hooks": 21`.
 
-API 22 adds item behaviour, on the server for every player: `native_hurt_enemy` hears a player's hit land on a mob with the
+API 22 adds what a server mod needs to keep the world itself out of guarded land. `native_block_spread` hears a
+fluid flow or fire spread into a block, `native_piston_move` a piston's push or pull, `native_explosion_detonate` the
+blocks an explosion is about to break (a mod takes out those it spares), `native_fill_bucket` a bucket filled or
+emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
+player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
+
+API 23 adds item behaviour, on the server for every player: `native_hurt_enemy` hears a player's hit land on a mob with the
 held stack, `native_inventory_tick` runs each tick for every stack a player carries (armour and off hand included), and
 `native_carried_stack` reads and changes that stack, and `native_on_equip` hears an equipment slot take a different item. The helpers read the acting player. Bundles
-that use them need `"hooks": 22`.
+that use them need `"hooks": 23`.
 
 ## What the launcher does
 
@@ -312,6 +318,16 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   own use and the item's (`ServerPlayerGameMode.useItemOn`), once per hand. A mod that sets `canceled` stops both,
   without a swing; the player's client is sent the block back. With `native_destroy_block` it keeps players out of
   claimed land.
+- **`native_block_spread(dimension, kind, from, to, canceled)`** and **`native_piston_move(dimension, piston,
+  direction, push, destroy, canceled)`** (API 22, on `GameLevel`, like the block observers): a fluid flowing or fire
+  spreading (`kind` `fluid` or `fire`) from `from` into `to`, and a piston moving blocks once its structure resolved.
+  Canceled, the block at `to` stays as it is, and the piston moves nothing. Fluids ask on every flow: answer from
+  memory, fast.
+- **`native_explosion_detonate(dimension, center, blocks)`** (API 22): the positions an explosion is about to break,
+  before any is hit; take out the ones to spare. Entities are hurt as before.
+- **`native_fill_bucket(stack, pos, canceled)`** and **`native_attack_entity(entity, kind, pos, canceled)`** (API 22):
+  a player's bucket at a block, and their blow on an entity, with the acting player swapped in. Canceled, the bucket
+  does nothing and the blow does no harm.
 
 ### Server menus
 

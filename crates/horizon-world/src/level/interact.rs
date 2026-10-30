@@ -421,7 +421,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 // JukeboxBlock.useWithoutItem: ejecting a disc is SUCCESS (the
                 // insert is useItemOn). An empty jukebox passes.
                 Class::Jukebox if table.bool(state, p.has_record) => Success,
-                Class::Command | Class::Structure | Class::Jigsaw => {
+                Class::Command
+                | Class::Structure
+                | Class::Jigsaw
+                | Class::TestBlock
+                | Class::TestInstanceBlock => {
                     if player.game_master {
                         self.player_effect(pos, state, PlayerEffect::OpenMenu);
                         Success

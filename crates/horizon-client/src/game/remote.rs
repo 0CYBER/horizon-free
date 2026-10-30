@@ -35,7 +35,7 @@ use horizon_protocol::{
         Empty,
         play::{self, Clientbound as C, Serverbound as S},
     },
-    registry::{Builtin, DimensionType, Dynamic, ceil_log2},
+    registry::{Builtin, DimensionType, Dynamic, SyncedNames, ceil_log2},
     secure_chat::Signature,
     text::{Language, plain},
 };
@@ -53,7 +53,7 @@ use std::{
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// A text component the server sent, for the HUD.
-fn remote_text(tag: &Tag) -> horizon_client::text::Text {
+pub(super) fn remote_text(tag: &Tag) -> horizon_client::text::Text {
     use horizon_client::scoreboard::{comp_text, tag_to_json};
     comp_text(&tag_to_json(tag))
 }
@@ -245,6 +245,10 @@ pub(super) struct Remote {
     /// The player's own shared flag 5 (`Entity.isInvisible`) as the server
     /// last set it.
     pub(super) own_invisible: bool,
+    /// `LivingEntity.DATA_ARROW_COUNT_ID` and `DATA_STINGER_COUNT_ID` of the
+    /// own player, as the server synced them.
+    pub(super) own_arrows: i32,
+    pub(super) own_stingers: i32,
     /// The local player's profile UUID (always in the level).
     profile: u128,
     /// The local player's profile name: its score holder and team member.
@@ -595,6 +599,8 @@ impl Game<'_> {
             level_player_textures: HashMap::new(),
             glowing: Default::default(),
             own_invisible: false,
+            own_arrows: 0,
+            own_stingers: 0,
             profile: 0,
             profile_name: String::new(),
             destroying: None,
@@ -831,6 +837,16 @@ impl Game<'_> {
             },
             s,
         )
+    }
+    /// `HashedStack.create` with the connection's registries (the client's
+    /// `decoratedHashOpsGenerator`).
+    fn hashed_stack(&self, s: &Option<ItemStack>) -> Option<Hashed> {
+        let r = self.remote.as_ref()?;
+        let names = SyncedNames {
+            builtin: &r.builtin,
+            dynamic: &r.registries,
+        };
+        self.to_network(s).map(|s| Hashed::create(&s, &names))
     }
     /// A line in the connection's chat, with its styles, click and hover
     /// events (ChatComponent.addMessage). The lines the Chat option hides
@@ -2265,6 +2281,7 @@ impl Game<'_> {
                 }));
             }
             C::BlockUpdate(p) => self.server_block(p.pos, p.state),
+            C::AddTransientBlock(p) => self.add_transient_block(p.pos, p.state),
             // ClientPacketListener.handleBlockDestruction: another player's crack.
             C::BlockDestruction(p) => {
                 self.destroy_block_progress(p.id, p.pos, i32::from(p.progress));
@@ -2633,6 +2650,17 @@ impl Game<'_> {
                             (1, Value::Int(air)) => {
                                 if let Some(pl) = self.player.as_mut() {
                                     pl.air = *air;
+                                }
+                            }
+                            // LivingEntity.DATA_ARROW_COUNT_ID and DATA_STINGER_COUNT_ID.
+                            (12, Value::Int(count)) => {
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_arrows = *count;
+                                }
+                            }
+                            (13, Value::Int(count)) => {
+                                if let Some(r) = self.remote.as_mut() {
+                                    r.own_stingers = *count;
                                 }
                             }
                             (17, Value::Float(amount)) => {
@@ -3343,6 +3371,10 @@ impl Game<'_> {
                 } else {
                     self.cooldowns.add(group, p.duration);
                 }
+            }
+            // ClientPacketListener.handleTestInstanceBlockStatus.
+            C::TestInstanceBlockStatus(p) => {
+                self.block_editor_status(remote_text(&p.status), p.size);
             }
             C::SystemChat(p) => {
                 // The component as sent, translated in the client's own
@@ -4937,10 +4969,18 @@ impl Game<'_> {
         let stepped = &mut r.stepped;
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
+        let tab_players = &r.tab_players;
         let mut using = Vec::new();
         let mut mob_fx = Vec::new();
         for (m, rain) in self.mobs.iter_mut().zip(rain) {
             let player = players.contains_key(&(m.id as i32));
+            if player {
+                // AvatarRenderer.extractRenderState: isSpectator, from the player list.
+                m.extra.spectator = players
+                    .get(&(m.id as i32))
+                    .and_then(|uuid| tab_players.get(uuid))
+                    .is_some_and(|t| t.game_mode == SPECTATOR);
+            }
             if (!running && !player) || driven == Some(m.id) {
                 continue;
             }
@@ -5639,6 +5679,12 @@ impl Game<'_> {
             if passes {
                 return false;
             }
+            // MinecartCommandBlock.interact on the client: the editor opens.
+            if self.carts.iter().any(|c| {
+                c.id as i32 == hit.id && c.kind == super::minecarts::CartKind::CommandBlock
+            }) {
+                self.open_cart_command_block(hit.id as u32);
+            }
             if response.unwrap_or(true) {
                 self.swing_arm();
             }
@@ -5794,6 +5840,7 @@ impl Game<'_> {
                     self.lever_puff(hit.pos);
                 }
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
+                self.open_block_editor_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
                 // MultiPlayerGameMode.useItemOn: SUCCESS SwingSource.CLIENT
                 // (a chest, barrel, furnace, …). CONSUME does not swing.
                 if result == InteractionResult::Success {
@@ -6658,6 +6705,7 @@ impl Game<'_> {
             self.send(S::Attack(play::Attack {
                 id: self.mobs[i].id as i32,
             }));
+            self.remote_player_attack(i);
             self.reset_attack_strength();
         } else if !self.entity_targeted()
             && let Some(hit) = self.pick()
@@ -6676,6 +6724,67 @@ impl Game<'_> {
         self.swing_arm();
         self.send(S::Punch(Empty));
         instant
+    }
+
+    /// `MultiPlayerGameMode.attack` runs `Player.attack` on this client too.
+    /// For a mob `hurtOrSimulate` fails here (`Entity.hurtClient`), so the
+    /// hit has no attacker side; but `RemotePlayer.hurtClient` is true, so a
+    /// hit on another player with extra knockback runs the attacker's side of
+    /// `causeExtraKnockback`: the 0.6 horizontal speed cut and the sprint
+    /// stop. Without it the next move outruns the server's player.
+    fn remote_player_attack(&mut self, mob: usize) {
+        let id = self.mobs[mob].id as i32;
+        if !self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.level_players.contains_key(&id))
+        {
+            return;
+        }
+        // `getAttackStrengthScale(0.5)`: here the ticker is `hand_strength`'s
+        // (`attack_ticks` only counts in the local world), and the attack
+        // speed is the player's synced attribute, which a server may change.
+        let speed = self
+            .own_attribute("minecraft:attack_speed")
+            .unwrap_or_else(|| self.main_hand_attack_speed());
+        let strength = self.hand_strength.scale(0.5, speed);
+        // Player.attack's damage: a riptide spin's, or this client's own
+        // ATTACK_DAMAGE, which the held item and effects don't change here.
+        let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
+        let damage = if spin > 0.0 {
+            spin
+        } else {
+            self.own_attribute("minecraft:attack_damage")
+                .map_or(1.0, |v| v as f32)
+        };
+        let knockback = self
+            .own_attribute("minecraft:attack_knockback")
+            .map_or(0.0, |v| v as f32);
+        let sprinting = self.player.as_ref().is_some_and(|p| p.sprinting);
+        if !horizon_client::attack_strength::attacker_slows_after_hit(
+            damage, knockback, strength, sprinting,
+        ) {
+            return;
+        }
+        if let Some(p) = self.player.as_mut() {
+            let slowdown = horizon_client::attack_strength::ATTACKER_SLOWDOWN;
+            p.velocity = Vec3::new(
+                p.velocity.x * slowdown,
+                p.velocity.y,
+                p.velocity.z * slowdown,
+            );
+        }
+        self.stop_sprint_after_extra_knockback();
+    }
+
+    /// An attribute's value on this client's player, if its map has the attribute.
+    fn own_attribute(&mut self, id: &str) -> Option<f64> {
+        let p = self.player.as_mut()?;
+        let key = p.attributes.key(id)?;
+        p.attributes.lookup(Some(&key))?;
+        p.attributes
+            .value(Some(key), horizon_world::attribute_map::ValueKind::Computed)
+            .ok()
     }
 
     fn remote_continue_attack(&mut self, down: bool) {
@@ -6969,7 +7078,7 @@ impl Game<'_> {
     }
     fn send_clicks(&mut self, container: i32, clicks: Vec<Predicted>) {
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
-        let hashed = |g: &Self, s: &Option<ItemStack>| g.to_network(s).map(|s| Hashed::of(&s));
+        let hashed = |g: &Self, s: &Option<ItemStack>| g.hashed_stack(s);
         for (slot, button, input, changed, carried) in clicks {
             let changed = changed.iter().map(|(i, s)| (*i, hashed(self, s))).collect();
             let carried = hashed(self, &carried);
@@ -7016,7 +7125,7 @@ impl Game<'_> {
             }
             self.swing_arm();
         }
-        let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
+        let carried = self.hashed_stack(&self.carried);
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
         self.send(S::ContainerClick(play::ContainerClick {
             container,

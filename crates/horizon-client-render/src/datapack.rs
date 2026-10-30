@@ -618,6 +618,37 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack]) -> Vec<String> {
     enabled
 }
 
+/// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
+/// as `enabled_ids` orders them): the id `namespace:path` and the parsed JSON, a later pack's
+/// file for an id replacing an earlier one's. This is `context.datapackDimensions()` of
+/// `WorldOpenFlows.loadWorldStem`.
+pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    for pack in packs {
+        for file in pack.list_kinds(&["dimension"]) {
+            let Some(rest) = file.strip_prefix("data/") else {
+                continue;
+            };
+            let Some((namespace, rest)) = rest.split_once('/') else {
+                continue;
+            };
+            let Some(path) = rest
+                .strip_prefix("dimension/")
+                .and_then(|p| p.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Some(json) = pack
+                .read(&file)
+                .and_then(|b| serde_json::from_slice(&b).ok())
+            {
+                out.insert(format!("{namespace}:{path}"), json);
+            }
+        }
+    }
+    out
+}
+
 // ---- worldgen ----------------------------------------------------------------
 
 /// The worldgen entries of `packs` (lowest priority first, the built-in pack

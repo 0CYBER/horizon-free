@@ -89,8 +89,8 @@ import net.minecraft.world.phys.Vec3;
  * {@code use NAME PITCH} (the main hand's item used looking that way,
  * ServerboundUseItemPacket), {@code stab NAME} (a jab, ServerboundPlayerActionPacket
  * STAB), {@code arc NAME TICK} (a jump straight ahead, one position a tick as
- * LocalPlayer sends them, with a STAB ahead of the position of TICK, or none
- * when negative), {@code sprint NAME} (START_SPRINTING,
+ * LocalPlayer sends them, each in the server's next tick, with a STAB ahead of
+ * the position of TICK, or none when negative), {@code sprint NAME} (START_SPRINTING,
  * ServerboundPlayerCommandPacket), {@code pickup NAME SLOT} (a left click on that
  * slot of the player's inventory menu, claiming nothing), {@code quit NAME},
  * {@code
@@ -223,6 +223,8 @@ public final class LocatorBarClient {
         private final Object replyLock = new Object();
         private int replies;
         private int syncs;
+        /** The game time in the latest sync's reply. */
+        private long gameTime;
 
         Player(String name) {
             this.name = name;
@@ -259,6 +261,25 @@ public final class LocatorBarClient {
                     }
                     replyLock.wait(left);
                 }
+            }
+        }
+
+        /**
+         * Waits until the game time moves on from the latest sync's: the server has run the tick that handles what
+         * this player sent since. A sleep of 50 ms drifts from the server's ticks, and a jump then gets a tick of
+         * gravity more or less. Vanilla runs commands between ticks and movement in the tick (its PacketProcessor),
+         * Horizon both at the tick's start: the latest reply, not a new sync, is the tick to wait past on both.
+         */
+        void nextTick() throws Exception {
+            long now = gameTime;
+            long until = System.nanoTime() + 30_000_000_000L;
+            while (gameTime == now) {
+                if (System.nanoTime() > until) {
+                    record("error no tick after " + now);
+                    return;
+                }
+                Thread.sleep(1);
+                sync();
             }
         }
 
@@ -299,6 +320,7 @@ public final class LocatorBarClient {
             double up = 0.42;
             // A tick of its own, as in still: the join's position has none behind it.
             send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
+            sync();
             for (int tick = 0; tick < 13; tick++) {
                 if (tick == stabTick) stab();
                 y = Math.max(start.y, y + up);
@@ -307,7 +329,7 @@ public final class LocatorBarClient {
                 boolean landed = tick > 0 && y == start.y;
                 send(new ServerboundMovePlayerPacket.PosRot(new Vec3(start.x, y, z), at.yRot(), at.xRot(), landed, false));
                 send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
-                Thread.sleep(50);
+                nextTick();
                 if (landed) break;
             }
             position = new PositionMoveRotation(new Vec3(start.x, y, z), Vec3.ZERO, at.yRot(), at.xRot());
@@ -411,7 +433,10 @@ public final class LocatorBarClient {
                     } else if (p instanceof ClientboundSystemChatPacket c
                         && c.content().getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents t
                         && t.getKey().equals("commands.time.query.gametime")) {
+                        Object time = t.getArgs()[0];
                         synchronized (replyLock) {
+                            gameTime = Long.parseLong(time instanceof net.minecraft.network.chat.Component text
+                                ? text.getString() : String.valueOf(time));
                             syncs++;
                             replyLock.notifyAll();
                         }

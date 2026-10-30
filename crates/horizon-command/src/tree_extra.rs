@@ -30,6 +30,39 @@ pub fn register(d: &mut Dispatcher, root: usize) {
     let reason = d.argument(t, "reason", ArgType::Message);
     d.executes(reason, "kick");
 
+    // OpCommand, DeOpCommands, BanPlayerCommands, PardonCommand
+    for (name, id) in [("op", "op"), ("deop", "deop"), ("pardon", "pardon")] {
+        let n = d.literal(root, name);
+        d.requires(n, ADMINS);
+        let t = d.argument(n, "targets", ArgType::GameProfile);
+        d.executes(t, id);
+    }
+    let ban = d.literal(root, "ban");
+    d.requires(ban, ADMINS);
+    let t = d.argument(ban, "targets", ArgType::GameProfile);
+    d.executes(t, "ban");
+    let reason = d.argument(t, "reason", ArgType::Message);
+    d.executes(reason, "ban");
+
+    // WhitelistCommand
+    let whitelist = d.literal(root, "whitelist");
+    d.requires(whitelist, ADMINS);
+    for (word, id) in [
+        ("on", "whitelist.on"),
+        ("off", "whitelist.off"),
+        ("list", "whitelist.list"),
+    ] {
+        let w = d.literal(whitelist, word);
+        d.executes(w, id);
+    }
+    for (word, id) in [("add", "whitelist.add"), ("remove", "whitelist.remove")] {
+        let w = d.literal(whitelist, word);
+        let t = d.argument(w, "targets", ArgType::GameProfile);
+        d.executes(t, id);
+    }
+    let reload = d.literal(whitelist, "reload");
+    d.executes(reload, "whitelist.reload");
+
     // PostEffectCommand
     let pe = d.literal(root, "posteffect");
     d.requires(pe, GAMEMASTERS);
