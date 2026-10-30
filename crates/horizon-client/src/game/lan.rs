@@ -1927,6 +1927,10 @@ impl Game<'_> {
         if event == 21 && self.options.execution_role.is_client() {
             self.start_guardian_sound(id as u32);
         }
+        // Fox.handleEntityEvent 45: the same window draws the eating crumbs.
+        if event == 45 && self.options.execution_role.is_client() {
+            self.fox_eat_particles(id as u32);
+        }
     }
     /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
     /// emitter, and an animation for the attacker's client and observers once

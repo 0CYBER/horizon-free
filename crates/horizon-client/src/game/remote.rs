@@ -2647,6 +2647,10 @@ impl Game<'_> {
                 if p.event == 21 {
                     self.start_guardian_sound(p.id as u32);
                 }
+                // Fox.handleEntityEvent 45: the crumbs of the food in its mouth.
+                if p.event == 45 {
+                    self.fox_eat_particles(p.id as u32);
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit

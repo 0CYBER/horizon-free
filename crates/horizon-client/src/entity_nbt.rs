@@ -447,17 +447,21 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         );
     }
     match id {
-        // Fox.addAdditionalSaveData; Horizon models only the type.
+        // Fox.addAdditionalSaveData; Horizon models only the type, the
+        // flags and no trusted players yet.
         "minecraft:fox" => {
             let kind = if m.extra.variant == 1 { "snow" } else { "red" };
             map.insert("Type".into(), string(kind));
-            for (key, value) in [
-                ("Trusted", Tag::List(Vec::new())),
-                ("Sleeping", Tag::Byte(0)),
-                ("Sitting", Tag::Byte(0)),
-                ("Crouching", Tag::Byte(0)),
+            map.entry("Trusted".into()).or_insert(Tag::List(Vec::new()));
+            for (key, bit) in [
+                ("Sleeping", crate::mobs::fox::SLEEPING),
+                ("Sitting", crate::mobs::fox::SITTING),
+                ("Crouching", crate::mobs::fox::CROUCHING),
             ] {
-                map.entry(key.into()).or_insert(value);
+                map.insert(
+                    key.into(),
+                    Tag::Byte(i8::from(crate::mobs::fox::flag(m, bit))),
+                );
             }
         }
         // MushroomCow.addAdditionalSaveData: the Variant codec's name (stew
@@ -1388,6 +1392,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     match m.species() {
         crate::mobs::Species::Fox => {
             m.extra.variant = u8::from(text(tag.get("Type")).as_deref() == Some("snow"));
+            // Fox.readAdditionalSaveData: the sleeping, sitting and crouching flags.
+            for (key, bit) in [
+                ("Sleeping", crate::mobs::fox::SLEEPING),
+                ("Sitting", crate::mobs::fox::SITTING),
+                ("Crouching", crate::mobs::fox::CROUCHING),
+            ] {
+                if flag(tag, key) {
+                    m.extra.ints[0] |= bit;
+                }
+            }
         }
         // MushroomCow.readAdditionalSaveData: a missing or unknown name is
         // Variant.DEFAULT, red.
