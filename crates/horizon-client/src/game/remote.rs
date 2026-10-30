@@ -5563,9 +5563,21 @@ impl Game<'_> {
         // ItemEntity.tick runs on a client too: gravity, collisions and
         // friction move the item between the server's updates (every 20
         // ticks), and only the server removes it.
-        let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
+        let (world, registry, facts, collision) = (
+            &self.world,
+            self.pack.assets.registry,
+            self.res.facts(),
+            self.collision,
+        );
         for d in self.dropped.iter_mut().filter(|_| running) {
-            d.tick(world, facts, collision, false, &self.res.motion().fluids);
+            d.tick(
+                world,
+                registry,
+                facts,
+                collision,
+                false,
+                &self.res.motion().fluids,
+            );
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
         let _ = self.handle_mob_events(mob_fx);

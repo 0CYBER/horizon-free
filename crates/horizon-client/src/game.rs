@@ -3224,19 +3224,11 @@ impl Game<'_> {
             }
             let alive = item.tick(
                 &self.world,
+                self.pack.assets.registry,
                 self.res.facts(),
                 self.collision,
                 no_physics,
                 &self.res.motion().fluids,
-            );
-            // Entity.applyEffectsFromBlocks: bubble columns lift or drag the item.
-            horizon_client::motion::bubble_column_push(
-                &self.world,
-                self.pack.assets.registry,
-                self.res.facts(),
-                self.collision,
-                item.bounds(),
-                &mut item.velocity,
             );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
