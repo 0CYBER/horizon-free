@@ -233,6 +233,7 @@ mod stations;
 mod stats;
 mod stats_screen;
 mod storage;
+mod structure_blocks;
 mod structures;
 mod subtitle_hud;
 mod sulfur_cubes;
@@ -2182,6 +2183,9 @@ struct Game<'a> {
     /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
     options_to_world_options: bool,
     command_block_screen: Option<command_blocks::CommandBlockScreen>,
+    /// `StructureTemplateManager.structureRepository`: the templates in memory
+    /// by id, a miss included (game/structure_blocks.rs).
+    structure_templates: HashMap<String, Option<structure_blocks::TemplateEntry>>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
@@ -4128,6 +4132,11 @@ impl Game<'_> {
                 } => self.command_block_tick(pos),
                 LevelEvent::BlockEvent {
                     pos,
+                    kind: "structure_block",
+                    ..
+                } => self.structure_block_neighbor_changed((pos.x, pos.y, pos.z)),
+                LevelEvent::BlockEvent {
+                    pos,
                     kind: "brushable",
                     ..
                 } => self.brushable_tick([pos.x, pos.y, pos.z]),
@@ -4269,6 +4278,11 @@ impl Game<'_> {
         }
         if horizon_client::command_block::Mode::of_block(&name).is_some() {
             self.open_command_block(key);
+            return;
+        }
+        // The game master blocks' screens open on the player's own client
+        // (`BlockEntity.usedBy`); the server has nothing to open.
+        if &*name == "minecraft:structure_block" {
             return;
         }
         // SignBlock.useWithoutItem: the text editor, not a container.
@@ -5257,6 +5271,7 @@ impl Game<'_> {
                     });
                     self.command_block_placed(key, !data);
                 }
+                Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
                 Some(BlockEntity::Sign(sign)) if !sign.waxed => self.open_sign_editor(key, true),
                 _ => {}
             }
@@ -15431,6 +15446,7 @@ impl<'a> Game<'a> {
             world_options: None,
             options_to_world_options: false,
             command_block_screen: None,
+            structure_templates: HashMap::new(),
             friends: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
