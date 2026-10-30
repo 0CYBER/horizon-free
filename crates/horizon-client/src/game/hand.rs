@@ -93,7 +93,63 @@ pub(super) fn matches_for_swap(a: Option<&ItemStack>, b: Option<&ItemStack>) -> 
     }
 }
 
+/// `AttackRange.isInRange(attacker, box, buffer)` with the reach of
+/// `attack_reach` (or `AttackRange.defaultFor`'s, from the entity interaction
+/// range): the eye's distance to the box, inclusive.
+fn in_attack_range(distance: f64, (min, max, margin): (f32, f32, f32), buffer: f64) -> bool {
+    distance >= f64::from(min - margin) - buffer && distance <= f64::from(max + margin) + buffer
+}
+
 impl Game<'_> {
+    /// `getAttributeValue` of an interaction range of the player in place (a
+    /// guest swapped in on a server): creative's modifiers are on it
+    /// (`update_player_attributes`), as are `/attribute`'s and the items'.
+    fn interaction_range(&mut self, attribute: &str, survival: f64, creative: f64) -> f64 {
+        let otherwise = if self.creative { creative } else { survival };
+        self.player
+            .as_mut()
+            .and_then(|p| p.attribute(attribute).ok())
+            .unwrap_or(otherwise)
+    }
+
+    /// ServerGamePacketListenerImpl.handleAttack's
+    /// `Player.isWithinAttackRange(mainHandItem, box, 3.0)` for the player in
+    /// place: the held item's `attack_range`, else `AttackRange.defaultFor`
+    /// (0 to the entity interaction range, no margin). Out of range, vanilla
+    /// drops the attack without a word.
+    pub(super) fn within_attack_range(&mut self, target: &Aabb) -> bool {
+        let Some(eye) = self.eye_position() else {
+            return false;
+        };
+        let range = self.held().and_then(|stack| {
+            self.pack
+                .item_renderer
+                .models
+                .components(&horizon_client::item_render::stack_view(stack))
+                .get("minecraft:attack_range")
+                .cloned()
+        });
+        let reach = match &range {
+            Some(r) => attack_reach(r, self.creative),
+            None => {
+                let range = self.interaction_range("minecraft:entity_interaction_range", 3.0, 5.0);
+                (0.0, range as f32, 0.0)
+            }
+        };
+        let distance = target.distance_squared_to_point(v3(eye)).sqrt();
+        in_attack_range(distance, reach, 3.0)
+    }
+
+    /// `Player.isWithinEntityInteractionRange(box, buffer)` for the player in
+    /// place (ServerGamePacketListenerImpl.handleInteract, with 3).
+    pub(super) fn within_entity_interaction_range(&mut self, target: &Aabb, buffer: f64) -> bool {
+        let Some(eye) = self.eye_position() else {
+            return false;
+        };
+        let range = self.interaction_range("minecraft:entity_interaction_range", 3.0, 5.0) + buffer;
+        target.distance_squared_to_point(v3(eye)) < range * range
+    }
+
     /// A slot of the inventory (`OFFHAND_SLOT` for the off hand) was set to
     /// a new stack: the hand holding it compares it as another `ItemStack`
     /// (`shows_held_stack`) until the hand shows the held stack again.
@@ -715,6 +771,24 @@ mod tests {
         // A block nearer than the minimum reach takes the pick.
         let wall = |from: Vec3, _: Vec3| Some(from.add_vector(Vec3::new(0.0, 0.0, 1.0)));
         assert_eq!(reach_pick(&boxes, eye, look, Vec3::ZERO, reach, wall), None);
+    }
+
+    #[test]
+    fn the_server_takes_attacks_within_vanilla_reach_only() {
+        // handleAttack: AttackRange.defaultFor (0 to the entity interaction
+        // range, no margin) plus 3, inclusive: 6 in survival, 8 in creative.
+        let survival = (0.0, 3.0, 0.0);
+        assert!(in_attack_range(6.0, survival, 3.0));
+        assert!(!in_attack_range(6.01, survival, 3.0));
+        assert!(!in_attack_range(50.0, survival, 3.0));
+        let creative = (0.0, 5.0, 0.0);
+        assert!(in_attack_range(8.0, creative, 3.0));
+        assert!(!in_attack_range(8.01, creative, 3.0));
+        // A spear's own range, with its margin, from the server's side too.
+        let spear = serde_json::json!({"min_reach": 2.0, "max_reach": 4.5, "hitbox_margin": 0.125});
+        let reach = attack_reach(&spear, false);
+        assert!(in_attack_range(7.625, reach, 3.0));
+        assert!(!in_attack_range(7.7, reach, 3.0));
     }
 
     fn stack(item: &str, count: u32, damage: u32) -> Option<ItemStack> {

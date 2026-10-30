@@ -724,6 +724,9 @@ enum Cmd {
         /// You read the mods' source and trust it with full access to this computer
         #[arg(long)]
         trust_native_code: bool,
+        /// Build mods made for different Horizon versions together anyway, on the newest of them
+        #[arg(long)]
+        allow_version_mismatch: bool,
     },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
@@ -1135,6 +1138,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             instance,
             version,
             trust_native_code,
+            allow_version_mismatch,
         } => {
             if !trust_native_code {
                 return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
@@ -1152,8 +1156,20 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     Some(&target),
                 ),
             };
-            let built = horizon_launcher::native_mods::build(&base, &folder, target, |step| {
-                eprintln!("{}", step.label())
+            let built = horizon_launcher::native_mods::build(
+                &base,
+                &folder,
+                target,
+                allow_version_mismatch,
+                |step| eprintln!("{}", step.label()),
+            )
+            .map_err(|e| {
+                match e.starts_with(horizon_launcher::native_mods::MISMATCH) {
+                    true => {
+                        format!("{e} They often still build: pass --allow-version-mismatch to try.")
+                    }
+                    false => e,
+                }
             })?;
             println!(
                 "{built} built and selected for its instance ({:.0} s).",

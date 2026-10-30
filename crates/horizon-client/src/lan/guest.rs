@@ -497,13 +497,19 @@ impl Guest {
     /// `Player.isWithinBlockInteractionRange(pos, 1.0)`, which the server
     /// checks a block action against (ServerPlayerGameMode.handleBlockBreakAction,
     /// ServerGamePacketListenerImpl.handleUseItemOn): from the eyes of the
-    /// guest's body in its pose (crouching, swimming, gliding).
-    pub fn may_reach_block(&self, pos: [i32; 3]) -> bool {
+    /// guest's body in its pose (crouching, swimming, gliding), with its
+    /// `block_interaction_range` (4.5, 5 in creative, more with `/attribute`).
+    pub fn may_reach_block(&mut self, pos: [i32; 3]) -> bool {
         let eye = self
             .motion
             .as_ref()
             .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let range = if self.creative() { 5.0 } else { 4.5 };
+        let otherwise = if self.creative() { 5.0 } else { 4.5 };
+        let range = self
+            .motion
+            .as_mut()
+            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
+            .unwrap_or(otherwise);
         within_block_range(
             [self.position[0], self.position[1] + eye, self.position[2]],
             range + 1.0,

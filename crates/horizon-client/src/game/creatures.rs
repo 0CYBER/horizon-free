@@ -71,11 +71,13 @@ pub(super) struct Creatures {
     /// Particles from a guest's turn, waiting for it to end
     /// (`lan_send_particles`: options, centre, spread, speed, count).
     pub lan_particles: Vec<(
+        &'static str,
         horizon_client::particles::ParticleOptions,
+        Option<horizon_world::registry::BlockStateId>,
         [f64; 3],
         [f64; 3],
         f64,
-        u32,
+        i32,
     )>,
 }
 pub(super) struct ProjWorld<'a, 'w> {

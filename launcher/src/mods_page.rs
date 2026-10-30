@@ -1333,7 +1333,12 @@ impl Launcher {
                 false,
             ),
         };
-        let build = (can_build && self.native_confirm.is_none()).then(|| {
+        let mismatch = self
+            .native_step
+            .is_none()
+            .then_some(self.native_mismatch.as_ref())
+            .flatten();
+        let build = (can_build && self.native_confirm.is_none() && mismatch.is_none()).then(|| {
             button("native-build", "Build", Kind::Primary, &t)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.native_confirm = Some(this.native_mods_to_build().map(|(_, b)| b));
@@ -1342,6 +1347,9 @@ impl Launcher {
                 .into_any_element()
         });
         let mut detail = div().flex().flex_col().gap(px(4.)).child(status);
+        if let Some(list) = mismatch {
+            detail = detail.child(self.native_mismatch_panel(list, cx));
+        }
         if let Some(mods) = &self.native_confirm {
             detail = detail.child(self.native_warning(mods, cx));
         }

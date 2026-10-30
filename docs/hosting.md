@@ -200,6 +200,7 @@ horizon-server start | stop | restart    in the background (its output goes to l
 horizon-server status [--json]           up or not, TPS, MSPT, players, chunks, RAM, CPU
 horizon-server cmd COMMAND...            one console command, and what it answers
 horizon-server logs [-f] [-n N]          the log; -f follows it
+horizon-server report [SECONDS]          record a performance report (below)
 horizon-server op|deop NAME
 horizon-server whitelist on|off|list
 horizon-server whitelist add|remove NAME
@@ -221,6 +222,13 @@ console commands do. While it's stopped, they edit vanilla's files directly. Any
 To generate the world around spawn ahead of the players, Horizon has its own `pregen` command, off until
 `server.toml` has `horizon-pregen = true` under `[properties]`: `horizon-server cmd pregen start 2500`
 ([pregeneration](pregeneration.md)).
+
+`horizon-server report` records the running server for 60 seconds (`report 300` for five minutes, up to 600),
+then prints a short summary and saves it in `reports/`: `perf-<time>.txt` and `perf-<time>.json`. They say where
+the ticks' time went, phase by phase (mobs, block ticks, block entities, the network and the chunks it
+sends, saving...), the slowest ticks, how many entities of each type, chunks, players, memory, CPU, and the
+settings that matter (view and simulation distance, max players). They hold no names, UUIDs or addresses, so you
+can attach them to an issue as they are. On the console it is `horizon-report [SECONDS]`.
 
 `config set` changes `server.toml` without opening it: `horizon-server config set world.difficulty=hard
 server.max_players=10`. Each key is a section and a name from the file (`properties.spawn-protection=0` for any
