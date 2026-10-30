@@ -102,6 +102,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
              handling), the guest puts a stack into a chest and a furnace, drags planks across
              its crafting grid and gathers a stack with a double click; the server has each.
+- wheel:     with the Mouse Tweaks extra on, real wheel events and a right-drag in a furnace, a
+             crafting table, a hopper and a dropper: fuel and smeltables go to their slots, nothing
+             into a result slot, and down over a result takes it. The server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
 - bed-occupied: the bed the host sleeps in is occupied and the guest cannot lie down in it; it is
@@ -298,6 +301,7 @@ Needs the prepared resources in .local/horizon-client. On Linux the games run on
 desktop), or headless (offscreen, no pause) where there is none; on macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -323,12 +327,12 @@ SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'flow-push', 'bubble-column', 'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'names', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
-          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
+          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'wheel', 'sleep', 'sleep-villager', 'bed-occupied', 'sleep-reload', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
-          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks']
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks', 'rocket-walls', 'rocket-ceilings', 'tag-query']
 
 
 class Game:
@@ -2173,6 +2177,220 @@ def check_clicks(host, guest, out):
     return {'chest': in_chest, 'furnace': in_furnace, 'grid': grid, 'inventory': counts}
 
 
+def wheel(game, slot, steps):
+    """Real wheel events over slot `slot` of the open screen (positive scrolls up)."""
+    x, y = slot_point(game, slot)
+    game.raw('scroll-at', f'{x:.1f}', f'{y:.1f}', steps)
+    game.wait(4)
+
+
+def wheel_fast(game, slot, steps):
+    """Wheel events with no pause after them."""
+    x, y = slot_point(game, slot)
+    game.raw('scroll-at', f'{x:.1f}', f'{y:.1f}', steps)
+
+
+def set_mouse_tweaks(game, on):
+    """The Extras page's switch, as a player flips it."""
+    game('options', page='extras')
+    switch = next(w for w in game.raw('ui')['widgets'] if w.get('label', '').startswith('Mouse Tweaks controls'))
+    if switch['label'].endswith('On') != on:
+        game('click', id=switch['id'])
+    game('close')
+    game.wait(5)
+
+
+def check_wheel(host, guest, out):
+    set_mouse_tweaks(guest, True)
+    # On the host's cleared floor, with the host behind: nothing stands in the way of the look at the
+    # one spot each block takes in turn.
+    hx, hy, hz = pos_of(host)
+    guest('command', command=f'tp @s {hx:.1f} {hy:.1f} {hz + 4:.1f}')
+    guest.wait(10)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    spot = (x, y, z + 2)
+    guest('command', command='gamemode survival')
+
+    def place(block):
+        guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:{block}')
+        guest.wait(20)  # until the client has the block, to look at it
+
+    def held(*stacks):
+        guest('command', command='clear @s')
+        for item, count in stacks:
+            guest('command', command=f'give @s minecraft:{item} {count}')
+        guest.wait(10)
+
+    def opened(screen='container'):
+        guest.raw('interact', *spot)
+        guest.raw('wait-for', 'screen', screen, '--timeout', 10)
+        guest.wait(10)
+
+    def slots():
+        return {s['slot']: (s['item'].removeprefix('minecraft:'), s['count'])
+                for s in guest('screen').get('slots', []) if s.get('item')}
+
+    def shut():
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+
+    def server_view():
+        """Closing and opening again resends the whole menu: what the server has."""
+        shut()
+        opened()
+        return slots()
+
+    def where(view, item):
+        return sorted(s for s, (i, _) in view.items() if i == item)
+
+    try:
+        # A chest always worked: the extra is on, and the wheel reaches the screen.
+        held(('cobblestone', 3))
+        place('chest')
+        opened()
+        wheel(guest, hotbar_slot(guest, 'minecraft:cobblestone'), -1)
+        view = server_view()
+        assert view.get(300) == ('cobblestone', 1), f'chest: {view}'
+        shut()
+        # The furnace: each item goes to the slot vanilla's quick move picks, never the output.
+        # Raw copper can't join the ingots in the output, so the furnace stays out and burns nothing.
+        held(('coal', 3), ('raw_copper', 3), ('dirt', 3))
+        place('furnace{Items:[{Slot:2b,id:"minecraft:iron_ingot",count:5}]}')
+        opened()
+        wheel(guest, hotbar_slot(guest, 'minecraft:coal'), -1)
+        wheel(guest, hotbar_slot(guest, 'minecraft:raw_copper'), -1)
+        wheel(guest, hotbar_slot(guest, 'minecraft:dirt'), -1)
+        view = server_view()
+        guest.shot(out, 'wheel-furnace')
+        assert view.get(300) == ('raw_copper', 1), f'smeltable, input: {view}'
+        assert view.get(301) == ('coal', 1), f'fuel, fuel slot: {view}'
+        assert view.get(302) == ('iron_ingot', 5), f'the output changed: {view}'
+        assert sum(c for i, c in view.values() if i == 'dirt') == 3, f'dirt went astray: {view}'
+        # Up over the fuel slot: one more coal. Down: one back.
+        wheel(guest, 301, 1)
+        pulled = server_view()
+        assert pulled.get(301) == ('coal', 2), f'pulled: {pulled}'
+        wheel(guest, 301, -1)
+        pushed = server_view()
+        assert pushed.get(301) == ('coal', 1), f'pushed: {pushed}'
+        # Out of the input again, or taking the output would light the furnace.
+        wheel(guest, 300, -1)
+        # Up over the output brings nothing in; down takes it, whole, to the inventory.
+        wheel(guest, 302, 1)
+        kept = server_view()
+        assert kept.get(302) == ('iron_ingot', 5), f'wheel up over the output: {kept}'
+        wheel(guest, 302, -1)
+        taken = server_view()
+        assert 302 not in taken and [taken[s] for s in where(taken, 'iron_ingot')] == [('iron_ingot', 5)], \
+            f'wheel down over the output: {taken}'
+        # An ingot from the inventory has no way back into the output.
+        wheel(guest, where(taken, 'iron_ingot')[0], -1)
+        back = server_view()
+        assert 302 not in back, f'an item went into the output: {back}'
+        # The right-drag: neither an empty fuel slot (dirt isn't fuel) nor the output takes it.
+        wheel(guest, 301, -1)
+        dirt = where(back, 'dirt')[0]
+        mouse(guest, dirt)
+        mouse(guest, 301, 302, right=True)
+        mouse(guest, dirt)
+        dragged = server_view()
+        guest.shot(out, 'wheel-furnace-drag')
+        assert 301 not in dragged and 302 not in dragged, f'right-drag: {dragged}'
+        assert sum(c for i, c in dragged.values() if i == 'dirt') == 3, f'right-drag lost items: {dragged}'
+        shut()
+
+        # The crafting table: into the grid; down over the result crafts once, into the inventory.
+        held(('oak_log', 2))
+        place('crafting_table')
+        opened('inventory')
+        wheel(guest, hotbar_slot(guest, 'minecraft:oak_log'), -1)
+        grid = slots()
+        assert grid.get(100) == ('oak_log', 1) and grid.get(200) == ('oak_planks', 4), f'grid: {grid}'
+        wheel(guest, 200, 1)
+        assert slots().get(100) == ('oak_log', 1), f'wheel up over the result: {slots()}'
+        wheel(guest, 200, -1)
+        crafted = slots()
+        guest.shot(out, 'wheel-crafting')
+        assert 100 not in crafted and 200 not in crafted, f'after the result: {crafted}'
+        assert [crafted[s] for s in where(crafted, 'oak_planks')] == [('oak_planks', 4)], f'after the result: {crafted}'
+        shut()
+        counts = guest('inventory')['counts']
+        assert counts.get('minecraft:oak_planks') == 4 and counts.get('minecraft:oak_log') == 1, f'the server has {counts}'
+
+        # Wheel events as fast as they come, with no time for the server to answer: nothing stays in the
+        # cursor and no item appears or goes.
+        for mode in ('survival', 'creative'):
+            guest('command', command=f'gamemode {mode}')
+            held(('cobblestone', 40), ('coal', 40))
+            place('air')  # a chest placed on a chest keeps its items
+            place('chest')
+            opened()
+            first, second = hotbar_slot(guest, 'minecraft:cobblestone'), hotbar_slot(guest, 'minecraft:coal')
+            for round_ in range(12):
+                wheel_fast(guest, first if round_ % 3 else second, -2)
+                wheel_fast(guest, 300, 1 if round_ % 2 else -1)
+            guest.wait(30)
+            assert guest('screen').get('carried') is None, f'{mode}: a stack stayed in the cursor'
+            total = {}
+            for item, count in server_view().values():
+                total[item] = total.get(item, 0) + count
+            assert total == {'cobblestone': 40, 'coal': 40}, f'{mode}: the items became {total}'
+            shut()
+        guest('command', command='gamemode survival')
+
+        # A furnace burning the fuel the wheel is taking: the click on the emptied slot takes nothing, and
+        # what comes next picks up nothing either.
+        held(('coal', 40), ('raw_copper', 40))
+        place('furnace')
+        opened()
+        coal, copper = hotbar_slot(guest, 'minecraft:coal'), hotbar_slot(guest, 'minecraft:raw_copper')
+        for round_ in range(10):
+            wheel_fast(guest, coal, -1)
+            wheel_fast(guest, copper, -1)
+            wheel_fast(guest, 301, -1)
+            guest.wait(4)
+        guest.wait(30)
+        assert guest('screen').get('carried') is None, 'a stack stayed in the cursor over a burning furnace'
+        shut()
+
+        # The crafting table, as fast: into the grid and out, and over the result.
+        held(('oak_log', 20), ('dirt', 20))
+        place('crafting_table')
+        opened('inventory')
+        log, dirt = hotbar_slot(guest, 'minecraft:oak_log'), hotbar_slot(guest, 'minecraft:dirt')
+        for round_ in range(12):
+            wheel_fast(guest, log if round_ % 2 else dirt, -2)
+            wheel_fast(guest, 100 + round_ % 3, -1)
+            wheel_fast(guest, 200, -1)
+        guest.wait(30)
+        assert guest('screen').get('carried') is None, 'a stack stayed in the cursor over a crafting table'
+        shut()
+        counts = guest('inventory')['counts']
+        assert counts.get('minecraft:dirt') == 20, f'the dirt became {counts}'
+        guest.raw('key', 'e', 'tap')
+        guest.wait(5)
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(5)
+
+        # Hopper, dropper: plain slots, both ways.
+        held(('cobblestone', 3))
+        for name in ('hopper', 'dropper'):
+            place(name)
+            opened()
+            wheel(guest, hotbar_slot(guest, 'minecraft:cobblestone'), -1)
+            view = server_view()
+            assert view.get(300) == ('cobblestone', 1), f'{name}: {view}'
+            wheel(guest, 300, -1)
+            view = server_view()
+            assert 300 not in view, f'{name}, pushed back: {view}'
+            shut()
+    finally:
+        back_to_game(guest)
+        set_mouse_tweaks(guest, False)
+        place('air')
+    return {'furnace': dragged, 'crafting': crafted}
+
+
 def check_feedback(host, guest, out):
     x, y, z = (round(v, 1) for v in pos_of(guest))
     guest('command', command='item replace entity @s weapon.mainhand with minecraft:stick')
@@ -3499,6 +3717,44 @@ def sparked(player, other, kinds, act, ticks=20):
     return seen
 
 
+def copy_recreate_command(game, check):
+    """F3+I (KeyboardHandler.copyRecreateCommand): what it copied once `check` accepts it."""
+    game.raw('key', 'f3', 'down')
+    game.raw('key', 'i', 'tap')
+    game.raw('key', 'f3', 'up')
+    return game.until(lambda: game('status')['debug']['clipboard'], lambda c: bool(c) and check(c), ticks=40)
+
+
+def check_tag_query(host, guest, out):
+    """An operator guest's F3+I copies the server's data (#3518): DebugQueryHandler's tag queries,
+    answered by ServerGamePacketListenerImpl.handleBlockEntityTagQuery and handleEntityTagQuery.
+    A chest's items and an entity's tags never reach the client, so only the server's answer has them."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest = (x, y, z + 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} '
+                             'minecraft:chest{Items:[{Slot:0b,id:"minecraft:diamond",count:5}]}')
+    guest.wait(10)
+    guest.raw('look-at-block', *chest)
+    guest.wait(2)
+    block = copy_recreate_command(guest, lambda c: c.startswith(f'/setblock {chest[0]} {chest[1]} {chest[2]} '))
+    block_said = guest.raw('messages', 1)['chat']
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
+    guest('command', command=f'summon minecraft:pig {x + 0.5} {y} {z + 2.5} {{NoAI:1b,Tags:["tag_query"]}}')
+    guest.wait(20)
+    pig = guest.raw('entities', 6, 'pig')['entities'][0]
+    guest.raw('look-at-entity', pig['id'])
+    guest.wait(2)
+    entity = copy_recreate_command(guest, lambda c: c.startswith('/summon minecraft:pig '))
+    entity_said = guest.raw('messages', 1)['chat']
+    guest.shot(out, 'tag-query')
+    guest('command', command='kill @e[type=minecraft:pig,tag=tag_query]')
+    assert 'id:"minecraft:diamond"' in block, f"the chest's items are missing: {block}"
+    assert block_said == ['[Debug]: Copied server-side block data to clipboard'], block_said
+    assert 'Tags: ["tag_query"]' in entity, f"the pig's tags are missing: {entity}"
+    assert entity_said == ['[Debug]: Copied server-side entity data to clipboard'], entity_said
+    return {'block': block, 'entity': entity}
+
+
 def check_fireworks(host, guest, out):
     """Event 17 must arrive before removal, with the item's colored, trailing explosion (#1478).
 
@@ -3550,6 +3806,76 @@ def check_fireworks(host, guest, out):
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
     assert all(n > 20 for n in trails.values()), f'no later red trail/fade: {trails}'
     return {'flashes': flashes, 'red_burst': burst, 'red_trail_fade': trails, 'rockets': rockets}
+
+
+def check_rocket_walls(host, guest, out):
+    """A rocket shot at an angle explodes on a block only with explosions (#4281).
+
+    FireworkRocketEntity.onHitBlock: `hasExplosion()`; a plain one flies on to its lifetime (20-31 ticks). A
+    dispenser shoots at an angle as a crossbow does, at a wall three blocks away (about 7 ticks of flight). The
+    host samples its status in one ctl process; a rocket's span is the client ticks between the first and the
+    last sample that saw it, never more than it lived, and short of it by at most two gaps between samples.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    y += 3
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 2} {y + 2} {z + 6} minecraft:air')
+    host('command', command=f'fill {x - 2} {y - 1} {z + 5} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    plain = 'minecraft:firework_rocket'
+    star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
+    result = {}
+    for label, item in (('plain', plain), ('star', star)):
+        host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:dispenser[facing=south]')
+        host('command', command=f'item replace block {x} {y} {z} container.0 with {item}')
+        host.wait(5)
+        replies = host.script([f'command setblock {x} {y + 1} {z} minecraft:redstone_block']
+                              + ['wait 1', 'status'] * 45, every=True)
+        samples = [(r['ticks'], r['rockets']) for r in replies if 'rockets' in r]
+        seen = [tick for tick, n in samples if n]
+        result[label] = {'span': seen[-1] - seen[0] if seen else None, 'samples': len(samples),
+                         'last': samples[-1][1], 'guest_last': guest('status')['rockets']}
+    host('command', command=f'setblock {x} {y + 1} {z} minecraft:air')
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
+        f'a rocket outlived its lifetime: {result}')
+    # A plain rocket lives 20-31 ticks; one with explosions is gone at the wall.
+    assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the wall: {result}'
+    assert result['star']['span'] is not None and result['star']['span'] < 14, (
+        f'star rocket did not explode on the wall: {result}')
+    return result
+
+
+def check_rocket_ceilings(host, guest, out):
+    """A rising rocket explodes on the block above only with explosions.
+
+    FireworkRocketEntity.tick: every rocket that isn't attached checks its move against blocks
+    (`getHitResultOnMoveVector`), not only one shot at an angle; onHitBlock: `hasExplosion()`. Launched from
+    the floor under a ceiling two blocks up, it reaches it in about 9 ticks; a plain one lives 20-31. Spans
+    are measured as in check_rocket_walls.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamemode creative')
+    host('command', command=f'fill {x - 2} {y - 1} {z + 1} {x + 2} {y - 1} {z + 5} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 1} {z + 5} minecraft:air')
+    host('command', command=f'fill {x - 2} {y + 2} {z + 1} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    plain = 'minecraft:firework_rocket'
+    star = plain + '[fireworks={flight_duration:1,explosions:[{shape:"ball",colors:[I;16711680]}]}]'
+    result = {}
+    for label, item in (('plain', plain), ('star', star)):
+        host('command', command=f'item replace entity @s weapon.mainhand with {item}')
+        host.wait(5)
+        replies = host.script([f'interact {x} {y - 1} {z + 3}'] + ['wait 1', 'status'] * 45, every=True)
+        samples = [(r['ticks'], r['rockets']) for r in replies if 'rockets' in r]
+        seen = [tick for tick, n in samples if n]
+        result[label] = {'span': seen[-1] - seen[0] if seen else None, 'samples': len(samples),
+                         'last': samples[-1][1], 'guest_last': guest('status')['rockets']}
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    assert all(r['last'] == 0 and r['guest_last'] == 0 for r in result.values()), (
+        f'a rocket outlived its lifetime: {result}')
+    assert (result['plain']['span'] or 0) >= 14, f'plain rocket went off on the ceiling: {result}'
+    # It rises about 8 ticks first: gone at once would be a burst at launch.
+    assert result['star']['span'] is not None and 3 <= result['star']['span'] < 14, (
+        f'star rocket did not explode on the ceiling: {result}')
+    return result
 
 
 def check_sparks(host, guest, out):
@@ -5383,7 +5709,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
-             'clicks': check_clicks, 'sleep': check_sleep, 'sleep-villager': check_sleep_villager,
+             'clicks': check_clicks, 'wheel': check_wheel, 'sleep': check_sleep, 'sleep-villager': check_sleep_villager,
              'bed-occupied': check_bed_occupied, 'sleep-reload': check_sleep_reload,
              'push': check_push, 'piston-push': check_piston_push,
              'piston-slime': check_piston_slime,
@@ -5407,7 +5733,9 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'hud': check_hud,
              'sidebar': check_sidebar,
              'border': check_border,
-             'particles': check_particles, 'fireworks': check_fireworks}
+             'particles': check_particles, 'fireworks': check_fireworks,
+             'rocket-walls': check_rocket_walls, 'rocket-ceilings': check_rocket_ceilings,
+             'tag-query': check_tag_query}
 
 
 def run(ctl, out, resources, checks):
@@ -8928,6 +9256,50 @@ def check_keys_released(host, guest, out):
 
 CHECKS += ['keys_released']
 CHECK_FNS['keys_released'] = check_keys_released
+
+
+def offline_uuid_ints(name):
+    """UUIDUtil.createOfflinePlayerUUID as the contents of an int-array UUID tag."""
+    digest = bytearray(hashlib.md5(f'OfflinePlayer:{name}'.encode()).digest())
+    digest[6] = digest[6] & 0x0f | 0x30
+    digest[8] = digest[8] & 0x3f | 0x80
+    return ','.join(str(int.from_bytes(digest[i:i + 4], 'big', signed=True)) for i in range(0, 16, 4))
+
+
+def check_pet_death(host, guest, out):
+    """TamableAnimal.die (#3514): with showDeathMessages, a tame pet's owner, and nobody else, hears how it
+    died (CombatTracker.getDeathMessage): the guest's wolf slain by a zombie, the host's cat killed."""
+    hx, hy, hz = pos_of(host)
+    tag = 'pet_death'
+    try:
+        host('command', command=f'summon minecraft:zombie {hx + 1.5:.2f} {hy:.2f} {hz - 2:.2f} '
+                                f'{{NoAI:1b,Silent:1b,Tags:["{tag}"]}}')
+        host('command', command=f'summon minecraft:wolf {hx - 1.5:.2f} {hy:.2f} {hz - 2:.2f} '
+                                f'{{CustomName:"Rex",NoAI:1b,Tags:["{tag}","rex"],'
+                                f'Owner:[I;{offline_uuid_ints(GUEST_NAME)}]}}')
+        host('command', command=f'summon minecraft:cat {hx:.2f} {hy:.2f} {hz - 3:.2f} '
+                                f'{{CustomName:"Tom",NoAI:1b,Tags:["{tag}","tom"],'
+                                f'Owner:[I;{offline_uuid_ints(host.player)}]}}')
+        host.wait(5)
+        host('command', command=f'damage @e[tag=rex,limit=1] 100 minecraft:mob_attack '
+                                f'by @e[type=minecraft:zombie,tag={tag},limit=1]')
+        host('command', command='kill @e[tag=tom]')
+        host.wait(20)
+        guest_chat = guest.raw('messages', 10)['chat']
+        host_chat = host.raw('messages', 10)['chat']
+        guest.shot(out, 'pet-death')
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+    seen = {'guest': guest_chat, 'host': host_chat}
+    assert 'Rex was slain by Zombie' in guest_chat, f"the wolf's owner was not told: {seen}"
+    assert 'Rex was slain by Zombie' not in host_chat, f"someone else's wolf was told to the host: {seen}"
+    assert 'Tom was killed' in host_chat, f"the cat's owner was not told: {seen}"
+    assert 'Tom was killed' not in guest_chat, f"someone else's cat was told to the guest: {seen}"
+    return seen
+
+
+CHECKS += ['pet_death']
+CHECK_FNS['pet_death'] = check_pet_death
 
 
 if __name__ == '__main__':

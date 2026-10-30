@@ -102,6 +102,9 @@ pub struct BiomeInfo {
     /// The biome's own fog colour attribute; otherwise the dimension's applies.
     pub fog: Option<u32>,
     pub water_fog: u32,
+    /// `BiomeGenerationSettings.features`: the placed feature ids of each
+    /// `GenerationStep.Decoration` step, in order.
+    pub features: Vec<Vec<String>>,
 }
 impl BiomeInfo {
     /// `Biome.getHeightAdjustedTemperature`: the frozen modifier, then cooler
@@ -235,6 +238,19 @@ impl Biomes {
                 fog: color(&attributes["minecraft:visual/fog_color"]),
                 water_fog: color(&attributes["minecraft:visual/water_fog_color"])
                     .unwrap_or(0x050533),
+                features: v["features"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|step| {
+                        step.as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .collect(),
                 name,
             });
         }

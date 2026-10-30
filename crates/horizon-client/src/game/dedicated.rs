@@ -1501,10 +1501,13 @@ impl Game<'_> {
         self.native_lifecycle.begin_close();
         log("INFO", "Stopping server");
         log("INFO", "Saving players");
-        if let Some(h) = self.lan.as_mut() {
-            for g in &h.hub.guests {
-                horizon_client::lan::playerdata::save(g, &self.world_root);
+        if let Some(host) = self.lan.take() {
+            for g in &host.hub.guests {
+                // The vehicle the guest rides, for the file that names it.
+                let vehicle = self.root_vehicle_uuid(g.vehicle);
+                horizon_client::lan::playerdata::save(g, &self.world_root, vehicle);
             }
+            self.lan = Some(host);
         }
         if let Some(h) = self.lan.as_ref() {
             for g in &h.hub.guests {

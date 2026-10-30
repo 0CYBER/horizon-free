@@ -3,8 +3,9 @@
 //! hands immutable `Arc` snapshots to workers; results carry a sequence number
 //! so stale work is dropped.
 use crate::fast_hash::{FxHashMap, FxHashSet};
+use crate::section_mask::SectionMask;
 use crate::{
-    chunk::{Chunk, SECTIONS},
+    chunk::Chunk,
     light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
@@ -79,6 +80,12 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// A decorated proto chunk's blocks as a column, to light a finished
     /// neighbour against (vanilla lights with neighbours at FEATURES).
     fn light_view(&self, _proto: &Proto) -> Option<Chunk> {
+        None
+    }
+    /// A decorated proto chunk's column sections (`Chunk::sections`
+    /// indexes) holding a block other than air: what its neighbours' light
+    /// layers count once it is at INITIALIZE_LIGHT.
+    fn non_air_sections(&self, _proto: &Proto) -> Option<SectionMask> {
         None
     }
     fn saved_proto(&self, _proto: &Proto) -> Option<crate::chunk::SavedProto> {
@@ -275,6 +282,7 @@ impl Mailbox {
 pub struct Streaming {
     shared: Arc<Shared>,
     light_view: Arc<dyn Fn(&Proto) -> Option<Chunk> + Send + Sync>,
+    non_air_sections: Arc<dyn Fn(&Proto) -> Option<SectionMask> + Send + Sync>,
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
     /// Ticks since the columns and protos that fell out of range were swept.
@@ -653,9 +661,14 @@ impl Streaming {
             let generator = generator.clone();
             Arc::new(move |p: &Proto| generator.light_view(p))
         };
+        let non_air_sections = {
+            let generator = generator.clone();
+            Arc::new(move |p: &Proto| generator.non_air_sections(p))
+        };
         Self {
             shared,
             light_view,
+            non_air_sections,
             threads,
             order: 0,
             scan_age: 0,
@@ -719,7 +732,7 @@ impl Streaming {
         self.meshing.clear();
         for &(x, z) in world.chunks.keys() {
             if self.lit.contains(&(x, z)) {
-                for sy in 0..SECTIONS as i32 {
+                for sy in 0..world.layout().sections() as i32 {
                     world.dirty_sections.insert((x, sy, z));
                 }
             }
@@ -737,7 +750,7 @@ impl Streaming {
         self.generated_total += 1;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                for sy in 0..SECTIONS as i32 {
+                for sy in 0..world.layout().sections() as i32 {
                     world.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
                 }
             }
@@ -752,7 +765,7 @@ impl Streaming {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let s = sy as i32 + dy;
-                        if (0..SECTIONS as i32).contains(&s) {
+                        if (0..world.layout().sections() as i32).contains(&s) {
                             world.dirty_sections.insert((x + dx, s, z + dz));
                         }
                     }
@@ -778,7 +791,7 @@ impl Streaming {
         self.lighting.remove(&(x, z));
         // By key, not by a pass over every pending section: a moved or
         // shrunk storage forgets thousands of columns in one frame.
-        for sy in 0..SECTIONS as i32 {
+        for sy in 0..world.layout().sections() as i32 {
             self.meshing.remove(&(x, sy, z));
             self.waiting.remove(&(x, sy, z));
         }
@@ -896,7 +909,7 @@ impl Streaming {
         world.chunks.insert(key, Arc::new(chunk));
         if loaded {
             self.lit.insert(key);
-            for sy in 0..SECTIONS as i32 {
+            for sy in 0..world.layout().sections() as i32 {
                 world.dirty_sections.insert((key.0, sy, key.1));
             }
         }
@@ -955,6 +968,15 @@ impl Streaming {
     }
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
+    }
+    /// The non-air sections of a column that is a decorated proto chunk
+    /// here (vanilla's INITIALIZE_LIGHT and on), if it is one: a level
+    /// chunk's light layers count them (#4294).
+    pub fn proto_sections(&self, x: i32, z: i32) -> Option<SectionMask> {
+        if !self.decorated.contains(&(x, z)) {
+            return None;
+        }
+        (self.non_air_sections)(self.protos.get(&(x, z))?.as_ref()?)
     }
     /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
     /// furthest step this column has reached, `None` before it is asked for.
@@ -1079,7 +1101,7 @@ impl Streaming {
                         if first {
                             for dz in -1..=1 {
                                 for dx in -1..=1 {
-                                    for sy in 0..SECTIONS as i32 {
+                                    for sy in 0..world.layout().sections() as i32 {
                                         world.dirty_sections.insert((x + dx, sy, z + dz));
                                     }
                                 }
@@ -1475,6 +1497,7 @@ impl Streaming {
             &mut changed,
         );
         Self::mark_light_changes(world, &changed);
+        Self::relight_beside_unlit(world, &changed);
         if !self.light_snapshots.is_empty() {
             for p in positions {
                 self.light_edit_sequence += 1;
@@ -1504,12 +1527,21 @@ impl Streaming {
                 &mut changed,
             );
             Self::mark_light_changes(world, &changed);
+            Self::relight_beside_unlit(world, &changed);
         }
         let oldest = self.light_snapshots.values().copied().min();
         match oldest {
             Some(oldest) => self.light_log.retain(|(seq, _)| *seq > oldest),
             None => self.light_log.clear(),
         }
+    }
+    /// A column whose light an edit changed beside a column not lit yet gets
+    /// a full light job ([`crate::light::beside_unlit`]).
+    fn relight_beside_unlit(world: &mut World, changed: &LightChanges) {
+        let columns = crate::light::beside_unlit(changed, |x, z| {
+            world.chunks.get(&(x, z)).is_some_and(|c| !c.lit)
+        });
+        world.dirty_light.extend(columns);
     }
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).

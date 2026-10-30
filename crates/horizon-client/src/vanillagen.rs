@@ -2,7 +2,7 @@
 //! aquifers, surface rules, carvers and placed features) to chunk streaming.
 use crate::{
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
+    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Section},
     save::SavedProto,
     streaming::{ChunkGenerator, LodSampler, Proto},
 };
@@ -80,7 +80,7 @@ fn add_default_block_entities(kinds: &[Option<&str>], out: &mut Chunk, raw: &mut
             let i = i as i32;
             let pos = [
                 out.x * 16 + (i & 15),
-                MIN_Y + si as i32 * 16 + (i >> 8),
+                out.min_y() + si as i32 * 16 + (i >> 8),
                 out.z * 16 + ((i >> 4) & 15),
             ];
             let at = |t: &Tag| {
@@ -248,6 +248,11 @@ impl VanillaTerrain {
             created: std::time::Instant::now(),
         })
     }
+    /// The column the dimension's chunks hold (its build range's).
+    fn layout(&self) -> ColumnLayout {
+        let (min_y, height) = self.generator.level();
+        ColumnLayout::of_level(min_y, height)
+    }
     /// The difficulty (0 peaceful to 3 hard) and overworld clock structure
     /// mobs are finalized with.
     pub fn set_spawn_conditions(&self, difficulty: u8, day_time: i64) {
@@ -275,12 +280,12 @@ impl VanillaTerrain {
     /// marks as a column.
     fn column(&self, chunk: &ProtoChunk) -> Chunk {
         let pos = chunk.position();
-        let mut out = Chunk::empty(pos.x, pos.z);
+        let mut out = Chunk::with_layout(pos.x, pos.z, self.layout());
         let (bx, bz) = (pos.x * 16, pos.z * 16);
         // Only the generated range (the Nether is 0..256) is copied.
         let (lo, hi) = (
-            chunk.terrain.min_y().max(MIN_Y),
-            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+            chunk.terrain.min_y().max(out.min_y()),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(out.max_y()),
         );
         out.structure_refs = chunk
             .structures()
@@ -289,8 +294,8 @@ impl VanillaTerrain {
             .collect();
         out.structure_starts = chunk.own_starts();
         let mut values = Box::new([0u32; 4096]);
-        for si in 0..SECTIONS as i32 {
-            let base = MIN_Y + si * 16;
+        for si in 0..out.sections.len() as i32 {
+            let base = out.min_y() + si * 16;
             if base + 16 <= lo || base >= hi {
                 continue;
             }
@@ -346,11 +351,11 @@ impl VanillaTerrain {
                 }
             }
         }
-        for si in 0..SECTIONS as i32 {
+        for si in 0..out.sections.len() as i32 {
             let mut cells = [0u32; 64];
             for (j, cell) in cells.iter_mut().enumerate() {
                 let (qx, qz, qy) = (j as i32 & 3, (j as i32 >> 2) & 3, si * 4 + (j as i32 >> 4));
-                let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
+                let y = (out.min_y() + qy * 4).clamp(lo, hi - 1);
                 let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
                 *cell = u32::from(self.biome_map.get(id.0 as usize).copied().unwrap_or(0));
             }
@@ -601,6 +606,24 @@ impl ChunkGenerator for VanillaTerrain {
             _ => None,
         }
     }
+    fn non_air_sections(&self, proto: &Proto) -> Option<crate::section_mask::SectionMask> {
+        let Some(VanillaProto::Ready(chunk)) = proto.downcast_ref::<VanillaProto>() else {
+            return None;
+        };
+        // The proto's sections from its own minimum Y; the column's from the
+        // layout's.
+        let layout = self.layout();
+        let below = (chunk.terrain.min_y() - layout.min_y()) >> 4;
+        let mut mask = crate::section_mask::SectionMask::EMPTY;
+        for i in chunk.terrain.filled_sections() {
+            if let Ok(i) = usize::try_from(i as i32 + below)
+                && i < layout.sections()
+            {
+                mask.insert(i);
+            }
+        }
+        Some(mask)
+    }
     fn saved_proto(&self, proto: &Proto) -> Option<SavedProto> {
         let Some(VanillaProto::Ready(chunk)) = proto.downcast_ref::<VanillaProto>() else {
             return None;
@@ -640,8 +663,8 @@ impl ChunkGenerator for VanillaTerrain {
         let column = &saved.column;
         let (bx, bz) = (column.x * 16, column.z * 16);
         let (lo, hi) = (
-            chunk.terrain.min_y().max(MIN_Y),
-            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+            chunk.terrain.min_y().max(column.min_y()),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(column.max_y()),
         );
         for y in lo..hi {
             for z in 0..16 {
@@ -712,7 +735,7 @@ impl ChunkGenerator for VanillaTerrain {
         let proto = proto.downcast::<VanillaProto>().expect("vanilla proto");
         let mut chunk = match *proto {
             VanillaProto::Ready(c) => c,
-            VanillaProto::Failed(x, z) => return Chunk::empty(x, z),
+            VanillaProto::Failed(x, z) => return Chunk::with_layout(x, z, self.layout()),
         };
         let mut out = self.column(&chunk);
         let (block_entities, rolled_loot) =

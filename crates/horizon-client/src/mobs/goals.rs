@@ -185,11 +185,11 @@ fn move_up_to_above_solid(w: &MobWorld, mut p: [i32; 3], above: i32) -> [i32; 3]
         return p;
     }
     p[1] += 1;
-    while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+    while p[1] < w.world.top_y() && w.solid(p[0], p[1], p[2]) {
         p[1] += 1;
     }
     let first = p[1];
-    while p[1] <= 319 && p[1] - first < above {
+    while p[1] < w.world.top_y() && p[1] - first < above {
         p[1] += 1;
         if w.solid(p[0], p[1], p[2]) {
             p[1] -= 1;
@@ -283,8 +283,8 @@ impl Mob {
         near && !within_home(c, r, p)
     }
     fn default_check(&self, w: &MobWorld, h: f64, p: [i32; 3]) -> bool {
-        p[1] >= crate::chunk::MIN_Y
-            && p[1] < 320
+        p[1] >= w.world.bottom_y()
+            && p[1] < w.world.top_y()
             && !self.restricted(h, p)
             && self.stable_destination(w, p)
             && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0
@@ -363,7 +363,7 @@ impl Mob {
     fn land_up_out_of_solid(&self, w: &MobWorld, mut p: [i32; 3]) -> Option<[i32; 3]> {
         if w.solid(p[0], p[1], p[2]) {
             p[1] += 1;
-            while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+            while p[1] < w.world.top_y() && w.solid(p[0], p[1], p[2]) {
                 p[1] += 1;
             }
         }
@@ -429,13 +429,14 @@ impl Mob {
     ) -> Option<[i32; 3]> {
         let d = self.random_direction_within(0.0, f64::from(h), v, fly_height, xd, zd, max_rad)?;
         let mut p = self.toward(f64::from(h), d);
-        if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || self.restricted(f64::from(h), p) {
+        if p[1] < w.world.bottom_y() || p[1] >= w.world.top_y() || self.restricted(f64::from(h), p)
+        {
             return None;
         }
         // RandomPos.moveUpOutOfSolid
         if w.solid(p[0], p[1], p[2]) {
             p[1] += 1;
-            while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+            while p[1] < w.world.top_y() && w.solid(p[0], p[1], p[2]) {
                 p[1] += 1;
             }
         }
@@ -477,8 +478,8 @@ impl Mob {
             let d = m.random_direction_within(0.0, f64::from(h), v, 0, xd, zd, max_rad)?;
             // LandRandomPos.generateRandomPosTowardDirection
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
             {
@@ -507,8 +508,8 @@ impl Mob {
         self.pick_best(w, |m| {
             let d = m.random_direction(h, v);
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
             {
@@ -530,8 +531,8 @@ impl Mob {
         for _ in 0..10 {
             let d = self.random_direction(h, v);
             let p = self.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
                 || self.restricted(f64::from(h), p)
                 || !self.stable_destination(w, p)
             {
@@ -613,8 +614,8 @@ impl Mob {
                 f64::from(std::f32::consts::FRAC_PI_2),
             )?;
             let p = m.toward(max_h, d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
+            if p[1] < w.world.bottom_y()
+                || p[1] >= w.world.top_y()
                 || m.restricted(max_h, p)
                 || !m.stable_destination(w, p)
             {
@@ -741,6 +742,43 @@ impl Goal for Float {
         if m.random.next_float() < 0.8 {
             m.ai.jump = true;
         }
+    }
+}
+/// `ClimbOnTopOfPowderSnowGoal`: a powder-snow walker standing in powder snow
+/// jumps while the block above is powder snow or has no collision.
+#[derive(Clone, Debug)]
+pub struct ClimbOnTopOfPowderSnow;
+impl Goal for ClimbOnTopOfPowderSnow {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        JUMP
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // wasInPowderSnow || isInPowderSnow: the freeze tick has read the
+        // powder snow the mob's box touches before the goals run.
+        if !super::ai::in_powder_snow(m, cx.w)
+            || !cx
+                .w
+                .data
+                .entity_has("minecraft:powder_snow_walkable_mobs", &m.kind.id)
+        {
+            return false;
+        }
+        // Mob.blockPosition().above()
+        let above = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32 + 1,
+            m.position.z.floor() as i32,
+        ];
+        cx.w.block_name(above[0], above[1], above[2]) == "minecraft:powder_snow"
+            || cx.w.collision_bounds(above).is_none()
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    /// `ClimbOnTopOfPowderSnowGoal.tick`: ask the mob to jump.
+    fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.ai.jump = true;
     }
 }
 /// PanicGoal: flee to a random position after panic-causing damage (or
@@ -1271,9 +1309,9 @@ impl Goal for MeleeAttack {
         }
         !(t.is_player && t.creative)
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.speed);
+        m.nav_move_to_path(cx.w, path, self.speed);
         m.ai.aggressive = true;
         self.recalc = 0;
         self.until_attack = 0;
@@ -1920,9 +1958,9 @@ impl Goal for AvoidEntity {
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()
     }
-    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let path = m.ai.pending_path.take();
-        m.nav_move_to_path(path, self.walk);
+        m.nav_move_to_path(cx.w, path, self.walk);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let from = match &self.what {
