@@ -34,7 +34,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
-pub use template::{BlockInfo, JigsawInfo, StructureTemplate};
+pub use template::{BlockInfo, EntityInfo, JigsawInfo, StructureTemplate, save_nbt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rotation {

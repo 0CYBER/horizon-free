@@ -32,6 +32,8 @@ struct Mock {
     /// (branch, path) -> (text, message, replaced blob).
     commits: HashMap<(String, String), (String, String, Option<String>)>,
     pulls: Vec<Value>,
+    /// (pull request number, labels added).
+    labels: Vec<(u64, Value)>,
     /// The account the next sign-in gets.
     login: String,
     /// GitHub takes this long to find the staging release.
@@ -84,6 +86,14 @@ async fn mock_github() -> (String, Shared) {
             ),
         )
         .route(
+            "/repos/alice/coords",
+            get(|| async { Json(json!({"private": false, "owner": {"login": "alice"}})) }),
+        )
+        .route(
+            "/repos/alice/secret",
+            get(|| async { Json(json!({"private": true, "owner": {"login": "alice"}})) }),
+        )
+        .route(
             "/repos/o/r/releases/tags/staging",
             get(|State(s): State<Shared>| async move {
                 let slow = s.lock().unwrap().slow;
@@ -125,7 +135,15 @@ async fn mock_github() -> (String, Shared) {
             post(|State(s): State<Shared>, Json(b): Json<Value>| async move {
                 let mut s = s.lock().unwrap();
                 s.pulls.push(b);
-                Json(json!({"html_url": format!("https://github.com/o/r/pull/{}", s.pulls.len())}))
+                let n = s.pulls.len();
+                Json(json!({"html_url": format!("https://github.com/o/r/pull/{n}"), "number": n}))
+            }),
+        )
+        .route(
+            "/repos/o/r/issues/{n}/labels",
+            post(|State(s): State<Shared>, UrlPath(n): UrlPath<u64>, Json(b): Json<Value>| async move {
+                s.lock().unwrap().labels.push((n, b["labels"].clone()));
+                Json(json!([]))
             }),
         )
         .with_state(state.clone());
@@ -225,13 +243,26 @@ impl Client {
     }
 
     async fn submit(&mut self, csrf: &str, form: &Value, file: &[u8]) -> (StatusCode, Value) {
+        self.submit_with(csrf, form, Some(file)).await
+    }
+
+    async fn submit_with(
+        &mut self,
+        csrf: &str,
+        form: &Value,
+        file: Option<&[u8]>,
+    ) -> (StatusCode, Value) {
         let boundary = "XhorizonX";
         let mut body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"entry\"\r\n\r\n{form}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"entry\"\r\n\r\n{form}\r\n"
         )
         .into_bytes();
-        body.extend_from_slice(file);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        if let Some(file) = file {
+            body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes());
+            body.extend_from_slice(file);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
         let request = Request::post("/api/mods/submit")
             .header(header::COOKIE, self.cookie_header())
             .header(header::ORIGIN, PUBLIC)
@@ -269,6 +300,15 @@ async fn setup() -> (Client, Shared) {
 }
 
 async fn setup_with(change: impl FnOnce(&mut github::GitHub)) -> (Client, Shared) {
+    setup_keyed(change, Some(UPDATE_KEY)).await
+}
+
+const UPDATE_KEY: &[u8] = b"a test update key";
+
+async fn setup_keyed(
+    change: impl FnOnce(&mut github::GitHub),
+    update_key: Option<&[u8]>,
+) -> (Client, Shared) {
     let (base, mock) = mock_github().await;
     let scratch =
         std::env::temp_dir().join(format!("horizon-mod-registry-test-{}", std::process::id()));
@@ -288,6 +328,7 @@ async fn setup_with(change: impl FnOnce(&mut github::GitHub)) -> (Client, Shared
         public_url: PUBLIC.into(),
         session_key: b"a test key of at least thirty-two bytes".to_vec(),
         github,
+        update_key: update_key.map(<[u8]>::to_vec),
         scratch,
         database: ":memory:".into(),
     };
@@ -339,6 +380,115 @@ async fn a_submission_becomes_a_pull_request() {
     let (status, json) = client.submit(&csrf, &form(), &file).await;
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
     assert_eq!(mock.lock().unwrap().assets.len(), 1, "uploaded once");
+}
+
+/// `mods/coords_hud.toml` on main as `alice` owns it: what the form's page
+/// says, a dummy first version.
+fn published(owner: &str, key: bool) -> String {
+    let f = form();
+    let text = format!(
+        "id = \"coords_hud\"\nkind = \"mod\"\nname = \"Coordinates HUD\"\nsummary = \"Your coordinates in a corner.\"\nauthors = [\"Alice\"]\nowners = [\"{owner}\"]\nlicense = \"MIT\"\nsource = \"https://github.com/alice/coords\"\n{}\n[[versions]]\nversion = \"0.0.1\"\npublished = \"2026-01-01\"\ngame = \"26.3\"\nfile = \"coords_hud-0.0.1.hmod\"\nsha256 = \"{}\"\n",
+        if key {
+            format!("key = {}\n", f["key"])
+        } else {
+            String::new()
+        },
+        "0".repeat(64)
+    );
+    toml::from_str::<Entry>(&text).unwrap();
+    text
+}
+
+/// What an update by `alice` leaves on GitHub: (the pull request's body, its labels).
+async fn update(
+    main: String,
+    change: impl FnOnce(&mut Value),
+    key: Option<&[u8]>,
+) -> (String, Vec<(u64, Value)>) {
+    let (mut client, mock) = setup_keyed(|_| {}, key).await;
+    mock.lock()
+        .unwrap()
+        .main
+        .insert("mods/coords_hud.toml".into(), main);
+    let file = std::fs::read(fixtures().join("coords_hud-0.1.0.hmod")).unwrap();
+    let csrf = client.sign_in().await;
+    let mut f = form();
+    change(&mut f);
+    let (status, json) = client.submit(&csrf, &f, &file).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let m = mock.lock().unwrap();
+    (
+        m.pulls[0]["body"].as_str().unwrap().to_owned(),
+        m.labels.clone(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_owners_update_is_signed_for_the_repository() {
+    use hmac::{Hmac, Mac};
+    let (body, labels) = update(published("alice", true), |_| {}, Some(UPDATE_KEY)).await;
+    let trailer = body.split("<!-- owner-update\n").nth(1).expect(&body);
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(UPDATE_KEY).unwrap();
+    mac.update(
+        format!("owner-update-v1\ncoords_hud\n0.1.0\n{HMOD_SHA}\ncoords_hud-0.1.0.hmod\nalice")
+            .as_bytes(),
+    );
+    let hmac: String = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        trailer,
+        format!(
+            "id: coords_hud\nversion: 0.1.0\nsha256: {HMOD_SHA}\nfile: coords_hud-0.1.0.hmod\nsubmitter: alice\nhmac: {hmac}\n-->"
+        ),
+    );
+    assert_eq!(labels, [(1, json!(["owner-update"]))]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn everything_else_waits_for_a_reviewer() {
+    let unsigned = |body: &str, labels: &[(u64, Value)]| {
+        assert!(!body.contains("owner-update"), "{body}");
+        assert!(labels.is_empty());
+    };
+    // A new project, not an update (alice isn't in a missing entry's owners).
+    let (mut client, mock) = setup().await;
+    let file = std::fs::read(fixtures().join("coords_hud-0.1.0.hmod")).unwrap();
+    let csrf = client.sign_in().await;
+    client.submit(&csrf, &form(), &file).await;
+    {
+        let m = mock.lock().unwrap();
+        unsigned(m.pulls[0]["body"].as_str().unwrap(), &m.labels);
+    }
+    // The feature is off without the secret.
+    let (body, labels) = update(published("alice", true), |_| {}, None).await;
+    unsigned(&body, &labels);
+    // The page's text changes with the version.
+    let (body, labels) = update(
+        published("alice", true),
+        |f| f["summary"] = json!("Another."),
+        Some(UPDATE_KEY),
+    )
+    .await;
+    unsigned(&body, &labels);
+    // A new icon.
+    let (body, labels) = update(
+        published("alice", true),
+        |f| f["icon"] = json!("https://x.test/i.png"),
+        Some(UPDATE_KEY),
+    )
+    .await;
+    unsigned(&body, &labels);
+    // A project with no key (and so no signature) is signed as well.
+    let unkeyed = |f: &mut Value| {
+        f.as_object_mut().unwrap().remove("key");
+        f.as_object_mut().unwrap().remove("signature");
+    };
+    let (body, _) = update(published("alice", false), unkeyed, Some(UPDATE_KEY)).await;
+    assert!(body.contains("<!-- owner-update"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -546,4 +696,67 @@ async fn a_refusal_waits_for_the_upload() {
     .unwrap();
     assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
     assert!(answer.contains("{\"error\":"), "{answer}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_is_listed_by_its_repository_and_never_updated_by_the_form() {
+    let (mut client, mock) = setup().await;
+    let csrf = client.sign_in().await;
+    let listing = json!({
+        "id": "coords_hud", "kind": "native-mod", "repo": "alice/coords", "name": "Coordinates HUD",
+        "summary": "Your coordinates in a corner.", "license": "MIT",
+    });
+    let (status, json) = client.submit_with(&csrf, &listing, None).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    {
+        let m = mock.lock().unwrap();
+        assert!(m.assets.is_empty(), "no file is uploaded");
+        let (text, _, blob) = &m.commits[&(
+            "list/coords_hud".to_owned(),
+            "mods/coords_hud.toml".to_owned(),
+        )];
+        assert!(blob.is_none());
+        let entry: Entry = toml::from_str(text).unwrap();
+        assert_eq!(entry.repo.as_deref(), Some("alice/coords"));
+        assert_eq!(entry.owners, ["alice"]);
+        assert!(entry.versions.is_empty());
+        let body = m.pulls[0]["body"].as_str().unwrap();
+        assert!(
+            body.contains("the submitter") && !body.contains("owner-update"),
+            "{body}"
+        );
+        assert!(m.labels.is_empty());
+    }
+    // A repository that is not found or private, a missing licence, a file beside a repository.
+    let mut other = listing.clone();
+    other["id"] = json!("other");
+    for (field, value) in [
+        ("repo", json!("alice/secret")),
+        ("repo", json!("alice/nothing")),
+        ("license", json!("")),
+    ] {
+        let mut bad = other.clone();
+        bad[field] = value;
+        let (status, json) = client.submit_with(&csrf, &bad, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    }
+    let (status, _) = client.submit_with(&csrf, &other, Some(b"x")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // An update of a project listed by its repository: publish a release instead.
+    let main = published("alice", false).replacen(
+        "kind = \"mod\"\n",
+        "kind = \"mod\"\nrepo = \"alice/coords\"\n",
+        1,
+    );
+    mock.lock()
+        .unwrap()
+        .main
+        .insert("mods/coords_hud.toml".into(), main);
+    let file = std::fs::read(fixtures().join("coords_hud-0.1.0.hmod")).unwrap();
+    let (status, json) = client.submit(&csrf, &form(), &file).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert!(
+        json["error"].as_str().unwrap().contains("GitHub release"),
+        "{json}"
+    );
 }

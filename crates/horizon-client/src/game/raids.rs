@@ -903,7 +903,8 @@ impl Game<'_> {
                         s.banner_at = None;
                         s.patrol_leader = true;
                         s.patrolling = true;
-                        m.extra.head = Some(raider::BANNER.into());
+                        // wear_banner: head id + ominous stack for SetEquipment (#4567).
+                        raider::wear_banner(m);
                     }
                 }
             }

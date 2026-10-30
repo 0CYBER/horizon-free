@@ -91,7 +91,7 @@ impl Game<'_> {
     pub(super) fn wear(&mut self, stack: &ItemStack, amount: u32) -> u32 {
         let loss = self.durability_loss(stack, amount);
         if loss > 0 {
-            self.trigger_item_durability(stack);
+            self.trigger_item_durability(stack, stack.damage + loss);
         }
         loss
     }

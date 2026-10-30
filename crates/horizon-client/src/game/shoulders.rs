@@ -4,6 +4,7 @@
 //! falls, swims, flies or sleeps (`ServerPlayer.handleShoulderEntities`).
 use super::Game;
 use horizon_client::mobs::Species;
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::nbt::Tag;
 
 const KEYS: [&str; 2] = ["ShoulderEntityLeft", "ShoulderEntityRight"];
@@ -59,6 +60,9 @@ impl Game<'_> {
     /// of a player who falls, swims, flies, sleeps, is hurt, dying, a
     /// spectator or spinning with a riptide.
     pub(super) fn handle_shoulder_entities(&mut self) {
+        for key in KEYS {
+            self.play_shoulder_entity_ambient_sound(key);
+        }
         let Some(p) = self.player.as_ref() else {
             return;
         };
@@ -79,6 +83,50 @@ impl Game<'_> {
                 || self.sleeping.is_some())
         {
             self.remove_entities_on_shoulder();
+        }
+    }
+
+    /// `ServerPlayer.playShoulderEntityAmbientSound`: a parrot that is not
+    /// `Silent` chirps or imitates a mob within 20 blocks, one tick in 200
+    /// (drawn from the level's random; the player's own is not kept).
+    fn play_shoulder_entity_ambient_sound(&mut self, key: &str) {
+        let Some(Tag::Compound(tag)) = self.level.player_extra.as_ref().and_then(|e| e.get(key))
+        else {
+            return;
+        };
+        let silent = matches!(tag.get(&"Silent".into()), Some(Tag::Byte(b)) if *b != 0);
+        let parrot = matches!(
+            tag.get(&"id".into()),
+            Some(Tag::String(id)) if id.to_string_lossy() == "minecraft:parrot"
+        );
+        if tag.is_empty() || silent || self.world.random.next_int_bound(200).unwrap_or(1) != 0 {
+            return;
+        }
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        if !parrot {
+            return;
+        }
+        let area = p.bounds().inflate(Vec3::new(20.0, 20.0, 20.0));
+        let at = [p.position.x, p.position.y, p.position.z];
+        let alive = !p.health.dead_or_dying();
+        let nearby: Vec<_> = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive() && !m.removed && m.bounds().intersects(area))
+            .map(|m| (m.species(), m.silent))
+            .collect();
+        let peaceful = self.ui.difficulty == 0;
+        if let Some((sound, volume, pitch)) = horizon_client::mobs::parrot::shoulder_sound(
+            &mut self.world.random,
+            alive,
+            false,
+            peaceful,
+            &nearby,
+        ) {
+            self.audio
+                .play(&format!("minecraft:{sound}"), Some(at), volume, pitch);
         }
     }
 

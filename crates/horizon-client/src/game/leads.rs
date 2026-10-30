@@ -316,79 +316,116 @@ impl Game<'_> {
                         * alpha as f32,
             )
             .to_radians();
-            let offset = leash::leash_offset(m);
-            let offset = rot_y(glam::DVec3::from_array(offset), -body);
-            let start = lerp3(m.previous, m.position) + offset;
-            let end = match holder {
-                Holder::Knot(p) => {
-                    if !knots.contains(&p) {
-                        knots.push(p);
-                    }
-                    glam::DVec3::new(
-                        f64::from(p[0]) + 0.5,
-                        f64::from(p[1]) + 0.375 + 0.2,
-                        f64::from(p[2]) + 0.5,
-                    )
-                }
-                Holder::Mob(id) => {
-                    let Some(o) = self.mobs.iter().find(|o| o.id == id) else {
-                        continue;
-                    };
-                    lerp3(o.previous, o.position) + glam::DVec3::new(0.0, o.eye_height() * 0.7, 0.0)
-                }
-                Holder::Player => {
-                    let Some(p) = self.player.as_ref() else {
-                        continue;
-                    };
-                    self.player_rope_hold(p, alpha)
-                }
+            // EntityRenderer.extractRenderState: one lead from the mob's leash
+            // offset to the holder's rope hold position, or, when the holder
+            // is a happy ghast and the mob supports a quad lead, four from
+            // `getQuadLeashOffsets` to `getQuadLeashHolderOffsets`.
+            let mut ends: Vec<(glam::DVec3, glam::DVec3, bool)> = Vec::new();
+            let quad = match holder {
+                Holder::Mob(id) if leash::supports_quad_leash(m.species()) => self
+                    .mobs
+                    .iter()
+                    .find(|o| o.id == id)
+                    .and_then(|o| leash::quad_holder_offsets(o).map(|h| (o, h))),
+                _ => None,
             };
+            if let Some((roper, holder_points)) = quad {
+                let roper_body = f64::from(
+                    roper.previous_body_yaw
+                        + horizon_client::mobs::living::wrap(
+                            roper.body_yaw - roper.previous_body_yaw,
+                        ) * alpha as f32,
+                )
+                .to_radians();
+                let holder_pos = lerp3(roper.previous, roper.position);
+                let here = lerp3(m.previous, m.position);
+                for (mine, theirs) in leash::quad_leash_offsets(m).iter().zip(holder_points) {
+                    let start = here + rot_y(glam::DVec3::from_array(*mine), -body);
+                    let end = holder_pos + rot_y(glam::DVec3::from_array(theirs), -roper_body);
+                    ends.push((start, end, false));
+                }
+            } else {
+                let offset = leash::leash_offset(m);
+                let offset = rot_y(glam::DVec3::from_array(offset), -body);
+                let start = lerp3(m.previous, m.position) + offset;
+                let end = match holder {
+                    Holder::Knot(p) => {
+                        if !knots.contains(&p) {
+                            knots.push(p);
+                        }
+                        glam::DVec3::new(
+                            f64::from(p[0]) + 0.5,
+                            f64::from(p[1]) + 0.375 + 0.2,
+                            f64::from(p[2]) + 0.5,
+                        )
+                    }
+                    Holder::Mob(id) => {
+                        let Some(o) = self.mobs.iter().find(|o| o.id == id) else {
+                            continue;
+                        };
+                        lerp3(o.previous, o.position)
+                            + glam::DVec3::new(0.0, o.eye_height() * 0.7, 0.0)
+                    }
+                    Holder::Player => {
+                        let Some(p) = self.player.as_ref() else {
+                            continue;
+                        };
+                        self.player_rope_hold(p, alpha)
+                    }
+                };
+                ends.push((start, end, true));
+            }
             let light = |p: glam::DVec3| {
                 self.world
                     .light(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32)
             };
             // Block and sky light averaged between the two ends.
-            let (a, b) = (light(start), light(end));
+            let (a, b) = (light(ends[0].0), light(ends[0].1));
             let packed = pack_light((((a >> 4) + (b >> 4)) / 2) << 4 | (((a & 15) + (b & 15)) / 2));
-            let d = end - start;
-            let k = 1.0 / (d.x * d.x + d.z * d.z).sqrt().max(1e-6) * 0.05 / 2.0;
-            let (dx_off, dz_off) = (d.z * k, d.x * k);
-            let point = |step: i32, fudge: f64| {
-                let progress = f64::from(step) / 24.0;
-                let y = if d.y > 0.0 {
-                    d.y * progress * progress
-                } else {
-                    d.y - d.y * (1.0 - progress) * (1.0 - progress)
-                };
-                let base = start + glam::DVec3::new(d.x * progress, y, d.z * progress);
-                (
-                    base + glam::DVec3::new(-dx_off, fudge, dz_off),
-                    base + glam::DVec3::new(dx_off, 0.05 - fudge, -dz_off),
-                )
-            };
-            for (fudge, backwards) in [(0.05, false), (0.0, true)] {
-                for step in 0..24 {
-                    let shade = |s: i32| {
-                        let dark = s % 2 == i32::from(backwards);
-                        let f = if dark { 0.7 } else { 1.0 };
-                        abgr(0.5 * f, 0.4 * f, 0.3 * f)
+            for (start, end, slack) in ends {
+                let d = end - start;
+                let k = 1.0 / (d.x * d.x + d.z * d.z).sqrt().max(1e-6) * 0.05 / 2.0;
+                let (dx_off, dz_off) = (d.z * k, d.x * k);
+                let point = |step: i32, fudge: f64| {
+                    let progress = f64::from(step) / 24.0;
+                    // LeashFeatureRenderer.addVertexPair: a quad lead is straight.
+                    let y = if !slack {
+                        d.y * progress
+                    } else if d.y > 0.0 {
+                        d.y * progress * progress
+                    } else {
+                        d.y - d.y * (1.0 - progress) * (1.0 - progress)
                     };
-                    let (a0, b0) = point(step, fudge);
-                    let (a1, b1) = point(step + 1, fudge);
-                    let color = shade(step);
-                    // Both faces: the leash is not culled.
-                    for quad in [[a0, b0, b1, a1], [a1, b1, b0, a0]] {
-                        for (v, uv) in quad.iter().zip(uv) {
-                            out.push(Vertex {
-                                normal: [0; 4],
-                                pos: (*v - camera).as_vec3().to_array(),
-                                uv,
-                                layer: 0,
-                                color,
-                                light: packed,
+                    let base = start + glam::DVec3::new(d.x * progress, y, d.z * progress);
+                    (
+                        base + glam::DVec3::new(-dx_off, fudge, dz_off),
+                        base + glam::DVec3::new(dx_off, 0.05 - fudge, -dz_off),
+                    )
+                };
+                for (fudge, backwards) in [(0.05, false), (0.0, true)] {
+                    for step in 0..24 {
+                        let shade = |s: i32| {
+                            let dark = s % 2 == i32::from(backwards);
+                            let f = if dark { 0.7 } else { 1.0 };
+                            abgr(0.5 * f, 0.4 * f, 0.3 * f)
+                        };
+                        let (a0, b0) = point(step, fudge);
+                        let (a1, b1) = point(step + 1, fudge);
+                        let color = shade(step);
+                        // Both faces: the leash is not culled.
+                        for quad in [[a0, b0, b1, a1], [a1, b1, b0, a0]] {
+                            for (v, uv) in quad.iter().zip(uv) {
+                                out.push(Vertex {
+                                    normal: [0; 4],
+                                    pos: (*v - camera).as_vec3().to_array(),
+                                    uv,
+                                    layer: 0,
+                                    color,
+                                    light: packed,
 
-                                glint_uv: [0.0, 0.0],
-                            });
+                                    glint_uv: [0.0, 0.0],
+                                });
+                            }
                         }
                     }
                 }

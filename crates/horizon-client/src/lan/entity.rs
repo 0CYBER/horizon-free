@@ -1211,6 +1211,34 @@ mod tests {
     }
 
     #[test]
+    fn a_cleared_crystal_beam_is_sent() {
+        let mut e = state(0.0);
+        e.kind = "minecraft:end_crystal".into();
+        e.defaults = vec![(8, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(None))];
+        e.meta = vec![(
+            8,
+            serializer::OPTIONAL_BLOCK_POS,
+            Value::OptPos(Some([0, 128, 0])),
+        )];
+        let mut s = added(&e);
+        e.meta.clear();
+        let mut packets = Vec::new();
+        s.send_dirty(&e, true, &mut packets);
+        let sent: Vec<_> = packets
+            .iter()
+            .filter_map(|p| match p {
+                play::Clientbound::SetEntityData(d) => Some(d.values.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(
+            sent,
+            vec![(8, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(None))]
+        );
+    }
+
+    #[test]
     fn a_value_back_at_a_listed_default_is_sent() {
         let mut e = state(0.0);
         e.defaults = vec![(16, serializer::BOOLEAN, Value::Bool(false))];

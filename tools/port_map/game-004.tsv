@@ -65,19 +65,19 @@ ConversionType.convertCommon	port	crates/horizon-client/src/game/zombie_villager
 ConversionType.copyComponent	inline	crates/horizon-client/src/game/zombie_villagers.rs::carry_over	gap: minor: the custom name is kept by carry_over and convert_mob, custom data is not
 Crackiness.byFraction	port	crates/horizon-client/src/mobs/golem.rs::crackiness	iron golem thresholds 0.75, 0.5, 0.25; wolf armor 0.95, 0.69, 0.32 are in mobs/render.rs::layers and mobs.rs::Mob::hurt_wolf_armor
 Crackiness.byDamage	inline	crates/horizon-client/src/mobs/render.rs::layers	wolf armor: durability left over max picks the crack texture; a golem uses its health instead
-Display.onSyncedDataUpdated	port	crates/horizon-client/src/game/text_displays.rs::RemoteTextDisplay::metadata	gap: minor: text displays a remote server sends only; start delay, duration and render state flags are tracked, width and height do not update a culling box
+Display.onSyncedDataUpdated	port	crates/horizon-client/src/game/text_displays.rs::RemoteTextDisplay::metadata	gap: minor: text displays a remote server sends only; start delay, duration and render state flags are tracked
 Display.createTransformation	port	crates/horizon-client/src/text_display.rs::TextDisplayData::matrix	translation, left rotation, scale, right rotation plus the billboard turn
 Display.tick	port	crates/horizon-client/src/game/text_displays.rs::RemoteTextDisplay::tick	start tick, interpolation duration and render state refresh; text displays only
 Display.defineSynchedData	port	crates/horizon-client/src/text_display.rs::TextDisplayData::default	the defaults of entries 8 to 22
 Display.readAdditionalSaveData	missing		player: display entities saved in a world (made by commands, datapacks or maps) are not loaded; the local game has no display entity, only a remote server's text displays are drawn
 Display.setTransformation	missing		minor: server side setter; there is no local display entity
 Display.addAdditionalSaveData	missing		minor: no local display entity to save
-Display.getInterpolatedBoundingBox	missing		minor: no culling box, a text display is drawn whenever it is within its view range, even off screen
+Display.getInterpolatedBoundingBox	port	crates/horizon-client/src/text_display.rs::culling_box	width-centred XZ box from y to y+height at the interpolated origin; used by Game::display_in_view
 Display.setBrightnessOverride	missing		minor: server side setter; there is no local display entity
 Display.getBrightnessOverride	inline	crates/horizon-client/src/game/text_displays.rs::Game::text_display_geometry	the packed sky and block light of the brightness entry (-1 uses the world light)
 Display.calculateInterpolationProgress	port	crates/horizon-client/src/game/text_displays.rs::RemoteTextDisplay::progress	
-Display.updateCulling	missing		minor: width and height are stored but no culling box is built
-Display.shouldRenderAtSqrDistance	inline	crates/horizon-client/src/game/text_displays.rs::Game::text_display_geometry	view_range * 64 * view scale squared
+Display.updateCulling	port	crates/horizon-client/src/text_display.rs::culling_box	noCulling when width or height is 0 (`no_culling`); else the width/height AABB
+Display.shouldRenderAtSqrDistance	inline	crates/horizon-client/src/game/text_displays.rs::Game::display_in_view	view_range * 64 * view scale squared; frustum when width and height are set
 Display.getTeamColor	missing		minor: glow_color_override is read but a glowing display gets no coloured outline
 Display.createFreshRenderState	inline	crates/horizon-client/src/game/text_displays.rs::RemoteTextDisplay::tick	the copy of the synced data when no interpolation runs
 Display.createInterpolatedRenderState	inline	crates/horizon-client/src/game/text_displays.rs::RemoteTextDisplay::tick	the new start state is the old one blended to the last drawn progress (TextDisplayData::blend)

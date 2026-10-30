@@ -106,37 +106,113 @@ impl Game<'_> {
                 m.ai.nav.stop();
             }
         }
-        // Text displays riding a mob, as NPC plugins put a name over a head:
-        // `LivingEntity.getPassengerRidingPosition`, the vehicle's passenger
-        // attachment (the top of its box in its pose), less the display's own
-        // vehicle attachment, which is 0 (Display's dimensions are 0 by 0).
-        // On the local player, the top of its box in its pose and scale (`Avatar.POSES`).
+        // Displays and interaction boxes riding anything the client tracks,
+        // as NPC plugins put a name over a head or a model's bones on a
+        // pivot: `Entity.rideTick` -> `positionRider`, the vehicle's passenger
+        // attachment (the top of its box in its pose) less the rider's own,
+        // which is 0 for both (Display and Interaction are 0 by 0). On the
+        // local player, the top of its box in its pose and scale
+        // (`Avatar.POSES`).
         let me = self.remote.as_ref().map(|r| r.entity_id as u32);
         let own_seat = self.player.as_ref().map(|p| {
             p.position
                 .add_vector(Vec3::new(0.0, f64::from(p.dimensions.height), 0.0))
         });
-        for display in self.text_displays.values_mut() {
-            let Some(vehicle) = display.vehicle else {
-                continue;
-            };
-            let at = if Some(vehicle) == me {
-                let Some(at) = own_seat else { continue };
-                at
-            } else {
-                let Some(&j) = index.get(&vehicle) else {
-                    continue;
-                };
-                let vehicle = &self.mobs[j];
-                riders::seat(
-                    riders::passenger_attachment(vehicle),
-                    0.0,
-                    vehicle.position,
-                    vehicle.yaw,
-                )
-            };
-            display.ride(glam::DVec3::new(at.x, at.y, at.z));
+        // A rider of a rider settles over a few passes, as the mobs above.
+        for _ in 0..3 {
+            let mut vehicles: Vec<u32> = self
+                .text_displays
+                .values()
+                .filter_map(|d| d.vehicle)
+                .chain(self.interactions.values().filter_map(|i| i.vehicle))
+                .collect();
+            vehicles.sort_unstable();
+            vehicles.dedup();
+            let seats: HashMap<u32, glam::DVec3> = vehicles
+                .into_iter()
+                .filter_map(|v| {
+                    self.passenger_riding_position(v, me, own_seat, &index)
+                        .map(|at| (v, at))
+                })
+                .collect();
+            for display in self.text_displays.values_mut() {
+                if let Some(at) = display.vehicle.and_then(|v| seats.get(&v)) {
+                    display.ride(*at);
+                }
+            }
+            for interaction in self.interactions.values_mut() {
+                if let Some(at) = interaction.vehicle.and_then(|v| seats.get(&v)) {
+                    interaction.ride_to(*at);
+                }
+            }
         }
+    }
+
+    /// `Entity.getPassengerRidingPosition` of a vehicle: where the feet of a
+    /// passenger whose own vehicle attachment is 0 land.
+    fn passenger_riding_position(
+        &self,
+        vehicle: u32,
+        me: Option<u32>,
+        own_seat: Option<Vec3>,
+        index: &HashMap<u32, usize>,
+    ) -> Option<glam::DVec3> {
+        if Some(vehicle) == me {
+            let at = own_seat?;
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(&j) = index.get(&vehicle) {
+            let v = &self.mobs[j];
+            let at = riders::seat(riders::passenger_attachment(v), 0.0, v.position, v.yaw);
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(d) = self.text_displays.get(&(vehicle as i32)) {
+            return Some(d.position());
+        }
+        if let Some(i) = self.interactions.get(&(vehicle as i32)) {
+            let at = i.position;
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(b) = self.boats.iter().find(|b| b.id == vehicle) {
+            let count = self.boat_players(vehicle).max(1) + self.boat_mobs(vehicle).len();
+            let at = b.seat(0, count, false, 0.0, false);
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(c) = self.carts.iter().find(|c| c.id == vehicle) {
+            let at = c
+                .position
+                .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
+            return Some(glam::DVec3::new(at.x, at.y, at.z));
+        }
+        if let Some(a) = self.armor_stands.iter().find(|a| a.id == vehicle) {
+            // ArmorStand.getDefaultDimensions: a marker has no box to sit on.
+            let height = if a.marker {
+                0.0
+            } else if a.small {
+                0.9875
+            } else {
+                1.975
+            };
+            return Some(glam::DVec3::new(
+                a.position.x,
+                a.position.y + height,
+                a.position.z,
+            ));
+        }
+        // Any other tracked entity sits on its feet; an area effect cloud is
+        // 0.5 tall, and ModelEngine parks a model's pivot half a block below
+        // its feet for exactly that.
+        let (kind, position) = self.remote.as_ref()?.tracked(vehicle as i32)?;
+        let lift = if kind == "minecraft:area_effect_cloud" {
+            0.5
+        } else {
+            0.0
+        };
+        Some(glam::DVec3::new(
+            position[0],
+            position[1] + lift,
+            position[2],
+        ))
     }
 
     /// `finalizeSpawn` jockeys of a naturally spawned mob: baby zombies on
