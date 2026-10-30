@@ -16,9 +16,12 @@ A native mod builds on one exact Horizon commit: `[compatibility] horizon_revisi
 and `horizon` in the `horizon-native.json` of its registry file (`.hnmod`, `horizon_mods::index::native`). Mods
 pin a **Nightly's commit** (or a release's). Every Nightly ships its source and keeps its commit for good as the
 tag `nightly-source/<date>-<short>` ([release-flow.md](release-flow.md#nightly-channel)), so a pinned mod still
-builds after its Nightly is replaced. All the mods of one build must pin the same commit; when they don't, the
-launcher says which mod pins which, and the player installs versions made for the same Nightly. A bundle with no
-pin builds on the commit of the installed version the build starts from.
+builds after its Nightly is replaced. When the mods of one build pin different commits, the launcher says which
+mod pins which and the commit the build would use, the newest of them, and builds only after the player chooses
+**Build anyway** (`native-build --allow-version-mismatch`): such mods often still apply and compile. A failed build
+then says the mods were made for other versions. Their horizon-mixins pins may differ too: the build uses the
+newest of them and the launcher's own, never one older than a mod was made with. A bundle with no pin builds on
+the commit of the installed version the build starts from.
 
 ### Mods on the hook points
 

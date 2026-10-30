@@ -80,6 +80,7 @@ Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Ho
 - `FOLDER`: A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them (default: the native mods installed and turned on in the instance)
 - `--instance`: The instance whose installed native mods to build, and which then plays the build (default: the selected one; the game's own home builds into the Native mods instance)
 - `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+- `--allow-version-mismatch`: Build mods made for different Horizon versions together anyway, on the newest of them
 
 MCP: none: the player's switch.
 
