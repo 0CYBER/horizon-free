@@ -424,7 +424,6 @@ impl Game<'_> {
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
-            Screen::Mod => "mod",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -536,7 +535,9 @@ impl Game<'_> {
             title
                 .recent_worlds()
                 .iter()
-                .map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.creative }))
+                .map(
+                    |w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 }),
+                )
                 .collect::<Vec<_>>()
         };
         match &title.mode {
@@ -546,7 +547,7 @@ impl Game<'_> {
                 selected,
             } => json!({
                 "mode": "select-world",
-                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.creative })).collect::<Vec<_>>(),
+                "worlds": list.iter().map(|w| json!({ "folder": w.folder, "name": w.name, "creative": w.game_mode == 1 })).collect::<Vec<_>>(),
                 "selected": selected,
             }),
             Mode::Create {
@@ -564,7 +565,7 @@ impl Game<'_> {
                 "hardcore": options.hardcore,
                 "difficulty": horizon_client::title::DIFFICULTIES[options.difficulty()],
                 "allow_commands": options.commands(*creative),
-                "superflat": options.flat,
+                "world_type": options.world_type.id(),
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
             }),
@@ -577,7 +578,7 @@ impl Game<'_> {
             } => json!({
                 "mode": "customize-flat",
                 "fields": { "name": name, "seed": seed },
-                "superflat": options.flat,
+                "superflat": options.world_type == horizon_client::save::WorldPreset::Flat,
                 "biome": flat.settings().biome,
                 "layers": flat.settings().layers.iter().map(|layer| json!({
                     "block": layer.block,
@@ -597,6 +598,9 @@ impl Game<'_> {
             Mode::Delete { world } => {
                 json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
             }
+            Mode::BackupBeforeUpgrade { world, .. } => {
+                json!({ "mode": "backup-before-upgrade", "folder": world.folder, "name": world.name })
+            }
             Mode::Error { message, .. } => {
                 json!({ "mode": "world-operation-error", "message": message })
             }
@@ -606,6 +610,9 @@ impl Game<'_> {
                 json!({ "mode": "multiplayer", "disconnected": reason })
             }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
+            Mode::MultiplayerWarning { check } => {
+                json!({ "mode": "multiplayer-warning", "check": check })
+            }
         }
     }
 
@@ -1449,7 +1456,15 @@ impl Game<'_> {
                 self.playing()?;
                 let all = a.pos.first() == Some(&"all");
                 let before = self.held().map(|s| self.stack_value(s));
-                self.drop_held(all);
+                if self.remote.is_some() {
+                    // As Q does on a server (and on the single-player server
+                    // thread): the server throws the stack, the client predicts it.
+                    if !self.spectator() {
+                        self.remote_drop(all);
+                    }
+                } else {
+                    self.drop_held(all);
+                }
                 ok(
                     json!({ "ok": true, "dropped_from": before, "held": self.held().map(|s| self.stack_value(s)) }),
                 )

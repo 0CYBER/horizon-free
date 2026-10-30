@@ -107,6 +107,11 @@ pub struct ItemInfo {
     pub weapon_damage: Option<u32>,
     /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
     pub use_speed: f32,
+    /// `use_effects.can_sprint` (default false): sprinting may start while the
+    /// item is in use.
+    pub can_sprint: bool,
+    /// `use_effects.interact_vibrations` (default true).
+    pub interact_vibrations: bool,
     /// `glider` (elytra).
     pub glider: bool,
     /// `equippable.swappable` and `equip_sound`.
@@ -663,6 +668,12 @@ impl Items {
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
                         .unwrap_or(0.2) as f32,
+                    can_sprint: c["minecraft:use_effects"]["can_sprint"]
+                        .as_bool()
+                        .unwrap_or(false),
+                    interact_vibrations: c["minecraft:use_effects"]["interact_vibrations"]
+                        .as_bool()
+                        .unwrap_or(true),
                     blocks_attacks: BlocksAttacks::parse(&c["minecraft:blocks_attacks"]),
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
@@ -1227,9 +1238,10 @@ impl LootContext<'_> {
                     let p = Self::number(o.get("p").unwrap_or(&Value::Null), random);
                     (0..n).filter(|_| random.next_float() < p).count() as f32
                 }
-                _ => 1.0,
+                // An unknown type gives 0, as in loot.rs `int` and `float`.
+                _ => 0.0,
             },
-            _ => 1.0,
+            _ => 0.0,
         }
     }
     fn int_number<R: RandomSource>(v: &Value, random: &mut R) -> i32 {
@@ -1251,9 +1263,11 @@ impl LootContext<'_> {
     }
     fn condition<R: RandomSource>(&self, c: &Value, random: &mut R) -> bool {
         let (kind, c) = match c {
+            Value::Null => return true,
+            Value::Array(list) => return list.iter().all(|c| self.condition(c, random)),
             Value::String(s) => (s.as_str(), &Value::Null),
             Value::Object(o) => (o.get("type").and_then(Value::as_str).unwrap_or(""), c),
-            _ => return true,
+            _ => return false,
         };
         match kind {
             // ExplosionCondition: 1 / radius under a decaying explosion.
@@ -1367,7 +1381,11 @@ impl LootContext<'_> {
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
             "minecraft:entity_properties" | "minecraft:damage_source_properties" => false,
-            _ => true,
+            // LocationCheck reads the world at its offset, which this engine
+            // does not have: held true (a double plant's other half is taken
+            // as there). Unknown types fail, as in loot.rs.
+            "minecraft:location_check" => true,
+            _ => false,
         }
     }
     fn conditions<R: RandomSource>(&self, o: &Value, random: &mut R) -> bool {
