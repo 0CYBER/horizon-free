@@ -50,6 +50,25 @@ impl Anticheat {
     }
 }
 
+/// Server ticks a claim of the ground keeps its height after the ground last held the player.
+const GROUND_GRACE: u64 = 10;
+
+/// Whether an entity of `kind` at `at` may carry a player standing at `player`: the entities players
+/// stand on (boats, rafts, minecarts, shulkers, happy ghasts, 4 blocks tall), within 4 blocks sideways and
+/// from a block above the player to a little more than a happy ghast's height below.
+fn carries_player(kind: &str, at: [f64; 3], player: [f64; 3]) -> bool {
+    let carrier = kind.ends_with("boat")
+        || kind.ends_with("raft")
+        || kind.contains("minecart")
+        || kind == "minecraft:shulker"
+        || kind == "minecraft:happy_ghast";
+    let up = player[1] - at[1];
+    carrier
+        && (at[0] - player[0]).abs() < 4.0
+        && (at[2] - player[2]).abs() < 4.0
+        && (-1.0..=4.5).contains(&up)
+}
+
 fn text(s: &str, color: &str) -> Tag {
     Tag::compound([
         ("text", Tag::String(JavaString::from(s))),
@@ -105,29 +124,60 @@ impl Hub {
         }
     }
 
-    /// `ground`, for a move from guest `i` that says it ends on the ground at `to`: None when the claim
-    /// stands (or isn't judged), else whether the player was sent back. A false claim is dropped either
-    /// way. Only blocks that can't hold anyone are judged: nothing but air and fluids around the feet,
-    /// and no collision a tenth of a block below. Anything else (powder snow, scaffolding, a block the
-    /// server doesn't have yet) and a boat, minecart, shulker or happy ghast nearby: not judged.
+    /// `ground`, for a move from guest `i` that says it ends on the ground at `to` (`stands`: the move
+    /// itself was stopped by something below): None when the claim stands (or isn't judged), else whether
+    /// the player was sent back. A false claim is dropped either way. A claim at the height where the
+    /// ground last held the player, within half a second, isn't judged: the block may have gone
+    /// server-side (broken, pushed) before the client heard.
     pub(super) fn anticheat_ground(
         &mut self,
         i: usize,
         to: [f64; 3],
+        stands: bool,
         ctx: &TickCtx,
         events: &mut Vec<HostEvent>,
     ) -> Option<bool> {
         if !self.anticheat.as_deref()?.config.runs(Check::Ground) {
             return None;
         }
+        let ticks = self.ticks;
+        if stands || self.ground_holds(i, to, ctx)? {
+            self.guests[i].anticheat.ground = Some((ticks, to[1]));
+            return None;
+        }
+        if self.guests[i].anticheat.ground.is_some_and(|(t, y)| {
+            ticks.saturating_sub(t) <= GROUND_GRACE && (y - to[1]).abs() < 1.0E-3
+        }) {
+            return None;
+        }
+        let (fx, fz) = (to[0].floor() as i32, to[2].floor() as i32);
+        let below = if self
+            .encoder
+            .has_fluid(ctx.world.block(fx, to[1].floor() as i32 - 1, fz).0)
+        {
+            "on a fluid"
+        } else {
+            "in the air"
+        };
+        let detail = format!(
+            "claims the ground {below} at {:.1} {:.1} {:.1}",
+            to[0], to[1], to[2]
+        );
+        Some(self.flag(i, Check::Ground, 1.0, &detail, events))
+    }
+
+    /// Whether something at `to` can hold guest `i` up; None: not judged. Only blocks that can't hold
+    /// anyone are judged: nothing but air and fluids around the feet, and no collision a tenth of a block
+    /// below. Anything else (powder snow, scaffolding, a block the server doesn't have yet) and a boat,
+    /// minecart, shulker or happy ghast under the player: not judged.
+    fn ground_holds(&self, i: usize, to: [f64; 3], ctx: &TickCtx) -> Option<bool> {
         let g = &self.guests[i];
         // No fall damage to skip.
         if g.creative() || g.spectator() || g.fall_flying {
             return None;
         }
         let binding = ctx.collision?;
-        let (fx, fz) = (to[0].floor() as i32, to[2].floor() as i32);
-        if !ctx.world.loaded(fx, fz) {
+        if !ctx.world.loaded(to[0].floor() as i32, to[2].floor() as i32) {
             return None;
         }
         let half = f64::from(g.dimensions().width) / 2.0;
@@ -144,17 +194,10 @@ impl Hub {
                 }
             }
         }
-        let carries = |kind: &str| {
-            kind.ends_with("boat")
-                || kind.ends_with("raft")
-                || kind.contains("minecart")
-                || kind == "minecraft:shulker"
-                || kind == "minecraft:happy_ghast"
-        };
         if ctx
             .entities
             .iter()
-            .any(|e| carries(&e.kind) && (0..3).all(|k| (e.position[k] - to[k]).abs() < 4.0))
+            .any(|e| carries_player(&e.kind, e.position, to))
         {
             return None;
         }
@@ -170,25 +213,11 @@ impl Hub {
             subject: None,
         };
         let down = Vec3::new(0.0, -0.1, 0.0);
-        if scene
-            .resolve(feet, down, 0.0, false)
-            .is_ok_and(|done| done.y > down.y)
-        {
-            return None;
-        }
-        let below = if self
-            .encoder
-            .has_fluid(ctx.world.block(fx, to[1].floor() as i32 - 1, fz).0)
-        {
-            "on a fluid"
-        } else {
-            "in the air"
-        };
-        let detail = format!(
-            "claims the ground {below} at {:.1} {:.1} {:.1}",
-            to[0], to[1], to[2]
-        );
-        Some(self.flag(i, Check::Ground, 1.0, &detail, events))
+        Some(
+            scene
+                .resolve(feet, down, 0.0, false)
+                .is_ok_and(|done| done.y > down.y),
+        )
     }
 
     /// `check` failed for guest `i`: raise its level, log it, and act on it. Returns whether the move or
@@ -252,5 +281,35 @@ impl Hub {
             self.resend_teleport(i, None);
         }
         v.setback || v.kick
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_happy_ghasts_rider_and_a_boats_are_carried() {
+        // HappyGhast is 4 blocks tall: its rider stands 4.0 above it.
+        assert!(carries_player(
+            "minecraft:happy_ghast",
+            [0.0, 70.0, 0.0],
+            [1.5, 74.0, -1.0]
+        ));
+        assert!(carries_player(
+            "minecraft:oak_boat",
+            [0.0, 62.0, 0.0],
+            [0.0, 62.5625, 0.0]
+        ));
+        assert!(!carries_player(
+            "minecraft:zombie",
+            [0.0, 70.0, 0.0],
+            [0.0, 71.0, 0.0]
+        ));
+        assert!(!carries_player(
+            "minecraft:happy_ghast",
+            [0.0, 70.0, 0.0],
+            [0.0, 80.0, 0.0]
+        ));
     }
 }

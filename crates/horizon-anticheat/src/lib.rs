@@ -196,6 +196,8 @@ pub struct Player {
     /// The server tick of each check's last alert.
     alerted: [Option<u64>; CHECKS],
     pub timer: timer::Balance,
+    /// The server tick and height where the ground last held the player.
+    pub ground: Option<(u64, f64)>,
 }
 
 impl Player {

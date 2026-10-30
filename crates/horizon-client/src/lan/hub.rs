@@ -2619,8 +2619,8 @@ impl Hub {
         // The anticheat's `ground`: a claim of the ground with nothing to
         // stand on is dropped (no-fall, walking on water).
         let mut flags = flags;
-        if flags & 1 != 0 && !stands && self.anticheat.is_some() {
-            match self.anticheat_ground(i, to, ctx, events) {
+        if flags & 1 != 0 && self.anticheat.is_some() {
+            match self.anticheat_ground(i, to, stands, ctx, events) {
                 Some(true) => {
                     let g = &mut self.guests[i];
                     (g.yaw, g.pitch) = (yaw, pitch);
