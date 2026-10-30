@@ -161,6 +161,14 @@ impl WorldEntry {
         }
     }
 }
+/// The AlertScreen an `Error` shows in place of the access failure.
+#[derive(Clone, Copy, Debug)]
+pub enum Alert {
+    /// The red `selectWorld.incompatible.title`.
+    Incompatible,
+    /// `selectWorld.recreate.error.title`.
+    Recreate,
+}
 #[derive(Clone, Debug)]
 pub enum Mode {
     Main,
@@ -209,8 +217,8 @@ pub enum Mode {
     Error {
         message: String,
         return_to: Box<Mode>,
-        /// AlertScreen with the red `selectWorld.incompatible.title`, not the access failure.
-        incompatible: bool,
+        /// An AlertScreen, not the access failure.
+        alert: Option<Alert>,
     },
     Multiplayer(crate::multiplayer::Screen),
     /// SafetyScreen: the warning before the first Multiplayer click, with its
@@ -731,7 +739,7 @@ impl Title {
         self.mode = Mode::Error {
             message: error.to_string(),
             return_to,
-            incompatible: false,
+            alert: None,
         };
     }
     /// Polling is done once per rendered frame so filesystem work never blocks drawing.
@@ -823,7 +831,7 @@ impl Title {
                     &[&version],
                 ),
                 return_to: Box::new(self.mode.clone()),
-                incompatible: true,
+                alert: Some(Alert::Incompatible),
             };
             return Action::None;
         }
@@ -1290,9 +1298,9 @@ impl Title {
                     93,
                 )]
             }
-            Mode::Error { incompatible, .. } => {
+            Mode::Error { alert, .. } => {
                 let lines = self.message_lines.get();
-                let y = if *incompatible {
+                let y = if alert.is_some() {
                     // AlertScreen.init: the button follows the text, kept inside the screen.
                     (90.0 + lines as f32 * 9.0 + 12.0)
                         .max(h / 6.0 + 96.0)
@@ -1770,26 +1778,28 @@ impl Title {
                     );
                 }
             }
-            Mode::Error {
-                message,
-                incompatible,
-                ..
-            } => {
+            Mode::Error { message, alert, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let lines: Vec<String> = message
                     .split('\n')
                     .flat_map(|line| wrapped(atlas, line, w - 50.0))
                     .collect();
                 self.message_lines.set(lines.len());
-                // AlertScreen (an incompatible world): the red title at 70, the text at 90.
-                let (top, text_top, key, fallback, color) = if *incompatible {
-                    (
-                        70.0,
-                        90.0,
-                        "selectWorld.incompatible.title",
-                        "Incompatible version",
-                        rgba(255, 0, 0, 255),
-                    )
+                // AlertScreen: the title at 70, the text at 90.
+                let (top, text_top, key, fallback, color) = if let Some(alert) = alert {
+                    let (key, fallback, color) = match alert {
+                        Alert::Incompatible => (
+                            "selectWorld.incompatible.title",
+                            "Incompatible version",
+                            rgba(255, 0, 0, 255),
+                        ),
+                        Alert::Recreate => (
+                            "selectWorld.recreate.error.title",
+                            "An error occurred!",
+                            u32::MAX,
+                        ),
+                    };
+                    (70.0, 90.0, key, fallback, color)
                 } else {
                     let top = confirm_top(h, lines.len());
                     (
@@ -2083,21 +2093,33 @@ impl Title {
                     }
                     14 => self.mode = Mode::Delete { world },
                     _ => {
-                        if let Some(level) = Level::read(&self.saves.join(&world.folder)) {
-                            self.create_return_to_main = false;
-                            let options = WorldOptions::of_world(
-                                &level,
-                                world.commands,
-                                &self.saves.join(&world.folder),
-                            );
-                            self.mode = Mode::Create {
-                                name: level.name,
-                                seed: level.seed.to_string(),
-                                creative: level.creative,
-                                focus: 0,
-                                options,
+                        let level = Level::read(&self.saves.join(&world.folder));
+                        // WorldListEntry.recreateWorld: a world that will not read is an
+                        // AlertScreen over the list.
+                        let Some(level) = level else {
+                            self.mode = Mode::Error {
+                                message: lang::get_or(
+                                    "selectWorld.recreate.error.text",
+                                    "Something went wrong while trying to recreate a world.",
+                                ),
+                                return_to: Box::new(self.mode.clone()),
+                                alert: Some(Alert::Recreate),
                             };
-                        }
+                            return Action::None;
+                        };
+                        self.create_return_to_main = false;
+                        let options = WorldOptions::of_world(
+                            &level,
+                            world.commands,
+                            &self.saves.join(&world.folder),
+                        );
+                        self.mode = Mode::Create {
+                            name: level.name,
+                            seed: level.seed.to_string(),
+                            creative: level.creative,
+                            focus: 0,
+                            options,
+                        };
                     }
                 }
                 Action::None

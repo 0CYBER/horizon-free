@@ -69,6 +69,7 @@ impl WorldOptions {
         dir: &std::path::Path,
     ) -> Self {
         let generation = crate::save::WorldGen::read(dir).unwrap_or_default();
+        let (pack_dir, data_packs) = crate::datapack::for_recreate(dir);
         Self {
             hardcore: level.hardcore,
             difficulty: DIFFICULTIES
@@ -83,6 +84,8 @@ impl WorldOptions {
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
             rules: crate::gamerules::GameRules::load(dir),
+            data_packs,
+            pack_dir,
             ..Self::default()
         }
     }
