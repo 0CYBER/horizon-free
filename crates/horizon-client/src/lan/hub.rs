@@ -202,6 +202,11 @@ pub struct Hub {
     /// `spawn-protection` (dedicated servers): the radius around the world
     /// spawn that only operators may change.
     pub spawn_protection: i32,
+    /// `chat-spam-threshold-seconds` as a TickThrottler threshold (20 a second):
+    /// over it, a guest who is not an operator is kicked. 0 never kicks.
+    pub chat_spam_threshold: i32,
+    /// `command-spam-threshold-seconds`, as `chat_spam_threshold`.
+    pub command_spam_threshold: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -373,6 +378,8 @@ impl Hub {
             ops: Default::default(),
             entity_range_percent: 100,
             spawn_protection: 0,
+            chat_spam_threshold: 0,
+            command_spam_threshold: 0,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
@@ -621,7 +628,7 @@ impl Hub {
             latency: Some(latency),
             display_name: Some(None),
             list_order: Some(0),
-            show_hat: Some(true),
+            show_hat: Some(guest.is_none_or(|g| g.info.model_customisation & 0x40 != 0)),
         }
     }
     /// ClientboundPlayerInfoUpdatePacket.createPlayerInitializing: every action.
@@ -2217,10 +2224,25 @@ impl Hub {
                 }
                 S::ClientInformation(info) => {
                     let g = &mut self.guests[i];
+                    // PlayerModelPart.HAT (bit 6): the tab list shows the hat layer.
+                    let was_hat = g.info.model_customisation & 0x40 != 0;
                     g.view_distance =
                         i32::from(info.view_distance).clamp(2, self.config.view_distance);
                     g.info = info;
                     g.center = None;
+                    let hat = g.info.model_customisation & 0x40 != 0;
+                    let uuid = g.uuid;
+                    // ServerGamePacketListenerImpl.handleClientInformation: UPDATE_HAT to everyone.
+                    if hat != was_hat {
+                        self.broadcast(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
+                            actions: 128,
+                            entries: vec![play::PlayerInfo {
+                                uuid,
+                                show_hat: Some(hat),
+                                ..Default::default()
+                            }],
+                        }));
+                    }
                 }
                 S::PlayerInput(p) => {
                     self.guests[i].input = p.flags;
@@ -2807,7 +2829,8 @@ pub fn guest_body(g: &Guest) -> BodyFlags {
         crouching: m.is_some_and(|m| m.pose == crate::pose::Pose::Crouching),
         spin_attack: m.is_some_and(|m| m.auto_spin_attack_ticks > 0),
         on_fire: m.is_some_and(|m| m.fire_ticks > 0),
-        invisible: g.effects.get("invisibility").is_some(),
+        // ServerPlayer.updateInvisibilityStatus: a spectator is always invisible.
+        invisible: g.effects.get("invisibility").is_some() || g.spectator(),
         glowing: g.effects.get("glowing").is_some(),
     }
 }

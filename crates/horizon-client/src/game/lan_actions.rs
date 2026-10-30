@@ -47,6 +47,10 @@ pub(super) struct GuestPlay {
     /// `ServerGamePacketListenerImpl.dropSpamThrottler` (`TickThrottler(20, 1480)`): 20 for each
     /// item a creative player drops from the creative screen, one less each tick.
     creative_drops: u32,
+    /// `ServerGamePacketListenerImpl.chatSpamThrottler`: 20 for each chat message, one less each tick.
+    pub(super) chat_spam: u32,
+    /// `commandSpamThrottler`: 20 for each command, one less each tick.
+    pub(super) command_spam: u32,
     /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
     pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
@@ -2247,6 +2251,11 @@ impl Game<'_> {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
             };
+            // ServerGamePacketListenerImpl.tick: the chat and command throttlers
+            // decay one a tick, dead or alive.
+            let play = host.play.entry(conn).or_default();
+            play.chat_spam = play.chat_spam.saturating_sub(1);
+            play.command_spam = play.command_spam.saturating_sub(1);
             self.guest_sleep_tick(host, gi);
             if host.hub.guests[gi].dead {
                 self.guest_tick_death(host, gi);
@@ -3095,7 +3104,8 @@ impl Game<'_> {
         );
     }
 
-    /// Dropped items touching a guest go into their inventory.
+    /// Dropped items touching a guest go into their inventory
+    /// (`ItemEntity.playerTouch`, then `ServerPlayer.onItemPickup`).
     fn guest_pickups(&mut self, host: &mut LanHost, gi: usize) {
         let (conn, mode, position, id, uuid) = {
             let g = &host.hub.guests[gi];
@@ -3128,16 +3138,28 @@ impl Game<'_> {
         for i in near.into_iter().rev() {
             let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
             let before = stack.count;
+            let thrower = self.dropped[i].thrower;
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
                     let item = self.dropped.remove(i);
+                    if let Some(thrower) = thrower {
+                        self.as_guest(host, conn, |g| {
+                            g.trigger_thrown_picked_up_by_player(&item.stack, thrower);
+                        });
+                    }
                     self.guest_pickup(host, id, item);
                     taken.push((item_id, before));
                 }
                 Some(rest) if rest.count < before => {
                     self.guest_pickup(host, id, self.dropped[i].clone());
                     self.dropped[i].stack = rest;
+                    if let Some(thrower) = thrower {
+                        let left = self.dropped[i].stack.clone();
+                        self.as_guest(host, conn, |g| {
+                            g.trigger_thrown_picked_up_by_player(&left, thrower);
+                        });
+                    }
                     taken.push((item_id, before - self.dropped[i].stack.count));
                 }
                 Some(_) => {}
