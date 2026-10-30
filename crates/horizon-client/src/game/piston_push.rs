@@ -462,9 +462,7 @@ impl Game<'_> {
             Target::ArmorStand(i) => {
                 self.armor_stands[i].position = self.armor_stands[i].position.add_vector(movement)
             }
-            Target::Tnt(i) => {
-                self.tnts[i].position = self.tnts[i].position.add_vector(movement)
-            }
+            Target::Tnt(i) => self.tnts[i].position = self.tnts[i].position.add_vector(movement),
         }
     }
 

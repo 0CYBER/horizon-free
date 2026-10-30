@@ -490,7 +490,6 @@ impl FluidFlowWorld for TntFluidWorld<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
 
     #[test]
     fn a_piston_slime_bounce_launches_primed_tnt() {
@@ -510,6 +509,7 @@ mod tests {
         assert!(!tnt.on_ground);
     }
 
+    #[test]
     fn primed_tnt_follows_water_currents_after_moving() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
