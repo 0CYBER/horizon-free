@@ -1,10 +1,12 @@
-//! Hook points for native mods (docs/native-mods.md, "Hook points"): empty
+//! Hook points for native mods (docs/native-mods.md, "Mods on the hook points"): empty
 //! functions the game calls at fixed places, for horizon-mixins bundles to
 //! hook with HEAD. Hooks that answer take an out parameter (`claimed`,
 //! `zoom`…) so several mods can hook the same point. A native mod keeps its
 //! own state in a module of its bundle; the helpers below read and draw what
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
+//!
+//! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
 //! (`native_panel_items`, `native_panel_recipes`, `native_panel_event`),
@@ -19,6 +21,7 @@
 //! that would break such a bundle is not made.
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
+use super::native_lifecycle::{NativeLifecycleContext, WorldPhase};
 use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
 use horizon_client::{
     chat::ChatSource,
@@ -35,7 +38,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 2;
+pub(crate) const NATIVE_HOOKS_API: u32 = 3;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -269,6 +272,18 @@ impl Game<'_> {
     /// and on servers), and the server's own (`native_window` is false
     /// there: the single player server thread, a dedicated server).
     pub(super) fn native_tick(&mut self) {}
+    /// The world's phases, read-only; `error_text` carries the engine's
+    /// own open-failure text, empty otherwise. Server-side; the deprecated
+    /// in-frame path delivers no lifecycle events. A server loop or final
+    /// save failure fires `WorldCloseFailed` with the error text.
+    pub(super) fn native_world_lifecycle(
+        &mut self,
+        context: &NativeLifecycleContext,
+        phase: WorldPhase,
+        error_text: &str,
+    ) {
+        let _ = (context, phase, error_text);
+    }
     /// The HUD (not drawn under F1), after the minimap: place a box with
     /// `corners.place` (boxes stack away from their edge) and draw it with
     /// `native_fill` and `native_text`. Skip a corner `native_corner_shown`
@@ -506,8 +521,8 @@ impl Game<'_> {
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
         self.native_mods(&mut mods);
-        // A WebAssembly mod of the same id doesn't run (`start_mods`): the
-        // native row stands for it, and alone toggles its `mod.<id>` line.
+        // A WebAssembly mod of the same id: the native row stands for it,
+        // and alone toggles its `mod.<id>` line.
         self.settings
             .mods
             .installed
@@ -525,7 +540,6 @@ impl Game<'_> {
                 description: m.description,
                 problem: None,
                 dev: false,
-                has_settings: false,
                 native: Some(page),
             });
         }
@@ -575,11 +589,11 @@ impl Game<'_> {
         self.native_wheel(steps, &mut claimed);
         claimed
     }
-    /// A client mod's command: a native mod's first, then a WebAssembly mod's.
+    /// A native mod's command.
     pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
         let mut ran = false;
         self.native_command(command, &mut ran);
-        ran || self.mod_command(command)
+        ran
     }
     /// The zoom in effect while playing (a native mod's); the spyglass's own
     /// view wins.
@@ -649,6 +663,60 @@ mod tests {
                 assert!(!line.contains(mac), "a macro in the hook points: {line}");
             }
         }
+    }
+
+    #[test]
+    fn lifecycle_source_stays_hookable() {
+        let source = include_str!("native_lifecycle.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+        for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!line.contains("cfg"), "a cfg in lifecycle source: {line}");
+            for mac in ["!(", "![", "! {", "!{"] {
+                assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_matches_hook_points() {
+        use std::collections::BTreeSet;
+
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../native-hooks.json")).unwrap();
+        let hooks = catalog["hooks"].as_array().unwrap();
+        let source = include_str!("native_hooks.rs");
+        let section = source
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        let declared: BTreeSet<_> = section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let mut names = BTreeSet::new();
+        let mut contracts = BTreeSet::new();
+        for hook in hooks {
+            let name = hook["name"].as_str().unwrap();
+            let version = hook["version"].as_u64().unwrap();
+            assert!(
+                version > 0 && contracts.insert((name, version)),
+                "invalid or duplicate hook: {name} v{version}"
+            );
+            names.insert(name);
+            assert_eq!(
+                hook["target"].as_str().unwrap(),
+                format!("horizon_client::game::native_hooks::Game<'_>::native_{name}")
+            );
+        }
+        assert_eq!(names, declared);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

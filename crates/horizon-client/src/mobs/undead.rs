@@ -2,10 +2,16 @@
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
     Damage, Mob, MobEvent, Species, Who,
-    doors::BreakDoor,
+    doors::{BreakDoor, can_navigate_ground, wooden_door},
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
+    },
+    path::Path,
+    spear_use::SpearUse,
+    villager_brain::{
+        closer_to_center, occupied_pois_in_range, others_tickets, sections_to_village,
+        village_sections,
     },
 };
 use crate::projectiles::{Projectile, ProjectileKind};
@@ -30,7 +36,13 @@ pub fn register(m: &mut Mob) {
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
+            // Zombie.addBehaviourGoals: a spear in hand is used first.
+            g.add(2, SpearUse::new(1.0, 1.0, 10.0, 2.0));
             g.add(3, MeleeAttack::new(1.0, false).zombie());
+            g.add(
+                6,
+                MoveThroughVillage::new(1.0, true, 4, |m| m.extra.can_break_doors),
+            );
             g.add(7, Stroll::avoiding_water(1.0));
             let t = &mut m.ai.targets;
             let mut hurt = HurtByTarget::new().alert();
@@ -55,8 +67,11 @@ pub fn register(m: &mut Mob) {
             // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
             let g = &mut m.ai.goals;
             g.add(1, BreakDoor::zombie());
+            // `Zombie.registerGoals`, which `ZombifiedPiglin` extends.
+            g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
+            g.add(1, SpearUse::new(1.0, 1.0, 10.0, 2.0));
             g.add(2, MeleeAttack::new(1.0, false).zombie());
             g.add(7, Stroll::avoiding_water(1.0));
             let t = &mut m.ai.targets;
@@ -131,6 +146,14 @@ pub fn register(m: &mut Mob) {
             g.add(6, LookAtPlayer::new(8.0));
             g.add(6, RandomLookAround::default());
             let t = &mut m.ai.targets;
+            // `WitherSkeleton.registerGoals` adds its piglin goal before
+            // calling super, so it comes first among the priority 3 goals.
+            if species == S::WitherSkeleton {
+                t.add(
+                    3,
+                    NearestTarget::species(&[S::Piglin, S::PiglinBrute], true),
+                );
+            }
             t.add(1, HurtByTarget::new());
             t.add(2, NearestTarget::player(true));
             t.add(3, NearestTarget::species(&[S::IronGolem], true));
@@ -142,12 +165,6 @@ pub fn register(m: &mut Mob) {
                 )
                 .interval(10),
             );
-            if species == S::WitherSkeleton {
-                t.add(
-                    3,
-                    NearestTarget::species(&[S::Piglin, S::PiglinBrute], true),
-                );
-            }
             // The AbstractSkeleton constructor's reassessWeaponGoal, after
             // registerGoals; the weapon itself comes with finalizeSpawn.
             // getHardAttackInterval / getAttackInterval.
@@ -930,6 +947,144 @@ impl Goal for DrownedGoToWater {
     }
 }
 
+/// `MoveThroughVillageGoal`: at night, walk to a village point of interest
+/// (a taken one) not visited lately, and on to the next.
+#[derive(Clone, Debug)]
+pub struct MoveThroughVillage {
+    speed: f64,
+    only_at_night: bool,
+    distance: i32,
+    can_deal_with_doors: fn(&Mob) -> bool,
+    path: Option<Path>,
+    poi: [i32; 3],
+    visited: Vec<[i32; 3]>,
+}
+impl MoveThroughVillage {
+    /// `MoveThroughVillageGoal.<init>`.
+    pub fn new(
+        speed: f64,
+        only_at_night: bool,
+        distance: i32,
+        can_deal_with_doors: fn(&Mob) -> bool,
+    ) -> Self {
+        Self {
+            speed,
+            only_at_night,
+            distance,
+            can_deal_with_doors,
+            path: None,
+            poi: [0; 3],
+            visited: Vec::new(),
+        }
+    }
+}
+impl Goal for MoveThroughVillage {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    /// `MoveThroughVillageGoal.canUse`.
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !can_navigate_ground(m) {
+            return false;
+        }
+        // updateVisited: the list keeps its last 16.
+        if self.visited.len() > 15 {
+            self.visited.remove(0);
+        }
+        if self.only_at_night && cx.w.daylight {
+            return false;
+        }
+        let w = cx.w;
+        let block = |p: Vec3| [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
+        let section = |p: [i32; 3]| [p[0] >> 4, p[1] >> 4, p[2] >> 4];
+        let pos = block(m.position);
+        let villages = village_sections(m, w);
+        // ServerLevel.isCloseToVillage(pos, 6).
+        if sections_to_village(&villages, section(pos)) > 6 {
+            return false;
+        }
+        let taken = others_tickets(m, w);
+        let visited = &self.visited;
+        let land = m.land_random_pos_scored(w, 15, 7, |p| {
+            if sections_to_village(&villages, section(p)) > 1 {
+                return f64::NEG_INFINITY;
+            }
+            // The first unvisited taken point within 10, by its distance.
+            occupied_pois_in_range(w, &taken, p, 10)
+                .into_iter()
+                .find(|q| !visited.contains(q))
+                .map_or(f64::NEG_INFINITY, |q| {
+                    let d = |i: usize| f64::from(q[i] - pos[i]);
+                    -(d(0) * d(0) + d(1) * d(1) + d(2) * d(2))
+                })
+        });
+        let Some(land) = land else { return false };
+        let Some(target) =
+            occupied_pois_in_range(w, &taken, block(Vec3::new(land[0], land[1], land[2])), 10)
+                .into_iter()
+                .find(|q| !self.visited.contains(q))
+        else {
+            return false;
+        };
+        self.poi = target;
+        let doors = (self.can_deal_with_doors)(m);
+        m.ai.nav.can_open_doors = doors;
+        let mut path = m.create_path_to(w, self.poi, 0);
+        m.ai.nav.can_open_doors = true;
+        if path.is_none() {
+            // No way there: a step of up to 10 blocks toward it instead.
+            let to = [
+                f64::from(self.poi[0]) + 0.5,
+                f64::from(self.poi[1]),
+                f64::from(self.poi[2]) + 0.5,
+            ];
+            let Some(step) =
+                m.default_random_pos_towards(w, 10, 7, to, f64::from(std::f32::consts::FRAC_PI_2))
+            else {
+                return false;
+            };
+            m.ai.nav.can_open_doors = doors;
+            path = m.create_path_to(w, block(Vec3::new(step[0], step[1], step[2])), 0);
+            m.ai.nav.can_open_doors = true;
+            if path.is_none() {
+                return false;
+            }
+        }
+        // A wooden door on the way: only as far as the door.
+        let door = path.as_ref().and_then(|p| {
+            p.nodes
+                .iter()
+                .find(|n| wooden_door(w, [n.x, n.y + 1, n.z]))
+                .map(|n| [n.x, n.y, n.z])
+        });
+        if let Some(at) = door {
+            path = m.create_path_to(w, at, 0);
+        }
+        self.path = path;
+        self.path.is_some()
+    }
+    /// `MoveThroughVillageGoal.canContinueToUse`.
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+            && !closer_to_center(
+                self.poi,
+                m.position,
+                f64::from(m.width()) + f64::from(self.distance),
+            )
+    }
+    /// `MoveThroughVillageGoal.start`.
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        m.nav_move_to_path(self.path.clone(), self.speed);
+    }
+    /// `MoveThroughVillageGoal.stop`: a point reached (or the walk ended) is
+    /// visited.
+    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        if m.ai.nav.is_done() || closer_to_center(self.poi, m.position, f64::from(self.distance)) {
+            self.visited.push(self.poi);
+        }
+    }
+}
 /// `Zombie.ZombieAttackTurtleEggGoal` (a `RemoveBlockGoal` on turtle eggs):
 /// walk to a turtle egg within 24 blocks and trample it.
 #[derive(Clone, Debug)]

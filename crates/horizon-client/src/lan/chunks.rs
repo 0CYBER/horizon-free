@@ -6,6 +6,7 @@ use crate::{
     containers::BlockEntity,
     fast_hash::FxHashMap,
     mobs::spawner::{SpawnDataExt, SpawnerExt},
+    section_mask::SectionMask,
 };
 use horizon_protocol::{
     buf::{BitSet, Codec, List, Writer, set_bit},
@@ -546,21 +547,21 @@ impl ChunkEncoder {
 
     /// The chunk column with its light and block entities.
     /// The non-air sections of a column as bits (LevelChunkSection.hasOnlyAir).
-    fn occupied(&self, chunk: &Chunk) -> u64 {
-        let mut bits = 0u64;
+    fn occupied(&self, chunk: &Chunk) -> SectionMask {
+        let mut bits = SectionMask::EMPTY;
         // One lock for the column: body_in asks for nine columns' sections.
         let mut cache = self.cache.lock().unwrap();
         for (i, s) in chunk.sections[self.sections.clone()].iter().enumerate() {
             if self.entry(&mut cache, s).non_air {
-                bits |= 1 << i;
+                bits.insert(i);
             }
         }
         bits
     }
 
     /// The non-air sections of the column and its neighbours, as bits.
-    fn around(&self, chunk: &Chunk, world: &crate::world::World) -> u64 {
-        let mut around = 0u64;
+    fn around(&self, chunk: &Chunk, world: &crate::world::World) -> SectionMask {
+        let mut around = SectionMask::EMPTY;
         for dz in -1..=1 {
             for dx in -1..=1 {
                 if let Some(c) = world.chunks.get(&(chunk.x + dx, chunk.z + dz)) {
@@ -683,7 +684,7 @@ impl ChunkEncoder {
         &self,
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
-        around: u64,
+        around: SectionMask,
     ) -> Vec<u8> {
         let (wires, entities) = self.blocks(chunk, block_entities);
         let heightmaps = self.heightmaps_of(chunk);
@@ -724,14 +725,14 @@ impl ChunkEncoder {
     /// client keeps the same light either way). A section changed as its
     /// last block went (light dimming around a removed block) is sent too:
     /// a client not tracking the block would otherwise keep its old light.
-    pub fn light_update(&self, chunk: &Chunk, changed: u32) -> Vec<u8> {
+    pub fn light_update(&self, chunk: &Chunk, changed: SectionMask) -> Vec<u8> {
         let first = self.sections.start;
         let lights: Vec<(usize, SectionLight)> = self
-            .light_sections(chunk, u64::MAX)
+            .light_sections(chunk, SectionMask::ALL)
             .into_iter()
             .filter(|&(b, _)| {
                 // Light section b holds the column's section first + b - 1.
-                (1..=self.sections.len()).contains(&b) && changed >> (first + b - 1) & 1 != 0
+                (1..=self.sections.len()).contains(&b) && changed.contains(first + b - 1)
             })
             .collect();
         horizon_protocol::packets::play::Clientbound::LightUpdate(
@@ -750,7 +751,7 @@ impl ChunkEncoder {
         block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
     ) -> LevelChunkWithLight {
         let mut packet = self.encode_blocks(chunk, block_entities);
-        packet.light = self.light_data(chunk, u64::MAX);
+        packet.light = self.light_data(chunk, SectionMask::ALL);
         packet
     }
 
@@ -859,14 +860,14 @@ impl ChunkEncoder {
 
     /// ClientboundLightUpdatePacketData: the light layers of the sections
     /// that exist around the column (`around`: the non-air sections of it
-    /// and its neighbours, as bits). A resident section's layers come from
+    /// and its neighbours). A resident section's layers come from
     /// the cache while it is unchanged (uniform light is quicker to fill than
     /// to keep).
-    fn light_data(&self, chunk: &Chunk, around: u64) -> LightData {
+    fn light_data(&self, chunk: &Chunk, around: SectionMask) -> LightData {
         light_data_of(&self.light_sections(chunk, around), self.sky)
     }
 
-    fn light_sections(&self, chunk: &Chunk, around: u64) -> Vec<(usize, SectionLight)> {
+    fn light_sections(&self, chunk: &Chunk, around: SectionMask) -> Vec<(usize, SectionLight)> {
         light_sections(&chunk.sections[self.sections.clone()], around, |s| {
             if let Light::Uniform(v) = s.light {
                 return SectionLight::Uniform(v);
@@ -940,6 +941,23 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
     match entity {
         BlockEntity::Sign(sign) => Some(Tag::compound(sign.encode())),
         BlockEntity::Spawner(s) => Some(s.update_tag()),
+        BlockEntity::Brushable(b) => {
+            let mut entries = Vec::new();
+            if let Some(face) = b.hit_direction {
+                entries.push(("hit_direction", Tag::Byte(face as i8)));
+            }
+            if let Some(item) = &b.item {
+                entries.push(("item", crate::save::item_to_nbt(item)));
+            }
+            Some(Tag::compound(entries))
+        }
+        BlockEntity::Shelf(s) => Some(Tag::compound([
+            ("Items", crate::save::encode_items(&s.items)),
+            (
+                "align_items_to_bottom",
+                Tag::Byte(i8::from(s.align_to_bottom)),
+            ),
+        ])),
         // BannerBlockEntity.getUpdateTag: saveWithoutMetadata, so the patterns,
         // the custom name and the components.
         BlockEntity::Banner(b) => {
@@ -962,6 +980,9 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             .next_spawn_data
             .as_ref()
             .map(|d| Tag::compound([("spawn_data", d.encode())])),
+        // CommandBlockEntity.getUpdateTag: saveWithoutMetadata, the command
+        // and its output settings (the edit screen reads them).
+        BlockEntity::CommandBlock(c) => Some(Tag::compound(c.save())),
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();
@@ -1004,11 +1025,11 @@ pub fn pot_tag(chunk: &Chunk, pos: (i32, i32, i32)) -> Option<Tag> {
 
 /// Light sections run from one below the world to one above it. A layer
 /// exists where vanilla's light storage keeps one: within one section of a
-/// non-air section of this column or a neighbouring one (`around`, bit i for
-/// section i; LayerLightSectionStorage.updateSectionStatus). An existing
+/// non-air section of this column or a neighbouring one (`around`, index i
+/// for section i; LayerLightSectionStorage.updateSectionStatus). An existing
 /// layer is sent, or marked empty when all dark; the others are left out.
 #[cfg(test)]
-fn light_data(sections: &[Arc<Section>], around: u64) -> LightData {
+fn light_data(sections: &[Arc<Section>], around: SectionMask) -> LightData {
     let lights = light_sections(sections, around, |s| {
         SectionLight::Layers(Arc::new(Layers::of(&s.light)))
     });
@@ -1046,13 +1067,13 @@ impl SectionLight {
 /// layers (`section` giving a section of the world's).
 fn light_sections(
     sections: &[Arc<Section>],
-    around: u64,
+    around: SectionMask,
     section: impl Fn(&Arc<Section>) -> SectionLight,
 ) -> Vec<(usize, SectionLight)> {
     let n = sections.len();
     // Light section b holds chunk section b - 1.
     let exists =
-        |b: usize| (b.saturating_sub(2)..=b.min(n - 1)).any(|s| s + 2 >= b && around >> s & 1 != 0);
+        |b: usize| (b.saturating_sub(2)..=b.min(n - 1)).any(|s| s + 2 >= b && around.contains(s));
     (0..n + 2)
         .filter(|&b| exists(b))
         .map(|b| {
@@ -1235,7 +1256,7 @@ mod tests {
         let mut chunk = Chunk::empty(0, 0);
         chunk.set(1, MIN_Y + 2, 3, 1);
         let before = encoder.encode(&chunk, &HashMap::new());
-        assert_eq!(encoder.occupied(&chunk), 1);
+        assert_eq!(encoder.occupied(&chunk), SectionMask::single(0));
         assert_eq!(
             &*encoder.section_wire(&chunk.sections[0]).0,
             fresh(&encoder, &chunk.sections[0])
@@ -1243,7 +1264,7 @@ mod tests {
         // An edit moves the section: the cache sees a new one.
         chunk.set(4, MIN_Y + 20, 4, 2);
         chunk.set(1, MIN_Y + 2, 3, 0);
-        assert_eq!(encoder.occupied(&chunk), 2);
+        assert_eq!(encoder.occupied(&chunk), SectionMask::single(1));
         let after = encoder.encode(&chunk, &HashMap::new());
         assert_ne!(before.chunk.buffer, after.chunk.buffer);
         let mut expected = Vec::new();
@@ -1261,7 +1282,7 @@ mod tests {
             *v = (i * 37 % 251) as u8;
         }
         Arc::make_mut(&mut chunk.sections[3]).light = Light::Full(light.clone());
-        let data = light_data(&chunk.sections, u64::MAX);
+        let data = light_data(&chunk.sections, SectionMask::ALL);
         // Layer 4 holds section 3. Below the world (layer 0) there is no sky
         // light, so the sky layers listed start at layer 1; section 3 has the
         // only block light.
@@ -1283,21 +1304,25 @@ mod tests {
         let mut light = Box::new([0x5Au8; 4096]);
         Arc::make_mut(&mut chunk.sections[2]).light = Light::Full(light.clone());
         let first = encoder.encode(&chunk, &HashMap::new()).light;
-        assert_eq!(first, light_data(&chunk.sections, u64::MAX));
+        assert_eq!(first, light_data(&chunk.sections, SectionMask::ALL));
         // Relighting moves the section, so the cached layers aren't reused.
         light[7] = 0xF3;
         Arc::make_mut(&mut chunk.sections[2]).light = Light::Full(light);
         let second = encoder.encode(&chunk, &HashMap::new()).light;
         assert_ne!(first, second);
-        assert_eq!(second, light_data(&chunk.sections, u64::MAX));
+        assert_eq!(second, light_data(&chunk.sections, SectionMask::ALL));
     }
 
     #[test]
     fn light_masks_cover_the_world_plus_borders() {
         let chunk = Chunk::empty(0, 0);
         // A column with nothing around it has no light layers at all.
-        assert!(light_data(&chunk.sections, 0).sky.is_empty());
-        let data = light_data(&chunk.sections, u64::MAX);
+        assert!(
+            light_data(&chunk.sections, SectionMask::EMPTY)
+                .sky
+                .is_empty()
+        );
+        let data = light_data(&chunk.sections, SectionMask::ALL);
         // Default sections are full sky light and no block light.
         assert_eq!(data.sky.len(), SECTIONS + 1);
         assert_eq!(data.block.len(), 0);
@@ -1347,7 +1372,7 @@ mod tests {
             (-7 * 16 + 8, 64, 12 * 16 + 1),
             BlockEntity::Sign(crate::signs::SignData::default()),
         );
-        let packet = |encoder: &ChunkEncoder, around: u64| {
+        let packet = |encoder: &ChunkEncoder, around: SectionMask| {
             let mut packet = encoder.encode_blocks(&chunk, &entities);
             packet.light = encoder.light_data(&chunk, around);
             horizon_protocol::packets::play::Clientbound::LevelChunkWithLight(packet).encode()
@@ -1358,17 +1383,23 @@ mod tests {
             .block_entities;
         assert_eq!(sent.len(), 3);
         assert!(sent.iter().any(|e| e.tag != Tag::End));
-        for around in [0, 1, 0b1010_0000, 1 << 23, u64::MAX] {
+        for around in [
+            SectionMask::EMPTY,
+            SectionMask::single(0),
+            SectionMask::from_iter([5, 7]),
+            SectionMask::single(23),
+            SectionMask::ALL,
+        ] {
             assert_eq!(
                 encoder.body(&chunk, &entities, around),
                 packet(&encoder, around),
-                "around {around:#b}"
+                "around {around:?}"
             );
         }
         encoder.set_dimension(0, 256, false);
         assert_eq!(
-            encoder.body(&chunk, &entities, u64::MAX),
-            packet(&encoder, u64::MAX)
+            encoder.body(&chunk, &entities, SectionMask::ALL),
+            packet(&encoder, SectionMask::ALL)
         );
     }
 
