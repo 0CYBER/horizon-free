@@ -173,6 +173,9 @@ pub struct GeneratorData {
     /// Data packs' level stems (`dimension/<id>.json`), by dimension id:
     /// they replace the world preset's.
     dimensions: BTreeMap<String, String>,
+    /// Data packs' dimension types (`dimension_type/<id>.json`), by id:
+    /// they replace the vanilla ones' build ranges.
+    dimension_types: BTreeMap<String, String>,
     /// What loading the data packs' entries left out, for the log.
     warnings: Vec<String>,
     conditions: MaterialConditionRegistry,
@@ -545,6 +548,7 @@ impl GeneratorData {
             settings: read_bundle(dir, ov, "settings")?,
             world_presets: read_bundle(dir, ov, "world_presets")?,
             dimensions: ov.apply(overrides::DIMENSIONS, BTreeMap::new()),
+            dimension_types: ov.apply(overrides::DIMENSION_TYPES, BTreeMap::new()),
             warnings,
             presets,
             conditions,
@@ -780,15 +784,6 @@ impl ProtoChunk {
             .heightmap(HeightmapType::WorldSurface)
             .and_then(|map| map.first_available(x & 15, z & 15).ok())
             .unwrap_or(self.terrain.min_y())
-    }
-}
-
-/// Build range (minimum Y, height) of the vanilla dimension types.
-fn dimension_type_height(name: &str) -> Option<(i32, i32)> {
-    match name {
-        "minecraft:overworld" | "minecraft:overworld_caves" => Some((-64, 384)),
-        "minecraft:the_nether" | "minecraft:the_end" => Some((0, 256)),
-        _ => None,
     }
 }
 
@@ -2030,6 +2025,8 @@ trait SeededPipeline: Send + Sync {
     /// The exact `end_island_decorated` origins in a chunk, without terrain.
     fn end_island_origins(&self, chunk: ChunkPos) -> Vec<[i32; 3]>;
     fn sea_level(&self) -> i32;
+    /// The level's build range (minimum Y, height).
+    fn level(&self) -> (i32, i32);
     fn surface_sample(
         &self,
         worker: &mut WorkerState,
@@ -2134,6 +2131,9 @@ where
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
+    }
+    fn level(&self) -> (i32, i32) {
+        (self.settings.level_min_y, self.settings.level_height)
     }
     fn structure_starts(
         &self,
@@ -2853,7 +2853,10 @@ impl OverworldGenerator {
             None => preset_json["dimensions"][dimension].clone(),
         };
         let generator = stem["generator"].clone();
-        let level = stem["type"].as_str().and_then(dimension_type_height);
+        // The level's build range: its dimension type's, a data pack's
+        // over the vanilla one.
+        let level = overrides::LevelHeight::of_type(&stem["type"], &data.dimension_types)
+            .map(|h| (h.min_y, h.height));
         if generator["type"].as_str() != Some("minecraft:noise") {
             return Err(resource(format!("{dimension} is not a noise generator")));
         }
@@ -2866,8 +2869,8 @@ impl OverworldGenerator {
             inline => inline.clone(),
         };
         // NoiseSettings.clampToHeightAccessor: noise past the build height
-        // (a data pack's taller terrain in a dimension Horizon keeps at its
-        // vanilla height) fills only the part inside it.
+        // (a data pack's taller terrain over a dimension type it left as it
+        // was) fills only the part inside it.
         let mut noise_clamped = None;
         if let Some((level_min_y, level_height)) = level
             && let (Some(min_y), Some(height)) = (
@@ -2926,6 +2929,10 @@ impl OverworldGenerator {
     }
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
+    }
+    /// The dimension's build range (minimum Y, height): what its chunks span.
+    pub fn level(&self) -> (i32, i32) {
+        self.pipeline.level()
     }
     /// Placed features of this dimension's biomes that decoration skips because
     /// their algorithm or bindings are not implemented, with the decode error.

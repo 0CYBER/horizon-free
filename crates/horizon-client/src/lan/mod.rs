@@ -132,6 +132,12 @@ pub struct NetLog {
     pub log_ips: bool,
 }
 
+/// The server.properties key that lets only the Horizon client join (off unless "true").
+pub const HORIZON_CLIENTS_ONLY: &str = "horizon-clients-only";
+/// What another client is told.
+pub const HORIZON_CLIENTS_ONLY_REASON: &str =
+    "This server is for the Horizon client: playhorizon.dev";
+
 /// How the server side of the network behaves: an integrated server's LAN
 /// uses the defaults, a dedicated server takes them from server.properties.
 #[derive(Clone)]
@@ -173,6 +179,13 @@ pub struct NetConfig {
     /// sent in configuration when non-empty
     /// (ServerConfigurationPacketListenerImpl.startConfiguration).
     pub server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
+    /// `horizon-clients-only` (Horizon's own server.properties key, off): a
+    /// client whose `minecraft:brand` isn't Horizon's is turned away during
+    /// configuration. A brand can be spoofed: a gate, not security.
+    pub horizon_clients_only: bool,
+    /// The shapes of the world's levels: their dimension types go to
+    /// clients when the world's data packs changed them.
+    pub levels: crate::chunk::LevelShapes,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -201,6 +214,8 @@ impl NetConfig {
             log: None,
             resource_pack: None,
             server_links: Vec::new(),
+            horizon_clients_only: false,
+            levels: crate::chunk::LevelShapes::VANILLA,
         }
     }
 }

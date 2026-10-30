@@ -89,6 +89,29 @@ pub(super) enum BlockInteraction {
     DestroyWithDecay,
 }
 
+/// `ServerExplosion.hurtEntities`: an entity is hurt when its position is
+/// within the blast's diameter of the centre.
+pub(super) fn blast_reaches(center: [f64; 3], diameter: f64, at: [f64; 3]) -> bool {
+    let d =
+        ((at[0] - center[0]).powi(2) + (at[1] - center[1]).powi(2) + (at[2] - center[2]).powi(2))
+            .sqrt();
+    d / diameter <= 1.0
+}
+
+/// Whether a blast leaves item frames, paintings, cushions and armour stands
+/// alone. Without `mobGriefing`, a blast that keeps blocks is ignored
+/// (`ServerExplosion.shouldAffectBlocklikeEntities` through their
+/// `ignoreExplosion`; no wind charge goes through `server_explode`), and one a
+/// mob causes does no harm (`BlockAttachedEntity.hurtServer` and
+/// `ArmorStand.hurtServer`: `source.getEntity() instanceof Mob`).
+pub(super) fn blast_spares_decorations(
+    mob_griefing: bool,
+    interaction: BlockInteraction,
+    by_mob: bool,
+) -> bool {
+    !mob_griefing && (interaction == BlockInteraction::Keep || by_mob)
+}
+
 thread_local! {
     /// Client-side randomness (explosion sound pitch), separate from the level random.
     static CLIENT_RANDOM: std::cell::RefCell<LegacyRandom> = std::cell::RefCell::new(LegacyRandom::new(0x5eed));
@@ -224,20 +247,24 @@ impl Game<'_> {
         }
         set.entries().map(|(k, _)| k.0).collect()
     }
-    /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT, minecarts);
-    /// the player takes `damage_type`.
     /// `ServerExplosion.hurtEntities` for the player: damage scaled by
     /// distance and exposure, through a raised shield (`hurtServer` blocks
     /// explosions like any attack from where the blast is), then the push
     /// (less with explosion knockback resistance; none for spectators or a
     /// creative player flying).
+    ///
+    /// Returns the push their client adds from the explosion packet
+    /// (`hitPlayers`), unless a hurt marked their velocity: that goes to them
+    /// whole, this push in it, once their server copy has travelled
+    /// (Entity.markHurt, then ServerEntity.sendChanges), and replaces what the
+    /// packet would add.
     pub(super) fn explosion_hurt_player(
         &mut self,
         center: [f64; 3],
         radius: f32,
         damage_type: &str,
         exploding: Option<u32>,
-    ) {
+    ) -> Option<[f64; 3]> {
         let diameter = f64::from(radius * 2.0);
         // Blast protection: `EXPLOSION_KNOCKBACK_RESISTANCE` (0.15 per level and
         // piece, so two Blast Protection IV pieces cancel it).
@@ -246,9 +273,7 @@ impl Game<'_> {
             .as_mut()
             .and_then(|p| p.attribute("minecraft:explosion_knockback_resistance").ok())
             .unwrap_or(0.0);
-        let Some(p) = self.player.as_ref() else {
-            return;
-        };
+        let p = self.player.as_ref()?;
         let feet = [p.position.x, p.position.y, p.position.z];
         let dist = ((feet[0] - center[0]).powi(2)
             + (feet[1] - center[1]).powi(2)
@@ -256,7 +281,7 @@ impl Game<'_> {
         .sqrt()
             / diameter;
         if dist > 1.0 || p.health.dead_or_dying() {
-            return;
+            return None;
         }
         // ServerPlayer.onExplosionHit: the blast that hit the player is theirs.
         self.adv.marks.blast = Some((feet, false));
@@ -291,6 +316,7 @@ impl Game<'_> {
         let (creative, spectator) = (self.creative, self.spectator());
         let flying = self.player.as_ref().is_some_and(|p| p.flying);
         let mut outcome = horizon_client::health::BlockOutcome::default();
+        let mut pushed = None;
         if let Some(p) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(damage_type)
         {
@@ -317,27 +343,33 @@ impl Game<'_> {
                 }
             }
             if !spectator && !(creative && flying) {
+                let push = [dir[0] * power, dir[1] * power, dir[2] * power];
                 p.velocity = Vec3::new(
-                    p.velocity.x + dir[0] * power,
-                    p.velocity.y + dir[1] * power,
-                    p.velocity.z + dir[2] * power,
+                    p.velocity.x + push[0],
+                    p.velocity.y + push[1],
+                    p.velocity.z + push[2],
                 );
+                pushed = (!p.health.sync_velocity).then_some(push);
             }
         }
         if raised {
             self.after_block(outcome, amount, None, false);
         }
+        pushed
     }
 
+    /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT, minecarts);
+    /// the player takes `damage_type`. Returns the players whose clients add a
+    /// push from the explosion packet, and how much (`explosion_hurt_player`).
     fn explosion_hurt_entities(
         &mut self,
         center: [f64; 3],
         radius: f32,
         damage_type: &str,
         interaction: BlockInteraction,
-    ) {
+    ) -> Vec<(u32, [f64; 3])> {
         if radius < 1.0e-5 {
-            return;
+            return Vec::new();
         }
         self.explosion_hits_special(center, radius);
         let diameter = f64::from(radius * 2.0);
@@ -371,8 +403,10 @@ impl Game<'_> {
             })
         };
         // The player, then every other player in the level (LAN guests),
-        // each swapped in as the player.
-        self.explosion_hurt_player(center, radius, damage_type, exploding);
+        // each swapped in as the player. In a guest's turn (their hit on an
+        // end crystal) the player is that guest.
+        let own = self.explosion_hurt_player(center, radius, damage_type, exploding);
+        let mut pushed: Vec<_> = self.lan_acting.zip(own).into_iter().collect();
         if let Some(mut host) = self.lan.take() {
             let guests: Vec<u32> = host
                 .hub
@@ -382,9 +416,12 @@ impl Game<'_> {
                 .map(|g| g.conn)
                 .collect();
             for conn in guests {
-                self.guest_hit_by(&mut host, conn, |g| {
-                    g.explosion_hurt_player(center, radius, damage_type, exploding);
+                let push = self.as_guest(&mut host, conn, |g| {
+                    g.explosion_hurt_player(center, radius, damage_type, exploding)
                 });
+                if let Some(Some(push)) = push {
+                    pushed.push((conn, push));
+                }
             }
             self.lan = Some(host);
         }
@@ -446,7 +483,6 @@ impl Game<'_> {
             );
         }
         self.mobs = mobs;
-        self.explosion_breaks_frames(center, diameter, interaction);
         // Dropped items: 5 health, destroyed by the explosion damage (nether stars resist).
         let mut items = std::mem::take(&mut self.dropped);
         items.retain_mut(|item| {
@@ -525,6 +561,74 @@ impl Game<'_> {
                 c.velocity.z + dir[2] * power,
             );
         }
+        // Frames, paintings, cushions and armour stands last: vanilla lists
+        // the entities in reach before hurting any, so the items they drop
+        // here are neither destroyed nor pushed by the same blast.
+        self.explosion_breaks_frames(center, diameter, interaction);
+        self.explosion_breaks_decorations(center, diameter, interaction);
+        pushed
+    }
+    /// `blast_spares_decorations` for the blast going off now: the mob that
+    /// owns its projectile or explodes itself is the source's entity.
+    pub(super) fn blast_spares_decorations(&self, interaction: BlockInteraction) -> bool {
+        let by_mob = self
+            .combat
+            .explosion_owner
+            .or(self.combat.explosion_source)
+            .is_some();
+        blast_spares_decorations(self.ui.rules.bool("mob_griefing"), interaction, by_mob)
+    }
+    /// `ServerExplosion.hurtEntities` for paintings, cushions and armour
+    /// stands (item frames: `explosion_breaks_frames`). A painting or cushion
+    /// in reach is killed and dropped (`BlockAttachedEntity.hurtServer`,
+    /// `Painting.dropItem`, `Cushion.dropItem`). An armour stand that is
+    /// neither invisible nor a marker breaks (`ArmorStand.hurtServer` with
+    /// `IS_EXPLOSION`: `brokenByAnything`, then `kill`): its equipment drops,
+    /// the stand itself does not.
+    /// Not ported: `BlockAttachedEntity.ignoreExplosion` also spares paintings
+    /// and cushions when the exploding entity is in water.
+    fn explosion_breaks_decorations(
+        &mut self,
+        center: [f64; 3],
+        diameter: f64,
+        interaction: BlockInteraction,
+    ) {
+        if self.blast_spares_decorations(interaction) {
+            return;
+        }
+        let mut i = 0;
+        while i < self.paintings.len() {
+            // HangingEntity.recalculateBoundingBox: a painting stands at the
+            // centre of its box.
+            let (lo, hi) = self.paintings[i].bounds();
+            let at = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
+            if blast_reaches(center, diameter, at) {
+                self.break_painting(i, false);
+            } else {
+                i += 1;
+            }
+        }
+        let mut i = 0;
+        while i < self.cushions.len() {
+            let p = self.cushions[i].position;
+            if blast_reaches(center, diameter, [p.x, p.y, p.z]) {
+                self.break_cushion(i, false);
+            } else {
+                i += 1;
+            }
+        }
+        let mut i = 0;
+        while i < self.armor_stands.len() {
+            let a = &self.armor_stands[i];
+            let p = a.position;
+            if !super::armor_stands::spared_by_blast(a)
+                && blast_reaches(center, diameter, [p.x, p.y, p.z])
+            {
+                self.break_armor_stand_by_anything(i);
+            } else {
+                i += 1;
+            }
+        }
     }
     /// `ServerLevel.getDestroyType`: a drop decay rule picks between decaying
     /// and plain destruction.
@@ -586,7 +690,7 @@ impl Game<'_> {
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.exploded_positions(center, radius, resists);
-        self.explosion_hurt_entities(center, radius, damage_type, interaction);
+        let pushed = self.explosion_hurt_entities(center, radius, damage_type, interaction);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)
             for i in (2..=targets.len()).rev() {
@@ -635,7 +739,7 @@ impl Game<'_> {
             .explosion(center, small, block_count, radius, &|b| {
                 facts.is_air(world.block(b[0], b[1], b[2]))
             });
-        self.lan_explode(center, small, radius, block_count);
+        self.lan_explode(center, small, radius, block_count, pushed);
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).
@@ -757,6 +861,29 @@ fn add_or_append_stack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blasts_reach_entities_within_their_diameter() {
+        // A TNT blast: radius 4, so the entity pass reaches 8 blocks out.
+        let center = [0.5, 64.0, 0.5];
+        assert!(blast_reaches(center, 8.0, [8.5, 64.0, 0.5]));
+        assert!(blast_reaches(center, 8.0, [-3.5, 68.0, 4.5]));
+        assert!(!blast_reaches(center, 8.0, [8.6, 64.0, 0.5]));
+    }
+
+    #[test]
+    fn mob_griefing_off_spares_decorations_from_kept_and_mob_blasts() {
+        use BlockInteraction::{Destroy, DestroyWithDecay, Keep};
+        // mobGriefing on: every blast breaks them, a creeper's included.
+        assert!(!blast_spares_decorations(true, DestroyWithDecay, true));
+        assert!(!blast_spares_decorations(true, Keep, true));
+        // Off: TNT still breaks them (ExplosionInteraction.TNT destroys blocks).
+        assert!(!blast_spares_decorations(false, Destroy, false));
+        assert!(!blast_spares_decorations(false, DestroyWithDecay, false));
+        // Off: a blast that keeps blocks, or one a mob causes, does not.
+        assert!(blast_spares_decorations(false, Keep, false));
+        assert!(blast_spares_decorations(false, Destroy, true));
+    }
 
     #[test]
     fn block_pos_hash_matches_vec3i() {

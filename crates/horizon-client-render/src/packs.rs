@@ -278,7 +278,8 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
         Source::Dir(d) => fs::read(d.join("pack.mcmeta")).ok()?,
         Source::Zip(z) => Zip::open(z).ok()?.read("pack.mcmeta").ok()?,
     };
-    serde_json::from_slice(&bytes).ok()
+    // Gson reads past a UTF-8 byte order mark; serde_json rejects it.
+    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).ok()
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
     pack_for(id, title, source, RESOURCE_FORMAT)
@@ -937,6 +938,25 @@ impl SelectionModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mcmeta_with_utf8_bom_is_read() {
+        let dir = std::env::temp_dir().join(format!("horizon-bom-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut meta = b"\xEF\xBB\xBF".to_vec();
+        meta.extend_from_slice(br#"{"pack":{"description":"d","pack_format":97}}"#);
+        fs::write(dir.join("pack.mcmeta"), &meta).unwrap();
+        assert!(read_meta(&Source::Dir(dir.clone())).is_some());
+        // Without a BOM the same JSON still reads; other leading bytes still fail.
+        fs::write(dir.join("pack.mcmeta"), &meta[3..]).unwrap();
+        assert!(read_meta(&Source::Dir(dir.clone())).is_some());
+        fs::write(
+            dir.join("pack.mcmeta"),
+            [b"\xEF\xBB".as_slice(), &meta[3..]].concat(),
+        )
+        .unwrap();
+        assert!(read_meta(&Source::Dir(dir.clone())).is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
     #[test]
     fn compatibility_ranges() {
         let v = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();

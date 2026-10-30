@@ -220,6 +220,12 @@ impl Game<'_> {
                 Event::SliderDrag => {
                     self.apply_settings();
                 }
+                // Options.createSoundSliderOptionInstance: the preview plays
+                // only without a level (on the title screen's options).
+                Event::Volume(source, volume) if self.title.is_some() => {
+                    self.audio.preview(source, volume);
+                }
+                Event::Volume(..) => {}
                 Event::CopyAgentDetails => {
                     use horizon_client::clipboard::Clipboard;
                     let text = self.agent_details();

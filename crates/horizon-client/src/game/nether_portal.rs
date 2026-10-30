@@ -339,7 +339,7 @@ impl Game<'_> {
                     }) {
                         continue;
                     }
-                    let base = horizon_client::chunk::MIN_Y + 16 * s as i32;
+                    let base = self.world.bottom_y() + 16 * s as i32;
                     for y in base..base + 16 {
                         for lz in 0..16 {
                             for lx in 0..16 {
@@ -869,21 +869,18 @@ impl Game<'_> {
         reach: horizon_core::geometry::Aabb,
         sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> bool {
-        use horizon_client::{
-            chunk::{MIN_Y, SECTIONS},
-            section_mask::SectionMask,
-        };
+        use horizon_client::section_mask::SectionMask;
         let (min, max) = (reach.min_position(), reach.max_position());
         if !min.is_finite() || !max.is_finite() {
             return true;
         }
         let (min, max) = (BlockPos::containing(min), BlockPos::containing(max));
-        let top = SECTIONS as i32 - 1;
+        let top = self.world.layout().sections() as i32 - 1;
         let (x0, x1) = (min.x >> 4, max.x >> 4);
         let (z0, z1) = (min.z >> 4, max.z >> 4);
         let (y0, y1) = (
-            ((min.y - MIN_Y) >> 4).clamp(0, top),
-            ((max.y - MIN_Y) >> 4).clamp(0, top),
+            ((min.y - self.world.bottom_y()) >> 4).clamp(0, top),
+            ((max.y - self.world.bottom_y()) >> 4).clamp(0, top),
         );
         let count = (i64::from(x1) - i64::from(x0) + 1)
             * (i64::from(y1) - i64::from(y0) + 1)
