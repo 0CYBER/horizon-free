@@ -31,6 +31,11 @@
       "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"
     },
     {
+      "name": "random_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_random_tick"
+    },
+    {
       "name": "hud",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_hud"

@@ -113,6 +113,24 @@ blocks an explosion is about to break (a mod takes out those it spares), `native
 emptied, and `native_attack_entity` a player's blow on an entity (an item frame, an armor stand, an animal, a
 player). Each may cancel, and nothing happens. Bundles that use them need `"hooks": 22`.
 
+API 23 adds random ticks a mod can handle through `native_random_tick`: on an authoritative server, each block
+`ServerLevel.tickChunk` random-ticks (`BlockState.randomTick`), with its dimension, position and state, before the
+block handles it. Only blocks that tick randomly fire it (a mod block as its vanilla template block does), once per
+draw that lands on one: it runs often, so keep it short. Bone meal's random ticks (`StemBlock.performBonemeal` calls
+`randomTick` itself) don't fire it. The hook may change the block with the level's
+`native_set_block_property(ticks, pos, key, value, flags)` and set `handled` to skip the block's own random tick, so a
+mod crop grows its own way. Without `handled`, the block then takes its own random tick as it is now (if it still
+ticks randomly), and lava's fluid random tick runs either way. The helper takes `ticks`, so only `native_random_tick`
+can call it. It is API 18's `Game::native_set_block_property` with `Level.setBlock`'s flags (`native_hooks::flags`): a
+vanilla crop grows with `flags::UPDATE_CLIENTS` (neighbours' shapes update, so an observer fires, but no neighbour
+gets `neighborChanged` and comparators aren't told), a furnace sets its `lit` with `flags::UPDATE_ALL` (both). Horizon
+sends every write to players whatever the flags: `UPDATE_CLIENTS` (2), `UPDATE_INVISIBLE` (4) and `UPDATE_IMMEDIATE`
+(8) change nothing yet. It writes at any loaded position, returns false off an authoritative server, for a property or
+value the block doesn't have or a position that isn't loaded, and true without writing when the property already has
+the value. Elsewhere, `Game::native_set_block_property_with(pos, key, value, flags)` does the same, as a brewing
+stand's tick sets its bottles with `flags::UPDATE_CLIENTS`. The deprecated in-frame path fires none. Bundles that use
+them need `"hooks": 23`.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

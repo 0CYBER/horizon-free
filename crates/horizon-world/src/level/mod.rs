@@ -150,6 +150,8 @@ pub mod flags {
     pub const UPDATE_NEIGHBORS: i32 = 1;
     pub const UPDATE_CLIENTS: i32 = 2;
     pub const UPDATE_INVISIBLE: i32 = 4;
+    /// Read only by a client's level, which rebuilds the section at once.
+    pub const UPDATE_IMMEDIATE: i32 = 8;
     pub const UPDATE_KNOWN_SHAPE: i32 = 16;
     pub const UPDATE_SUPPRESS_DROPS: i32 = 32;
     pub const UPDATE_MOVE_BY_PISTON: i32 = 64;
@@ -344,6 +346,20 @@ pub trait LevelAccess {
         _state: BlockStateId,
         _changed: BlockId,
         _moved: bool,
+    ) {
+    }
+    /// `BlockState.randomTick` from `ServerLevel.tickChunk`, before the block
+    /// handles it. The level may change the block (`Behaviours::set_block`
+    /// with `ticks`); setting `handled` skips the block's own random tick. A
+    /// level that changed the block without setting `handled` must put the
+    /// block's state as it is now in `state`: the block's own random tick
+    /// runs on it. The default does nothing.
+    fn before_random_tick(
+        &mut self,
+        _ticks: &mut Ticks,
+        _pos: BlockPos,
+        _state: &mut BlockStateId,
+        _handled: &mut bool,
     ) {
     }
     /// `Level.isClientSide`: this level is a client's copy (false on a

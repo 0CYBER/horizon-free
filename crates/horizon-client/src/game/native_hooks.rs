@@ -6,6 +6,10 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 23 adds random ticks a mod can handle (`native_random_tick`), and
+//! `native_set_block_property` on the level, which takes `Level.setBlock`'s
+//! `flags` as `Game::native_set_block_property_with` does.
+//!
 //! API 22 adds what a mod needs to keep the world from changing blocks
 //! it guards: fluid and fire spreading (`native_block_spread`), pistons
 //! (`native_piston_move`), explosions (`native_explosion_detonate`),
@@ -107,17 +111,24 @@ use horizon_client::{
 };
 use horizon_core::{geometry::Direction, position::BlockPos};
 use horizon_world::{
-    level::{BlockId, flags},
+    level::{BlockId, LevelAccess, Ticks},
     nbt::Compound,
-    registry::BlockStateId,
+    registry::{BlockRegistry, BlockStateId},
 };
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
+/// `Level.setBlock`'s flags, for the `native_set_block_property` helpers:
+/// `flags::UPDATE_CLIENTS` as a vanilla crop grows, `flags::UPDATE_ALL` as a
+/// furnace sets its `lit`. Horizon sends every write to players, so
+/// `UPDATE_CLIENTS`, `UPDATE_INVISIBLE` and `UPDATE_IMMEDIATE` change nothing
+/// yet.
+pub(super) use horizon_world::level::flags;
+
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 22;
+pub(crate) const NATIVE_HOOKS_API: u32 = 23;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -182,6 +193,27 @@ impl GameLevel<'_> {
         canceled: &mut bool,
     ) {
         let _ = (dimension, piston, direction, push, destroy, canceled);
+    }
+
+    /// An authoritative server's `ServerLevel.tickChunk` is about to
+    /// random-tick the block `state` at `pos` (`BlockState.randomTick`):
+    /// only blocks that tick randomly, a mod's as its vanilla template block
+    /// does. Bone meal's random ticks (`StemBlock.performBonemeal`) don't
+    /// fire it. Change the block with `native_set_block_property` and set
+    /// `handled` to skip the block's own random tick (a mod crop growing its
+    /// own way); a block changed without `handled` takes its own random tick
+    /// as it is now, if it still ticks randomly. Lava's fluid random tick
+    /// runs either way.
+    #[inline(always)]
+    pub(super) fn native_random_tick(
+        &mut self,
+        ticks: &mut Ticks,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        state: BlockStateId,
+        handled: &mut bool,
+    ) {
+        let _ = (ticks, dimension, pos, state, handled);
     }
 }
 
@@ -858,6 +890,40 @@ impl GameLevel<'_> {
             .push((dimension, options.clone(), state, at, spread, speed, count));
         true
     }
+    /// Sets property `key` of the block at `pos` to `value` with
+    /// `Level.setBlock(pos, state, flags)`, from a hook that gets the
+    /// level's `ticks` (`native_random_tick`). A crop's random tick grows it
+    /// with `flags::UPDATE_CLIENTS`: neighbours' shapes update, but no
+    /// neighbour gets `neighborChanged` and comparators aren't told;
+    /// `flags::UPDATE_ALL` does both. Horizon sends every write to players
+    /// whatever the flags: `UPDATE_CLIENTS`, `UPDATE_INVISIBLE` and
+    /// `UPDATE_IMMEDIATE` change nothing yet. Any loaded position, not only
+    /// the hook's; false off an authoritative server, when the block has no
+    /// such property or value, or `pos` is not loaded; true without a write
+    /// when the property already has `value`. Elsewhere,
+    /// `Game::native_set_block_property_with` does the same. API 23.
+    pub(super) fn native_set_block_property(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: i32,
+    ) -> bool {
+        if !self.native_authoritative {
+            return false;
+        }
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        let state = self.block_state(at);
+        let Some(id) = with_property(self.registry, state, key, value) else {
+            return false;
+        };
+        if id == state {
+            return true;
+        }
+        let b = self.behaviours;
+        b.set_block(self, ticks, at, id, flags)
+    }
 }
 
 // Native mods use these; nothing in Horizon does.
@@ -879,22 +945,27 @@ impl Game<'_> {
         key: &str,
         value: &str,
     ) -> bool {
-        let registry = self.pack.assets.registry;
+        self.native_set_block_property_with(pos, key, value, flags::UPDATE_ALL)
+    }
+    /// `native_set_block_property` with `Level.setBlock`'s `flags`, as a
+    /// brewing stand's tick sets its bottles with `flags::UPDATE_CLIENTS`.
+    /// Players get the write whatever the flags (`flags`). API 23.
+    pub(super) fn native_set_block_property_with(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: i32,
+    ) -> bool {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let Some(mut s) = registry.state(state).cloned() else {
+        let Some(id) = with_property(self.pack.assets.registry, state, key, value) else {
             return false;
         };
-        match s.properties.get(key) {
-            Some(v) if v == value => return true,
-            Some(_) => {}
-            None => return false,
+        if id == state {
+            return true;
         }
-        s.properties.insert(key.into(), value.into());
-        let Ok(id) = registry.resolve(&s) else {
-            return false;
-        };
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags::UPDATE_ALL))
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags))
     }
     /// Runs `change` on the mod block entity at `pos` (a generator charging
     /// the machine beside it) and returns what it returns; none for any
@@ -1678,6 +1749,24 @@ fn debug_takes(corner: Corner, debug: bool, charts: [bool; 2]) -> bool {
 /// A menu of `MOD_MENUS`, by its name.
 fn mod_menu(name: &str) -> Option<(&'static str, usize)> {
     MOD_MENUS.into_iter().find(|(menu, _)| *menu == name)
+}
+
+/// `state` with its property `key` set to `value`; none when the block has
+/// no such property or value.
+fn with_property(
+    registry: &BlockRegistry,
+    state: BlockStateId,
+    key: &str,
+    value: &str,
+) -> Option<BlockStateId> {
+    let mut s = registry.state(state)?.clone();
+    match s.properties.get(key) {
+        Some(v) if v == value => return Some(state),
+        Some(_) => {}
+        None => return None,
+    }
+    s.properties.insert(key.into(), value.into());
+    registry.resolve(&s).ok()
 }
 
 /// `v` within `lo..=hi`; `lo` when it is not a number.
