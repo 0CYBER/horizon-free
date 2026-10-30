@@ -142,6 +142,8 @@ pub(super) struct Remote {
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
     joined: bool,
+    /// `ServerReconfigScreen` is up since this tick.
+    reconfiguring: Option<u64>,
     /// `LevelLoadingScreen.reason`: what the loading screen shows behind its
     /// text (`ClientPacketListener.determineLevelLoadingReason`).
     loading_reason: horizon_client::level_loading::Reason,
@@ -530,6 +532,7 @@ impl Game<'_> {
             lang,
             registries: Arc::new(Dynamic::default()),
             joined: false,
+            reconfiguring: None,
             loading_reason: horizon_client::level_loading::Reason::Other,
             logged_in: false,
             status: "Connecting to the server...".into(),
@@ -1161,6 +1164,19 @@ impl Game<'_> {
                 Event::QuietCommands => {
                     if let Some(remote) = &mut self.remote {
                         remote.quiet_commands = true;
+                    }
+                }
+                Event::Reconfiguring => {
+                    // handleConfigurationStart: the held-back chat shows, then
+                    // clearClientLevel opens ServerReconfigScreen over no level.
+                    self.flush_chat_queue();
+                    self.close_dialogs();
+                    self.player = None;
+                    self.screen = Screen::Playing;
+                    self.capture(false);
+                    let ticks = self.ticks;
+                    if let Some(r) = self.remote.as_mut() {
+                        r.reconfiguring = Some(ticks);
                     }
                 }
                 Event::Reconfigured(registries) => {
@@ -2149,6 +2165,12 @@ impl Game<'_> {
             }
             C::Login(p) => {
                 self.level.hardcore = p.hardcore;
+                // handleLogin: startWaitingForNewLevel with Reason.OTHER, which
+                // replaces ServerReconfigScreen.
+                if let Some(r) = self.remote.as_mut() {
+                    r.reconfiguring = None;
+                    r.loading_reason = horizon_client::level_loading::Reason::Other;
+                }
                 // handleLogin makes a new MultiPlayerGameMode (carried index 0) and a
                 // new LocalPlayer (slot 0, no effects).
                 self.selected = 0;
@@ -7186,6 +7208,10 @@ impl Game<'_> {
         }
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
+        if let Some(since) = r.reconfiguring {
+            self.draw_reconfiguring(batch, since);
+            return true;
+        }
         if r.joined {
             // LevelLoadingScreen.extractBackground by its reason, then the
             // text; a server sends no chunk map or progress.
@@ -7213,12 +7239,43 @@ impl Game<'_> {
     pub(super) fn remote_loading(&self) -> bool {
         self.remote.is_some() && self.player.is_none()
     }
+    /// `ServerReconfigScreen`: a vertical layout of cells padded by 10, the
+    /// title (9 high) over Disconnect (150 x 20), centred. The title's and the
+    /// button's top left corners.
+    fn reconfigure_layout(&self, (w, h): (f32, f32)) -> ((f32, f32), (f32, f32)) {
+        let title = horizon_client::text::Text::translate("connect.reconfiguring", &[]);
+        let title_w = self.gui.atlas.font.width_text(&title).ceil() as i32;
+        let width = (title_w + 20).max(170);
+        let left = ((w as i32 - width) as f32 * 0.5) as i32;
+        let top = ((h as i32 - 69) as f32 * 0.5) as i32;
+        let across = |child: i32| (10.0 + ((width - child - 10) as f32 - 10.0) * 0.5) as i32;
+        (
+            ((left + across(title_w)) as f32, (top + 10) as f32),
+            ((left + across(150)) as f32, (top + 39) as f32),
+        )
+    }
+    /// `ServerReconfigScreen` over the panorama; Disconnect wakes up after
+    /// `DISCONNECT_TIME` (600 ticks).
+    fn draw_reconfiguring(&self, batch: &mut HudBatch, since: u64) {
+        let atlas = &self.gui.atlas;
+        let (w, h) = (batch.width, batch.height);
+        horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        let title = horizon_client::text::Text::translate("connect.reconfiguring", &[]);
+        let ((tx, ty), (bx, by)) = self.reconfigure_layout((w, h));
+        batch.text_styled(atlas, &title, tx, ty, u32::MAX, true);
+        let label = horizon_client::text::Text::translate("gui.disconnect", &[]);
+        let active = self.ticks.saturating_sub(since) >= 600;
+        let hover = horizon_client::ui::hovered(self.cursor, bx, by, 150.0, 20.0);
+        horizon_client::ui::button(batch, atlas, bx, by, 150.0, 20.0, &label, active, hover);
+    }
     /// The loading screen of `Reason.OTHER` (and `ConnectScreen`) draws the
     /// panorama and blurs it; the portal reasons draw their own background.
     pub(super) fn remote_loading_panorama(&self) -> bool {
         self.remote_loading()
             && self.remote.as_ref().is_some_and(|r| {
-                !r.joined || r.loading_reason == horizon_client::level_loading::Reason::Other
+                !r.joined
+                    || r.reconfiguring.is_some()
+                    || r.loading_reason == horizon_client::level_loading::Reason::Other
             })
     }
     /// `ConnectScreen`'s Cancel: a server's (single player's server isn't
@@ -7232,6 +7289,17 @@ impl Game<'_> {
     /// (`connect.aborted`) and goes back. Escape does nothing there
     /// (`shouldCloseOnEsc` is false).
     pub(super) fn connect_screen_click(&mut self) -> Result<()> {
+        // ServerReconfigScreen's Disconnect, once it is active.
+        if let Some(since) = self.remote.as_ref().and_then(|r| r.reconfiguring) {
+            let (_, (x, y)) = self.reconfigure_layout(self.gui_size());
+            if self.ticks.saturating_sub(since) >= 600
+                && horizon_client::ui::hovered(self.cursor, x, y, 150.0, 20.0)
+            {
+                self.audio.play_button_click();
+                self.leave_server(None)?;
+            }
+            return Ok(());
+        }
         let Some((x, y)) = self.connect_cancel(self.gui_size()) else {
             return Ok(());
         };
