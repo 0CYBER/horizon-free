@@ -3439,7 +3439,12 @@ impl Game<'_> {
                 // it, else turned back (a perched dragon sets it alight first).
                 let mut arrow = p.clone();
                 let amount = self.shot_damage(&mut arrow, None);
-                let outcome = match self.hit_special(id, amount, by_player, true) {
+                let outcome = match self.hit_special(
+                    id,
+                    amount,
+                    by_player,
+                    horizon_client::mobs::DamageKind::Arrow,
+                ) {
                     super::dragon::Hurt::Landed { .. } => EntityHit::Hurt,
                     super::dragon::Hurt::Refused => EntityHit::Refused,
                     super::dragon::Hurt::Shrugged => {
@@ -3456,7 +3461,13 @@ impl Game<'_> {
                 ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => 6.0,
                 _ => 0.0,
             };
-            self.hit_special(id, amount, by_player, false);
+            let kind = match p.kind {
+                ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => {
+                    horizon_client::mobs::DamageKind::Fireball
+                }
+                _ => horizon_client::mobs::DamageKind::Thrown,
+            };
+            self.hit_special(id, amount, by_player, kind);
             // ThrowableProjectile.onHit goes on after onHitEntity: a pearl
             // still takes its owner to where it broke (into the crystal's
             // blast), an egg still hatches, a snowball still breaks.
