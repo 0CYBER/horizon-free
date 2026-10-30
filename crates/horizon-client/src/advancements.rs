@@ -5,7 +5,8 @@
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +67,25 @@ fn frame(v: &Value) -> Frame {
     }
 }
 impl Tree {
+    /// [`Tree::load`], shared while anyone holds it: a server's advancement
+    /// packets (`ServerAdvancements`) and its game's criteria read the same
+    /// files, and each kept its own copy (7 MB).
+    pub fn shared(data: &Path) -> Arc<Tree> {
+        static TREES: Mutex<Vec<(PathBuf, Weak<Tree>)>> = Mutex::new(Vec::new());
+        // Held while loading: a second reader waits for the first one's tree.
+        let mut trees = TREES.lock().unwrap_or_else(|e| e.into_inner());
+        trees.retain(|(_, tree)| tree.strong_count() > 0);
+        if let Some(tree) = trees
+            .iter()
+            .find(|(path, _)| path == data)
+            .and_then(|(_, tree)| tree.upgrade())
+        {
+            return tree;
+        }
+        let tree = Arc::new(Tree::load(data));
+        trees.push((data.to_path_buf(), Arc::downgrade(&tree)));
+        tree
+    }
     /// Loads `<data>/<namespace>/advancement/**/*.json`.
     pub fn load(data: &Path) -> Tree {
         let mut tree = Tree::default();
