@@ -111,6 +111,11 @@ impl Game<'_> {
         };
         let vehicle_id = vehicle as u32;
         for m in &mut self.mobs {
+            // `Entity.isVehicle` (the saddle reins of a ridden horse): the
+            // server sends no rider on the mob itself, only this list.
+            if m.id == vehicle_id {
+                m.extra.rider = passengers.first().map(|&p| p as u32);
+            }
             if m.extra.mount == Some(vehicle_id) && !passengers.contains(&(m.id as i32)) {
                 m.extra.mount = None;
                 m.extra.passenger = false;
@@ -291,6 +296,11 @@ impl Game<'_> {
         let strafe = f32::from(u8::from(keys.left)) - f32::from(u8::from(keys.right));
         let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
         let m = &mut self.mobs[i];
+        if jump > 0.0 && equine::is_equine(m.species()) {
+            // LocalPlayer.aiStep also runs `onPlayerJump` here: the mount slides
+            // on the rider's keys and rears while the server does the same.
+            equine::on_player_jump(m);
+        }
         // playerJumpPendingScale waits for the ground.
         let pending = m.rider.map_or(0.0, |r| r.jump);
         m.rider = Some(equine::Rider {

@@ -169,6 +169,9 @@ pub struct Guest {
     /// What the player's file says of the body (`Entity.load`: the fire
     /// and air ticks and the fall distance), for the first body it gets.
     pub loaded_body: Option<SavedBody>,
+    /// The vehicle the player's file names (`ServerPlayer.saveParentVehicle`'s
+    /// "RootVehicle"), for the ride to come back on the next login.
+    pub saved_vehicle: Option<[i32; 4]>,
     /// The hurt and attack logs of the body it had before it respawned,
     /// until the new body takes them over (the control socket's `hurtlog`
     /// reads across a death).
@@ -334,6 +337,7 @@ impl Guest {
             tracker: Tracker::default(),
             motion: None,
             loaded_body: None,
+            saved_vehicle: None,
             logs_kept: None,
             inventory: vec![None; 36],
             armor: [None, None, None, None],
@@ -515,6 +519,14 @@ impl Guest {
             36..=44 => self.inventory.get(slot - 36).cloned().flatten(),
             45 => self.offhand.clone(),
             _ => None,
+        }
+    }
+    /// The open menu's packets told the client every inventory slot: the
+    /// inventory menu's own sync has nothing to add. Sent again, it could land
+    /// on clicks the client has predicted since.
+    pub fn inventory_told(&mut self) {
+        for slot in 9..45 {
+            self.menu_sent[slot] = self.menu_slot(slot);
         }
     }
     pub fn set_menu_slot(&mut self, slot: usize, item: Option<ItemStack>) {

@@ -169,7 +169,7 @@ impl Game<'_> {
     fn level_min_y(&self) -> i32 {
         match self.remote.as_ref() {
             Some(r) => r.dimension.min_y,
-            None => self.dim.min_y(),
+            None => self.world.shape.min_y,
         }
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under
@@ -362,6 +362,9 @@ impl Game<'_> {
         // The day timeline: firefly bush sounds from 12600 to 23400.
         let firefly_bush_sounds = self.dim == Dim::Overworld
             && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
+        // EnvironmentAttributes.CREAKING_ACTIVE: the same overworld night.
+        let creaking_active = self.dim == Dim::Overworld
+            && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         let tables = &self.pack.context.tables;
         let model_offset = |state, x, z| tables.offset(state, x, z);
         let gateway_particles = |state, p| {
@@ -381,6 +384,7 @@ impl Game<'_> {
             raining_at: &raining_at,
             height_no_leaves: &height_no_leaves,
             firefly_bush_sounds,
+            creaking_active,
             sky_darken: self.sky_darken(),
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
             model_offset: &model_offset,
@@ -485,6 +489,20 @@ impl Game<'_> {
                 },
             );
         }
+        // SpellParticle.isCloseToScopingPlayer: the eye of a local player looking
+        // through a spyglass in first person.
+        let scope_eye = self
+            .player
+            .as_ref()
+            .filter(|_| self.camera_type.first_person() && self.scoping())
+            .map(|p| {
+                [
+                    p.position.x,
+                    p.position.y + f64::from(p.dimensions.eye_height),
+                    p.position.z,
+                ]
+            });
+        self.particles.set_scope_eye(scope_eye);
         let level = ParticleLevel {
             world,
             facts,

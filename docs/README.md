@@ -38,6 +38,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 ## Architecture: world generation
 
 - [World generation](world-generation.md): the pipeline from noise to features.
+- [World height](world-height.md): each level's shape from its dimension type, data packs' taller levels.
 - [Pregeneration](pregeneration.md): `/pregen`, generating, lighting and saving an area ahead of the players.
 - [Noise generation](noise-generation.md), [compiled density functions](density-functions.md), [structure density](structure-density.md), [terrain filling](terrain-filling.md).
 - Biomes: [lookup](biome-lookup.md), [temperatures](biome-temperatures.md).

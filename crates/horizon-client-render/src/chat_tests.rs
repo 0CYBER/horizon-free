@@ -519,3 +519,62 @@ fn a_guests_line_follows_the_player_message_permission() {
         );
     }
 }
+
+/// `ChatComponent.deleteMessageOrDelay`: a deleted message shows for 60
+/// ticks from when it was added, then becomes the grey italic
+/// `chat.deleted_marker` line with the system bar; the other lines stay.
+#[test]
+fn a_deleted_message_shows_60_ticks_then_becomes_the_marker() {
+    let font = font();
+    let mut chat = Chat::default();
+    let secret = [7; 256];
+    chat.add_signed_message(
+        &font,
+        Text::literal("<Steve> secret"),
+        Some(secret),
+        100,
+        false,
+    );
+    chat.add_signed_message(
+        &font,
+        Text::literal("<Alex> hi"),
+        Some([8; 256]),
+        110,
+        false,
+    );
+    let lines =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    let marker = Chat::deleted_marker().plain();
+    chat.delete_message_with(&font, &secret, 130);
+    assert_eq!(
+        lines(&chat),
+        ["<Alex> hi", "<Steve> secret"],
+        "too new: delayed"
+    );
+    chat.process_deletions(&font, 159);
+    assert_eq!(lines(&chat), ["<Alex> hi", "<Steve> secret"]);
+    chat.process_deletions(&font, 160);
+    assert_eq!(lines(&chat), ["<Alex> hi".to_owned(), marker.clone()]);
+    assert!(chat.deletions.is_empty());
+    let line = &chat.lines[1];
+    assert_eq!(line.indicator, Some(SYSTEM_INDICATOR));
+    assert_eq!(line.added, 100, "the marker keeps the message's time");
+    assert!(
+        line.content
+            .spans
+            .iter()
+            .all(|s| s.style.color == Some(text::GRAY) && s.style.is_italic())
+    );
+    assert_eq!(
+        chat.messages[1].content.translation_key(),
+        Some("chat.deleted_marker")
+    );
+    // A message shown 60 ticks already is replaced at once; an unknown or
+    // already deleted signature changes nothing.
+    chat.delete_message_with(&font, &[8; 256], 170);
+    assert_eq!(lines(&chat), [marker.clone(), marker.clone()]);
+    chat.delete_message_with(&font, &secret, 200);
+    chat.delete_message_with(&font, &[9; 256], 200);
+    assert_eq!(lines(&chat), [marker.clone(), marker]);
+    assert!(chat.deletions.is_empty());
+}

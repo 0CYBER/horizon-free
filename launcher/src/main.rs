@@ -1963,7 +1963,9 @@ impl Launcher {
                     .relative()
                     .flex()
                     .flex_col()
+                    .flex_1()
                     .min_w_0()
+                    .overflow_hidden()
                     .child(
                         shell::text(theme::night::UI, shell::c(n.ink))
                             .font_weight(FontWeight::SEMIBOLD)
@@ -1971,7 +1973,11 @@ impl Launcher {
                             .truncate()
                             .child(name),
                     )
-                    .child(shell::text(theme::night::CAPTION, shell::c(n.muted)).child(how)),
+                    .child(
+                        shell::text(theme::night::CAPTION, shell::c(n.muted))
+                            .truncate()
+                            .child(how),
+                    ),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.account_menu = !this.account_menu;

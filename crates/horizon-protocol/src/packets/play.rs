@@ -319,6 +319,39 @@ impl Codec<PositionPath> for PositionPath {
 }
 packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPath, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool });
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
+packet!(
+    /// ClientboundChunksBiomesPacket.ChunkBiomeData: a column and its
+    /// sections' biome containers, in order (`extractChunkData`).
+    ChunkBiomeData { pos: [i32; 2] => ChunkPos, buffer: Vec<u8> => BytesN<2097152> }
+);
+impl ChunkBiomeData {
+    /// `LevelChunk.replaceBiomes`' read: `count` sections' biome
+    /// containers, one after another.
+    pub fn biomes(&self, count: usize, biome_bits: u8) -> Result<Vec<crate::chunk::Paletted>> {
+        let mut r = Reader::new(&self.buffer);
+        (0..count)
+            .map(|_| {
+                crate::chunk::Paletted::read(&mut r, crate::chunk::Strategy::Biomes, biome_bits)
+            })
+            .collect()
+    }
+    /// `extractChunkData`: the sections' biome containers, in order.
+    pub fn from_biomes(pos: [i32; 2], biomes: &[crate::chunk::Paletted]) -> Self {
+        let mut w = Writer::new();
+        for b in biomes {
+            b.write(&mut w);
+        }
+        Self {
+            pos,
+            buffer: w.data,
+        }
+    }
+}
+packet!(
+    /// ClientboundChunksBiomesPacket: columns whose biomes changed
+    /// (`/fillbiome`, through `ChunkMap.resendBiomesForChunks`).
+    ChunksBiomes { chunks: Vec<ChunkBiomeData> => List<ChunkBiomeData> }
+);
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
 packet!(
@@ -610,6 +643,11 @@ packet!(PlayerChat {
     filter: (i32, Vec<i64>) => FilterMask,
     chat_type: ChatTypeBound => ChatTypeBound,
 });
+packet!(
+    /// ClientboundDeleteChatPacket: the server deleted a player message,
+    /// named by its packed signature.
+    DeleteChat { signature: (i32, Option<Vec<u8>>) => PackedSignature }
+);
 packet!(PlayerCombatKill { id: i32 => VarInt, message: Tag => Nbt });
 packet!(PlayerInfoRemove { uuids: Vec<u128> => List<Uuid> });
 /// One ClientboundPlayerInfoUpdatePacket entry; fields are set for the
@@ -1865,9 +1903,11 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
+    DeleteChat(DeleteChat) = DELETE_CHAT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
     EntityEvent(EntityEvent) = ENTITY_EVENT,
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
+    ChunksBiomes(ChunksBiomes) = CHUNKS_BIOMES,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
@@ -2676,6 +2716,18 @@ mod tests {
                 pitch: 2.0,
                 on_ground: true,
             }),
+            Clientbound::ChunksBiomes(ChunksBiomes {
+                chunks: vec![
+                    ChunkBiomeData {
+                        pos: [-3, 7],
+                        buffer: vec![0, 4, 1, 2],
+                    },
+                    ChunkBiomeData {
+                        pos: [i32::MAX, i32::MIN],
+                        buffer: Vec::new(),
+                    },
+                ],
+            }),
             Clientbound::ForgetLevelChunk(ForgetLevelChunk { pos: [-1, 2] }),
             Clientbound::GameEvent(GameEvent {
                 event: 13,
@@ -2763,6 +2815,12 @@ mod tests {
                 xp: 12,
                 show_progress: true,
                 can_restock: true,
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None),
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![9; 256])),
             }),
             Clientbound::PlayerChat(PlayerChat {
                 global_index: 0,
@@ -2958,6 +3016,27 @@ mod tests {
         for p in packets {
             round_trip(p, Clientbound::encode, Clientbound::decode);
         }
+    }
+
+    #[test]
+    fn delete_chat_decodes_a_packed_signature() {
+        use crate::ids::play::clientbound::DELETE_CHAT;
+        // MessageSignature.Packed: id + 1, so 5 names cache slot 4...
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &[5]).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None)
+            })
+        );
+        // ...and 0 carries the full 256-byte signature.
+        let mut full = vec![0];
+        full.extend([3; 256]);
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &full).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![3; 256]))
+            })
+        );
     }
 
     #[test]
@@ -3218,6 +3297,66 @@ mod tests {
                 Clientbound::PlayerLookAt(p)
             );
         }
+    }
+
+    /// ClientboundChunksBiomesPacket is read, not passed through as an
+    /// unknown packet: one column (1, -2) with two bytes of biomes.
+    #[test]
+    fn chunks_biomes_is_a_known_packet() {
+        let id = crate::ids::play::clientbound::CHUNKS_BIOMES;
+        let payload = [1, 0xFF, 0xFF, 0xFF, 0xFE, 0, 0, 0, 1, 2, 5, 6];
+        let p = Clientbound::decode(id, &payload).unwrap();
+        assert!(!matches!(p, Clientbound::Unknown(..)), "{p:?}");
+        assert_eq!(p.encode()[1..], payload);
+        // Cut short, it is an error rather than a packet.
+        assert!(Clientbound::decode(id, &payload[..10]).is_err());
+    }
+
+    /// ClientboundChunksBiomesPacket.STREAM_CODEC: a list of (ChunkPos as
+    /// one long, x low and z high; `byteArray(2097152)`), the bytes being
+    /// each section's biome container (`ChunkBiomeData.extractChunkData`).
+    #[test]
+    fn chunks_biomes_wire_and_biomes() {
+        let p = Clientbound::ChunksBiomes(ChunksBiomes {
+            chunks: vec![ChunkBiomeData {
+                pos: [1, -2],
+                buffer: vec![5, 6],
+            }],
+        });
+        let bytes = p.encode();
+        assert_eq!(
+            bytes,
+            [
+                crate::ids::play::clientbound::CHUNKS_BIOMES as u8,
+                1,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFE,
+                0,
+                0,
+                0,
+                1,
+                2,
+                5,
+                6
+            ]
+        );
+        assert_eq!(
+            Clientbound::decode(bytes[0].into(), &bytes[1..]).unwrap(),
+            p
+        );
+        use crate::chunk::{Paletted, Strategy};
+        let sections = [
+            Paletted::from_values(&[3; 64], Strategy::Biomes, 6),
+            Paletted::from_values(
+                &(0..64).map(|i| i % 5).collect::<Vec<_>>(),
+                Strategy::Biomes,
+                6,
+            ),
+        ];
+        let data = ChunkBiomeData::from_biomes([4, 4], &sections);
+        assert_eq!(data.biomes(2, 6).unwrap(), sections);
     }
 
     /// ClientboundSetCameraPacket: one VarInt, the camera entity's id.

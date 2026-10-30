@@ -139,6 +139,8 @@ pub struct WorldEntry {
     pub modified: std::time::SystemTime,
     pub commands: bool,
     pub version: String,
+    /// `LevelSummary.isLocked`: another running copy has the world open.
+    pub locked: bool,
     /// `LevelSummary.CorruptedLevelSummary`: level.dat did not read, so the row
     /// only knows its folder and offers recovery instead of play.
     pub corrupted: bool,
@@ -154,6 +156,7 @@ impl WorldEntry {
             modified,
             commands: false,
             version: String::new(),
+            locked: false,
             corrupted: true,
         }
     }
@@ -343,6 +346,7 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
                 version: data.get("Version").and_then(|v| v.get("Name"))
                     .and_then(|v| match v { horizon_world::nbt::Tag::String(s) => Some(s.to_string_lossy()), _ => None })
                     .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
+                locked: crate::save::SessionLock::is_locked(&path),
                 corrupted: false,
             })
         })
@@ -353,6 +357,16 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
 /// LevelSummary.createInfo: a hardcore world's mode in red (CommonColors.RED),
 /// else `gameMode.` + its GameType name, then commands and the version.
 fn world_info(world: &WorldEntry) -> crate::text::Text {
+    // LevelSummary.createInfo: a locked world says so in red (ChatFormatting.RED).
+    if world.locked {
+        return crate::text::Text::colored(
+            lang::get_or(
+                "selectWorld.locked",
+                "Locked by another running instance of Minecraft.",
+            ),
+            0xFF5555,
+        );
+    }
     // CorruptedLevelSummary.INFO: recover_world.warning in red (-65536).
     if world.corrupted {
         return crate::text::Text::colored(
@@ -747,6 +761,10 @@ impl Title {
     /// another series is an alert, one whose file fixes are due or that a newer version
     /// saved asks for a backup first; any other opens at once.
     fn play(&mut self, world: WorldEntry) -> Action {
+        // LevelSummary.primaryActionActive: a world another copy has open cannot be joined.
+        if world.locked {
+            return Action::None;
+        }
         if crate::save::SessionLock::acquire(&self.saves.join(&world.folder)).is_err() {
             self.toast = Some((
                 crate::toasts::Slide::default(),

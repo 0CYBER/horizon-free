@@ -663,42 +663,106 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     interest_tick(m);
     // isWet (extra.flag2), isShaking (counter2 > 0).
-    let rain = super::ai::in_rain(m, w);
+    let wet = m.fluids.in_water || super::ai::in_rain(m, w);
+    server_shake(m, wet, events);
+}
+/// A server's wolf: `Wolf.aiStep` starts shaking a wet wolf that stands on
+/// the ground and is not pathing, and tells the clients (entity event 8),
+/// then `Wolf.tick` runs the shake (`shake_tick`). `wet` is
+/// `isInWaterOrRain`.
+pub fn server_shake(m: &mut Mob, wet: bool, events: &mut Vec<MobEvent>) {
+    if m.extra.flag2 && m.extra.counter2 == 0 && m.ai.nav.is_done() && m.on_ground {
+        start_shaking(m);
+        broadcast(m, events, 8);
+    }
+    shake_tick(m, wet, true, events);
+}
+/// `Wolf.tick` for a wolf of a server (`rain` is `isInRain` at the wolf):
+/// a client knows it is wet on its own, starts and cancels the shake from
+/// the server's entity events (`entity_event`) and draws the splashes.
+pub fn client_tick(m: &mut Mob, rain: bool, events: &mut Vec<MobEvent>) {
+    if m.alive() {
+        shake_tick(m, m.fluids.in_water || rain, false, events);
+    }
+}
+/// `Entity.isInRain`, for a client's wolves.
+pub fn in_rain(m: &Mob, w: &MobWorld) -> bool {
+    super::ai::in_rain(m, w)
+}
+/// `Wolf.handleEntityEvent`: 8 starts the shake, 56 cancels it.
+pub fn entity_event(m: &mut Mob, event: u8) {
+    match event {
+        8 => start_shaking(m),
+        56 => cancel_shake(m),
+        _ => {}
+    }
+}
+/// `isShaking = true`, `shakeAnim` and `shakeAnimO` from 0.
+fn start_shaking(m: &mut Mob) {
+    m.extra.counter2 = 1;
+    m.anim.v[SHAKE] = 0.0;
+    m.anim.vo[SHAKE] = 0.0;
+}
+/// `Wolf.cancelShake`: it stays wet.
+fn cancel_shake(m: &mut Mob) {
+    m.extra.counter2 = 0;
+    m.anim.v[SHAKE] = 0.0;
+    m.anim.vo[SHAKE] = 0.0;
+}
+fn broadcast(m: &Mob, events: &mut Vec<MobEvent>, event: i8) {
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
+}
+/// The wet and shaking part of `Wolf.tick`. In water or rain the wolf is
+/// wet, and a server cancels its shake (entity event 56). Out of it a
+/// shaking wolf shakes for 2 (`shakeAnim` by 0.05 a tick), dry at the end,
+/// with splashes past 0.4 (drawn by a client). The sound is the server's:
+/// `Entity.playSound` plays nothing on a client (`ClientLevel.playSound`
+/// with no player).
+fn shake_tick(m: &mut Mob, wet: bool, server: bool, events: &mut Vec<MobEvent>) {
     let shaking = m.extra.counter2 > 0;
-    if m.fluids.in_water || rain {
+    if wet {
         m.extra.flag2 = true;
-        if shaking {
-            m.extra.counter2 = 0;
-            m.anim.v[SHAKE] = 0.0;
-            m.anim.vo[SHAKE] = 0.0;
+        if shaking && server {
+            broadcast(m, events, 56);
+            cancel_shake(m);
         }
     } else if shaking {
         if m.anim.v[SHAKE] == 0.0 {
             let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
-            events.push(MobEvent::Sound("entity.wolf.shake", m.center(), 0.4, pitch));
+            if server {
+                events.push(MobEvent::Sound("entity.wolf.shake", m.center(), 0.4, pitch));
+            }
         }
+        m.anim.vo[SHAKE] = m.anim.v[SHAKE];
         m.anim.v[SHAKE] += 0.05;
         if m.anim.vo[SHAKE] >= 2.0 {
             m.extra.flag2 = false;
-            m.extra.counter2 = 0;
-            m.anim.v[SHAKE] = 0.0;
-            m.anim.vo[SHAKE] = 0.0;
+            cancel_shake(m);
         }
         if m.anim.v[SHAKE] > 0.4 {
-            let count = (((m.anim.v[SHAKE] - 0.4) * PI).msin() * 7.0) as u32;
-            if count > 0 {
-                events.push(MobEvent::Particles {
+            // The server draws the offsets too (its addParticle draws nothing).
+            let y = m.position.y as f32 + 0.8;
+            let count = (((m.anim.v[SHAKE] - 0.4) * PI).msin() * 7.0) as i32;
+            let half = m.width() * 0.5;
+            let v = m.velocity;
+            for _ in 0..count {
+                let dx = (m.random.next_float() * 2.0 - 1.0) * half;
+                let dz = (m.random.next_float() * 2.0 - 1.0) * half;
+                events.push(MobEvent::ParticleAt {
                     kind: "splash",
-                    at: [m.position.x, m.position.y + 0.8, m.position.z],
-                    count,
+                    at: [
+                        m.position.x + f64::from(dx),
+                        f64::from(y),
+                        m.position.z + f64::from(dz),
+                    ],
+                    velocity: [v.x, v.y, v.z],
                 });
             }
         }
-    } else if m.extra.flag2 && m.ai.nav.is_done() && m.on_ground {
-        // Wolf.aiStep: start shaking when wet, standing and not pathing.
-        m.extra.counter2 = 1;
-        m.anim.v[SHAKE] = 0.0;
-        m.anim.vo[SHAKE] = 0.0;
     }
 }
 /// `Wolf.hurtServer`: stop sitting. The anger comes with the target
@@ -1572,5 +1636,129 @@ pub fn feline(p: &mut Poses, s: &State, st: &Feline) {
     if relax > 0.0 {
         let hx = p.get("head")[3];
         p.xrot("head", rot_lerp(relax, hx, -0.581_776_44));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::sensor_scan_tests::kind;
+    use std::sync::Arc;
+
+    const WHITE: u32 = 0xFFFF_FFFF;
+
+    fn wolf() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:wolf".into();
+        k.species = Species::Wolf;
+        k.width = 0.6;
+        k.height = 0.85;
+        let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
+        m.on_ground = true;
+        m
+    }
+    fn entity_events(events: &[MobEvent]) -> Vec<i8> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                MobEvent::EntityEvent { event, .. } => Some(*event),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A wolf of a server (the default single player's server thread, a LAN
+    /// guest): `Wolf.tick` makes it wet in water on the client too, which
+    /// `getWetShade` darkens; entity event 8 starts the shake, which the
+    /// client runs to the end, splashing, and then the wolf is dry (#2885).
+    #[test]
+    fn a_wolf_of_a_server_darkens_in_water_and_shakes_dry_on_its_event() {
+        let mut m = wolf();
+        let mut events = Vec::new();
+        m.fluids.in_water = true;
+        client_tick(&mut m, false, &mut events);
+        // 0.75 of the colour: 191.
+        assert_eq!(tint(&m, 1.0), 0xFFBF_BFBF, "wet in water");
+        m.fluids.in_water = false;
+        client_tick(&mut m, false, &mut events);
+        assert_eq!(tint(&m, 1.0), 0xFFBF_BFBF, "still wet before it shakes");
+        assert_eq!(m.anim.v[SHAKE], 0.0);
+        // Rain wets it as well.
+        let mut dry = wolf();
+        client_tick(&mut dry, true, &mut events);
+        assert_ne!(tint(&dry, 1.0), WHITE, "wet in the rain");
+
+        crate::mobs::sync::entity_event(&mut m, 8);
+        let mut ticks = 0;
+        while m.extra.flag2 && ticks < 100 {
+            client_tick(&mut m, false, &mut events);
+            ticks += 1;
+            if ticks == 1 {
+                assert!((m.anim.v[SHAKE] - 0.05).abs() < 1e-6);
+                assert_eq!(m.anim.vo[SHAKE], 0.0);
+            }
+        }
+        // shakeAnimO reaches 2 on the 41st tick.
+        assert!((41..=42).contains(&ticks), "shook for {ticks} ticks");
+        assert_eq!(tint(&m, 1.0), WHITE, "dry after the shake");
+        assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MobEvent::ParticleAt { kind: "splash", .. })),
+            "the client draws the splashes"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, MobEvent::Sound(..))),
+            "the shake sound is the server's"
+        );
+    }
+
+    /// `Wolf.handleEntityEvent(56)`: back in the water, the server cancels
+    /// the shake; the wolf stays wet. A client does not cancel on its own.
+    #[test]
+    fn a_wolf_of_a_server_stops_shaking_on_its_cancel_event() {
+        let mut m = wolf();
+        let mut events = Vec::new();
+        m.fluids.in_water = true;
+        client_tick(&mut m, false, &mut events);
+        m.fluids.in_water = false;
+        crate::mobs::sync::entity_event(&mut m, 8);
+        for _ in 0..10 {
+            client_tick(&mut m, false, &mut events);
+        }
+        assert!(m.anim.v[SHAKE] > 0.4);
+        m.fluids.in_water = true;
+        client_tick(&mut m, false, &mut events);
+        assert!(m.extra.counter2 > 0, "only the server cancels");
+        crate::mobs::sync::entity_event(&mut m, 56);
+        assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
+        assert_ne!(tint(&m, 1.0), WHITE, "still wet");
+    }
+
+    /// `Wolf.aiStep` broadcasts entity event 8 when a wet wolf standing on
+    /// the ground starts shaking, and `Wolf.tick` event 56 when water or rain
+    /// cancels it: the clients' only way to know.
+    #[test]
+    fn a_server_tells_the_clients_when_a_wolf_shakes() {
+        let mut m = wolf();
+        let mut events = Vec::new();
+        server_shake(&mut m, true, &mut events);
+        assert!(m.extra.flag2);
+        // Out of the water: it starts and makes its sound in the same tick.
+        server_shake(&mut m, false, &mut events);
+        assert_eq!(entity_events(&events), [8]);
+        assert!(m.extra.counter2 > 0);
+        assert!((m.anim.v[SHAKE] - 0.05).abs() < 1e-6);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MobEvent::Sound("entity.wolf.shake", ..)))
+        );
+        server_shake(&mut m, true, &mut events);
+        assert_eq!(entity_events(&events), [8, 56]);
+        assert_eq!((m.extra.counter2, m.anim.v[SHAKE]), (0, 0.0));
+        assert!(m.extra.flag2, "still wet");
     }
 }

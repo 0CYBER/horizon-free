@@ -341,10 +341,21 @@ impl ConnReader {
                 return Ok((id, body[start..].to_vec()));
             }
             let mut chunk = [0u8; 16384];
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
-                return Err(Error::new("Connection closed by the server"));
-            }
+            let n = match self.stream.read(&mut chunk) {
+                Ok(0) => return Err(Error::end_of_stream()),
+                Ok(n) => n,
+                // The read timeout passed: Windows reports TimedOut, Unix
+                // WouldBlock.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err(Error::timed_out());
+                }
+                Err(e) => return Err(e.into()),
+            };
             self.counters
                 .bytes_in
                 .fetch_add(n as i64, Ordering::Relaxed);
@@ -491,6 +502,23 @@ mod tests {
         let refused = error("test", (0..3).map(closed).collect());
         assert!(refused.starts_with("Connection refused"), "{refused}");
         assert_eq!(error("nowhere", Vec::new()), "Unknown host nowhere");
+    }
+
+    #[test]
+    fn a_silent_peer_times_out_and_a_closed_one_ends_the_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        c.reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let silent = c.recv().unwrap_err();
+        assert!(silent.is_timed_out(), "{silent}");
+        assert_eq!(silent.to_string(), "Timed out");
+        drop(server);
+        let closed = c.recv().unwrap_err();
+        assert!(closed.is_end_of_stream(), "{closed}");
     }
 
     #[test]

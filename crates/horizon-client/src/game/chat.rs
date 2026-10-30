@@ -979,6 +979,41 @@ impl Game<'_> {
             .chat
             .draw(batch, &self.gui.atlas, self.ticks, focused);
     }
+    /// `HoverEvent.EntityTooltipInfo.getTooltipLines`: the name when the
+    /// event has one, the entity type and the UUID.
+    fn entity_tooltip_lines(entity: &serde_json::Value) -> Vec<(Text, u32)> {
+        let mut lines = Vec::new();
+        if let Some(name) = entity.get("name") {
+            let name = horizon_client::component::to_text(name, &mut |s| Text::literal(s));
+            lines.push((name, u32::MAX));
+        }
+        let id = entity
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let kind = Text::translate(&format!("entity.{}", id.replace(':', ".")), &[]);
+        lines.push((
+            Text::translate("gui.entity_tooltip.type", &[kind]),
+            u32::MAX,
+        ));
+        if let Some(uuid) = entity.get("uuid").and_then(Self::entity_uuid) {
+            lines.push((Text::literal(uuid), u32::MAX));
+        }
+        lines
+    }
+    /// The UUID of a ShowEntity event: its string, or the int array
+    /// `UUIDUtil.CODEC` writes (most significant word first).
+    fn entity_uuid(v: &serde_json::Value) -> Option<String> {
+        if let Some(s) = v.as_str() {
+            return Some(s.to_owned());
+        }
+        let words = v.as_array().filter(|w| w.len() == 4)?;
+        let mut bits = 0u128;
+        for w in words {
+            bits = (bits << 32) | u128::from(w.as_i64()? as u32);
+        }
+        Some(horizon_protocol::crypto::uuid_string(bits))
+    }
     pub(super) fn draw_chat_screen(&mut self, batch: &mut HudBatch) {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
@@ -1029,6 +1064,13 @@ impl Game<'_> {
         let (cx, cy) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
         let wrap = (batch.width as i32 / 2).max(200);
         if let Some(style) = self.ui.chat.style_at(&self.gui.atlas.font, height, cx, cy) {
+            // DrawingFocusedGraphicsAccess.handleMessage: the pointing hand over
+            // insertion text, which ChatScreen only asks for while Shift is held.
+            if style.insertion.is_some() && self.has_shift_down() {
+                horizon_client::widgets::request_cursor(
+                    horizon_client::widgets::Cursor::PointingHand,
+                );
+            }
             if let Some(hover) = style.hover {
                 let lines = self.wrapped_rows(&hover, wrap);
                 self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
@@ -1039,6 +1081,14 @@ impl Game<'_> {
                 .filter(|s| self.items().get(&s.item).is_some())
             {
                 self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
+            } else if let Some(entity) = style
+                .hover_entity
+                .as_deref()
+                .filter(|_| self.settings.file.bool("advancedItemTooltips"))
+            {
+                // ChatScreen: a ShowEntity tooltip only with advanced tooltips on.
+                let lines = Self::entity_tooltip_lines(entity);
+                self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
             }
         } else if self.ui.chat.indicator_at(height, cx, cy) {
             // GuiMessageTag.systemSinglePlayer's text, split at 210.
