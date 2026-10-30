@@ -159,6 +159,11 @@
       "name": "interact_entity",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"
+    },
+    {
+      "name": "left_click_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"
     }
   ]
 }

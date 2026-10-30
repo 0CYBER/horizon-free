@@ -6,6 +6,8 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 21 adds left-clicking a block (`native_left_click_block`).
+//!
 //! API 20 adds right-clicking an entity (`native_interact_entity`).
 //!
 //! API 19 adds mod-drawn screens for mod blocks (`native_screen`,
@@ -103,7 +105,7 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 20;
+pub(crate) const NATIVE_HOOKS_API: u32 = 21;
 
 impl GameLevel<'_> {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -667,6 +669,22 @@ impl Game<'_> {
         claimed: &mut bool,
     ) {
         let _ = (entity, kind, stack, claimed);
+    }
+    /// A player left-clicks the block `state` at `pos`, `face` the face hit
+    /// (`[0, 1, 0]` is the top): where `ServerPlayerGameMode.handleBlockBreakAction`
+    /// takes a dig's start, after its reach, spawn protection and world border
+    /// checks, before `Block.attack` (a note block plays) or a creative break.
+    /// Set `canceled` to ignore the click: the block isn't attacked, dug or
+    /// broken, and the player's client gets it back. Server-side, for every
+    /// player of the world (the helpers read the acting one). API 21.
+    pub(super) fn native_left_click_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        state: BlockStateId,
+        canceled: &mut bool,
+    ) {
+        let _ = (pos, face, state, canceled);
     }
 }
 
