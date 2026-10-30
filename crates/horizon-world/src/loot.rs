@@ -321,7 +321,9 @@ fn overlay_map(overlay: &PackOverlay, kind: &str, out: &mut HashMap<String, Valu
 
 /// The loot tables of every namespace in `root`'s `data/`, with `overlay`'s
 /// over them. Shared while one is alive: `Items` and [`LootData`] of the
-/// same root and packs hold one map, not a copy each (7 MB).
+/// same root and packs hold one map, not a copy each (7 MB). The key holds
+/// the packs' bytes and each root file's size and modification time, so a
+/// table changed on disk is read again rather than taken from a held map.
 pub fn shared_tables(
     root: &Path,
     overlay: &PackOverlay,
@@ -331,6 +333,17 @@ pub fn shared_tables(
         use std::hash::{DefaultHasher, Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         root.hash(&mut hasher);
+        let data = root.join("data");
+        let mut namespaces: Vec<_> = fs::read_dir(&data)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        namespaces.sort();
+        for namespace in namespaces {
+            hash_files(&namespace.join("loot_table"), &mut hasher);
+        }
         overlay
             .kind("loot_table")
             .for_each(|file| file.hash(&mut hasher));
@@ -367,6 +380,29 @@ fn load_kind(data: &Path, kind: &str, out: &mut HashMap<String, Value>) -> io::R
         load_dir(&data.join(&ns).join(kind), &ns, "", out)?;
     }
     Ok(())
+}
+
+/// Every file's path, size and modification time under `dir`, in name order.
+fn hash_files(dir: &Path, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            hash_files(&path, hasher);
+        } else {
+            path.hash(hasher);
+            meta.len().hash(hasher);
+            meta.modified().ok().hash(hasher);
+        }
+    }
 }
 
 fn load_dir(
@@ -1653,6 +1689,21 @@ mod namespace_tests {
         let packs = shared_tables(&root, &PackOverlay { files: &files }).unwrap();
         assert!(!Arc::ptr_eq(&first, &packs));
         assert!(packs.contains_key("minecraft:chests/b"));
+        // A table changed at the same path while `first` is still held: the
+        // new file is read, not the held map.
+        fs::write(
+            root.join("data/minecraft/loot_table/chests/a.json"),
+            r#"{"pools": [], "random_sequence": "minecraft:chests/a"}"#,
+        )
+        .unwrap();
+        let changed = shared_tables(&root, &PackOverlay::NONE).unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(
+            changed["minecraft:chests/a"]
+                .get("random_sequence")
+                .is_some()
+        );
+        assert!(first["minecraft:chests/a"].get("random_sequence").is_none());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1687,9 +1738,6 @@ mod namespace_tests {
         assert!(data.has_table("kaisyn:village/forest/house"));
         assert!(!data.has_table("minecraft:village/forest/house"));
         assert!(data.in_tag("item", "kaisyn:food", "minecraft:bread"));
-        // The tables of a root are read once while a copy is held
-        // (`shared_tables`): let it go before changing a file.
-        drop(data);
         // Rolls and weights written as floats (Towns and Towers' tables).
         let table = r#"{"pools": [{"rolls": {"type": "minecraft:uniform", "min": 3.0, "max": 3.0},
             "entries": [{"type": "minecraft:item", "name": "minecraft:bread", "weight": 2.0}]}]}"#;
