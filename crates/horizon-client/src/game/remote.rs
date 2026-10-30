@@ -259,6 +259,9 @@ pub(super) struct Remote {
     /// `ClientCommonPacketListenerImpl.serverLinks`: the links "Server
     /// Links..." in the pause menu lists (only `http`/`https` URIs kept).
     pub(super) server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
+    /// `ClientPacketListener.getDebugQueryHandler`: the F3+I query waiting
+    /// for the server's data.
+    pub(super) debug_query: super::debug_keys::DebugQuery,
 }
 
 /// The time a frame spends on chunk packets before it leaves the rest of
@@ -564,6 +567,7 @@ impl Game<'_> {
             backlog: VecDeque::new(),
             backlog_since: None,
             server_links: Vec::new(),
+            debug_query: Default::default(),
             transfer: None,
         });
         // The level's TickRateManager follows the server's ticking packets.
@@ -3110,6 +3114,7 @@ impl Game<'_> {
                     self.capture(true);
                 }
             }
+            C::TagQuery(p) => self.answer_tag_query(p.transaction, p.tag),
             C::Unknown(id, data)
                 if id == horizon_protocol::ids::play::clientbound::COMMAND_SUGGESTIONS =>
             {

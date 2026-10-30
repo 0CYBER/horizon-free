@@ -48,7 +48,7 @@ ClientPacketListener.handleCommands	port	crates/horizon-client/src/game/remote.r
 ClientPacketListener.handleStopSoundEvent	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	StopSound arm: audio stop_sounds
 ClientPacketListener.handleUpdateRecipes	skip:data		Horizon reads recipes from its own tables; the server's list is not read
 ClientPacketListener.handleLookAt	missing		player: a server command that turns the camera (/faceplayer, /tp with facing) does not turn this player's view
-ClientPacketListener.handleTagQueryPacket	skip:debug		answer to a debug NBT query; Horizon sends none
+ClientPacketListener.handleTagQueryPacket	port	crates/horizon-client/src/game/debug_keys.rs::Game::answer_tag_query	reached from the TagQuery arm of remote.rs handle_packet
 ClientPacketListener.handleAwardStats	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	AwardStats arm: known stat keys into the stats values
 ClientPacketListener.handleRecipeBookAdd	port	crates/horizon-client/src/game/recipe_book.rs::Game::remote_recipe_book_add	
 ClientPacketListener.handleRecipeBookRemove	port	crates/horizon-client/src/game/recipe_book.rs::Game::remote_recipe_book_remove	

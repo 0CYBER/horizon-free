@@ -717,6 +717,27 @@ impl Game<'_> {
         });
         dims
     }
+    /// `Level.getEntity`: the entity of the level in place with a network
+    /// id, players aside.
+    pub(in crate::game) fn level_entity(&self, id: i32) -> Option<Target> {
+        let id = u32::try_from(id).ok()?;
+        [
+            Target::Mob(id),
+            Target::Item(id),
+            Target::Orb(id),
+            Target::Projectile(id),
+            Target::Stand(id),
+            Target::Frame(id),
+            Target::Painting(id),
+            Target::Boat(id),
+            Target::Cart(id),
+            Target::Other(id),
+            Target::Crystal(id),
+            Target::Dragon(id),
+        ]
+        .into_iter()
+        .find(|t| self.level_holds(*t))
+    }
     /// Whether the level in place holds the entity a target names.
     fn level_holds(&self, t: Target) -> bool {
         match t {
