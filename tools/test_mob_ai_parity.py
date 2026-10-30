@@ -327,6 +327,11 @@ def scenarios():
     # Constructor path maluses: an Animal avoids fire (FIRE -1, FIRE_IN_NEIGHBOR 16).
     add('pig_tempt_fire', 100, ['player 9.5 -60 0.5 hand=minecraft:carrot', 'fill 3 -61 -3 3 -61 3 minecraft:netherrack',
                                 'fill 3 -60 -3 3 -60 3 minecraft:fire', 'mob minecraft:pig 0.5 -60 0.5 0 221 persistent'])
+    # A baby villager grows up: Villager.ageBoundaryReached rebuilds its brain, so the adult schedule
+    # (work, meet) replaces the baby's (play) at once.
+    for seed in (201, 202):
+        add(f'villager_grows_up_{seed}', 120, ['player 8.5 -60 0.5',
+                                               f'mob minecraft:villager 0.5 -60 0.5 0 {seed} persistent age=-30'], 'time=2000')
     add('wither_skeleton_player', 100, ['player 9.5 -60 0.5', 'mob minecraft:wither_skeleton 0.5 -60 0.5 0 222 persistent'])
     # Chickens fleeing a hit (PanicGoal) beside a pool.
     for seed in range(191, 193):
