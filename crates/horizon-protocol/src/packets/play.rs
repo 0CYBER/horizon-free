@@ -211,6 +211,18 @@ packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i1
 // ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
 // its entry lasts (0 ends it).
 packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
+packet!(
+    /// ClientboundCustomChatCompletionsPacket: how the server changes the
+    /// extra chat completions (`custom_chat_action`) and the entries.
+    CustomChatCompletions { action: i32 => VarInt, entries: Vec<String> => List<Str> }
+);
+/// ClientboundCustomChatCompletionsPacket.Action, by id (`ByIdMap.continuous`
+/// with `OutOfBoundsStrategy.ZERO`: an unknown id is `ADD`).
+pub mod custom_chat_action {
+    pub const ADD: i32 = 0;
+    pub const REMOVE: i32 = 1;
+    pub const SET: i32 = 2;
+}
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -1840,6 +1852,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
     Cooldown(Cooldown) = COOLDOWN,
+    CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
@@ -2399,6 +2412,34 @@ mod tests {
         for len in 0..bytes.len() {
             assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
         }
+    }
+
+    #[test]
+    fn custom_chat_completions_are_an_action_and_a_string_list() {
+        // ClientboundCustomChatCompletionsPacket.STREAM_CODEC: Action.STREAM_CODEC
+        // (ByteBufCodecs.idMapper, a VarInt), then STRING_UTF8 in a list.
+        let payload = b"Steve#tag";
+        let packet = Clientbound::CustomChatCompletions(CustomChatCompletions {
+            action: custom_chat_action::SET,
+            entries: vec!["Steve".into(), "#tag".into()],
+        });
+        assert_eq!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                payload
+            )
+            .unwrap(),
+            packet
+        );
+        assert_eq!(&packet.encode()[1..], payload);
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        assert!(
+            Clientbound::decode(
+                crate::ids::play::clientbound::CUSTOM_CHAT_COMPLETIONS,
+                &payload[..payload.len() - 1]
+            )
+            .is_err()
+        );
     }
 
     #[test]
