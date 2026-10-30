@@ -1001,7 +1001,7 @@ def level_guest_end(host, guest, out):
     level_floor(guest, 700, 80, 0)
     guest('command', command='tp @s 700.5 80 0.5')
     guest.wait(20)
-    guest('command', command='setblock 702 80 0 minecraft:end_gateway{exit_portal:[I;100,50,0],exact_teleport:1b}')
+    guest('command', command='setblock 702 80 0 minecraft:end_gateway{exit_portal:[I;100,50,0],ExactTeleport:1b}')
     guest('command', command='tp @s 702.5 80 0.5')
     gateway = None
     for _ in range(20):
