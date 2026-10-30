@@ -803,8 +803,8 @@ pub fn allowed_in_peaceful(kind: &str) -> bool {
             | "zombified_piglin"
     )
 }
-/// `getBabyStartAge`.
-fn baby_start_age(s: Species) -> i32 {
+/// `AgeableMob.getBabyStartAge` (a sniffer's is -48000).
+pub fn baby_start_age(s: Species) -> i32 {
     if s == Species::Sniffer {
         super::sniffer::BABY_START_AGE
     } else {

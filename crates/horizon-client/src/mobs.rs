@@ -774,6 +774,10 @@ pub struct Extra {
     pub age: i32,
     /// `AgeLocked` (tadpoles fed a slime ball... and ageable mobs).
     pub age_locked: bool,
+    /// `AgeableMob.ageLockParticleTimer` (a tadpole's too): the ticks of
+    /// growth particles left after a golden dandelion, and the cooldown
+    /// before the next one can be used. Not saved.
+    pub age_lock_particle_timer: i32,
     /// AgeableMob.forcedAge: the age fed food added, restored as the age
     /// when it reaches 0 (`ForcedAge`).
     pub forced_age: i32,
@@ -906,6 +910,8 @@ pub struct Extra {
     pub positions: Vec<[i32; 3]>,
     /// A warden's brain, anger and vibrations.
     pub warden: Option<Box<warden::Warden>>,
+    /// An allay's vibration listener and liked note block.
+    pub allay: Option<Box<allay::State>>,
     /// A raider's patrol and raid state.
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
