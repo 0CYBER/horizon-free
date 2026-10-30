@@ -95,7 +95,6 @@
   "Start the game, or run a server for others to join.": "Starte das Spiel oder betreibe einen Server, dem andere beitreten können.",
   "No version installed yet.": "Noch keine Version installiert.",
   "Choose a version": "Version auswählen",
-  "Host a server": "Server hosten",
   "Preparing…": "Vorbereitung…",
   "Prepare": "Vorbereiten",
   "Prepare again": "Erneut vorbereiten",
@@ -139,7 +138,6 @@
   "Open folder": "Ordner öffnen",
   "Join a friend": "Einem Freund beitreten",
   "Paste an invite code": "Einladungscode einfügen",
-  "Paste the code a friend shows when they invite you.": "Füge den Code ein, den dir ein Freund beim Einladen zeigt.",
   "Join": "Beitreten",
   "Shortcut": "Verknüpfung",
   "Remove shortcut": "Verknüpfung entfernen",
@@ -192,5 +190,7 @@
   "Keep": "Behalten",
   "Move to Trash": "In den Papierkorb",
   "Install and turn on native mods": "Installieren und native Mods einschalten",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Native Mods werden in ein eigenes Spiel kompiliert. Wenn du eine installierst, werden native Mods eingeschaltet: Danach baust du das Spiel damit unter Einstellungen > Native Mods. Der erste Build lädt Rust herunter und kann 20 bis 30 Minuten dauern; spätere Builds sind schneller.",
+  "Folder": "Ordner",
+  "Version": "Version"
 }

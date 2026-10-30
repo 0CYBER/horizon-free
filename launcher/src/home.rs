@@ -293,7 +293,7 @@ impl Launcher {
                 focused,
                 false,
                 false,
-                "Invite code",
+                "Paste an invite code",
             ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.friend_focus);

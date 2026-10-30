@@ -95,7 +95,6 @@
   "Start the game, or run a server for others to join.": "Запустіть гру або сервер, до якого зможуть приєднатися інші.",
   "No version installed yet.": "Ще не встановлено жодної версії.",
   "Choose a version": "Виберіть версію",
-  "Host a server": "Запустити сервер",
   "Preparing…": "Підготовка…",
   "Prepare": "Підготувати",
   "Prepare again": "Підготувати знову",
@@ -139,7 +138,6 @@
   "Open folder": "Відкрити теку",
   "Join a friend": "Приєднатися до друга",
   "Paste an invite code": "Вставте код запрошення",
-  "Paste the code a friend shows when they invite you.": "Вставте код, який показує друг, коли запрошує вас.",
   "Join": "Приєднатися",
   "Shortcut": "Ярлик",
   "Remove shortcut": "Прибрати ярлик",
@@ -192,5 +190,7 @@
   "Keep": "Залишити",
   "Move to Trash": "Перемістити до кошика",
   "Install and turn on native mods": "Встановити й увімкнути нативні моди",
-  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативні моди компілюються в окрему гру. Встановлення такого мода вмикає нативні моди: потім ви збираєте з ним гру в «Налаштування > Нативні моди». Перше збирання завантажує Rust і може тривати 20–30 хвилин; наступні швидші."
+  "Native mods compile into a game of their own. Installing one turns Native mods on: you then build the game with it in Settings > Native mods. The first build downloads Rust and can take 20 to 30 minutes; later builds are faster.": "Нативні моди компілюються в окрему гру. Встановлення такого мода вмикає нативні моди: потім ви збираєте з ним гру в «Налаштування > Нативні моди». Перше збирання завантажує Rust і може тривати 20–30 хвилин; наступні швидші.",
+  "Folder": "Тека",
+  "Version": "Версія"
 }

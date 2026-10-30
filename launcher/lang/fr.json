@@ -95,7 +95,6 @@
   "Start the game, or run a server for others to join.": "Lancez le jeu, ou ouvrez un serveur que d'autres peuvent rejoindre.",
   "No version installed yet.": "Aucune version installée pour l'instant.",
   "Choose a version": "Choisir une version",
-  "Host a server": "Héberger un serveur",
   "Preparing…": "Préparation…",
   "Prepare": "Préparer",
   "Prepare again": "Préparer à nouveau",
@@ -139,7 +138,6 @@
   "Open folder": "Ouvrir le dossier",
   "Join a friend": "Rejoindre un ami",
   "Paste an invite code": "Collez un code d'invitation",
-  "Paste the code a friend shows when they invite you.": "Collez le code qu'un ami affiche quand il vous invite.",
   "Join": "Rejoindre",
   "Shortcut": "Raccourci",
   "Remove shortcut": "Retirer le raccourci",
@@ -192,5 +190,7 @@
   "Delete…": "Supprimer…",
   "Keep": "Garder",
   "Move to Trash": "Mettre à la corbeille",
-  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer."
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Mettre {name} à la corbeille, avec ses mondes et ses réglages ? Vous pourrez l'y récupérer.",
+  "Folder": "Dossier",
+  "Version": "Version"
 }

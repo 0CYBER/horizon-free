@@ -95,7 +95,6 @@
   "Start the game, or run a server for others to join.": "Запустите игру или сервер, к которому смогут подключиться другие.",
   "No version installed yet.": "Пока не установлено ни одной версии.",
   "Choose a version": "Выбрать версию",
-  "Host a server": "Открыть сервер",
   "Preparing…": "Подготовка…",
   "Prepare": "Подготовить",
   "Prepare again": "Подготовить заново",
@@ -139,7 +138,6 @@
   "Open folder": "Открыть папку",
   "Join a friend": "Присоединиться к другу",
   "Paste an invite code": "Вставьте код приглашения",
-  "Paste the code a friend shows when they invite you.": "Вставьте код, который друг показывает, когда приглашает вас.",
   "Join": "Войти",
   "Shortcut": "Ярлык",
   "Remove shortcut": "Убрать ярлык",
@@ -192,5 +190,7 @@
   "Delete…": "Удалить…",
   "Keep": "Оставить",
   "Move to Trash": "В корзину",
-  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть."
+  "Move {name} to the Trash, with its worlds and settings? You can get it back from there.": "Переместить {name} в корзину вместе с мирами и настройками? Оттуда его можно вернуть.",
+  "Folder": "Папка",
+  "Version": "Версия"
 }
