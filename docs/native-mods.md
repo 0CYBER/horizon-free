@@ -30,7 +30,7 @@ on any Horizon whose version is the one it needs or a later one. Its `horizon` i
 pin, else on the installed version's commit (the game the player plays), after checking that commit's
 `NATIVE_HOOKS_API` (read from GitHub) is at least the mod's; when it isn't and nothing pins, it builds on the commit the
 mod was tested on. In its own copy of the mod it sets `horizon_revision` to the commit it builds on. Horizon's
-official mods (Zoom, FPS counter, Keystrokes, Minimap, Recipes) are made this way, so any of them build together
+own native mods (Zoom, FPS counter, Keystrokes, Minimap; horizon-rust/horizon-mods, `native/<name>/`) are made this way, so any of them build together
 with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
 
 API 2 adds the item panel beside container screens and its recipe pages (`native_panel_items`,
@@ -38,6 +38,29 @@ API 2 adds the item panel beside container screens and its recipe pages (`native
 the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_place_recipe`, `native_give`): what a
 recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
 mod shows one.
+
+API 11 adds `GameLevel::native_send_particles` on authoritative servers. It sends supported
+vanilla particles to nearby players. Block particles require a valid block state. Item, trail and
+vibration particles are not supported by the current dispatch. Count zero sends one directional
+particle. The return value says whether the call was accepted, not whether any player received it. Bundles that use it need `"hooks": 11`.
+
+API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
+and final close. Bundles that use these events need `"hooks": 3`.
+
+API 4 adds authoritative server tick events through `native_server_tick`: start (before any level ticks, like NeoForge's `ServerTickEvent.Pre`) and end of each non-paused
+server tick, with `world_running`. A frozen world reports false except during a requested step. Bundles that
+use these events need `"hooks": 4`.
+
+API 8 adds server commands and players: `native_register_commands` (the commands a mod adds to every player's
+command tree) and `native_perform_command` (a player's command on the server), with helpers to answer
+([Server commands and players](#server-commands-and-players)). Bundles that use them need `"hooks": 8`.
+
+API 9 adds the acting player's plain items for server mods (count, take, give; [Server commands and
+players](#server-commands-and-players)). Bundles that use them need `"hooks": 9`.
+
+API 10 adds server menus: a vanilla chest menu a server mod opens and fills, whose clicks and closing reach the mod
+(`native_menu_clicked`, `native_menu_closed`), and `native_exchange_items`, two players' stacks swapped in one checked
+step ([Server menus](#server-menus)). Bundles that use them need `"hooks": 10`.
 
 ## What the launcher does
 
@@ -175,8 +198,9 @@ each was built or last used): switching a mod off and on again plays the kept bu
   versions. The Mods page says who made each one, and "Not made or endorsed by the Horizon project" for any mod not
   Horizon's own.
 - **The registry** (horizon-rust/horizon-mods) lists them as their own kind, `native-mod`, only after a maintainer
-  has read the source: the `.hnmod` *is* the source (only `.rs` and `.toml`, checked without running anything),
-  pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
+  has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
+  `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
+  The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
   A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
@@ -190,9 +214,80 @@ each was built or last used): switching a mod off and on again plays the kept bu
 - **Single player and LAN host:** the mods run in the host's game and its integrated server, so a server-side
   hook applies to every player of the world.
 - **Joining a server:** only client-side hooks do anything; the protocol is unchanged.
-- **Dedicated servers:** not built yet; the same pipeline can build the server (`--no-default-features`).
+- **Dedicated servers:** native mods are not built yet. Lifecycle hook call sites are ready for when the pipeline builds them (`--no-default-features`).
 
 ## Left to do
 
 - A list of every native build, to delete the ones no instance needs.
 - A prebuilt horizon-mixins from its CI instead of building it on the player's computer.
+
+## Named hook catalog (draft)
+
+`native-hooks.json` maps stable hook names and contract versions to the current
+source targets. A contract includes the signature, call timing and behavior.
+Keep an existing contract or add a new version when it changes incompatibly.
+The catalog does not cover helper methods or arbitrary private game code.
+Named injection resolution needs a matching horizon-mixins change; existing raw
+targets and the `hooks` metadata continue to work as before.
+
+### Reading server blocks (draft)
+
+A native server tick hook can call `native_server_block` with its context, a dimension id and a block position. It returns the block name and state properties from a loaded chunk. It does not load a chunk or open a dimension. Reads outside that hook, from a stale context, from unavailable dimensions or outside the world bounds return an error.
+
+### Neighbour observations (draft)
+
+`native_neighbor_changed` observes each authoritative server `neighborChanged` before the block handles it. It supplies the dimension, position, current state ID, changed block ID and moved flag. Resolve IDs with the level's registries during the hook; the hook does not load chunks or change the update queue.
+
+### Server block changes (draft)
+
+`native_block_changed` observes a committed authoritative server `Level.setBlock` change before block side effects and neighbour updates. It supplies the dimension, position and old and new state IDs. It does not observe chunk loading or direct storage writes that bypass `Level.setBlock`.
+
+### Server commands and players
+
+For mods that run where the world is simulated: a dedicated server, a LAN host, single player's server thread
+(`crates/horizon-client/src/game/native_server.rs`). The SMP mod of the official server is built on them
+([smp.md](smp.md)).
+
+- **`native_register_commands(commands)`**: push a `NativeCommand` per usage, asked once when a world opens to
+  players. A usage is words, then arguments `<name:kind>`, optional ones last in brackets:
+  `NativeCommand::new("pay <player:player> <amount:integer>")`, `NativeCommand::op("eco set <player:player>
+  <amount:integer>", 3)` for operators of level 3. Kinds: `word`, `text` (the rest of the line, last), `integer`,
+  `number`, `boolean`, `player`, `item`, `block_pos`. The usages of one command merge into one tree, which every
+  player receives after vanilla's (filtered by their level, as vanilla's is), so their chat box completes and colours
+  it. A name vanilla has, or a usage that doesn't parse, is left out with a warning in the log.
+- **`native_perform_command(player, command, ran)`**: a player typed a registered command (without its slash) and
+  their level allows it, whether the world allows commands or not. The mod parses the line and sets `ran`. The
+  player's state is swapped in for the call, as for their other actions, so `native_player` reads them; a
+  registered command no mod takes answers as vanilla's unknown command.
+- Helpers: `native_server_players()` (uuid, name, level, dimension, position and game mode of each player on);
+  `native_tell(uuid, text)`, a system line to one player; `native_broadcast(text)`, to every player and the server's
+  log; `native_feedback(text)`, the command's answer to the player whose command it is; `native_world_dir()`, the
+  open world's folder, where a server mod keeps its data in a folder of its own so the world's backups carry it.
+- Items (API 9), of the acting player (inside `native_perform_command`, whose player is swapped in): `native_held()`
+  (the main hand's item, count, and whether it is plain), `native_count_items(item)`, `native_carried_items()`,
+  `native_take_items(item, count)` (the main hand first, then as `Inventory.add` orders slots),
+  `native_room_for(item)` and `native_give_items(item, count)` (only where it fits: nothing is dropped). They look at
+  the 36 inventory slots and the off hand, never the armour, and only at **plain** stacks: no damage and no
+  component (name, enchantment...), so a shop never takes a worn or enchanted item for a new one. Each returns how
+  many it counted, took or gave; the player's screen follows as for any change to their inventory.
+
+### Server menus
+
+API 10, `crates/horizon-client/src/game/native_menus.rs`: menus a server mod builds from ordinary items, which a
+stock client shows as a chest (`generic_9x1` to `generic_9x6`); nothing is installed on the player's side.
+
+- `native_open_menu(uuid, rows, title, items)` opens one in place of the player's open menu (its window id);
+  `native_set_menu_items(uuid, items)` changes what it shows; `native_close_menu(uuid)` closes it.
+- **No click moves anything.** Each reaches `native_menu_clicked(uuid, window, slot, button, mode)`, and the client
+  is sent the menu, its inventory and its cursor as they were. `slot` counts the menu's own slots first, then the
+  player's inventory below it: `native_menu_inventory_slot(size, slot)` gives the inventory slot (0..9 the hotbar).
+- `native_menu_closed(uuid, window)`: the player closed it, another menu opened, or the player left.
+- `native_player_stacks(uuid)`: the player's 36 inventory slots, to show copies or offer them.
+- `native_exchange_items(a, a_offer, b, b_offer)`: each offer is inventory slots, each with the exact stack it must
+  still hold. Both offers leave their slots and go to the other player where they fit whole (onto matching stacks,
+  then empty slots), or nothing moves and the error says why (an offer that changed, no room, a player gone or
+  dead). A trade on these menus leaves the offered stacks in their owners' inventories until this one step, so
+  closing the menu, leaving or dying moves nothing.
+
+The menu hooks run with no player's state swapped in; `native_player_stacks` and `native_exchange_items` refuse a
+player whose state is (inside `native_perform_command`): call them from a menu hook or `native_server_tick`.

@@ -14,7 +14,7 @@ ServerExplosion.interactWithBlocks	inline	crates/horizon-client/src/game/explosi
 ServerExplosion.createFire	inline	crates/horizon-client/src/game/explosion.rs::Game::server_explode_as	one in three chance on air above a solid block, with the block's fire state
 ServerExplosion.canTriggerBlocks	inline	crates/horizon-client/src/game/wind.rs::Game::wind_burst	breeze charges need mob griefing before the trigger pass; the trigger-only check is implicit because only wind bursts reach it
 ServerExplosion.StackCollector.tryMerge	port	crates/horizon-client/src/game/explosion.rs::add_or_append_stack	merges up to 16 of the same item and damage
-SignalGetter.getBestOwnOrNeighbourSignal	missing		player: an explosive sulfur cube on or next to redstone power does not light its fuse every tick; Horizon's sulfur cube only primes on fire or explosion damage and best_neighbor_signal has no own-signal part
+SignalGetter.getBestOwnOrNeighbourSignal	inline	crates/horizon-client/src/game/sulfur_cubes.rs::Game::sulfur_cube_power_priming	best_neighbor_signal at the cube; no block overrides ownSignal
 SpawnData.CustomSpawnRules.checkLightBoundaries	skip:java		codec validation of the light limit range; Horizon decodes the limits in spawner.rs
 StructureManager.forWorldGenRegion	skip:other		wraps the level as a worldgen region view; Horizon passes the level into worldgen fns, no manager object
 StructureManager.startsForStructure	inline	crates/horizon-client/src/game/structures.rs::Game::structures_reaching_where	gap: minor: returns starts whose box holds the position, not every start the section references
@@ -27,11 +27,11 @@ StructureManager.getAllStructuresAt	inline	crates/horizon-client/src/game/struct
 Biome.getTemperature	port	crates/horizon-world/src/worldgen/biome_temperature.rs::BiomeTemperature::temperature	height adjusted temperature with the 1024 entry cache
 Biome.warmEnoughToRain	port	crates/horizon-world/src/worldgen/biome_temperature.rs::BiomeTemperature::warm_enough_to_rain	temperature at least 0.15
 Biome.shouldMeltFrozenOceanIcebergSlightly	port	crates/horizon-world/src/worldgen/biome_temperature.rs::BiomeTemperature::should_melt_frozen_ocean_iceberg_slightly	temperature above 0.1
-Biome.getGrassColor	port	crates/horizon-client/src/biome.rs::Biomes::grass	the grass modifier on the base colour
-Biome.getBaseGrassColor	inline	crates/horizon-client/src/biome.rs::Biomes::load	the grass_color override, else the colormap sample, resolved at load
-Biome.getGrassColorFromTexture	port	crates/horizon-client/src/biome.rs::sample	grass colormap by clamped temperature and downfall
-Biome.getFoliageColorFromTexture	port	crates/horizon-client/src/biome.rs::sample	foliage colormap by clamped temperature and downfall
-Biome.getDryFoliageColorFromTexture	port	crates/horizon-client/src/biome.rs::sample	dry foliage colormap by clamped temperature and downfall
+Biome.getGrassColor	port	crates/horizon-client-render/src/biome.rs::Biomes::grass	the grass modifier on the base colour
+Biome.getBaseGrassColor	inline	crates/horizon-client-render/src/biome.rs::Biomes::load	the grass_color override, else the colormap sample, resolved at load
+Biome.getGrassColorFromTexture	port	crates/horizon-client-render/src/biome.rs::sample	grass colormap by clamped temperature and downfall
+Biome.getFoliageColorFromTexture	port	crates/horizon-client-render/src/biome.rs::sample	foliage colormap by clamped temperature and downfall
+Biome.getDryFoliageColorFromTexture	port	crates/horizon-client-render/src/biome.rs::sample	dry foliage colormap by clamped temperature and downfall
 Biome.BiomeBuilder.putAttributes	skip:java		builder for the biome bootstrap; Horizon reads biome data
 Biome.BiomeBuilder.build	skip:java		builder for the biome bootstrap; Horizon reads biome data
 Biome.BiomeBuilder.toString	skip:debug		debug text only

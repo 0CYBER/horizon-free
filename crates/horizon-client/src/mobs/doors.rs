@@ -40,7 +40,7 @@ pub fn is_zombie(s: Species) -> bool {
     )
 }
 /// `DoorBlock.isWoodenDoor`: a door a hand opens, which is any but iron.
-fn wooden_door(w: &MobWorld, p: [i32; 3]) -> bool {
+pub fn wooden_door(w: &MobWorld, p: [i32; 3]) -> bool {
     let name = w.block_name(p[0], p[1], p[2]);
     name.ends_with("_door") && name != "minecraft:iron_door"
 }

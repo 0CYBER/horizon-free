@@ -149,9 +149,12 @@ impl StartupMenu {
         )
     }
 
-    fn title_key(&mut self, event: &KeyEvent) {
+    /// `Screen.keyPressed` on the title screens: the action a key starts (Enter confirms, see `confirm_key` in title.rs).
+    fn title_key(&mut self, event: &KeyEvent) -> Action {
         let shortcut = self.shortcut(event);
-        let Some(title) = &mut self.title else { return };
+        let Some(title) = &mut self.title else {
+            return Action::None;
+        };
         if let Some(shortcut) = shortcut {
             if title.has_caret_field() {
                 title.field_shortcut(shortcut, &mut self.clipboard);
@@ -164,13 +167,16 @@ impl StartupMenu {
             {
                 title.search_changed();
             }
-            return;
+            return Action::None;
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => title.escape(),
             PhysicalKey::Code(KeyCode::F5) => title.refresh_servers(),
             PhysicalKey::Code(KeyCode::Tab) => title.tab(),
-            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => title.confirm_edit(),
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => return title.confirm_key(),
+            PhysicalKey::Code(KeyCode::Space) if title.list_focused() => {
+                return title.confirm_key();
+            }
             PhysicalKey::Code(
                 key @ (KeyCode::Backspace
                 | KeyCode::Delete
@@ -202,6 +208,7 @@ impl StartupMenu {
                 }
             }
         }
+        Action::None
     }
 }
 
@@ -244,6 +251,7 @@ pub(super) fn spawn_loader(
                 &settings,
                 started,
                 true,
+                false,
                 &progress,
                 &mut |gui, root| {
                     let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
@@ -276,11 +284,12 @@ impl Loading {
                     Err(TryRecvError::Disconnected) => {
                         // The loader sends `Done` before it returns: it panicked.
                         let reason = match self.handle.take().map(JoinHandle::join) {
-                            Some(Err(payload)) => format!(": {}", panic_text(payload.as_ref())),
-                            _ => String::new(),
+                            Some(Err(payload)) => panic_text(payload.as_ref()).to_owned(),
+                            Some(Ok(())) => "it returned without a result".into(),
+                            None => "no loader thread was running".into(),
                         };
                         return Err(
-                            format!("resource loader stopped before finishing{reason}").into()
+                            format!("resource loader stopped before finishing: {reason}").into(),
                         );
                     }
                 }
@@ -426,8 +435,9 @@ impl Loading {
                 }
                 // Mods' settings pages open only in a running game.
                 Event::NativeSettings(_) | Event::NativeButton(..) => {}
-                // The startup menu runs before the game opens a control socket.
-                Event::ButtonClick | Event::CopyAgentDetails => {}
+                // The startup menu runs before the game opens a control socket,
+                // and before its sound engine (no clicks, no volume previews).
+                Event::ButtonClick | Event::CopyAgentDetails | Event::Volume(..) => {}
             }
         }
     }
@@ -603,14 +613,17 @@ impl Loading {
                 } else {
                     raw
                 } * self.settings.mouse_wheel_sensitivity;
-                let batch = HudBatch::new(self.menu_size());
+                let size = self.menu_size();
+                let batch = HudBatch::new(size);
                 if self.menu.options_open {
-                    self.menu.options.scroll_at(
-                        &self.settings,
+                    let events = self.menu.options.wheel(
+                        &mut self.settings,
                         (batch.width, batch.height),
                         self.menu.cursor,
+                        [size[0] as i32, size[1] as i32],
                         amount,
                     );
+                    self.menu_option_events(events);
                 } else if let Some(title) = &mut self.menu.title {
                     title.scroll_worlds(amount, self.menu.cursor, (batch.width, batch.height));
                 }
@@ -638,8 +651,8 @@ impl Loading {
                         self.menu_option_events(events);
                     }
                 } else {
-                    self.menu.title_key(&event);
-                    self.save_menu_address();
+                    let action = self.menu.title_key(&event);
+                    self.menu_action(event_loop, action);
                 }
             }
             _ => {}
@@ -875,7 +888,7 @@ mod tests {
         let mut loading = loading(receiver);
         assert_eq!(
             loading.poll_menu_resources().unwrap_err().to_string(),
-            "resource loader stopped before finishing"
+            "resource loader stopped before finishing: no loader thread was running"
         );
     }
 }

@@ -856,27 +856,49 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
     };
     assert!(*creative && !options.hardcore && options.commands(true));
     // The World tab (second of three 124-wide tabs from x 54): its seed box
-    // takes the focus, Superflat and the switches toggle.
+    // takes the focus, the world type cycles and the switches toggle.
     let (action, sound) = f.title.click(54.0 + 124.0 + 10.0, 10.0, size);
     assert!(sound && action == Action::None);
     let world = labels(&f);
     assert_eq!((world[0].1, world[0].2), (85.0, 38.0));
     assert_eq!((world[2].1, world[2].2), (85.0 + 266.0, 38.0 + 73.0));
-    f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+    // The world-type button cycles through vanilla's world presets.
+    let world_type = |f: &Fixture| -> crate::save::WorldPreset {
+        let Mode::Create { options, .. } = &f.title.mode else {
+            panic!()
+        };
+        options.world_type
+    };
+    assert_eq!(world_type(&f), crate::save::WorldPreset::Normal);
+    for expected in [
+        crate::save::WorldPreset::Flat,
+        crate::save::WorldPreset::LargeBiomes,
+        crate::save::WorldPreset::Amplified,
+        crate::save::WorldPreset::SingleBiomeSurface,
+        crate::save::WorldPreset::Normal,
+    ] {
+        f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+        assert_eq!(world_type(&f), expected);
+    }
+    // The amplified preset is the third one.
+    for _ in 0..3 {
+        f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+    }
     f.title.click(world[3].1 + 10.0, world[3].2 + 10.0, size);
     f.title.click(100.0, 38.0 + 41.0 + 10.0, size);
     let Mode::Create { focus, options, .. } = &f.title.mode else {
         panic!()
     };
     assert_eq!(*focus, 1);
-    assert!(options.flat && options.bonus_chest());
+    assert_eq!(options.world_type, crate::save::WorldPreset::Amplified);
+    assert!(options.bonus_chest());
     let Action::Create { options, .. } = f.title.create_action() else {
         panic!()
     };
     assert_eq!(
         options.world_gen(),
         crate::save::WorldGen {
-            flat: true,
+            preset: crate::save::WorldPreset::Amplified,
             structures: true,
             bonus_chest: true
         }
@@ -911,23 +933,83 @@ fn new_world_generation_settings_round_trip() {
     let f = Fixture::new();
     let dir = f.root.join("flat");
     let options = crate::save::WorldGen {
-        flat: true,
+        preset: crate::save::WorldPreset::Flat,
         structures: false,
         bonus_chest: true,
     };
     crate::save::write_world_gen_settings(&dir, 42, options).unwrap();
     assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
     let settings = crate::save::world_gen_settings(&dir).unwrap();
+    let generator = settings
+        .get("dimensions")
+        .and_then(|d| d.get("minecraft:overworld"))
+        .and_then(|o| o.get("generator"));
     assert_eq!(
-        crate::save::text(
-            settings
-                .get("dimensions")
-                .and_then(|d| d.get("minecraft:overworld"))
-                .and_then(|o| o.get("generator"))
-                .and_then(|g| g.get("type"))
-        )
-        .as_deref(),
+        crate::save::text(generator.and_then(|g| g.get("type"))).as_deref(),
         Some("minecraft:flat")
+    );
+}
+
+#[test]
+fn each_world_preset_writes_its_own_generator() {
+    let f = Fixture::new();
+    let generator = |preset: crate::save::WorldPreset| {
+        let dir = f.root.join(preset.id());
+        let options = crate::save::WorldGen {
+            preset,
+            structures: true,
+            bonus_chest: false,
+        };
+        crate::save::write_world_gen_settings(&dir, 42, options).unwrap();
+        assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
+        let settings = crate::save::world_gen_settings(&dir).unwrap();
+        let generator = settings
+            .get("dimensions")
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"))
+            .cloned()
+            .unwrap();
+        (
+            crate::save::text(generator.get("type")),
+            crate::save::text(generator.get("settings")),
+            crate::save::text(generator.get("biome_source").and_then(|s| s.get("type"))),
+        )
+    };
+    assert_eq!(
+        generator(crate::save::WorldPreset::Normal),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:overworld".to_owned()),
+            Some("minecraft:multi_noise".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::Amplified),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:amplified".to_owned()),
+            Some("minecraft:multi_noise".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::LargeBiomes),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:large_biomes".to_owned()),
+            Some("minecraft:multi_noise".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::SingleBiomeSurface),
+        (
+            Some("minecraft:noise".to_owned()),
+            Some("minecraft:overworld".to_owned()),
+            Some("minecraft:fixed".to_owned()),
+        )
+    );
+    assert_eq!(
+        generator(crate::save::WorldPreset::Flat).0,
+        Some("minecraft:flat".to_owned())
     );
 }
 
@@ -1046,4 +1128,126 @@ fn world_list_names_every_game_mode_and_hardcore_in_red() {
     let creative = info("Creative");
     assert_eq!(creative.plain(), "Creative Mode, Commands, Version: 26.3");
     assert!(creative.spans.iter().all(|s| s.style.color.is_none()));
+}
+
+#[test]
+fn world_with_unreadable_level_dat_stays_in_the_world_list() {
+    let f = Fixture::new();
+    f.world("Broken", "My World");
+    f.world("Broken", "My World");
+    fs::write(f.title.saves.join("Broken/level.dat"), b"truncated").unwrap();
+    // A folder with only level.dat_old is a world too (findLevelCandidates).
+    f.world("Old only", "Old only");
+    f.world("Old only", "Old only");
+    fs::remove_file(f.title.saves.join("Old only/level.dat")).unwrap();
+    let mut listed: Vec<String> = list_worlds(&f.title.saves)
+        .into_iter()
+        .map(|w| w.folder)
+        .collect();
+    listed.sort();
+    assert_eq!(listed, ["Broken", "Old only"]);
+}
+
+#[test]
+fn world_with_unreadable_level_dat_is_listed_and_recovers_from_level_dat_old() {
+    let mut f = Fixture::new();
+    // A second save keeps the first level.dat as level.dat_old; then level.dat
+    // is cut short, as a crash in the middle of a save leaves it.
+    f.world("Broken", "My World");
+    f.world("Broken", "My World");
+    let dir = f.title.saves.join("Broken");
+    fs::write(dir.join("level.dat"), b"truncated").unwrap();
+
+    // LevelStorageSource.readLevelSummary: a CorruptedLevelSummary, still listed.
+    let worlds = list_worlds(&f.title.saves);
+    let broken = worlds
+        .iter()
+        .find(|w| w.folder == "Broken")
+        .expect("a world whose level.dat does not read stays in the list");
+    assert!(broken.corrupted);
+    assert_eq!(broken.name, "Broken");
+    let info = world_info(broken);
+    assert_eq!(info.plain(), "Failed to load world summary");
+    assert_eq!(info.spans[0].style.color, Some(0xFF0000));
+
+    f.select();
+    let buttons = f.title.buttons(480.0, 262.0);
+    let enabled = |label: &str| buttons.iter().find(|b| b.label == label).unwrap().enabled;
+    assert!(enabled("Attempt to Recover"));
+    assert!(!enabled("Edit") && !enabled("Re-Create") && enabled("Delete"));
+
+    // Its primary action opens RecoverWorldDataScreen, not the world.
+    assert_eq!(f.click("Attempt to Recover"), Action::None);
+    let Mode::Recover { issues, .. } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert!(matches!(
+        issues[0],
+        Some(crate::save::DatIssue::Unreadable(_))
+    ));
+    assert_eq!(issues[1], None);
+    assert_eq!(fs::read(dir.join("level.dat")).unwrap(), b"truncated");
+
+    // restoreLevelDataFromOld: level.dat_old back in place, the broken file kept aside.
+    f.click("Attempt to Restore");
+    assert!(matches!(
+        f.title.mode,
+        Mode::Recovered { success: true, .. }
+    ));
+    assert_eq!(Level::read_summary(&dir).unwrap().name, "My World");
+    assert!(!dir.join("level.dat_old").exists());
+    let kept: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("level.dat_corrupted_")
+        })
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(fs::read(kept[0].path()).unwrap(), b"truncated");
+    assert_eq!(
+        f.click("Continue"),
+        Action::Play {
+            folder: "Broken".into()
+        }
+    );
+    assert!(!list_worlds(&f.title.saves)[0].corrupted);
+}
+
+#[test]
+fn world_with_nothing_to_recover_from_is_listed_but_never_opened() {
+    let mut f = Fixture::new();
+    let dir = f.title.saves.join("Lost");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("level.dat"), b"garbage").unwrap();
+    // A folder without level.dat or level.dat_old is no world (findLevelCandidates).
+    fs::create_dir_all(f.title.saves.join("Not a world")).unwrap();
+    let worlds = list_worlds(&f.title.saves);
+    assert_eq!(worlds.len(), 1);
+    assert!(worlds[0].corrupted);
+
+    f.select();
+    f.click("Attempt to Recover");
+    let Mode::Recover { issues, .. } = &f.title.mode else {
+        panic!("expected the recovery screen, got {:?}", f.title.mode);
+    };
+    assert_eq!(issues[1], Some(crate::save::DatIssue::Missing));
+    let restore = f
+        .title
+        .buttons(480.0, 262.0)
+        .into_iter()
+        .find(|b| b.label == "Attempt to Restore")
+        .unwrap();
+    assert!(!restore.enabled);
+    // Pressed anyway, attemptRestore fails without touching the files.
+    f.title.attempt_restore(worlds[0].clone());
+    assert!(matches!(
+        f.title.mode,
+        Mode::Recovered { success: false, .. }
+    ));
+    assert_eq!(fs::read(dir.join("level.dat")).unwrap(), b"garbage");
+    f.click("Back");
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
 }
