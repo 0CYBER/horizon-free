@@ -2248,6 +2248,24 @@ impl Game<'_> {
         } else {
             None
         };
+        // MushroomCow.getOffspringVariant, from the mother's random: the other
+        // colour 1 time in 1024 when both parents share one, otherwise either
+        // parent's colour by a coin flip.
+        let mooshroom = if p.species() == Species::Mooshroom {
+            let mate = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            let own = p.extra.variant;
+            self.mobs.iter_mut().find(|m| m.id == parent).map(|m| {
+                if own == mate && m.random.next_int_bound(1024).unwrap_or(1) == 0 {
+                    if own == 1 { 0 } else { 1 }
+                } else if m.random.next_boolean() {
+                    own
+                } else {
+                    mate
+                }
+            })
+        } else {
+            None
+        };
         // A horse and a donkey have a mule.
         let kind = match (p.species(), q.as_ref().map(|q| q.species())) {
             (Species::Horse, Some(Species::Donkey)) | (Species::Donkey, Some(Species::Horse)) => {
@@ -2395,22 +2413,8 @@ impl Game<'_> {
             {
                 child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
             }
-            // MushroomCow.getOffspringVariant, from the mother's random: the other
-            // colour 1 time in 1024 when both parents share one, otherwise either
-            // parent's colour by a coin flip.
-            if p.species() == Species::Mooshroom {
-                let mate = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
-                let own = p.extra.variant;
-                let variant = self.mobs.iter_mut().find(|m| m.id == parent).map(|m| {
-                    if own == mate && m.random.next_int_bound(1024).unwrap_or(1) == 0 {
-                        if own == 1 { 0 } else { 1 }
-                    } else if m.random.next_boolean() {
-                        own
-                    } else {
-                        mate
-                    }
-                });
-                child.extra.variant = variant.unwrap_or(own);
+            if let Some(variant) = mooshroom {
+                child.extra.variant = variant;
             }
             // Sheep.getBreedOffspring: the lamb's wool mixes both parents' dyes.
             if p.species() == Species::Sheep {
