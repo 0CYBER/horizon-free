@@ -1031,9 +1031,9 @@ impl Game<'_> {
     pub(super) fn stack_display_name(&self, s: &ItemStack) -> Text {
         let item = &*s.item;
         let empty = item == "minecraft:air" || s.count == 0;
-        let custom = s.custom_name();
+        let custom = s.data().and_then(|data| data.custom_name.as_ref());
         let hover = if let Some(c) = custom {
-            Text::literal(c)
+            horizon_client::component::name_text(c)
         } else if let Some(title) = s
             .data()
             .and_then(|d| d.written.as_ref())
@@ -1053,6 +1053,11 @@ impl Game<'_> {
                 &horizon_client::brewing::potion_name_key(item, s.potion()),
                 &[],
             )
+        } else if item == "minecraft:shield"
+            && let Some(color) = s.data().and_then(|d| d.base_color.as_deref())
+        {
+            // `ShieldItem.getName`: the banner's base colour names the shield.
+            Text::translate(&format!("item.minecraft.shield.{color}"), &[])
         } else {
             // Item.getDescriptionId: a block item's is the block's.
             let (namespace, path) = item.split_once(':').unwrap_or(("minecraft", item));

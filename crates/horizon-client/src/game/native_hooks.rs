@@ -1,4 +1,4 @@
-//! Hook points for native mods (docs/native-mods.md, "Hook points"): empty
+//! Hook points for native mods (docs/native-mods.md, "Mods on the hook points"): empty
 //! functions the game calls at fixed places, for horizon-mixins bundles to
 //! hook with HEAD. Hooks that answer take an out parameter (`claimed`,
 //! `zoom`…) so several mods can hook the same point. A native mod keeps its
@@ -648,6 +648,48 @@ mod tests {
                 assert!(!line.contains(mac), "a macro in the hook points: {line}");
             }
         }
+    }
+
+    #[test]
+    fn catalog_matches_hook_points() {
+        use std::collections::BTreeSet;
+
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../native-hooks.json")).unwrap();
+        let hooks = catalog["hooks"].as_array().unwrap();
+        let source = include_str!("native_hooks.rs");
+        let section = source
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        let declared: BTreeSet<_> = section
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("pub(super) fn native_")?
+                    .split('(')
+                    .next()
+            })
+            .collect();
+        let mut names = BTreeSet::new();
+        let mut contracts = BTreeSet::new();
+        for hook in hooks {
+            let name = hook["name"].as_str().unwrap();
+            let version = hook["version"].as_u64().unwrap();
+            assert!(
+                version > 0 && contracts.insert((name, version)),
+                "invalid or duplicate hook: {name} v{version}"
+            );
+            names.insert(name);
+            assert_eq!(
+                hook["target"].as_str().unwrap(),
+                format!("horizon_client::game::native_hooks::Game<'_>::native_{name}")
+            );
+        }
+        assert_eq!(names, declared);
     }
 
     /// Vanilla's F3 draws a column in each top corner (`extractLines`, left

@@ -84,6 +84,8 @@ impl InlineObject {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
     pub color: Option<u32>,
+    /// Text component `shadow_color` as packed ARGB. Zero suppresses shadows.
+    pub shadow_color: Option<u32>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underlined: Option<bool>,
@@ -116,6 +118,7 @@ impl Style {
     /// Fill unset fields from `base` (Style.applyTo).
     pub fn inherit(&mut self, base: &Style) {
         self.color = self.color.or(base.color);
+        self.shadow_color = self.shadow_color.or(base.shadow_color);
         self.bold = self.bold.or(base.bold);
         self.italic = self.italic.or(base.italic);
         self.underlined = self.underlined.or(base.underlined);
@@ -520,8 +523,9 @@ impl Text {
 }
 
 /// The style fields of a component's JSON.
-const STYLE_KEYS: [&str; 10] = [
+const STYLE_KEYS: [&str; 11] = [
     "color",
+    "shadow_color",
     "bold",
     "italic",
     "underlined",
@@ -541,6 +545,9 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
             .find(|n| n.2 == c)
             .map_or_else(|| format!("#{c:06X}"), |n| n.1.to_owned());
         out.push(("color".to_owned(), name.into()));
+    }
+    if let Some(shadow) = style.shadow_color {
+        out.push(("shadow_color".to_owned(), Value::from(shadow as i32)));
     }
     for (key, flag) in [
         ("bold", style.bold),

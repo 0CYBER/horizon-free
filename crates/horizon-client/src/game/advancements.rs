@@ -1089,6 +1089,31 @@ impl Game<'_> {
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
+    /// `ServerPlayer.onItemPickup`: the player in place (the host, or the
+    /// guest `as_guest` runs) picked up an item entity whose owner
+    /// (`ItemEntity.getOwner`, the thrower) is `thrower`: the whole stack, or
+    /// what is left after a partial take. An owner that is that player also
+    /// fires `LivingEntity.onItemPickup` (the by-entity trigger); one that is
+    /// gone, or another player, fires nothing here.
+    pub(super) fn trigger_thrown_picked_up_by_player(
+        &mut self,
+        stack: &ItemStack,
+        thrower: [i32; 4],
+    ) {
+        let target = if thrower == self.acting_uuid() {
+            let me = self.player_entity();
+            self.trigger_item_entity("minecraft:thrown_item_picked_up_by_entity", stack, &me);
+            me
+        } else if let Some(id) = self.mob_by_uuid(thrower) {
+            let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+                return;
+            };
+            self.mob_entity(m)
+        } else {
+            return;
+        };
+        self.trigger_item_entity("minecraft:thrown_item_picked_up_by_player", stack, &target);
+    }
     /// `ConstructBeaconTrigger`: the pyramid levels of the new beacon.
     pub(super) fn trigger_construct_beacon(&mut self, levels: i32) {
         let me = self.player_entity();
