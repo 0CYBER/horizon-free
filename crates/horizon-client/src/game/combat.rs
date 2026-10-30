@@ -1,8 +1,9 @@
 //! The player's `CombatTracker`: the damage taken lately, who dealt it and
 //! where the player fell from, turned into the vanilla death message.
-use super::{Game, chat::PLAYER_NAME};
+use super::{Game, chat::PLAYER_NAME, commands::Target};
 use horizon_client::{
     health::HealthEvent,
+    mobs::{Mob, Species},
     motion::MotionEvent,
     particles::{ParticleOptions, ParticleType},
     text::Text,
@@ -72,6 +73,10 @@ pub(super) struct CombatTracker {
     /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
     /// but the mobs they killed still ask for their loot.
     pub(super) charged_exploders: Vec<u32>,
+    /// The mobs whose blast went off this tick and that left the mob list
+    /// (`MobEvent::ExplosionSource`): their names, for the death messages of
+    /// the mobs the blast killed.
+    pub(super) exploded: Vec<(u32, Text)>,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,
@@ -390,5 +395,135 @@ impl Game<'_> {
         // No entity at all: the one-argument message, as vanilla sends it (a
         // template that names a killer then shows as written).
         Text::translate(&key, &[me])
+    }
+    /// `TamableAnimal.die`: with `showDeathMessages`, a tame wolf, cat,
+    /// parrot or nautilus's owner, when online in any dimension
+    /// (`EntityReference.getEntity` looks through every level), is sent how it
+    /// died. `killer` is the player who last hurt it (`None` inside for the
+    /// host), from `last_hurt_by_player`.
+    pub(super) fn tell_owner_pet_died(&mut self, m: &Mob, killer: Option<Option<u32>>) {
+        let tamable = matches!(
+            m.species(),
+            Species::Wolf
+                | Species::Cat
+                | Species::Parrot
+                | Species::Nautilus
+                | Species::ZombieNautilus
+        );
+        let Some(owner) = m.extra.owner.filter(|_| tamable && m.extra.tame) else {
+            return;
+        };
+        if !self.ui.rules.bool("show_death_messages") {
+            return;
+        }
+        let host = self.player.is_some()
+            && self.options.dedicated.is_none()
+            && horizon_client::mobs::tame::owned_by(
+                Some(owner),
+                self.level.player_uuid.unwrap_or_default(),
+            );
+        let uuid = horizon_client::lan::playerdata::ints_uuid(owner);
+        let guest = !host
+            && self
+                .lan
+                .as_ref()
+                .is_some_and(|l| l.hub.guests.iter().any(|g| g.placed && g.uuid == uuid));
+        if !host && !guest {
+            return;
+        }
+        let message = self.mob_death_message(m, killer);
+        if host {
+            self.system_message(message);
+        } else if let Some(lan) = &self.lan {
+            let content = horizon_client::lan::data::component_nbt(&message.component());
+            lan.hub.system_message_to_player(uuid, content);
+        }
+    }
+    /// `CombatTracker.getDeathMessage` for a mob, from the hits it recorded
+    /// (`Mob::combat`), told the way the player's own tracker tells them.
+    pub(super) fn mob_death_message(&mut self, m: &Mob, killer: Option<Option<u32>>) -> Text {
+        use horizon_client::mobs::{DamageKind, Who};
+        let me = mob_name(m);
+        // The player behind a `Who::Player` hit: the last one to hurt it, or
+        // the one in place (a server with nobody acting has none).
+        let player = match killer {
+            Some(Some(conn)) => Some((u32::MAX - 1 - conn, self.target_name(Target::Guest(conn)))),
+            Some(None) => Some((u32::MAX, self.target_name(Target::Player))),
+            None if self.player.is_some() || self.lan_acting.is_some() => {
+                Some((u32::MAX, self.target_name(Target::Player)))
+            }
+            None => None,
+        };
+        // The cause's display name: a mob that is gone (a creeper that blew
+        // up) is still named by its blast.
+        let name = |g: &Self, who: Who| match who {
+            Who::Player => player.clone(),
+            Who::Mob(id) => g
+                .mob_display_name(id)
+                .or_else(|| {
+                    g.combat
+                        .exploded
+                        .iter()
+                        .find(|(e, _)| *e == id)
+                        .map(|(_, n)| n.clone())
+                })
+                .map(|n| (id, n)),
+        };
+        let entries = m
+            .combat
+            .entries
+            .iter()
+            .map(|e| {
+                let attacker = e.source.attacker.and_then(|w| name(self, w));
+                // AbstractArrow.onHitEntity: an arrow nobody shot is its own
+                // cause.
+                let direct = (attacker.is_none() && e.source.kind == DamageKind::Arrow)
+                    .then(|| Text::translate("entity.minecraft.arrow", &[]));
+                Entry {
+                    // DamageSources.explosion: player_explosion whenever
+                    // something caused the blast (the only kind that asks).
+                    damage_type: super::creatures::damage_type(
+                        e.source.kind,
+                        e.source.attacker.is_some(),
+                    )
+                    .to_owned(),
+                    damage: e.damage,
+                    fall_location: e.in_water.then_some("water"),
+                    fall_distance: e.fall_distance,
+                    attacker,
+                    direct,
+                }
+            })
+            .collect();
+        // LivingEntity.getKillCredit: the player who hurt it lately, else the
+        // last mob to hurt it within 100 ticks.
+        let credit = if m.ai.last_hurt_by_player > 0 && player.is_some() {
+            player.clone()
+        } else {
+            m.ai.last_hurt_by
+                .filter(|_| m.age as i32 - m.ai.last_hurt_by_time <= 100)
+                .and_then(|w| name(self, w))
+        };
+        let now = self.world.game_time;
+        let mut tracker = CombatTracker {
+            entries,
+            last_damage: now,
+            in_combat: m.combat.in_combat,
+            last_hurt_by: credit.map(|c| (c, now)),
+            ..CombatTracker::default()
+        };
+        std::mem::swap(&mut self.combat, &mut tracker);
+        let text = self.combat_death_message_for(me);
+        std::mem::swap(&mut self.combat, &mut tracker);
+        text
+    }
+}
+
+/// `Entity.getDisplayName` of a mob: its custom name or its type's name.
+fn mob_name(m: &Mob) -> Text {
+    match (&m.custom_name_text, &m.custom_name) {
+        (Some(text), _) => text.clone(),
+        (None, Some(name)) => Text::literal(name.clone()),
+        (None, None) => Text::translate(&format!("entity.{}", m.kind.id.replace(':', ".")), &[]),
     }
 }

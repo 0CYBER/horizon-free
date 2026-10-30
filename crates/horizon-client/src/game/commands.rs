@@ -1731,6 +1731,16 @@ impl Game<'_> {
             }
             Target::Mob(id) => {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    // LivingEntity.kill: a generic_kill hit of Float.MAX_VALUE,
+                    // which its death message tells.
+                    if m.alive() {
+                        m.record_damage(
+                            horizon_client::mobs::Damage::of(
+                                horizon_client::mobs::DamageKind::GenericKill,
+                            ),
+                            f32::MAX,
+                        );
+                    }
                     m.health = 0.0;
                     if m.death_time == 0 {
                         m.death_time = 1;

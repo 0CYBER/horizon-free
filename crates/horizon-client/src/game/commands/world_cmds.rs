@@ -202,10 +202,17 @@ impl Game<'_> {
                     attacker,
                     from,
                 };
-                self.mobs
+                let hurt = self
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id)
-                    .is_some_and(|m| m.damage(amount, damage))
+                    .is_some_and(|m| m.damage(amount, damage));
+                // LivingEntity.hurtServer: a player's hit makes them
+                // `lastHurtByPlayer`, whose kill and death message it is.
+                if hurt && attacker == Some(Who::Player) {
+                    self.last_hurt_by_player.insert(id, self.lan_acting);
+                }
+                hurt
             }
             _ => false,
         };
