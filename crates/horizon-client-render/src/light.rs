@@ -292,6 +292,19 @@ impl LightScratch {
             ids: Box::new([0u32; 4096]),
         }
     }
+
+    /// Clear queues and shrink them if capacity exceeds the retention cap.
+    fn clear_queues(&mut self) {
+        const MAX_QUEUE_CAPACITY: usize = 65_536;
+        self.queue.clear();
+        if self.queue.capacity() > MAX_QUEUE_CAPACITY {
+            self.queue.shrink_to(MAX_QUEUE_CAPACITY);
+        }
+        self.sky_queue.clear();
+        if self.sky_queue.capacity() > MAX_QUEUE_CAPACITY {
+            self.sky_queue.shrink_to(MAX_QUEUE_CAPACITY);
+        }
+    }
 }
 
 thread_local! {
@@ -336,8 +349,7 @@ fn light_chunk_with_scratch(
     scratch.sky.fill(0);
     scratch.block.resize(total, 0);
     scratch.block.fill(0);
-    scratch.queue.clear();
-    scratch.sky_queue.clear();
+    scratch.clear_queues();
 
     let states = &mut scratch.states[..total];
     let sky = &mut scratch.sky[..total];
@@ -514,7 +526,9 @@ fn light_chunk_with_scratch(
     };
     spread(sky, sky_queue);
     spread(block, queue);
-    pack_lighting(sections, h, sky, block, sky_light)
+    let result = pack_lighting(sections, h, sky, block, sky_light);
+    scratch.clear_queues();
+    result
 }
 
 /// Extract just the centre column's light (`sections` of it); never copy
@@ -1860,5 +1874,289 @@ mod tests {
             elapsed,
             elapsed.as_micros() as f64 / iters as f64
         );
+    }
+
+    #[test]
+    fn scratch_queues_shrink_above_capacity_cap() {
+        let mut scratch = LightScratch::new();
+        scratch.queue.resize(100_000, 0);
+        scratch.sky_queue.resize(100_000, 0);
+        assert!(scratch.queue.capacity() >= 100_000);
+        assert!(scratch.sky_queue.capacity() >= 100_000);
+        scratch.clear_queues();
+        assert_eq!(scratch.queue.len(), 0);
+        assert_eq!(scratch.sky_queue.len(), 0);
+        assert!(scratch.queue.capacity() < 100_000);
+        assert!(scratch.sky_queue.capacity() < 100_000);
+    }
+
+    /// The baseline flood-fill lighting algorithm before the scratch and wavefront optimizations.
+    fn old_light_chunk(
+        region: &[[Option<&Chunk>; 3]; 3],
+        tables: &LightTables,
+        sky_light: bool,
+    ) -> Vec<Light> {
+        let sections = region[1][1].expect("centre chunk").sections.len();
+        let mut top_section = 0;
+        for chunk in region.iter().flatten().flatten() {
+            for (i, s) in chunk.sections.iter().enumerate().rev() {
+                if !s.is_uniform(0) {
+                    top_section = top_section.max(i + 1);
+                    break;
+                }
+            }
+        }
+        let h = ((top_section + 1) * 16).min(sections * 16);
+        let at = |x: usize, y: usize, z: usize| (y * W + z) * W + x;
+        let mut states = vec![0u16; W * W * h];
+        let mut sky = vec![0u8; W * W * h];
+        let mut block = vec![0u8; W * W * h];
+        let mut queue = VecDeque::new();
+        let mut sky_queue = VecDeque::new();
+        let mut ids = Box::new([0u32; 4096]);
+        for (dz, row) in region.iter().enumerate() {
+            for (dx, chunk) in row.iter().enumerate() {
+                let Some(chunk) = chunk else { continue };
+                for (si, section) in chunk.sections.iter().enumerate().take(top_section) {
+                    if section.is_uniform(0) {
+                        continue;
+                    }
+                    section.unpack(&mut ids);
+                    for (i, &id) in ids.iter().enumerate() {
+                        let (lx, lz, ly) = (i & 15, (i >> 4) & 15, i >> 8);
+                        let p = at(dx * 16 + lx, si * 16 + ly, dz * 16 + lz);
+                        let info = tables.info[id as usize];
+                        states[p] = info as u16;
+                        let emission = info >> 16;
+                        if emission > 0 {
+                            block[p] = emission as u8;
+                            queue.push_back(p as u32);
+                        }
+                    }
+                }
+            }
+        }
+        let mut present = vec![false; W * W];
+        for z in 0..W {
+            for x in 0..W {
+                present[z * W + x] = region[z / 16][x / 16].is_some();
+            }
+        }
+        let mut lowest = vec![h as i32; W * W];
+        let old_packed_edge_occluded = |top: u16, bottom: u16| -> bool {
+            bottom & 0xF != 0 || tables.packed_blocked(top, bottom, Direction::Down as usize)
+        };
+        for z in 0..W {
+            for x in 0..W {
+                if !present[z * W + x] || !sky_light {
+                    continue;
+                }
+                let mut y = h as i32 - 1;
+                sky[at(x, y as usize, z)] = 15;
+                while y > 0
+                    && !old_packed_edge_occluded(
+                        states[at(x, y as usize, z)],
+                        states[at(x, y as usize - 1, z)],
+                    )
+                {
+                    y -= 1;
+                    sky[at(x, y as usize, z)] = 15;
+                }
+                lowest[z * W + x] = y;
+            }
+        }
+        for z in 0..W {
+            for x in 0..W {
+                if !present[z * W + x] || !sky_light {
+                    continue;
+                }
+                let own = lowest[z * W + x];
+                let mut deepest = own;
+                for (nx, nz) in [
+                    (x.wrapping_sub(1), z),
+                    (x + 1, z),
+                    (x, z.wrapping_sub(1)),
+                    (x, z + 1),
+                ] {
+                    if nx < W && nz < W && present[nz * W + nx] {
+                        deepest = deepest.max(lowest[nz * W + nx]);
+                    }
+                }
+                let from = own.max(0) as usize;
+                let to = (deepest as usize).min(h.saturating_sub(1));
+                for y in from..=to {
+                    if sky[at(x, y, z)] == 15 {
+                        sky_queue.push_back(at(x, y, z) as u32);
+                    }
+                }
+            }
+        }
+        let spread = |light: &mut [u8], queue: &mut VecDeque<u32>| {
+            while let Some(p) = queue.pop_front() {
+                let p = p as usize;
+                let level = light[p];
+                if level <= 1 {
+                    continue;
+                }
+                let x = p % W;
+                let z = (p / W) % W;
+                let y = p / (W * W);
+                let from = states[p];
+                let col = z * W + x;
+                macro_rules! neighbour {
+                    ($d:expr, $q:expr, $ncol:expr) => {{
+                        if present[$ncol] {
+                            let q = $q;
+                            let to = states[q];
+                            let next = level.saturating_sub((to & 0xF).max(1) as u8);
+                            if next > light[q] && !tables.packed_blocked(from, to, $d) {
+                                light[q] = next;
+                                queue.push_back(q as u32);
+                            }
+                        }
+                    }};
+                }
+                if y > 0 {
+                    neighbour!(0, p - W * W, col);
+                }
+                if y + 1 < h {
+                    neighbour!(1, p + W * W, col);
+                }
+                if z > 0 {
+                    neighbour!(2, p - W, col - W);
+                }
+                if z + 1 < W {
+                    neighbour!(3, p + W, col + W);
+                }
+                if x > 0 {
+                    neighbour!(4, p - 1, col - 1);
+                }
+                if x + 1 < W {
+                    neighbour!(5, p + 1, col + 1);
+                }
+            }
+        };
+        spread(&mut sky, &mut sky_queue);
+        spread(&mut block, &mut queue);
+        pack_lighting(sections, h, &sky, &block, sky_light)
+    }
+
+    #[test]
+    fn light_chunk_matches_old_algorithm() {
+        let t = tables();
+        let layout = ColumnLayout::VANILLA;
+
+        let mut rng = 0x1234_5678_u64;
+        let mut next = |max: usize| -> usize {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((rng >> 32) as usize) % max
+        };
+
+        let cases = [
+            // (sky_light, missing_pattern)
+            // 0 = full 3x3
+            // 1 = missing corners
+            // 2 = missing edges
+            // 3 = random missing neighbours
+            // 4 = only centre and single neighbour
+            (true, 0),
+            (false, 0),
+            (true, 1),
+            (false, 1),
+            (true, 2),
+            (false, 2),
+            (true, 3),
+            (false, 3),
+            (true, 4),
+            (false, 4),
+        ];
+
+        for (round, &(sky_light, pattern)) in cases.iter().enumerate() {
+            let mut chunks = Vec::new();
+            for cz in -1..=1 {
+                for cx in -1..=1 {
+                    let mut c = Chunk::with_layout(cx, cz, layout);
+                    let base_y = -64 + next(64) as i32;
+                    for y in layout.min_y()..base_y {
+                        for i in 0..256 {
+                            c.set(i & 15, y, i >> 4, STONE);
+                        }
+                    }
+                    let features = 10 + next(20);
+                    for _ in 0..features {
+                        let fx = next(16) as i32;
+                        let fz = next(16) as i32;
+                        let fy = base_y + next(32) as i32;
+                        let block_type = match next(4) {
+                            0 => AIR,
+                            1 => STONE,
+                            2 => TORCH,
+                            _ => SLAB,
+                        };
+                        c.set(fx, fy, fz, block_type);
+                    }
+                    let roof_y = base_y + 10 + next(10) as i32;
+                    for rx in 4..12 {
+                        for rz in 4..12 {
+                            if next(3) != 0 {
+                                c.set(rx, roof_y, rz, SLAB);
+                            }
+                        }
+                    }
+                    c.set(8, roof_y - 1, 8, TORCH);
+                    c.set(next(16) as i32, roof_y + 2, next(16) as i32, TORCH);
+                    c.set(0, base_y + 1, 0, TORCH);
+                    c.set(15, base_y + 1, 15, TORCH);
+
+                    chunks.push(c);
+                }
+            }
+
+            let mut region: [[Option<&Chunk>; 3]; 3] = [[None; 3]; 3];
+            for dz in 0..3 {
+                for dx in 0..3 {
+                    let is_centre = dz == 1 && dx == 1;
+                    let chunk_ref = &chunks[dz * 3 + dx];
+                    let include = if is_centre {
+                        true
+                    } else {
+                        match pattern {
+                            0 => true,
+                            1 => (dz + dx) % 2 == 1,
+                            2 => (dz + dx) % 2 == 0,
+                            3 => next(10) < 6,
+                            4 => dz == 1 && dx == 2,
+                            _ => true,
+                        }
+                    };
+                    if include {
+                        region[dz][dx] = Some(chunk_ref);
+                    }
+                }
+            }
+
+            let old = old_light_chunk(&region, &t, sky_light);
+            let new = light_chunk(&region, &t, sky_light);
+
+            assert_eq!(
+                old.len(),
+                new.len(),
+                "round {round}: section count mismatch"
+            );
+            for si in 0..old.len() {
+                for i in 0..4096 {
+                    assert_eq!(
+                        new[si].get(i),
+                        old[si].get(i),
+                        "mismatch at round {round} (sky_light={sky_light}, pattern={pattern}), section {si}, index {i} (lx={}, ly={}, lz={}): new={:#04x}, old={:#04x}",
+                        i & 15,
+                        i >> 8,
+                        (i >> 4) & 15,
+                        new[si].get(i),
+                        old[si].get(i)
+                    );
+                }
+            }
+        }
     }
 }
