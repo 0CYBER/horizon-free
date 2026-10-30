@@ -11133,6 +11133,24 @@ impl Game<'_> {
             if !emptied {
                 return Ok(UseResult::Fail);
             }
+            // `BucketItem.emptyContents` uses `playSound(player, …)`: the
+            // actor's client already played the empty / evaporate sound from
+            // its DryLevel prediction (#4684).
+            if self.lan_acting.is_some()
+                && let Some(capture) = self.audio.capture.as_mut()
+            {
+                let want = sound.trim_start_matches("minecraft:");
+                let mut keep = Vec::with_capacity(capture.len());
+                for entry in capture.drain(..) {
+                    let name = entry.0.trim_start_matches("minecraft:");
+                    if name == want || name == "block.fire.extinguish" {
+                        self.guest_player_sounds.push(entry);
+                    } else {
+                        keep.push(entry);
+                    }
+                }
+                *capture = keep;
+            }
             if let Some(kind) = mob {
                 if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {

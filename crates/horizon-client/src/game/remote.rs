@@ -6094,28 +6094,32 @@ impl Game<'_> {
     /// the client's own. A fill into a waterloggable block changes nothing
     /// here: `SimpleWaterloggedBlock.placeLiquid` tests `isClientSide` and
     /// leaves the block update to the server.
-    fn remote_use_bucket(&mut self, stack: &ItemStack) -> (bool, Option<DryChanges>) {
+    fn remote_use_bucket(&mut self, stack: &ItemStack) -> (bool, Option<DryChanges>, Vec<DrySound>) {
         // `BucketItem.use`: `level.mayInteract` and `mayUseItemAt`.
         if !self.may_build() {
-            return (false, None);
+            return (false, None, Vec::new());
         }
         if &*stack.item == "minecraft:bucket" {
             let Some(hit) = self.bucket_hit() else {
-                return (false, None);
+                return (false, None, Vec::new());
             };
             let pos = horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
             let creative = self.creative;
             return self.with_level(|b, level, ticks| {
                 let mut level = DryLevel::new(level);
                 let picked = b.bucket_pickup(&mut level, ticks, pos, creative).is_some();
-                (picked, Some(level.changed.into_iter().collect()))
+                (
+                    picked,
+                    Some(level.changed.into_iter().collect()),
+                    std::mem::take(&mut level.sounds),
+                )
             });
         }
         let Some((content, sound, _)) = horizon_client::items::bucket_contents(&stack.item) else {
-            return (false, None);
+            return (false, None, Vec::new());
         };
         let Some(hit) = self.pick() else {
-            return (false, None);
+            return (false, None, Vec::new());
         };
         let target = self.bucket_target(content, &hit);
         let pos = horizon_core::position::BlockPos::new(target[0], target[1], target[2]);
@@ -6132,6 +6136,7 @@ impl Game<'_> {
             (
                 emptied,
                 client_change.then(|| level.changed.into_iter().collect()),
+                std::mem::take(&mut level.sounds),
             )
         })
     }
@@ -6165,9 +6170,25 @@ impl Game<'_> {
         if &*held.item == "minecraft:bucket"
             || horizon_client::items::bucket_contents(&held.item).is_some()
         {
-            let (succeeded, changes) = self.with_hand(hand, |g| g.remote_use_bucket(&held));
+            let (succeeded, changes, sounds) =
+                self.with_hand(hand, |g| g.remote_use_bucket(&held));
             if let Some(changes) = changes {
                 self.predict_blocks(&changes, seq);
+            }
+            // `BucketItem.emptyContents` / evaporate: `playSound(player, …)` on
+            // this client; the server leaves the actor out (#4684).
+            for (pos, sound, volume, pitch) in sounds {
+                let at = [
+                    f64::from(pos.x) + 0.5,
+                    f64::from(pos.y) + 0.5,
+                    f64::from(pos.z) + 0.5,
+                ];
+                let name = if sound.contains(':') {
+                    sound.to_string()
+                } else {
+                    format!("minecraft:{sound}")
+                };
+                self.audio.play(&name, Some(at), volume, pitch);
             }
             return succeeded;
         }
