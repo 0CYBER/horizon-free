@@ -366,6 +366,41 @@ impl Game<'_> {
         }
         Some(id)
     }
+    /// `Mob.convertTo(type, ConversionParams.single(...))` for a mob already
+    /// removed: a new mob of `kind`, made without spawn finalization, takes
+    /// its place with what `conversion::single` carries over, and the old
+    /// mob's riders move onto it. A zombie that comes out of it rolls
+    /// `Zombie.handleAttributes(special, CONVERSION)` (the
+    /// `postConversionStep` of its `ConversionTracker`).
+    pub(super) fn convert_to(
+        &mut self,
+        from: &Mob,
+        kind: &str,
+        params: horizon_client::mobs::conversion::Params,
+    ) -> Option<u32> {
+        let t = self.res.mob_types().get(kind).cloned()?;
+        self.next_entity += 1;
+        let mut mob = Mob::new(self.next_entity, t, from.position, from.yaw);
+        horizon_client::mobs::conversion::single(from, &mut mob, params);
+        if matches!(from.species(), Species::Zombie | Species::Husk) {
+            let at = [from.position.x, from.position.y, from.position.z];
+            let special = self.local_difficulty(at).special();
+            horizon_client::mobs::finalize::zombie_attributes(
+                &mut mob,
+                special,
+                horizon_client::mobs::finalize::Reason::Conversion,
+            );
+        }
+        let id = mob.id;
+        // ConversionType.SINGLE: the passengers get off and board the new mob.
+        for rider in self.mobs.iter_mut() {
+            if rider.extra.mount == Some(from.id) {
+                rider.extra.mount = Some(id);
+            }
+        }
+        self.mobs.push(mob);
+        Some(id)
+    }
     /// The `summon` command: spawn a mob in front of the player or at a position.
     pub(super) fn summon(&mut self, kind: &str, at: Option<[f64; 3]>, baby: bool) -> Result<u32> {
         let at = match at {
@@ -1608,6 +1643,9 @@ impl Game<'_> {
                     if let Some(id) = self.spawn_mob(&kind, at, setup.persistent) {
                         self.apply_setup(id, &setup);
                     }
+                }
+                MobEvent::Convert { from, kind, params } => {
+                    self.convert_to(&from, kind, params);
                 }
                 MobEvent::DropItem { item, count, at } => self.spawn_item(
                     ItemStack {
