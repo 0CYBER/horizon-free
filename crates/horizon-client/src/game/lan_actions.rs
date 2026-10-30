@@ -1583,6 +1583,33 @@ impl Game<'_> {
                     self.send_admin_feedback(host, Some(conn));
                 }
             }
+            // handleEntityTagQuery: a game master's F3+I on an entity of their
+            // level gets its Entity.saveWithoutId.
+            S::EntityTagQuery(p) if host.hub.guests[gi].permission >= 2 => {
+                if let Some(tag) = self.level_entity_tag(host, p.entity) {
+                    host.hub.send_to(
+                        conn,
+                        &C::TagQuery(play::TagQuery {
+                            transaction: p.transaction,
+                            tag,
+                        }),
+                    );
+                }
+            }
+            // handleBlockEntityTagQuery: BlockEntity.saveWithoutMetadata, or
+            // null where there is no block entity.
+            S::BlockEntityTagQuery(p) if host.hub.guests[gi].permission >= 2 => {
+                let tag = self
+                    .block_entity_tag(p.pos)
+                    .unwrap_or(horizon_world::nbt::Tag::End);
+                host.hub.send_to(
+                    conn,
+                    &C::TagQuery(play::TagQuery {
+                        transaction: p.transaction,
+                        tag,
+                    }),
+                );
+            }
             S::Unknown(id, payload)
                 if id == horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION =>
             {
@@ -1636,6 +1663,31 @@ impl Game<'_> {
             }
             _ => {}
         }
+    }
+
+    /// `ServerLevel.getEntity(id)`'s `Entity.saveWithoutId`: the player or
+    /// other entity of the level in place with that network id.
+    fn level_entity_tag(&mut self, host: &mut LanHost, id: i32) -> Option<horizon_world::nbt::Tag> {
+        use super::commands::Target;
+        let player = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && host.hub.here(g))
+            .map(|g| g.conn);
+        let mut tag = match player {
+            Some(player) => self
+                .as_guest(host, player, |g| g.entity_nbt(Target::Player))
+                .flatten()?,
+            None => {
+                let target = self.level_entity(id)?;
+                self.entity_nbt(target)?
+            }
+        };
+        if let horizon_world::nbt::Tag::Compound(c) = &mut tag {
+            c.remove(&"id".into());
+        }
+        Some(tag)
     }
 
     /// `ServerGamePacketListenerImpl.tryPickItem` for the guest: a matching stack
@@ -2232,6 +2284,7 @@ impl Game<'_> {
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
             border: &self.border,
+            streaming: Some(&self.streaming),
         };
         host.hub.respawn(i, spawn, &ctx);
         // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
@@ -2450,7 +2503,7 @@ impl Game<'_> {
                 let me = self.player_text(&name, uuid);
                 let text = match cause {
                     Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                    None if at[1] < f64::from(self.world.bottom_y() - 64) => {
                         horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                     }
                     None => self.guest_death_message(conn, me),
@@ -2719,9 +2772,10 @@ impl Game<'_> {
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
-                    let sprinting = w.player.sprinting;
-                    w.player
-                        .cause_food_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                    // ServerGamePacketListenerImpl.handlePlayerPositionChange:
+                    // the server's copy jumps with the player, so the velocity
+                    // it sends them keeps the jump.
+                    let _ = w.jump_from_ground();
                 }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;

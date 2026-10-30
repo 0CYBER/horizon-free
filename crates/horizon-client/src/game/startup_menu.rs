@@ -434,8 +434,9 @@ impl Loading {
                 }
                 // Mods' settings pages open only in a running game.
                 Event::NativeSettings(_) | Event::NativeButton(..) => {}
-                // The startup menu runs before the game opens a control socket.
-                Event::ButtonClick | Event::CopyAgentDetails => {}
+                // The startup menu runs before the game opens a control socket,
+                // and before its sound engine (no clicks, no volume previews).
+                Event::ButtonClick | Event::CopyAgentDetails | Event::Volume(..) => {}
             }
         }
     }

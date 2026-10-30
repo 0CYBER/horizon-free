@@ -298,9 +298,8 @@ impl Game<'_> {
     }
     /// `ServerExplosion.hurtEntities` for item frames: a frame within the blast
     /// is killed and dropped with its item (`BlockAttachedEntity.hurtServer`).
-    /// A fixed frame is not hurt by an explosion. Without `mobGriefing` a blast
-    /// that keeps blocks (`ServerExplosion.shouldAffectBlocklikeEntities` through
-    /// `BlockAttachedEntity.ignoreExplosion`) and a mob's blast spare frames.
+    /// A fixed frame is not hurt by an explosion, and `blast_spares_decorations`
+    /// keeps every frame without `mobGriefing`.
     /// Not ported: `ignoreExplosion` also spares frames when the exploding
     /// entity is in water.
     pub(super) fn explosion_breaks_frames(
@@ -309,10 +308,7 @@ impl Game<'_> {
         diameter: f64,
         interaction: super::explosion::BlockInteraction,
     ) {
-        if !self.ui.rules.bool("mob_griefing")
-            && (interaction == super::explosion::BlockInteraction::Keep
-                || self.combat.explosion_source.is_some())
-        {
+        if self.blast_spares_decorations(interaction) {
             return;
         }
         let mut i = 0;

@@ -1414,7 +1414,7 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
         let free = self.res.facts().is_air(self.block_at(target))
-            && target.1 >= horizon_client::chunk::MIN_Y + 2
+            && target.1 >= self.world.bottom_y() + 2
             && self.ui.difficulty != 0
             && self.can_build_wither(target);
         if free {

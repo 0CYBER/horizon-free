@@ -1,5 +1,6 @@
-//! Read-only world lifecycle observations for native mods on authoritative
-//! servers. The deprecated in-frame path delivers no lifecycle events.
+//! Read-only lifecycle observations for native mods on authoritative servers.
+//! The deprecated in-frame path delivers no lifecycle events. A paused pass
+//! observes nothing; a frozen world reports `world_running: false` except during a step.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,6 +22,10 @@ pub(super) enum NativeAuthority {
 /// One open attempt of one world; it rejects a previous open's commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NativeWorldEpoch(u64);
+
+/// Non-paused authoritative server ticks since open (not game or frame time).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NativeTickId(u64);
 
 /// Internal state for deciding which events can fire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,14 +49,23 @@ pub(super) enum WorldPhase {
     WorldCloseFailed,
 }
 
+/// The tick phases carry whether the world runs, including frozen steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ServerTickPhase {
+    ServerTickStart { world_running: bool },
+    ServerTickEnd { world_running: bool },
+}
+
 /// Context for every world lifecycle phase.
 /// `authority` is the server role. LocalAuthoritative and RemoteClient never
 /// fire today. `epoch` identifies the open attempt, including failed opens;
 /// the same epoch identifies its ready, final-close, or failed-close event.
+/// `tick` counts non-paused server ticks since the world opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NativeLifecycleContext {
     pub(super) authority: NativeAuthority,
     pub(super) epoch: NativeWorldEpoch,
+    pub(super) tick: NativeTickId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +73,10 @@ struct OpenAttempt {
     authority: NativeAuthority,
     epoch: u64,
     session: OpenState,
+    ticks: u64,
+    /// A tick started and its end has not fired (or the tick errored).
+    tick_open: bool,
+    tick_world_running: bool,
 }
 
 impl OpenAttempt {
@@ -66,19 +84,30 @@ impl OpenAttempt {
         NativeLifecycleContext {
             authority: self.authority,
             epoch: NativeWorldEpoch(self.epoch),
+            tick: NativeTickId(self.ticks),
         }
     }
 }
 
-/// The lifecycle bookkeeping: the current attempt's epoch and session phase.
-/// It only decides whether a phase fires; every hook body is empty, so with no
-/// native mods nothing changes.
+/// The lifecycle bookkeeping: the current attempt's epoch, session phase
+/// and non-paused tick count. It only decides whether a phase fires; every
+/// hook body is empty, so with no native mods nothing changes.
 #[derive(Default)]
 pub(super) struct NativeLifecycle {
     attempt: Option<OpenAttempt>,
+    read_scope: bool,
 }
 
 impl NativeLifecycle {
+    /// A read is valid only during a tick hook with its current tick context.
+    pub(super) fn permits_read(&self, context: &NativeLifecycleContext) -> bool {
+        self.read_scope
+            && self
+                .attempt
+                .as_ref()
+                .is_some_and(|a| a.session == OpenState::Ready && a.context() == *context)
+    }
+
     /// The open starts: a fresh process-wide epoch, never reused.
     pub(super) fn begin_open(&mut self, authority: NativeAuthority) {
         let epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed);
@@ -86,6 +115,9 @@ impl NativeLifecycle {
             authority,
             epoch,
             session: OpenState::Opening,
+            ticks: 0,
+            tick_open: false,
+            tick_world_running: false,
         });
     }
 
@@ -136,6 +168,49 @@ impl NativeLifecycle {
         self.attempt = None;
         Some(context)
     }
+
+    /// Non-paused ready ticks only; a paused pass observes nothing, does not count.
+    pub(super) fn server_tick_start(
+        &mut self,
+        world_running: bool,
+    ) -> Option<(NativeLifecycleContext, ServerTickPhase)> {
+        let attempt = self.attempt.as_mut()?;
+        if attempt.session != OpenState::Ready {
+            return None;
+        }
+        attempt.ticks += 1;
+        attempt.tick_open = true;
+        attempt.tick_world_running = world_running;
+        Some((
+            attempt.context(),
+            ServerTickPhase::ServerTickStart { world_running },
+        ))
+    }
+
+    /// Discard the pending end when a tick fails.
+    pub(super) fn cancel_server_tick(&mut self) {
+        if let Some(attempt) = &mut self.attempt {
+            attempt.tick_open = false;
+        }
+    }
+
+    /// Pairs the last start; an errored tick never reaches it.
+    pub(super) fn server_tick_end(
+        &mut self,
+        paused: bool,
+    ) -> Option<(NativeLifecycleContext, ServerTickPhase)> {
+        let attempt = self.attempt.as_mut()?;
+        if paused || attempt.session != OpenState::Ready || !attempt.tick_open {
+            return None;
+        }
+        attempt.tick_open = false;
+        Some((
+            attempt.context(),
+            ServerTickPhase::ServerTickEnd {
+                world_running: attempt.tick_world_running,
+            },
+        ))
+    }
 }
 
 impl Game<'_> {
@@ -185,17 +260,84 @@ impl Game<'_> {
             self.native_world_lifecycle(&context, WorldPhase::WorldCloseFinal, "");
         }
     }
+
+    pub(super) fn native_lifecycle_server_tick_start(&mut self, world_running: bool) {
+        if let Some((context, phase)) = self.native_lifecycle.server_tick_start(world_running) {
+            self.native_lifecycle.read_scope = true;
+            self.native_server_tick(&context, phase);
+            self.native_lifecycle.read_scope = false;
+        }
+    }
+
+    /// An errored tick returned at `result?` before this site.
+    pub(super) fn native_lifecycle_server_tick_end(&mut self, paused: bool) {
+        if let Some((context, phase)) = self.native_lifecycle.server_tick_end(paused) {
+            self.native_lifecycle.read_scope = true;
+            self.native_server_tick(&context, phase);
+            self.native_lifecycle.read_scope = false;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn frozen_steps_are_observed_without_consuming_them() {
+        let mut lifecycle = opening();
+        lifecycle.world_open_ready();
+        let mut clock = horizon_client::clock::FixedStep::default();
+        clock.set_frozen(true);
+        clock.set_frozen_ticks_to_run(4);
+        let mut observed = 0;
+        for _ in 0..6 {
+            let running = clock.world_runs();
+            let (_, start) = lifecycle.server_tick_start(running).unwrap();
+            let (_, end) = lifecycle.server_tick_end(false).unwrap();
+            assert_eq!(
+                start,
+                ServerTickPhase::ServerTickStart {
+                    world_running: running
+                }
+            );
+            assert_eq!(
+                end,
+                ServerTickPhase::ServerTickEnd {
+                    world_running: running
+                }
+            );
+            observed += usize::from(running);
+        }
+        assert_eq!(observed, 4);
+    }
+
     /// A lifecycle mid-open on the server thread.
     fn opening() -> NativeLifecycle {
         let mut lifecycle = NativeLifecycle::default();
         lifecycle.begin_open(NativeAuthority::IntegratedServer);
         lifecycle
+    }
+
+    #[test]
+    fn block_reads_require_the_current_hook_scope() {
+        let mut life = NativeLifecycle::default();
+        life.begin_open(NativeAuthority::IntegratedServer);
+        let ready = life.world_open_ready().unwrap();
+        assert!(!life.permits_read(&ready));
+        let (tick, _) = life.server_tick_start(true).unwrap();
+        life.read_scope = true;
+        assert!(life.permits_read(&tick));
+        assert!(!life.permits_read(&ready));
+        life.read_scope = false;
+        assert!(!life.permits_read(&tick));
+        life.server_tick_end(false).unwrap();
+        life.begin_close();
+        life.world_close_final().unwrap();
+        life.begin_open(NativeAuthority::IntegratedServer);
+        life.world_open_ready().unwrap();
+        life.read_scope = true;
+        assert!(!life.permits_read(&tick));
     }
 
     #[test]
@@ -213,6 +355,7 @@ mod tests {
         let context = lifecycle.world_open_failed().expect("the failure fires");
         let failed_epoch = context.epoch;
         assert!(lifecycle.world_open_ready().is_none(), "the epoch is gone");
+        assert!(lifecycle.server_tick_start(true).is_none());
         lifecycle.begin_open(NativeAuthority::IntegratedServer);
         let context = lifecycle.world_open_ready().expect("the retry opens fresh");
         assert!(context.epoch.0 > failed_epoch.0, "a fresh epoch");
@@ -229,6 +372,7 @@ mod tests {
             lifecycle.world_close_final().is_none(),
             "a repeated close request is a no-op"
         );
+        assert!(lifecycle.server_tick_start(true).is_none());
         assert!(lifecycle.world_open_ready().is_none());
     }
 
@@ -261,8 +405,8 @@ mod tests {
             .unwrap();
         let load = source.find("self.load_world(WorldRequest::new(").unwrap();
         let ready = source.find("self.native_lifecycle_world_ready();").unwrap();
-        let tick_loop = source.find("self.tick_server_timed(paused)?;").unwrap();
-        assert!(open < load && load < ready && ready < tick_loop);
+        let tick = source.find("self.tick_server_timed(paused)?;").unwrap();
+        assert!(open < load && load < ready && ready < tick);
 
         let stop = source.split("fn stop_dedicated").nth(1).unwrap();
         let begin = stop.find("self.native_lifecycle.begin_close();").unwrap();
@@ -270,6 +414,33 @@ mod tests {
         let close = stop.find("self.native_lifecycle_world_closed();").unwrap();
         let release = stop.find("self.lan_close(false);").unwrap();
         assert!(begin < save && save < close && close < release);
+    }
+
+    #[test]
+    fn failed_server_ticks_cancel_before_end() {
+        let tick = include_str!("levels.rs")
+            .split("fn tick_server(&mut self, paused: bool)")
+            .nth(1)
+            .unwrap()
+            .split("fn tick_server_timed")
+            .next()
+            .unwrap();
+        let first_cancel = tick
+            .find("self.native_lifecycle.cancel_server_tick();")
+            .unwrap();
+        let result = tick.find("result?;").unwrap();
+        let close = tick
+            .find("if let Err(error) = self.close_idle_levels()")
+            .unwrap();
+        let second_cancel = tick
+            .rfind("self.native_lifecycle.cancel_server_tick();")
+            .unwrap();
+        let end = tick
+            .find("self.native_lifecycle_server_tick_end(paused);")
+            .unwrap();
+        assert!(
+            first_cancel < result && result < close && close < second_cancel && second_cancel < end
+        );
     }
 
     #[test]

@@ -183,7 +183,8 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
         | "minecraft:axolotl"
         | "minecraft:dolphin"
         | "minecraft:squid"
-        | "minecraft:glow_squid" => Some(16),
+        | "minecraft:glow_squid"
+        | "minecraft:sulfur_cube" => Some(16),
         _ => None,
     }
 }
@@ -627,10 +628,11 @@ fn mob_meta(
             }
         }
         // AbstractCubeMob.ID_SIZE.
-        "minecraft:slime" | "minecraft:magma_cube" => {
+        "minecraft:slime" | "minecraft:magma_cube" | "minecraft:sulfur_cube" => {
             if e.size > 1 {
                 meta.push((18, serializer::INT, Value::Int(e.size)));
             }
+            defaults.push((18, serializer::INT, Value::Int(1)));
         }
         // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED and DATA_IS_IGNITED: the
         // guest swells the creeper from them. The direction always goes in,
@@ -1613,6 +1615,7 @@ impl Game<'_> {
                     tick_steps: self.clock.step_state(),
                     collision: Some(self.collision),
                     border: &self.border,
+                    streaming: Some(&self.streaming),
                 };
                 host.hub.movement_checks = (
                     self.ui.rules.bool("player_movement_check"),
@@ -1869,6 +1872,7 @@ impl Game<'_> {
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
             border: &self.border,
+            streaming: Some(&self.streaming),
         };
         host.hub.place_new_player(conn, &mut ctx);
         if elsewhere && let Err(e) = self.enter_level(Some(host), back) {
