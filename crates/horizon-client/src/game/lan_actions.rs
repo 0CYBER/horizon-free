@@ -139,6 +139,8 @@ pub(super) struct GuestSwap {
     selected: usize,
     mode: horizon_client::command::args::GameMode,
     creative: bool,
+    /// The host's command permission, swapped for the guest's for its turn.
+    permission: u8,
     xp: Experience,
     host_keys: std::collections::HashSet<KeyCode>,
     screen: Screen,
@@ -278,6 +280,12 @@ impl Game<'_> {
             return None;
         }
         let i = host.hub.guests.iter().position(|g| g.conn == conn)?;
+        // `ServerPlayer.permissions()`: the guest's own command level for its
+        // turn, so game-master checks see it (not the host's).
+        let permission = std::mem::replace(
+            &mut self.ui.registries.permission,
+            host.hub.guests[i].permission,
+        );
         let fresh = host.hub.guests[i].motion.is_none();
         if fresh {
             let p = Vec3::new(
@@ -315,6 +323,7 @@ impl Game<'_> {
         let g = &mut host.hub.guests[i];
         // The guest's body.
         let Some(mut motion) = g.motion.take() else {
+            self.ui.registries.permission = permission;
             host.play.insert(conn, play);
             return None;
         };
@@ -470,6 +479,7 @@ impl Game<'_> {
             selected,
             mode,
             creative,
+            permission,
             xp,
             host_keys,
             screen,
@@ -532,6 +542,7 @@ impl Game<'_> {
             selected,
             mode,
             creative,
+            permission,
             xp,
             host_keys,
             screen,
@@ -576,6 +587,8 @@ impl Game<'_> {
             projectiles,
             modifiers,
         } = swap;
+        // `ServerPlayer.permissions()` back to the host's after the turn.
+        self.ui.registries.permission = permission;
         self.sculk.swap_player(&mut play.sculk);
         // The guest's damage record back into their slot, the host's in place.
         let guest_combat = std::mem::replace(&mut self.combat, combat);

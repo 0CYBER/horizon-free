@@ -4934,6 +4934,9 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
+        let debug_stick = self
+            .held()
+            .is_some_and(|stack| &*stack.item == "minecraft:debug_stick");
         if !self
             .res
             .items()
@@ -4966,7 +4969,11 @@ impl Game<'_> {
         }
         if self.creative {
             let seq = self.next_sequence();
-            self.predict_break(hit.pos, state, seq);
+            // DebugStickItem.canDestroyBlock never lets the client break the
+            // block; the server only selects the property on this START.
+            if !debug_stick {
+                self.predict_break(hit.pos, state, seq);
+            }
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 0,
                 pos: hit.pos,
@@ -5016,7 +5023,9 @@ impl Game<'_> {
             self.tutorial_destroy(state, 0.0);
             if progress >= 1.0 {
                 // startDestroyBlock: instant survival breaks have no destroy delay.
-                self.predict_break(hit.pos, state, seq);
+                if !debug_stick {
+                    self.predict_break(hit.pos, state, seq);
+                }
                 return;
             }
             if let Some(r) = self.remote.as_mut() {
@@ -5041,7 +5050,11 @@ impl Game<'_> {
         let ticks = self.mining.as_ref().map_or(0, |m| m.ticks) + 1;
         if done >= 1.0 {
             let seq = self.next_sequence();
-            self.predict_break(pos, state, seq);
+            // DebugStickItem.canDestroyBlock: the server selects the property
+            // and sends the block update instead; never predict a break.
+            if !debug_stick {
+                self.predict_break(pos, state, seq);
+            }
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 3,
                 pos,
@@ -5224,6 +5237,9 @@ impl Game<'_> {
             .as_ref()
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
+        let debug_stick = held
+            .as_ref()
+            .is_some_and(|stack| &*stack.item == "minecraft:debug_stick");
         if let Some(hit) = self.pick() {
             // ShelfBlock.useItemOn consumes a nonempty main-hand click client-side
             // without predicting the inventory swap or swinging.
@@ -5249,6 +5265,13 @@ impl Game<'_> {
                     InteractionResult::Pass
                 };
                 (result, DryUse::default())
+            };
+            // DebugStickItem.useOn once the block passed: SUCCESS on the client
+            // too (the hand swings below); only the server changes the block.
+            let (result, changes) = if debug_stick && !spectator && !result.consumes_action() {
+                (InteractionResult::Success, DryUse::default())
+            } else {
+                (result, changes)
             };
             let reacts = result.consumes_action();
             // ArmorStandItem.useOn runs in startPrediction before the packet
@@ -5308,6 +5331,16 @@ impl Game<'_> {
                         g.using = Some((g.held_slot(), 0));
                     }
                 });
+                return true;
+            } else if held
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:bone_meal")
+                && self.remote_bone_meal_succeeds(&hit)
+            {
+                // BoneMealItem.useOn succeeded on this client's level (SUCCESS;
+                // the server grows the plant): this hand swings and the click
+                // ends, so the other hand (a torch) is never tried.
+                self.with_hand(hand, Game::swing_arm);
                 return true;
             } else if stand_fits {
                 // ArmorStandItem.useOn on a client level: SUCCESS once the
@@ -5398,6 +5431,16 @@ impl Game<'_> {
         }
     }
 
+    /// `BoneMealItem.useOn` on this client's level (a copy: nothing grows
+    /// here): whether it succeeds.
+    fn remote_bone_meal_succeeds(&mut self, hit: &super::Hit) -> bool {
+        let pos = horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
+        let face = horizon_core::geometry::Direction::ALL[face_direction(hit.face) as usize];
+        self.with_level(|b, level, _| {
+            b.bone_meal_succeeds_on_client(&mut DryLevel::new(level), pos, face)
+        })
+    }
+
     /// MultiPlayerGameMode.useItemOn inside startPrediction: the blocks the
     /// use changed on this client's level at once, each kept as predicted
     /// under the use's sequence until the server acknowledges it (a use the
@@ -5464,6 +5507,12 @@ impl Game<'_> {
                 .hive_state(hit.pos)
                 .is_some_and(|(honey, _)| honey == Some(5))
         {
+            return (InteractionResult::Success, DryUse::default());
+        }
+        // ComposterBlock.useItemOn: a compostable item on a composter below
+        // level 8 is SUCCESS on the client too (only the server adds the
+        // layer), so the other hand (a torch) is never tried.
+        if self.composter_takes(hit.pos, held) {
             return (InteractionResult::Success, DryUse::default());
         }
         use horizon_core::geometry::Direction;
