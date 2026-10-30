@@ -81,6 +81,7 @@ Native mods (docs/native-mods.md): compile mixin bundles on the Horizon revision
 - `--instance`: The instance whose installed native mods to build, and which then plays the build (default: the selected one)
 - `--update`: Move to the newest installed release or Nightly instead of the Horizon the instance plays (a full rebuild)
 - `--trust-native-code`: You read the mods' source and trust it with full access to this computer
+- `--allow-version-mismatch`: Build mods made for different Horizon versions together anyway, on the newest of them
 
 MCP: none: the player's switch.
 

@@ -158,8 +158,8 @@ with advice if needed.
 Content mods (`.hmod`, API 0.2) carry data: blocks, items, and everything in the 26.3 data-pack and resource-pack
 formats ([mods.md](mods.md#content-mods-api-02)). Behaviour that needs code is not a content-mod feature: it is
 written as a native mod ([native-mods.md](native-mods.md)), one per ported mod. The "Planned in" column keeps the
-order of the original plan. The rows planned for 0.3 and later were designed as WebAssembly interfaces, which Horizon
-dropped: their "Shape" column is history, and a native mod hooks the game's code instead. What a content pack needs:
+order of the original plan; for the rows planned for 0.3 and later, a native mod hooks the game's code instead of
+using the "Shape" column. What a content pack needs:
 
 | Feature | Content mod today | Needed by (ATM10 content+integration, by tier) | Planned in | Shape |
 |---|---|---|---|---|

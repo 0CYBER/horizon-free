@@ -16,9 +16,12 @@ A native mod builds on one exact Horizon commit: `[compatibility] horizon_revisi
 and `horizon` in the `horizon-native.json` of its registry file (`.hnmod`, `horizon_mods::index::native`). Mods
 pin a **Nightly's commit** (or a release's). Every Nightly ships its source and keeps its commit for good as the
 tag `nightly-source/<date>-<short>` ([release-flow.md](release-flow.md#nightly-channel)), so a pinned mod still
-builds after its Nightly is replaced. All the mods of one build must pin the same commit; when they don't, the
-launcher says which mod pins which, and the player installs versions made for the same Nightly. A bundle with no
-pin builds on the commit of the installed version the build starts from.
+builds after its Nightly is replaced. When the mods of one build pin different commits, the launcher says which
+mod pins which and the commit the build would use, the newest of them, and builds only after the player chooses
+**Build anyway** (`native-build --allow-version-mismatch`): such mods often still apply and compile. A failed build
+then says the mods were made for other versions. Their horizon-mixins pins may differ too: the build uses the
+newest of them and the launcher's own, never one older than a mod was made with. A bundle with no pin builds on
+the commit of the installed version the build starts from.
 
 ### Mods on the hook points
 
@@ -31,13 +34,12 @@ pin, else on the installed version's commit (the game the player plays), after c
 `NATIVE_HOOKS_API` (read from GitHub) is at least the mod's; when it isn't and nothing pins, it builds on the commit the
 mod was tested on. In its own copy of the mod it sets `horizon_revision` to the commit it builds on. Horizon's
 own native mods (Zoom, FPS counter, Keystrokes, Minimap; horizon-rust/horizon-mods, `native/<name>/`) are made this way, so any of them build together
-with no re-release for each Nightly. The `mods` feature (WebAssembly mods) is passed to the build only when the source has it.
+with no re-release for each Nightly.
 
 API 2 adds the item panel beside container screens and its recipe pages (`native_panel_items`,
 `native_panel_recipes`, and the hook `native_panel_event` for the player's clicks, searches and keys over items), and
 the game's items and recipes (`native_recipes`, `native_known_recipes`, `native_place_recipe`, `native_give`): what a
-recipe viewer needs, in builds with or without the `mods` feature. A WebAssembly mod's panel shows only while no native
-mod shows one.
+recipe viewer needs.
 
 API 11 adds `GameLevel::native_send_particles` on authoritative servers. It sends supported
 vanilla particles to nearby players. Block particles require a valid block state. Item, trail and
@@ -91,7 +93,7 @@ trusting native code is the player's decision, never an agent's.
    rustup, nothing on the system; the player's own Rust is never used. Windows uses the `windows-gnu` host, which
    links without Visual Studio. `rust-mingw` only links, so on Windows the toolchain also brings MinGW-w64
    (`rust_toolchain::MINGW`: WinLibs' GCC 16.2.0 on MinGW-w64 14.0.0, MSVCRT like `rust-mingw`, one zip pinned by
-   SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring`, `hidapi` and wasmtime compile C,
+   SHA-256, its `mingw64/` without the documentation) on the build's `PATH`: `ring` and `hidapi` compile C,
    and `windows-sys`' `raw-dylib` imports need `dlltool` and the assembler it runs. The linker is the system's on
    macOS (the Command Line Tools: the launcher asks for `xcode-select --install`) and Linux (`cc`).
    `horizon-launcher rust status|install|remove`.
@@ -201,7 +203,7 @@ each was built or last used): switching a mod off and on again plays the kept bu
   has read the source: the `.hnmod` contains `.rs` and `.toml` files and may contain data files under
   `mixins/<id>/data/`. The launcher checks the bundle without running anything. Native code is trusted.
   The file is pinned by SHA-256 like every registry file. An update is reviewed again; `revoked.toml` takes one down.
-  A WebAssembly mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
+  A content mod's entry may turn `native-mod` once (never back): its `.hmod` versions stay published and
   are checked as `.hmod`s, the index lists only its `.hnmod` versions, and the launcher's update keeps the
   player's `.hmod` (the game runs it until a native build has the mod, then skips it); removing the mod removes both.
 - **Isolation of data.** Native mods run only in the instance they are installed in, with its worlds, options and

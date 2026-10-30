@@ -65,7 +65,7 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 The **FPS counter**, **Keystrokes**, **Zoom** and the **Minimap** are official native mods now (in
 horizon-rust/horizon-mods under `native/<name>/`, [mods.md](mods.md#horizons-official-mods)), with the same look and
 options. Players install them from the launcher's Mods page, and the launcher builds them into the game
-([native-mods.md](native-mods.md)). They were WebAssembly mods for a while; those don't run any more. The game keeps
+([native-mods.md](native-mods.md)). The game keeps
 the hook points they use (`crates/horizon-client/src/game/native_hooks.rs`), and `horizon-extras.txt` keeps the old
 keys and `movedToMods`.
 

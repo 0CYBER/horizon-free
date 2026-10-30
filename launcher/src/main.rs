@@ -202,6 +202,9 @@ struct Launcher {
     /// contents, so an entry never goes stale.
     native_builds:
         std::cell::RefCell<std::collections::HashMap<String, Option<native_status::Build>>>,
+    /// The mods of a build made for other Horizon versions (`native_mods::MISMATCH`): the build
+    /// waits for "Build anyway".
+    native_mismatch: Option<String>,
     confirm_remove: Option<String>,
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
@@ -440,6 +443,7 @@ impl Launcher {
             native_for: None,
             native_update: None,
             native_builds: Default::default(),
+            native_mismatch: None,
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
@@ -654,12 +658,14 @@ impl Launcher {
     /// Builds the selected instance's native mods, once the player accepted the warning. The
     /// build stays on the Horizon the instance plays (`native_mods::base_for`), unless the
     /// warning was Update's: then it moves to that newer Horizon.
-    fn build_native(&mut self) {
+    /// `anyway`: the player agreed to build mods made for other Horizon versions together.
+    fn build_native(&mut self, anyway: bool) {
         if self.native_step.is_some() {
             return;
         }
         self.native_confirm = None;
         self.native_error = None;
+        self.native_mismatch = None;
         let instance = instances::selected();
         self.native_for = Some(instance.id.clone());
         let plays = self.version_of(&instance).cloned();
@@ -681,7 +687,7 @@ impl Launcher {
         self.native_step = Some(tr("Starting the build").into());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = native_mods::build(&base, &folder, &instance, |step| {
+            let result = native_mods::build(&base, &folder, &instance, anyway, |step| {
                 let _ = tx.send(Msg::NativeProgress(step.label()));
             });
             let _ = tx.send(Msg::Native(result));
@@ -919,8 +925,13 @@ impl Launcher {
                     self.native_step = None;
                     self.installed = backend::installed();
                     self.reload_instances();
-                    if let Err(e) = result {
-                        self.native_error = Some(e);
+                    match result.map_err(|e| match e.strip_prefix(native_mods::MISMATCH) {
+                        Some(list) => Ok(list.to_owned()),
+                        None => Err(e),
+                    }) {
+                        Err(Ok(list)) => self.native_mismatch = Some(list),
+                        Err(Err(e)) => self.native_error = Some(e),
+                        Ok(_) => {}
                     }
                 }
                 Msg::LauncherProgress(p) => {
@@ -3146,7 +3157,7 @@ impl Launcher {
                     &t,
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.build_native();
+                    this.build_native(false);
                     cx.notify();
                 })),
             );
@@ -3160,6 +3171,44 @@ impl Launcher {
                 },
             )),
         ))
+    }
+
+    /// Mods made for other Horizon versions: which, and the version the build uses. They often
+    /// still work, so the player may build anyway.
+    fn native_mismatch_panel(&self, list: &str, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .mt(px(8.))
+            .p(px(12.))
+            .bg(t.well)
+            .child(div().text_color(t.danger).child(tr("These mods were made for different Horizon versions").to_string()))
+            .child(list.to_owned())
+            .child(tr("They often still work together. If the build fails, install versions made for the same Nightly.").to_string())
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .mt(px(4.))
+                    .child(
+                        button("native-anyway", "Build anyway", Kind::Primary, &t).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.build_native(true);
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        button("native-mismatch-cancel", "Cancel", Kind::Secondary, &t).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.native_mismatch = None;
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
     }
 
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in
