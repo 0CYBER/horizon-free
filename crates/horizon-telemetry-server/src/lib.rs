@@ -7,7 +7,7 @@
 //!   least 3 installs only (`summary`), cached; the website's Benchmarks page reads it.
 //! - `POST /v1/live`: a game's anonymous "I'm playing" ping (`live`, in memory only).
 //! - `GET /v1/live`: how many play now, rounded, cached briefly.
-//! - `/hub/…`: the hub's votes (`hub`), bug reports and suggestions (`intake`).
+//! - `/hub/…`: the hub's votes (`hub`) and bug reports (`intake`).
 //! - `GET /healthz`.
 //!
 //! Abuse limits: a token bucket per IP address (kept in memory for an hour, never stored), a
@@ -64,16 +64,12 @@ pub struct Config {
     pub live_max_sessions: usize,
     /// The hub's votes and reads of their counts an IP address may make an hour.
     pub hub_per_hour: f64,
-    /// Bug reports and suggestions together an IP address may send an hour.
+    /// Bug reports an IP address may send an hour.
     pub hub_posts_per_hour: f64,
     /// Bug reports taken a day, from everyone: each one opens a GitHub issue.
     pub hub_reports_per_day: u32,
-    /// Suggestions taken a day, from everyone.
-    pub hub_suggestions_per_day: u32,
-    /// Days reports and suggestions are kept (Kira has relayed them long before).
+    /// Days reports are kept (opened as issues long before).
     pub hub_keep_days: u32,
-    /// The bearer token `GET /hub/suggestions` wants (Kira's); unset, it answers 404.
-    pub hub_token: Option<String>,
     /// Opens the website's bug reports as issues; unset, `POST /hub/report` answers 503.
     pub github_token: Option<String>,
     /// Where those issues go, `owner/name`.
@@ -95,9 +91,7 @@ impl Default for Config {
             hub_per_hour: 600.0,
             hub_posts_per_hour: 20.0,
             hub_reports_per_day: 30,
-            hub_suggestions_per_day: 200,
             hub_keep_days: 90,
-            hub_token: None,
             github_token: None,
             github_repo: "horizon-rust/horizon".into(),
         }
@@ -108,8 +102,8 @@ impl Config {
     /// The defaults, with `HORIZON_TELEMETRY_RETENTION_DAYS`, `…_MIN_INSTALL_DAYS`,
     /// `…_REQUESTS_PER_HOUR`, `…_ITEMS_PER_DAY`, `…_TRUST_PROXY` (1), `…_ALLOW_ORIGIN`,
     /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS`, `…_HUB_PER_HOUR`,
-    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_SUGGESTIONS_PER_DAY`, `…_HUB_KEEP_DAYS`,
-    /// `…_HUB_TOKEN`, `…_GITHUB_TOKEN` and `…_GITHUB_REPO`. Empty tokens count as unset.
+    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_KEEP_DAYS`, `…_GITHUB_TOKEN` and
+    /// `…_GITHUB_REPO`. An empty token counts as unset.
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(format!("HORIZON_TELEMETRY_{k}")).ok();
         let secret = |k: &str| {
@@ -151,13 +145,9 @@ impl Config {
             hub_reports_per_day: var("HUB_REPORTS_PER_DAY")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_reports_per_day),
-            hub_suggestions_per_day: var("HUB_SUGGESTIONS_PER_DAY")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(d.hub_suggestions_per_day),
             hub_keep_days: var("HUB_KEEP_DAYS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_keep_days),
-            hub_token: secret("HUB_TOKEN"),
             github_token: secret("GITHUB_TOKEN"),
             github_repo: var("GITHUB_REPO").unwrap_or(d.github_repo),
         }
@@ -185,7 +175,7 @@ pub struct App {
     hub_key: RandomState,
     /// The hub's votes and vote counts, per hashed address.
     hub_buckets: Mutex<hub::HashedBuckets>,
-    /// The hub's reports and suggestions, per hashed address.
+    /// The hub's bug reports, per hashed address.
     hub_post_buckets: Mutex<hub::HashedBuckets>,
     /// `GET /hub/votes`'s answer and when it was made.
     votes_cache: Mutex<Option<(Instant, String)>>,
@@ -303,7 +293,7 @@ impl App {
     }
 
     /// Daily upkeep: totals rebuilt, expired rows removed, idle rate-limit entries and live
-    /// sessions forgotten, the hub's old reports and suggestions removed. Reports still waiting for
+    /// sessions forgotten, the hub's old reports removed. Reports still waiting for
     /// their issue are [`Self::file_pending`]'s.
     pub fn maintain(&self) -> rusqlite::Result<usize> {
         let oldest = (self.today)().saturating_sub(self.config.retention_days);
@@ -590,11 +580,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/hub/vote", post(hub::vote).options(hub::preflight))
         .route("/hub/votes", get(hub::votes))
         .route("/hub/report", post(intake::report).options(hub::preflight))
-        .route(
-            "/hub/suggest",
-            post(intake::suggest).options(hub::preflight),
-        )
-        .route("/hub/suggestions", get(intake::suggestions))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }

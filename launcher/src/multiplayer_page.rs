@@ -1,6 +1,7 @@
 //! The selected instance's server list on Home (`horizon_launcher::server_list`, the game's own
 //! `servers.dat`): each server with the picture the game last saw, Join (the game starts straight
-//! into it), Remove after a confirmation, and a line to add one.
+//! into it), Remove after a confirmation, and a line to add one. The official server is put on top
+//! once, as the game does (`server_list::add_official`).
 use super::*;
 use gpui::{Image, ImageFormat};
 use horizon_launcher::server_list::{self, Server};
@@ -37,6 +38,8 @@ impl Launcher {
         if self.multiplayer.fresh {
             return;
         }
+        // A list that can't be read is the game's to report: the page shows it empty.
+        let _ = server_list::add_official(&home);
         // A few servers and their 64×64 pictures: small enough to read while drawing.
         self.multiplayer.list = server_list::List::load(&home)
             .servers()
@@ -68,36 +71,40 @@ impl Launcher {
         let address = self.servers.value(Field::ServerAddress).to_string();
         self.edit_servers(|list| list.add(&name, &address));
         if self.multiplayer.error.is_none() {
-            self.servers.text(Field::ServerName).clear();
-            self.servers.text(Field::ServerAddress).clear();
+            self.servers.text(Field::ServerName).set(String::new());
+            self.servers.text(Field::ServerAddress).set(String::new());
             self.multiplayer.adding = false;
         }
     }
 
-    /// Home's Multiplayer section, for the selected instance.
-    pub(super) fn multiplayer_section(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+    /// How many servers the selected instance's list has.
+    pub(super) fn servers_count(&mut self) -> usize {
+        let Some(home) = self.selected_instance().map(|i| i.home.clone()) else {
+            return 0;
+        };
+        self.load_servers(home);
+        self.multiplayer.list.len()
+    }
+
+    /// Home's Multiplayer tab, for the selected instance: its button (beside the tabs) and its
+    /// list.
+    pub(super) fn multiplayer_section(&mut self, cx: &mut Context<Self>) -> Option<(Div, Div)> {
         let t = self.theme;
         let home = self.selected_instance()?.home.clone();
         self.load_servers(home);
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .mb(px(4.))
-            .child(section_title("Multiplayer", "server", &t))
-            .child(
-                button("server-add", "Add server", Kind::Ghost, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.multiplayer.adding = !this.multiplayer.adding;
-                        this.multiplayer.error = None;
-                        if this.multiplayer.adding {
-                            this.servers.focus_soon = Some(Field::ServerAddress);
-                        }
-                        cx.notify();
-                    },
-                )),
-            );
-        let mut section = div().flex().flex_col().gap(px(8.)).child(header);
+        let actions = div().child(
+            button("server-add", "Add server", Kind::Ghost, &t).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    this.multiplayer.adding = !this.multiplayer.adding;
+                    this.multiplayer.error = None;
+                    if this.multiplayer.adding {
+                        this.servers.focus_soon = Some(Field::ServerAddress);
+                    }
+                    cx.notify();
+                },
+            )),
+        );
+        let mut section = div().flex().flex_col().gap(px(8.));
         if let Some(e) = self.multiplayer.error.clone() {
             section = section.child(notice(e, &t));
         }
@@ -130,7 +137,7 @@ impl Launcher {
         for (i, (server, icon)) in list.into_iter().enumerate() {
             section = section.child(self.server_row(i, server, icon, cx));
         }
-        Some(section)
+        Some((actions, section))
     }
 
     fn server_row(
@@ -190,7 +197,7 @@ impl Launcher {
                 );
         } else {
             let ip = server.ip.clone();
-            let busy = !self.can_start_selected();
+            let busy = !self.can_join_selected();
             let join = button(
                 SharedString::from(format!("server-join-{i}")),
                 "Join",

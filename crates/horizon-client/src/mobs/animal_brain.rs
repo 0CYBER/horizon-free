@@ -1083,7 +1083,7 @@ impl B {
                     *last_target = walk.target.block(cx.w);
                     t.begin(cx.lr, cx.now);
                     mem(m).path.set_opt(path.clone());
-                    m.nav_move_to_path(path.clone(), f64::from(*speed));
+                    m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     return true;
                 }
                 let mm = mem(m);
@@ -1476,7 +1476,7 @@ impl B {
                     if d > 4 && compute_path(m, cx, &walk, path, speed) {
                         *last_target = Some(now_target);
                         mem(m).path.set_opt(path.clone());
-                        m.nav_move_to_path(path.clone(), f64::from(*speed));
+                        m.nav_move_to_path(cx.w, path.clone(), f64::from(*speed));
                     }
                 }
             }
@@ -2396,6 +2396,7 @@ fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i
                 target,
                 &mut super::goals::Cx {
                     w: cx.w,
+                    lr: cx.lr,
                     events: cx.events,
                 },
             );

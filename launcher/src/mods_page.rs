@@ -4,7 +4,7 @@
 //! signed and what it may do), install it with its checksum checked, turn Horizon mods on and
 //! off, and update or remove what was installed (`horizon_launcher::browser`). Imported modpacks
 //! are listed on its Modpacks tab.
-use super::servers_page::{type_key, Key};
+use super::line_edit::{self, Key, LineEdit};
 use super::*;
 use horizon_launcher::browser::{
     self, horizon, installed, java, java_instance, Kind as PackKind, Project, Query, SourceId,
@@ -59,7 +59,7 @@ pub(super) enum Checking {
 pub(super) struct Mods {
     pub(super) kind: PackKind,
     pub(super) source: SourceId,
-    text: String,
+    text: LineEdit,
     focus: FocusHandle,
     pub(super) focused: bool,
     everything: bool,
@@ -73,8 +73,10 @@ pub(super) struct Mods {
     pub(super) report_list: cull::Cull,
     more: bool,
     error: Option<String>,
-    installed: Vec<installed::Entry>,
+    pub(super) installed: Vec<installed::Entry>,
     loaded: bool,
+    /// Whether the page searched for the instance as it is (its version and loader).
+    asked: bool,
     /// The game folder the browser installs into and lists: the selected instance's.
     home: Option<PathBuf>,
     /// The selected Java instance's version and loader: its mods and resource packs are the
@@ -85,8 +87,8 @@ pub(super) struct Mods {
     world: Option<PathBuf>,
     /// The project being installed, and the line and fraction of its download.
     pub(super) busy: Option<(String, String, f32)>,
-    message: Option<Result<String, String>>,
-    updates: HashMap<(SourceId, String), String>,
+    pub(super) message: Option<Result<String, String>>,
+    pub(super) updates: HashMap<(SourceId, String), String>,
     confirm_remove: Option<String>,
     /// A native mod's Install waiting for the one-time notice (`native_mods::needs_notice`).
     native_notice: Option<(SourceId, String, Option<Project>)>,
@@ -151,7 +153,7 @@ impl Mods {
                 Ok("horizon") => SourceId::Horizon,
                 _ => SourceId::Modrinth,
             },
-            text: String::new(),
+            text: LineEdit::new(String::new(), 100, 40),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focused: false,
             everything: false,
@@ -166,6 +168,7 @@ impl Mods {
             error: None,
             installed: Vec::new(),
             loaded: false,
+            asked: false,
             home: None,
             java: None,
             worlds: Vec::new(),
@@ -405,14 +408,14 @@ impl Launcher {
             Some(target) => Query {
                 offset,
                 limit: PAGE,
-                ..target.search(&m.text, m.kind, &m.browse.filters)
+                ..target.search(m.text.text(), m.kind, &m.browse.filters)
             },
             None => Query {
                 everything: m.everything,
                 offset,
                 limit: PAGE,
                 filters: m.browse.filters.clone(),
-                ..Query::new(&m.text, m.kind)
+                ..Query::new(m.text.text(), m.kind)
             },
         };
         // A Java instance's files are Modrinth's; Horizon's registry is for Horizon.
@@ -463,9 +466,21 @@ impl Launcher {
         });
     }
 
-    /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does.
-    fn mods_switch(&mut self, e: &installed::Entry) {
+    /// Turns a Horizon mod the browser installed on or off, as the game's Options > Mods does;
+    /// in a Java instance, renames its file.
+    pub(super) fn mods_switch(&mut self, e: &installed::Entry) {
         let home = self.mods.home();
+        if self.mods.java.is_some() {
+            let on = !java_instance::is_on(&home, e);
+            self.mods.message = Some(java_instance::set_on(&home, e, on).map(|()| {
+                format!(
+                    "{} is {}. The game reads this when it starts.",
+                    e.title,
+                    if on { "on" } else { "off" }
+                )
+            }));
+            return;
+        }
         let Some(id) = horizon::mod_id(e) else {
             return;
         };
@@ -568,7 +583,7 @@ impl Launcher {
 
     /// Updates every installed pack a newer version was found for, one after the other on a
     /// thread, each checked as an install is. One failing doesn't stop the others.
-    fn mods_update_all(&mut self) {
+    pub(super) fn mods_update_all(&mut self) {
         if self.mods.busy.is_some() || self.mods.updates.is_empty() {
             return;
         }
@@ -774,11 +789,7 @@ impl Launcher {
         let t = self.theme;
         let m = &self.mods;
         let focused = m.focused;
-        let shown: String = {
-            let chars: Vec<char> = m.text.chars().collect();
-            chars[chars.len().saturating_sub(40)..].iter().collect()
-        };
-        div()
+        let field = div()
             .id("mods-search")
             .track_focus(&m.focus)
             .flex()
@@ -794,59 +805,43 @@ impl Launcher {
             .text_size(px(theme::UI.px))
             .cursor_text()
             .child(blocks::icon("search", 18., t.muted))
-            .child(if m.text.is_empty() && !focused {
-                div().text_color(t.muted).child("Search, then Enter")
-            } else {
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| {
-                d.child(div().flex_none().w(px(1.)).h(px(16.)).bg(t.ink))
-            })
+            .child(line_edit::content(
+                &m.text,
+                &t,
+                focused,
+                false,
+                false,
+                "Search, then Enter",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.mods.focus);
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                let k = &ev.keystroke;
-                let command = k.modifiers.control || k.modifiers.platform;
-                match type_key(
-                    &mut this.mods.text,
-                    false,
-                    &k.key,
-                    k.key_char.as_deref(),
-                    command,
-                ) {
+                match line_edit::handle(&mut this.mods.text, ev, cx) {
                     Key::Enter => this.mods_search(0),
                     Key::Escape => window.blur(),
-                    Key::Paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            let line = text.lines().next().unwrap_or_default().trim().to_string();
-                            this.mods.text.push_str(&line);
-                        }
-                    }
-                    Key::Edited => {}
                     Key::Pass => return,
-                }
-                if let Some((at, _)) = this.mods.text.char_indices().nth(100) {
-                    this.mods.text.truncate(at);
+                    _ => {}
                 }
                 cx.stop_propagation();
                 cx.notify();
-            }))
+            }));
+        line_edit::mouse(field, cx, |this| &mut this.mods.text)
     }
 
-    pub(super) fn mods_page(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        // Packs and mods go into the selected instance: picking another reads its list.
+    /// Reads what the browser installed in the selected instance (once per instance) and looks
+    /// for updates: the Mods page and Home's Mods tab (`instance_mods.rs`) show it. Packs and mods
+    /// go into the selected instance: picking another reads its list.
+    pub(super) fn mods_load(&mut self) {
         let home = self.selected_instance().map(|i| i.home.clone());
         let java = self
             .selected_instance()
             .and_then(|i| i.java.as_ref())
             .map(|j| j.target());
-        // Another version or loader: other results.
-        if self.mods.loaded && java != self.mods.java {
-            self.mods.java = java.clone();
-            self.mods_search(0);
+        // Another version or loader: other results, on the page's next draw.
+        if java != self.mods.java {
+            self.mods.asked = false;
         }
         self.mods.java = java;
         if !self.mods.loaded || (home.is_some() && self.mods.home != home) {
@@ -858,10 +853,16 @@ impl Launcher {
             self.mods.read_worlds();
             self.mods_check_updates();
             self.mods_taken_down();
-            if !self.mods.loaded {
-                self.mods_search(0);
-            }
             self.mods.loaded = true;
+        }
+    }
+
+    pub(super) fn mods_page(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        self.mods_load();
+        if !self.mods.asked {
+            self.mods.asked = true;
+            self.mods_search(0);
         }
         let header = page_header(
             "Mods",
@@ -1184,9 +1185,15 @@ impl Launcher {
                 }
                 cx.notify();
             }));
-            if e.source == SourceId::Horizon && e.kind == PackKind::Mod {
-                let on =
-                    horizon::mod_id(e).is_some_and(|id| java::is_enabled(&self.mods.home(), id));
+            let on = match &self.mods.java {
+                _ if e.kind != PackKind::Mod => None,
+                Some(_) => Some(java_instance::is_on(&self.mods.home(), e)),
+                None if e.source == SourceId::Horizon => Some(
+                    horizon::mod_id(e).is_some_and(|id| java::is_enabled(&self.mods.home(), id)),
+                ),
+                None => None,
+            };
+            if let Some(on) = on {
                 let entry = e.clone();
                 right = right.child(
                     div()

@@ -2,34 +2,48 @@
 //! (`LevelChunkSection.isRandomlyTicking`), memoized per section.
 use crate::{
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y, SECTIONS, Section},
+    chunk::{Chunk, MIN_Y, Section},
     fast_hash::FxHashMap,
+    section_mask::SectionMask,
 };
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, Weak};
 
 /// A value snapshot, in ascending section order, with no per-chunk allocation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sections(u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sections {
+    mask: SectionMask,
+    /// The minimum Y of section index 0 (the chunk's).
+    base: i32,
+}
+impl Default for Sections {
+    fn default() -> Self {
+        Self {
+            mask: SectionMask::EMPTY,
+            base: MIN_Y,
+        }
+    }
+}
 impl Sections {
     /// The minimum Y of the lowest section in the set from block `min_y` up.
     pub fn from(self, min_y: i32) -> Option<i32> {
-        let index = ((min_y - MIN_Y) >> 4).max(0) as u32;
-        Sections(self.0 & u32::MAX.checked_shl(index).unwrap_or(0)).next()
+        let index = ((min_y - self.base) >> 4).max(0) as usize;
+        Sections {
+            mask: self.mask.from(index),
+            ..self
+        }
+        .next()
     }
 }
 impl Iterator for Sections {
     type Item = i32;
     fn next(&mut self) -> Option<i32> {
-        if self.0 == 0 {
-            return None;
-        }
-        let index = self.0.trailing_zeros();
-        self.0 &= self.0 - 1;
-        Some(MIN_Y + index as i32 * 16)
+        let index = self.mask.iter().next()?;
+        self.mask.remove(index);
+        Some(self.base + index as i32 * 16)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.0.count_ones() as usize;
+        let len = self.mask.len();
         (len, Some(len))
     }
 }
@@ -38,7 +52,7 @@ impl ExactSizeIterator for Sections {}
 struct Cached {
     chunk: Weak<Chunk>,
     /// The section each bit of `sections` was read from.
-    read: [Weak<Section>; SECTIONS],
+    read: Vec<Weak<Section>>,
     sections: Sections,
 }
 /// Vanilla keeps a count of randomly ticking blocks and fluids per section,
@@ -72,15 +86,19 @@ impl RandomTickSections {
         chunk: &Arc<Chunk>,
         mut random: impl FnMut(u32) -> bool,
     ) -> Sections {
-        const {
-            assert!(SECTIONS <= u32::BITS as usize);
-        }
         let cached = self.chunks.entry(key).or_insert_with(|| Cached {
             chunk: Weak::new(),
-            read: std::array::from_fn(|_| Weak::new()),
+            read: Vec::new(),
             sections: Sections::default(),
         });
         if cached.chunk.as_ptr() != Arc::as_ptr(chunk) {
+            if cached.read.len() != chunk.sections.len() || cached.sections.base != chunk.min_y() {
+                cached.read = chunk.sections.iter().map(|_| Weak::new()).collect();
+                cached.sections = Sections {
+                    mask: SectionMask::EMPTY,
+                    base: chunk.min_y(),
+                };
+            }
             for (i, (section, read)) in chunk.sections.iter().zip(&mut cached.read).enumerate() {
                 if read.as_ptr() == Arc::as_ptr(section) {
                     continue;
@@ -88,9 +106,9 @@ impl RandomTickSections {
                 // `isRandomlyTicking`: the blocks themselves, not the palette,
                 // which keeps the states no block uses any more.
                 if section.blocks.has(&mut random) {
-                    cached.sections.0 |= 1 << i;
+                    cached.sections.mask.insert(i);
                 } else {
-                    cached.sections.0 &= !(1 << i);
+                    cached.sections.mask.remove(i);
                 }
                 *read = Arc::downgrade(section);
             }
@@ -103,8 +121,23 @@ impl RandomTickSections {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunk::SECTIONS;
     use crate::chunk::Section;
 
+    #[test]
+    fn a_tall_chunk_ticks_its_sections_near_the_top() {
+        let layout = crate::chunk::ColumnLayout::new(-64, 2096).unwrap();
+        let mut cache = RandomTickSections::default();
+        let mut chunk = Arc::new(Chunk::with_layout(0, 0, layout));
+        Arc::make_mut(&mut chunk).set(0, 2020, 0, 1);
+        Arc::make_mut(&mut chunk).set(0, 100, 0, 1);
+        let sections = cache.get_with((0, 0), &chunk, |id| id == 1);
+        assert_eq!(sections.collect::<Vec<_>>(), [96, 2016]);
+        assert_eq!(sections.from(200), Some(2016));
+        // A vanilla chunk at the same key is read again.
+        let short = Arc::new(Chunk::empty(0, 0));
+        assert_eq!(cache.get_with((0, 0), &short, |id| id == 1).len(), 0);
+    }
     #[test]
     fn edits_replacements_compaction_and_reload() {
         let mut cache = RandomTickSections::default();
@@ -211,6 +244,7 @@ mod tests {
 #[cfg(test)]
 mod tick_parity {
     use super::*;
+    use crate::chunk::SECTIONS;
     use horizon_core::{
         position::{BlockPos, ChunkPos},
         random::{LegacyRandom, RandomSource},

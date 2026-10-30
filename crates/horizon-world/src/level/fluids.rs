@@ -1,7 +1,7 @@
 //! `FlowingFluid` (water and lava) ticking and spreading, `LiquidBlock`
 //! interactions, liquid containers (waterlogging) and bucket pickup.
 use super::{
-    Dimension, LevelAccess, Sim,
+    Behaviours, Dimension, LevelAccess, Sim,
     classes::{Class, Interface},
     update::{HORIZONTAL, above, below, rel},
 };
@@ -54,6 +54,16 @@ impl SpreadContext {
         let x = pos.x.wrapping_sub(self.origin.x).wrapping_add(128) & 0xff;
         let z = pos.z.wrapping_sub(self.origin.z).wrapping_add(128) & 0xff;
         ((x << 8) | z) as i16
+    }
+}
+
+impl Behaviours {
+    /// `state.getBlock() instanceof LiquidBlockContainer`: a block that keeps
+    /// a fluid inside its own state (`SimpleWaterloggedBlock` extends the
+    /// interface, so stairs, slabs and every other waterloggable block count).
+    pub fn is_liquid_container(&self, state: BlockStateId) -> bool {
+        self.implements(state, Interface::LiquidBlockContainer)
+            || self.implements(state, Interface::SimpleWaterlogged)
     }
 }
 
@@ -179,19 +189,28 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     /// `LiquidBlockContainer` membership (`canHoldAnyFluid` first clause).
     pub(super) fn is_liquid_container(&self, state: BlockStateId) -> bool {
-        self.b.implements(state, Interface::LiquidBlockContainer)
-            || self.b.implements(state, Interface::SimpleWaterlogged)
+        self.b.is_liquid_container(state)
     }
-    /// `LiquidBlockContainer.canPlaceLiquid(null, level, pos, state, fluid)`.
-    pub(crate) fn can_place_liquid(&self, state: BlockStateId, fluid: FluidKind) -> bool {
+    /// `LiquidBlockContainer.canPlaceLiquid(user, level, pos, state, fluid)`:
+    /// `creative` is whether `user` is a creative player (a bucket in creative
+    /// mode); a dispenser or a flowing fluid passes none (`false`).
+    pub(crate) fn can_place_liquid(
+        &self,
+        state: BlockStateId,
+        fluid: FluidKind,
+        creative: bool,
+    ) -> bool {
         let b = self.b;
         let data = b.data(state);
         if data.is(Class::Kelp)
             || data.is(Class::KelpPlant)
             || data.is(Class::Seagrass)
             || data.is(Class::TallSeagrass)
-            || data.is(Class::Barrier)
         {
+            return false;
+        }
+        // `BarrierBlock.canPlaceLiquid`: only a creative player may waterlog.
+        if data.is(Class::Barrier) && !creative {
             return false;
         }
         if data.is(Class::Slab) && b.table.text(state, b.props.kind) == "double" {
@@ -205,9 +224,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         pos: BlockPos,
         state: BlockStateId,
         fluid: FluidState,
+        creative: bool,
     ) -> bool {
         let b = self.b;
-        if !self.can_place_liquid(state, fluid.kind())
+        if !self.can_place_liquid(state, fluid.kind(), creative)
             || fluid.kind() != FluidKind::Water
             || !b.table.has(state, b.props.waterlogged)
         {
@@ -240,10 +260,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.set_block_and_update(pos, next);
         let delay = self.fluid_tick_delay(fluid.kind());
         self.schedule_fluid_tick(pos, fluid.kind(), delay);
+        // DriedGhastBlock.placeLiquid: its own place-in-water sound.
+        if data.is(Class::DriedGhast) {
+            self.emit(super::LevelEvent::Sound {
+                pos,
+                sound: "minecraft:block.dried_ghast.place_in_water".into(),
+                volume: 1.0,
+                pitch: 1.0,
+            });
+        }
         true
     }
     /// `BucketPickup.pickupBlock`: true when a fluid was taken.
-    pub(crate) fn pickup_block(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
+    pub(crate) fn pickup_block(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        creative: bool,
+    ) -> bool {
         let b = self.b;
         if b.instance_of(state, Class::Liquid) {
             if b.table.int(state, b.props.level) == 0 {
@@ -255,6 +289,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if b.implements(state, Interface::SimpleWaterlogged)
             && b.table.has(state, b.props.waterlogged)
         {
+            // `BarrierBlock.pickupBlock`: only a creative player drains one.
+            if b.instance_of(state, Class::Barrier) && !creative {
+                return false;
+            }
             if b.is_waterlogged(state) {
                 self.set_block_and_update(pos, b.table.set_bool(state, b.props.waterlogged, false));
                 if !self.can_survive(state, pos) {
@@ -263,6 +301,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 return true;
             }
             return false;
+        }
+        if b.is_block(state, b.named.bubble_column) {
+            // BubbleColumnBlock.pickupBlock: the column is removed, the bucket is water.
+            self.set_block(pos, b.air(), 11);
+            return true;
         }
         if b.is_block(state, b.named.powder_snow) {
             // PowderSnowBlock.pickupBlock: the block breaks with its particles and sound.
@@ -277,7 +320,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn can_hold_specific_fluid(&self, state: BlockStateId, fluid: FluidKind) -> bool {
         if self.is_liquid_container(state) {
-            self.can_place_liquid(state, fluid)
+            self.can_place_liquid(state, fluid, false)
         } else {
             true
         }
@@ -489,7 +532,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return;
         }
         if self.is_liquid_container(state) {
-            self.place_liquid(pos, state, target);
+            self.place_liquid(pos, state, target, false);
         } else {
             if !b.is_air(state) {
                 if is_water(kind) {

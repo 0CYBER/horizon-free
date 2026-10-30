@@ -251,6 +251,21 @@ impl Game<'_> {
         ];
         self.block_explosion(center, in_water.then_some(pos))
     }
+    /// `StrawBedBlock.destroyBed`: the break sound, then the bed is air.
+    pub(super) fn destroy_straw_bed(&mut self, head: [i32; 3]) -> Result<()> {
+        let center = [
+            f64::from(head[0]) + 0.5,
+            f64::from(head[1]) + 0.5,
+            f64::from(head[2]) + 0.5,
+        ];
+        self.audio.play(
+            "minecraft:block.straw_bed.break_leave",
+            Some(center),
+            1.0,
+            1.0,
+        );
+        self.level_set(head, self.world.air)
+    }
     /// `BedRule.destroyOnUse` of the dimension's `bed_rule` and
     /// `straw_bed_rule`: true in the Nether and the End.
     pub(super) fn beds_destroy_on_use(&self) -> bool {
@@ -268,14 +283,7 @@ impl Game<'_> {
             f64::from(head[2]) + 0.5,
         ];
         if &*name == "minecraft:straw_bed" {
-            // StrawBedBlock.destroyBed.
-            self.audio.play(
-                "minecraft:block.straw_bed.break_leave",
-                Some(center),
-                1.0,
-                1.0,
-            );
-            return self.level_set(head, self.world.air);
+            return self.destroy_straw_bed(head);
         }
         // removeBlock(head), then the foot behind it if it is still this bed.
         let facing = self
@@ -341,6 +349,12 @@ impl Game<'_> {
         if self.block_in_tag("minecraft:climbable", name) || open_trapdoor {
             return VoxelShape::empty();
         }
+        self.block_collision_shape(p)
+    }
+    /// `BlockState.getCollisionShape(level, pos)`: the shape under the empty
+    /// collision context.
+    pub(super) fn block_collision_shape(&self, p: [i32; 3]) -> VoxelShape {
+        let state = self.world.block(p[0], p[1], p[2]);
         let binding = self.collision;
         let mut scene = SceneCollisions {
             world: &self.world,
@@ -355,6 +369,22 @@ impl Game<'_> {
                 &CollisionContext::empty(false),
             )
             .unwrap_or_else(|_| VoxelShape::empty())
+    }
+    /// `DismountHelper.canDismountTo(level, entity, box)`: no block collides
+    /// with the box and it is inside the world border.
+    pub(super) fn can_dismount_to(&self, bounds: Aabb) -> bool {
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        if !no_collision_empty(&mut scene, bounds) {
+            return false;
+        }
+        // WorldBorder.isWithinBounds(box).
+        let (lo, hi) = (bounds.min(Axis::X), bounds.max(Axis::X) - 1.0e-5);
+        let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
+        self.border.contains(lo, lz) && self.border.contains(hi, hz)
     }
     pub(super) fn block_in_tag(&self, tag: &str, block: &str) -> bool {
         self.res
@@ -419,12 +449,7 @@ impl Game<'_> {
                 position.z + half,
             ),
         );
-        let mut scene = SceneCollisions {
-            world: &self.world,
-            binding: self.collision,
-            subject: None,
-        };
-        if !no_collision_empty(&mut scene, bounds) {
+        if !self.can_dismount_to(bounds) {
             return None;
         }
         let name = |q: [i32; 3]| {
@@ -442,10 +467,7 @@ impl Game<'_> {
         {
             return None;
         }
-        // WorldBorder.isWithinBounds(box).
-        let (lo, hi) = (bounds.min(Axis::X), bounds.max(Axis::X) - 1.0e-5);
-        let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
-        (self.border.contains(lo, lz) && self.border.contains(hi, hz)).then_some(position)
+        Some(position)
     }
     /// `Block.isPossibleToRespawnInThis`: neither solid nor liquid; banners,
     /// signs and pressure plates override it to always.
