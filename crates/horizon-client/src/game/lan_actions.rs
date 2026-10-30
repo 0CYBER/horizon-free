@@ -272,6 +272,32 @@ impl Game<'_> {
         Some(result)
     }
 
+    /// `as_guest`, with the system messages the guest's action earns (the
+    /// `player::sendSystemMessage` of a packet handler) sent to that guest.
+    pub(super) fn as_guest_messaged<R>(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let (result, lines) = self.as_guest(host, conn, |game| {
+            let outer = game.chat_capture.replace(Vec::new());
+            let result = f(game);
+            let lines = std::mem::replace(&mut game.chat_capture, outer).unwrap_or_default();
+            (result, lines)
+        })?;
+        for line in lines {
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        Some(result)
+    }
+
     /// The first half of `as_guest`: the guest's state in place of the
     /// game's, which the returned swap keeps until `leave_guest`. Between the
     /// two the host may go back into `self.lan`, so that what the guest does
@@ -300,10 +326,14 @@ impl Game<'_> {
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
             // The first body after joining burns, breathes and falls on as saved.
-            if let Some(saved) = host.hub.guests[i].loaded_body.take()
-                && let Some(m) = host.hub.guests[i].motion.as_mut()
+            let g = &mut host.hub.guests[i];
+            if let Some(saved) = g.loaded_body.take()
+                && let Some(m) = g.motion.as_mut()
             {
                 saved.apply(m);
+                // LivingEntity.readAdditionalSaveData: the saved attributes.
+                let _ =
+                    m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
             }
             // The saved golden hearts go on the first body of a player who
             // has been here before.
@@ -981,8 +1011,12 @@ impl Game<'_> {
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         self.lan_station_closed(host, conn, None);
+        let hidden = self.native_hidden_slots(pos, items.len());
         host.hub
             .open_container(conn, menu, title, pos, slots, items);
+        if !hidden.is_empty() {
+            host.hub.hide_menu_slots(conn, hidden);
+        }
         true
     }
 
@@ -1538,6 +1572,11 @@ impl Game<'_> {
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
             S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
+            S::SetStructureBlock(p) => self.lan_set_structure_block(host, conn, p),
+            S::TestInstanceBlockAction(p) => self.lan_test_instance_action(host, conn, p),
+            S::SetTestBlock(p) => self.lan_set_test_block(host, conn, p),
+            S::SetJigsawBlock(p) => self.lan_set_jigsaw_block(host, conn, p),
+            S::JigsawGenerate(p) => self.lan_jigsaw_generate(host, conn, p),
             S::EditBook(p) => self.lan_edit_book(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
@@ -2385,6 +2424,11 @@ impl Game<'_> {
         }
         // PlayerList.respawn removes the dead player (Player.remove).
         self.guest_drop_carried(host, i);
+        // AbstractContainerScreen.tick / ServerPlayer.closeContainer: the dead
+        // player's open container goes with it, so a chest's lid (its opener
+        // count) falls instead of staying up for a player who is gone.
+        self.guest_container_closed(host, conn);
+        host.hub.close_container(conn);
         // PlayerList.respawn: a server's player comes back in its respawn
         // point's level: the Overworld, where the world spawn and beds are,
         // or another one's anchor or forced point, which its block resolves
@@ -3064,7 +3108,13 @@ impl Game<'_> {
         });
         for event in events {
             match event {
-                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.playHurtSound: the server's `Entity.playSound`
+                // reaches every player around but the hurt one, whose own
+                // client plays it from handleDamageEvent (#4149).
+                MotionEvent::HurtSound(sound) => {
+                    let source = horizon_client::settings::sound_source(sound) as i32;
+                    host.hub.sound(sound, at, 1.0, 1.0, source, Some(conn));
+                }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,

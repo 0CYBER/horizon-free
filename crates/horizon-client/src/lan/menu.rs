@@ -36,6 +36,9 @@ pub struct Menu {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The data slots the client was last sent (ContainerSetData), a furnace's progress.
     pub sent_data: Vec<i16>,
+    /// Container slots the menu does not have: a mod's screen hides them, so
+    /// no click or quick move reaches them (`Slot` positions are the screen's).
+    pub hidden: Vec<usize>,
 }
 
 /// What a guest did with a native mod's menu (`Slots::Native`), for the game
@@ -182,6 +185,8 @@ pub struct View<'a> {
     pub container: Option<&'a mut [Option<ItemStack>]>,
     /// The container is a shulker box (`ShulkerBoxSlot`).
     pub shulker: bool,
+    /// Container slots that do not exist in this menu (see [`Menu::hidden`]).
+    pub hidden: &'a [usize],
 }
 
 impl View<'_> {
@@ -218,7 +223,7 @@ impl View<'_> {
     }
     /// Whether the slot takes part in clicks at all.
     fn enabled(&self, i: usize) -> bool {
-        self.container.is_some() || i >= 5
+        (self.container.is_some() || i >= 5) && !self.hidden.contains(&i)
     }
     fn may_place(&self, i: usize, stack: &ItemStack, rules: &dyn Rules) -> bool {
         if self.container.is_none() && (5..=8).contains(&i) {
@@ -795,6 +800,7 @@ mod tests {
             guest: &mut g,
             container: Some(&mut chest),
             shulker: false,
+            hidden: &[],
         };
         view.guest.carried = Some(ItemStack::new("minecraft:bundle", 1));
         // Left click with the bundle: the stone goes in.
@@ -867,6 +873,7 @@ mod tests {
                 guest: &mut g,
                 container: Some(&mut read),
                 shulker: false,
+                hidden: &[],
             };
             click(&mut view, &mut drag, 5 + 27, 0, input::QUICK_MOVE, &rules);
             assert_eq!(view.get(0).map(|s| s.item), Some("minecraft:dirt".into()));
@@ -886,6 +893,34 @@ mod tests {
         assert_eq!(m.items[7].as_ref().map(|s| s.count), Some(2));
     }
 
+    /// A slot a mod's screen hides is not in the menu: a shift-click from the
+    /// inventory skips it, and a shift-click on it moves nothing.
+    #[test]
+    fn a_hidden_slot_takes_no_quick_move() {
+        let Some(rules) = rules() else {
+            return;
+        };
+        let mut g = guest();
+        let mut container = vec![None; 3];
+        container[2] = Some(ItemStack::new("minecraft:stone", 1));
+        g.inventory[0] = Some(ItemStack::new("minecraft:dirt", 1));
+        let hidden = [0, 2];
+        let mut drag = None;
+        let mut view = View {
+            guest: &mut g,
+            container: Some(&mut container),
+            shulker: false,
+            hidden: &hidden,
+        };
+        // The hotbar's first slot (menu slot 3 + 27) lands in the one slot shown.
+        click(&mut view, &mut drag, 3 + 27, 0, input::QUICK_MOVE, &rules);
+        assert!(view.get(0).is_none());
+        assert_eq!(view.get(1).map(|s| s.item), Some("minecraft:dirt".into()));
+        // Nothing leaves a hidden slot either.
+        click(&mut view, &mut drag, 2, 0, input::QUICK_MOVE, &rules);
+        assert_eq!(view.get(2).map(|s| s.item), Some("minecraft:stone".into()));
+    }
+
     #[test]
     fn guest_shulker_box_menu_refuses_shulker_boxes() {
         let Some(rules) = rules() else {
@@ -899,6 +934,7 @@ mod tests {
                 guest: &mut g,
                 container: Some(&mut container),
                 shulker,
+                hidden: &[],
             };
             // Carried onto an empty slot, shift-clicked from the hotbar
             // (menu slot 27 + 27) and swapped in with the number key 1.

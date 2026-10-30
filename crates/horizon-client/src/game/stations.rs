@@ -15,6 +15,65 @@ use horizon_client::{
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 
+/// The book above the enchanting table's offers: `EnchantmentScreen`'s
+/// `time`, `flip`, `oFlip`, `flipT`, `flipA`, `open`, `oOpen` and `last`.
+pub(super) struct EnchantBook {
+    time: i32,
+    flip: f32,
+    o_flip: f32,
+    flip_t: f32,
+    flip_a: f32,
+    open: f32,
+    o_open: f32,
+    last: Option<ItemStack>,
+    random: LegacyRandom,
+}
+impl EnchantBook {
+    fn new(random: LegacyRandom) -> Self {
+        Self {
+            time: 0,
+            flip: 0.0,
+            o_flip: 0.0,
+            flip_t: 0.0,
+            flip_a: 0.0,
+            open: 0.0,
+            o_open: 0.0,
+            last: None,
+            random,
+        }
+    }
+    /// `EnchantmentScreen.tickBook`: a new item in the enchanting slot picks a
+    /// new page to turn to; the book opens while any offer has a cost.
+    pub(super) fn tick(&mut self, input: Option<&ItemStack>, costs: [i32; 3]) {
+        if input != self.last.as_ref() {
+            self.last = input.cloned();
+            loop {
+                let a = self.random.next_int_bound(4).unwrap_or(0);
+                let b = self.random.next_int_bound(4).unwrap_or(0);
+                self.flip_t += (a - b) as f32;
+                if !(self.flip <= self.flip_t + 1.0 && self.flip >= self.flip_t - 1.0) {
+                    break;
+                }
+            }
+        }
+        self.time += 1;
+        self.o_flip = self.flip;
+        self.o_open = self.open;
+        let open = costs.iter().any(|&c| c != 0);
+        self.open = (self.open + if open { 0.2 } else { -0.2 }).clamp(0.0, 1.0);
+        let diff = ((self.flip_t - self.flip) * 0.4).clamp(-0.2, 0.2);
+        self.flip_a += (diff - self.flip_a) * 0.9;
+        self.flip += self.flip_a;
+    }
+    /// `EnchantmentScreen.extractBook`'s `open` and `flip` at the partial tick.
+    pub(super) fn at(&self, partial: f32) -> (f32, f32) {
+        (
+            self.o_open + (self.open - self.o_open) * partial,
+            self.o_flip + (self.flip - self.o_flip) * partial,
+        )
+    }
+}
+
 /// Slot ids of the open station: inputs from 600, the result at 650.
 pub(super) const INPUT: usize = 600;
 pub(super) const RESULT: usize = 650;
@@ -280,6 +339,8 @@ pub(super) struct Station {
     pub(super) loom: super::loom::LoomState,
     /// The smithing table's three `CyclingSlotBackground`s: the template, base and additions slots.
     cycling: [CyclingSlot; 3],
+    /// The enchanting table's book (`EnchantmentScreen`'s flip and open state).
+    pub(super) book: EnchantBook,
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -306,6 +367,9 @@ impl Station {
             beacon_levels: None,
             loom: Default::default(),
             cycling: Default::default(),
+            book: EnchantBook::new(LegacyRandom::new(
+                horizon_client::sound_engine::unique_seed(),
+            )),
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -433,6 +497,13 @@ fn rgb_of(rgba: u32) -> u32 {
     (rgba & 0xFF) << 16 | (rgba >> 8 & 0xFF) << 8 | (rgba >> 16 & 0xFF)
 }
 impl Game<'_> {
+    /// `EnchantmentScreen.containerTick`'s `tickBook` for an open enchanting table.
+    pub(super) fn tick_enchanting_book(&mut self) {
+        if let Some(s) = self.station.as_mut().filter(|s| s.kind == Kind::Enchanting) {
+            let costs = s.offers.costs;
+            s.book.tick(s.inputs[0].as_ref(), costs);
+        }
+    }
     /// `Component.translatable`: the selected language (which `lang` layers
     /// over `en_us`), the caller's English text last.
     pub(super) fn translate(&self, key: &str, fallback: &str) -> String {
@@ -1494,6 +1565,16 @@ impl Game<'_> {
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
                 Kind::Enchanting => {
+                    let (open, flip) = s.book.at(self.clock.camera_fraction() as f32);
+                    horizon_client::item_render::gui::draw_enchanting_book(
+                        &self.pack.item_renderer,
+                        &atlas.sprites,
+                        batch,
+                        ox + 14.0,
+                        oy + 14.0,
+                        open,
+                        flip,
+                    );
                     if s.inputs[1].is_none() {
                         batch.sprite(
                             atlas,
@@ -2396,7 +2477,7 @@ impl Game<'_> {
     }
     /// The tooltip's text's top-left corner and the box's size: beside the
     /// cursor, kept on screen, `extra` pixels taller than the text.
-    fn tooltip_geometry(
+    pub(super) fn tooltip_geometry(
         atlas: &horizon_client::hud::HudAtlas,
         lines: &[(horizon_client::text::Text, u32)],
         (x, y): (f32, f32),
@@ -2426,7 +2507,7 @@ impl Game<'_> {
         (x, y, w, h)
     }
     /// The box and its frame sprites.
-    fn tooltip_box(
+    pub(super) fn tooltip_box(
         batch: &mut HudBatch,
         atlas: &horizon_client::hud::HudAtlas,
         x: f32,
@@ -2470,7 +2551,7 @@ impl Game<'_> {
             rgba(60, 0, 190, 80),
         );
     }
-    fn tooltip_text(
+    pub(super) fn tooltip_text(
         batch: &mut HudBatch,
         atlas: &horizon_client::hud::HudAtlas,
         lines: &[(horizon_client::text::Text, u32)],
@@ -2695,7 +2776,11 @@ impl Game<'_> {
                             .insert(format!("has_bottle_{i}"), has.to_string());
                     }
                     if let Ok(id) = self.pack.assets.registry.resolve(&s) {
-                        self.world.set(x, y, z, id)?;
+                        self.level_set_with_flags(
+                            [x, y, z],
+                            id,
+                            horizon_world::level::flags::UPDATE_CLIENTS,
+                        )?;
                     }
                 }
             }
@@ -2719,6 +2804,40 @@ fn anvil_box() -> horizon_client::ui::EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enchanting_book_opens_with_offers_and_turns_for_a_new_item() {
+        let mut book = EnchantBook::new(LegacyRandom::new(0));
+        // No offers: the book stays shut and on its page.
+        book.tick(None, [0; 3]);
+        assert_eq!(book.at(1.0), (0.0, 0.0));
+        // An item with offers: it opens 0.2 a tick and picks a page
+        // more than one away to turn to.
+        let sword = ItemStack::new("minecraft:diamond_sword", 1);
+        book.tick(Some(&sword), [3, 10, 30]);
+        assert!((book.open - 0.2).abs() < 1e-6);
+        assert!((book.flip_t - book.flip).abs() > 1.0 - 0.2);
+        let target = book.flip_t;
+        for _ in 0..60 {
+            book.tick(Some(&sword), [3, 10, 30]);
+        }
+        assert_eq!(book.open, 1.0);
+        assert!(
+            (book.flip - target).abs() < 0.05,
+            "{} {}",
+            book.flip,
+            target
+        );
+        // The same item keeps the page; taking it out closes the book.
+        assert_eq!(book.flip_t, target);
+        for _ in 0..6 {
+            book.tick(None, [0; 3]);
+        }
+        assert_eq!(book.open, 0.0);
+        assert_ne!(book.flip_t, target);
+        let (open, _) = book.at(0.5);
+        assert!(open < 1e-6);
+    }
 
     #[test]
     fn stonecutter_scroller_rows() {

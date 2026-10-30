@@ -71,18 +71,18 @@ DolphinJumpGoal.surfaceIsClear	inline	crates/horizon-client/src/mobs/dolphin.rs:
 DolphinJumpGoal.canContinueToUse	port	crates/horizon-client/src/mobs/dolphin.rs::Jump::can_continue	
 DoorInteractGoal.start	inline	crates/horizon-client/src/mobs/doors.rs::RaiderOpenDoor::start	passed and the door direction only feed canContinueToUse, which both subclasses override, so they are not kept
 DoorInteractGoal.tick	inline	crates/horizon-client/src/mobs/doors.rs::BreakDoor::tick	the passed-the-door dot test is not kept: BreakDoor and RaiderOpenDoor both override can_continue
-FollowFlockLeaderGoal	missing		player: cod, salmon and tropical fish spawn in groups but do not follow a leader, so schools do not swim together (leader id is stored, no goal uses it)
+FollowFlockLeaderGoal	port	crates/horizon-client/src/mobs/aquatic.rs::FollowFlockLeader	tick for tick with vanilla in mob_ai cod/salmon/tropical_fish_school; recruits in vanilla getEntitiesOfClass order (Mob.section)
 FollowMobGoal	missing		player: parrots do not fly after and hover near other mobs (priority 3 goal missing from register_parrot)
-FollowPlayerRiddenEntityGoal	missing		player: dolphins do not swim after a boat or nautilus a player is riding
+FollowPlayerRiddenEntityGoal	port	crates/horizon-client/src/mobs/dolphin.rs::FollowPlayerRidden	only the player the mob sees (the nearest) is considered; tick for tick with vanilla in mob_ai dolphin_boat_*
 GoalSelector.removeAllGoals	port	crates/horizon-client/src/mobs/goals.rs::GoalSelector::clear	gap: minor: clear() takes no predicate and does not stop running goals
 GoalSelector.removeGoal	missing		minor: no per-goal removal; callers (cat and ocelot trust, zombie break door, skeleton weapon swap, skeleton horse trap) fold the condition into can_use
 GoalSelector.goalContainsAnyFlags	inline	crates/horizon-client/src/mobs/goals.rs::GoalSelector::tick	flags & disabled
 GoalSelector.goalCanBeReplacedForAllFlags	inline	crates/horizon-client/src/mobs/goals.rs::GoalSelector::tick	the replaceable check over the locked slots
 GoalSelector.tickRunningGoals	port	crates/horizon-client/src/mobs/goals.rs::GoalSelector::tick_running	
-GolemRandomStrollInVillageGoal	missing		player: iron golems stroll with a plain water-avoiding stroll, so they do not stay in the village or go towards villagers who want a golem
+GolemRandomStrollInVillageGoal	inline	crates/horizon-client/src/mobs/golem.rs::register_iron	a named Stroll with a gate and a position; tick for tick with vanilla in mob_ai iron_golem_village_*
 MeleeAttackGoal.checkAndPerformAttack	inline	crates/horizon-client/src/mobs/goals.rs::MeleeAttack::tick	reset cooldown, swing, do_hurt_target
 MeleeAttackGoal.canPerformAttack	inline	crates/horizon-client/src/mobs/goals.rs::MeleeAttack::tick	cooldown over, within melee range, line of sight
-MoveBackToVillageGoal	missing		player: iron golems outside a village never walk back towards it (goal missing from register_iron)
+MoveBackToVillageGoal	inline	crates/horizon-client/src/mobs/golem.rs::register_iron	a named Stroll with a gate and a position; tick for tick with vanilla in mob_ai iron_golem_village_*
 MoveThroughVillageGoal	missing		player: zombies never walk purposefully through a village towards its POIs and doors at night; they only wander (priority 6 goal missing; the raider variant is separate)
 MoveToBlockGoal.moveMobToBlock	inline	crates/horizon-client/src/mobs/goals.rs::MoveToBlock::start	nav_move_to the block centre one up
 MoveTowardsTargetGoal.start	inline	crates/horizon-client/src/mobs/golem.rs::MoveTowardsTarget::can_use	gap: minor: paths straight to the target entity in can_use, not to a random position towards it chosen in canUse

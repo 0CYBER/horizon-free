@@ -11,6 +11,7 @@ mod misc;
 mod place;
 mod players;
 pub(super) mod pregen;
+mod profiles;
 mod raid;
 mod terrain_cmds;
 mod text_commands;
@@ -202,6 +203,20 @@ impl Game<'_> {
             return;
         }
         self.system_message(message);
+    }
+    /// `sendSuccess(message, false)`: the source is told (when it takes
+    /// success feedback), the operators are not.
+    pub(super) fn feedback_unbroadcast(&mut self, message: Text) {
+        if self.command_source.is_some_and(|s| s.silent) {
+            return;
+        }
+        if let Some(block) = self.command_source.and_then(|s| s.block) {
+            self.command_block_success(block, message);
+            return;
+        }
+        if self.ui.rules.bool("send_command_feedback") {
+            self.system_message(message);
+        }
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {
@@ -923,6 +938,8 @@ impl Game<'_> {
             id if id.starts_with("dialog.") => self.cmd_dialog(id, ctx),
             id if id.starts_with("posteffect.") => self.cmd_posteffect(id, ctx),
             "kick" => self.cmd_kick(ctx),
+            "op" | "deop" | "ban" | "pardon" => self.cmd_profiles(id, ctx),
+            id if id.starts_with("whitelist.") => self.cmd_whitelist(id, ctx),
             "fetchprofile" => self.cmd_fetchprofile(ctx),
             "publish" => self.cmd_publish(ctx),
             "unpublish" => self.cmd_unpublish(),
@@ -1482,6 +1499,41 @@ impl Game<'_> {
             });
         true
     }
+    /// `ServerPlayer.lookAt`: besides turning the player, tell their client
+    /// with a `ClientboundPlayerLookAtPacket` (`from` anchor, the point, and
+    /// the entity with its anchor when the target is one). Only a connected
+    /// player has a client to tell. The entity form is sent for mobs, whose
+    /// ids are their network ids; `LookAt.LookAtEntity.perform` falls back to
+    /// the point (`LookAt.LookAtPosition`) for any other kind of target,
+    /// which turns the client the same unless the entity moves first.
+    pub(super) fn send_player_look_at(
+        &mut self,
+        t: Target,
+        from_eyes: bool,
+        target: [f64; 3],
+        entity: Option<(Target, bool)>,
+    ) {
+        let packet = C::PlayerLookAt(play::PlayerLookAt {
+            from: i32::from(from_eyes),
+            target,
+            entity: entity.and_then(|(e, eyes)| match e {
+                Target::Mob(id) => Some(play::LookAtEntity {
+                    id: id as i32,
+                    anchor: i32::from(eyes),
+                }),
+                _ => None,
+            }),
+        });
+        match t {
+            Target::Player if self.lan_acting.is_some() => self.guest_packets.push(packet),
+            Target::Guest(conn) => {
+                if let Some(host) = self.lan.as_ref() {
+                    host.hub.send_to(conn, &packet);
+                }
+            }
+            _ => {}
+        }
+    }
     fn cmd_teleport(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = if id.starts_with("teleport.targets") {
             self.entities(ctx, "targets", false)?
@@ -1540,12 +1592,14 @@ impl Game<'_> {
             };
             None
         });
+        let mut facing_entity = None;
         let facing = match (facing, ctx.get("facingEntity")) {
             (Some(f), _) => Some(f),
             (None, Some(_)) => {
                 let e = self.entities(ctx, "facingEntity", false)?[0];
                 // EntityAnchorArgument.Anchor.apply: the feet, or the eyes.
                 let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
+                facing_entity = Some((e, eyes));
                 let eye_height = if eyes { self.target_eye_height(e) } else { 0.0 };
                 self.target_position(e)
                     .map(|p| [p[0], p[1] + eye_height, p[2]])
@@ -1587,6 +1641,10 @@ impl Game<'_> {
                 self.teleport_player_to_dimension(dimension, pos, rotation)?;
             } else {
                 self.teleport_to(t, pos, rotation);
+            }
+            // LookAt.perform after a successful teleportTo.
+            if let Some(f) = facing {
+                self.send_player_look_at(t, anchored_eyes, f, facing_entity);
             }
         }
         let [x, y, z] = pos.map(|v| Text::literal(format_double(v)));

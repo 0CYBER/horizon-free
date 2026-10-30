@@ -18,7 +18,10 @@ use crate::{
     items::ItemStack,
     world::World,
 };
-use horizon_core::geometry::{Aabb, ShapeOp, Vec3, VoxelShape};
+use horizon_core::{
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
+    random::LegacyRandom,
+};
 use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
     entity_data::{Particle, ParticleData, Value, serializer},
@@ -31,7 +34,7 @@ use horizon_world::{
     collision_context::CollisionContext,
     nbt::{JavaString, Tag},
 };
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 
 /// GameEvent types (ClientboundGameEventPacket).
 pub mod chat;
@@ -181,6 +184,8 @@ pub struct Hub {
     pub guests: Vec<Guest>,
     pub(super) sync: Arc<SyncData>,
     pub ticks: u64,
+    /// `Level.soundSeedGenerator`: a fresh `nextLong` per `playSound`.
+    pub(super) sound_seeds: Mutex<LegacyRandom>,
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
@@ -378,6 +383,7 @@ impl Hub {
             guests: Vec::new(),
             sync,
             ticks: 0,
+            sound_seeds: Mutex::new(LegacyRandom::new(crate::sound_engine::unique_seed())),
             immediate_respawn: false,
             movement_checks: (true, true),
             anticheat: None,
@@ -778,18 +784,7 @@ impl Hub {
         g.send(&raw(ids::UPDATE_RECIPES, self.sync.recipes.clone()));
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
-        // ServerRecipeBook.sendInitialRecipeBook: each book's open and
-        // filtering flags, then every known recipe.
-        let g = &self.guests[i];
-        let book = &g.recipe_book;
-        let settings = (0..4)
-            .flat_map(|b| [u8::from(book.open[b]), u8::from(book.filtering[b])])
-            .collect();
-        g.send(&raw(ids::RECIPE_BOOK_SETTINGS, settings));
-        g.send(&raw(
-            ids::RECIPE_BOOK_ADD,
-            self.sync.advancements.initial_recipe_book(book, &self.sync),
-        ));
+        self.send_initial_recipe_book(i);
         // The others hear of the newcomer before it joins the list.
         self.broadcast_except(
             conn,
@@ -2188,6 +2183,59 @@ impl Hub {
                 item: net,
             }));
             g.menu_sent[slot] = now;
+        }
+    }
+
+    /// `ServerRecipeBook.sendInitialRecipeBook`: each book's open and
+    /// filtering flags, then every known recipe.
+    fn send_initial_recipe_book(&self, i: usize) {
+        let g = &self.guests[i];
+        let book = &g.recipe_book;
+        let settings = (0..4)
+            .flat_map(|b| [u8::from(book.open[b]), u8::from(book.filtering[b])])
+            .collect();
+        g.send(&raw(ids::RECIPE_BOOK_SETTINGS, settings));
+        g.send(&raw(
+            ids::RECIPE_BOOK_ADD,
+            self.sync.advancements.initial_recipe_book(book, &self.sync),
+        ));
+    }
+
+    /// `PlayerList.reloadResources` (`/reload`): every player's advancements
+    /// reload against the new data, then everyone gets the tags, and each
+    /// player the recipes and their recipe book again.
+    pub fn reload_resources(&mut self, sync: Arc<SyncData>) {
+        self.lan.shared.set_sync(sync.clone());
+        self.sync = sync.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        for g in &mut self.guests {
+            // PlayerAdvancements.reload: isFirstPacket again, the progress
+            // read against the new tree; a player whose advancements were
+            // never loaded does that on their first tick.
+            if !g.advancements_loaded {
+                continue;
+            }
+            g.advancements_visible.clear();
+            g.advancements_changed.clear();
+            if let Some(add) =
+                sync.advancements
+                    .reload(&sync, now, &mut g.advancements, &mut g.recipe_book)
+            {
+                g.send(&raw(ids::RECIPE_BOOK_ADD, add));
+            }
+        }
+        // broadcastAll(ClientboundUpdateTagsPacket).
+        self.broadcast(&C::UpdateTags(sync.tags.clone()));
+        // For each player: ClientboundUpdateRecipesPacket, then
+        // sendInitialRecipeBook.
+        for i in 0..self.guests.len() {
+            if !self.guests[i].placed {
+                continue;
+            }
+            self.guests[i].send(&raw(ids::UPDATE_RECIPES, sync.recipes.clone()));
+            self.send_initial_recipe_book(i);
         }
     }
 

@@ -74,6 +74,66 @@ struct TerrainOut {
     @location(4) cylindrical: f32,
     // The light the face emits, 0 to 15 (mesher.rs's `EMISSION_BITS`).
     @location(5) @interpolate(flat) emission: u32,
+    @location(6) @interpolate(flat) fade: u32,
+    // A distant tile's tile-relative position, for its fade (`faded`).
+    @location(7) local: vec3<f32>,
+}
+// Whether a fading tile or section leaves this pixel out (gfx/lod.rs's
+// `fade_code`, `fade_out_code`). It fades in, or out, chunk by chunk: each
+// column of its own grid (`local`, the tile-relative position: 16 blocks,
+// 2^level for coarse tiles) starts in turn over the first half of the fade
+// and fades over the second, as a 4x4 ordered pattern in the face's plane,
+// its unit the power of two of a block nearest 1.5 pixels, so it stays on
+// the terrain as the camera moves. `dx` and `dy`: `local`'s screen
+// derivatives.
+fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
+    if code == 0u { return false; }
+    // Sixty-fourths of the fade: 1 to 63 fading in, 65 to 128 fading out.
+    let step = (code - 1u) % 129u;
+    let out = step >= 64u;
+    let progress = f32(select(step, step - 64u, out)) / 64.0;
+    let size = exp2(f32(max((code - 1u) / 129u, 4u)));
+    let cell = bitcast<vec2<u32>>(vec2<i32>(floor(local.xz / size)));
+    var h = cell.x * 73856093u ^ cell.y * 19349663u;
+    h = (h ^ (h >> 13u)) * 0x5bd1e995u;
+    let start = f32((h ^ (h >> 15u)) & 1023u) / 2048.0;
+    let ramp = clamp((progress - start) * 2.0, 0.0, 1.0);
+    let shown = select(ramp, 1.0 - ramp, out);
+    let n = abs(cross(dx, dy));
+    var plane = local.xy;
+    if n.x >= n.y && n.x >= n.z {
+        plane = local.yz;
+    } else if n.y >= n.z {
+        plane = local.xz;
+    }
+    let pixel = max(length(dx), length(dy));
+    let unit = exp2(ceil(log2(max(pixel * 1.5, 1.0 / 16.0))));
+    let p = vec2<u32>(bitcast<vec2<u32>>(vec2<i32>(floor(plane / unit)))) & vec2(3u);
+    let bayer = array<u32, 16>(0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
+    return (f32(bayer[p.y * 4u + p.x]) + 0.5) / 16.0 >= shown;
+}
+// A fading tile or section is drawn a hair toward the camera (depth is
+// reversed: nearer is larger), the newer the more, so it wins where it draws
+// over the solid tiles it replaces. Distant tiles go back by 0.2% of their
+// distance, so near chunks win over tiles still under them (gfx/lod.rs's
+// `previous`, columns not complete yet): near water lies a little below a
+// tile's (vanilla's fluid corner heights), and under a smaller step the
+// tile's drew over it, two waters, opaque. A tile's UV step is 1/32, a
+// section's 1/32768 (`terrain_uv`).
+fn fade_depth(clip: vec4<f32>, w: f32) -> vec4<f32> {
+    let code = fade_code(w);
+    let tile = fract(abs(w)) > 0.001;
+    var scale = select(1.0, 1.0 - 2e-3, tile);
+    if code != 0u && (code - 1u) % 129u < 64u {
+        scale *= 1.0 + 5e-6 * f32(64u - (code - 1u) % 129u);
+    } else if code != 0u && !tile {
+        // A section leaving (gfx/lod.rs's `HELD`, `fade_out_code`) goes 2% of
+        // its distance toward the camera: far terrain's coarser blocks stand a
+        // little out of the real ones, and the tile coming in under it hid it
+        // at once, before its fade.
+        scale *= 1.02;
+    }
+    return vec4(clip.xy, clip.z * scale, clip.w);
 }
 // Horizon Extras' dynamic lights (dynamic_light.rs): the block light, in the vertex's units
 // (16 per level), a vertex at camera-relative `pos` gets from the frame's light sources, one
@@ -95,15 +155,21 @@ fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
 // mesher.rs's TerrainVertex holds the UV in fixed point; the instance's
 // origin.w is the step: 1/32768 per unit for sections (a power of two on an
 // integer below 2^24, so it decodes exactly), 1/32 per block for distant
-// terrain tiles (TerrainVertex::tiled).
+// terrain tiles (TerrainVertex::tiled). A fading tile negates it past its
+// dither code (gfx/lod.rs's `instance`): the step is the fraction either way.
 fn terrain_uv(packed: vec2<u32>, step: f32) -> vec2<f32> {
-    return vec2<f32>(packed) * step;
+    return vec2<f32>(packed) * fract(abs(step));
+}
+// A fading distant tile's dither code (gfx/lod.rs's `fade_code`), 0 when whole.
+fn fade_code(w: f32) -> u32 {
+    return u32(floor(max(-w, 0.0)));
 }
 @vertex fn vs_terrain(
     @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> TerrainOut {
-    return terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz);
+    return terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+        origin.w);
 }
 // Flat section draws (gfx/flat.rs): one draw per arena page over the frame's
 // index list. A section's vertices fill whole 256-vertex blocks of its page:
@@ -116,13 +182,15 @@ fn terrain_uv(packed: vec2<u32>, step: f32) -> vec2<f32> {
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainOut {
     let origin = slot_origins[block_slots[vertex >> 8u]];
-    return terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz);
+    return terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+        origin.w);
 }
 fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
-    light: vec2<u32>, origin: vec3<f32>) -> TerrainOut {
+    light: vec2<u32>, origin: vec3<f32>, w: f32) -> TerrainOut {
     let pos = position + origin;
     var out: TerrainOut;
-    out.clip = globals.view_proj * vec4(pos, 1.0);
+    out.clip = fade_depth(globals.view_proj * vec4(pos, 1.0), w);
+    out.local = position;
     out.uv = uv;
     out.layer = layer;
     let block = max(f32(light.y), dynamic_block_light(pos));
@@ -130,6 +198,7 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.emission = 15u - (u32(round(color.a * 255.0)) & 15u);
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
+    out.fade = fade_code(w);
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -143,6 +212,9 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 @fragment fn fs_solid(in: TerrainOut) -> @location(0) vec4<f32> {
+    let dx = dpdx(in.local);
+    let dy = dpdy(in.local);
+    if faded(in.fade, in.local, dx, dy) { discard; }
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
     if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
@@ -152,6 +224,9 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     let emissive = select(1.0, 0.7 * f32(4u - min(in.emission, 4u)) / 4.0, in.emission > 0u);
     return apply_fog(vec4(color.rgb, emissive), in.spherical, in.cylindrical);
 }
+// Water, glass and other see-through faces draw whole as they fade in, the
+// layer drawn first in front (gfx.rs's water tiers): dithered, the faded-out
+// pixels showed the layer behind through the one in front, twice the water.
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
     let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
     if color.a < 0.01 { discard; }

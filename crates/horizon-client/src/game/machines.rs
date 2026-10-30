@@ -602,6 +602,19 @@ impl Game<'_> {
         }
         rest
     }
+    /// `stack` into the block container at `pos` through its side `face`, as
+    /// a hopper gives it (`addItem`); the remainder.
+    pub(super) fn insert_into_container(
+        &mut self,
+        pos: Pos,
+        stack: ItemStack,
+        face: Direction,
+    ) -> Option<ItemStack> {
+        let Some(view) = self.containers().view(pos, false) else {
+            return Some(stack);
+        };
+        self.add_item(None, &view, stack, Some(face))
+    }
     /// Remove one item from a slot (`removeItem(slot, 1)`).
     fn take_one(&mut self, view: &View, slot: usize) -> Option<ItemStack> {
         let target = self.slot_mut_at(view, slot)?;
@@ -1115,6 +1128,9 @@ impl Game<'_> {
     }
     /// `imageHeight` of the open screen (HopperScreen is 133 tall).
     pub(super) fn screen_height(&self) -> f32 {
+        if let Some(height) = self.native_screen_height() {
+            return height;
+        }
         if self
             .station
             .as_ref()

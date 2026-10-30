@@ -221,6 +221,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
         enabled,
         id,
         icon: None,
+        trailing: None,
     };
     let (gx, gy) = grid(w, h, o.tab);
     let mut buttons = match o.tab {
