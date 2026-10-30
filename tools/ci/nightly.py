@@ -95,7 +95,8 @@ def notes(today: str, chosen: Ref, main: Ref, picked: list[dict], left_out: list
     new = [pr for pr in shown if "feature" in pr["labels"]]
     fixed = [pr for pr in shown if "feature" not in pr["labels"]]
     built = f"main ({main.sha[:7]})" + (f" with {len(picked)} pull requests merged in" if picked else "")
-    parts = [f"Nightly {today} · {chosen.sha[:7]}: {built}, built from `{chosen.name}` ({chosen.sha}).",
+    # The banner first: people who land on the Nightly ran its game zip for the launcher (a player, 2026-10-30).
+    parts = [train.PLAYERS, f"Nightly {today} · {chosen.sha[:7]}: {built}, built from `{chosen.name}` ({chosen.sha}).",
              source_line(today, chosen.sha), PLAYERS]
     if not shown and not picked:
         parts.append("Nothing new for players on main since the previous Nightly.")
