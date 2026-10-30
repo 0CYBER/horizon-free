@@ -598,6 +598,11 @@ packet!(PlayerChat {
     filter: (i32, Vec<i64>) => FilterMask,
     chat_type: ChatTypeBound => ChatTypeBound,
 });
+packet!(
+    /// ClientboundDeleteChatPacket: the server deleted a player message,
+    /// named by its packed signature.
+    DeleteChat { signature: (i32, Option<Vec<u8>>) => PackedSignature }
+);
 packet!(PlayerCombatKill { id: i32 => VarInt, message: Tag => Nbt });
 packet!(PlayerInfoRemove { uuids: Vec<u128> => List<Uuid> });
 /// One ClientboundPlayerInfoUpdatePacket entry; fields are set for the
@@ -1842,6 +1847,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     Cooldown(Cooldown) = COOLDOWN,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
+    DeleteChat(DeleteChat) = DELETE_CHAT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
     EntityEvent(EntityEvent) = ENTITY_EVENT,
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
@@ -2693,6 +2699,12 @@ mod tests {
                 show_progress: true,
                 can_restock: true,
             }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None),
+            }),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![9; 256])),
+            }),
             Clientbound::PlayerChat(PlayerChat {
                 global_index: 0,
                 sender: 5,
@@ -2887,6 +2899,27 @@ mod tests {
         for p in packets {
             round_trip(p, Clientbound::encode, Clientbound::decode);
         }
+    }
+
+    #[test]
+    fn delete_chat_decodes_a_packed_signature() {
+        use crate::ids::play::clientbound::DELETE_CHAT;
+        // MessageSignature.Packed: id + 1, so 5 names cache slot 4...
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &[5]).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (4, None)
+            })
+        );
+        // ...and 0 carries the full 256-byte signature.
+        let mut full = vec![0];
+        full.extend([3; 256]);
+        assert_eq!(
+            Clientbound::decode(DELETE_CHAT, &full).unwrap(),
+            Clientbound::DeleteChat(DeleteChat {
+                signature: (-1, Some(vec![3; 256]))
+            })
+        );
     }
 
     #[test]
