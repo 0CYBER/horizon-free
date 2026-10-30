@@ -425,6 +425,32 @@ def mob_riding():
     ]
 
 
+def camel_riders():
+    """A husk riding a camel (#3199): the camel and its rider never push each other
+    (Entity.push skips passengers of the same vehicle), so the camel stays near
+    where it was summoned instead of sliding off backwards, and it never sits down
+    with a controlling passenger (CamelAi.RandomSitting needs none)."""
+    camel = '@e[tag=camel_v,limit=1]'
+    return [
+        # A walled pen, and a camel that cannot walk: only a push would move it.
+        *setup('/fill 0 200 0 15 203 15 minecraft:glass hollow', '/fill 1 203 1 14 203 14 minecraft:air',
+               '/scoreboard objectives add camel_pose dummy',
+               '/summon minecraft:camel 8.0 201 8.0 {Tags:["camel_v"],'
+               'Passengers:[{id:"minecraft:husk",Tags:["camel_r"]}]}',
+               f'/attribute {camel} minecraft:movement_speed base set 0'),
+        {'op': 'tick', 'n': 100},
+        cmd('/execute as @e[tag=camel_r] on vehicle run say carrying'),
+        cmd('/execute if entity @e[tag=camel_v,x=8,y=201,z=8,distance=..4]'),
+        {'op': 'tick', 'n': 500},
+        *setup(f'/execute store result score camel camel_pose run data get entity {camel} LastPoseTick'),
+        # Negative while sitting.
+        cmd('/execute if score camel camel_pose matches ..-1'),
+        cmd('/execute as @e[tag=camel_r] on vehicle run say still carrying'),
+        *setup('/kill @e[tag=camel_r]', '/kill @e[tag=camel_v]', '/scoreboard objectives remove camel_pose',
+               '/fill 0 200 0 15 203 15 minecraft:air'),
+    ]
+
+
 def scores():
     return [
         cmd('/scoreboard objectives add harness dummy'),
@@ -1198,6 +1224,7 @@ def groups():
         ('wither spawn', wither_spawn()),
         ('riding teleport', riding_teleport()),
         ('mob riding', mob_riding()),
+        ('camel riders', camel_riders()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),

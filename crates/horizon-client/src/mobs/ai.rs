@@ -1208,6 +1208,18 @@ fn on_climbable(m: &Mob, w: &MobWorld) -> bool {
     );
     w.has_tag("minecraft:climbable", w.block_name(x, y, z))
 }
+/// `Entity.getRootVehicle` of the mob `id` riding `vehicle`: the bottom of
+/// its stack of vehicles (itself when it rides nothing).
+fn root_vehicle(w: &MobWorld, id: u32, vehicle: Option<u32>) -> u32 {
+    let (mut root, mut next) = (id, vehicle);
+    // A stack of riders is short; the bound only guards a broken loop.
+    for _ in 0..16 {
+        let Some(v) = next else { break };
+        root = v;
+        next = w.seen(v).and_then(|s| s.vehicle);
+    }
+    root
+}
 /// LivingEntity.pushEntities: every pushable entity overlapping the box is
 /// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
 /// mobs are `Push` events their tick picks up.
@@ -1221,8 +1233,9 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && m.species() != Species::Shulker
         && !on_climbable(m, w)
         && (m.species() != Species::Creaking || super::creaking::can_move(m));
-    // Each with whether it rides a vehicle (`Entity.isPassenger`).
-    let mut targets: Vec<(Who, Vec3, bool)> = Vec::new();
+    // Each with whether it rides a vehicle (`Entity.isPassenger`) and
+    // whether it shares this one's root vehicle (`isPassengerOfSameVehicle`).
+    let mut targets: Vec<(Who, Vec3, bool, bool)> = Vec::new();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
         && m.rider.is_none()
@@ -1230,11 +1243,13 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && !p.spectator
         && p.bounds.intersects(bounds)
     {
-        targets.push((Who::Player, p.position, p.passenger));
+        targets.push((Who::Player, p.position, p.passenger, false));
     }
+    let root = root_vehicle(w, m.id, m.extra.mount);
     for o in w.others_near(bounds) {
         if o.id != m.id && o.alive && o.pushable && o.bounds.intersects(bounds) {
-            targets.push((Who::Mob(o.id), o.position, o.passenger));
+            let same = root_vehicle(w, o.id, o.vehicle) == root;
+            targets.push((Who::Mob(o.id), o.position, o.passenger, same));
         }
     }
     // EntitySelector.pushableBy(this): the teams' collision rules.
@@ -1250,10 +1265,15 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         m.damage(6.0, Damage::of(DamageKind::Cramming));
     }
-    for (who, at, _) in targets {
+    for (who, at, _, same) in targets {
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
             super::warden::do_push(m, w, who, events);
+        }
+        // Entity.push: passengers of the same vehicle (a rider and its mount
+        // among them) never push each other.
+        if same {
+            continue;
         }
         // Entity.push(Entity) with `this` the other entity.
         let (mut xa, mut za) = (m.position.x - at.x, m.position.z - at.z);
@@ -2476,6 +2496,61 @@ mod poison_effect_tests {
             zombie.health, initial_zombie_health,
             "undead mobs are immune to poison"
         );
+    }
+}
+
+#[cfg(test)]
+mod same_vehicle_push_tests {
+    use super::*;
+    use crate::mobs::world::with_test_world;
+
+    /// `Entity.push(Entity)` returns at once for `isPassengerOfSameVehicle`
+    /// (the same `getRootVehicle`): a camel and the husk on its back, seated
+    /// half a block toward its front and so inside its box, never push each
+    /// other (#3199). The camel still pushes a mob that only overlaps it.
+    #[test]
+    fn a_camel_and_its_rider_never_push_each_other() {
+        // The mobs the camel pushes, and its velocity after, with these mobs
+        // around: a husk on its back, and a zombie standing in its back half.
+        let push = |zombie_too: bool| {
+            let mut out = None;
+            let mut riders = Vec::new();
+            with_test_world(&[], |_, types| {
+                let mob = |id: u32, name: &str, at: Vec3| {
+                    Mob::new(id, std::sync::Arc::new(types.types[name].clone()), at, 0.0)
+                };
+                let mut camel = mob(1, "minecraft:camel", Vec3::new(0.5, 64.0, 0.5));
+                let mut husk = mob(2, "minecraft:husk", Vec3::new(0.5, 65.5, 1.0));
+                camel.extra.rider = Some(husk.id);
+                husk.extra.mount = Some(camel.id);
+                riders.push(husk.seen(None));
+                if zombie_too {
+                    riders.push(mob(3, "minecraft:zombie", Vec3::new(0.5, 64.0, 0.0)).seen(None));
+                }
+                out = Some(camel);
+            });
+            let mut camel = out?;
+            let mut events = Vec::new();
+            with_test_world(&riders, |w, _| push_entities(&mut camel, w, &mut events));
+            let pushed: Vec<u32> = events
+                .iter()
+                .filter_map(|e| match e {
+                    MobEvent::Push {
+                        target: Who::Mob(id),
+                        ..
+                    } => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            Some((pushed, camel.velocity))
+        };
+        let Some((pushed, velocity)) = push(false) else {
+            return;
+        };
+        assert_eq!(pushed, Vec::<u32>::new(), "the camel pushes its own rider");
+        assert_eq!(velocity, Vec3::ZERO, "its rider pushes the camel");
+        let (pushed, _) = push(true).unwrap();
+        assert_eq!(pushed, vec![3], "the camel pushes the zombie");
     }
 }
 
