@@ -6833,13 +6833,21 @@ impl Game<'_> {
                 self.audio.play(sound, None, 1.0, 1.0);
             }
         }
-        if let Some(title) = &self.title {
-            title.draw(
-                &self.gui.atlas,
-                &mut batch,
-                self.cursor,
-                self.settings.file.bool("hideSplashTexts"),
-            );
+        if self.title.is_some() {
+            // TitleScreen.extractRenderState, then ToastManager over it: vanilla
+            // draws the toast manager on every screen, so a pack download or a
+            // resource-reload failure still shows on the title (#4428).
+            if let Some(title) = &self.title {
+                title.draw(
+                    &self.gui.atlas,
+                    &mut batch,
+                    self.cursor,
+                    self.settings.file.bool("hideSplashTexts"),
+                );
+            }
+            self.draw_toasts(&mut batch, false);
+            self.draw_tutorial_toasts(&mut batch, false);
+            self.draw_pack_toasts(&mut batch, false);
             return batch;
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
